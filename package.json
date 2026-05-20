@@ -1,0 +1,94 @@
+{
+  "name": "ecorex-agent",
+  "version": "0.1.0",
+  "private": true,
+  "author": "EcoreX",
+  "description": "EcoreX desktop AI agent powered by an Electron, React and Claude Code bridge.",
+  "main": "electron/main.cjs",
+  "type": "module",
+  "config": {
+    "electron_builder_binaries_mirror": "https://npmmirror.com/mirrors/electron-builder-binaries/"
+  },
+  "scripts": {
+    "dev": "concurrently -k \"vite --host 127.0.0.1 --port 5188 --strictPort\" \"wait-on tcp:5188 && node electron/run-electron.cjs\"",
+    "verify:native": "node scripts/verify-native.cjs",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 5188 --strictPort",
+    "pack": "npm run build && npm run verify:native && electron-builder --dir",
+    "dist": "npm run build && npm run verify:native && electron-builder --win --x64"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.143",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "electron": "^33.3.1",
+    "electron-builder": "^25.1.8",
+    "vite": "^6.0.7",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "com.ecorex.agent",
+    "productName": "EcoreX Agent",
+    "copyright": "Copyright © 2026 EcoreX",
+    "directories": {
+      "output": "release"
+    },
+    "electronDist": "node_modules/electron/dist",
+    "electronDownload": {
+      "mirror": "https://npmmirror.com/mirrors/electron/"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "build/icon.ico",
+      "package.json",
+      "node_modules/@anthropic-ai/claude-code/**/*",
+      "node_modules/@anthropic-ai/claude-code-win32-x64/**/*"
+    ],
+    "asarUnpack": [
+      "node_modules/@anthropic-ai/claude-code/bin/**/*",
+      "node_modules/@anthropic-ai/claude-code-win32-x64/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "终端源代码/cli.js.map",
+        "to": "backend/cli.js.map"
+      },
+      {
+        "from": "终端源代码/claude-code-main",
+        "to": "backend/claude-code-main",
+        "filter": [
+          "README.md",
+          "CHANGELOG.md",
+          ".claude-plugin/marketplace.json",
+          "plugins/**/*",
+          "examples/**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "EcoreX Agent"
+    }
+  }
+}
