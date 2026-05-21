@@ -3,6 +3,11 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('ecorex', {
   getBackendStatus: () => ipcRenderer.invoke('backend:status'),
   getCapabilities: () => ipcRenderer.invoke('backend:capabilities'),
+  getSettings: () => ipcRenderer.invoke('settings:get'),
+  updateSettings: (payload) => ipcRenderer.invoke('settings:update', payload),
+  getDiagnostics: () => ipcRenderer.invoke('diagnostics:get'),
+  listWorkspace: (payload) => ipcRenderer.invoke('workspace:list', payload),
+  ensureWorkspace: (payload) => ipcRenderer.invoke('workspace:ensure', payload),
   openAuth: () => ipcRenderer.invoke('backend:open-auth'),
   runPrompt: (payload) => ipcRenderer.invoke('agent:run', payload),
   stopPrompt: (sessionId) => ipcRenderer.invoke('agent:stop', sessionId),

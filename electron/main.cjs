@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, session } = require('electron');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -14,8 +14,39 @@ const AGENT_TIMEOUT_MS = 30 * 60 * 1000;
 const AGENT_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const AGENT_MIN_TIMEOUT_MS = 30 * 1000;
 const MAX_PROMPT_CHARS = 80_000;
+const MIN_PROMPT_CHARS = 1_000;
+const SETTINGS_FILE_NAME = 'settings.json';
+const LOG_FILE_NAME = 'ecorex-agent.log';
+const MAX_LOG_LINES = 200;
+const MAX_COMMAND_OUTPUT_CHARS = 2 * 1024 * 1024;
+const MAX_AGENT_LINE_BUFFER_CHARS = 2 * 1024 * 1024;
 const ALLOWED_PERMISSION_MODES = new Set(['acceptEdits', 'auto', 'plan', 'default']);
 const ALLOWED_MODELS = new Set(['sonnet', 'opus']);
+const AGENT_ENV_ALLOWLIST = new Set([
+  'PATH',
+  'Path',
+  'PATHEXT',
+  'HOME',
+  'USERPROFILE',
+  'APPDATA',
+  'LOCALAPPDATA',
+  'TEMP',
+  'TMP',
+  'SystemRoot',
+  'ComSpec',
+  'USERNAME',
+  'USER',
+  'LANG',
+  'LC_ALL',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_BASE_URL',
+  'CLAUDE_CONFIG_DIR',
+  'XDG_CONFIG_HOME'
+]);
 
 const AGENT_SYSTEM_PROMPT = [
   '你是 EcoreX Agent，由 EcoreX 亦芯开发的具备自主思考能力的 AI Agent。',
@@ -35,6 +66,61 @@ function backendPath(...segments) {
   return path.join(ROOT_DIR, '终端源代码', ...segments);
 }
 
+function logPath() {
+  return path.join(app.getPath('logs'), LOG_FILE_NAME);
+}
+
+function writeLog(level, message, meta = {}) {
+  try {
+    fs.mkdirSync(app.getPath('logs'), { recursive: true });
+    const payload = {
+      time: new Date().toISOString(),
+      level,
+      message,
+      ...meta
+    };
+    fs.appendFileSync(logPath(), `${JSON.stringify(payload)}\n`, 'utf8');
+  } catch {
+    // Logging must never break the app.
+  }
+}
+
+function readRecentLogs(limit = MAX_LOG_LINES) {
+  try {
+    const file = logPath();
+    if (!fs.existsSync(file)) return [];
+    return fs
+      .readFileSync(file, 'utf8')
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .slice(-Math.min(Math.max(Number(limit) || MAX_LOG_LINES, 1), MAX_LOG_LINES))
+      .map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch {
+          return { time: null, level: 'info', message: line };
+        }
+      });
+  } catch {
+    return [];
+  }
+}
+
+function filteredAgentEnv(extra = {}) {
+  const env = {};
+  for (const key of AGENT_ENV_ALLOWLIST) {
+    if (process.env[key]) env[key] = process.env[key];
+  }
+  return { ...env, ...extra };
+}
+
+function isTrustedSender(event) {
+  const senderUrl = event?.senderFrame?.url || event?.sender?.getURL?.() || '';
+  if (!senderUrl) return true;
+  if (app.isPackaged) return senderUrl.startsWith('file://');
+  return senderUrl.startsWith('http://127.0.0.1:5188') || senderUrl.startsWith('http://localhost:5188');
+}
+
 function isPathInside(base, target) {
   const resolvePath = (location) => {
     try {
@@ -47,11 +133,156 @@ function isPathInside(base, target) {
   return relative === '' || (relative && !relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
-function defaultAgentCwd() {
-  if (!app.isPackaged) return ROOT_DIR;
+function defaultWorkspaceRoot() {
   const workspace = path.join(app.getPath('userData'), 'workspace');
+  return workspace;
+}
+
+function settingsPath() {
+  return path.join(app.getPath('userData'), SETTINGS_FILE_NAME);
+}
+
+function clampPromptChars(value) {
+  const chars = Number(value);
+  if (!Number.isFinite(chars)) return MAX_PROMPT_CHARS;
+  return Math.min(Math.max(Math.floor(chars), MIN_PROMPT_CHARS), MAX_PROMPT_CHARS);
+}
+
+function normalizeWorkspaceRoot(value) {
+  const fallback = defaultWorkspaceRoot();
+  const raw = typeof value === 'string' && value.trim() ? value.trim() : fallback;
+  const resolved = path.resolve(raw);
+  if (resolved.length > 500) return fallback;
+  return resolved;
+}
+
+function normalizeSettings(raw = {}) {
+  return {
+    defaultModel: ALLOWED_MODELS.has(raw.defaultModel) ? raw.defaultModel : 'sonnet',
+    permissionMode: ALLOWED_PERMISSION_MODES.has(raw.permissionMode) ? raw.permissionMode : 'acceptEdits',
+    workspaceRoot: normalizeWorkspaceRoot(raw.workspaceRoot),
+    maxPromptChars: clampPromptChars(raw.maxPromptChars),
+    autoRefreshBackend: typeof raw.autoRefreshBackend === 'boolean' ? raw.autoRefreshBackend : true
+  };
+}
+
+function readSettings() {
+  try {
+    const file = settingsPath();
+    const raw = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+    return normalizeSettings(raw);
+  } catch {
+    return normalizeSettings();
+  }
+}
+
+function writeSettings(nextSettings) {
+  const settings = normalizeSettings(nextSettings);
+  fs.mkdirSync(app.getPath('userData'), { recursive: true });
+  fs.mkdirSync(settings.workspaceRoot, { recursive: true });
+  const file = settingsPath();
+  const tempFile = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tempFile, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
+  fs.renameSync(tempFile, file);
+  return settings;
+}
+
+function defaultAgentCwd() {
+  const workspace = readSettings().workspaceRoot;
   fs.mkdirSync(workspace, { recursive: true });
   return workspace;
+}
+
+function updateSettings(payload = {}) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error('Invalid settings payload.');
+  }
+  const current = readSettings();
+  const next = { ...current };
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'defaultModel')) {
+    if (!ALLOWED_MODELS.has(payload.defaultModel)) throw new Error('Invalid defaultModel.');
+    next.defaultModel = payload.defaultModel;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'permissionMode')) {
+    if (!ALLOWED_PERMISSION_MODES.has(payload.permissionMode)) throw new Error('Invalid permissionMode.');
+    next.permissionMode = payload.permissionMode;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'workspaceRoot')) {
+    if (typeof payload.workspaceRoot !== 'string' || !payload.workspaceRoot.trim()) {
+      throw new Error('Invalid workspaceRoot.');
+    }
+    next.workspaceRoot = normalizeWorkspaceRoot(payload.workspaceRoot);
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'maxPromptChars')) {
+    next.maxPromptChars = clampPromptChars(payload.maxPromptChars);
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'autoRefreshBackend')) {
+    if (typeof payload.autoRefreshBackend !== 'boolean') throw new Error('Invalid autoRefreshBackend.');
+    next.autoRefreshBackend = payload.autoRefreshBackend;
+  }
+
+  return writeSettings(next);
+}
+
+function sanitizeWorkspaceRelativePath(value = '') {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (raw.includes('\0') || path.isAbsolute(raw) || raw.length > 240) {
+    throw new Error('Invalid workspace path.');
+  }
+  const normalized = path.normalize(raw);
+  if (normalized === '..' || normalized.startsWith(`..${path.sep}`) || path.isAbsolute(normalized)) {
+    throw new Error('Workspace path escapes root.');
+  }
+  return normalized === '.' ? '' : normalized;
+}
+
+function resolveWorkspacePath(relativePath = '') {
+  const workspaceRoot = readSettings().workspaceRoot;
+  fs.mkdirSync(workspaceRoot, { recursive: true });
+  const safeRelative = sanitizeWorkspaceRelativePath(relativePath);
+  const target = path.resolve(workspaceRoot, safeRelative);
+  if (!isPathInside(workspaceRoot, target)) throw new Error('Workspace path escapes root.');
+  return { workspaceRoot, target, relativePath: safeRelative };
+}
+
+function listWorkspace(payload = {}) {
+  const { workspaceRoot, target, relativePath } = resolveWorkspacePath(payload?.relativePath);
+  const entries = fs.existsSync(target)
+    ? fs
+        .readdirSync(target, { withFileTypes: true })
+        .slice(0, 200)
+        .map((entry) => {
+          const absolute = path.join(target, entry.name);
+          const stat = fs.statSync(absolute);
+          return {
+            name: entry.name,
+            path: path.relative(workspaceRoot, absolute).replace(/\\/g, '/'),
+            type: entry.isDirectory() ? 'directory' : 'file',
+            size: entry.isFile() ? stat.size : 0,
+            modifiedAt: stat.mtime.toISOString()
+          };
+        })
+    : [];
+  return { ok: true, workspaceRoot, relativePath: relativePath.replace(/\\/g, '/'), entries };
+}
+
+function ensureWorkspace(payload = {}) {
+  if (typeof payload?.workspaceRoot === 'string' && payload.workspaceRoot.trim()) {
+    updateSettings({ workspaceRoot: payload.workspaceRoot });
+  }
+  const { workspaceRoot, target, relativePath } = resolveWorkspacePath(payload?.relativePath);
+  fs.mkdirSync(target, { recursive: true });
+  const stat = fs.statSync(target);
+  if (!stat.isDirectory()) throw new Error('Workspace path is not a directory.');
+  return {
+    ok: true,
+    workspaceRoot,
+    path: target,
+    relativePath: relativePath.replace(/\\/g, '/'),
+    exists: true
+  };
 }
 
 function clampTimeout(timeoutMs) {
@@ -66,12 +297,14 @@ function sanitizeSessionId(sessionId) {
 }
 
 function sanitizePayload(payload = {}) {
-  const prompt = String(payload.prompt || '').trim().slice(0, MAX_PROMPT_CHARS);
+  const settings = readSettings();
+  const prompt = String(payload.prompt || '').trim().slice(0, settings.maxPromptChars);
   const permissionMode = ALLOWED_PERMISSION_MODES.has(payload.permissionMode)
     ? payload.permissionMode
-    : 'acceptEdits';
-  const model = ALLOWED_MODELS.has(payload.model) ? payload.model : 'sonnet';
-  const workspaceRoot = defaultAgentCwd();
+    : settings.permissionMode;
+  const model = ALLOWED_MODELS.has(payload.model) ? payload.model : settings.defaultModel;
+  const workspaceRoot = settings.workspaceRoot;
+  fs.mkdirSync(workspaceRoot, { recursive: true });
   const requestedCwd = payload.cwd ? path.resolve(String(payload.cwd)) : workspaceRoot;
   const cwd = fs.existsSync(requestedCwd) && isPathInside(workspaceRoot, requestedCwd) ? requestedCwd : workspaceRoot;
   const plugins = Array.isArray(payload.plugins)
@@ -116,6 +349,27 @@ function createWindow() {
     mainWindow = null;
   });
 
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    writeLog('warn', 'Blocked window.open', { url });
+    return { action: 'deny' };
+  });
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const allowed = app.isPackaged
+      ? url.startsWith('file://')
+      : url.startsWith('http://127.0.0.1:5188') || url.startsWith('http://localhost:5188');
+    if (!allowed) {
+      event.preventDefault();
+      writeLog('warn', 'Blocked navigation', { url });
+    }
+  });
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    writeLog('error', 'Renderer process gone', details);
+    stopAllAgents('renderer-gone');
+  });
+  mainWindow.webContents.on('unresponsive', () => {
+    writeLog('warn', 'Renderer became unresponsive');
+  });
+
   if (app.isPackaged) {
     mainWindow.loadFile(path.join(ROOT_DIR, 'dist', 'index.html'));
   } else {
@@ -125,6 +379,21 @@ function createWindow() {
 }
 
 app.whenReady().then(createWindow);
+
+app.whenReady().then(() => {
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [
+          app.isPackaged
+            ? "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'"
+            : "default-src 'self' http://127.0.0.1:5188 ws://127.0.0.1:5188; img-src 'self' data: http://127.0.0.1:5188; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-eval'; connect-src 'self' http://127.0.0.1:5188 ws://127.0.0.1:5188"
+        ]
+      }
+    });
+  });
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
@@ -136,6 +405,20 @@ app.on('before-quit', () => {
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
+});
+
+process.on('uncaughtException', (error) => {
+  writeLog('error', 'Main process uncaughtException', {
+    error: error?.message,
+    stack: error?.stack
+  });
+});
+
+process.on('unhandledRejection', (reason) => {
+  writeLog('error', 'Main process unhandledRejection', {
+    error: reason instanceof Error ? reason.message : String(reason),
+    stack: reason instanceof Error ? reason.stack : undefined
+  });
 });
 
 function emitAgentEvent(payload) {
@@ -201,6 +484,11 @@ function stopAgent(sessionId, reason = 'cancelled') {
   runningAgents.delete(sessionId);
   clearAgentTimers(entry);
   killProcessTree(entry.child);
+  writeLog(reason === 'cancelled' ? 'info' : 'warn', 'Agent session stopped', {
+    sessionId,
+    reason,
+    durationMs: Date.now() - entry.startedAt
+  });
   emitAgentEvent({
     sessionId,
     kind: reason === 'cancelled' ? 'cancelled' : 'error',
@@ -220,23 +508,40 @@ function commandOutput(command, args = [], options = {}) {
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd: options.cwd || ROOT_DIR,
-      env: { ...process.env, ...(options.env || {}) },
+      env: filteredAgentEnv(options.env || {}),
       windowsHide: true,
       shell: false
     });
 
     let stdout = '';
     let stderr = '';
+    let truncated = false;
     const timeout = setTimeout(() => {
       killProcessTree(child);
       resolve({ ok: false, code: -1, stdout, stderr: `${stderr}\nCommand timed out.`.trim() });
     }, options.timeoutMs || 15000);
 
     child.stdout.on('data', (chunk) => {
-      stdout += chunk.toString();
+      if (stdout.length < MAX_COMMAND_OUTPUT_CHARS) {
+        stdout += chunk.toString();
+        if (stdout.length > MAX_COMMAND_OUTPUT_CHARS) {
+          stdout = stdout.slice(0, MAX_COMMAND_OUTPUT_CHARS);
+          truncated = true;
+        }
+      } else {
+        truncated = true;
+      }
     });
     child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
+      if (stderr.length < MAX_COMMAND_OUTPUT_CHARS) {
+        stderr += chunk.toString();
+        if (stderr.length > MAX_COMMAND_OUTPUT_CHARS) {
+          stderr = stderr.slice(0, MAX_COMMAND_OUTPUT_CHARS);
+          truncated = true;
+        }
+      } else {
+        truncated = true;
+      }
     });
     child.on('error', (error) => {
       clearTimeout(timeout);
@@ -244,7 +549,7 @@ function commandOutput(command, args = [], options = {}) {
     });
     child.on('close', (code) => {
       clearTimeout(timeout);
-      resolve({ ok: code === 0, code, stdout: stdout.trim(), stderr: stderr.trim() });
+      resolve({ ok: code === 0, code, stdout: stdout.trim(), stderr: stderr.trim(), truncated });
     });
   });
 }
@@ -548,6 +853,92 @@ async function collectBackendStatus() {
   };
 }
 
+function getRunningSessionSummaries() {
+  return Array.from(runningAgents.entries()).map(([sessionId, entry]) => ({
+    sessionId,
+    prompt: entry.prompt,
+    cwd: entry.cwd,
+    startedAt: entry.startedAt,
+    lastActivityAt: entry.lastActivityAt
+  }));
+}
+
+function fileSummary(filePath) {
+  try {
+    const stat = fs.statSync(filePath);
+    return {
+      path: filePath,
+      exists: true,
+      type: stat.isDirectory() ? 'directory' : 'file',
+      size: stat.isFile() ? stat.size : 0,
+      sizeMb: stat.isFile() ? Number((stat.size / 1024 / 1024).toFixed(1)) : 0,
+      modifiedAt: stat.mtime.toISOString()
+    };
+  } catch {
+    return { path: filePath, exists: false };
+  }
+}
+
+function collectReleaseInstallers() {
+  const releaseDir = devPath('release');
+  const installerPattern = /\.(exe|msi|dmg|pkg|appimage|deb|rpm)$/i;
+  let entries = [];
+  try {
+    entries = fs
+      .readdirSync(releaseDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && installerPattern.test(entry.name))
+      .map((entry) => fileSummary(path.join(releaseDir, entry.name)));
+  } catch {
+    entries = [];
+  }
+  return {
+    directory: releaseDir,
+    exists: fs.existsSync(releaseDir),
+    installers: entries
+  };
+}
+
+async function collectDiagnostics() {
+  const [claude, settings] = await Promise.all([locateClaude(), Promise.resolve(readSettings())]);
+  const backendSource = backendPath('claude-code-main');
+  const backendMap = backendPath('cli.js.map');
+  const nativePackage = nativeClaudePackageName();
+  return {
+    ok: true,
+    app: {
+      name: app.getName(),
+      version: app.getVersion(),
+      platform: process.platform,
+      arch: process.arch,
+      isPackaged: app.isPackaged,
+      userData: app.getPath('userData')
+    },
+    settings,
+    workspaceRoot: settings.workspaceRoot,
+    claude: {
+      path: claude.path,
+      version: claude.version,
+      command: claude.command,
+      nativePackage
+    },
+    logs: {
+      path: logPath(),
+      recent: readRecentLogs()
+    },
+    runningSessions: getRunningSessionSummaries(),
+    backend: {
+      source: fileSummary(backendSource),
+      sourceMap: fileSummary(backendMap),
+      dist: fileSummary(devPath('dist', 'index.html')),
+      packagedBackend: fileSummary(path.join(process.resourcesPath || '', 'backend')),
+      nativeBinaryPackage: nativePackage
+        ? fileSummary(devPath('node_modules', '@anthropic-ai', nativePackage))
+        : { path: null, exists: false }
+    },
+    release: collectReleaseInstallers()
+  };
+}
+
 async function collectCapabilities() {
   if (cachedCapabilities) return cachedCapabilities;
   const plugins = parsePluginInventory();
@@ -697,14 +1088,14 @@ function runAgent(payload = {}) {
 
     const child = spawn(claude.command, args, {
       cwd,
-      env: {
-        ...process.env,
+      env: filteredAgentEnv({
         CLAUDE_CODE_NO_FLICKER: '1',
         CLAUDE_CODE_SIMPLE: safePayload.bare ? '1' : process.env.CLAUDE_CODE_SIMPLE || ''
-      },
+      }),
       windowsHide: true,
       shell: false
     });
+    writeLog('info', 'Agent session started', { sessionId, cwd, model, permissionMode, plugins: selectedPlugins });
 
     const startedEvent = {
       sessionId,
@@ -715,6 +1106,7 @@ function runAgent(payload = {}) {
     const entry = {
       child,
       prompt,
+      cwd,
       startedAt: Date.now(),
       lastActivityAt: Date.now(),
       totalTimer: null,
@@ -740,6 +1132,10 @@ function runAgent(payload = {}) {
       if (entry) entry.lastActivityAt = Date.now();
       armIdleTimer(sessionId);
       lineBuffer += chunk.toString();
+      if (lineBuffer.length > MAX_AGENT_LINE_BUFFER_CHARS) {
+        writeLog('warn', 'Agent line buffer truncated', { sessionId, length: lineBuffer.length });
+        lineBuffer = lineBuffer.slice(-MAX_AGENT_LINE_BUFFER_CHARS);
+      }
       const lines = lineBuffer.split(/\r?\n/);
       lineBuffer = lines.pop() || '';
       for (const line of lines) {
@@ -763,6 +1159,7 @@ function runAgent(payload = {}) {
         kind: 'stderr',
         text: chunk.toString()
       });
+      writeLog('warn', 'Agent stderr', { sessionId, text: chunk.toString().slice(0, 4000) });
     });
 
     child.on('error', (error) => {
@@ -770,6 +1167,7 @@ function runAgent(payload = {}) {
       if (!entry) return;
       runningAgents.delete(sessionId);
       clearAgentTimers(entry);
+      writeLog('error', 'Agent process error', { sessionId, error: error.message });
       emitAgentEvent({ sessionId, kind: 'error', text: error.message });
     });
 
@@ -791,25 +1189,63 @@ function runAgent(payload = {}) {
         status: code === 0 ? 'completed' : 'failed',
         text: code === 0 ? '后端执行完成' : `后端进程退出，代码 ${code}`
       });
+      writeLog(code === 0 ? 'info' : 'error', 'Agent session closed', {
+        sessionId,
+        code,
+        durationMs: Date.now() - entry.startedAt
+      });
     });
   });
 }
 
-ipcMain.handle('backend:status', collectBackendStatus);
-ipcMain.handle('backend:capabilities', collectCapabilities);
-ipcMain.handle('agent:run', (_event, payload) => runAgent(payload));
-ipcMain.handle('agent:stop', (_event, sessionId) => {
+function handleSafe(channel, handler) {
+  ipcMain.handle(channel, async (event, ...args) => {
+    try {
+      if (!isTrustedSender(event)) {
+        writeLog('warn', 'Blocked untrusted IPC invoke', { channel, url: event.senderFrame?.url });
+        return { ok: false, error: 'Untrusted renderer.' };
+      }
+      return await handler(event, ...args);
+    } catch (error) {
+      writeLog('error', 'IPC handler failed', {
+        channel,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  });
+}
+
+function assertTrustedIpc(event, channel) {
+  if (isTrustedSender(event)) return true;
+  writeLog('warn', 'Blocked untrusted IPC message', { channel, url: event.senderFrame?.url });
+  return false;
+}
+
+handleSafe('backend:status', collectBackendStatus);
+handleSafe('backend:capabilities', collectCapabilities);
+handleSafe('settings:get', () => ({ ok: true, settings: writeSettings(readSettings()) }));
+handleSafe('settings:update', (_event, payload) => ({ ok: true, settings: updateSettings(payload) }));
+handleSafe('diagnostics:get', collectDiagnostics);
+handleSafe('workspace:list', (_event, payload) => listWorkspace(payload));
+handleSafe('workspace:ensure', (_event, payload) => ensureWorkspace(payload));
+ipcMain.handle('agent:run', (event, payload) => {
+  if (!assertTrustedIpc(event, 'agent:run')) return { ok: false, error: 'Untrusted renderer.' };
+  return runAgent(payload);
+});
+ipcMain.handle('agent:stop', (event, sessionId) => {
+  if (!assertTrustedIpc(event, 'agent:stop')) return { ok: false, error: 'Untrusted renderer.' };
   return stopAgent(sessionId, 'cancelled');
 });
-ipcMain.handle('agent:sessions', () => {
-  return Array.from(runningAgents.entries()).map(([sessionId, entry]) => ({
-    sessionId,
-    prompt: entry.prompt,
-    startedAt: entry.startedAt,
-    lastActivityAt: entry.lastActivityAt
-  }));
+ipcMain.handle('agent:sessions', (event) => {
+  if (!assertTrustedIpc(event, 'agent:sessions')) return [];
+  return getRunningSessionSummaries();
 });
-ipcMain.handle('backend:open-auth', async () => {
+ipcMain.handle('backend:open-auth', async (event) => {
+  if (!assertTrustedIpc(event, 'backend:open-auth')) return { ok: false, error: 'Untrusted renderer.' };
   const claude = await locateClaude();
   if (!claude.command) return { ok: false, error: '未找到 Claude Code CLI。' };
   if (isWindows) {
@@ -830,6 +1266,7 @@ ipcMain.handle('backend:open-auth', async () => {
 });
 
 ipcMain.on('window:control', (event, action) => {
+  if (!assertTrustedIpc(event, 'window:control')) return;
   const window = BrowserWindow.fromWebContents(event.sender);
   if (!window) return;
   if (action === 'minimize') window.minimize();

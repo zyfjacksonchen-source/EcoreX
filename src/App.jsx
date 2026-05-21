@@ -297,6 +297,7 @@ function App() {
         page={page}
         setPage={setPage}
         backendStatus={backendStatus}
+        backendError={backendError}
         capabilities={capabilities}
         refreshBackend={refreshBackend}
         logout={() => {
@@ -438,6 +439,7 @@ function MainShell({
   page,
   setPage,
   backendStatus,
+  backendError,
   capabilities,
   refreshBackend,
   logout
@@ -464,6 +466,14 @@ function MainShell({
           <McpView
             backendStatus={backendStatus}
             setPage={setPage}
+          />
+        )}
+        {page === 'diagnostics' && (
+          <DiagnosticsView
+            backendStatus={backendStatus}
+            backendError={backendError}
+            capabilities={capabilities}
+            refreshBackend={refreshBackend}
           />
         )}
       </main>
@@ -494,6 +504,10 @@ function Sidebar({ page, setPage, logout }) {
         <button className={page === 'skills' ? 'active' : ''} type="button" onClick={() => setPage('skills')}>
           <Layers3 size={25} />
           Skill 管理
+        </button>
+        <button className={page === 'diagnostics' ? 'active' : ''} type="button" onClick={() => setPage('diagnostics')}>
+          <Settings size={25} />
+          诊断 / 设置
         </button>
       </nav>
       <div className="recent">
@@ -536,7 +550,7 @@ function Sidebar({ page, setPage, logout }) {
             </button>
             <div className="profile-menu-grid">
               <button type="button"><User size={20} />个人资料</button>
-              <button type="button"><Settings size={20} />偏好设置</button>
+              <button type="button" onClick={() => setPage('diagnostics')}><Settings size={20} />偏好设置</button>
               <button type="button"><HelpCircle size={20} />帮助中心</button>
               <button type="button"><Keyboard size={20} />快捷键</button>
             </div>
@@ -1538,6 +1552,288 @@ function StatusTree({ timeline, sourceMap, compact = false, title = '执行状�
           ))}
         </div>
       )}
+    </section>
+  );
+}
+
+async function callEcorex(candidates, ...args) {
+  const bridge = window.ecorex;
+  if (!bridge) return { ok: false, missing: true, error: 'Electron 后端桥接不可用' };
+
+  for (const candidate of candidates) {
+    const parts = candidate.split('.');
+    const fn = parts.reduce((target, part) => target?.[part], bridge);
+    if (typeof fn !== 'function') continue;
+    try {
+      return await fn(...args);
+    } catch (error) {
+      return { ok: false, error: error?.message || String(error) };
+    }
+  }
+
+  return { ok: false, missing: true, error: '当前版本未暴露该后端 API' };
+}
+
+function normalizeSettingsState(raw = {}) {
+  return {
+    defaultModel: raw.defaultModel || raw.model || 'sonnet',
+    permissionMode: raw.permissionMode || raw.permissions || 'acceptEdits',
+    workspaceRoot: raw.workspaceRoot || raw.workspace || '',
+    maxPromptChars: raw.maxPromptChars || 80000,
+    autoRefreshBackend: raw.autoRefreshBackend !== false
+  };
+}
+
+function DiagnosticsView({ backendStatus, backendError, capabilities, refreshBackend }) {
+  const [diagnostics, setDiagnostics] = useState(null);
+  const [settings, setSettings] = useState(() => normalizeSettingsState(backendStatus?.settings));
+  const [workspace, setWorkspace] = useState({ entries: [], workspaceRoot: '' });
+  const [sessions, setSessions] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState('');
+  const [notice, setNotice] = useState('');
+
+  const permissionOptions = useMemo(() => {
+    const modes = capabilities?.permissionModes;
+    if (Array.isArray(modes) && modes.length) return modes.map((item) => [item.value, item.label]);
+    return [
+      ['acceptEdits', 'Accept edits'],
+      ['auto', 'Auto'],
+      ['plan', 'Plan'],
+      ['default', 'Default']
+    ];
+  }, [capabilities]);
+
+  const modelOptions = useMemo(() => {
+    const models = capabilities?.models;
+    if (Array.isArray(models) && models.length) return models.map((item) => [item.value, item.label]);
+    return [
+      ['sonnet', 'Sonnet'],
+      ['opus', 'Opus']
+    ];
+  }, [capabilities]);
+
+  async function loadDiagnostics() {
+    setLoading(true);
+    setNotice('');
+    try {
+      const [diagResult, settingsResult, workspaceResult, sessionResult] = await Promise.all([
+        callEcorex(['getDiagnostics', 'diagnostics.get']),
+        callEcorex(['getSettings', 'settings.get']),
+        callEcorex(['listWorkspace', 'workspace.list'], { relativePath: '' }),
+        callEcorex(['getAgentSessions', 'agent.getSessions'])
+      ]);
+
+      const nextDiagnostics = diagResult?.ok === false ? null : (diagResult?.diagnostics || diagResult);
+      const nextSettings = settingsResult?.settings || nextDiagnostics?.settings || backendStatus?.settings;
+      setDiagnostics(nextDiagnostics);
+      setSettings(normalizeSettingsState(nextSettings || settings));
+      setWorkspace({
+        entries: workspaceResult?.entries || nextDiagnostics?.workspace?.entries || [],
+        workspaceRoot: workspaceResult?.workspaceRoot || nextDiagnostics?.workspaceRoot || nextSettings?.workspaceRoot || ''
+      });
+      setSessions(Array.isArray(sessionResult) ? sessionResult : (sessionResult?.sessions || nextDiagnostics?.runningSessions || []));
+      if (diagResult?.missing || settingsResult?.missing || workspaceResult?.missing) {
+        setNotice('部分后端 API 尚未暴露，已使用现有状态与本地默认值展示。');
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadDiagnostics();
+  }, []);
+
+  async function saveSettings(patch) {
+    const nextSettings = normalizeSettingsState({ ...settings, ...patch });
+    setSettings(nextSettings);
+    setSaving(Object.keys(patch)[0] || 'settings');
+    setNotice('');
+    const result = await callEcorex(['updateSettings', 'settings.update'], patch);
+    if (result?.ok === false) {
+      setNotice(result.missing ? '设置 API 尚未暴露，当前仅更新界面预览值。' : `设置保存失败：${result.error}`);
+    } else {
+      setSettings(normalizeSettingsState(result.settings || nextSettings));
+      setNotice('设置已保存。');
+      refreshBackend?.();
+    }
+    setSaving('');
+  }
+
+  async function ensureWorkspace() {
+    setSaving('workspaceRoot');
+    const result = await callEcorex(['ensureWorkspace', 'workspace.ensure'], { workspaceRoot: settings.workspaceRoot });
+    if (result?.ok === false) {
+      setNotice(result.missing ? '工作区 API 尚未暴露，无法创建或校验目录。' : `工作区校验失败：${result.error}`);
+    } else {
+      setNotice('工作区已校验。');
+      loadDiagnostics();
+    }
+    setSaving('');
+  }
+
+  const statusItems = [
+    ['后端健康', backendStatus?.ok ? '正常' : '待连接', backendError || backendStatus?.error || 'Backend bridge', Activity, backendStatus?.ok ? 'ok' : 'warn'],
+    ['Claude CLI', diagnostics?.claude?.version || backendStatus?.claude?.version || '未检测', diagnostics?.claude?.path || backendStatus?.claude?.path || '等待后端诊断', SquareTerminal, diagnostics?.claude?.path || backendStatus?.claude?.path ? 'ok' : 'warn'],
+    ['工作区', workspace.workspaceRoot || settings.workspaceRoot || backendStatus?.workspaceRoot || '未配置', `${workspace.entries.length} 个顶层条目`, LayoutDashboard, workspace.workspaceRoot || settings.workspaceRoot ? 'ok' : 'warn'],
+    ['构建包', diagnostics?.release?.installers?.length ? `${diagnostics.release.installers.length} 个安装包` : '未发现安装包', diagnostics?.release?.directory || 'release', Box, diagnostics?.release?.installers?.length ? 'ok' : 'warn'],
+    ['运行会话', String(sessions.length), sessions.length ? 'Claude Code CLI 正在执行' : '当前无运行任务', Bot, sessions.length ? 'running' : 'ok']
+  ];
+
+  const buildItems = [
+    ['前端 dist', diagnostics?.backend?.dist],
+    ['CLI 后端', diagnostics?.backend?.source],
+    ['Source map', diagnostics?.backend?.sourceMap],
+    ['Native binary', diagnostics?.backend?.nativeBinaryPackage],
+    ['Packaged backend', diagnostics?.backend?.packagedBackend]
+  ];
+
+  return (
+    <section className="diagnostics-page panel">
+      <HeaderBar
+        title="诊断 / 设置"
+        badge={window.ecorex ? '桌面端' : '预览模式'}
+        subtitle="集中查看后端健康、Claude CLI、工作区、构建包与运行会话，并维护 Agent 默认运行参数"
+        backendStatus={backendStatus}
+        onRefresh={() => {
+          refreshBackend?.();
+          loadDiagnostics();
+        }}
+      />
+
+      <div className="diagnostics-summary">
+        {statusItems.map(([label, value, detail, Icon, tone]) => (
+          <article className={`diagnostic-card ${tone}`} key={label}>
+            <span><Icon size={22} /></span>
+            <div>
+              <em>{label}</em>
+              <strong>{value}</strong>
+              <small>{detail}</small>
+            </div>
+          </article>
+        ))}
+      </div>
+
+      <div className="diagnostics-content">
+        <section className="settings-panel">
+          <header>
+            <h3>默认设置</h3>
+            <button type="button" onClick={loadDiagnostics} disabled={loading}>
+              <Loader2 size={16} className={loading ? 'spin-icon' : ''} />
+              刷新
+            </button>
+          </header>
+          <div className="settings-grid">
+            <label>
+              <span>默认模型</span>
+              <select value={settings.defaultModel} onChange={(event) => saveSettings({ defaultModel: event.target.value })}>
+                {modelOptions.map(([value, label]) => <option value={value} key={value}>{label}</option>)}
+              </select>
+            </label>
+            <label>
+              <span>权限模式</span>
+              <select value={settings.permissionMode} onChange={(event) => saveSettings({ permissionMode: event.target.value })}>
+                {permissionOptions.map(([value, label]) => <option value={value} key={value}>{label}</option>)}
+              </select>
+            </label>
+            <label className="wide">
+              <span>工作区路径</span>
+              <input
+                value={settings.workspaceRoot}
+                onChange={(event) => setSettings((current) => ({ ...current, workspaceRoot: event.target.value }))}
+                onBlur={() => saveSettings({ workspaceRoot: settings.workspaceRoot })}
+                placeholder="等待后端返回默认工作区"
+              />
+            </label>
+            <label>
+              <span>最大提示长度</span>
+              <input
+                min="1000"
+                step="1000"
+                type="number"
+                value={settings.maxPromptChars}
+                onChange={(event) => setSettings((current) => ({ ...current, maxPromptChars: Number(event.target.value) }))}
+                onBlur={() => saveSettings({ maxPromptChars: settings.maxPromptChars })}
+              />
+            </label>
+            <label className="switch-row">
+              <span>自动刷新后端</span>
+              <button
+                className={`toggle ${settings.autoRefreshBackend ? 'on' : ''}`}
+                type="button"
+                onClick={() => saveSettings({ autoRefreshBackend: !settings.autoRefreshBackend })}
+              >
+                <span />
+              </button>
+            </label>
+          </div>
+          <div className="settings-actions">
+            <button type="button" onClick={ensureWorkspace} disabled={saving === 'workspaceRoot'}>
+              <Check size={16} />
+              校验工作区
+            </button>
+            <button type="button" onClick={() => saveSettings(settings)} disabled={Boolean(saving)}>
+              <Settings size={16} />
+              {saving ? '保存中' : '保存设置'}
+            </button>
+          </div>
+          {notice && <p className="diagnostics-notice">{notice}</p>}
+        </section>
+
+        <section className="diagnostics-list-panel">
+          <header>
+            <h3>工作区</h3>
+            <small>{workspace.workspaceRoot || settings.workspaceRoot || '未连接'}</small>
+          </header>
+          <div className="workspace-entry-list">
+            {(workspace.entries.length ? workspace.entries : [
+              { name: '后端 API 未就绪', type: 'info', size: 0, modified: '使用降级预览' }
+            ]).map((entry) => (
+              <div className="workspace-entry" key={`${entry.path || entry.name}-${entry.type}`}>
+                <FileText size={17} />
+                <strong>{entry.name || entry.path}</strong>
+                <span>{entry.type || (entry.isDirectory ? 'folder' : 'file')}</span>
+                <em>{entry.modifiedAt || entry.modified || entry.size || '-'}</em>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="diagnostics-list-panel">
+          <header>
+            <h3>构建包</h3>
+            <small>{diagnostics?.app?.version ? `v${diagnostics.app.version}` : '本地构建状态'}</small>
+          </header>
+          <div className="build-entry-list">
+            {buildItems.map(([label, item]) => (
+              <div className={`build-entry ${item?.exists ? 'ok' : 'warn'}`} key={label}>
+                <span className={item?.exists ? 'dot ok' : 'dot warn'} />
+                <strong>{label}</strong>
+                <em>{item?.path || '未检测'}</em>
+                <small>{item?.exists ? (item.sizeMb ? `${item.sizeMb}MB` : '存在') : '缺失'}</small>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="diagnostics-list-panel sessions-panel">
+          <header>
+            <h3>运行会话</h3>
+            <small>{sessions.length} 个活动会话</small>
+          </header>
+          <div className="session-list">
+            {(sessions.length ? sessions : [{ sessionId: 'empty', status: 'idle', prompt: '当前没有运行中的 Claude Code CLI 会话' }]).map((session) => (
+              <div className="session-entry" key={session.sessionId || session.id}>
+                <Bot size={17} />
+                <strong>{session.sessionId || session.id || 'empty'}</strong>
+                <span>{session.status || session.state || 'idle'}</span>
+                <em>{session.prompt || session.cwd || '等待任务提交'}</em>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
     </section>
   );
 }
