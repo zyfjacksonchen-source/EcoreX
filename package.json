@@ -12,10 +12,20 @@
   "scripts": {
     "dev": "concurrently -k \"vite --host 127.0.0.1 --port 5188 --strictPort\" \"wait-on tcp:5188 && node electron/run-electron.cjs\"",
     "verify:native": "node scripts/verify-native.cjs",
+    "test:model-adapter": "node scripts/test-model-adapter.cjs",
+    "release:fix-metadata": "node scripts/fix-release-metadata.cjs",
+    "verify:production": "node scripts/verify-production.cjs && npm run test:model-adapter",
+    "verify:production:strict": "node scripts/verify-production.cjs --strict && npm run test:model-adapter",
+    "verify:production:release": "node scripts/verify-production.cjs --strict --require-signed-artifact && npm run test:model-adapter",
+    "test:agent-smoke": "npm run verify:production",
+    "test:e2e": "playwright test -c playwright.e2e.config.cjs",
+    "test:e2e:responsive": "playwright test -c playwright.e2e.config.cjs --grep @responsive",
+    "test:responsive": "node scripts/responsiveness-smoke.cjs",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1 --port 5188 --strictPort",
-    "pack": "npm run build && npm run verify:native && electron-builder --dir",
-    "dist": "npm run build && npm run verify:native && electron-builder --win --x64"
+    "pack": "npm run build && npm run verify:production && npm run verify:native && electron-builder --dir && npm run release:fix-metadata && npm run verify:production",
+    "dist": "npm run build && npm run verify:production && npm run verify:native && electron-builder --win --x64 && npm run release:fix-metadata && npm run verify:production",
+    "dist:release": "npm run build && npm run verify:production:strict && npm run verify:native && electron-builder --win --x64 && npm run release:fix-metadata && npm run verify:production:release"
   },
   "dependencies": {
     "@anthropic-ai/claude-code": "2.1.143",
@@ -24,6 +34,7 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.1.0",
     "electron": "^33.3.1",
@@ -34,6 +45,7 @@
   "build": {
     "appId": "com.ecorex.agent",
     "productName": "EcoreX Agent",
+    "artifactName": "${productName} Setup ${version}.${ext}",
     "copyright": "Copyright © 2026 EcoreX",
     "directories": {
       "output": "release"
@@ -48,7 +60,23 @@
       "build/icon.ico",
       "package.json",
       "node_modules/@anthropic-ai/claude-code/**/*",
-      "node_modules/@anthropic-ai/claude-code-win32-x64/**/*"
+      "node_modules/@anthropic-ai/claude-code-win32-x64/**/*",
+      "!**/.env",
+      "!**/.env.*",
+      "!**/*.log",
+      "!**/settings.json",
+      "!**/secrets.json",
+      "!**/auth-session.json",
+      "!**/auth-identity.json",
+      "!**/model-profiles.json",
+      "!**/.ecorex-project.json",
+      "!**/.ecorex-projects.json",
+      "!**/.ecorex-memory/**/*",
+      "!**/.mcp.json",
+      "!**/.claude/**/*",
+      "!**/.codex/**/*",
+      "!**/.agents/**/*",
+      "!**/superpowers/**/*"
     ],
     "asarUnpack": [
       "node_modules/@anthropic-ai/claude-code/bin/**/*",
@@ -67,7 +95,25 @@
           "CHANGELOG.md",
           ".claude-plugin/marketplace.json",
           "plugins/**/*",
-          "examples/**/*"
+          "!**/.env",
+          "!**/.env.*",
+          "!**/*.log",
+          "!**/settings.json",
+          "!**/secrets.json",
+          "!**/auth-session.json",
+          "!**/auth-identity.json",
+          "!**/model-profiles.json",
+          "!**/.ecorex-project.json",
+          "!**/.ecorex-projects.json",
+          "!**/.ecorex-memory/**/*",
+          "!**/.mcp.json",
+          "!**/.claude/**/*",
+          "!**/.codex/**/*",
+          "!**/.agents/**/*",
+          "!**/superpowers/**/*",
+          "!plugins/**/node_modules/**/*",
+          "!plugins/**/.git/**/*",
+          "!plugins/**/superpowers/**/*"
         ]
       }
     ],
