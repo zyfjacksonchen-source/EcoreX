@@ -12,7 +12,8 @@ const secretEnvKeys = [
   'OPENAI_API_KEY',
   'ECOREX_LICENSE_KEY',
   'ANTHROPIC_BASE_URL',
-  'OPENAI_BASE_URL'
+  'OPENAI_BASE_URL',
+  'ECOREX_REAL_MODEL_API_KEY'
 ];
 
 function makeTempAppPaths() {

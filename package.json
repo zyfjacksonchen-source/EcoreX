@@ -13,6 +13,13 @@
     "dev": "concurrently -k \"vite --host 127.0.0.1 --port 5188 --strictPort\" \"wait-on tcp:5188 && node electron/run-electron.cjs\"",
     "verify:native": "node scripts/verify-native.cjs",
     "test:model-adapter": "node scripts/test-model-adapter.cjs",
+    "test:real-agent": "node scripts/real-agent-stress.cjs",
+    "audit:security": "node scripts/security-audit.cjs",
+    "verify:install-matrix": "node scripts/verify-install-matrix.cjs",
+    "verify:mac": "node scripts/verify-macos-release-env.cjs",
+    "test:packaged-input": "node scripts/packaged-input-smoke.cjs",
+    "assets:mac-icon": "node scripts/create-mac-icon.cjs",
+    "release:policy": "node scripts/prepare-release-policy.cjs",
     "release:fix-metadata": "node scripts/fix-release-metadata.cjs",
     "verify:production": "node scripts/verify-production.cjs && npm run test:model-adapter",
     "verify:production:strict": "node scripts/verify-production.cjs --strict && npm run test:model-adapter",
@@ -25,6 +32,7 @@
     "preview": "vite preview --host 127.0.0.1 --port 5188 --strictPort",
     "pack": "npm run build && npm run verify:production && npm run verify:native && electron-builder --dir && npm run release:fix-metadata && npm run verify:production",
     "dist": "npm run build && npm run verify:production && npm run verify:native && electron-builder --win --x64 && npm run release:fix-metadata && npm run verify:production",
+    "dist:mac": "npm run assets:mac-icon && npm run build && npm run verify:production:strict && npm run verify:native && electron-builder --mac --x64 --arm64 && npm run release:policy && npm run verify:mac",
     "dist:release": "npm run build && npm run verify:production:strict && npm run verify:native && electron-builder --win --x64 && npm run release:fix-metadata && npm run verify:production:release"
   },
   "dependencies": {
@@ -60,6 +68,8 @@
       "build/icon.ico",
       "package.json",
       "node_modules/@anthropic-ai/claude-code/**/*",
+      "node_modules/@anthropic-ai/claude-code-darwin-arm64/**/*",
+      "node_modules/@anthropic-ai/claude-code-darwin-x64/**/*",
       "node_modules/@anthropic-ai/claude-code-win32-x64/**/*",
       "!**/.env",
       "!**/.env.*",
@@ -80,6 +90,8 @@
     ],
     "asarUnpack": [
       "node_modules/@anthropic-ai/claude-code/bin/**/*",
+      "node_modules/@anthropic-ai/claude-code-darwin-arm64/**/*",
+      "node_modules/@anthropic-ai/claude-code-darwin-x64/**/*",
       "node_modules/@anthropic-ai/claude-code-win32-x64/**/*"
     ],
     "extraResources": [
@@ -127,6 +139,46 @@
         }
       ],
       "icon": "build/icon.ico"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.business",
+      "icon": "build/icon.icns",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist"
+    },
+    "dmg": {
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "sign": false,
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
     },
     "nsis": {
       "oneClick": true,

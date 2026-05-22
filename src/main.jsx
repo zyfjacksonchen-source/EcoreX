@@ -3,6 +3,22 @@ import { createRoot } from 'react-dom/client';
 import App from './App.jsx';
 import './styles.css';
 
+let startupFinished = false;
+
+function finishStartupLoader() {
+  if (startupFinished) return;
+  startupFinished = true;
+  document.documentElement.dataset.ecorexReady = 'true';
+  window.setTimeout(() => {
+    document.getElementById('startup-loader')?.remove();
+  }, 240);
+}
+
+window.__ecorexFinishStartup = finishStartupLoader;
+window.setTimeout(() => {
+  if (document.getElementById('startup-loader')) finishStartupLoader();
+}, 15000);
+
 class RootErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -11,6 +27,10 @@ class RootErrorBoundary extends React.Component {
 
   static getDerivedStateFromError(error) {
     return { error };
+  }
+
+  componentDidCatch() {
+    finishStartupLoader();
   }
 
   render() {

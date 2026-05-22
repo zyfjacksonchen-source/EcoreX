@@ -4,9 +4,13 @@ node_modules/
 test-results/
 playwright-report/
 
-# Local Electron build intermediates. The installer in release/*.exe is kept.
+# Local Electron build outputs. Installers are uploaded as GitHub release assets.
 release/win-unpacked/
 release/__uninstaller-nsis-*.exe
+release/*.exe
+release/*.exe.blockmap
+release/latest.yml
+release/real-agent-stress-*.json
 
 # Local secrets and transient logs.
 .env

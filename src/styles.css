@@ -79,7 +79,7 @@
 
 body {
   margin: 0;
-  min-width: 1040px;
+  min-width: 800px;
   height: 100vh;
   min-height: 0;
   overflow: hidden;
@@ -140,7 +140,7 @@ select:focus-visible {
 .app-frame {
   width: 100vw;
   height: 100vh;
-  min-width: 1040px;
+  min-width: 800px;
   min-height: 0;
   display: grid;
   grid-template-rows: 34px minmax(0, 1fr);
@@ -149,19 +149,47 @@ select:focus-visible {
 }
 
 .app-content {
+  position: relative;
+  z-index: 1;
   min-width: 0;
   min-height: 0;
   height: 100%;
   overflow: hidden;
+  -webkit-app-region: no-drag;
+}
+
+.app-content *,
+.login-screen *,
+.app-shell * {
+  -webkit-app-region: no-drag;
+}
+
+.app-content input,
+.app-content textarea,
+.app-content select,
+.app-content button,
+.app-content a,
+.app-content label {
+  -webkit-app-region: no-drag;
+}
+
+input,
+textarea,
+select,
+[contenteditable="true"] {
+  pointer-events: auto;
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-app-region: no-drag;
 }
 
 .app-titlebar {
   height: 34px;
   position: relative;
   z-index: 100;
-  display: grid;
-  grid-template-columns: 120px 1fr 138px;
+  display: flex;
   align-items: center;
+  justify-content: center;
   background: #070c12;
   border-bottom: 1px solid rgba(231, 238, 247, 0.08);
   color: var(--muted);
@@ -170,15 +198,15 @@ select:focus-visible {
 }
 
 .app-titlebar.is-mac {
-  grid-template-columns: 82px 1fr 82px;
+  justify-content: center;
 }
 
 .titlebar-title {
-  justify-self: center;
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0;
   opacity: 0.78;
+  pointer-events: none;
 }
 
 .win-window-controls,
@@ -186,9 +214,16 @@ select:focus-visible {
   -webkit-app-region: no-drag;
 }
 
+.win-window-controls *,
+.mac-window-controls * {
+  -webkit-app-region: no-drag;
+}
+
 .win-window-controls {
+  position: absolute;
+  top: 0;
+  right: 0;
   height: 100%;
-  justify-self: end;
   display: grid;
   grid-template-columns: repeat(3, 46px);
 }
@@ -199,6 +234,8 @@ select:focus-visible {
   color: #c8ced6;
   display: grid;
   place-items: center;
+  border-radius: 0;
+  font-family: "Segoe UI", system-ui, sans-serif;
 }
 
 .win-window-controls button:hover {
@@ -210,9 +247,38 @@ select:focus-visible {
   color: #fff;
 }
 
+.win-control-glyph {
+  display: block;
+  width: 16px;
+  height: 16px;
+  color: currentColor;
+  font-size: 16px;
+  line-height: 14px;
+  text-align: center;
+}
+
+.win-control-glyph.minimize {
+  transform: translateY(-2px);
+}
+
+.win-control-glyph.maximize {
+  font-size: 15px;
+  line-height: 13px;
+}
+
+.win-control-glyph.close {
+  font-size: 21px;
+  line-height: 15px;
+  font-weight: 300;
+}
+
 .mac-window-controls {
-  justify-self: start;
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
   display: flex;
+  align-items: center;
   gap: 8px;
   padding-left: 14px;
 }
@@ -222,6 +288,7 @@ select:focus-visible {
   height: 12px;
   border-radius: 50%;
   border: 1px solid rgba(0, 0, 0, 0.28);
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.28);
 }
 
 .mac-window-controls .close { background: #ff5f57; }
@@ -440,6 +507,7 @@ select:focus-visible {
 
 .icon-button,
 .side-nav button,
+.recent-row,
 .recent button,
 .new-chat,
 .primary,
@@ -496,6 +564,7 @@ select:focus-visible {
 }
 
 .side-nav button:hover,
+.recent-row:hover,
 .recent button:hover,
 .workspace-entry:hover,
 .project-workspace-entry:hover,
@@ -534,7 +603,7 @@ select:focus-visible {
   position: relative;
   width: 100vw;
   height: 100%;
-  min-width: 1040px;
+  min-width: 800px;
   min-height: 0;
   display: grid;
   align-items: center;
@@ -652,7 +721,7 @@ select:focus-visible {
   width: clamp(430px, 34vw, 560px);
   min-width: 0;
   max-height: min(760px, calc(100vh - 92px));
-  z-index: 2;
+  z-index: 5;
   padding: clamp(32px, 4.2vh, 54px) clamp(34px, 4.4vw, 58px) clamp(24px, 3.2vh, 36px);
   border-radius: 16px;
   background: #151a22;
@@ -662,6 +731,8 @@ select:focus-visible {
   flex-direction: column;
   overflow: auto;
   scrollbar-width: thin;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
 }
 
 :root[data-theme="dark"] .login-panel {
@@ -741,6 +812,10 @@ select:focus-visible {
   outline: 0;
   background: transparent;
   color: var(--text);
+  pointer-events: auto;
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-app-region: no-drag;
 }
 
 .input-shell button {
@@ -885,15 +960,20 @@ select:focus-visible {
 .app-shell {
   width: 100vw;
   height: 100%;
-  min-width: 1040px;
+  min-width: 800px;
   min-height: 0;
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr);
+  transition: grid-template-columns 0.18s ease;
   overflow: hidden;
   font-size: 14px;
   background:
     radial-gradient(circle at 72% 14%, rgba(255, 90, 0, 0.08), transparent 30%),
     linear-gradient(180deg, var(--bg), var(--bg));
+}
+
+.app-shell.sidebar-collapsed {
+  grid-template-columns: 76px minmax(0, 1fr);
 }
 
 .sidebar {
@@ -906,6 +986,7 @@ select:focus-visible {
   grid-template-rows: auto auto auto minmax(0, 1fr) auto;
   gap: 14px;
   overflow: hidden;
+  transition: padding 0.18s ease;
 }
 
 :root[data-theme="dark"] .sidebar {
@@ -917,6 +998,80 @@ select:focus-visible {
   align-items: center;
   justify-content: space-between;
   padding-right: 4px;
+}
+
+.sidebar-collapse-button {
+  flex: 0 0 auto;
+}
+
+.sidebar.collapsed {
+  padding: 12px 8px;
+  gap: 10px;
+}
+
+.sidebar.collapsed .sidebar-top {
+  justify-content: center;
+  padding-right: 0;
+  gap: 0;
+}
+
+.sidebar.collapsed .brand {
+  justify-content: center;
+}
+
+.sidebar.collapsed .brand-name,
+.sidebar.collapsed .recent,
+.sidebar.collapsed .profile-trigger > div:not(.avatar),
+.sidebar.collapsed .profile-trigger > svg {
+  display: none;
+}
+
+.sidebar.collapsed .sidebar-collapse-button {
+  margin-left: 0;
+}
+
+.sidebar.collapsed .new-chat {
+  width: 44px;
+  height: 40px;
+  margin: 0 auto;
+  padding: 0;
+  gap: 0;
+  font-size: 0;
+}
+
+.sidebar.collapsed .side-nav {
+  gap: 6px;
+}
+
+.sidebar.collapsed .side-nav button {
+  height: 42px;
+  justify-content: center;
+  gap: 0;
+  padding: 0;
+  font-size: 0;
+}
+
+.sidebar.collapsed .side-nav button svg {
+  width: 22px;
+  height: 22px;
+}
+
+.sidebar.collapsed .user-card {
+  min-height: 46px;
+  padding-top: 8px;
+  grid-template-columns: 1fr;
+  justify-items: center;
+}
+
+.sidebar.collapsed .profile-trigger {
+  grid-template-columns: 1fr;
+  justify-items: center;
+}
+
+.sidebar.collapsed .profile-popover {
+  left: 82px;
+  bottom: 12px;
+  width: min(360px, calc(100vw - 100px));
 }
 
 .new-chat {
@@ -938,7 +1093,8 @@ select:focus-visible {
 }
 
 .side-nav button,
-.recent button {
+.recent button,
+.recent-row {
   width: 100%;
   min-width: 0;
   background: transparent;
@@ -957,7 +1113,7 @@ select:focus-visible {
 }
 
 .side-nav button.active,
-.recent button.active {
+.recent-row.active {
   background: var(--orange-soft);
   color: var(--orange);
 }
@@ -981,15 +1137,22 @@ select:focus-visible {
   font-weight: 600;
 }
 
-.recent button {
+.recent-row {
   flex: 0 0 34px;
+  height: 34px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px;
+  align-items: center;
+}
+
+.recent-open {
   height: 34px;
   gap: 8px;
   padding: 0 9px;
   color: var(--muted);
 }
 
-.recent button span {
+.recent-open span {
   flex: 1;
   overflow: hidden;
   white-space: nowrap;
@@ -997,10 +1160,30 @@ select:focus-visible {
   text-align: left;
 }
 
-.recent button em {
+.recent-open em {
   flex: 0 0 auto;
   font-style: normal;
   font-size: 12px;
+}
+
+.recent-delete {
+  width: 28px;
+  height: 28px;
+  margin-right: 3px;
+  display: grid;
+  place-items: center;
+  color: var(--subtle);
+  opacity: 0;
+}
+
+.recent-row:hover .recent-delete,
+.recent-delete:focus-visible {
+  opacity: 1;
+}
+
+.recent-delete:hover {
+  color: #ff4b4b;
+  background: rgba(255, 68, 68, 0.12);
 }
 
 .user-card {
@@ -1531,6 +1714,16 @@ select:focus-visible {
   padding: 10px;
 }
 
+.workspace-view {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+
+.workspace-view[hidden] {
+  display: none;
+}
+
 .panel {
   border: 1px solid var(--line);
   border-radius: 16px;
@@ -1893,23 +2086,23 @@ select:focus-visible {
   display: grid;
   grid-template-columns: 34px minmax(0, min(820px, calc(100% - 44px)));
   gap: 10px;
-  margin: 0 0 8px;
+  margin: 0 0 12px;
   max-width: 100%;
 }
 
 .assistant-card {
   min-width: 0;
   max-width: 100%;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--surface);
-  box-shadow: var(--shadow-mid);
-  overflow: hidden;
+  padding: 2px 0 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
 }
 
 .assistant-row.error .assistant-card {
-  border-color: rgba(239, 68, 68, 0.45);
+  border-color: transparent;
 }
 
 .assistant-head {
@@ -1951,39 +2144,55 @@ select:focus-visible {
 }
 
 .agent-trace {
-  margin: 6px 0 8px;
-  border: 1px solid rgba(231, 238, 247, 0.1);
-  border-radius: 10px;
-  background: rgba(7, 12, 18, 0.38);
-  padding: 8px 10px;
-  max-height: 180px;
-  overflow: auto;
+  margin: 4px 0 8px;
+  border: 0;
+  border-left: 1px solid rgba(255, 90, 0, 0.35);
+  border-radius: 0;
+  background: transparent;
+  padding: 2px 0 2px 10px;
   min-width: 0;
 }
 
-.agent-trace-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 6px;
+.agent-trace-summary {
+  width: 100%;
+  min-width: 0;
+  min-height: 28px;
+  border: 0;
+  background: transparent;
   color: var(--muted);
-  font-size: 11px;
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 7px;
+  padding: 0;
+  text-align: left;
+  font-size: 12px;
 }
 
-.agent-trace-head span {
+.agent-trace-summary strong {
   color: var(--text);
-  font-weight: 800;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
-.agent-trace-head em {
+.agent-trace-summary em,
+.agent-trace-summary small,
+.agent-trace-summary b {
   font-style: normal;
   color: var(--subtle);
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .agent-trace-list {
+  max-height: 150px;
+  overflow: auto;
   display: grid;
   gap: 2px;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(231, 238, 247, 0.08);
 }
 
 .agent-trace-row {
@@ -2023,10 +2232,74 @@ select:focus-visible {
   background: var(--subtle);
 }
 
+.agent-trace-node.success,
 .agent-trace-row.success .agent-trace-node { background: var(--green); }
+.agent-trace-node.running,
+.agent-trace-node.pending,
+.agent-trace-node.warn,
 .agent-trace-row.running .agent-trace-node,
-.agent-trace-row.pending .agent-trace-node { background: var(--orange); }
+.agent-trace-row.pending .agent-trace-node,
+.agent-trace-row.warn .agent-trace-node { background: var(--orange); }
+.agent-trace-node.danger,
 .agent-trace-row.danger .agent-trace-node { background: var(--red); }
+
+.inline-permission-request {
+  margin: 6px 0 8px;
+  max-width: 680px;
+  border: 1px solid rgba(255, 90, 0, 0.36);
+  border-radius: 10px;
+  background: rgba(255, 90, 0, 0.08);
+  padding: 9px 10px;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 8px;
+  color: var(--muted);
+}
+
+.inline-permission-request > svg {
+  color: var(--orange);
+  margin-top: 1px;
+}
+
+.inline-permission-request strong,
+.inline-permission-request span {
+  display: block;
+  min-width: 0;
+}
+
+.inline-permission-request strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.inline-permission-request span {
+  margin-top: 3px;
+  line-height: 1.45;
+}
+
+.inline-permission-actions {
+  grid-column: 2;
+  margin-top: 6px;
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.inline-permission-actions button {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 90, 0, 0.32);
+  border-radius: 8px;
+  background: rgba(255, 90, 0, 0.12);
+  color: var(--orange);
+  font-weight: 700;
+}
+
+.inline-permission-actions button:first-child {
+  border-color: transparent;
+  background: linear-gradient(180deg, #ff6a09, #ff4b00);
+  color: #fff;
+}
 
 .agent-trace-sources {
   display: flex;
@@ -2414,12 +2687,13 @@ select:focus-visible {
 }
 
 .message-meta {
+  display: none;
   color: var(--muted);
   font-size: 12px;
 }
 
 .message-actions {
-  display: flex;
+  display: none;
   align-items: center;
   gap: 7px;
   margin-top: 8px;
@@ -2444,17 +2718,35 @@ select:focus-visible {
   justify-content: center;
 }
 
+.message-retry-link {
+  height: 28px;
+  margin-top: 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--orange);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  font-weight: 700;
+}
+
+.message-retry-link:hover {
+  color: var(--orange-2);
+}
+
 .composer {
   flex: 0 0 auto;
   position: relative;
-  z-index: 40;
+  z-index: 180;
   margin: 4px 0 0;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface);
   box-shadow: var(--shadow-low);
   padding: 8px 12px;
-  max-height: 174px;
+  max-height: 238px;
   min-width: 0;
   overflow: visible;
 }
@@ -2472,6 +2764,115 @@ select:focus-visible {
   line-height: 1.4;
   padding-right: 4px;
   scrollbar-width: thin;
+}
+
+.attachment-tray {
+  margin: 7px 0 6px;
+  display: flex;
+  gap: 7px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+
+.attachment-tray.compact {
+  max-width: 100%;
+  margin: 8px 0 2px;
+  flex-wrap: wrap;
+  overflow: visible;
+  padding-bottom: 0;
+}
+
+.attachment-chip {
+  flex: 0 0 auto;
+  position: relative;
+  max-width: 260px;
+  min-height: 54px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(7, 12, 18, 0.38);
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 22px;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 8px;
+}
+
+.attachment-tray.compact .attachment-chip {
+  max-width: min(100%, 250px);
+  min-height: 38px;
+  grid-template-columns: 28px minmax(0, 1fr);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.attachment-thumb {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: rgba(255, 90, 0, 0.14);
+  color: var(--orange);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.attachment-chip.file .attachment-thumb {
+  background: rgba(231, 238, 247, 0.12);
+  color: var(--muted);
+}
+
+.attachment-tray.compact .attachment-thumb {
+  width: 28px;
+  height: 28px;
+}
+
+.attachment-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.attachment-chip strong,
+.attachment-chip span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.attachment-chip strong {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.attachment-chip span {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.attachment-chip button {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.78);
+}
+
+.attachment-chip button:hover {
+  color: #fff;
+  background: rgba(239, 68, 68, 0.92);
+}
+
+.attachment-tray:not(.compact) .attachment-chip button {
+  position: absolute;
+  right: -6px;
+  top: -6px;
 }
 
 .composer-bottom {
@@ -2510,8 +2911,24 @@ select:focus-visible {
 }
 
 .tool-row button {
-  flex: 0 1 104px;
+  flex: 0 0 auto;
   min-width: 0;
+}
+
+.composer-file-button {
+  width: 34px;
+  justify-content: center;
+  padding: 0;
+}
+
+.composer-file-button span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .tool-row button span,
@@ -2526,7 +2943,7 @@ select:focus-visible {
   gap: 6px;
   flex: 0 0 auto;
   position: relative;
-  z-index: 45;
+  z-index: 220;
 }
 
 .composer-controls select,
@@ -2541,6 +2958,12 @@ select:focus-visible {
 .agent-select,
 .permission-select {
   position: relative;
+  z-index: 230;
+}
+
+.agent-select.open,
+.permission-select.open {
+  z-index: 260;
 }
 
 .agent-select > button,
@@ -2576,7 +2999,7 @@ select:focus-visible {
   position: absolute;
   right: 0;
   bottom: calc(100% + 6px);
-  z-index: 120;
+  z-index: 1000;
   width: 142px;
   padding: 5px;
   border: 1px solid rgba(255, 90, 0, 0.42);
@@ -2617,7 +3040,7 @@ select:focus-visible {
   position: absolute;
   right: 0;
   bottom: calc(100% + 6px);
-  z-index: 125;
+  z-index: 1000;
   width: 286px;
   padding: 6px;
   border: 1px solid rgba(255, 90, 0, 0.42);
@@ -3288,6 +3711,84 @@ select:focus-visible {
   display: flex;
   flex-direction: column;
   min-height: 0;
+}
+
+.system-settings-page {
+  height: 100%;
+  min-height: 0;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+}
+
+.system-settings-tabs {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.system-settings-tabs button {
+  min-width: 0;
+  min-height: 48px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--muted);
+  display: grid;
+  grid-template-columns: 20px minmax(0, max-content) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.system-settings-tabs button svg {
+  color: var(--muted);
+}
+
+.system-settings-tabs button span {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.system-settings-tabs button em {
+  min-width: 0;
+  font-size: 12px;
+  font-style: normal;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.system-settings-tabs button.active {
+  border-color: rgba(255, 90, 0, 0.48);
+  background: rgba(255, 90, 0, 0.1);
+  color: var(--orange);
+}
+
+.system-settings-tabs button.active svg,
+.system-settings-tabs button.active span {
+  color: var(--orange);
+}
+
+.system-settings-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.embedded-management,
+.embedded-settings-section {
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .management-toolbar,
@@ -4382,6 +4883,14 @@ select:focus-visible {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.diagnostics-page.embedded-settings-section,
+.management.embedded-management {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .diagnostics-summary {
@@ -5672,7 +6181,7 @@ select:focus-visible {
 }
 
 .side-nav button:not(.active):hover,
-.recent button:not(.active):hover {
+.recent-row:not(.active):hover {
   background: var(--hover-surface);
   color: var(--text);
 }
@@ -5709,7 +6218,6 @@ select:focus-visible {
   background: rgba(12, 19, 28, 0.92);
 }
 
-.assistant-card:hover,
 .permission-mini-card:hover,
 .chart-card:hover,
 .rail-card:hover,
@@ -6373,8 +6881,9 @@ select:focus-visible {
   .side-nav button span,
   .new-chat span,
   .recent h3,
-  .recent button span,
-  .recent button em,
+  .recent-open span,
+  .recent-open em,
+  .recent-delete,
   .profile-trigger > div:not(.avatar),
   .profile-trigger > svg {
     display: none;
@@ -6382,7 +6891,7 @@ select:focus-visible {
 
   .new-chat,
   .side-nav button,
-  .recent button {
+  .recent-open {
     justify-content: center;
     padding: 0;
     font-size: 0;
@@ -6404,9 +6913,10 @@ select:focus-visible {
     padding-top: 8px;
   }
 
-  .recent button {
+  .recent-row {
     height: 34px;
     flex-basis: 34px;
+    grid-template-columns: 1fr;
   }
 
   .user-card {

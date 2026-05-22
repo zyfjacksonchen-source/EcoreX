@@ -495,12 +495,12 @@ check('high privilege IPC requires trusted renderer and auth', () => {
       'event.senderFrame !== event.sender.mainFrame',
       'return isAllowedRendererUrl(senderUrl)',
       "const WINDOW_CONTROL_ACTIONS = new Set(['minimize', 'maximize', 'close'])",
-      "const unauthorized = assertAuthorizedIpc(event, 'window:control', [payload])",
+      "if (!assertTrustedIpc(event, 'window:control')) return",
       'if (!WINDOW_CONTROL_ACTIONS.has(payload.action))'
     ],
-    'IPC trust and window control auth'
+    'IPC trust and window control safety'
   );
-  assertMatches(preload, /windowControl:\s*\(action\)\s*=>\s*ipcRenderer\.send\('window:control',\s*withAuth\(\{\s*action\s*\}\)\)/, 'window control must carry the isolated auth token.');
+  assertMatches(preload, /windowControl:\s*\(action\)\s*=>\s*ipcRenderer\.send\('window:control',\s*withAuth\(\{\s*action\s*\}\)\)/, 'window control should keep the isolated auth token when available.');
 });
 
 check('crash recovery and diagnostics package are production-safe', () => {
@@ -559,11 +559,27 @@ check('crash recovery and diagnostics package are production-safe', () => {
   assertMatches(main, /Bearer\\s\+\[A-Za-z0-9._~\+\/=-\]\{16,\}[\s\S]*Bearer \[REDACTED\]/, 'diagnostics redaction must scrub bearer tokens.');
 });
 
-check('window default and minimum size guardrails', () => {
+check('window default, preload and minimum size guardrails', () => {
   const main = readText('electron/main.cjs');
-  includesAll(main, ['function defaultWindowBounds', 'screen.getPrimaryDisplay()', 'width: bounds.width', 'height: bounds.height', 'minWidth: 1040', 'minHeight: 720'], 'desktop window sizing guardrails');
+  includesAll(main, ['function defaultWindowBounds', 'screen.getPrimaryDisplay()', 'width: bounds.width', 'height: bounds.height', 'minWidth: 800', 'minHeight: 600', 'show: true', 'function revealStartupWindow', "revealStartupWindow('created')", 'mainWindow.maximize()', 'function startStartupPreload', 'function waitForStartupPreload', "startStartupPreload('native-loading')", 'collectBackendStatus(null, { refresh: false })'], 'desktop window sizing and startup preload guardrails');
+  includesAll(main, ['locateClaude()', 'Promise.resolve().then(() => collectCapabilities())', 'publicAuthSession(readAuthSession({ refresh: true }))', 'await waitForStartupPreload(startupPreload)', 'loadRendererEntry()'], 'native splash preload must finish or time out before renderer entry');
   const css = readText('src/styles.css');
-  includesAll(css, ['min-width: 1040px'], 'renderer minimum width CSS');
+  includesAll(css, ['min-width: 800px'], 'renderer minimum width CSS');
+  const renderer = readText('src/main.jsx');
+  const app = readText('src/App.jsx');
+  includesAll(renderer, ['window.__ecorexFinishStartup', 'finishStartupLoader', '15000'], 'renderer startup loader completion fallback');
+  includesAll(app, ['startupReadyRef', 'const startupWork = Promise.allSettled', 'refreshAuthStatus()', 'refreshBackend()', 'withStartupTimeout(startupWork)', 'window.__ecorexFinishStartup?.()'], 'renderer startup loader waits for auth/backend preload');
+  const directStartupFinally = /const startupWork = Promise\.allSettled\(\[[\s\S]*?refreshAuthStatus\(\),[\s\S]*?refreshBackend\(\)[\s\S]*?\]\)\.finally\(\(\) => \{[\s\S]*?window\.__ecorexFinishStartup\?\.\(\);/.test(app);
+  const wrappedStartupFinally = /const startupWork = Promise\.allSettled\(\[[\s\S]*?refreshAuthStatus\(\),[\s\S]*?refreshBackend\(\)[\s\S]*?\]\);[\s\S]*?withStartupTimeout\(startupWork\)\.finally\(\(\) => \{[\s\S]*?window\.__ecorexFinishStartup\?\.\(\);/.test(app);
+  assert(
+    directStartupFinally || wrappedStartupFinally,
+    'renderer startup loader must finish after the auth/backend preload promise settles.'
+  );
+  assertMatches(
+    main,
+    /mainWindow\.loadURL\(startupSplashUrl\)[\s\S]*?await waitForStartupPreload\(startupPreload\);[\s\S]*?loadRendererEntry\(\);/,
+    'native startup splash must wait for main-process preload before loading the renderer.'
+  );
 });
 
 check('packaged renderer trust boundary is fixed to app entry', () => {
@@ -600,7 +616,20 @@ check('agent runtime production guardrails', () => {
       "if (status === 'timeout') return 'timeout'",
       'ECOREX_AGENT_SYSTEM_PROMPT',
       'function agentRecoveryHint',
-      'recoveryHint: agentRecoveryHint'
+      'recoveryHint: agentRecoveryHint',
+      'function defaultCommandCwd',
+      'process.resourcesPath',
+      'function stableClaudeSessionUuid',
+      'sanitizeClaudeSessionId',
+      'function claudeSessionTranscriptExists',
+      "'--session-id'",
+      "'--resume'",
+      'claudeSessionId',
+      'contextManagement',
+      'const CLAUDE_AUTO_ALLOWED_TOOL_SET',
+      "'--tools'",
+      "'--allowedTools'",
+      'CLAUDE_AUTO_ALLOWED_TOOL_SET'
     ],
     'agent runtime guardrails'
   );
@@ -609,6 +638,16 @@ check('agent runtime production guardrails', () => {
   assertMatches(main, /child\.stdin\.end\(`\$\{prompt\}\\n`\)/, 'agent prompt must be written to stdin.');
   assertNotMatches(main, /args\.push\(\s*prompt\s*\)|spawn\([^)]*prompt/s, 'agent prompt must not be passed through process argv.');
   assert(/const profile = store\.profiles\.find\(\(item\) => item\.model === normalizedModel\) \|\| null/.test(main), 'model profile env must only match the selected model exactly.');
+  assertMatches(main, /default:\s*\{[\s\S]*?permissionMode:\s*'auto'[\s\S]*?cliMode:\s*'auto'/, 'default permission mode must use Claude auto mode for low-risk tool calls.');
+  assertMatches(main, /const CLAUDE_AUTO_ALLOWED_TOOL_SET = 'WebFetch,WebSearch,Task,TodoRead,TodoWrite,mcp__\*'/, 'auto allowed tools must be limited to web and low-risk tools.');
+  const autoAllowedTools = (main.match(/const CLAUDE_AUTO_ALLOWED_TOOL_SET = '([^']*)'/)?.[1] || '').split(',').map((tool) => tool.trim()).filter(Boolean);
+  for (const forbiddenTool of ['Bash', 'Read', 'Write', 'Edit', 'MultiEdit', 'NotebookRead', 'NotebookEdit', 'Glob', 'Grep', 'LS']) {
+    assert(!autoAllowedTools.includes(forbiddenTool), `file and command tool ${forbiddenTool} must not be auto-allowed.`);
+  }
+  assertMatches(main, /sanitizeClaudeSessionId\(payload\.claudeSessionId \|\| payload\.conversationId,\s*payload\.sessionId\)/, 'Claude session id must be stable for frontend conversations with session fallback.');
+  assertMatches(main, /const claudeResumeExistingSession = claudeSessionTranscriptExists\(claudeSessionId\)/, 'Claude session reuse must detect existing CLI transcripts.');
+  assertMatches(main, /if \(claudeResumeExistingSession\) \{\s*args\.push\('--resume', claudeSessionId\);\s*\} else \{\s*args\.push\('--session-id', claudeSessionId\);/s, 'Claude CLI must resume existing sessions and only create new sessions with --session-id.');
+  assertMatches(main, /entry\.claudeSessionId === requestedClaudeSessionId/, 'parallel starts for the same Claude session must be blocked before spawning.');
 });
 
 check('agent transcript history is public-safe', () => {
@@ -633,6 +672,25 @@ check('agent transcript history is public-safe', () => {
   assert(transcriptWriter, 'writeSessionTranscript block must be present.');
   assertNotMatches(transcriptWriter[0], /prompt:\s*entry\.prompt|cwd:\s*entry\.cwd/, 'transcript must not save full prompt or absolute cwd.');
   assertNotMatches(transcriptWriter[0], /\btext:\s*safeTranscriptText\(normalized\.text\)/, 'transcript must store textPreview instead of full event text.');
+});
+
+check('chat disclosure stays public-safe', () => {
+  const app = readText('src/App.jsx');
+  includesAll(
+    app,
+    [
+      'function isPublicTraceItem',
+      "if (kind === 'debug' || kind === 'assistant') return false",
+      'function publicTraceItems',
+      'slice(-6)',
+      'function InlineAgentTrace',
+      'function isContextCompactEvent',
+      'contextSummary',
+      'claude-cli-compact'
+    ],
+    'chat disclosure filtering'
+  );
+  assertNotMatches(app, /costUsd|total_cost_usd/, 'renderer chat must not render model runtime cost fields.');
 });
 
 check('fullAccess permission parameter chain', () => {
@@ -832,7 +890,13 @@ check('diagnostics health check UI is complete and static-safe', () => {
   includesAll(
     app,
     [
-      "page === 'diagnostics'",
+      'function SystemSettingsView',
+      "systemSettingsTabFromPage(page)",
+      "data-testid=\"system-settings-page\"",
+      "data-testid={`system-settings-tab-${value}`}",
+      '系统设置',
+      'MCP',
+      'SKILLS',
       '<DiagnosticsView',
       "callEcorex(['getDiagnostics', 'diagnostics.get'])",
       'function releasePackageSummary',
@@ -862,6 +926,10 @@ check('diagnostics health check UI is complete and static-safe', () => {
     ],
     'diagnostics health check renderer'
   );
+  assertMatches(app, /<nav className="side-nav">[\s\S]*?setPage\('projects'\)[\s\S]*?<\/nav>/, 'sidebar must keep project navigation available.');
+  assertNotMatches(app, /<nav className="side-nav">[\s\S]*?setPage\('(mcp|skills|diagnostics|settings)'\)[\s\S]*?<\/nav>/, 'MCP, SKILLS, and diagnostics/settings must stay out of the left sidebar.');
+  assertMatches(app, /profile-menu-grid[\s\S]*setPage\('settings'\)[\s\S]*系统设置/, 'system settings must remain reachable from the personal profile menu.');
+  assertMatches(app, /const tabs = \[[\s\S]*\['mcp', 'MCP'[\s\S]*\['skills', 'SKILLS'[\s\S]*\['diagnostics'/, 'system settings must expose MCP, SKILLS, and diagnostics as tabs.');
   assertMatches(app, /async function refreshModelHealth\([\s\S]*?loadModelProfiles\(settings\.defaultModel \|\| 'sonnet'\)/, 'diagnostics model health must use stored profile metadata only.');
   assertNotMatches(app, /refreshModelHealth[\s\S]{0,500}testModel(Profile|AdapterProfile)|refreshModelHealth[\s\S]{0,500}generateModelImage/, 'diagnostics model health must not run model tests or image generation.');
   assertMatches(app, /function validateModelConnectionDraft\([\s\S]*?未发起模型调用/, 'model tests must locally report missing key/baseUrl/model without calling providers.');
@@ -979,6 +1047,105 @@ check('project workspaces isolate advertising context and memory', () => {
     ],
     'project workspace layout'
   );
+});
+
+check('renderer default copy is advertising-focused', () => {
+  const app = readText('src/App.jsx');
+  const rendererFiles = firstPartyTextFiles().filter((file) => {
+    const normalized = toPosix(file);
+    return normalized === 'src/App.jsx' || normalized.startsWith('dist/');
+  });
+  const forbiddenLegacyDomainPattern = /双碳|碳排|碳核算|减排|能耗|排放|绿色电力|供应链 Scope|碳资产|ESG|tCO2e/;
+  includesAll(
+    app,
+    [
+      '广告投放',
+      '素材创意',
+      '预算优化',
+      '归因分析',
+      '投放数据分析',
+      '生成客户周报',
+      '素材审核',
+      '广告投放与项目分析上下文',
+      '你可以问我任何问题'
+    ],
+    'advertising-focused renderer copy'
+  );
+  for (const file of rendererFiles) {
+    assertNotMatches(readText(file), forbiddenLegacyDomainPattern, `${file} must not contain legacy carbon/ESG default copy.`);
+  }
+});
+
+check('macOS packaging, release policy, and telemetry guardrails', () => {
+  const pkg = packageJson();
+  const main = readText('electron/main.cjs');
+  const preload = readText('electron/preload.cjs');
+  const app = readText('src/App.jsx');
+  for (const scriptName of [
+    'dist:mac',
+    'verify:mac',
+    'assets:mac-icon',
+    'release:policy',
+    'verify:install-matrix',
+    'test:real-agent',
+    'audit:security'
+  ]) {
+    assert(pkg.scripts?.[scriptName], `package script ${scriptName} is missing.`);
+  }
+  includesAll(
+    pkg.scripts['dist:mac'],
+    ['npm run assets:mac-icon', 'electron-builder --mac --x64 --arm64', 'npm run release:policy', 'npm run verify:mac'],
+    'mac dist script'
+  );
+  const build = pkg.build || {};
+  assert(build.mac?.hardenedRuntime === true, 'mac hardened runtime must be enabled.');
+  assert(build.mac?.entitlements === 'build/entitlements.mac.plist', 'mac entitlements file must be configured.');
+  assert(build.mac?.entitlementsInherit === 'build/entitlements.mac.inherit.plist', 'mac inherited entitlements file must be configured.');
+  assertExistingFile(rel('build/entitlements.mac.plist'), 'mac entitlements');
+  assertExistingFile(rel('build/entitlements.mac.inherit.plist'), 'mac inherited entitlements');
+  assertIncludesPatterns(build.files, [
+    'node_modules/@anthropic-ai/claude-code-darwin-arm64/**/*',
+    'node_modules/@anthropic-ai/claude-code-darwin-x64/**/*'
+  ], 'build.files mac native packages');
+  assertIncludesPatterns(build.asarUnpack, [
+    'node_modules/@anthropic-ai/claude-code-darwin-arm64/**/*',
+    'node_modules/@anthropic-ai/claude-code-darwin-x64/**/*'
+  ], 'build.asarUnpack mac native packages');
+  for (const file of [
+    'scripts/verify-macos-release-env.cjs',
+    'scripts/create-mac-icon.cjs',
+    'scripts/prepare-release-policy.cjs',
+    'scripts/verify-install-matrix.cjs',
+    'scripts/real-agent-stress.cjs',
+    'scripts/security-audit.cjs',
+    'docs/production-qa-checklist.md'
+  ]) {
+    assertExistingFile(rel(file), file);
+  }
+  includesAll(
+    main,
+    [
+      "const TELEMETRY_QUEUE_FILE_NAME = 'telemetry-queue.json'",
+      'anonymousTelemetryEnabled',
+      'function publicTelemetryStatus',
+      'function enqueueAnonymousTelemetry',
+      "handleSafe('telemetry:status'",
+      "handleSafe('telemetry:flush'"
+    ],
+    'anonymous telemetry main guardrails'
+  );
+  includesAll(
+    preload,
+    ['getTelemetryStatus', 'flushTelemetry'],
+    'anonymous telemetry preload bridge'
+  );
+  includesAll(
+    app,
+    ['匿名诊断上报', '诊断上报端点', 'anonymousTelemetryEnabled', 'telemetryEndpoint'],
+    'anonymous telemetry renderer settings'
+  );
+  assertMatches(main, /anonymousTelemetryEnabled:\s*raw\.anonymousTelemetryEnabled\s*===\s*true/, 'anonymous telemetry must default off.');
+  assertMatches(main, /includesPrompts:\s*false[\s\S]*includesApiKeys:\s*false[\s\S]*includesLocalPathBodies:\s*false/, 'telemetry privacy summary must exclude prompts, keys, and local path bodies.');
 });
 
 check('package build config excludes local model/secrets storage', () => {

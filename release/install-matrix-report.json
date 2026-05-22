@@ -1,0 +1,103 @@
+{
+  "schema": "ecorex.install-matrix.v1",
+  "generatedAt": "2026-05-22T02:23:34.737Z",
+  "releaseDir": "C:\\EcoreX-Agent\\release",
+  "artifacts": [
+    {
+      "name": "EcoreX Agent Setup 0.1.0.exe",
+      "size": 147805738,
+      "sha256": "3d0fcdcf8a47e655715994a594b25fc6cafeba3b78c00640cb7578f9fb6220c8",
+      "updatedAt": "2026-05-22T02:23:12.629Z"
+    }
+  ],
+  "platforms": [
+    {
+      "id": "win10-x64",
+      "name": "Windows 10 x64",
+      "artifactReady": true,
+      "artifacts": [
+        {
+          "name": "EcoreX Agent Setup 0.1.0.exe",
+          "size": 147805738,
+          "sha256": "3d0fcdcf8a47e655715994a594b25fc6cafeba3b78c00640cb7578f9fb6220c8",
+          "updatedAt": "2026-05-22T02:23:12.629Z"
+        }
+      ],
+      "manualChecks": [
+        "Defender/SmartScreen download",
+        "first launch",
+        "local owner binding",
+        "model connection test",
+        "project create/switch",
+        "uninstall",
+        "reinstall keeps no stale crash loop"
+      ],
+      "status": "ready-for-clean-machine-test"
+    },
+    {
+      "id": "win11-x64",
+      "name": "Windows 11 x64",
+      "artifactReady": true,
+      "artifacts": [
+        {
+          "name": "EcoreX Agent Setup 0.1.0.exe",
+          "size": 147805738,
+          "sha256": "3d0fcdcf8a47e655715994a594b25fc6cafeba3b78c00640cb7578f9fb6220c8",
+          "updatedAt": "2026-05-22T02:23:12.629Z"
+        }
+      ],
+      "manualChecks": [
+        "Defender/SmartScreen download",
+        "first launch",
+        "full access confirmation",
+        "diagnostics export",
+        "concurrent task cancel",
+        "uninstall",
+        "reinstall"
+      ],
+      "status": "ready-for-clean-machine-test"
+    },
+    {
+      "id": "macos-arm64",
+      "name": "macOS Apple Silicon",
+      "artifactReady": false,
+      "artifacts": [],
+      "manualChecks": [
+        "Gatekeeper open",
+        "first launch",
+        "keychain safeStorage",
+        "model connection test",
+        "project memory isolation",
+        "move to Applications",
+        "uninstall from Applications"
+      ],
+      "status": "artifact-missing"
+    },
+    {
+      "id": "macos-x64",
+      "name": "macOS Intel",
+      "artifactReady": false,
+      "artifacts": [],
+      "manualChecks": [
+        "Gatekeeper open",
+        "first launch",
+        "keychain safeStorage",
+        "model connection test",
+        "project memory isolation",
+        "move to Applications",
+        "uninstall from Applications"
+      ],
+      "status": "artifact-missing"
+    }
+  ],
+  "requiredManualEvidence": [
+    "OS build and architecture screenshot",
+    "installer hash before install",
+    "first launch screenshot",
+    "model connection result",
+    "project create/switch result",
+    "diagnostics export after run",
+    "uninstall/reinstall result",
+    "antivirus or Gatekeeper verdict"
+  ]
+}

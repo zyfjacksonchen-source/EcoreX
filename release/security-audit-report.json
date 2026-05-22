@@ -1,0 +1,147 @@
+{
+  "schema": "ecorex.security-audit.v1",
+  "generatedAt": "2026-05-22T02:14:06.222Z",
+  "strict": false,
+  "production": {
+    "info": 0,
+    "low": 0,
+    "moderate": 0,
+    "high": 0,
+    "critical": 0,
+    "total": 0,
+    "advisories": []
+  },
+  "allDependencies": {
+    "info": 0,
+    "low": 0,
+    "moderate": 0,
+    "high": 11,
+    "critical": 0,
+    "total": 11,
+    "advisories": [
+      {
+        "name": "@electron/rebuild",
+        "severity": "high",
+        "isDirect": false,
+        "range": "3.2.10 - 4.0.2",
+        "fixAvailable": {
+          "name": "electron-builder",
+          "version": "26.8.1",
+          "isSemVerMajor": true
+        }
+      },
+      {
+        "name": "app-builder-lib",
+        "severity": "high",
+        "isDirect": false,
+        "range": "23.0.7 - 26.5.0",
+        "fixAvailable": {
+          "name": "electron-builder",
+          "version": "26.8.1",
+          "isSemVerMajor": true
+        }
+      },
+      {
+        "name": "cacache",
+        "severity": "high",
+        "isDirect": false,
+        "range": "14.0.0 - 18.0.4",
+        "fixAvailable": {
+          "name": "electron-builder",
+          "version": "26.8.1",
+          "isSemVerMajor": true
+        }
+      },
+      {
+        "name": "dmg-builder",
+        "severity": "high",
+        "isDirect": false,
+        "range": "23.0.7 - 26.5.0",
+        "fixAvailable": {
+          "name": "electron-builder",
+          "version": "26.8.1",
+          "isSemVerMajor": true
+        }
+      },
+      {
+        "name": "electron",
+        "severity": "high",
+        "isDirect": true,
+        "range": "<=39.8.4",
+        "fixAvailable": {
+          "name": "electron",
+          "version": "42.2.0",
+          "isSemVerMajor": true
+        }
+      },
+      {
+        "name": "electron-builder",
+        "severity": "high",
+        "isDirect": true,
+        "range": "19.25.0 || 23.0.7 - 26.5.0",
+        "fixAvailable": {
+          "name": "electron-builder",
+          "version": "26.8.1",
+          "isSemVerMajor": true
+        }
+      },
+      {
+        "name": "electron-builder-squirrel-windows",
+        "severity": "high",
+        "isDirect": false,
+        "range": "23.0.7 - 26.5.0",
+        "fixAvailable": {
+          "name": "electron-builder",
+          "version": "26.8.1",
+          "isSemVerMajor": true
+        }
+      },
+      {
+        "name": "glob",
+        "severity": "high",
+        "isDirect": false,
+        "range": "10.2.0 - 10.4.5",
+        "fixAvailable": true
+      },
+      {
+        "name": "make-fetch-happen",
+        "severity": "high",
+        "isDirect": false,
+        "range": "7.1.1 - 14.0.0",
+        "fixAvailable": {
+          "name": "electron-builder",
+          "version": "26.8.1",
+          "isSemVerMajor": true
+        }
+      },
+      {
+        "name": "node-gyp",
+        "severity": "high",
+        "isDirect": false,
+        "range": "<=10.3.1",
+        "fixAvailable": {
+          "name": "electron-builder",
+          "version": "26.8.1",
+          "isSemVerMajor": true
+        }
+      },
+      {
+        "name": "tar",
+        "severity": "high",
+        "isDirect": false,
+        "range": "<=7.5.10",
+        "fixAvailable": {
+          "name": "electron-builder",
+          "version": "26.8.1",
+          "isSemVerMajor": true
+        }
+      }
+    ]
+  },
+  "policy": {
+    "productionCriticalOrHighFails": true,
+    "productionAnyVulnerabilityFails": true,
+    "devCriticalOrHighFailsOnlyInStrict": true,
+    "electronRuntimeUpgradeRequiredBeforePublicRelease": true
+  }
+}

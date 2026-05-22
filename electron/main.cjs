@@ -12,7 +12,9 @@ const runningAgents = new Map();
 const pendingAgentStarts = new Map();
 const recentAgentStartsByWindow = new Map();
 let mainWindow = null;
+let startupSplashUrl = '';
 let cachedClaude = null;
+let cachedClaudeCheckedAt = 0;
 let cachedCapabilities = null;
 let cachedBackendStatus = null;
 let backendStatusInflight = null;
@@ -23,10 +25,12 @@ const MAX_RUNNING_AGENTS = 4;
 const AGENT_START_DEBOUNCE_MS = 1200;
 const AGENT_START_PENDING_TTL_MS = 15 * 1000;
 const BACKEND_STATUS_TTL_MS = 3 * 1000;
+const CLAUDE_TRANSCRIPT_CACHE_TTL_MS = 60 * 1000;
 const RENDERER_RECOVERY_DELAY_MS = 800;
 const RENDERER_UNRESPONSIVE_RECOVERY_MS = 15 * 1000;
 const RENDERER_RECOVERY_WINDOW_MS = 60 * 1000;
 const MAX_RENDERER_RECOVERY_ATTEMPTS = 3;
+const STARTUP_PRELOAD_TIMEOUT_MS = 12 * 1000;
 const MAX_PROMPT_CHARS = 80_000;
 const MIN_PROMPT_CHARS = 1_000;
 const MAX_PROMPT_PREVIEW_CHARS = 240;
@@ -37,6 +41,7 @@ const SECRETS_FILE_NAME = 'secrets.json';
 const MODEL_PROFILES_FILE_NAME = 'model-profiles.json';
 const SESSION_TRANSCRIPT_DIR_NAME = 'sessions';
 const CRASH_SUMMARY_FILE_NAME = 'crash-summary.json';
+const TELEMETRY_QUEUE_FILE_NAME = 'telemetry-queue.json';
 const DIAGNOSTIC_EXPORT_DIR_NAME = 'EcoreX Diagnostics';
 const PROJECT_STATE_FILE_NAME = '.ecorex-projects.json';
 const PROJECT_METADATA_FILE_NAME = '.ecorex-project.json';
@@ -46,6 +51,7 @@ const PROJECT_CONTEXT_FILE_NAME = 'project-context.json';
 const LOG_FILE_NAME = 'ecorex-agent.log';
 const MAX_LOG_LINES = 200;
 const MAX_CRASH_EVENTS = 50;
+const MAX_TELEMETRY_EVENTS = 100;
 const MAX_DIAGNOSTIC_LOG_LINES = 80;
 const MAX_DIAGNOSTIC_SESSIONS = 12;
 const MAX_COMMAND_OUTPUT_CHARS = 2 * 1024 * 1024;
@@ -68,6 +74,7 @@ const MAX_SECRET_VALUE_CHARS = 20_000;
 const MAX_MODEL_PROFILES = 20;
 const MAX_MODEL_PROFILE_TEXT_CHARS = 2048;
 const MODEL_PROFILE_TEST_TIMEOUT_MS = 20 * 1000;
+const ATTACHMENT_PREVIEW_MAX_BYTES = 2 * 1024 * 1024;
 const LOCAL_AUTH_HASH_ITERATIONS = 210_000;
 const LOCAL_AUTH_MIN_PASSWORD_CHARS = 8;
 const AUTH_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
@@ -76,6 +83,7 @@ const MAX_PROJECTS = 100;
 const MAX_PROJECT_STATS_ITEMS = 2000;
 const FULL_ACCESS_PERMISSION_MODE = 'fullAccess';
 const FULL_ACCESS_CLAUDE_FLAG = '--dangerously-skip-permissions';
+const CLAUDE_AUTO_ALLOWED_TOOL_SET = 'WebFetch,WebSearch,Task,TodoRead,TodoWrite,mcp__*';
 const PUBLIC_PERMISSION_MODES = ['default', FULL_ACCESS_PERMISSION_MODE];
 const WINDOW_CONTROL_ACTIONS = new Set(['minimize', 'maximize', 'close']);
 const PERMISSION_POLICIES = Object.freeze({
@@ -83,11 +91,11 @@ const PERMISSION_POLICIES = Object.freeze({
     value: 'default',
     accessMode: 'default',
     mode: 'default',
-    permissionMode: 'default',
-    cliMode: 'default',
+    permissionMode: 'auto',
+    cliMode: 'auto',
     cliFlags: [],
     label: '默认权限',
-    description: '使用 Claude Code 默认权限策略。',
+    description: '联网搜索、网页读取和常规工具自动执行；文件读写、命令执行和系统目录访问继续按权限确认。',
     fullAccess: false
   },
   acceptEdits: {
@@ -194,19 +202,28 @@ let agentEventSequence = 0;
 let rendererRecoveryAttempts = [];
 let rendererUnresponsiveSince = 0;
 let rendererUnresponsiveTimer = null;
+let startupPreloadPromise = null;
+let startupPreloadState = { status: 'idle' };
+const claudeTranscriptExistenceCache = new Map();
 
 const AGENT_SYSTEM_PROMPT = [
   '你是 EcoreX Agent，由 EcoreX 亦芯开发的具备自主思考能力的 AI Agent。',
   '你的主要任务是服务广告业务常用工作场景，包括但不限于品牌策略、投放计划、预算分配、素材创意、A/B 测试、数据归因、效果复盘、竞品洞察、客户简报、项目协同与自动化执行。',
   '你应主动拆解目标、识别缺失信息、给出可执行方案，并在需要调用工具、读写文件、运行命令或生成报告时清晰说明动作与结果。',
-  '默认使用专业、可靠、面向业务结果的中文表达，输出要便于广告运营、市场、创意、数据分析与项目管理团队直接落地。'
+  '默认使用专业、可靠、面向业务结果的中文表达，输出要便于广告运营、市场、创意、数据分析与项目管理团队直接落地。',
+  '输出不要使用星号作为 Markdown 标记，不要使用 *、** 或星号项目符号；列表请使用中文序号或短句换行。',
+  '需要事实核验、外部资料、网页信息或时效性内容时，应主动使用联网检索与网页读取能力；需要本地资料时，应主动使用文件读取、写入、编辑、检索、命令执行和 MCP 工具。',
+  '联网搜索、网页读取和常规非文件工具不需要先询问用户，直接执行并在结果中说明来源；涉及读取、写入、编辑用户文件、运行命令或访问系统目录时，遵循权限确认。'
 ].join('\n');
 
 const ECOREX_AGENT_SYSTEM_PROMPT = [
   '你是 EcoreX Agent，由 EcoreX 亦芯开发的具备自主思考能力的 AI Agent。',
   '你的主要任务是服务广告业务常用工作场景，包括但不限于品牌策略、投放计划、预算分配、素材创意、A/B 测试、数据归因、效果复盘、竞品洞察、客户简报、项目协同与自动化执行。',
   '你应主动拆解目标、识别缺失信息、给出可执行方案，并在需要调用工具、读写文件、运行命令或生成报告时清晰说明动作与结果。',
-  '默认使用专业、可靠、面向业务结果的中文表达，输出要便于广告运营、市场、创意、数据分析与项目管理团队直接落地。'
+  '默认使用专业、可靠、面向业务结果的中文表达，输出要便于广告运营、市场、创意、数据分析与项目管理团队直接落地。',
+  '输出不要使用星号作为 Markdown 标记，不要使用 *、** 或星号项目符号；列表请使用中文序号或短句换行。',
+  '需要事实核验、外部资料、网页信息或时效性内容时，应主动使用联网检索与网页读取能力；需要本地资料时，应主动使用文件读取、写入、编辑、检索、命令执行和 MCP 工具。',
+  '联网搜索、网页读取和常规非文件工具不需要先询问用户，直接执行并在结果中说明来源；涉及读取、写入、编辑用户文件、运行命令或访问系统目录时，遵循权限确认。'
 ].join('\n');
 
 function devPath(...segments) {
@@ -244,6 +261,7 @@ function rendererEntryUrl() {
 
 function isAllowedRendererUrl(url = '') {
   const value = String(url || '');
+  if (startupSplashUrl && value === startupSplashUrl) return true;
   if (app.isPackaged) return value === rendererEntryUrl();
   return value === 'http://127.0.0.1:5188/' || value.startsWith('http://127.0.0.1:5188/');
 }
@@ -303,11 +321,12 @@ function publicProductText(value = '') {
     .replace(/--dangerously-skip-permissions/gi, 'Full Access')
     .replace(/\bClaude Code CLI\b/gi, 'EcoreX execution engine')
     .replace(/\bClaude Code\b/gi, 'EcoreX execution engine')
-    .replace(/\bclaude\s+(mcp|plugin|plugins)\b/gi, 'EcoreX data connection')
-    .replace(/\bMCP servers?\b/gi, 'data connections')
-    .replace(/\bMCP\b/gi, 'data connection')
-    .replace(/\bplugin marketplace\b/gi, 'capability library')
-    .replace(/\bplugins?\b/gi, 'capability pack')
+    .replace(/\bclaude\s+mcp\b/gi, 'EcoreX MCP')
+    .replace(/\bclaude\s+(plugin|plugins)\b/gi, 'EcoreX SKILLS')
+    .replace(/\bMCP servers?\b/gi, 'MCP')
+    .replace(/\bMCP\b/gi, 'MCP')
+    .replace(/\bplugin marketplace\b/gi, 'SKILLS library')
+    .replace(/\bplugins?\b/gi, 'SKILLS')
     .replace(/\bCLI\b/gi, 'execution bridge');
 }
 
@@ -711,7 +730,107 @@ function recordCrashEvent(kind, details = {}) {
   } catch {
     // Crash persistence is best-effort and must never cascade.
   }
+  enqueueAnonymousTelemetry('crash', {
+    kind: event.kind,
+    process: event.process,
+    severity: event.severity,
+    appVersion: event.appVersion,
+    platform: event.platform,
+    arch: event.arch
+  });
   return event;
+}
+
+function readTelemetryQueue() {
+  try {
+    const file = telemetryQueuePath();
+    if (!fs.existsSync(file)) return { version: 1, events: [] };
+    const stat = fs.statSync(file);
+    if (!stat.isFile() || stat.size > 512 * 1024) return { version: 1, events: [] };
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const events = Array.isArray(raw?.events) ? raw.events : [];
+    return { version: 1, events: events.slice(-MAX_TELEMETRY_EVENTS) };
+  } catch {
+    return { version: 1, events: [] };
+  }
+}
+
+function writeTelemetryQueue(events = []) {
+  atomicWriteJson(telemetryQueuePath(), {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    events: events.slice(-MAX_TELEMETRY_EVENTS)
+  });
+}
+
+function publicTelemetryStatus(settings = readSettings()) {
+  const queue = readTelemetryQueue();
+  return {
+    enabled: Boolean(settings.anonymousTelemetryEnabled),
+    endpointConfigured: Boolean(settings.telemetryEndpoint),
+    queuedEvents: queue.events.length,
+    installId: settings.anonymousTelemetryEnabled ? settings.telemetryInstallId : '',
+    privacy: {
+      anonymous: true,
+      includesPrompts: false,
+      includesApiKeys: false,
+      includesLocalPathBodies: false
+    }
+  };
+}
+
+function enqueueAnonymousTelemetry(kind, payload = {}) {
+  try {
+    const settings = readSettings();
+    if (!settings.anonymousTelemetryEnabled) return null;
+    const event = {
+      id: `telemetry-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`,
+      time: new Date().toISOString(),
+      kind: safeOutputText(kind, 80),
+      installId: settings.telemetryInstallId,
+      appVersion: app.getVersion(),
+      platform: process.platform,
+      arch: process.arch,
+      payload: JSON.parse(JSON.stringify(payload || {}))
+    };
+    const queue = readTelemetryQueue();
+    writeTelemetryQueue([...queue.events, event]);
+    return event;
+  } catch {
+    return null;
+  }
+}
+
+async function flushAnonymousTelemetry(payload = {}) {
+  optionalObjectPayload(payload, 'telemetry payload');
+  const settings = readSettings();
+  const status = publicTelemetryStatus(settings);
+  if (!settings.anonymousTelemetryEnabled) return { ok: true, sent: 0, status, skipped: 'disabled' };
+  if (!settings.telemetryEndpoint) return { ok: true, sent: 0, status, skipped: 'endpoint-not-configured' };
+  const queue = readTelemetryQueue();
+  if (!queue.events.length) return { ok: true, sent: 0, status };
+  const endpoint = settings.telemetryEndpoint;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        schema: 'ecorex.anonymous-telemetry.v1',
+        sentAt: new Date().toISOString(),
+        events: queue.events
+      }),
+      signal: controller.signal
+    });
+    if (!response.ok) throw new Error(`telemetry upload failed: ${response.status}`);
+    writeTelemetryQueue([]);
+    return { ok: true, sent: queue.events.length, status: publicTelemetryStatus(readSettings()) };
+  } catch (error) {
+    return { ok: false, sent: 0, error: safeOutputText(error instanceof Error ? error.message : String(error), 1000), status };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function claimRendererRecoverySlot(now = Date.now()) {
@@ -922,6 +1041,10 @@ function sessionTranscriptDir() {
 
 function crashSummaryPath() {
   return path.join(app.getPath('userData'), CRASH_SUMMARY_FILE_NAME);
+}
+
+function telemetryQueuePath() {
+  return path.join(app.getPath('userData'), TELEMETRY_QUEUE_FILE_NAME);
 }
 
 function atomicWriteJson(file, payload) {
@@ -1536,6 +1659,27 @@ function normalizeModelName(value, fallback = 'sonnet') {
     return fallbackText;
   }
   return text;
+}
+
+function normalizeTelemetryEndpoint(value = '') {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error('Invalid telemetryEndpoint.');
+  }
+  if (url.protocol !== 'https:') throw new Error('telemetryEndpoint must use HTTPS.');
+  if (url.username || url.password || url.hash) throw new Error('Invalid telemetryEndpoint.');
+  url.search = '';
+  return url.toString();
+}
+
+function normalizeTelemetryInstallId(value = '') {
+  const raw = String(value || '').trim();
+  if (/^[a-zA-Z0-9_-]{12,80}$/.test(raw)) return raw;
+  return publicStableId('install', `${app.getPath('userData')}:${app.getName()}`);
 }
 
 function hasOwnValue(input = {}, key) {
@@ -2174,7 +2318,10 @@ function normalizeSettings(raw = {}) {
     workspaceRoot,
     customWorkspaceRootConfirmed,
     maxPromptChars: clampPromptChars(raw.maxPromptChars),
-    autoRefreshBackend: typeof raw.autoRefreshBackend === 'boolean' ? raw.autoRefreshBackend : true
+    autoRefreshBackend: typeof raw.autoRefreshBackend === 'boolean' ? raw.autoRefreshBackend : true,
+    anonymousTelemetryEnabled: raw.anonymousTelemetryEnabled === true,
+    telemetryEndpoint: normalizeTelemetryEndpoint(raw.telemetryEndpoint || ''),
+    telemetryInstallId: normalizeTelemetryInstallId(raw.telemetryInstallId)
   };
 }
 
@@ -2259,6 +2406,13 @@ function updateSettings(payload = {}) {
   if (Object.prototype.hasOwnProperty.call(payload, 'autoRefreshBackend')) {
     if (typeof payload.autoRefreshBackend !== 'boolean') throw new Error('Invalid autoRefreshBackend.');
     next.autoRefreshBackend = payload.autoRefreshBackend;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'anonymousTelemetryEnabled')) {
+    if (typeof payload.anonymousTelemetryEnabled !== 'boolean') throw new Error('Invalid anonymousTelemetryEnabled.');
+    next.anonymousTelemetryEnabled = payload.anonymousTelemetryEnabled;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'telemetryEndpoint')) {
+    next.telemetryEndpoint = normalizeTelemetryEndpoint(payload.telemetryEndpoint || '');
   }
 
   return writeSettings(next);
@@ -2933,6 +3087,77 @@ function sanitizeSessionId(sessionId) {
   return /^[a-zA-Z0-9_-]{8,80}$/.test(value) ? value : crypto.randomUUID();
 }
 
+function stableClaudeSessionUuid(value) {
+  const hash = crypto
+    .createHash('sha256')
+    .update(`ecorex-claude-session/v1:${String(value || '')}`)
+    .digest();
+  hash[6] = (hash[6] & 0x0f) | 0x50;
+  hash[8] = (hash[8] & 0x3f) | 0x80;
+  const hex = hash.subarray(0, 16).toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
+function sanitizeClaudeSessionId(sessionId, fallbackKey = '') {
+  const value = String(sessionId || '').trim();
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
+    return value.toLowerCase();
+  }
+  const stableSource = value || String(fallbackKey || '').trim();
+  return stableSource ? stableClaudeSessionUuid(stableSource) : crypto.randomUUID();
+}
+
+function claudeProjectsRoot() {
+  const home = process.env.USERPROFILE || process.env.HOME || '';
+  return home ? path.join(home, '.claude', 'projects') : '';
+}
+
+function markClaudeSessionTranscriptSeen(claudeSessionId) {
+  const sessionId = String(claudeSessionId || '').trim().toLowerCase();
+  if (/^[0-9a-f-]{36}$/i.test(sessionId)) {
+    claudeTranscriptExistenceCache.set(sessionId, { exists: true, checkedAt: Date.now() });
+  }
+}
+
+function claudeSessionTranscriptExists(claudeSessionId) {
+  const sessionId = String(claudeSessionId || '').trim().toLowerCase();
+  if (!/^[0-9a-f-]{36}$/i.test(sessionId)) return false;
+  const cached = claudeTranscriptExistenceCache.get(sessionId);
+  if (cached?.exists && Date.now() - cached.checkedAt <= CLAUDE_TRANSCRIPT_CACHE_TTL_MS) return true;
+  const root = claudeProjectsRoot();
+  if (!root) return false;
+  try {
+    if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) return false;
+  } catch {
+    return false;
+  }
+
+  const stack = [root];
+  let visited = 0;
+  while (stack.length && visited < 4000) {
+    const current = stack.pop();
+    visited += 1;
+    let entries = [];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const child = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(child);
+        continue;
+      }
+      if (entry.isFile() && entry.name.toLowerCase() === `${sessionId}.jsonl`) {
+        markClaudeSessionTranscriptSeen(sessionId);
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function sanitizePayload(payload = {}) {
   const settings = readSettings();
   const prompt = String(payload.prompt || '').trim().slice(0, settings.maxPromptChars);
@@ -2988,6 +3213,7 @@ function sanitizePayload(payload = {}) {
 
   return {
     sessionId: sanitizeSessionId(payload.sessionId),
+    claudeSessionId: sanitizeClaudeSessionId(payload.claudeSessionId || payload.conversationId, payload.sessionId),
     prompt,
     accessMode: permissionPolicy.accessMode,
     permissionMode: permissionPolicy.permissionMode,
@@ -3091,7 +3317,7 @@ function windowDiagnosticSnapshot(window = mainWindow) {
 }
 
 function defaultWindowBounds() {
-  const fallback = { width: 1560, height: 980 };
+  const fallback = { width: 1400, height: 900 };
   let workArea = null;
   try {
     workArea = screen.getPrimaryDisplay()?.workAreaSize || null;
@@ -3100,18 +3326,125 @@ function defaultWindowBounds() {
   }
   if (!workArea?.width || !workArea?.height) return fallback;
   return {
-    width: Math.min(fallback.width, Math.max(1180, workArea.width - 32)),
-    height: Math.min(fallback.height, Math.max(780, workArea.height - 32))
+    width: Math.min(fallback.width, Math.max(800, workArea.width - 32)),
+    height: Math.min(fallback.height, Math.max(600, workArea.height - 32))
   };
+}
+
+function startupSplashHtml() {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EcoreX Agent 正在启动</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #070c12; color: #f3f6fa; font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", Arial, sans-serif; }
+    body { display: grid; place-items: center; background: radial-gradient(circle at 55% 44%, rgba(255, 90, 0, .18), transparent 34%), linear-gradient(145deg, #050910, #0a1119); }
+    .splash { display: grid; justify-items: center; gap: 16px; transform: translateY(-8px); }
+    .mark { width: 68px; height: 68px; border-radius: 18px; display: grid; place-items: center; background: #111820; box-shadow: 0 20px 60px rgba(0,0,0,.42), inset 0 1px 0 rgba(255,255,255,.08); color: #ff5a00; font-size: 44px; font-weight: 900; line-height: 1; }
+    .title { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: 0; }
+    .sub { margin: -6px 0 2px; color: #a9b0bb; font-size: 13px; }
+    .spinner { width: 34px; height: 34px; border-radius: 50%; border: 3px solid rgba(255,255,255,.12); border-top-color: #ff5a00; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <main class="splash" aria-live="polite">
+    <div class="mark">X</div>
+    <h1 class="title">EcoreX Agent</h1>
+    <p class="sub">正在预加载本地能力与会话环境</p>
+    <div class="spinner" aria-hidden="true"></div>
+  </main>
+</body>
+</html>`;
+}
+
+function startupSplashDataUrl() {
+  return `data:text/html;charset=utf-8,${encodeURIComponent(startupSplashHtml())}`;
+}
+
+function waitForStartupPreload(promise, timeoutMs = STARTUP_PRELOAD_TIMEOUT_MS) {
+  if (!promise) return Promise.resolve({ status: 'skipped' });
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      writeLog('warn', 'Startup preload timed out; renderer will continue while preload finishes', {
+        timeoutMs,
+        state: startupPreloadState.status
+      });
+      resolve({ status: 'timeout', timeoutMs });
+    }, timeoutMs);
+    promise
+      .then((result) => resolve(result))
+      .catch((error) => resolve({
+        status: 'failed',
+        error: error instanceof Error ? error.message : String(error)
+      }))
+      .finally(() => clearTimeout(timer));
+  });
+}
+
+function startStartupPreload(reason = 'startup') {
+  if (startupPreloadPromise) return startupPreloadPromise;
+  const startedAt = Date.now();
+  startupPreloadState = { status: 'running', reason, startedAt };
+  startupPreloadPromise = Promise.allSettled([
+    locateClaude(),
+    collectBackendStatus(null, { refresh: false }),
+    Promise.resolve().then(() => collectCapabilities()),
+    Promise.resolve().then(() => publicAuthSession(readAuthSession({ refresh: true })))
+  ]).then((results) => {
+    const [claudeResult, backendResult, capabilitiesResult, authResult] = results;
+    startupPreloadState = {
+      status: 'ready',
+      reason,
+      durationMs: Date.now() - startedAt,
+      claudeReady: claudeResult.status === 'fulfilled' && Boolean(claudeResult.value?.command),
+      backendReady: backendResult.status === 'fulfilled' && Boolean(backendResult.value?.ok),
+      capabilitiesReady: capabilitiesResult.status === 'fulfilled' && capabilitiesResult.value?.ok !== false,
+      loggedIn: authResult.status === 'fulfilled' && Boolean(authResult.value?.loggedIn)
+    };
+    writeLog('info', 'Startup preload completed', startupPreloadState);
+    return startupPreloadState;
+  }).catch((error) => {
+    startupPreloadState = {
+      status: 'failed',
+      reason,
+      durationMs: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error)
+    };
+    writeLog('warn', 'Startup preload failed', startupPreloadState);
+    return startupPreloadState;
+  });
+  return startupPreloadPromise;
 }
 
 function createWindow() {
   const bounds = defaultWindowBounds();
+  let startupMaximizeApplied = false;
+  function revealStartupWindow(reason) {
+    if (!mainWindow) return;
+    if (!startupMaximizeApplied) {
+      startupMaximizeApplied = true;
+      try {
+        mainWindow.maximize();
+      } catch (error) {
+        writeLog('warn', 'Startup maximize failed', {
+          reason,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+    if (!mainWindow.isVisible()) mainWindow.show();
+    mainWindow.focus();
+  }
+
   mainWindow = new BrowserWindow({
     width: bounds.width,
     height: bounds.height,
-    minWidth: 1040,
-    minHeight: 720,
+    minWidth: 800,
+    minHeight: 600,
     center: true,
     title: 'EcoreX Agent',
     backgroundColor: '#080d14',
@@ -3132,9 +3465,10 @@ function createWindow() {
     mainWindow = null;
   });
 
+  revealStartupWindow('created');
+
   mainWindow.on('ready-to-show', () => {
-    if (!mainWindow.isVisible()) mainWindow.show();
-    mainWindow.focus();
+    revealStartupWindow('ready-to-show');
     writeLog('info', 'Main window ready to show', windowDiagnosticSnapshot(mainWindow));
   });
 
@@ -3200,23 +3534,26 @@ function createWindow() {
     });
   });
   mainWindow.webContents.on('did-finish-load', () => {
-    if (!mainWindow.isVisible()) mainWindow.show();
-    mainWindow.focus();
+    revealStartupWindow('did-finish-load');
     writeLog('info', 'Renderer finished loading', windowDiagnosticSnapshot(mainWindow));
   });
 
   writeLog('info', 'Main window created', windowDiagnosticSnapshot(mainWindow));
 
-  if (app.isPackaged) {
-    const target = rendererEntryPath();
-    mainWindow.loadFile(target).catch((error) => {
-      writeLog('error', 'mainWindow.loadFile failed', {
-        ...windowDiagnosticSnapshot(mainWindow),
-        target,
-        error: error instanceof Error ? error.message : String(error)
+  function loadRendererEntry() {
+    startupSplashUrl = '';
+    if (app.isPackaged) {
+      const target = rendererEntryPath();
+      mainWindow.loadFile(target).catch((error) => {
+        writeLog('error', 'mainWindow.loadFile failed', {
+          ...windowDiagnosticSnapshot(mainWindow),
+          target,
+          error: error instanceof Error ? error.message : String(error)
+        });
       });
-    });
-  } else {
+      return;
+    }
+
     const target = 'http://127.0.0.1:5188';
     mainWindow.loadURL(target).catch((error) => {
       writeLog('error', 'mainWindow.loadURL failed', {
@@ -3229,6 +3566,21 @@ function createWindow() {
       mainWindow.webContents.openDevTools({ mode: 'detach' });
     }
   }
+
+  const startupPreload = startStartupPreload('native-loading');
+  startupSplashUrl = startupSplashDataUrl();
+  mainWindow.loadURL(startupSplashUrl)
+    .then(async () => {
+      await waitForStartupPreload(startupPreload);
+      loadRendererEntry();
+    })
+    .catch((error) => {
+      writeLog('warn', 'Startup splash failed, loading renderer directly', {
+        ...windowDiagnosticSnapshot(mainWindow),
+        error: error instanceof Error ? error.message : String(error)
+      });
+      waitForStartupPreload(startupPreload).finally(loadRendererEntry);
+    });
 }
 
 app.whenReady().then(createWindow);
@@ -3307,6 +3659,46 @@ function agentTaskType(kind = 'debug') {
   return 'session';
 }
 
+function publicAgentToolName(tool = '') {
+  const rawName = typeof tool === 'string' ? tool : tool?.name;
+  const name = publicProductText(String(rawName || '').trim());
+  if (!name) return 'EcoreX 原生能力';
+  if (/^mcp__/i.test(name)) return 'MCP';
+  if (/^Skill$/i.test(name)) return 'SKILLS';
+  if (/^ToolSearch$/i.test(name)) return 'ToolSearch';
+  return name.slice(0, 120);
+}
+
+function publicAgentToolLabel(tool = '') {
+  const rawName = typeof tool === 'string' ? tool : tool?.name;
+  const name = String(rawName || '').trim();
+  const input = typeof tool === 'object' && tool ? tool.input || {} : {};
+  const query = String(input?.query || '').trim();
+  if (/^ToolSearch$/i.test(name) && /WebSearch/i.test(query)) return '准备联网检索';
+  if (/^ToolSearch$/i.test(name) && /WebFetch/i.test(query)) return '准备读取网页';
+  if (/^ToolSearch$/i.test(name)) return '准备调用工具';
+  if (/^WebSearch$/i.test(name)) return '联网检索';
+  if (/^WebFetch$/i.test(name)) return '读取网页';
+  if (/^TodoWrite$/i.test(name)) return '更新任务清单';
+  if (/^TodoRead$/i.test(name)) return '读取任务清单';
+  if (/^Task$|^TaskCreate$|^SendMessage$/i.test(name)) return '调度子 Agent';
+  if (/^Read$|^Grep$|^Glob$|^LS$|^NotebookRead$/i.test(name)) return '查看项目文件';
+  if (/^Write$|^Edit$|^MultiEdit$|^NotebookEdit$/i.test(name)) return '准备修改文件';
+  if (/^Bash$|^PowerShell$|^Cmd$/i.test(name)) return '执行本地命令';
+  if (/^mcp__/i.test(name)) return '调用 MCP';
+  if (/^Skill$/i.test(name)) return '调用 SKILLS';
+  if (/^Cron|^Monitor$/i.test(name)) return '管理后台任务';
+  if (/^EnterPlanMode$|^ExitPlanMode$/i.test(name)) return '更新计划状态';
+  return publicProductText(name || '调用原生能力').slice(0, 120);
+}
+
+function publicAgentToolInput(toolName, input) {
+  const name = String(toolName || '').trim();
+  if (!input || typeof input !== 'object') return undefined;
+  if (/^Skill$|^ToolSearch$/i.test(name) || /^mcp__/i.test(name)) return undefined;
+  return safeJsonValue(input, 4000);
+}
+
 function normalizeAgentEvent(payload = {}, options = {}) {
   const now = new Date().toISOString();
   const kind = String(payload.kind || 'debug').trim() || 'debug';
@@ -3320,7 +3712,7 @@ function normalizeAgentEvent(payload = {}, options = {}) {
     payload.toolName ||
     payload.name ||
     (taskType === 'session' ? 'Agent session' : kind);
-  const taskName = taskType === 'tool' ? 'EcoreX capability' : publicProductText(rawTaskName);
+  const taskName = taskType === 'tool' ? publicAgentToolLabel(rawTaskName) : publicProductText(rawTaskName);
   const taskId =
     payload.task?.id ||
     payload.taskId ||
@@ -3329,9 +3721,9 @@ function normalizeAgentEvent(payload = {}, options = {}) {
   const safeTools = Array.isArray(payload.tools)
     ? payload.tools.slice(0, 20).map((tool, index) => ({
         id: tool?.id ? publicStableId('capability', tool.id) : `capability-${index + 1}`,
-        name: 'EcoreX capability',
+        name: publicAgentToolName(tool),
         status: tool?.status,
-        input: tool?.input ? safeJsonValue(tool.input, 4000) : undefined
+        input: publicAgentToolInput(tool?.name, tool?.input)
       }))
     : undefined;
   const event = {
@@ -3349,7 +3741,7 @@ function normalizeAgentEvent(payload = {}, options = {}) {
       id: taskId,
       parentId: payload.parentTaskId || payload.task?.parentId || sessionId || null,
       type: taskType,
-      name: safeOutputText(taskType === 'tool' ? 'EcoreX capability' : taskName, 120),
+      name: safeOutputText(taskName, 120),
       status,
       state
     },
@@ -3357,7 +3749,7 @@ function normalizeAgentEvent(payload = {}, options = {}) {
   };
 
   if (safeTools) event.tools = safeTools;
-  if (event.toolName) event.toolName = 'EcoreX capability';
+  if (event.toolName) event.toolName = publicAgentToolLabel(event.toolName);
   if (options.includeBackend !== true) {
     delete event.permissionCliMode;
     delete event.permissionCliFlags;
@@ -3609,6 +4001,26 @@ function claimAgentStart(payload = {}, options = {}) {
     };
   }
 
+  const requestedClaudeSessionId = String(payload.claudeSessionId || '').trim();
+  if (requestedClaudeSessionId) {
+    const activeClaudeSession = Array.from(runningAgents.entries()).find(([, entry]) => entry.claudeSessionId === requestedClaudeSessionId);
+    const pendingClaudeSession = Array.from(pendingAgentStarts.entries()).find(([, entry]) => entry.claudeSessionId === requestedClaudeSessionId);
+    const duplicateClaudeSession = activeClaudeSession || pendingClaudeSession;
+    if (duplicateClaudeSession) {
+      return {
+        ok: false,
+        sessionId: duplicateClaudeSession[0],
+        requestedSessionId: payload.sessionId,
+        duplicateOf: duplicateClaudeSession[0],
+        code: 'duplicate-session',
+        status: 'running',
+        state: 'running',
+        error: 'Agent session is already running.',
+        recoveryHint: agentRecoveryHint('duplicate-session')
+      };
+    }
+  }
+
   const activeSessionCount = runningAgents.size + pendingAgentStarts.size;
   if (activeSessionCount >= MAX_RUNNING_AGENTS) {
     return {
@@ -3657,6 +4069,7 @@ function claimAgentStart(payload = {}, options = {}) {
     permissionCliFlags: payload.permissionCliFlags,
     permissionLabel: payload.permissionLabel,
     permissionPolicy: payload.permissionPolicy,
+    claudeSessionId: payload.claudeSessionId,
     projectId: payload.projectId || null,
     projectName: payload.projectContext?.name || '',
     projectPath: payload.projectContext?.pathLabel || '',
@@ -3770,10 +4183,17 @@ function stopAllAgents(reason = 'app-quit') {
   flushAllAgentEvents();
 }
 
+function defaultCommandCwd() {
+  if (app.isPackaged && process.resourcesPath && fs.existsSync(process.resourcesPath)) {
+    return process.resourcesPath;
+  }
+  return ROOT_DIR;
+}
+
 function commandOutput(command, args = [], options = {}) {
   return new Promise((resolve) => {
     const child = spawn(command, args, {
-      cwd: options.cwd || ROOT_DIR,
+      cwd: options.cwd || defaultCommandCwd(),
       env: filteredAgentEnv(options.env || {}, { includeSecrets: options.includeSecrets === true }),
       windowsHide: true,
       shell: false
@@ -3927,7 +4347,8 @@ function candidateClaudePaths() {
 }
 
 async function locateClaude() {
-  if (cachedClaude) return cachedClaude;
+  if (cachedClaude?.command) return cachedClaude;
+  if (cachedClaude && Date.now() - cachedClaudeCheckedAt < 5000) return cachedClaude;
 
   for (const candidate of candidateClaudePaths()) {
     const looksLikePath = candidate.includes(path.sep) || candidate.endsWith('.cmd') || candidate.endsWith('.ps1');
@@ -3942,6 +4363,7 @@ async function locateClaude() {
         path: looksLikePath ? candidate : 'PATH: claude',
         version: result.stdout
       };
+      cachedClaudeCheckedAt = Date.now();
       return cachedClaude;
     }
   }
@@ -3952,6 +4374,7 @@ async function locateClaude() {
     path: null,
     version: null
   };
+  cachedClaudeCheckedAt = Date.now();
   return cachedClaude;
 }
 
@@ -4093,7 +4516,7 @@ function parseMcpServices(raw = '') {
         name,
         url: urlMatch?.[0] || safeLine.replace(/\s+/g, ' '),
         summary: safeLine.replace(/\s+/g, ' '),
-        tags: ['Data connection'],
+        tags: ['MCP'],
         auth: /oauth/i.test(safeLine) ? 'OAuth 2.0' : 'Local',
         authState: status === 'online' ? '已授权' : '需授权',
         status,
@@ -4107,13 +4530,13 @@ function parseMcpServices(raw = '') {
 async function collectMcpStatus(payload = {}) {
   return attachDeveloperDiagnostics({
     ok: true,
-    source: 'EcoreX data connections',
+    source: 'EcoreX MCP',
     refreshedAt: new Date().toISOString(),
     configured: false,
     services: [],
     servers: [],
     defaultEmpty: true,
-    message: 'EcoreX starts with no data connections. Add project connections inside EcoreX.'
+    message: 'EcoreX starts with no MCP entries. Add project MCP entries inside EcoreX.'
   }, {
     bridge: 'ecorex-managed',
     command: 'disabled: local Claude/Codex MCP inventory is intentionally not scanned'
@@ -4141,7 +4564,7 @@ async function getMcpServer(payload = {}) {
   const output = result.stdout || result.stderr || '';
   return attachDeveloperDiagnostics({
     ok: result.ok,
-    source: 'EcoreX data connections',
+    source: 'EcoreX MCP',
     name,
     server: {
       id: publicStableId('connection', name),
@@ -4179,7 +4602,7 @@ async function updateMcpConfig(payload = {}) {
   }
   const response = {
     ok: result.ok,
-    source: 'EcoreX data connections',
+    source: 'EcoreX MCP',
     name,
     scope,
     error: result.ok ? undefined : publicBridgeError(result, 'MCP config update failed.')
@@ -4733,6 +5156,74 @@ function fileSummary(filePath) {
   }
 }
 
+function attachmentMimeFromPath(filePath = '') {
+  const ext = path.extname(filePath).toLowerCase();
+  if (['.png'].includes(ext)) return 'image/png';
+  if (['.jpg', '.jpeg'].includes(ext)) return 'image/jpeg';
+  if (['.webp'].includes(ext)) return 'image/webp';
+  if (['.gif'].includes(ext)) return 'image/gif';
+  if (['.svg'].includes(ext)) return 'image/svg+xml';
+  if (['.pdf'].includes(ext)) return 'application/pdf';
+  if (['.csv'].includes(ext)) return 'text/csv';
+  if (['.txt', '.md', '.json', '.log'].includes(ext)) return 'text/plain';
+  if (['.xlsx'].includes(ext)) return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  if (['.xls'].includes(ext)) return 'application/vnd.ms-excel';
+  if (['.docx'].includes(ext)) return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  if (['.pptx'].includes(ext)) return 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+  return 'application/octet-stream';
+}
+
+function selectedAttachmentSummary(filePath) {
+  const absolutePath = path.resolve(filePath);
+  const stat = fs.statSync(absolutePath);
+  if (!stat.isFile()) throw new Error('Selected item is not a file.');
+  const type = attachmentMimeFromPath(absolutePath);
+  const entry = {
+    id: crypto.createHash('sha256').update(`${absolutePath}:${stat.size}:${stat.mtimeMs}`).digest('hex').slice(0, 16),
+    name: path.basename(absolutePath),
+    path: absolutePath,
+    type,
+    sizeBytes: stat.size,
+    modifiedAt: stat.mtime.toISOString(),
+    previewDataUrl: ''
+  };
+  if (type.startsWith('image/') && stat.size <= ATTACHMENT_PREVIEW_MAX_BYTES) {
+    try {
+      entry.previewDataUrl = `data:${type};base64,${fs.readFileSync(absolutePath).toString('base64')}`;
+    } catch {
+      entry.previewDataUrl = '';
+    }
+  }
+  return entry;
+}
+
+async function selectAttachmentFiles(event, payload = {}) {
+  optionalObjectPayload(payload, 'attachment selection payload');
+  const limit = Math.max(1, Math.min(20, Number(payload.limit) || 10));
+  const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender) || mainWindow, {
+    title: '选择要发送给 EcoreX 亦芯的文件',
+    properties: ['openFile', 'multiSelections'],
+    filters: [
+      { name: '常用文件', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'pdf', 'csv', 'xlsx', 'xls', 'docx', 'pptx', 'txt', 'md', 'json'] },
+      { name: '所有文件', extensions: ['*'] }
+    ]
+  });
+  if (result.canceled || !result.filePaths?.length) {
+    return { ok: true, canceled: true, files: [] };
+  }
+  const files = [];
+  for (const filePath of result.filePaths.slice(0, limit)) {
+    try {
+      files.push(selectedAttachmentSummary(filePath));
+    } catch (error) {
+      writeLog('warn', 'Skipped invalid attachment selection', {
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+  return { ok: true, canceled: false, files };
+}
+
 function collectReleaseInstallers() {
   const releaseDir = devPath('release');
   const installerPattern = /\.(exe|msi|dmg|pkg|appimage|deb|rpm)$/i;
@@ -5237,6 +5728,7 @@ async function collectStartupHealth(_event, payload = {}) {
     capabilities: summarizeCapabilities(capabilities),
     runningSessions: getRunningSessionSummaries(),
     crashes: readCrashSummary(10),
+    telemetry: publicTelemetryStatus(settings),
     logs: {
       path: logPath(),
       recent: readRecentLogs(40)
@@ -5290,6 +5782,7 @@ async function collectDiagnostics() {
     recentSessionHistory: recentSessionFiles(),
     recentSessionFiles: recentSessionFiles(),
     crashes: readCrashSummary(),
+    telemetry: publicTelemetryStatus(settings),
     backend: {
       source: fileSummary(backendSource),
       sourceMap: fileSummary(backendMap),
@@ -5317,14 +5810,14 @@ async function collectCapabilities() {
     permissionModes: publicPermissionPolicies(),
     models: modelCapabilityOptions(),
     builtIns: [
-      'Read / Write / Edit / Grep / Glob',
-      'Shell execution tools',
-      'EcoreX data connections',
-      'Plan / Auto / Full Access permission modes',
-      'Background agents and multi-agent dispatch',
-      'Lifecycle guards and approval controls',
-      'App-managed EcoreX skills and data connections',
-      'Structured streaming output'
+      '本地文件读取、写入、编辑、检索与目录遍历',
+      '本地命令执行与工作区操作',
+      '联网检索与网页信息获取',
+      'MCP 与工具调用',
+      '默认权限与完全访问权限模式',
+      '后台任务、多 Agent 调度与取消恢复',
+      '生命周期保护、权限确认与诊断能力',
+      '结构化流式输出'
     ]
   };
   return cachedCapabilities;
@@ -5332,6 +5825,88 @@ async function collectCapabilities() {
 
 function normalizeClaudeEvent(sessionId, json) {
   const base = { sessionId, raw: json, time: new Date().toISOString() };
+  const contextManagement = json.context_management || json.contextManagement || null;
+  if (json.type === 'stream_event') {
+    const streamEvent = json.event || {};
+    const streamType = String(streamEvent.type || '').trim();
+    const block = streamEvent.content_block || streamEvent.contentBlock || {};
+    const delta = streamEvent.delta || {};
+    if (streamType === 'content_block_delta' && delta.type === 'text_delta' && delta.text) {
+      return {
+        ...base,
+        kind: 'assistant',
+        status: 'running',
+        text: delta.text,
+        contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined
+      };
+    }
+    if (streamType === 'content_block_start') {
+      if (block.type === 'text' && block.text) {
+        return {
+          ...base,
+          kind: 'assistant',
+          status: 'running',
+          text: block.text,
+          contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined
+        };
+      }
+      if (block.type === 'tool_use' || block.type === 'server_tool_use') {
+        const tool = {
+          id: block.id,
+          name: block.name || block.tool_name || 'tool',
+          input: safeJsonValue(block.input || {}, 8000)
+        };
+        return {
+          ...base,
+          kind: 'tool',
+          status: 'running',
+          toolName: publicAgentToolLabel(tool),
+          tools: [tool],
+          text: `${publicAgentToolLabel(tool)}。`,
+          contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined
+        };
+      }
+      if (block.type === 'thinking') {
+        return {
+          ...base,
+          kind: 'status',
+          status: 'running',
+          text: '正在分析任务',
+          contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined
+        };
+      }
+    }
+    if (streamType === 'content_block_delta' && delta.type === 'input_json_delta') {
+      return {
+        ...base,
+        kind: 'tool',
+        status: 'running',
+        toolName: '整理工具参数',
+        text: '正在整理工具参数',
+        contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined
+      };
+    }
+    if (streamType === 'message_start') {
+      return {
+        ...base,
+        kind: 'status',
+        status: 'running',
+        text: '开始生成回复',
+        contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined
+      };
+    }
+    if (streamType === 'message_stop') {
+      return {
+        ...base,
+        kind: 'status',
+        status: 'completed',
+        text: '回复生成完成',
+        contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined
+      };
+    }
+    return null;
+  }
+
   if (json.type === 'assistant') {
     const content = json.message?.content || json.content || [];
     const tools = Array.isArray(content)
@@ -5345,25 +5920,27 @@ function normalizeClaudeEvent(sessionId, json) {
       : [];
     const text = Array.isArray(content)
       ? content
-          .map((block) => {
-            if (typeof block === 'string') return block;
-            if (block?.type === 'text') return block.text;
-            if (block?.type === 'tool_use') return '\n[EcoreX capability running]\n';
-            return '';
-          })
+        .map((block) => {
+          if (typeof block === 'string') return block;
+          if (block?.type === 'text') return block.text;
+          if (block?.type === 'tool_use') return '';
+          return '';
+        })
           .join('')
       : '';
     if (tools.length && !text.trim()) {
+      const toolLabel = publicAgentToolLabel(tools[0]);
       return {
         ...base,
         kind: 'tool',
         status: 'running',
-        toolName: 'EcoreX capability',
+        toolName: toolLabel,
         tools,
-        text: 'EcoreX capability requested.'
+        text: `${toolLabel}。`,
+        contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined
       };
     }
-    return { ...base, kind: 'assistant', tools, text };
+    return { ...base, kind: 'assistant', tools, text, contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined };
   }
 
   if (json.type === 'user') {
@@ -5373,10 +5950,19 @@ function normalizeClaudeEvent(sessionId, json) {
       : [];
     if (toolResults.length) {
       const failed = toolResults.some((block) => block.is_error);
+      const resultInfo = json.toolUseResult || {};
+      const resultToolName =
+        resultInfo.commandName === 'using-superpowers'
+          ? 'SKILLS'
+          : resultInfo.query
+            ? 'WebSearch'
+            : resultInfo.commandName || '';
+      const resultLabel = resultToolName ? publicAgentToolLabel(resultToolName) : '工具返回结果';
       return {
         ...base,
         kind: 'tool',
         status: failed ? 'failed' : 'completed',
+        toolName: resultLabel,
         toolUseId: toolResults[0].tool_use_id,
         text: toolResults
           .map((block) => {
@@ -5399,7 +5985,8 @@ function normalizeClaudeEvent(sessionId, json) {
       status: 'completed',
       text: json.result || '',
       costUsd: json.total_cost_usd,
-      durationMs: json.duration_ms
+      durationMs: json.duration_ms,
+      contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined
     };
   }
 
@@ -5408,7 +5995,8 @@ function normalizeClaudeEvent(sessionId, json) {
       ...base,
       kind: 'status',
       status: json.subtype || 'system',
-      text: json.cwd || json.session_id || json.message || '会话已初始化'
+      text: json.cwd || json.session_id || json.message || '会话已初始化',
+      contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined
     };
   }
 
@@ -5417,7 +6005,8 @@ function normalizeClaudeEvent(sessionId, json) {
       ...base,
       kind: 'tool',
       status: json.type,
-      text: json.message || 'EcoreX capability event'
+      toolName: publicAgentToolLabel(json.toolName || json.name || ''),
+      text: json.message || 'EcoreX 原生能力事件'
     };
   }
 
@@ -5481,6 +6070,7 @@ function runAgent(payload = {}, options = {}) {
         permissionLabel,
         permissionPolicy,
         model,
+        claudeSessionId,
         cwd,
         projectContext
       } = safePayload;
@@ -5493,6 +6083,7 @@ function runAgent(payload = {}, options = {}) {
         .filter((plugin) => plugin.available)
         .map((plugin) => [plugin.name, path.resolve(repoRoot, plugin.source)])
     );
+    const claudeResumeExistingSession = claudeSessionTranscriptExists(claudeSessionId);
     const args = [
       ...claude.baseArgs,
       '--print',
@@ -5501,6 +6092,10 @@ function runAgent(payload = {}, options = {}) {
       '--verbose',
       '--include-partial-messages',
       '--include-hook-events',
+      '--tools',
+      'default',
+      '--allowedTools',
+      CLAUDE_AUTO_ALLOWED_TOOL_SET,
       '--model',
       model,
       '--append-system-prompt',
@@ -5508,6 +6103,11 @@ function runAgent(payload = {}, options = {}) {
       '--name',
       'EcoreX Desktop Agent'
     ];
+    if (claudeResumeExistingSession) {
+      args.push('--resume', claudeSessionId);
+    } else {
+      args.push('--session-id', claudeSessionId);
+    }
     if (permissionCliMode) args.push('--permission-mode', permissionCliMode);
     for (const flag of permissionCliFlags || []) {
       args.push(flag);
@@ -5552,6 +6152,8 @@ function runAgent(payload = {}, options = {}) {
       accessMode,
       permissionMode,
       permissionLabel,
+      claudeSessionId: publicStableId('claude-session', claudeSessionId),
+      claudeResumeMode: claudeResumeExistingSession ? 'resume' : 'new',
       projectId: projectContext?.id || null,
       projectName: projectContext?.name || '',
       projectMemoryLabel: projectContext?.memoryLabel || '',
@@ -5575,6 +6177,8 @@ function runAgent(payload = {}, options = {}) {
       permissionCliMode,
       permissionCliFlags,
       permissionLabel,
+      claudeSessionId: publicStableId('claude-session', claudeSessionId),
+      claudeResumeMode: claudeResumeExistingSession ? 'resume' : 'new',
       projectId: projectContext?.id || null,
       projectName: projectContext?.name || '',
       projectPath: projectContext?.pathLabel || '',
@@ -5594,6 +6198,7 @@ function runAgent(payload = {}, options = {}) {
       permissionCliFlags,
       permissionLabel,
       permissionPolicy,
+      claudeSessionId,
       projectId: projectContext?.id || null,
       projectName: projectContext?.name || '',
       projectPath: projectContext?.pathLabel || '',
@@ -5617,8 +6222,10 @@ function runAgent(payload = {}, options = {}) {
       lineBuffer = '';
       try {
         const event = normalizeClaudeEvent(sessionId, JSON.parse(buffered));
-        recordSessionEvent(entry, event);
-        emitAgentEvent(event);
+        if (event) {
+          recordSessionEvent(entry, event);
+          emitAgentEvent(event);
+        }
       } catch {
         const event = { sessionId, kind: 'assistant', text: buffered };
         recordSessionEvent(entry, event);
@@ -5653,6 +6260,7 @@ function runAgent(payload = {}, options = {}) {
       permissionCliMode,
       permissionCliFlags,
       permissionLabel,
+      claudeResumeMode: claudeResumeExistingSession ? 'resume' : 'new',
       projectId: projectContext?.id || null,
       projectName: projectContext?.name || '',
       projectPath: projectContext?.pathLabel || '',
@@ -5677,8 +6285,10 @@ function runAgent(payload = {}, options = {}) {
         try {
           const json = JSON.parse(trimmed);
           const event = normalizeClaudeEvent(sessionId, json);
-          recordSessionEvent(runningAgents.get(sessionId), event);
-          emitAgentEvent(event);
+          if (event) {
+            recordSessionEvent(runningAgents.get(sessionId), event);
+            emitAgentEvent(event);
+          }
         } catch {
           const event = { sessionId, kind: 'assistant', text: trimmed };
           recordSessionEvent(runningAgents.get(sessionId), event);
@@ -5722,6 +6332,7 @@ function runAgent(payload = {}, options = {}) {
         code,
         signal
       });
+      markClaudeSessionTranscriptSeen(entry.claudeSessionId);
       writeLog(code === 0 ? 'info' : 'error', 'Agent session closed', {
         sessionId,
         code,
@@ -5814,9 +6425,12 @@ handleSafe('diagnostics:get', collectDiagnostics, { authRequired: true });
 handleSafe('diagnostics:export', exportDiagnosticsPackage, { authRequired: true });
 handleSafe('diagnostics:open-location', openDiagnosticsLocation, { authRequired: true });
 handleSafe('diagnostics:crash-recovery', (_event, payload) => getCrashRecoveryStatus(payload), { authRequired: true });
+handleSafe('telemetry:status', () => ({ ok: true, telemetry: publicTelemetryStatus() }), { authRequired: true });
+handleSafe('telemetry:flush', (_event, payload) => flushAnonymousTelemetry(payload), { authRequired: true });
 handleSafe('workspace:select-directory', (event, payload) => selectWorkspaceDirectory(event, payload), { authRequired: true });
 handleSafe('workspace:list', (_event, payload) => listWorkspace(payload), { authRequired: true });
 handleSafe('workspace:ensure', (_event, payload) => ensureWorkspace(payload), { authRequired: true });
+handleSafe('attachment:select-files', (event, payload) => selectAttachmentFiles(event, payload), { authRequired: true });
 handleSafe('project:list', (_event, payload) => listProjects(payload), { authRequired: true });
 handleSafe('project:create', (_event, payload) => createProject(payload), { authRequired: true });
 handleSafe('project:switch', (_event, payload) => switchProject(payload), { authRequired: true });
@@ -5869,8 +6483,7 @@ handleSafe('backend:open-auth', async () => {
 
 ipcMain.on('window:control', (event, action) => {
   const payload = action && typeof action === 'object' && !Array.isArray(action) ? action : { action };
-  const unauthorized = assertAuthorizedIpc(event, 'window:control', [payload]);
-  if (unauthorized) return;
+  if (!assertTrustedIpc(event, 'window:control')) return;
   if (!WINDOW_CONTROL_ACTIONS.has(payload.action)) {
     writeLog('warn', 'Blocked invalid window control action', { action: payload.action });
     return;

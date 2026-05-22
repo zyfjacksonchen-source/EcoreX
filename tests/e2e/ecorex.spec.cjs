@@ -17,12 +17,10 @@ const test = base.test.extend({
 });
 
 async function openDiagnostics(page) {
-  const nav = page.locator('[data-testid="nav-diagnostics"]');
-  if (await nav.count()) {
-    await nav.click();
-  } else {
-    await page.locator('.side-nav button').nth(2).click();
-  }
+  await page.locator('.profile-trigger').click();
+  await page.locator('.profile-menu-grid').getByRole('button', { name: /系统设置/ }).click();
+  await expect(page.locator('[data-testid="system-settings-page"]')).toBeVisible();
+  await page.locator('[data-testid="system-settings-tab-diagnostics"]').click();
   await expect(page.locator('[data-testid="diagnostics-page"], .diagnostics-page').first()).toBeVisible();
 }
 
@@ -72,6 +70,81 @@ function samePath(left, right) {
   return resolvedLeft === resolvedRight;
 }
 
+function installStartupLoaderProbe() {
+  const probe = {
+    authStarted: false,
+    authDone: false,
+    backendStarted: false,
+    backendDone: false,
+    authWrapped: false,
+    backendWrapped: false,
+    finishCalls: 0,
+    finishBeforeBothSettled: false,
+    loaderVisibleDuringPending: false,
+    loaderVisibleAtFinish: false,
+    readyDatasetAtFinish: false,
+    finishAt: 0,
+    patchErrors: []
+  };
+  window.__ecorexStartupProbe = probe;
+
+  const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const startupLoaderVisible = () => {
+    const loader = document.getElementById('startup-loader');
+    if (!loader) return false;
+    const style = window.getComputedStyle(loader);
+    return style.visibility !== 'hidden' && style.display !== 'none' && style.opacity !== '0';
+  };
+
+  let assignedFinishStartup;
+  Object.defineProperty(window, '__ecorexFinishStartup', {
+    configurable: true,
+    get() {
+      return assignedFinishStartup;
+    },
+    set(value) {
+      if (typeof value !== 'function') {
+        assignedFinishStartup = value;
+        return;
+      }
+      assignedFinishStartup = function wrappedFinishStartup(...args) {
+        probe.finishCalls += 1;
+        if (probe.authWrapped && probe.backendWrapped) {
+          probe.finishBeforeBothSettled = probe.finishBeforeBothSettled || !(probe.authDone && probe.backendDone);
+        }
+        probe.loaderVisibleAtFinish = startupLoaderVisible();
+        probe.readyDatasetAtFinish = document.documentElement.dataset.ecorexReady === 'true';
+        probe.finishAt = Date.now();
+        return value.apply(this, args);
+      };
+    }
+  });
+
+  function wrapStartupMethod(name, startedKey, doneKey, delayMs) {
+    const original = window.ecorex?.[name];
+    if (typeof original !== 'function') return;
+    try {
+      window.ecorex[name] = async function wrappedStartupMethod(...args) {
+        probe[startedKey] = true;
+        probe.loaderVisibleDuringPending = probe.loaderVisibleDuringPending || startupLoaderVisible();
+        await delay(delayMs);
+        probe.loaderVisibleDuringPending = probe.loaderVisibleDuringPending || startupLoaderVisible();
+        try {
+          return await original.apply(this, args);
+        } finally {
+          probe[doneKey] = true;
+        }
+      };
+      probe[`${name === 'getAuthStatus' ? 'auth' : 'backend'}Wrapped`] = window.ecorex[name] !== original;
+    } catch (error) {
+      probe.patchErrors.push(`${name}: ${error?.message || error}`);
+    }
+  }
+
+  wrapStartupMethod('getAuthStatus', 'authStarted', 'authDone', 260);
+  wrapStartupMethod('getBackendStatus', 'backendStarted', 'backendDone', 520);
+}
+
 test.describe('EcoreX Agent Electron E2E', () => {
   test('starts the Electron app and shows the login form @responsive', async ({ ecorex }) => {
     const { electronApp, page, timings } = ecorex;
@@ -90,15 +163,83 @@ test.describe('EcoreX Agent Electron E2E', () => {
       return appWindow?.getTitle() || '';
     });
     expect(windowTitle).toContain('EcoreX');
+
+    const isMaximized = await electronApp.evaluate(({ BrowserWindow }) => {
+      const appWindow = BrowserWindow.getAllWindows()
+        .find((window) => window.webContents.getURL().startsWith('http://127.0.0.1:5188'));
+      return appWindow?.isMaximized() || false;
+    });
+    expect(isMaximized).toBe(true);
   });
 
-  test('opens diagnostics from the sidebar and shows the health check area', async ({ ecorex }) => {
+  test('keeps the startup loader until auth and backend preload settle', async ({ ecorex }) => {
+    const { electronApp, page } = ecorex;
+
+    await electronApp.evaluate(({ ipcMain }) => {
+      global.__ecorexStartupIpcProbe = {
+        authStartedAt: 0,
+        authDoneAt: 0,
+        backendStartedAt: 0,
+        backendDoneAt: 0
+      };
+      const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      ipcMain.removeHandler('auth:status');
+      ipcMain.handle('auth:status', async () => {
+        global.__ecorexStartupIpcProbe.authStartedAt = Date.now();
+        await delay(260);
+        global.__ecorexStartupIpcProbe.authDoneAt = Date.now();
+        return { ok: true, loggedIn: false, setupRequired: true, authMode: 'local-owner' };
+      });
+      ipcMain.removeHandler('backend:status');
+      ipcMain.handle('backend:status', async () => {
+        global.__ecorexStartupIpcProbe.backendStartedAt = Date.now();
+        await delay(520);
+        global.__ecorexStartupIpcProbe.backendDoneAt = Date.now();
+        return { ok: true, ready: true, mode: 'e2e-startup-probe' };
+      });
+    });
+
+    await page.addInitScript(installStartupLoaderProbe);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await expect(page.locator('.app-frame')).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('[data-testid="login-form"], form.login-panel').first()).toBeVisible({ timeout: 20_000 });
+    await expect.poll(() => page.evaluate(() => window.__ecorexStartupProbe?.finishCalls || 0)).toBeGreaterThan(0);
+    await expect.poll(() => page.evaluate(() => document.documentElement.dataset.ecorexReady)).toBe('true');
+
+    const probe = await page.evaluate(() => window.__ecorexStartupProbe);
+    const ipcProbe = await electronApp.evaluate(() => global.__ecorexStartupIpcProbe);
+    expect(probe.patchErrors).toEqual([]);
+    expect(ipcProbe.authStartedAt).toBeGreaterThan(0);
+    expect(ipcProbe.backendStartedAt).toBeGreaterThan(0);
+    expect(ipcProbe.authDoneAt).toBeGreaterThanOrEqual(ipcProbe.authStartedAt);
+    expect(ipcProbe.backendDoneAt).toBeGreaterThanOrEqual(ipcProbe.backendStartedAt);
+    expect(probe.finishAt).toBeGreaterThanOrEqual(ipcProbe.authDoneAt);
+    expect(probe.finishAt).toBeGreaterThanOrEqual(ipcProbe.backendDoneAt);
+    expect(probe.loaderVisibleAtFinish).toBe(true);
+    expect(probe.readyDatasetAtFinish).toBe(false);
+    expect(probe.finishBeforeBothSettled).toBe(false);
+  });
+
+  test('opens diagnostics from personal system settings and shows the health check area', async ({ ecorex }) => {
     const { page } = ecorex;
     await login(page);
 
+    await expect(page.locator('.side-nav').getByText(/MCP|SKILLS|系统设置|诊断/)).toHaveCount(0);
     await openDiagnostics(page);
 
-    await expect(page.getByRole('heading', { name: /诊断 \/ 设置/ })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /系统设置/ })).toBeVisible();
+    const mcpTab = page.locator('[data-testid="system-settings-tab-mcp"]');
+    const skillsTab = page.locator('[data-testid="system-settings-tab-skills"]');
+    const diagnosticsTab = page.locator('[data-testid="system-settings-tab-diagnostics"]');
+    await expect(mcpTab).toContainText('MCP');
+    await expect(skillsTab).toContainText('SKILLS');
+    await expect(diagnosticsTab).toContainText(/诊断/);
+    await mcpTab.click();
+    await expect(mcpTab).toHaveAttribute('aria-selected', 'true');
+    await skillsTab.click();
+    await expect(skillsTab).toHaveAttribute('aria-selected', 'true');
+    await diagnosticsTab.click();
+    await expect(diagnosticsTab).toHaveAttribute('aria-selected', 'true');
     const healthPanel = page.locator('.health-check-panel');
     await expect(healthPanel).toBeVisible();
     await expect(healthPanel.getByText('可发布前检查')).toBeVisible();
@@ -214,6 +355,89 @@ test.describe('EcoreX Agent Electron E2E', () => {
     expect(['auto', 'scroll']).toContain(layout.textareaOverflowY);
     expect(layout.textareaScrollWidth).toBeLessThanOrEqual(layout.textareaClientWidth + 2);
     expect(layout.documentScrollWidth).toBeLessThanOrEqual(layout.documentClientWidth + 2);
+  });
+
+  test('handles core chat interactions without trapping the user', async ({ ecorex }) => {
+    const { electronApp, page } = ecorex;
+    await login(page);
+    await page.addStyleTag({ content: '.messages { max-height: 220px !important; }' });
+
+    await electronApp.evaluate(({ ipcMain }) => {
+      global.__ecorexRunPayloads = [];
+      ipcMain.removeHandler('agent:run');
+      ipcMain.handle('agent:run', (_event, payload) => {
+        global.__ecorexRunPayloads.push(payload);
+        return {
+          ok: false,
+          sessionId: payload.sessionId,
+          status: 'cancelled',
+          error: 'e2e stubbed run'
+        };
+      });
+    });
+
+    await page.locator('[data-testid="chat-input"]').fill('回车发送烟测');
+    await page.locator('[data-testid="chat-input"]').press('Enter');
+    await expect(page.locator('.user-bubble').filter({ hasText: '回车发送烟测' }).first()).toBeVisible();
+    await expect(page.locator('.recent-row').first()).toContainText('回车发送烟测');
+    const recentCountAfterFirstSend = await page.locator('.recent-row').count();
+    await page.locator('[data-testid="chat-send-button"]').click();
+    await expect(page.locator('.running-session-strip')).toBeHidden({ timeout: 15_000 });
+
+    await page.locator('[data-testid="chat-input"]').fill('同一会话第二轮');
+    await page.locator('.messages').evaluate((node) => {
+      node.scrollTop = 0;
+    });
+    await page.locator('[data-testid="chat-input"]').press('Enter');
+    await expect(page.locator('.user-bubble').filter({ hasText: '同一会话第二轮' }).first()).toBeVisible();
+    await expect.poll(async () => page.locator('.messages').evaluate((node) => (
+      Math.ceil(node.scrollTop + node.clientHeight) >= node.scrollHeight - 3
+    ))).toBeTruthy();
+    const runPayloads = await electronApp.evaluate(() => global.__ecorexRunPayloads || []);
+    expect(runPayloads.length).toBeGreaterThanOrEqual(2);
+    expect(runPayloads[1].conversationId).toBe(runPayloads[0].conversationId);
+    expect(runPayloads[0].claudeSessionId).toBe(runPayloads[0].conversationId);
+    expect(runPayloads[1].claudeSessionId).toBe(runPayloads[0].claudeSessionId);
+    expect(runPayloads[1].prompt).not.toContain('当前会话上下文');
+    expect(runPayloads[1].prompt).not.toContain('用户：回车发送烟测');
+    expect(runPayloads[1].prompt).toContain('用户当前输入：同一会话第二轮');
+    await expect(page.locator('.recent-row')).toHaveCount(recentCountAfterFirstSend);
+    await expect(page.locator('.recent-row').first()).toContainText('同一会话第二轮');
+    await expect(page.locator('.permission-inline-note')).toHaveCount(0);
+    await page.locator('[data-testid="chat-send-button"]').click();
+    await expect(page.locator('.running-session-strip')).toBeHidden({ timeout: 15_000 });
+
+    await page.locator('.side-nav button').first().click();
+    await page.locator('.recent-row').first().locator('.recent-open').click();
+    await expect(page.locator('.user-bubble').filter({ hasText: '同一会话第二轮' }).first()).toBeVisible();
+
+    await page.locator('[data-testid="chat-input"]').fill('这条会被新会话清空');
+    await page.locator('.new-chat').click();
+    await expect(page.locator('[data-testid="chat-input"]')).toHaveValue('');
+    await expect(page.locator('.assistant-card').first()).toContainText('接下来我们做些什么');
+    await expect(page.locator('.recent-row').first()).toContainText('新会话');
+
+    const recentRows = page.locator('.recent-row');
+    const beforeDelete = await recentRows.count();
+    await recentRows.first().hover();
+    await recentRows.first().locator('.recent-delete').click();
+    await expect(recentRows).toHaveCount(beforeDelete - 1);
+
+    await page.locator('[data-testid="chat-input"]').evaluate((textarea) => {
+      const base64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lS5nWQAAAABJRU5ErkJggg==';
+      const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+      const file = new File([bytes], 'pasted-creative.png', { type: 'image/png' });
+      const transfer = new DataTransfer();
+      transfer.items.add(file);
+      const event = new ClipboardEvent('paste', {
+        clipboardData: transfer,
+        bubbles: true,
+        cancelable: true
+      });
+      textarea.dispatchEvent(event);
+    });
+    await expect(page.locator('.attachment-chip').filter({ hasText: 'pasted-creative.png' }).first()).toBeVisible();
+    await expect(page.locator('.attachment-chip img').first()).toHaveAttribute('src', /^data:image\/png/);
   });
 
   test('creates and switches projects from diagnostics workspace @responsive', async ({ ecorex }) => {
