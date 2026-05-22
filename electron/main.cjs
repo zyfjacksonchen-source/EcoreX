@@ -11,6 +11,7 @@ const isWindows = process.platform === 'win32';
 const runningAgents = new Map();
 const pendingAgentStarts = new Map();
 const recentAgentStartsByWindow = new Map();
+const agentSessionActors = new Map();
 let mainWindow = null;
 let startupSplashUrl = '';
 let cachedClaude = null;
@@ -22,6 +23,7 @@ const AGENT_TIMEOUT_MS = 30 * 60 * 1000;
 const AGENT_IDLE_TIMEOUT_MS = 12 * 60 * 1000;
 const AGENT_MIN_TIMEOUT_MS = 30 * 1000;
 const MAX_RUNNING_AGENTS = 4;
+const AGENT_RUNTIME_KIND = 'claude-cli-session-actor';
 const AGENT_START_DEBOUNCE_MS = 1200;
 const AGENT_START_PENDING_TTL_MS = 15 * 1000;
 const BACKEND_STATUS_TTL_MS = 3 * 1000;
@@ -56,7 +58,8 @@ const MAX_DIAGNOSTIC_LOG_LINES = 80;
 const MAX_DIAGNOSTIC_SESSIONS = 12;
 const MAX_COMMAND_OUTPUT_CHARS = 2 * 1024 * 1024;
 const MAX_AGENT_LINE_BUFFER_CHARS = 2 * 1024 * 1024;
-const MAX_TRANSCRIPT_EVENTS = 80;
+const MAX_TRANSCRIPT_EVENTS = 160;
+const MAX_TRANSCRIPT_HEAD_EVENTS = 40;
 const MAX_TRANSCRIPT_TEXT_PREVIEW_CHARS = 320;
 const MAX_RECENT_SESSION_FILES = 20;
 const MAX_IPC_OUTPUT_CHARS = 200 * 1024;
@@ -3231,6 +3234,176 @@ function sanitizePayload(payload = {}) {
   };
 }
 
+function createAgentPermissionSnapshot(safePayload = {}) {
+  const permissionPolicy = safePayload.permissionPolicy || publicPermissionPolicy(safePayload.accessMode || safePayload.permissionMode, { includeBackend: true });
+  const permissionCliFlags = Object.freeze([...(safePayload.permissionCliFlags || permissionPolicy.cliFlags || [])]);
+  const plugins = Object.freeze([...(safePayload.plugins || [])]);
+  const snapshot = Object.freeze({
+    runtimeKind: AGENT_RUNTIME_KIND,
+    sessionId: safePayload.sessionId,
+    claudeSessionId: safePayload.claudeSessionId,
+    accessMode: permissionPolicy.accessMode || safePayload.accessMode,
+    permissionMode: permissionPolicy.permissionMode || safePayload.permissionMode,
+    permissionCliMode: safePayload.permissionCliMode ?? permissionPolicy.cliMode ?? null,
+    permissionCliFlags,
+    permissionLabel: safePayload.permissionLabel || permissionPolicy.label,
+    fullAccess: Boolean(permissionPolicy.fullAccess),
+    model: safePayload.model,
+    cwd: path.resolve(safePayload.cwd || defaultCommandCwd()),
+    workspacePath: publicWorkspacePath(safePayload.cwd),
+    projectId: safePayload.projectId || null,
+    projectName: safePayload.projectContext?.name || '',
+    projectPath: safePayload.projectContext?.pathLabel || '',
+    projectMemoryLabel: safePayload.projectContext?.memoryLabel || '',
+    plugins,
+    createdAt: new Date().toISOString()
+  });
+  return assertAgentPermissionSnapshotIsolated(snapshot);
+}
+
+function assertAgentPermissionSnapshotIsolated(snapshot = {}) {
+  if (!Object.isFrozen(snapshot) || !Object.isFrozen(snapshot.permissionCliFlags) || !Object.isFrozen(snapshot.plugins)) {
+    throw new Error('Agent permission snapshot must be immutable.');
+  }
+  const includesFullAccessFlag = snapshot.permissionCliFlags.includes(FULL_ACCESS_CLAUDE_FLAG);
+  if (Boolean(snapshot.fullAccess) !== includesFullAccessFlag) {
+    throw new Error('Agent permission snapshot is inconsistent.');
+  }
+  if (!snapshot.sessionId || !snapshot.claudeSessionId || !snapshot.cwd) {
+    throw new Error('Agent permission snapshot is incomplete.');
+  }
+  return snapshot;
+}
+
+function createAgentSessionActor(sessionId, safePayload, startLock, metadata = {}) {
+  const permissionSnapshot = createAgentPermissionSnapshot(safePayload);
+  const actor = {
+    actorId: crypto.randomUUID(),
+    runtimeKind: AGENT_RUNTIME_KIND,
+    sessionId,
+    ownerId: startLock.ownerId,
+    signature: startLock.signature,
+    claudeSessionId: safePayload.claudeSessionId,
+    permissionSnapshot,
+    status: 'starting',
+    state: 'running',
+    createdAt: Date.now(),
+    startedAt: Date.now(),
+    lastActivityAt: Date.now(),
+    claudeResumeMode: metadata.claudeResumeExistingSession ? 'resume' : 'new',
+    transport: null,
+    stop(reason = 'cancelled') {
+      this.status = agentFinalStatus(reason);
+      this.state = 'stopping';
+      this.stopReason = reason;
+      if (this.transport && typeof this.transport.stop === 'function') {
+        return this.transport.stop(reason);
+      }
+      return false;
+    }
+  };
+  agentSessionActors.set(sessionId, actor);
+  return actor;
+}
+
+function createCliAgentTransport(child, metadata = {}) {
+  return {
+    kind: 'claude-cli-child',
+    pid: child?.pid || null,
+    actorId: metadata.actorId || null,
+    resumeMode: metadata.resumeMode || 'new',
+    startedAt: Date.now(),
+    stopped: false,
+    stop(reason = 'cancelled') {
+      if (this.stopped) return false;
+      this.stopped = true;
+      this.stopReason = reason;
+      this.stoppedAt = Date.now();
+      killProcessTree(child);
+      return true;
+    }
+  };
+}
+
+function disposeAgentSessionActor(sessionId, reason = 'stopped') {
+  const actor = agentSessionActors.get(sessionId);
+  if (!actor) return false;
+  actor.status = agentFinalStatus(reason);
+  actor.state = 'stopped';
+  actor.endedAt = Date.now();
+  if (actor.transport) actor.transport.endedAt = actor.endedAt;
+  agentSessionActors.delete(sessionId);
+  return true;
+}
+
+function runtimeStatusSnapshot() {
+  const now = Date.now();
+  const actors = Array.from(agentSessionActors.values()).map((actor) => {
+    const snapshot = actor.permissionSnapshot || {};
+    return {
+      actorId: actor.actorId,
+      sessionId: actor.sessionId,
+      runtimeKind: actor.runtimeKind || AGENT_RUNTIME_KIND,
+      status: actor.status || 'running',
+      state: actor.state || 'running',
+      startedAt: new Date(actor.startedAt || actor.createdAt || now).toISOString(),
+      uptimeMs: Math.max(0, now - (actor.startedAt || actor.createdAt || now)),
+      lastActivityAt: new Date(actor.lastActivityAt || actor.startedAt || now).toISOString(),
+      claudeSessionId: publicStableId('claude-session', actor.claudeSessionId),
+      claudeResumeMode: actor.claudeResumeMode || 'new',
+      transport: actor.transport?.kind || 'pending',
+      pid: actor.transport?.pid || null,
+      accessMode: snapshot.accessMode || 'default',
+      permissionMode: snapshot.permissionMode || 'default',
+      permissionLabel: snapshot.permissionLabel || '',
+      fullAccess: Boolean(snapshot.fullAccess),
+      projectId: snapshot.projectId || null,
+      projectName: snapshot.projectName || '',
+      workspacePath: snapshot.workspacePath || publicWorkspacePath(snapshot.cwd),
+      model: snapshot.model || null
+    };
+  });
+  return {
+    ok: true,
+    runtimeKind: AGENT_RUNTIME_KIND,
+    status: actors.length ? 'running' : 'ready',
+    activeActors: actors.length,
+    maxRunning: MAX_RUNNING_AGENTS,
+    preloadStatus: startupPreloadState.status,
+    generatedAt: new Date(now).toISOString(),
+    actors
+  };
+}
+
+function publicAgentRuntimeStatus() {
+  const snapshot = runtimeStatusSnapshot();
+  return {
+    ok: true,
+    runtimeKind: snapshot.runtimeKind,
+    status: snapshot.status,
+    activeActors: snapshot.activeActors,
+    maxRunning: snapshot.maxRunning,
+    preloadStatus: snapshot.preloadStatus,
+    generatedAt: snapshot.generatedAt,
+    actors: snapshot.actors.map((actor) => ({
+      actorId: actor.actorId,
+      sessionId: actor.sessionId,
+      status: actor.status,
+      state: actor.state,
+      transport: actor.transport,
+      claudeResumeMode: actor.claudeResumeMode,
+      accessMode: actor.accessMode,
+      permissionMode: actor.permissionMode,
+      permissionLabel: actor.permissionLabel,
+      fullAccess: actor.fullAccess,
+      projectId: actor.projectId,
+      projectName: actor.projectName,
+      model: actor.model,
+      uptimeMs: actor.uptimeMs
+    }))
+  };
+}
+
 function readProjectMemoryPreview(projectContext) {
   if (!projectContext?.memoryFile) return '';
   try {
@@ -3331,7 +3504,28 @@ function defaultWindowBounds() {
   };
 }
 
-function startupSplashHtml() {
+function startupBrandIconPath() {
+  const candidates = [
+    devPath('build', 'icon.ico'),
+    devPath('build', 'icon.png'),
+    devPath('dist', 'icon.png'),
+    devPath('public', 'icon.png'),
+    devPath('前端UI视觉', 'ecorex_app_icon_transparent.png')
+  ];
+  const iconPath = candidates.find((candidate) => {
+    try {
+      return fs.existsSync(candidate) && fs.statSync(candidate).isFile();
+    } catch {
+      return false;
+    }
+  });
+  return iconPath || '';
+}
+
+function startupSplashHtml(iconFileName = '') {
+  const iconMarkup = iconFileName
+    ? `<img class="mark" src="${iconFileName}" alt="" aria-hidden="true" />`
+    : '<div class="mark fallback" aria-hidden="true">EX</div>';
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -3343,7 +3537,8 @@ function startupSplashHtml() {
     html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #070c12; color: #f3f6fa; font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", Arial, sans-serif; }
     body { display: grid; place-items: center; background: radial-gradient(circle at 55% 44%, rgba(255, 90, 0, .18), transparent 34%), linear-gradient(145deg, #050910, #0a1119); }
     .splash { display: grid; justify-items: center; gap: 16px; transform: translateY(-8px); }
-    .mark { width: 68px; height: 68px; border-radius: 18px; display: grid; place-items: center; background: #111820; box-shadow: 0 20px 60px rgba(0,0,0,.42), inset 0 1px 0 rgba(255,255,255,.08); color: #ff5a00; font-size: 44px; font-weight: 900; line-height: 1; }
+    .mark { width: 68px; height: 68px; border-radius: 18px; display: block; object-fit: contain; filter: drop-shadow(0 20px 60px rgba(0,0,0,.42)); }
+    .mark.fallback { display: grid; place-items: center; background: #111820; color: #ff5a00; font-size: 24px; font-weight: 900; box-shadow: inset 0 1px 0 rgba(255,255,255,.08); }
     .title { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: 0; }
     .sub { margin: -6px 0 2px; color: #a9b0bb; font-size: 13px; }
     .spinner { width: 34px; height: 34px; border-radius: 50%; border: 3px solid rgba(255,255,255,.12); border-top-color: #ff5a00; animation: spin .8s linear infinite; }
@@ -3352,7 +3547,7 @@ function startupSplashHtml() {
 </head>
 <body>
   <main class="splash" aria-live="polite">
-    <div class="mark">X</div>
+    ${iconMarkup}
     <h1 class="title">EcoreX Agent</h1>
     <p class="sub">正在预加载本地能力与会话环境</p>
     <div class="spinner" aria-hidden="true"></div>
@@ -3362,7 +3557,29 @@ function startupSplashHtml() {
 }
 
 function startupSplashDataUrl() {
-  return `data:text/html;charset=utf-8,${encodeURIComponent(startupSplashHtml())}`;
+  return `data:text/html;charset=utf-8,${encodeURIComponent(startupSplashHtml(''))}`;
+}
+
+function startupSplashUrlForWindow() {
+  try {
+    const splashDir = path.join(app.getPath('userData'), 'startup');
+    fs.mkdirSync(splashDir, { recursive: true });
+    const iconPath = startupBrandIconPath();
+    let iconFileName = '';
+    if (iconPath) {
+      const iconExt = path.extname(iconPath).toLowerCase() || '.png';
+      iconFileName = `startup-icon${iconExt}`;
+      fs.copyFileSync(iconPath, path.join(splashDir, iconFileName));
+    }
+    const htmlPath = path.join(splashDir, 'startup-splash.html');
+    fs.writeFileSync(htmlPath, startupSplashHtml(iconFileName), 'utf8');
+    return pathToFileURL(htmlPath).href;
+  } catch (error) {
+    writeLog('warn', 'Startup splash file could not be prepared', {
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return startupSplashDataUrl();
+  }
 }
 
 function waitForStartupPreload(promise, timeoutMs = STARTUP_PRELOAD_TIMEOUT_MS) {
@@ -3447,7 +3664,7 @@ function createWindow() {
     minHeight: 600,
     center: true,
     title: 'EcoreX Agent',
-    backgroundColor: '#080d14',
+    backgroundColor: '#070c12',
     icon: devPath('build', 'icon.ico'),
     frame: false,
     show: true,
@@ -3465,7 +3682,7 @@ function createWindow() {
     mainWindow = null;
   });
 
-  revealStartupWindow('created');
+  revealStartupWindow('created-dark-shell');
 
   mainWindow.on('ready-to-show', () => {
     revealStartupWindow('ready-to-show');
@@ -3567,14 +3784,17 @@ function createWindow() {
     }
   }
 
-  const startupPreload = startStartupPreload('native-loading');
-  startupSplashUrl = startupSplashDataUrl();
+  startupSplashUrl = startupSplashUrlForWindow();
   mainWindow.loadURL(startupSplashUrl)
     .then(async () => {
+      revealStartupWindow('startup-splash-loaded');
+      const startupPreload = startStartupPreload('native-loading');
       await waitForStartupPreload(startupPreload);
       loadRendererEntry();
     })
     .catch((error) => {
+      revealStartupWindow('startup-splash-failed');
+      const startupPreload = startStartupPreload('native-loading');
       writeLog('warn', 'Startup splash failed, loading renderer directly', {
         ...windowDiagnosticSnapshot(mainWindow),
         error: error instanceof Error ? error.message : String(error)
@@ -4060,6 +4280,7 @@ function claimAgentStart(payload = {}, options = {}) {
     lastActivityAt: now,
     status: 'starting',
     state: 'running',
+    runtimeKind: AGENT_RUNTIME_KIND,
     promptPreview: publicPromptPreview(payload.prompt),
     workspacePath: publicWorkspacePath(payload.cwd),
     model: payload.model,
@@ -4122,6 +4343,7 @@ function finalizeAgentSession(sessionId, entry, details = {}) {
   if (!entry || entry.finished) return false;
   entry.finished = true;
   runningAgents.delete(sessionId);
+  disposeAgentSessionActor(sessionId, details.reason || details.status || 'stopped');
   clearAgentTimers(entry);
   if (typeof entry.flushBufferedOutput === 'function') {
     entry.flushBufferedOutput();
@@ -4162,7 +4384,13 @@ function stopAgent(sessionId, reason = 'cancelled') {
     }
     return { ok: false, reason: 'not-found', status: 'not-found', error: 'Agent session was not found.', recoveryHint: agentRecoveryHint('not-found') };
   }
-  killProcessTree(entry.child);
+  if (entry.transport && typeof entry.transport.stop === 'function') {
+    entry.transport.stop(reason);
+  } else if (entry.actor && typeof entry.actor.stop === 'function') {
+    entry.actor.stop(reason);
+  } else {
+    killProcessTree(entry.child);
+  }
   const status = agentFinalStatus(reason);
   finalizeAgentSession(sessionId, entry, { status, reason });
   writeLog(reason === 'cancelled' ? 'info' : 'warn', 'Agent session stopped', {
@@ -4932,6 +5160,9 @@ function publicSessionSummary(sessionId, entry = {}, now = Date.now()) {
     sessionId,
     status: entry.status || 'running',
     state: entry.state || 'running',
+    runtimeKind: entry.runtimeKind || AGENT_RUNTIME_KIND,
+    actorId: entry.actorId || null,
+    transport: entry.transport?.kind || null,
     startedAt: startedAtMs,
     startedAtIso: new Date(startedAtMs).toISOString(),
     startedAtMs,
@@ -4952,6 +5183,7 @@ function publicSessionSummary(sessionId, entry = {}, now = Date.now()) {
     permissionMode,
     permissionLabel: entry.permissionLabel || permissionPolicy.label,
     permissionPolicy,
+    fullAccess: Boolean(entry.permissionSnapshot?.fullAccess || permissionPolicy.fullAccess),
     eventCount: Array.isArray(entry.transcript) ? entry.transcript.length : 0
   };
 }
@@ -4975,6 +5207,31 @@ function safeTranscriptTextPreview(value = '') {
   return safeTranscriptText(value).slice(0, MAX_TRANSCRIPT_TEXT_PREVIEW_CHARS);
 }
 
+function compactSessionTranscriptEvents(events = []) {
+  if (events.length <= MAX_TRANSCRIPT_EVENTS) return events;
+  const keep = new Map();
+  const add = (index) => {
+    if (index < 0 || index >= events.length || keep.size >= MAX_TRANSCRIPT_EVENTS) return;
+    keep.set(index, events[index]);
+  };
+  const isImportant = (event = {}) => {
+    const kind = String(event.kind || '').trim();
+    if (!kind || kind !== 'assistant') return true;
+    return Boolean(event.toolName || event.tools?.length || event.task?.type === 'tool');
+  };
+  const headCount = Math.min(12, MAX_TRANSCRIPT_HEAD_EVENTS, Math.floor(MAX_TRANSCRIPT_EVENTS / 4));
+  for (let index = 0; index < headCount; index += 1) add(index);
+  events.forEach((event, index) => {
+    if (isImportant(event)) add(index);
+  });
+  for (let index = events.length - 1; index >= 0 && keep.size < MAX_TRANSCRIPT_EVENTS; index -= 1) {
+    add(index);
+  }
+  return [...keep.entries()]
+    .sort((left, right) => left[0] - right[0])
+    .map(([, event]) => event);
+}
+
 function recordSessionEvent(entry, event) {
   if (!entry) return;
   if (!Array.isArray(entry.transcript)) entry.transcript = [];
@@ -4983,6 +5240,11 @@ function recordSessionEvent(entry, event) {
   entry.state = normalized.state;
   entry.lastActivityAt = Date.now();
   entry.lastEventAt = normalized.time;
+  if (entry.actor) {
+    entry.actor.status = normalized.status || entry.actor.status;
+    entry.actor.state = normalized.state || entry.actor.state;
+    entry.actor.lastActivityAt = entry.lastActivityAt;
+  }
   entry.transcript.push({
     time: normalized.time,
     kind: normalized.kind,
@@ -4993,7 +5255,7 @@ function recordSessionEvent(entry, event) {
     textPreview: safeTranscriptTextPreview(normalized.text)
   });
   if (entry.transcript.length > MAX_TRANSCRIPT_EVENTS) {
-    entry.transcript = entry.transcript.slice(-MAX_TRANSCRIPT_EVENTS);
+    entry.transcript = compactSessionTranscriptEvents(entry.transcript);
   }
 }
 
@@ -5452,6 +5714,10 @@ function healthSummaryForDiagnostics(health = {}) {
       version: health.cli?.version ? safeDiagnosticText(health.cli.version, 120) : null,
       nativePackage: health.cli?.nativePackage ? safeDiagnosticText(health.cli.nativePackage, 120) : null
     },
+    agentRuntime: safeDiagnosticValue(health.agentRuntime || publicAgentRuntimeStatus(), {
+      stringLimit: 1000,
+      maxArrayItems: 12
+    }),
     capabilities: safeDiagnosticValue(health.capabilities || {}, {
       stringLimit: 1000,
       maxArrayItems: 40
@@ -5726,6 +5992,7 @@ async function collectStartupHealth(_event, payload = {}) {
       nativePackage: nativeClaudePackageName()
     },
     capabilities: summarizeCapabilities(capabilities),
+    agentRuntime: publicAgentRuntimeStatus(),
     runningSessions: getRunningSessionSummaries(),
     crashes: readCrashSummary(10),
     telemetry: publicTelemetryStatus(settings),
@@ -5774,6 +6041,7 @@ async function collectDiagnostics() {
       version: claude.version,
       nativePackage
     },
+    runtime: publicAgentRuntimeStatus(),
     logs: {
       path: logPath(),
       recent: readRecentLogs()
@@ -6043,6 +6311,7 @@ function runAgent(payload = {}, options = {}) {
 
     const startLock = startClaim.lock;
 
+    let runtimeActor = null;
     try {
       const claude = await locateClaude();
       if (startLock.cancelled || pendingAgentStarts.get(sessionId) !== startLock) {
@@ -6084,6 +6353,8 @@ function runAgent(payload = {}, options = {}) {
         .map((plugin) => [plugin.name, path.resolve(repoRoot, plugin.source)])
     );
     const claudeResumeExistingSession = claudeSessionTranscriptExists(claudeSessionId);
+    runtimeActor = createAgentSessionActor(sessionId, safePayload, startLock, { claudeResumeExistingSession });
+    const permissionSnapshot = runtimeActor.permissionSnapshot;
     const args = [
       ...claude.baseArgs,
       '--print',
@@ -6137,6 +6408,13 @@ function runAgent(payload = {}, options = {}) {
       windowsHide: true,
       shell: false
     });
+    const transport = createCliAgentTransport(child, {
+      actorId: runtimeActor.actorId,
+      resumeMode: claudeResumeExistingSession ? 'resume' : 'new'
+    });
+    runtimeActor.transport = transport;
+    runtimeActor.status = 'started';
+    runtimeActor.lastActivityAt = Date.now();
     try {
       child.stdin.end(`${prompt}\n`);
     } catch (error) {
@@ -6147,6 +6425,8 @@ function runAgent(payload = {}, options = {}) {
     }
     writeLog('info', 'Agent session started', {
       sessionId,
+      runtimeKind: AGENT_RUNTIME_KIND,
+      actorId: runtimeActor.actorId,
       cwd,
       model,
       accessMode,
@@ -6172,6 +6452,8 @@ function runAgent(payload = {}, options = {}) {
       sessionId,
       kind: 'status',
       status: 'started',
+      runtimeKind: AGENT_RUNTIME_KIND,
+      actorId: runtimeActor.actorId,
       accessMode,
       permissionMode,
       permissionCliMode,
@@ -6187,6 +6469,11 @@ function runAgent(payload = {}, options = {}) {
     };
     const entry = {
       child,
+      transport,
+      actor: runtimeActor,
+      actorId: runtimeActor.actorId,
+      runtimeKind: AGENT_RUNTIME_KIND,
+      permissionSnapshot,
       promptHash: crypto.createHash('sha256').update(prompt).digest('hex'),
       cwd,
       ownerId: startLock.ownerId,
@@ -6255,6 +6542,8 @@ function runAgent(payload = {}, options = {}) {
       sessionId,
       kind: 'status',
       status: 'started',
+      runtimeKind: AGENT_RUNTIME_KIND,
+      actorId: runtimeActor.actorId,
       accessMode,
       permissionMode,
       permissionCliMode,
@@ -6270,7 +6559,10 @@ function runAgent(payload = {}, options = {}) {
 
     child.stdout.on('data', (chunk) => {
       const entry = runningAgents.get(sessionId);
-      if (entry) entry.lastActivityAt = Date.now();
+      if (entry) {
+        entry.lastActivityAt = Date.now();
+        if (entry.actor) entry.actor.lastActivityAt = entry.lastActivityAt;
+      }
       armIdleTimer(sessionId);
       lineBuffer += chunk.toString();
       if (lineBuffer.length > MAX_AGENT_LINE_BUFFER_CHARS) {
@@ -6299,7 +6591,10 @@ function runAgent(payload = {}, options = {}) {
 
     child.stderr.on('data', (chunk) => {
       const entry = runningAgents.get(sessionId);
-      if (entry) entry.lastActivityAt = Date.now();
+      if (entry) {
+        entry.lastActivityAt = Date.now();
+        if (entry.actor) entry.actor.lastActivityAt = entry.lastActivityAt;
+      }
       armIdleTimer(sessionId);
       const stderrText = safeOutputText(chunk.toString(), MAX_AGENT_EVENT_TEXT_CHARS);
       const event = {
@@ -6341,6 +6636,7 @@ function runAgent(payload = {}, options = {}) {
       });
     });
     } catch (error) {
+      disposeAgentSessionActor(sessionId, 'failed');
       releaseAgentStart(sessionId, startLock);
       writeLog('error', 'Agent session failed to start', {
         sessionId,

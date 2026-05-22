@@ -122,11 +122,19 @@ select,
 }
 
 button:focus-visible,
+[role="button"]:focus-visible {
+  outline: 0;
+  box-shadow: var(--focus-ring);
+}
+
+input:focus,
+textarea:focus,
+select:focus,
 input:focus-visible,
 textarea:focus-visible,
 select:focus-visible {
   outline: 0;
-  box-shadow: var(--focus-ring);
+  box-shadow: none;
 }
 
 .drag-strip {
@@ -791,7 +799,7 @@ select,
 .input-shell {
   flex: 0 0 auto;
   min-height: 54px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid rgba(231, 238, 247, 0.08);
   border-radius: 8px;
   background: rgba(5, 10, 16, 0.38);
   display: flex;
@@ -1184,6 +1192,39 @@ select,
 .recent-delete:hover {
   color: #ff4b4b;
   background: rgba(255, 68, 68, 0.12);
+}
+
+.recent-empty {
+  min-height: 86px;
+  border: 1px dashed rgba(231, 238, 247, 0.12);
+  border-radius: 8px;
+  padding: 12px 10px;
+  display: grid;
+  place-items: center;
+  gap: 5px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.recent-empty svg {
+  color: var(--subtle);
+}
+
+.recent-empty strong,
+.recent-empty span {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.recent-empty strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.recent-empty span {
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .user-card {
@@ -2741,10 +2782,10 @@ select,
   position: relative;
   z-index: 180;
   margin: 4px 0 0;
-  border: 1px solid var(--line);
+  border: 1px solid rgba(231, 238, 247, 0.07);
   border-radius: 12px;
   background: var(--surface);
-  box-shadow: var(--shadow-low);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
   padding: 8px 12px;
   max-height: 238px;
   min-width: 0;
@@ -6004,10 +6045,12 @@ select,
 
 .project-create-row {
   flex: 0 0 auto;
+  position: relative;
+  z-index: 1;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 7px;
-  margin-bottom: 8px;
+  margin-top: 8px;
 }
 
 .project-create-row input {
@@ -6048,8 +6091,10 @@ select,
 }
 
 .project-workspace-list {
+  position: relative;
+  z-index: 2;
   flex: 1 1 auto;
-  min-height: 0;
+  min-height: 48px;
   overflow: auto;
   display: grid;
   align-content: start;
@@ -6214,8 +6259,22 @@ select,
 .project-create-form input:focus,
 .project-create-form textarea:hover,
 .project-create-form textarea:focus {
-  border-color: var(--hover-accent-line);
-  background: rgba(12, 19, 28, 0.92);
+  border-color: rgba(231, 238, 247, 0.12);
+  background: rgba(12, 19, 28, 0.78);
+  box-shadow: none;
+}
+
+.composer:focus-within,
+.input-shell:focus-within {
+  border-color: rgba(231, 238, 247, 0.14);
+  background: rgba(14, 22, 31, 0.9);
+  color: var(--text);
+  box-shadow: none;
+}
+
+.composer textarea:focus,
+.input-shell input:focus {
+  box-shadow: none;
 }
 
 .permission-mini-card:hover,

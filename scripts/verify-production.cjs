@@ -368,6 +368,10 @@ check('model adapter syntax', () => {
   nodeCheck('scripts/test-model-adapter.cjs');
 });
 
+check('agent runtime smoke syntax', () => {
+  nodeCheck('scripts/agent-runtime-smoke.cjs');
+});
+
 check('preload exposes model profile IPC', () => {
   const preload = readText('electron/preload.cjs');
   assert(preload.includes("contextBridge.exposeInMainWorld('ecorex'"), 'ecorex bridge is not exposed.');
@@ -561,8 +565,13 @@ check('crash recovery and diagnostics package are production-safe', () => {
 
 check('window default, preload and minimum size guardrails', () => {
   const main = readText('electron/main.cjs');
-  includesAll(main, ['function defaultWindowBounds', 'screen.getPrimaryDisplay()', 'width: bounds.width', 'height: bounds.height', 'minWidth: 800', 'minHeight: 600', 'show: true', 'function revealStartupWindow', "revealStartupWindow('created')", 'mainWindow.maximize()', 'function startStartupPreload', 'function waitForStartupPreload', "startStartupPreload('native-loading')", 'collectBackendStatus(null, { refresh: false })'], 'desktop window sizing and startup preload guardrails');
+  includesAll(main, ['function defaultWindowBounds', 'screen.getPrimaryDisplay()', 'width: bounds.width', 'height: bounds.height', 'minWidth: 800', 'minHeight: 600', "backgroundColor: '#070c12'", 'show: true', 'function revealStartupWindow', "revealStartupWindow('created-dark-shell')", "revealStartupWindow('startup-splash-loaded')", 'mainWindow.maximize()', 'function startupBrandIconPath', 'function startupSplashUrlForWindow', 'function startupSplashDataUrl', 'function startStartupPreload', 'function waitForStartupPreload', "startStartupPreload('native-loading')", 'collectBackendStatus(null, { refresh: false })'], 'desktop window sizing and startup preload guardrails');
   includesAll(main, ['locateClaude()', 'Promise.resolve().then(() => collectCapabilities())', 'publicAuthSession(readAuthSession({ refresh: true }))', 'await waitForStartupPreload(startupPreload)', 'loadRendererEntry()'], 'native splash preload must finish or time out before renderer entry');
+  assertMatches(
+    main,
+    /startupSplashUrl = startupSplashUrlForWindow\(\);[\s\S]*?mainWindow\.loadURL\(startupSplashUrl\)[\s\S]*?revealStartupWindow\('startup-splash-loaded'\);[\s\S]*?const startupPreload = startStartupPreload\('native-loading'\);/,
+    'native startup splash must be visible before main-process preload starts.'
+  );
   const css = readText('src/styles.css');
   includesAll(css, ['min-width: 800px'], 'renderer minimum width CSS');
   const renderer = readText('src/main.jsx');
@@ -1153,9 +1162,14 @@ check('package build config excludes local model/secrets storage', () => {
   assert(pkg.main === 'electron/main.cjs', 'package main must point to electron/main.cjs.');
   assert(pkg.scripts && pkg.scripts['verify:production'], 'verify:production script is missing.');
   assert(
-    pkg.scripts['verify:production'].includes('node scripts/verify-production.cjs') &&
+    pkg.scripts['verify:production'].includes('npm run test:agent-runtime') &&
+      pkg.scripts['verify:production'].includes('node scripts/verify-production.cjs') &&
       pkg.scripts['verify:production'].includes('npm run test:model-adapter'),
-    'verify:production must be the P0/P1 entry and include model adapter smoke tests.'
+    'verify:production must be the P0/P1 entry and include agent runtime and model adapter smoke tests.'
+  );
+  assert(
+    pkg.scripts['test:agent-runtime'] === 'node scripts/agent-runtime-smoke.cjs',
+    'test:agent-runtime must run the offline agent runtime smoke script.'
   );
   assert(
     pkg.scripts['test:model-adapter'] === 'node scripts/test-model-adapter.cjs',
@@ -1166,11 +1180,11 @@ check('package build config excludes local model/secrets storage', () => {
     'release:fix-metadata must run the release metadata repair script.'
   );
   assert(
-    pkg.scripts['verify:production:strict'] === 'node scripts/verify-production.cjs --strict && npm run test:model-adapter',
+    pkg.scripts['verify:production:strict'] === 'npm run test:agent-runtime && node scripts/verify-production.cjs --strict && npm run test:model-adapter',
     'verify:production:strict must enable strict release signing gates while staying offline.'
   );
   assert(
-    pkg.scripts['verify:production:release'] === 'node scripts/verify-production.cjs --strict --require-signed-artifact && npm run test:model-adapter',
+    pkg.scripts['verify:production:release'] === 'npm run test:agent-runtime && node scripts/verify-production.cjs --strict --require-signed-artifact && npm run test:model-adapter',
     'verify:production:release must require signed release artifacts after packaging.'
   );
   for (const scriptName of ['pack', 'dist', 'dist:release']) {

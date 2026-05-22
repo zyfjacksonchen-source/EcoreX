@@ -1,13 +1,13 @@
 {
   "schema": "ecorex.install-matrix.v1",
-  "generatedAt": "2026-05-22T02:23:34.737Z",
+  "generatedAt": "2026-05-22T07:57:12.612Z",
   "releaseDir": "C:\\EcoreX-Agent\\release",
   "artifacts": [
     {
       "name": "EcoreX Agent Setup 0.1.0.exe",
-      "size": 147805738,
-      "sha256": "3d0fcdcf8a47e655715994a594b25fc6cafeba3b78c00640cb7578f9fb6220c8",
-      "updatedAt": "2026-05-22T02:23:12.629Z"
+      "size": 147819855,
+      "sha256": "426f9a2219e482298f54283f991105dcc2038122c060536a9993ec01283580ba",
+      "updatedAt": "2026-05-22T07:56:15.857Z"
     }
   ],
   "platforms": [
@@ -18,9 +18,9 @@
       "artifacts": [
         {
           "name": "EcoreX Agent Setup 0.1.0.exe",
-          "size": 147805738,
-          "sha256": "3d0fcdcf8a47e655715994a594b25fc6cafeba3b78c00640cb7578f9fb6220c8",
-          "updatedAt": "2026-05-22T02:23:12.629Z"
+          "size": 147819855,
+          "sha256": "426f9a2219e482298f54283f991105dcc2038122c060536a9993ec01283580ba",
+          "updatedAt": "2026-05-22T07:56:15.857Z"
         }
       ],
       "manualChecks": [
@@ -41,9 +41,9 @@
       "artifacts": [
         {
           "name": "EcoreX Agent Setup 0.1.0.exe",
-          "size": 147805738,
-          "sha256": "3d0fcdcf8a47e655715994a594b25fc6cafeba3b78c00640cb7578f9fb6220c8",
-          "updatedAt": "2026-05-22T02:23:12.629Z"
+          "size": 147819855,
+          "sha256": "426f9a2219e482298f54283f991105dcc2038122c060536a9993ec01283580ba",
+          "updatedAt": "2026-05-22T07:56:15.857Z"
         }
       ],
       "manualChecks": [

@@ -1,6 +1,6 @@
 {
   "schema": "ecorex.security-audit.v1",
-  "generatedAt": "2026-05-22T02:14:06.222Z",
+  "generatedAt": "2026-05-22T08:26:46.985Z",
   "strict": false,
   "production": {
     "info": 0,
@@ -90,11 +90,7 @@
         "severity": "high",
         "isDirect": false,
         "range": "23.0.7 - 26.5.0",
-        "fixAvailable": {
-          "name": "electron-builder",
-          "version": "26.8.1",
-          "isSemVerMajor": true
-        }
+        "fixAvailable": true
       },
       {
         "name": "glob",

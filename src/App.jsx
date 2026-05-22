@@ -300,7 +300,7 @@ const MAX_STORED_CONVERSATIONS = 30;
 const MAX_STORED_MESSAGES_PER_CONVERSATION = 120;
 const MESSAGE_WINDOW_SIZE = 40;
 const MESSAGE_WINDOW_STEP = 30;
-const ASSISTANT_COLLAPSE_CHARS = 1400;
+const ASSISTANT_COLLAPSE_CHARS = 900;
 const CONTEXT_RECENT_MESSAGE_LIMIT = 12;
 const CONTEXT_RECENT_MESSAGE_CHARS = 760;
 const CONTEXT_SUMMARY_MAX_CHARS = 5000;
@@ -317,6 +317,7 @@ const AGENT_EVENT_PENDING_DELAY_MS = 140;
 const PENDING_AGENT_EVENT_TTL_MS = 7000;
 const AGENT_TIMELINE_BATCH_LIMIT = 24;
 const AGENT_EVENT_TERMINAL_KINDS = new Set(['done', 'error', 'cancelled', 'timeout']);
+const AGENT_DISCLOSURE_DELAYS_MS = [1800, 6500, 14000, 28000];
 const MANAGED_SECRET_DEFINITIONS = [
   { key: 'ANTHROPIC_API_KEY', label: '模型服务密钥', hint: '用于亦芯调用模型服务' },
   { key: 'ANTHROPIC_AUTH_TOKEN', label: '模型授权令牌', hint: '用于企业授权会话' },
@@ -444,21 +445,44 @@ function withStartupTimeout(promise, ms = STARTUP_FRONTEND_TIMEOUT_MS) {
 }
 
 async function preloadStartupState() {
-  if (!window.ecorex) return;
+  if (!window.ecorex) {
+    const skipped = { status: 'skipped', label: '预览模式', detail: '桌面预加载不可用', total: 0, fulfilled: 0 };
+    window.__ecorexStartupState = skipped;
+    return skipped;
+  }
+  const startedAt = Date.now();
   const entries = [
     ['settings', window.ecorex.getSettings],
     ['agentSessions', window.ecorex.getAgentSessions],
     ['modelProfiles', window.ecorex.listModelProfiles],
     ['projects', window.ecorex.getProjects]
   ].filter(([, fn]) => typeof fn === 'function');
-  const results = await Promise.allSettled(entries.map(([, fn]) => fn()));
+  if (!entries.length) {
+    const skipped = { status: 'skipped', label: '未接入', detail: '预加载接口不可用', total: 0, fulfilled: 0 };
+    window.__ecorexStartupState = skipped;
+    return skipped;
+  }
+  const results = await Promise.allSettled(entries.map(([, fn]) => Promise.resolve().then(() => fn())));
+  const fulfilledKeys = [];
   window.__ecorexStartupCache = entries.reduce((cache, [key], index) => {
     const result = results[index];
     if (result?.status === 'fulfilled' && result.value && result.value.ok !== false && !result.value.unauthorized) {
       cache[key] = result.value;
+      fulfilledKeys.push(key);
     }
     return cache;
   }, window.__ecorexStartupCache || {});
+  const summary = {
+    status: fulfilledKeys.length === entries.length ? 'ready' : (fulfilledKeys.length ? 'partial' : 'failed'),
+    label: fulfilledKeys.length === entries.length ? '已完成' : (fulfilledKeys.length ? '部分完成' : '未完成'),
+    detail: `${fulfilledKeys.length}/${entries.length} 项已预加载`,
+    keys: fulfilledKeys,
+    total: entries.length,
+    fulfilled: fulfilledKeys.length,
+    durationMs: Date.now() - startedAt
+  };
+  window.__ecorexStartupState = summary;
+  return summary;
 }
 
 function formatFileSize(bytes = 0) {
@@ -483,6 +507,45 @@ function attachmentPromptSection(attachments = []) {
 
 function isContinuationPrompt(value = '') {
   return /^(是|对|好|好的|可以|继续|继续吧|同意|确认|允许|允许一次|执行|开始|行|嗯|ok|yes|y|go|继续执行)[。！!,.，\s]*$/i.test(String(value || '').trim());
+}
+
+function permissionActionFromValue(value = {}) {
+  const raw = typeof value === 'string' ? value : value?.action;
+  const text = String(raw || '').trim();
+  if (text === 'allow' || /允许|确认|继续|approve|yes/i.test(text)) {
+    return {
+      action: 'allow',
+      label: '允许一次',
+      tone: 'pending',
+      accessMode: 'fullAccess',
+      prompt: '用户已在权限确认卡中选择「允许一次」。请继续上一轮正在等待确认的本地操作；该授权只对刚才那一步生效。不要把这条确认当作新的用户任务，不要重新询问，执行后直接返回结果。'
+    };
+  }
+  if (text === 'plan' || /计划|只读|只做/i.test(text)) {
+    return {
+      action: 'plan',
+      label: '只做计划',
+      tone: 'warn',
+      accessMode: 'default',
+      prompt: '用户已在权限确认卡中选择「只做计划」。不要执行本地文件、命令或系统目录操作；请基于上一轮任务输出只读计划、风险和需要用户手动执行的步骤。'
+    };
+  }
+  return {
+    action: 'deny',
+    label: '拒绝',
+    tone: 'danger',
+    accessMode: 'default',
+    prompt: '用户已在权限确认卡中选择「拒绝」。不要执行上一轮等待确认的本地操作；请给出无需该操作的替代方案或说明无法继续的原因。'
+  };
+}
+
+function permissionContinuationPrompt(decision = {}) {
+  return [
+    '权限确认回执：',
+    decision.prompt || permissionActionFromValue(decision).prompt,
+    '',
+    '交互规则：这是一条来自权限确认卡的后台控制消息，不要在回复中复述它，也不要把它当成新的业务需求。'
+  ].join('\n');
 }
 
 function readableMessageText(message = {}) {
@@ -591,12 +654,26 @@ function shouldRotateNativeClaudeSession(messages = [], lastRotateCount = 0) {
   );
 }
 
-function agentRunPolicySection() {
+function realtimePlatformSearchPolicySection(prompt = '') {
+  const text = String(prompt || '');
+  const platformPattern = /(小红书|抖音|微博|快手|B站|哔哩哔哩|社媒|社交平台|热榜|热门话题|趋势)/i;
+  const freshPattern = /(近\s*\d+\s*天|近三天|近两天|今天|昨日|昨天|最新|实时|热门|热榜|趋势|话题)/i;
+  if (!platformPattern.test(text) || !freshPattern.test(text)) return '';
+  return [
+    '实时平台趋势检索边界：',
+    '1. 优先使用 1 次最聚焦的 WebSearch，必要时最多追加 1 次校验搜索；不要反复扩大到过多第三方榜单或历史报告。',
+    '2. 如果公开网页搜索超过约 60 秒、或无法稳定获取站内实时热榜，立即基于已拿到的公开来源给出“公开资料推断”，并明确说明可信度与限制。',
+    '3. 优先输出可行动结论、话题方向、内容建议和来源链接，不要为了追求完整站内榜单长时间等待。'
+  ].join('\n');
+}
+
+function agentRunPolicySection(prompt = '') {
   return [
     '执行策略：',
     '1. 联网搜索、网页读取、MCP 调用、SKILLS 调用、只读信息检索和常规分析工具由 EcoreX 自主判断并直接执行，不要先询问用户是否允许。',
     '2. 涉及本地文件写入/修改/删除、命令执行、系统目录访问或不可逆变更时，先用一句话说明将执行什么，并等待用户在聊天里确认；用户确认“是/继续/允许一次”后继续。',
-    '3. 简单问答只返回答案；复杂任务只展示当前动作、关键计划和必要风险，不输出完整调试日志或冗长状态树。'
+    '3. 简单问答只返回答案；复杂任务只展示当前动作、关键计划和必要风险，不输出完整调试日志或冗长状态树。',
+    realtimePlatformSearchPolicySection(prompt)
   ].join('\n');
 }
 
@@ -623,13 +700,15 @@ function normalizeRecentChatItem(item, index = 0) {
 
 function loadRecentChatItems() {
   try {
-    const parsed = JSON.parse(localStorage.getItem(RECENT_CHAT_STORAGE_KEY) || '[]');
+    const stored = localStorage.getItem(RECENT_CHAT_STORAGE_KEY);
+    if (stored === null) return [];
+    const parsed = JSON.parse(stored || '[]');
     const items = Array.isArray(parsed) ? parsed.map(normalizeRecentChatItem).filter(Boolean) : [];
-    if (items.length) return items.slice(0, MAX_RECENT_CHATS);
+    return items.slice(0, MAX_RECENT_CHATS);
   } catch {
-    // Fall back to bundled samples when storage is empty or unavailable.
+    // Keep an empty production state instead of restoring design samples.
   }
-  return recentChats.map(([title, time], index) => normalizeRecentChatItem({ id: `sample-${index}`, title, time, updatedAt: Date.now() - index })).filter(Boolean);
+  return [];
 }
 
 function storeRecentChatItems(items = []) {
@@ -691,6 +770,14 @@ function sanitizeStoredMessages(messages = []) {
       streaming: false,
       sessionId: message.sessionId ? String(message.sessionId).slice(0, 120) : undefined,
       originalPrompt: message.originalPrompt ? String(message.originalPrompt).slice(0, 12000) : undefined,
+      permissionDecision: message.permissionDecision && typeof message.permissionDecision === 'object'
+        ? {
+            action: String(message.permissionDecision.action || '').slice(0, 40),
+            label: String(message.permissionDecision.label || '').slice(0, 80),
+            status: String(message.permissionDecision.status || '').slice(0, 40),
+            at: Number(message.permissionDecision.at) || null
+          }
+        : undefined,
       timeline: sanitizeStoredTimeline(message.timeline || []),
       attachments: Array.isArray(message.attachments)
         ? message.attachments.slice(0, MAX_COMPOSER_ATTACHMENTS).map((attachment) => ({
@@ -764,6 +851,11 @@ function App() {
   const [capabilities, setCapabilities] = useState(null);
   const [backendError, setBackendError] = useState('');
   const [authNotice, setAuthNotice] = useState('');
+  const [startupState, setStartupState] = useState(() => window.__ecorexStartupState || {
+    status: window.ecorex ? 'loading' : 'skipped',
+    label: window.ecorex ? '预加载中' : '预览模式',
+    detail: window.ecorex ? '正在预加载本地能力' : '桌面预加载不可用'
+  });
   const startupReadyRef = useRef(false);
 
   useEffect(() => {
@@ -774,6 +866,11 @@ function App() {
   useEffect(() => {
     if (startupReadyRef.current) return;
     startupReadyRef.current = true;
+    setStartupState({
+      status: window.ecorex ? 'loading' : 'skipped',
+      label: window.ecorex ? '预加载中' : '预览模式',
+      detail: window.ecorex ? '正在预加载本地能力' : '桌面预加载不可用'
+    });
     const startupWork = Promise.allSettled([
       refreshAuthStatus(),
       refreshBackend(),
@@ -781,10 +878,33 @@ function App() {
     ]);
     withStartupTimeout(startupWork).finally(() => {
       window.__ecorexFinishStartup?.();
-    });
-    withStartupTimeout(startupWork).then((result) => {
-      if (result?.timedOut) window.__ecorexFinishStartup?.();
-    });
+    })
+      .then((result) => {
+        const nextState = result?.timedOut
+          ? {
+              status: 'timeout',
+              label: '已进入',
+              detail: '预加载仍在后台继续',
+              timedOut: true,
+              timeoutMs: STARTUP_FRONTEND_TIMEOUT_MS
+            }
+          : (Array.isArray(result) ? result.find((item) => item.status === 'fulfilled' && item.value?.status)?.value : null) || window.__ecorexStartupState || {
+              status: 'ready',
+              label: '已完成',
+              detail: '启动检查已完成'
+            };
+        window.__ecorexStartupState = nextState;
+        setStartupState(nextState);
+      })
+      .catch(() => {
+        const failedState = {
+          status: 'failed',
+          label: '未完成',
+          detail: '启动检查未完成'
+        };
+        window.__ecorexStartupState = failedState;
+        setStartupState(failedState);
+      });
   }, []);
 
   async function refreshAuthStatus() {
@@ -920,6 +1040,7 @@ function App() {
         backendError={backendError}
         capabilities={capabilities}
         authStatus={authStatus}
+        startupState={startupState}
         refreshBackend={refreshBackend}
         onUnauthorized={handleUnauthorized}
         logout={handleLogout}
@@ -1132,6 +1253,7 @@ function MainShell({
   backendError,
   capabilities,
   authStatus,
+  startupState,
   refreshBackend,
   onUnauthorized,
   logout
@@ -1169,6 +1291,7 @@ function MainShell({
             backendError={backendError}
             capabilities={capabilities}
             authStatus={authStatus}
+            startupState={startupState}
             refreshBackend={refreshBackend}
             onUnauthorized={onUnauthorized}
           />
@@ -1231,6 +1354,28 @@ function Sidebar({ page, setPage, logout, collapsed = false, onToggleCollapsed }
     window.dispatchEvent?.(new CustomEvent('ecorex:new-chat', { detail: item }));
   }
 
+  function openRecentChat(item = {}) {
+    if (!item?.id) return;
+    setPage('chat');
+    window.dispatchEvent?.(new CustomEvent('ecorex:open-chat', {
+      detail: { id: item.id, claudeSessionId: item.claudeSessionId, title: item.title }
+    }));
+  }
+
+  function openBlankChatAfterDelete() {
+    const id = createLocalId('conversation');
+    setPage('chat');
+    window.dispatchEvent?.(new CustomEvent('ecorex:new-chat', {
+      detail: {
+        id,
+        claudeSessionId: id,
+        title: '新会话',
+        updatedAt: Date.now(),
+        emptyAfterDelete: true
+      }
+    }));
+  }
+
   useEffect(() => {
     if (!profileOpen) return undefined;
     const closeOnOutside = (event) => {
@@ -1280,14 +1425,20 @@ function Sidebar({ page, setPage, logout, collapsed = false, onToggleCollapsed }
       </nav>
       <div className="recent">
         <h3>最近对话</h3>
+        {recentItems.length === 0 && (
+          <div className="recent-empty">
+            <Bot size={17} />
+            <strong>暂无最近对话</strong>
+            <span>发送第一条消息后会出现在这里</span>
+          </div>
+        )}
         {recentItems.map(({ id, claudeSessionId, title, time }, index) => (
           <div className={`recent-row ${index === 0 ? 'active' : ''}`} key={id || title}>
             <button
               className="recent-open"
               type="button"
               onClick={() => {
-                setPage('chat');
-                window.dispatchEvent?.(new CustomEvent('ecorex:open-chat', { detail: { id, claudeSessionId, title } }));
+                openRecentChat({ id, claudeSessionId, title });
               }}
               title={title}
             >
@@ -1306,6 +1457,12 @@ function Sidebar({ page, setPage, logout, collapsed = false, onToggleCollapsed }
                   const nextItems = items.filter((item) => item.id !== id);
                   storeRecentChatItems(nextItems);
                   deleteConversationState(id);
+                  if (index === 0) {
+                    window.setTimeout(() => {
+                      if (nextItems[0]) openRecentChat(nextItems[0]);
+                      else openBlankChatAfterDelete();
+                    }, 0);
+                  }
                   return nextItems;
                 });
               }}
@@ -1382,6 +1539,7 @@ function SystemSettingsView({
   backendError,
   capabilities,
   authStatus,
+  startupState,
   refreshBackend,
   onUnauthorized
 }) {
@@ -1442,6 +1600,7 @@ function SystemSettingsView({
             backendError={backendError}
             capabilities={capabilities}
             authStatus={authStatus}
+            startupState={startupState}
             refreshBackend={refreshBackend}
             onUnauthorized={onUnauthorized}
           />
@@ -2220,6 +2379,13 @@ function agentDisclosureLabel(event = {}) {
     ? event.tools.map((tool) => String(tool?.name || '').trim()).filter(Boolean)
     : [];
   const firstTool = toolNames[0] || rawName;
+  if (/^(EcoreX capability|Agent session|EcoreX 原生能力)$/i.test(firstTool)) {
+    const text = String(event.text || '').trim();
+    if (/联网|检索|搜索/i.test(text)) return '联网检索';
+    if (/网页|读取/i.test(text)) return '读取网页';
+    if (/工具|能力/i.test(text)) return '调用原生能力';
+    return '';
+  }
   if (/^ToolSearch$/i.test(firstTool)) return rawName || '准备调用工具';
   if (/^WebSearch$/i.test(firstTool)) return '联网检索';
   if (/^WebFetch$/i.test(firstTool)) return '读取网页';
@@ -2343,6 +2509,61 @@ function cleanAssistantOutputText(value = '') {
 
 function mergeAssistantOutputText(existing = '', incoming = '') {
   return cleanAssistantOutputText(mergeAssistantText(existing, incoming));
+}
+
+function promptDisclosureProfile(prompt = '', attachments = []) {
+  const text = String(prompt || '').trim();
+  const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+  const wantsFreshInfo = /(联网|搜索|检索|查询|查下|查一下|最新|今天|昨天|近\s*\d+\s*天|近三天|近两天|天气|热点|热门|趋势|小红书|抖音|微博|新闻|官网|网页|链接|报告)/i.test(text);
+  const touchesLocalWork = /(文件|附件|目录|本地|工作区|读取|写入|修改|删除|命令|终端|项目|代码|表格|图片|PDF|文档)/i.test(text) || hasAttachments;
+  const complex = text.length > 48 || /(分析|对比|梳理|整理|生成|诊断|排查|方案|计划|复盘|总结|报告|自动化|批量)/i.test(text);
+  if (wantsFreshInfo) return 'search';
+  if (touchesLocalWork) return 'local';
+  if (complex) return 'analysis';
+  return 'simple';
+}
+
+function buildImmediateTimeline(prompt = '', attachments = [], time = formatAgentEventTime()) {
+  const profile = promptDisclosureProfile(prompt, attachments);
+  const items = [['接收用户任务', '已提交', time, 'success', 'status']];
+  if (profile === 'search') {
+    items.push(['准备联网检索', '进行中', time, 'running', 'tool']);
+  } else if (profile === 'local') {
+    items.push(['准备读取任务上下文', '进行中', time, 'running', 'tool']);
+  } else if (profile === 'analysis') {
+    items.push(['分析任务目标', '进行中', time, 'running', 'status']);
+  }
+  return items;
+}
+
+function buildDisclosureProgressSteps(prompt = '', attachments = []) {
+  const profile = promptDisclosureProfile(prompt, attachments);
+  if (profile === 'search') {
+    return [
+      ['连接联网检索能力', '进行中', 'tool'],
+      ['检索公开网页来源', '进行中', 'tool'],
+      ['筛选近期待验证信息', '进行中', 'tool'],
+      ['整理可引用结果', '进行中', 'result']
+    ];
+  }
+  if (profile === 'local') {
+    return [
+      ['读取任务上下文', '进行中', 'tool'],
+      ['检查可用本地能力', '进行中', 'tool'],
+      ['等待必要的本地权限确认', '按需确认', 'status'],
+      ['整理执行结果', '进行中', 'result']
+    ];
+  }
+  if (profile === 'analysis') {
+    return [
+      ['分析任务目标', '进行中', 'status'],
+      ['拆分关键问题', '进行中', 'status'],
+      ['组织回答结构', '进行中', 'assistant']
+    ];
+  }
+  return [
+    ['整理回答', '进行中', 'assistant']
+  ];
 }
 
 function createInitialMessages(userName = '张晓明') {
@@ -3105,6 +3326,46 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     statusTimers.current.push(timer);
   }
 
+  function appendAssistantTimelineItem(assistantId, item, { revealTrace = true } = {}) {
+    const current = messagesRef.current.find((message) => message.id === assistantId);
+    if (!current?.streaming) return;
+    const exists = (current.timeline || []).some((entry) => entry?.[0] === item?.[0] && entry?.[4] === item?.[4]);
+    if (exists) return;
+    setMessages((items) =>
+      items.map((message) =>
+        message.id === assistantId && message.streaming
+          ? {
+              ...message,
+              showTrace: revealTrace || message.showTrace,
+              status: message.status === 'generating' ? 'generating' : 'thinking',
+              timeline: appendTimeline(message.timeline || [], item)
+            }
+          : message
+      )
+    );
+    setTimeline((items) => appendTimeline(items, item));
+  }
+
+  function scheduleAssistantProgressDisclosure(assistantId, promptText, attachmentList = []) {
+    const profile = promptDisclosureProfile(promptText, attachmentList);
+    const steps = buildDisclosureProgressSteps(promptText, attachmentList);
+    steps.forEach(([label, status, kind], index) => {
+      const delay = AGENT_DISCLOSURE_DELAYS_MS[index] || (AGENT_DISCLOSURE_DELAYS_MS.at(-1) + index * 12000);
+      const timer = setTimeout(() => {
+        const current = messagesRef.current.find((message) => message.id === assistantId);
+        if (!current?.streaming) return;
+        const hasVisibleAnswer = cleanAssistantOutputText(current.text || '').trim().length > 24;
+        if (profile === 'simple' && hasVisibleAnswer) return;
+        appendAssistantTimelineItem(
+          assistantId,
+          [label, status, formatAgentEventTime(), 'running', kind || 'status'],
+          { revealTrace: profile !== 'simple' }
+        );
+      }, delay);
+      statusTimers.current.push(timer);
+    });
+  }
+
   async function sendPrompt(text = prompt, attachmentList = attachments) {
     const cleanPrompt = String(text || '').trim();
     const cleanAttachments = Array.isArray(attachmentList) ? attachmentList : [];
@@ -3130,7 +3391,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       contextSection = conversationContextSection(messages, cleanPrompt, contextSummaryRef.current);
     }
     const currentUserTask = `用户当前输入：${cleanPrompt || '请分析这些附件，并给出可执行建议。'}`;
-    const promptForAgent = [contextSection, agentRunPolicySection(), currentUserTask, attachmentSection]
+    const promptForAgent = [contextSection, agentRunPolicySection(cleanPrompt), currentUserTask, attachmentSection]
       .filter(Boolean)
       .join('\n\n');
 
@@ -3138,7 +3399,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     const userId = `user-${Date.now()}`;
     const assistantId = `assistant-${Date.now()}`;
     const requestedSessionId = createLocalId('session');
-    const submitted = ['提交用户任务到本地能力', '进行中', now, 'running'];
+    const initialDisclosureTimeline = buildImmediateTimeline(cleanPrompt, cleanAttachments, now);
     const accessMode = normalizeAccessMode(permissionMode);
     const requestedPermissionMode = permissionModeFromAccessMode(accessMode);
     sessionMap.current.set(requestedSessionId, assistantId);
@@ -3170,12 +3431,14 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         status: 'thinking',
         sessionId: requestedSessionId,
         originalPrompt: promptForAgent,
-        timeline: [submitted]
+        showTrace: promptDisclosureProfile(cleanPrompt, cleanAttachments) !== 'simple',
+        timeline: initialDisclosureTimeline
       }
     ]);
     setPrompt('');
     clearAttachments({ revoke: false });
-    setTimeline((items) => appendTimeline(items, submitted));
+    setTimeline((items) => appendTimelineItems(items, initialDisclosureTimeline));
+    scheduleAssistantProgressDisclosure(assistantId, cleanPrompt, cleanAttachments);
     scheduleMessageStatus(userId, 'sent', 280);
     scheduleMessageStatus(userId, 'read', 760);
 
@@ -3335,6 +3598,135 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     if (message?.originalPrompt) sendPrompt(message.originalPrompt);
   }
 
+  async function continueFromPermission(message = {}, actionValue = 'allow') {
+    if (!message?.id) return;
+    const decision = permissionActionFromValue(actionValue);
+    const requestedSessionId = createLocalId('session');
+    const continuationPrompt = permissionContinuationPrompt(decision);
+    const now = formatAgentEventTime();
+    const accessMode = decision.accessMode || normalizeAccessMode(permissionMode);
+    const requestedPermissionMode = permissionModeFromAccessMode(accessMode);
+
+    sessionMap.current.set(requestedSessionId, message.id);
+    trackSession(requestedSessionId, {
+      messageId: message.id,
+      prompt: continuationPrompt,
+      accessMode,
+      source: 'local'
+    });
+
+    setMessages((items) =>
+      items.map((item) =>
+        item.id === message.id
+          ? {
+              ...item,
+              streaming: true,
+              status: 'thinking',
+              error: false,
+              permissionDecision: {
+                action: decision.action,
+                label: decision.label,
+                status: 'running',
+                at: Date.now()
+              },
+              showTrace: true,
+              timeline: appendTimeline(item.timeline || [], [
+                decision.action === 'allow' ? '权限已确认，继续执行' : decision.action === 'plan' ? '权限选择为只做计划' : '权限已拒绝',
+                decision.label,
+                now,
+                decision.tone || 'pending',
+                'status'
+              ])
+            }
+          : item
+      )
+    );
+    setTimeline((items) => appendTimeline(items, [
+      decision.action === 'allow' ? '权限已确认，继续执行' : decision.action === 'plan' ? '权限选择为只做计划' : '权限已拒绝',
+      decision.label,
+      now,
+      decision.tone || 'pending',
+      'status'
+    ]));
+
+    if (!window.ecorex?.runPrompt) {
+      finishSession(requestedSessionId);
+      return;
+    }
+
+    try {
+      const result = await window.ecorex.runPrompt({
+        sessionId: requestedSessionId,
+        conversationId: conversationIdRef.current,
+        claudeSessionId: conversationSessionIdRef.current || conversationIdRef.current,
+        prompt: continuationPrompt,
+        accessMode,
+        permissionMode: requestedPermissionMode,
+        defaultPermissionMode: requestedPermissionMode,
+        ...fullAccessConfirmationFields(accessMode),
+        model,
+        plugins: selectedPlugins,
+        permissionContinuation: true
+      });
+
+      if (!result.ok) {
+        finishSession(requestedSessionId);
+        if (result.unauthorized) onUnauthorized?.();
+        setMessages((items) =>
+          items.map((item) =>
+            item.id === message.id
+              ? {
+                  ...item,
+                  streaming: false,
+                  error: true,
+                  status: result.status === 'timeout' ? 'timeout' : 'error',
+                  permissionDecision: {
+                    action: decision.action,
+                    label: decision.label,
+                    status: 'failed',
+                    at: Date.now()
+                  },
+                  timeline: appendTimeline(item.timeline || [], ['权限续跑启动失败', formatSessionStatus(result.status || result.code || 'failed'), formatAgentEventTime(), 'danger'])
+                }
+              : item
+          )
+        );
+        return;
+      }
+
+      const sessionId = result.sessionId || requestedSessionId;
+      if (sessionId !== requestedSessionId) transferSession(requestedSessionId, sessionId);
+      currentSessionIdRef.current = sessionId;
+      setCurrentSessionId(sessionId);
+      setMessages((items) =>
+        items.map((item) => (item.id === message.id ? { ...item, sessionId } : item))
+      );
+      if (result.initialEvent) queueAgentEvents(result.initialEvent);
+    } catch (error) {
+      finishSession(requestedSessionId);
+      if (isUnauthorizedError(error)) onUnauthorized?.();
+      setMessages((items) =>
+        items.map((item) =>
+          item.id === message.id
+            ? {
+                ...item,
+                streaming: false,
+                error: true,
+                status: 'error',
+                permissionDecision: {
+                  action: decision.action,
+                  label: decision.label,
+                  status: 'failed',
+                  at: Date.now()
+                },
+                timeline: appendTimeline(item.timeline || [], ['权限续跑启动失败', '失败', formatAgentEventTime(), 'danger'])
+              }
+            : item
+        )
+      );
+    }
+  }
+
   function changePermissionMode(value) {
     const accessMode = normalizeAccessMode(value);
     if (accessMode === 'fullAccess' && normalizeAccessMode(permissionMode) !== 'fullAccess' && !confirmFullAccessChange()) {
@@ -3410,7 +3802,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
               sourceMap={backendStatus?.sourceMap}
               showTrace={message.showTrace === true || message.streaming || message.error || message.status === 'timeout' || message.status === 'cancelled'}
               onRetry={retryMessage}
-              onPermissionReply={(reply) => sendPrompt(reply)}
+              onPermissionReply={continueFromPermission}
             />
           ))}
         </div>
@@ -3615,7 +4007,7 @@ function ChatMessage({ message, timeline, sourceMap, showTrace = false, onRetry,
             {expanded ? '收起长回复' : `展开全文（${rawText.length.toLocaleString('zh-CN')} 字符）`}
           </button>
         )}
-        {permissionRequest && <InlinePermissionRequest request={permissionRequest} onReply={onPermissionReply} />}
+        {permissionRequest && <InlinePermissionRequest request={permissionRequest} onReply={(action) => onPermissionReply?.(message, action)} />}
         {showTrace && <InlineAgentTrace timeline={timeline} sourceMap={sourceMap} />}
         {message.rich && <CampaignPerformanceReport />}
         {message.streaming && <ThinkingIndicator phase={message.status} />}
@@ -4543,13 +4935,14 @@ function AbilityGrid({ setPage }) {
 
 function isPublicTraceItem(item = []) {
   const [label = '', status = '', , tone = '', kind = ''] = item;
+  if (/能力索引|source map|57MB/i.test(`${label} ${status}`)) return false;
   const publicKinds = new Set(['tool', 'stderr', 'result', 'done', 'cancelled', 'error', 'timeout']);
   if (tone === 'danger') return true;
   if (publicKinds.has(kind)) return true;
   if (kind === 'debug' || kind === 'assistant') return false;
   if (kind === 'status') {
     const text = `${label} ${status}`.toLowerCase();
-    return /权限|授权|确认|等待|工具|命令|文件|项目|错误|异常|失败|超时/.test(text);
+    return /权限|授权|确认|等待|工具|命令|文件|项目|联网|检索|读取|整理|错误|异常|失败|超时/.test(text);
   }
   return false;
 }
@@ -4583,6 +4976,7 @@ function isHighRiskPermissionText(value = '') {
 
 function permissionRequestFromMessage(message = {}, timeline = []) {
   if (message.role !== 'assistant') return null;
+  if (message.permissionDecision?.status) return null;
   const text = cleanAssistantOutputText(message.text || '');
   const traceText = publicTraceItems(timeline).slice(-5).map((item) => `${item[0]} ${item[1]}`).join(' ');
   const candidate = `${text} ${traceText}`;
@@ -5076,7 +5470,7 @@ function statusToneFrom(status, error, enabled = true) {
 
 function statusLabelFrom(status, tone, enabled = true) {
   if (!enabled) return '已禁用';
-  if (status) return String(status);
+  if (status) return localizedStatusLabel(status);
   const labels = {
     success: '在线',
     running: '连接中',
@@ -5084,6 +5478,45 @@ function statusLabelFrom(status, tone, enabled = true) {
     pending: '待连接'
   };
   return labels[tone] || '未知';
+}
+
+function localizedStatusLabel(status, fallback = '未知') {
+  const text = String(status || '').trim();
+  if (!text) return fallback;
+  const normalized = text.toLowerCase();
+  const labels = {
+    ok: '正常',
+    success: '正常',
+    ready: '已就绪',
+    online: '在线',
+    connected: '已连接',
+    authenticated: '已认证',
+    valid: '有效',
+    present: '已检测',
+    configured: '已配置',
+    running: '运行中',
+    active: '运行中',
+    starting: '启动中',
+    loading: '加载中',
+    checking: '检测中',
+    pending: '等待中',
+    syncing: '同步中',
+    timeout: '已超时',
+    failed: '异常',
+    error: '异常',
+    missing: '缺失',
+    absent: '缺失',
+    invalid: '无效',
+    disabled: '已禁用',
+    inactive: '未启用',
+    offline: '离线',
+    disconnected: '已断开',
+    incomplete: '未完成',
+    skipped: '已跳过',
+    partial: '部分完成',
+    idle: '待命'
+  };
+  return labels[normalized] || sanitizeDisplayText(text, fallback);
 }
 
 function sanitizeDisplayText(value, fallback = '信息待返回') {
@@ -5209,7 +5642,7 @@ function pickFirstDefined(...values) {
 function formatHealthValue(value, fallback = '待返回') {
   if (typeof value === 'boolean') return value ? '正常' : '需检查';
   if (typeof value === 'number') return String(value);
-  return sanitizeDisplayText(value, fallback);
+  return localizedStatusLabel(value, fallback);
 }
 
 function toneFromHealth(value, fallbackTone = 'warn') {
@@ -5249,13 +5682,37 @@ function signatureStatusSummary(diagnostics = {}, backendStatus = {}) {
 }
 
 function runtimeEngineSummary(diagnostics = {}, backendStatus = {}) {
-  const bridge = diagnostics?.agentBridge || diagnostics?.runtime || backendStatus?.agentBridge || backendStatus?.runtime || {};
+  const bridge = diagnostics?.agentBridge
+    || diagnostics?.runtimeEngine
+    || diagnostics?.runtime
+    || backendStatus?.agentBridge
+    || backendStatus?.runtimeEngine
+    || backendStatus?.runtime
+    || {};
   const version = pickFirstDefined(bridge.version, diagnostics?.claude?.version, backendStatus?.claude?.version);
-  const available = pickFirstDefined(bridge.available, bridge.ok, Boolean(version));
+  const rawStatus = pickFirstDefined(bridge.status, bridge.state, bridge.health, bridge.ready);
+  const available = pickFirstDefined(bridge.available, bridge.ok, bridge.ready, bridge.path, bridge.command, Boolean(version));
+  const tone = toneFromHealth(pickFirstDefined(rawStatus, available), available ? 'ok' : 'warn');
   return {
-    value: version ? sanitizeDisplayText(version, '已就绪') : (available ? '已就绪' : '未检测'),
+    value: version ? sanitizeDisplayText(version, '已就绪') : (available ? localizedStatusLabel(rawStatus, '已就绪') : localizedStatusLabel(rawStatus, '未检测')),
     detail: available ? '本地运行引擎可用' : '等待运行引擎',
-    tone: available ? 'ok' : 'warn'
+    tone
+  };
+}
+
+function startupPreloadSummary(startupState = {}) {
+  const state = startupState || {};
+  const normalized = String(state.status || '').toLowerCase();
+  if (!window.ecorex && !normalized) {
+    return { value: '预览模式', detail: '桌面预加载不可用', tone: 'running' };
+  }
+  const tone = ['ready', 'complete', 'completed', 'success'].includes(normalized)
+    ? 'ok'
+    : (['loading', 'running', 'partial', 'timeout', 'skipped'].includes(normalized) ? 'running' : 'warn');
+  return {
+    value: state.label || localizedStatusLabel(normalized, window.ecorex ? '预加载中' : '预览模式'),
+    detail: sanitizeDisplayText(state.detail, tone === 'ok' ? '启动预加载已完成' : '预加载状态待更新'),
+    tone
   };
 }
 
@@ -5798,7 +6255,7 @@ async function archiveManagedProject(projectId) {
   return callEcorexAction(['archiveProject', 'projects.archive'], { id: projectId, projectId });
 }
 
-function DiagnosticsView({ backendStatus, backendError, capabilities, authStatus, refreshBackend, onUnauthorized, embedded = false }) {
+function DiagnosticsView({ backendStatus, backendError, capabilities, authStatus, startupState, refreshBackend, onUnauthorized, embedded = false }) {
   const [diagnostics, setDiagnostics] = useState(null);
   const [settings, setSettings] = useState(() => normalizeSettingsState(backendStatus?.settings));
   const [workspace, setWorkspace] = useState({ entries: [], workspaceRoot: '' });
@@ -6285,6 +6742,7 @@ function DiagnosticsView({ backendStatus, backendError, capabilities, authStatus
   const releaseHealth = releasePackageSummary(diagnostics, backendStatus);
   const signatureHealth = signatureStatusSummary(diagnostics, backendStatus);
   const runtimeHealth = runtimeEngineSummary(diagnostics, backendStatus);
+  const startupHealth = startupPreloadSummary(startupState || window.__ecorexStartupState);
   const modelHealthSummary = modelConfigSummary(modelHealth, settings, capabilities);
   const localBuildHealth = localBuildSummary(diagnostics || {});
   const permissionHealth = permissionModeSummary(settings);
@@ -6300,6 +6758,7 @@ function DiagnosticsView({ backendStatus, backendError, capabilities, authStatus
     ['认证状态', effectiveAuth.loggedIn ? '已登录' : '待登录', effectiveAuth.user?.email || effectiveAuth.account || effectiveAuth.mode || '本地认证', ShieldCheck, effectiveAuth.loggedIn ? 'ok' : 'warn'],
     ['服务状态', backendStatus?.ok ? '正常' : '待连接', sanitizeDisplayText(backendError || backendStatus?.error, '本地能力服务'), Activity, backendStatus?.ok ? 'ok' : 'warn'],
     ['运行引擎', runtimeHealth.value, runtimeHealth.detail, SquareTerminal, runtimeHealth.tone],
+    ['预加载', startupHealth.value, startupHealth.detail, Loader2, startupHealth.tone],
     ['工作区', workspace.workspaceRoot || settings.workspaceRoot || backendStatus?.workspaceRoot ? '已配置' : '未配置', `${workspace.entries.length} 个顶层条目`, LayoutDashboard, workspace.workspaceRoot || settings.workspaceRoot ? 'ok' : 'warn'],
     ['项目', currentProject?.name || (projectState.apiReady ? '暂无项目' : '未连接'), projectState.apiReady ? `${projectState.projects.length} 个项目 · ${projectFileCount} 个文件` : '项目服务未就绪', Box, currentProject ? 'ok' : 'warn'],
     ['模型配置', modelHealthSummary.value, modelHealthSummary.detail, Brain, modelHealthSummary.tone]
@@ -6308,6 +6767,7 @@ function DiagnosticsView({ backendStatus, backendError, capabilities, authStatus
   const healthItems = [
     ['本地构建', localBuildHealth.value, localBuildHealth.detail, Upload, localBuildHealth.tone],
     ['Agent 引擎', runtimeHealth.value, runtimeHealth.detail, SquareTerminal, runtimeHealth.tone],
+    ['预加载状态', startupHealth.value, startupHealth.detail, Loader2, startupHealth.tone],
     ['模型配置', modelHealthSummary.value, modelHealth.notice || modelHealthSummary.detail, Brain, modelHealthSummary.tone],
     ['权限模式', permissionHealth.value, permissionHealth.detail, ShieldCheck, permissionHealth.tone],
     ['项目目录', projectDirectoryHealth.value, projectDirectoryHealth.detail, LayoutDashboard, projectDirectoryHealth.tone],
@@ -6656,19 +7116,6 @@ function DiagnosticsView({ backendStatus, backendError, capabilities, authStatus
               </span>
             </div>
           </div>
-          <div className="project-create-row">
-            <input
-              data-testid="project-create-input"
-              value={newProjectName}
-              onChange={(event) => setNewProjectName(event.target.value)}
-              placeholder={canCreateProject ? '输入项目名称' : '项目创建暂不可用'}
-              disabled={!canCreateProject || projectBusy === 'create'}
-            />
-            <button type="button" data-testid="project-create-button" onClick={createProject} disabled={!canCreateProject || !newProjectName.trim() || projectBusy === 'create'}>
-              <Plus size={15} />
-              新建
-            </button>
-          </div>
           <div className="project-workspace-list">
             {(projectState.projects.length ? projectState.projects : [{ id: 'empty', name: projectState.apiReady ? '暂无项目' : '项目服务未就绪', fileCount: 0, sessionCount: 0, updatedAt: '', status: projectState.status }]).map((project) => (
               <div className={`project-workspace-entry ${project.current ? 'active' : ''}`} data-testid="project-workspace-entry" key={project.id}>
@@ -6689,6 +7136,19 @@ function DiagnosticsView({ backendStatus, backendError, capabilities, authStatus
                 </button>
               </div>
             ))}
+          </div>
+          <div className="project-create-row">
+            <input
+              data-testid="project-create-input"
+              value={newProjectName}
+              onChange={(event) => setNewProjectName(event.target.value)}
+              placeholder={canCreateProject ? '输入项目名称' : '项目创建暂不可用'}
+              disabled={!canCreateProject || projectBusy === 'create'}
+            />
+            <button type="button" data-testid="project-create-button" onClick={createProject} disabled={!canCreateProject || !newProjectName.trim() || projectBusy === 'create'}>
+              <Plus size={15} />
+              新建
+            </button>
           </div>
           {projectState.notice && <p className="diagnostics-notice compact">{projectState.notice}</p>}
         </section>

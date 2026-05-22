@@ -440,6 +440,52 @@ test.describe('EcoreX Agent Electron E2E', () => {
     await expect(page.locator('.attachment-chip img').first()).toHaveAttribute('src', /^data:image\/png/);
   });
 
+  test('continues permission confirmations without adding a user prompt', async ({ ecorex }) => {
+    const { electronApp, page } = ecorex;
+    await login(page);
+
+    await electronApp.evaluate(({ ipcMain, BrowserWindow }) => {
+      global.__ecorexRunPayloads = [];
+      ipcMain.removeHandler('agent:run');
+      ipcMain.handle('agent:run', (event, payload) => {
+        global.__ecorexRunPayloads.push(payload);
+        const win = BrowserWindow.fromWebContents(event.sender);
+        const text = payload.permissionContinuation
+          ? '已执行确认后的本地只读操作。'
+          : '我需要执行一条只读的 PowerShell 命令来查看本机磁盘剩余空间，不会修改任何文件或系统设置。请确认是否允许我执行？';
+        setTimeout(() => {
+          win.webContents.send('agent:events', {
+            sessionId: payload.sessionId,
+            events: [
+              { sessionId: payload.sessionId, kind: 'result', status: 'completed', text },
+              { sessionId: payload.sessionId, kind: 'done', status: 'completed', text: 'Agent task completed.' }
+            ]
+          });
+        }, 50);
+        return {
+          ok: true,
+          sessionId: payload.sessionId,
+          initialEvent: { sessionId: payload.sessionId, kind: 'status', status: 'started', text: '本地执行引擎会话已启动' }
+        };
+      });
+    });
+
+    await page.locator('[data-testid="chat-input"]').fill('查看本机磁盘剩余空间');
+    await page.locator('[data-testid="chat-input"]').press('Enter');
+    await expect(page.locator('.inline-permission-request')).toBeVisible({ timeout: 15_000 });
+    await page.locator('.inline-permission-actions button').first().click();
+    await expect(page.locator('.assistant-card').filter({ hasText: '已执行确认后的本地只读操作' }).first()).toBeVisible({ timeout: 15_000 });
+
+    const runPayloads = await electronApp.evaluate(() => global.__ecorexRunPayloads || []);
+    expect(runPayloads).toHaveLength(2);
+    expect(runPayloads[1].permissionContinuation).toBe(true);
+    expect(runPayloads[1].accessMode).toBe('fullAccess');
+    expect(runPayloads[1].prompt).toContain('权限确认回执');
+    expect(runPayloads[1].conversationId).toBe(runPayloads[0].conversationId);
+    expect(runPayloads[1].claudeSessionId).toBe(runPayloads[0].claudeSessionId);
+    await expect(page.locator('.user-bubble').filter({ hasText: '允许一次' })).toHaveCount(0);
+  });
+
   test('creates and switches projects from diagnostics workspace @responsive', async ({ ecorex }) => {
     const { page } = ecorex;
     await login(page);

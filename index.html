@@ -54,28 +54,9 @@
         width: 56px;
         height: 56px;
         border-radius: 14px;
-        display: grid;
-        place-items: center;
-        background: linear-gradient(145deg, #1c2633, #090e15);
-        box-shadow: 0 20px 42px rgba(0, 0, 0, 0.36), inset 0 0 0 1px rgba(255, 255, 255, 0.1);
-      }
-
-      .startup-mark::before,
-      .startup-mark::after {
-        content: "";
-        grid-area: 1 / 1;
-        width: 36px;
-        height: 10px;
-        border-radius: 999px;
-        background: linear-gradient(90deg, #ff4b00, #ff9a1a);
-      }
-
-      .startup-mark::before {
-        transform: rotate(45deg);
-      }
-
-      .startup-mark::after {
-        transform: rotate(-45deg);
+        display: block;
+        object-fit: contain;
+        filter: drop-shadow(0 20px 42px rgba(0, 0, 0, 0.36));
       }
 
       .startup-title {
@@ -118,7 +99,7 @@
   <body>
     <div id="startup-loader" aria-live="polite" aria-label="EcoreX Agent 正在启动">
       <div class="startup-card">
-        <div class="startup-mark" aria-hidden="true"></div>
+        <img class="startup-mark" src="icon.png" alt="" aria-hidden="true" />
         <h1 class="startup-title">EcoreX 亦芯</h1>
         <p class="startup-subtitle">正在启动本地 Agent 环境...</p>
         <div class="startup-spinner" aria-hidden="true"></div>
