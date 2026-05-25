@@ -33,13 +33,17 @@ const REQUIRED_LOCAL_STATE_EXCLUSIONS = [
   '!**/.claude/**/*',
   '!**/.codex/**/*',
   '!**/.agents/**/*',
-  '!**/superpowers/**/*'
+  '!**/superpowers/**/*',
+  '!**/huashu-design/**/*',
+  '!**/huashu_design/**/*'
 ];
 const REQUIRED_BACKEND_FILTER_EXCLUSIONS = [
   ...REQUIRED_LOCAL_STATE_EXCLUSIONS,
   '!plugins/**/node_modules/**/*',
   '!plugins/**/.git/**/*',
-  '!plugins/**/superpowers/**/*'
+  '!plugins/**/superpowers/**/*',
+  '!plugins/**/huashu-design/**/*',
+  '!plugins/**/huashu_design/**/*'
 ];
 const REQUIRED_BACKEND_RUNTIME_PLUGINS = ['feature-dev', 'code-review', 'security-guidance', 'plugin-dev'];
 
@@ -191,7 +195,7 @@ function assertNoSecretOrModelStoragePaths(files, label) {
     '.ecorex-memory',
     'ecorex-agent.log'
   ];
-  const forbiddenSegments = ['.claude', '.codex', '.agents', '.mcp', 'superpowers'];
+  const forbiddenSegments = ['.claude', '.codex', '.agents', '.mcp', 'superpowers', 'huashu-design', 'huashu_design'];
   for (const file of files) {
     const normalized = toPosix(file).replace(/\/+$/, '').toLowerCase();
     if (!normalized || normalized.startsWith('!')) continue;
@@ -370,6 +374,8 @@ check('model adapter syntax', () => {
 
 check('agent runtime smoke syntax', () => {
   nodeCheck('scripts/agent-runtime-smoke.cjs');
+  nodeCheck('scripts/prepare-kkfileview.cjs');
+  nodeCheck('scripts/verify-kkfileview-vendor.cjs');
 });
 
 check('preload exposes model profile IPC', () => {
@@ -487,7 +493,7 @@ check('auth token exposure and session lifecycle are bounded', () => {
 check('high privilege IPC requires trusted renderer and auth', () => {
   const main = readText('electron/main.cjs');
   const preload = readText('electron/preload.cjs');
-  for (const channel of ['startup:health', 'diagnostics:get', 'diagnostics:export', 'diagnostics:open-location', 'diagnostics:crash-recovery', 'workspace:select-directory', 'backend:open-auth', 'agent:run', 'agent:stop']) {
+  for (const channel of ['startup:health', 'diagnostics:get', 'diagnostics:export', 'diagnostics:open-location', 'diagnostics:crash-recovery', 'workspace:select-directory', 'shell:open-external', 'backend:open-auth', 'agent:run', 'agent:stop']) {
     const pattern = new RegExp(`handleSafe\\('${channel}'[\\s\\S]*?authRequired:\\s*true`);
     assert(pattern.test(main), `${channel} handler must be authRequired.`);
   }
@@ -505,6 +511,8 @@ check('high privilege IPC requires trusted renderer and auth', () => {
     'IPC trust and window control safety'
   );
   assertMatches(preload, /windowControl:\s*\(action\)\s*=>\s*ipcRenderer\.send\('window:control',\s*withAuth\(\{\s*action\s*\}\)\)/, 'window control should keep the isolated auth token when available.');
+  includesAll(main, ['function normalizeExternalUrl', "Only http, https and mailto links can be opened.", "shell.openExternal(url, { activate: true })"], 'external link opening safety');
+  assertMatches(preload, /openExternalUrl:\s*\(payload\)\s*=>\s*safeInvoke\('shell:open-external',\s*withAuth/, 'preload must expose authenticated external-link opening IPC.');
 });
 
 check('crash recovery and diagnostics package are production-safe', () => {
@@ -561,6 +569,151 @@ check('crash recovery and diagnostics package are production-safe', () => {
   assertNotMatches(main, /buildDiagnosticsPackage[\s\S]{0,2500}promptPreview/, 'diagnostics package must not include prompt previews.');
   assertMatches(main, /PRIVATE KEY[\s\S]*REDACTED_PRIVATE_KEY/, 'diagnostics redaction must scrub private-key blocks.');
   assertMatches(main, /Bearer\\s\+\[A-Za-z0-9._~\+\/=-\]\{16,\}[\s\S]*Bearer \[REDACTED\]/, 'diagnostics redaction must scrub bearer tokens.');
+});
+
+check('safe local file preview bridge is bounded and redacted', () => {
+  const main = readText('electron/main.cjs');
+  const preload = readText('electron/preload.cjs');
+  includesAll(
+    main,
+    [
+      'const FILE_PREVIEW_MAX_BYTES = 512 * 1024',
+      'const FILE_PREVIEW_IMAGE_MAX_BYTES = 768 * 1024',
+      'const FILE_PREVIEW_TEXT_EXTENSIONS = new Set',
+      'const FILE_PREVIEW_IMAGE_EXTENSIONS = new Set',
+      'const FILE_PREVIEW_DOCUMENT_EXTENSIONS = new Set',
+      'const AGENT_ARTIFACT_ACCESS_TTL_MS = 24 * 60 * 60 * 1000',
+      'function resolveFilePreviewTarget',
+      'function extractPreviewArtifactTargets',
+      'function registerAgentArtifactsFromEvent',
+      'function isRegisteredAgentArtifact',
+      'function previewImageFile',
+      'function previewMetadataOnly',
+      'function previewFile',
+      'function openSelectedAttachmentFile',
+      'redactSensitiveText(rawText)',
+      "reason: 'too-large'",
+      "reason: 'unsupported-type'",
+      "reason: 'binary'",
+      "renderMode: filePreviewRenderMode(file.extension)",
+      "renderMode: 'image'",
+      "renderMode: 'metadata'",
+      'dataUrl',
+      "handleSafe('file:preview', (_event, payload) => previewFile(payload), { authRequired: true })",
+      "handleSafe('attachment:open-file', (_event, payload) => openSelectedAttachmentFile(payload), { authRequired: true })"
+    ],
+    'safe local file preview bridge'
+  );
+  assertMatches(
+    preload,
+    /previewFile:\s*\(payload\)\s*=>\s*safeInvoke\('file:preview',\s*withAuth\(typeof payload === 'string' \? \{ path: payload \} : payload\)\)/,
+    'preload must expose authenticated file preview IPC.'
+  );
+  assertMatches(main, /candidatePreviewPath[\s\S]*fileURLToPath\(raw\)[\s\S]*File preview only supports local files/, 'file preview must normalize local paths and reject remote URLs.');
+  assertMatches(main, /resolveFilePreviewTarget[\s\S]*isPathInside\(entry\.root,\s*target\)[\s\S]*pathContainsSymlink\(root\.root,\s*target\)/, 'file preview paths must stay inside allowed roots and reject symlink traversal.');
+  assertMatches(main, /previewFile[\s\S]*stat\.size > FILE_PREVIEW_MAX_BYTES[\s\S]*previewable:\s*false[\s\S]*reason:\s*'too-large'/, 'oversized files must return metadata with a non-previewable reason.');
+  assertMatches(main, /previewFile[\s\S]*looksLikeBinaryBuffer\(buffer\)[\s\S]*reason:\s*'binary'/, 'binary files must return metadata with a non-previewable reason.');
+  assertMatches(main, /previewFile[\s\S]*const content = redactSensitiveText\(rawText\)[\s\S]*text:\s*content/, 'preview text must be redacted before crossing IPC.');
+  assertMatches(main, /previewImageFile[\s\S]*stat\.size > FILE_PREVIEW_IMAGE_MAX_BYTES[\s\S]*reason:\s*'too-large'[\s\S]*dataUrl/, 'small image preview must be bounded and returned as dataUrl.');
+  assertMatches(main, /isDocumentMetadataPreviewExtension\(file\.extension\)[\s\S]*previewMetadataOnly\(file,\s*'metadata-only'\)/, 'PDF and Office files must return metadata-only previews.');
+  assertMatches(main, /resolveFilePreviewTarget[\s\S]*isRegisteredSelectedAttachment\(target,\s*input\)/, 'file preview must also support explicit selected-file grants.');
+  assertMatches(main, /extractPreviewArtifactTargets[\s\S]*cleanPreviewArtifactPath[\s\S]*\[\^\\\\r\\\\n<>/, 'AI artifact path extraction must tolerate generated paths with spaces while staying line bounded.');
+  assertMatches(main, /resolveFilePreviewTarget[\s\S]*isRegisteredAgentArtifact\(target,\s*input,\s*workspaceRoot\)[\s\S]*kind:\s*'agent-artifact'/, 'same-session AI artifacts must be previewable without opening arbitrary local files.');
+  assertMatches(main, /filePreviewPathLabel[\s\S]*kind === 'agent-artifact'[\s\S]*artifact:\//, 'AI artifact preview labels must not expose full local paths.');
+  assertMatches(main, /recordSessionEvent[\s\S]*registerAgentArtifactsFromEvent\(entry,\s*normalized\)/, 'tool events must register generated artifact grants for the current session.');
+  assertMatches(main, /if \(!requestedId \|\| !entry\.id \|\| requestedId !== entry\.id\) return false;/, 'selected attachment grants must require the generated attachment id.');
+  assertMatches(main, /openSelectedAttachmentFile[\s\S]*isRegisteredSelectedAttachment\(target,\s*input\)[\s\S]*openPathSafely\(target\)/, 'uploaded attachments may only be opened locally after a selected-file grant.');
+  assertMatches(preload, /openAttachmentFile:\s*\(payload\)\s*=>\s*safeInvoke\('attachment:open-file',\s*withAuth/, 'preload must expose authenticated attachment open IPC.');
+  assertNotMatches(main, /function previewFile[\s\S]{0,2400}(shell\.openPath|BrowserWindow|loadURL|executeJavaScript|spawn\()/, 'file preview must not open windows, execute, open, or spawn local artifacts.');
+  assertNotMatches(main, /function previewImageFile[\s\S]{0,2500}(shell\.openPath|BrowserWindow|loadURL|executeJavaScript|spawn\()/, 'image preview must stay inside safe read-only IPC.');
+});
+
+check('kkFileView sidecar preview engine is local and bounded', () => {
+  const main = readText('electron/main.cjs');
+  const app = readText('src/App.jsx');
+  const pkg = packageJson();
+  includesAll(
+    main,
+    [
+      "const KKFILEVIEW_VENDOR_DIR_NAME = 'kkfileview'",
+      'const KKFILEVIEW_PREVIEW_MAX_BYTES = 100 * 1024 * 1024',
+      'function locateKkFileViewResource',
+      'function ensureKkFileViewEngine',
+      'function ensureKkFileViewBridgeServer',
+      'function handleKkFileViewBridgeRequest',
+      'function previewWithKkFileView',
+      "renderMode: 'kkfileview'",
+      "listen(0, '127.0.0.1'",
+      '--server.address=127.0.0.1',
+      '--file.upload.disable=true',
+      '--pdf.download.disable=true',
+      '--media.convert.disable=true',
+      "stopKkFileViewEngine('app-quit')"
+    ],
+    'kkFileView sidecar preview engine'
+  );
+  assertMatches(main, /createKkFileViewSourceUrl[\s\S]*crypto\.randomBytes\(24\)[\s\S]*expiresAt:\s*Date\.now\(\) \+ KKFILEVIEW_GRANT_TTL_MS/, 'kkFileView source URLs must use expiring random grants.');
+  assertMatches(main, /handleKkFileViewBridgeRequest[\s\S]*preview-file\\\/\(\[a-f0-9\]\{32,64\}\)[\s\S]*'Cache-Control': 'no-store'/, 'kkFileView bridge must only serve tokenized preview-file requests with no-store caching.');
+  assertMatches(main, /function kkFileViewResourceRoots\(\)[\s\S]*if \(app\.isPackaged\)[\s\S]*process\.resourcesPath[\s\S]*\} else \{[\s\S]*process\.env\.ECOREX_KKFILEVIEW_HOME/, 'packaged kkFileView must use bundled resources instead of env-injected runtime roots.');
+  assertMatches(main, /function isKkFileViewRuntimeEnabled\(\)[\s\S]*app\.isPackaged[\s\S]*ECOREX_ENABLE_DEV_KKFILEVIEW/, 'kkFileView runtime must be packaged-only unless dev explicitly opts in.');
+  assertMatches(main, /function canUseKkFileViewPreview[\s\S]*isKkFileViewRuntimeEnabled\(\)/, 'document preview must not start kkFileView when the runtime is disabled.');
+  assertMatches(main, /safeKkFileViewOutputText[\s\S]*'\/preview-file\/\[REDACTED\]'/, 'kkFileView logs must redact temporary preview tokens.');
+  assertMatches(main, /previewFile[\s\S]*previewWithKkFileView\(target,\s*file,\s*stat\)[\s\S]*previewOpenXmlOfficeFile/, 'Office preview must try kkFileView before falling back to OpenXML text extraction.');
+  assertMatches(main, /Content-Security-Policy[\s\S]*img-src 'self' data: https: http:\/\/127\.0\.0\.1:\*[\s\S]*media-src 'self' data: blob: https: http:\/\/127\.0\.0\.1:\*[\s\S]*frame-src 'self' http:\/\/127\.0\.0\.1:\*/, 'renderer CSP must allow local preview frames and bounded rich chat media.');
+  includesAll(
+    app,
+    [
+      "preview.renderMode === 'kkfileview'",
+      'artifact-kkfileview-frame',
+      'sandbox="allow-scripts allow-same-origin allow-forms"',
+      "payload.type !== 'ecorex-preview-selection'"
+    ],
+    'kkFileView renderer preview branch'
+  );
+  const extraResources = Array.isArray(pkg.build?.extraResources) ? pkg.build.extraResources : [];
+  const kkResource = extraResources.find((item) => String(item.to || '').replace(/\\/g, '/') === 'kkfileview');
+  assert(kkResource, 'kkFileView extraResources entry must be configured.');
+  assert(kkResource.from === 'vendor/kkfileview', 'kkFileView extraResources source must be vendor/kkfileview.');
+  assertIncludesPatterns(kkResource.filter, ['**/*', '!**/*.log', '!**/tmp/**/*'], 'kkFileView extraResources.filter');
+  assertExistingDirectory(rel('vendor/kkfileview'), 'kkFileView vendor placeholder');
+  assertExistingFile(rel('vendor/kkfileview/README.md'), 'kkFileView vendor README');
+});
+
+check('agent attachments, tool ledger and run journal are production-safe', () => {
+  const main = readText('electron/main.cjs');
+  const preload = readText('electron/preload.cjs');
+  includesAll(
+    main,
+    [
+      'const ATTACHMENT_TEXT_MAX_BYTES = 512 * 1024',
+      'const ATTACHMENT_IMAGE_MAX_BYTES = 768 * 1024',
+      'const MAX_AGENT_ATTACHMENTS = 12',
+      'const RUN_JOURNAL_FILE_NAME =',
+      'function resolveAttachmentTarget',
+      'function ingestAgentAttachments',
+      'function composePromptWithAttachmentContext',
+      'const attachmentContext = ingestAgentAttachments(payload, { cwd, projectContext })',
+      'prompt,',
+      'userPrompt,',
+      'attachmentContext,',
+      'function toolLedgerStartEvent',
+      'function toolLedgerFinishEvent',
+      'function safeToolLedger',
+      'ledger: toolLedgerFinishEvent',
+      'function appendRunJournalEntry',
+      'function recentUnfinishedRunJournals',
+      "handleSafe('attachment:ingest', (_event, payload) => ingestAttachmentsForPreview(payload), { authRequired: true })",
+      'unfinishedRuns: recentUnfinishedRunJournals()'
+    ],
+    'attachment ingestion, ledger and durable run journal'
+  );
+  assertMatches(main, /resolveAttachmentTarget[\s\S]*isPathInside\(entry\.root,\s*target\)[\s\S]*isRegisteredSelectedAttachment\(target,\s*input\)[\s\S]*pathContainsSymlink\(root\.root,\s*target\)/, 'attachment ingestion must stay inside project/workspace or selected-file grants and reject symlink traversal.');
+  assertMatches(main, /ingestAttachmentFromPath[\s\S]*fs\.readFileSync\(target\)[\s\S]*textAttachmentContextFromBuffer|ingestAttachmentFromPath[\s\S]*textAttachmentContextFromBuffer\(buffer,\s*metadata\)/, 'attachment ingestion must read bounded text payloads for the agent prompt.');
+  assertMatches(main, /imageAttachmentContextFromBuffer[\s\S]*base64Sample[\s\S]*ATTACHMENT_IMAGE_BASE64_SAMPLE_CHARS/, 'image attachment ingestion must include only bounded base64 summaries.');
+  assertMatches(main, /appendRunJournalEntry\(sessionId,\s*entry,\s*'running',\s*\{\s*event:\s*'start'\s*\}\)/, 'run journal must record session start.');
+  assertMatches(main, /appendRunJournalEntry\(sessionId,\s*entry,\s*status,[\s\S]*event:\s*'finish'/, 'run journal must record session finish.');
+  assertMatches(preload, /ingestAttachments:\s*\(payload\)\s*=>\s*safeInvoke\('attachment:ingest',\s*withAuth\(payload\)\)/, 'preload must expose only authenticated attachment ingestion IPC.');
+  assertNotMatches(preload, /readFile|writeFile|openPath|BrowserWindow|shell\./, 'preload must not expose arbitrary filesystem or shell APIs.');
 });
 
 check('window default, preload and minimum size guardrails', () => {
@@ -621,7 +774,8 @@ check('agent runtime production guardrails', () => {
       'MAX_RUNNING_AGENTS',
       'child.stdin.end(`${prompt}\\n`)',
       "'--verbose'",
-      "return { ok: true, sessions: getRunningSessionSummaries() }",
+      'sessions: getRunningSessionSummaries()',
+      'unfinishedRuns: recentUnfinishedRunJournals()',
       "if (status === 'timeout') return 'timeout'",
       'ECOREX_AGENT_SYSTEM_PROMPT',
       'function agentRecoveryHint',
@@ -631,8 +785,14 @@ check('agent runtime production guardrails', () => {
       'function stableClaudeSessionUuid',
       'sanitizeClaudeSessionId',
       'function claudeSessionTranscriptExists',
+      'function refreshClaudeSessionTranscriptSeen',
+      'const ECOREX_AGENT_CONFIG_DIR_NAME',
+      'const BLOCKED_LOCAL_SKILL_NAMES',
+      'function isolatedAgentRuntimeEnv',
+      'function isBlockedLocalSkillName',
       "'--session-id'",
       "'--resume'",
+      "'--bare'",
       'claudeSessionId',
       'contextManagement',
       'const CLAUDE_AUTO_ALLOWED_TOOL_SET',
@@ -643,6 +803,11 @@ check('agent runtime production guardrails', () => {
     'agent runtime guardrails'
   );
   assertMatches(main, /'--output-format',\s*'stream-json',\s*'--verbose'/, 'stream-json output must always be paired with --verbose.');
+  assertMatches(main, /'--bare'[\s\S]*'--print'[\s\S]*'--plugin-dir'/, 'agent runtime must run in bare isolated mode while explicitly loading bundled plugins.');
+  assertMatches(main, /env:\s*filteredAgentEnv\(\{[\s\S]*isolatedAgentRuntimeEnv\(\)[\s\S]*CLAUDE_CODE_SIMPLE:\s*'1'/, 'agent runtime must isolate config and disable inherited user skills/memory.');
+  assertMatches(main, /function runClaudeCommand[\s\S]*env:\s*\{[\s\S]*isolatedAgentRuntimeEnv\(\)/, 'auxiliary backend CLI commands must also use the EcoreX isolated config.');
+  assertMatches(main, /const plugins = Array\.isArray\(payload\.plugins\)[\s\S]*isBlockedLocalSkillName\(plugin\)/, 'payload plugin names must reject local user skill packs.');
+  assertMatches(main, /parsePluginInventory[\s\S]*isBlockedLocalSkillName\(pluginName\)[\s\S]*isBlockedLocalSkillName\(source\)/, 'backend plugin inventory must exclude blocked local skill pack names.');
   assertMatches(main, /stdio:\s*\['pipe',\s*'pipe',\s*'pipe'\]/, 'agent child process must keep stdin piped.');
   assertMatches(main, /child\.stdin\.end\(`\$\{prompt\}\\n`\)/, 'agent prompt must be written to stdin.');
   assertNotMatches(main, /args\.push\(\s*prompt\s*\)|spawn\([^)]*prompt/s, 'agent prompt must not be passed through process argv.');
@@ -657,6 +822,12 @@ check('agent runtime production guardrails', () => {
   assertMatches(main, /const claudeResumeExistingSession = claudeSessionTranscriptExists\(claudeSessionId\)/, 'Claude session reuse must detect existing CLI transcripts.');
   assertMatches(main, /if \(claudeResumeExistingSession\) \{\s*args\.push\('--resume', claudeSessionId\);\s*\} else \{\s*args\.push\('--session-id', claudeSessionId\);/s, 'Claude CLI must resume existing sessions and only create new sessions with --session-id.');
   assertMatches(main, /entry\.claudeSessionId === requestedClaudeSessionId/, 'parallel starts for the same Claude session must be blocked before spawning.');
+  assertMatches(main, /function refreshClaudeSessionTranscriptSeen[\s\S]*findClaudeSessionTranscript\(sessionId\)[\s\S]*claudeTranscriptExistenceCache\.delete\(sessionId\)/, 'Claude resume cache must verify transcript files and clear stale resume state.');
+  assertMatches(main, /const finalStatus = code === 0 && !entry\.claudeResultFailed \? 'completed' : 'failed'/, 'Claude result error events must keep the final session status failed even when the process exits cleanly.');
+  assertNotMatches(main, /child\.on\('close'[\s\S]{0,600}markClaudeSessionTranscriptSeen\(entry\.claudeSessionId\)/, 'agent close must not blindly mark failed or missing Claude transcripts as resumable.');
+  assertMatches(main, /streamType === 'error'[\s\S]*claudeResultStatus:\s*'failed'/, 'stream-json error events must be surfaced as failed agent events.');
+  assertMatches(main, /json\.type === 'result'[\s\S]*const resultFailed = Boolean[\s\S]*claudeResultStatus: resultFailed \? 'failed' : 'completed'/, 'Claude result subtypes must drive success or failure status.');
+  assertMatches(main, /const retainedEventCount = HARD_MAX_AGENT_EVENT_QUEUE - 1[\s\S]*queue\.events\.slice\(-retainedEventCount\)/, 'event backpressure compression must stay within the hard queue limit including the notice event.');
 });
 
 check('agent transcript history is public-safe', () => {
@@ -818,10 +989,17 @@ check('model adapter defaults and smoke tests are offline-safe', () => {
     [
       "const DEFAULT_IMAGE_MODEL = 'gpt-image-2'",
       'model: body.model || profile.imageModel || DEFAULT_IMAGE_MODEL',
-      'DEFAULT_IMAGE_MODEL'
+      'DEFAULT_IMAGE_MODEL',
+      'function extractOpenAIText',
+      'function parseOpenAIStream',
+      'function normalizeOpenAIResponse',
+      'text: responseOk ? normalizedText :',
+      'stream: Boolean(normalized.stream)'
     ],
-    'model image default'
+    'model adapter defaults and OpenAI-compatible text/stream transform'
   );
+  assertMatches(adapter, /const responseOk = Boolean\(response\.ok && !normalized\.errorMessage\)/, 'model adapter must treat OpenAI stream error chunks as failed responses.');
+  assertMatches(adapter, /parseServerSentEventData[\s\S]*trimmed === '\[DONE\]'[\s\S]*extractOpenAIStreamText/, 'model adapter must parse OpenAI-compatible SSE stream text.');
   assertMatches(smoke, /createModelAdapter\(\{\s*fetchImpl:/, 'model adapter smoke tests must inject fake fetchImpl.');
   assertMatches(smoke, /assert\.equal\(imageCalls\[0\]\.model,\s*DEFAULT_IMAGE_MODEL\)/, 'model adapter smoke tests must assert default image model.');
   assertNotMatches(smoke, /\bfetch\(\s*['"`]https?:\/\//, 'model adapter smoke tests must not call real network URLs.');
@@ -835,7 +1013,9 @@ check('MCP plugin and CLI exposure is sanitized', () => {
     main,
     [
       'function publicProductText',
+      'function publicAgentText',
       '.replace(/\\bClaude Code CLI\\b/gi,',
+      ".replace(/\\bClaude\\b/gi, 'EcoreX')",
       '.replace(/\\bMCP servers?\\b/gi,',
       '.replace(/\\bplugins?\\b/gi,',
       'function safeOutputText',
@@ -975,7 +1155,7 @@ check('chat state tree and critical front-end affordances', () => {
       'const messageStates = {',
       "cancelled: { label: '已取消'",
       "timeout: { label: '已超时'",
-      "const AGENT_EVENT_TERMINAL_KINDS = new Set(['done', 'error', 'cancelled', 'timeout'])",
+      "const AGENT_EVENT_TERMINAL_KINDS = new Set(['result', 'done', 'error', 'cancelled', 'timeout'])",
       "status: 'cancelled'",
       "status: 'timeout'",
       'function agentRecoveryText',
@@ -983,19 +1163,43 @@ check('chat state tree and critical front-end affordances', () => {
       "result.code === 'too-many-sessions'",
       'timelineItemFromAgentEvent',
       '<MessageStatus',
-      'setRailExpanded((next) => !next)',
-      'project-card-collapsed'
+      "chat-layout ${focusArtifact ? 'preview-focus' : 'chat-only'}",
+      '<ArtifactFocusPanel',
+      'function RichMessageText',
+      'function ChatExternalLink',
+      'function ChatInlineMedia',
+      'chatMediaKind(safeUrl)',
+      'openExternalUrlWithBridge(safeUrl)',
+      'function stageTransferredInput',
+      'function transferText',
+      'function filesFromDataTransfer',
+      'onDrop={(event) => stageTransferredInput(event, event.dataTransfer)}'
     ],
-    'chat state tree and right rail'
+    'chat state tree and artifact focus layout'
   );
+  includesAll(app, ["replace(/\\bClaude\\s*Code\\s*CLI\\b/gi, 'EcoreX')", "replace(/\\bClaude\\b/gi, 'EcoreX')"], 'assistant-visible product naming sanitizer');
+  assert(!app.includes('setRailExpanded((next) => !next)'), 'chat main must not keep the removed quick project right rail toggle.');
+  assert(!app.includes('<aside className={`right-rail'), 'chat main must not render the removed quick project right rail.');
+  includesAll(app, ['function finalArtifactsFromText', "source: 'assistant-final'", 'finalArtifacts: mergeArtifactReferences', 'message.finalArtifacts || []', 'function isExplicitLocalArtifactPathToken', 'function validateArtifactAvailabilityWithBridge'], 'final deliverable artifact extraction');
+  assertMatches(app, /const candidateArtifactReferences = useMemo\([\s\S]{0,620}message\.finalArtifacts \|\| \[\]/, 'artifact preview shelf must use final result artifacts only.');
+  assertMatches(app, /validateArtifactAvailabilityWithBridge\(artifact\)[\s\S]{0,320}setAvailableArtifactIds/, 'artifact preview shelf must hide non-local or unavailable artifact references before rendering cards.');
+  assertMatches(app, /<ArtifactPreviewShelf[\s\S]{0,420}artifacts=\{artifactReferences\}/, 'artifact preview shelf must render only the computed final artifact list.');
+  assertNotMatches(app, /const candidateArtifactReferences = useMemo\([\s\S]{0,900}extractArtifactReferences\(rawText\)/, 'streamed/intermediate assistant text must not create artifact preview cards.');
+  assertNotMatches(app, /const candidateArtifactReferences = useMemo\([\s\S]{0,900}artifactsFromLedger\(message\.ledger/, 'tool ledger and intermediate files must not create artifact preview cards.');
+  assertNotMatches(app, /message\.role === 'user'[\s\S]{0,900}<ArtifactPreviewShelf/, 'user-uploaded local files must not open the AI artifact preview flow.');
+  includesAll(app, ['onOpenAttachment={openUserAttachment}', '<AttachmentPreviewList attachments={message.attachments} compact onOpen={onOpenAttachment} />'], 'uploaded file local-open UX');
   assertMatches(app, /function Composer\([\s\S]*?const maxHeight = 112;[\s\S]*?overflowY = textarea\.scrollHeight > maxHeight \? 'auto' : 'hidden'/, 'composer must clamp textarea height and enable overflow scrolling.');
   includesAll(
     css,
     [
       '.composer textarea',
       'max-height: 128px',
-      '.right-rail.collapsed',
-      '.project-card-collapsed'
+      '.chat-rich-link',
+      '.chat-rich-media video',
+      '.chat-layout.preview-focus',
+      'grid-template-columns: minmax(0, 1fr);',
+      '.sidebar-project-session.active',
+      'background: transparent;'
     ],
     'front-end layout CSS guardrails'
   );
@@ -1016,6 +1220,7 @@ check('project workspaces isolate advertising context and memory', () => {
       'function projectEnvForAgent',
       "handleSafe('project:update'",
       "handleSafe('project:archive'",
+      "handleSafe('project:delete'",
       'Run cwd must stay inside the current project.'
     ],
     'project workspace backend'
@@ -1026,7 +1231,8 @@ check('project workspaces isolate advertising context and memory', () => {
     preload,
     [
       "updateProject: (payload) => safeInvoke('project:update'",
-      "archiveProject: (payload) => safeInvoke('project:archive'"
+      "archiveProject: (payload) => safeInvoke('project:archive'",
+      "deleteProject: (payload) => safeInvoke('project:delete'"
     ],
     'project workspace preload bridge'
   );
@@ -1037,6 +1243,7 @@ check('project workspaces isolate advertising context and memory', () => {
       'const PROJECT_STATUS_OPTIONS',
       'function projectPayloadFromDraft',
       'async function archiveManagedProject',
+      'async function deleteManagedProject',
       "page === 'projects'",
       "title=\"项目\"",
       'project-memory.md',

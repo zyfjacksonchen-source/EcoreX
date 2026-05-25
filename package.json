@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "author": "EcoreX",
-  "description": "EcoreX desktop AI agent powered by an Electron, React and Claude Code bridge.",
+  "description": "EcoreX desktop AI agent for advertising workflows.",
   "main": "electron/main.cjs",
   "type": "module",
   "config": {
@@ -19,9 +19,12 @@
     "verify:install-matrix": "node scripts/verify-install-matrix.cjs",
     "verify:mac": "node scripts/verify-macos-release-env.cjs",
     "test:packaged-input": "node scripts/packaged-input-smoke.cjs",
+    "test:packaged-project": "node scripts/packaged-project-smoke.cjs",
     "assets:mac-icon": "node scripts/create-mac-icon.cjs",
     "release:policy": "node scripts/prepare-release-policy.cjs",
     "release:fix-metadata": "node scripts/fix-release-metadata.cjs",
+    "prepare:kkfileview": "node scripts/prepare-kkfileview.cjs",
+    "verify:kkfileview": "node scripts/verify-kkfileview-vendor.cjs --allow-missing --allow-draft",
     "verify:production": "npm run test:agent-runtime && node scripts/verify-production.cjs && npm run test:model-adapter",
     "verify:production:strict": "npm run test:agent-runtime && node scripts/verify-production.cjs --strict && npm run test:model-adapter",
     "verify:production:release": "npm run test:agent-runtime && node scripts/verify-production.cjs --strict --require-signed-artifact && npm run test:model-adapter",
@@ -31,9 +34,9 @@
     "test:responsive": "node scripts/responsiveness-smoke.cjs",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1 --port 5188 --strictPort",
-    "pack": "npm run build && npm run verify:production && npm run verify:native && electron-builder --dir && npm run release:fix-metadata && npm run verify:production",
-    "dist": "npm run build && npm run verify:production && npm run verify:native && electron-builder --win --x64 && npm run release:fix-metadata && npm run verify:production",
-    "dist:mac": "npm run assets:mac-icon && npm run build && npm run verify:production:strict && npm run verify:native && electron-builder --mac --x64 --arm64 && npm run release:policy && npm run verify:mac",
+    "pack": "npm run build && npm run verify:production && npm run verify:native && npm run verify:kkfileview && electron-builder --dir && npm run release:fix-metadata && npm run verify:production",
+    "dist": "npm run build && npm run verify:production && npm run verify:native && npm run verify:kkfileview && electron-builder --win --x64 && npm run release:fix-metadata && npm run verify:production",
+    "dist:mac": "npm run assets:mac-icon && npm run build && npm run verify:production:strict && npm run verify:native && npm run verify:kkfileview && electron-builder --mac --x64 --arm64 && npm run release:policy && npm run verify:mac",
     "dist:release": "npm run build && npm run verify:production:strict && npm run verify:native && electron-builder --win --x64 && npm run release:fix-metadata && npm run verify:production:release"
   },
   "dependencies": {
@@ -87,7 +90,9 @@
       "!**/.claude/**/*",
       "!**/.codex/**/*",
       "!**/.agents/**/*",
-      "!**/superpowers/**/*"
+      "!**/superpowers/**/*",
+      "!**/huashu-design/**/*",
+      "!**/huashu_design/**/*"
     ],
     "asarUnpack": [
       "node_modules/@anthropic-ai/claude-code/bin/**/*",
@@ -124,9 +129,24 @@
           "!**/.codex/**/*",
           "!**/.agents/**/*",
           "!**/superpowers/**/*",
+          "!**/huashu-design/**/*",
+          "!**/huashu_design/**/*",
           "!plugins/**/node_modules/**/*",
           "!plugins/**/.git/**/*",
-          "!plugins/**/superpowers/**/*"
+          "!plugins/**/superpowers/**/*",
+          "!plugins/**/huashu-design/**/*",
+          "!plugins/**/huashu_design/**/*"
+        ]
+      },
+      {
+        "from": "vendor/kkfileview",
+        "to": "kkfileview",
+        "filter": [
+          "**/*",
+          "!**/*.log",
+          "!**/tmp/**/*",
+          "!**/.DS_Store",
+          "!**/Thumbs.db"
         ]
       }
     ],

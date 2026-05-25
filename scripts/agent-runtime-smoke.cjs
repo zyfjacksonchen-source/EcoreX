@@ -302,6 +302,49 @@ check('agent stream backpressure and transcript hygiene', () => {
   );
 });
 
+check('attachment ingestion, tool ledger and run journal', () => {
+  includesAll(
+    main,
+    [
+      'const ATTACHMENT_TEXT_MAX_BYTES = 512 * 1024',
+      'const ATTACHMENT_IMAGE_MAX_BYTES = 768 * 1024',
+      'const FILE_PREVIEW_IMAGE_MAX_BYTES = 768 * 1024',
+      'const RUN_JOURNAL_FILE_NAME =',
+      'function resolveAttachmentTarget',
+      'function ingestAgentAttachments',
+      'function composePromptWithAttachmentContext',
+      'const attachmentContext = ingestAgentAttachments(payload, { cwd, projectContext })',
+      'function toolLedgerStartEvent',
+      'function toolLedgerFinishEvent',
+      'function appendRunJournalEntry',
+      'function recentUnfinishedRunJournals',
+      "handleSafe('attachment:ingest'",
+      "handleSafe('file:preview'"
+    ],
+    'attachment ingestion and durable tool/run records'
+  );
+  assertMatches(
+    main,
+    /resolveAttachmentTarget[\s\S]*isRegisteredSelectedAttachment\(target,\s*input\)[\s\S]*pathContainsSymlink\(root\.root,\s*target\)/,
+    'attachment paths must be limited to workspace/project or explicit selected-file grants.'
+  );
+  assertMatches(
+    main,
+    /previewImageFile[\s\S]*dataUrl[\s\S]*FILE_PREVIEW_IMAGE_MAX_BYTES/,
+    'file preview must return bounded image data URLs.'
+  );
+  assertMatches(
+    main,
+    /isDocumentMetadataPreviewExtension\(file\.extension\)[\s\S]*previewMetadataOnly\(file,\s*'metadata-only'\)/,
+    'file preview must return PDF and Office metadata without executing content.'
+  );
+  assertMatches(
+    main,
+    /ledger:\s*toolLedgerFinishEvent\(sessionId,\s*toolResults\[0\]\.tool_use_id/,
+    'tool result events must carry structured ledger completions.'
+  );
+});
+
 console.log('\nAgent runtime smoke');
 for (const name of passes) console.log(`  ok   ${name}`);
 

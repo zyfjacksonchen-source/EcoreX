@@ -2,7 +2,10 @@ const assert = require('assert/strict');
 const {
   DEFAULT_IMAGE_MODEL,
   createModelAdapter,
-  endpointUrl
+  endpointUrl,
+  inferModelCapabilities,
+  normalizeOpenAIResponse,
+  parseOpenAIStream
 } = require('../electron/model-adapter.cjs');
 
 async function main() {
@@ -36,6 +39,67 @@ async function main() {
   assert.equal(fallbackCalls.length, 2);
   assert.equal(fallbackCalls[0].auth, `Bearer ${secret}`);
   assert.equal(fallbackCalls[1].url, 'https://api.example.test/v1/responses');
+  assert.equal(fallbackResult.capabilities.supportsResponses, true);
+  assert.equal(fallbackResult.capabilities.supportsChatCompletions, true);
+
+  const multiPart = normalizeOpenAIResponse('', {
+    model: 'gpt-4o',
+    choices: [{
+      message: {
+        content: [
+          { type: 'text', text: 'hello ' },
+          { type: 'output_text', text: { value: 'world' } },
+          { type: 'image_url', image_url: { url: 'https://example.test/image.png' } }
+        ],
+        tool_calls: [{
+          id: 'call_1',
+          type: 'function',
+          function: { name: 'lookup', arguments: '{"q":"x"}' }
+        }]
+      }
+    }]
+  });
+  assert.equal(multiPart.text, 'hello world');
+  assert.equal(multiPart.toolCalls.length, 1);
+  assert.equal(multiPart.toolCalls[0].name, 'lookup');
+
+  const sseText = [
+    'event: response.output_text.delta',
+    'data: {"type":"response.output_text.delta","delta":"he"}',
+    '',
+    'data: {"choices":[{"delta":{"content":[{"type":"text","text":"llo"}]}}]}',
+    '',
+    'event: response.output_text.done',
+    'data: {"type":"response.output_text.done","text":"hello"}',
+    '',
+    'data: [DONE]',
+    ''
+  ].join('\n');
+  const stream = parseOpenAIStream(sseText);
+  assert.equal(stream.text, 'hello');
+  assert.equal(stream.errorMessage, '');
+
+  const errorStream = normalizeOpenAIResponse([
+    'event: error',
+    'data: {"error":{"message":"provider overloaded"}}',
+    '',
+    'data: [DONE]',
+    ''
+  ].join('\n'));
+  assert.equal(errorStream.stream, true);
+  assert.equal(errorStream.errorMessage, 'provider overloaded');
+
+  const inferred = inferModelCapabilities({
+    profile: { model: 'gpt-5.5', imageModel: DEFAULT_IMAGE_MODEL },
+    request: { body: { stream: true } },
+    endpoint: '/responses',
+    type: 'responses'
+  });
+  assert.equal(inferred.supportsResponses, true);
+  assert.equal(inferred.supportsVision, true);
+  assert.equal(inferred.supportsImages, true);
+  assert.equal(inferred.supportsStreaming, true);
+  assert.ok(inferred.contextWindow >= 128000);
 
   const imageCalls = [];
   const imageAdapter = createModelAdapter({
@@ -52,6 +116,18 @@ async function main() {
   );
   assert.equal(imageResult.ok, true);
   assert.equal(imageCalls[0].model, DEFAULT_IMAGE_MODEL);
+  assert.equal(imageResult.capabilities.supportsImages, true);
+  assert.equal(imageResult.imageArtifacts.length, 1);
+
+  const imageFailureAdapter = createModelAdapter({
+    fetchImpl: async () => new Response(JSON.stringify({ model: DEFAULT_IMAGE_MODEL, data: [] }), { status: 200 })
+  });
+  const imageFailureResult = await imageFailureAdapter.generateImage(
+    { baseUrl: 'https://api.example.test/v1', apiKey: secret },
+    { prompt: 'test image' }
+  );
+  assert.equal(imageFailureResult.ok, false);
+  assert.match(imageFailureResult.error.message, /^Image generation failed:/);
 
   const redactionAdapter = createModelAdapter({
     fetchImpl: async () =>
@@ -66,6 +142,26 @@ async function main() {
   });
   assert.equal(redactionResult.ok, false);
   assert.equal(redactionResult.error.message.includes(secret), false);
+
+  const streamErrorAdapter = createModelAdapter({
+    fetchImpl: async () => new Response([
+      'data: {"choices":[{"delta":{"content":""}}]}',
+      '',
+      'event: error',
+      'data: {"error":{"message":"stream failed"}}',
+      '',
+      'data: [DONE]',
+      ''
+    ].join('\n'), { status: 200 }),
+    retries: 0
+  });
+  const streamErrorResult = await streamErrorAdapter.chatCompletion({
+    baseUrl: 'https://api.example.test/v1',
+    apiKey: secret,
+    model: 'profile-model'
+  });
+  assert.equal(streamErrorResult.ok, false);
+  assert.match(streamErrorResult.error.message, /stream failed/);
 
   const limitAdapter = createModelAdapter({
     fetchImpl: async () => new Response('x'.repeat(4096), { status: 200 }),

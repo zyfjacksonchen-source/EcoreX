@@ -1,9 +1,13 @@
 const { app, BrowserWindow, ipcMain, session, safeStorage, dialog, screen, shell } = require('electron');
 const { spawn } = require('child_process');
 const fs = require('fs');
+const http = require('http');
+const net = require('net');
 const path = require('path');
 const crypto = require('crypto');
+const zlib = require('zlib');
 const { pathToFileURL } = require('url');
+const { fileURLToPath } = require('url');
 const { createModelAdapter, DEFAULT_IMAGE_MODEL } = require('./model-adapter.cjs');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
@@ -12,6 +16,19 @@ const runningAgents = new Map();
 const pendingAgentStarts = new Map();
 const recentAgentStartsByWindow = new Map();
 const agentSessionActors = new Map();
+const selectedAttachmentAccess = new Map();
+const agentArtifactAccess = new Map();
+const agentToolLedger = new Map();
+const kkFileViewState = {
+  process: null,
+  port: 0,
+  starting: null,
+  resource: null,
+  bridgeServer: null,
+  bridgePort: 0,
+  grants: new Map(),
+  lastError: ''
+};
 let mainWindow = null;
 let startupSplashUrl = '';
 let cachedClaude = null;
@@ -42,6 +59,7 @@ const AUTH_IDENTITY_FILE_NAME = 'auth-identity.json';
 const SECRETS_FILE_NAME = 'secrets.json';
 const MODEL_PROFILES_FILE_NAME = 'model-profiles.json';
 const SESSION_TRANSCRIPT_DIR_NAME = 'sessions';
+const RUN_JOURNAL_FILE_NAME = 'agent-run-journal.jsonl';
 const CRASH_SUMMARY_FILE_NAME = 'crash-summary.json';
 const TELEMETRY_QUEUE_FILE_NAME = 'telemetry-queue.json';
 const DIAGNOSTIC_EXPORT_DIR_NAME = 'EcoreX Diagnostics';
@@ -78,6 +96,50 @@ const MAX_MODEL_PROFILES = 20;
 const MAX_MODEL_PROFILE_TEXT_CHARS = 2048;
 const MODEL_PROFILE_TEST_TIMEOUT_MS = 20 * 1000;
 const ATTACHMENT_PREVIEW_MAX_BYTES = 2 * 1024 * 1024;
+const ECOREX_AGENT_CONFIG_DIR_NAME = 'agent-runtime-config';
+const BLOCKED_LOCAL_SKILL_NAMES = new Set(['superpowers', 'huashu-design', 'huashu_design', 'huashu design']);
+const ATTACHMENT_TEXT_MAX_BYTES = 512 * 1024;
+const ATTACHMENT_IMAGE_MAX_BYTES = 768 * 1024;
+const ATTACHMENT_DATA_URL_MAX_CHARS = 2 * 1024 * 1024;
+const ATTACHMENT_INLINE_TEXT_CHARS = 16 * 1024;
+const ATTACHMENT_IMAGE_BASE64_SAMPLE_CHARS = 4096;
+const MAX_AGENT_ATTACHMENTS = 12;
+const MAX_ATTACHMENT_PROMPT_CHARS = 32 * 1024;
+const SELECTED_ATTACHMENT_ACCESS_TTL_MS = 4 * 60 * 60 * 1000;
+const MAX_SELECTED_ATTACHMENT_ACCESS = 200;
+const AGENT_ARTIFACT_ACCESS_TTL_MS = 24 * 60 * 60 * 1000;
+const MAX_AGENT_ARTIFACT_ACCESS = 500;
+const MAX_RUN_JOURNAL_BYTES = 2 * 1024 * 1024;
+const MAX_RUN_JOURNAL_ENTRIES = 240;
+const MAX_TOOL_LEDGER_SUMMARY_CHARS = 1600;
+const FILE_PREVIEW_MAX_BYTES = 512 * 1024;
+const FILE_PREVIEW_IMAGE_MAX_BYTES = 768 * 1024;
+const FILE_PREVIEW_OFFICE_MAX_BYTES = 12 * 1024 * 1024;
+const FILE_PREVIEW_OFFICE_MAX_CHARS = 80 * 1024;
+const KKFILEVIEW_PREVIEW_MAX_BYTES = 100 * 1024 * 1024;
+const KKFILEVIEW_START_TIMEOUT_MS = 24 * 1000;
+const KKFILEVIEW_GRANT_TTL_MS = 30 * 60 * 1000;
+const KKFILEVIEW_MAX_GRANTS = 200;
+const KKFILEVIEW_VENDOR_DIR_NAME = 'kkfileview';
+const KKFILEVIEW_DOCUMENT_EXTENSIONS = new Set(['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.xlsm', '.ppt', '.pptx', '.pptm', '.csv']);
+const KKFILEVIEW_PROHIBITED_EXTENSIONS = new Set(['.exe', '.dll', '.msi', '.bat', '.cmd', '.ps1', '.sh', '.app', '.dmg', '.pkg', '.jar', '.com', '.scr']);
+const FILE_PREVIEW_TEXT_EXTENSIONS = new Set([
+  '.html',
+  '.htm',
+  '.md',
+  '.markdown',
+  '.txt',
+  '.json',
+  '.jsonl',
+  '.csv',
+  '.log',
+  '.css',
+  '.js',
+  '.mjs',
+  '.cjs'
+]);
+const FILE_PREVIEW_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg']);
+const FILE_PREVIEW_DOCUMENT_EXTENSIONS = new Set(['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']);
 const LOCAL_AUTH_HASH_ITERATIONS = 210_000;
 const LOCAL_AUTH_MIN_PASSWORD_CHARS = 8;
 const AUTH_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
@@ -220,6 +282,7 @@ const AGENT_SYSTEM_PROMPT = [
 ].join('\n');
 
 const ECOREX_AGENT_SYSTEM_PROMPT = [
+  '不要向用户暴露或提及 Claude Code、Claude CLI、Anthropic CLI、底层后端或执行桥；统一称为 EcoreX。',
   '你是 EcoreX Agent，由 EcoreX 亦芯开发的具备自主思考能力的 AI Agent。',
   '你的主要任务是服务广告业务常用工作场景，包括但不限于品牌策略、投放计划、预算分配、素材创意、A/B 测试、数据归因、效果复盘、竞品洞察、客户简报、项目协同与自动化执行。',
   '你应主动拆解目标、识别缺失信息、给出可执行方案，并在需要调用工具、读写文件、运行命令或生成报告时清晰说明动作与结果。',
@@ -322,8 +385,11 @@ function redactSensitiveText(value = '') {
 function publicProductText(value = '') {
   return redactSensitiveText(value)
     .replace(/--dangerously-skip-permissions/gi, 'Full Access')
-    .replace(/\bClaude Code CLI\b/gi, 'EcoreX execution engine')
-    .replace(/\bClaude Code\b/gi, 'EcoreX execution engine')
+    .replace(/\bClaude Code CLI\b/gi, 'EcoreX')
+    .replace(/\bClaude Code\b/gi, 'EcoreX')
+    .replace(/\bClaude CLI\b/gi, 'EcoreX')
+    .replace(/\bAnthropic CLI\b/gi, 'EcoreX')
+    .replace(/\bClaude\b/gi, 'EcoreX')
     .replace(/\bclaude\s+mcp\b/gi, 'EcoreX MCP')
     .replace(/\bclaude\s+(plugin|plugins)\b/gi, 'EcoreX SKILLS')
     .replace(/\bMCP servers?\b/gi, 'MCP')
@@ -351,6 +417,10 @@ function safeOutputText(value = '', limit = MAX_IPC_OUTPUT_CHARS) {
   const text = publicProductText(String(value || ''));
   if (text.length <= limit) return text;
   return `${text.slice(0, limit)}\n[output truncated to ${limit} chars]`;
+}
+
+function safeKkFileViewOutputText(value = '', limit = 1200) {
+  return safeOutputText(value, limit).replace(/\/preview-file\/[a-f0-9]{32,64}/gi, '/preview-file/[REDACTED]');
 }
 
 function safeJsonValue(value, limit = MAX_AGENT_EVENT_RAW_CHARS) {
@@ -501,12 +571,16 @@ function safeCommandResult(result = {}, limit = MAX_IPC_OUTPUT_CHARS) {
   };
 }
 
-function publicBridgeError(result = {}, fallback = 'Agent bridge operation failed.') {
+function publicBridgeError(result = {}, fallback = 'EcoreX operation failed.') {
   const text = safeOutputText(result.stderr || result.stdout || '', 4000)
-    .replace(/claude\s+(mcp|plugin|plugins)\b/gi, 'the agent bridge')
-    .replace(/Claude Code CLI/gi, 'agent bridge')
+    .replace(/claude\s+(mcp|plugin|plugins)\b/gi, 'EcoreX')
+    .replace(/Claude Code CLI/gi, 'EcoreX')
     .replace(/plugin(s)?/gi, 'skill pack$1');
   return text || fallback;
+}
+
+function publicAgentText(value = '', limit = MAX_AGENT_EVENT_TEXT_CHARS) {
+  return publicProductText(safeOutputText(value, limit));
 }
 
 function parseJsonOutput(text = '') {
@@ -951,6 +1025,32 @@ function defaultWorkspaceRoot() {
   return workspace;
 }
 
+function agentRuntimeConfigDir() {
+  const dir = path.join(app.getPath('userData'), ECOREX_AGENT_CONFIG_DIR_NAME);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function isolatedAgentRuntimeEnv() {
+  const configDir = agentRuntimeConfigDir();
+  return {
+    CLAUDE_CONFIG_DIR: configDir,
+    ECOREX_AGENT_CONFIG_DIR: configDir,
+    CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
+    ECOREX_SKILL_SCOPE: 'bundled-only'
+  };
+}
+
+function isBlockedLocalSkillName(value = '') {
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\\/g, '/');
+  if (!normalized) return false;
+  const compact = normalized.replace(/[_\s]+/g, '-');
+  return [...BLOCKED_LOCAL_SKILL_NAMES].some((name) => compact === name || compact.includes(`/${name}/`) || compact.endsWith(`/${name}`));
+}
+
 function workspacePathKey(value) {
   const resolved = path.resolve(String(value || ''));
   return isWindows ? resolved.toLowerCase() : resolved;
@@ -1040,6 +1140,10 @@ function modelProfilesPath() {
 
 function sessionTranscriptDir() {
   return path.join(app.getPath('userData'), SESSION_TRANSCRIPT_DIR_NAME);
+}
+
+function runJournalPath() {
+  return path.join(app.getPath('userData'), RUN_JOURNAL_FILE_NAME);
 }
 
 function crashSummaryPath() {
@@ -2601,6 +2705,19 @@ function uniqueProjectDir(workspaceRoot, baseSlug) {
   throw new Error('Unable to allocate project directory.');
 }
 
+function uniqueProjectRenameDir(workspaceRoot, project, nextName) {
+  const currentPath = path.resolve(project.projectPath);
+  const safeBase = projectSlugForName(nextName);
+  for (let index = 0; index < 100; index += 1) {
+    const dirName = index === 0 ? safeBase : `${safeBase}-${index + 1}`;
+    const projectPath = path.resolve(workspaceRoot, dirName);
+    if (!isPathInside(workspaceRoot, projectPath)) throw new Error('Project path escapes workspace.');
+    if (isSameWorkspacePath(projectPath, currentPath)) return { dirName, projectPath, changed: false };
+    if (!fs.existsSync(projectPath)) return { dirName, projectPath, changed: true };
+  }
+  throw new Error('Unable to allocate project directory.');
+}
+
 function publicWorkspacePathLabel(workspaceRoot, target) {
   const resolved = path.resolve(target || workspaceRoot);
   if (!isPathInside(workspaceRoot, resolved)) return 'workspace:/';
@@ -2997,9 +3114,22 @@ function updateProject(payload = {}) {
   optionalObjectPayload(payload, 'project payload');
   const { workspaceRoot, project } = resolveProject(payload, { allowArchived: true });
   const now = new Date().toISOString();
+  const nextName = Object.prototype.hasOwnProperty.call(payload, 'name') ? sanitizeProjectDisplayName(payload.name) : project.name;
+  let projectPath = project.projectPath;
+  let dirName = project.dirName;
+  if (nextName !== project.name) {
+    const linkStat = fs.lstatSync(project.projectPath);
+    if (!linkStat.isDirectory() || linkStat.isSymbolicLink()) throw new Error('Project directory is not safe to rename.');
+    const renamed = uniqueProjectRenameDir(workspaceRoot, project, nextName);
+    if (renamed.changed) {
+      fs.renameSync(project.projectPath, renamed.projectPath);
+      projectPath = renamed.projectPath;
+      dirName = renamed.dirName;
+    }
+  }
   const next = {
     id: project.id,
-    name: Object.prototype.hasOwnProperty.call(payload, 'name') ? sanitizeProjectDisplayName(payload.name) : project.name,
+    name: nextName,
     status: Object.prototype.hasOwnProperty.call(payload, 'status') ? sanitizeProjectStatus(payload.status) : project.status,
     client: Object.prototype.hasOwnProperty.call(payload, 'client') ? payload.client : project.client,
     goal: Object.prototype.hasOwnProperty.call(payload, 'goal') ? payload.goal : project.goal,
@@ -3012,8 +3142,8 @@ function updateProject(payload = {}) {
     createdAt: project.createdAt,
     updatedAt: now
   };
-  writeProjectMetadata(project.projectPath, next);
-  const updated = readProjectMetadata(project.projectPath, project.dirName);
+  writeProjectMetadata(projectPath, next);
+  const updated = readProjectMetadata(projectPath, dirName);
   ensureProjectMemory(updated);
   const state = readWorkspaceProjectState(workspaceRoot);
   if (updated.status === 'archived' && state.activeProjectId === updated.id) {
@@ -3030,6 +3160,33 @@ function updateProject(payload = {}) {
 
 function archiveProject(payload = {}) {
   return updateProject({ ...(typeof payload === 'string' ? { id: payload } : payload), status: 'archived' });
+}
+
+function deleteProject(payload = {}) {
+  optionalObjectPayload(payload, 'project payload');
+  if (payload.confirmDelete !== true && payload.deleteFilesConfirmed !== true) {
+    throw new Error('Project deletion requires explicit confirmation.');
+  }
+  const { workspaceRoot, project } = resolveProject(payload, { allowArchived: true });
+  const projectPath = path.resolve(project.projectPath);
+  if (!isPathInside(workspaceRoot, projectPath) || isSameWorkspacePath(workspaceRoot, projectPath)) {
+    throw new Error('Project path is not safe to delete.');
+  }
+  const linkStat = fs.lstatSync(projectPath);
+  if (!linkStat.isDirectory() || linkStat.isSymbolicLink()) {
+    throw new Error('Project directory is not safe to delete.');
+  }
+  fs.rmSync(projectPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  const state = readWorkspaceProjectState(workspaceRoot);
+  if (state.activeProjectId === project.id) {
+    writeWorkspaceProjectState(workspaceRoot, { activeProjectId: null });
+  }
+  return {
+    ok: true,
+    deletedProjectId: project.id,
+    deletedProjectName: project.name,
+    deletedPathLabel: publicWorkspacePathLabel(workspaceRoot, projectPath)
+  };
 }
 
 function projectStatus(payload = {}) {
@@ -3054,6 +3211,22 @@ function projectStatus(payload = {}) {
           stats: includeStats ? active.stats : undefined
         }
       : null
+  };
+}
+
+async function openProjectFolder(payload = {}) {
+  const { workspaceRoot, project } = resolveProject(payload, { allowArchived: true });
+  const target = path.resolve(project.projectPath);
+  if (!isPathInside(workspaceRoot, target) || !fs.existsSync(target) || !fs.statSync(target).isDirectory()) {
+    throw new Error('Project folder is not available.');
+  }
+  const opened = await openPathSafely(target);
+  return {
+    ok: Boolean(opened.opened),
+    opened: Boolean(opened.opened),
+    method: 'openPath',
+    pathLabel: publicWorkspacePathLabel(workspaceRoot, target),
+    error: opened.error || undefined
   };
 }
 
@@ -3122,17 +3295,15 @@ function markClaudeSessionTranscriptSeen(claudeSessionId) {
   }
 }
 
-function claudeSessionTranscriptExists(claudeSessionId) {
+function findClaudeSessionTranscript(claudeSessionId) {
   const sessionId = String(claudeSessionId || '').trim().toLowerCase();
-  if (!/^[0-9a-f-]{36}$/i.test(sessionId)) return false;
-  const cached = claudeTranscriptExistenceCache.get(sessionId);
-  if (cached?.exists && Date.now() - cached.checkedAt <= CLAUDE_TRANSCRIPT_CACHE_TTL_MS) return true;
+  if (!/^[0-9a-f-]{36}$/i.test(sessionId)) return '';
   const root = claudeProjectsRoot();
-  if (!root) return false;
+  if (!root) return '';
   try {
-    if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) return false;
+    if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) return '';
   } catch {
-    return false;
+    return '';
   }
 
   const stack = [root];
@@ -3153,17 +3324,36 @@ function claudeSessionTranscriptExists(claudeSessionId) {
         continue;
       }
       if (entry.isFile() && entry.name.toLowerCase() === `${sessionId}.jsonl`) {
-        markClaudeSessionTranscriptSeen(sessionId);
-        return true;
+        return child;
       }
     }
   }
+  return '';
+}
+
+function refreshClaudeSessionTranscriptSeen(claudeSessionId) {
+  const sessionId = String(claudeSessionId || '').trim().toLowerCase();
+  if (!/^[0-9a-f-]{36}$/i.test(sessionId)) return false;
+  if (findClaudeSessionTranscript(sessionId)) {
+    markClaudeSessionTranscriptSeen(sessionId);
+    return true;
+  }
+  claudeTranscriptExistenceCache.delete(sessionId);
   return false;
+}
+
+function claudeSessionTranscriptExists(claudeSessionId) {
+  const sessionId = String(claudeSessionId || '').trim().toLowerCase();
+  if (!/^[0-9a-f-]{36}$/i.test(sessionId)) return false;
+  const cached = claudeTranscriptExistenceCache.get(sessionId);
+  if (cached?.exists && Date.now() - cached.checkedAt <= CLAUDE_TRANSCRIPT_CACHE_TTL_MS) return true;
+  return refreshClaudeSessionTranscriptSeen(sessionId);
 }
 
 function sanitizePayload(payload = {}) {
   const settings = readSettings();
-  const prompt = String(payload.prompt || '').trim().slice(0, settings.maxPromptChars);
+  const maxPromptChars = Math.max(MIN_PROMPT_CHARS, Math.min(Number(settings.maxPromptChars) || MAX_PROMPT_CHARS, MAX_PROMPT_CHARS));
+  const userPrompt = String(payload.prompt || '').trim().slice(0, maxPromptChars);
   const hasPayloadAccessMode = Object.prototype.hasOwnProperty.call(payload, 'accessMode');
   const hasPayloadPermissionMode = Object.prototype.hasOwnProperty.call(payload, 'permissionMode');
   const hasPayloadDefaultPermissionMode = Object.prototype.hasOwnProperty.call(payload, 'defaultPermissionMode');
@@ -3190,10 +3380,11 @@ function sanitizePayload(payload = {}) {
   const model = normalizeModelName(payload.model, settings.defaultModel);
   const workspaceRoot = settings.workspaceRoot;
   fs.mkdirSync(workspaceRoot, { recursive: true });
-  const requestedProjectId = payload.projectId ? sanitizeProjectId(payload.projectId) : null;
+  const projectContextDisabled = payload.disableProjectContext === true;
+  const requestedProjectId = !projectContextDisabled && payload.projectId ? sanitizeProjectId(payload.projectId) : null;
   let projectContext = requestedProjectId
     ? projectContextFromProject(workspaceRoot, resolveProject({ id: requestedProjectId }, { allowArchived: false }).project)
-    : activeProjectContext();
+    : projectContextDisabled ? null : activeProjectContext();
   let cwd = projectContext?.projectPath || workspaceRoot;
   if (payload.cwd || payload.pathLabel) {
     const requested = String(payload.cwd || payload.pathLabel || '').trim();
@@ -3211,13 +3402,18 @@ function sanitizePayload(payload = {}) {
     ? payload.plugins
         .map((plugin) => String(plugin || '').trim())
         .filter((plugin) => /^[a-zA-Z0-9_.-]{1,80}$/.test(plugin))
+        .filter((plugin) => !isBlockedLocalSkillName(plugin))
         .slice(0, 12)
     : [];
+  const attachmentContext = ingestAgentAttachments(payload, { cwd, projectContext });
+  const prompt = composePromptWithAttachmentContext(userPrompt, attachmentContext, maxPromptChars);
 
   return {
     sessionId: sanitizeSessionId(payload.sessionId),
     claudeSessionId: sanitizeClaudeSessionId(payload.claudeSessionId || payload.conversationId, payload.sessionId),
     prompt,
+    userPrompt,
+    attachmentContext,
     accessMode: permissionPolicy.accessMode,
     permissionMode: permissionPolicy.permissionMode,
     permissionCliMode: permissionPolicy.cliMode,
@@ -3806,14 +4002,29 @@ function createWindow() {
 app.whenReady().then(createWindow);
 
 app.whenReady().then(() => {
+  const shouldPreloadKkFileView =
+    process.env.ECOREX_DISABLE_KKFILEVIEW_PRELOAD !== '1' &&
+    isKkFileViewRuntimeEnabled() &&
+    (app.isPackaged || process.env.ECOREX_PRELOAD_KKFILEVIEW === '1');
+  if (shouldPreloadKkFileView) {
+    ensureKkFileViewEngine({ preload: true }).catch((error) => {
+      kkFileViewState.lastError = error?.message || String(error);
+      writeLog('warn', 'kkFileView preload skipped', { error: safeOutputText(kkFileViewState.lastError, 1000) });
+    });
+  }
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const responseUrl = String(details.url || '');
+    if (/^http:\/\/127\.0\.0\.1:(?!5188(?:\/|$))/.test(responseUrl)) {
+      callback({ responseHeaders: details.responseHeaders });
+      return;
+    }
     callback({
       responseHeaders: {
         ...details.responseHeaders,
         'Content-Security-Policy': [
           app.isPackaged
-            ? "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'"
-            : "default-src 'self' http://127.0.0.1:5188 ws://127.0.0.1:5188; img-src 'self' data: http://127.0.0.1:5188; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-eval'; connect-src 'self' http://127.0.0.1:5188 ws://127.0.0.1:5188"
+            ? "default-src 'self'; img-src 'self' data: https: http://127.0.0.1:*; media-src 'self' data: blob: https: http://127.0.0.1:*; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' http://127.0.0.1:*; frame-src 'self' http://127.0.0.1:*"
+            : "default-src 'self' http://127.0.0.1:5188 ws://127.0.0.1:5188; img-src 'self' data: https: http://127.0.0.1:*; media-src 'self' data: blob: https: http://127.0.0.1:*; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-eval'; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:5188; frame-src 'self' http://127.0.0.1:*"
         ]
       }
     });
@@ -3826,6 +4037,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   stopAllAgents('app-quit');
+  stopKkFileViewEngine('app-quit');
 });
 
 app.on('activate', () => {
@@ -3919,6 +4131,131 @@ function publicAgentToolInput(toolName, input) {
   return safeJsonValue(input, 4000);
 }
 
+function safeLedgerText(value = '', limit = MAX_TOOL_LEDGER_SUMMARY_CHARS) {
+  return safeOutputText(value, limit)
+    .replace(/\b[A-Za-z]:\\(?:[^\\\s"'<>|]+\\)*[^\\\s"'<>|]+/g, '[local-path]')
+    .replace(/\/(?:Users|home|var|tmp|etc|Volumes)\/[^\s"'<>]+/g, '[local-path]');
+}
+
+function summarizeToolInput(input = {}) {
+  if (!input || typeof input !== 'object') return '';
+  return safeLedgerText(JSON.stringify(redactForLog(input)), MAX_TOOL_LEDGER_SUMMARY_CHARS);
+}
+
+function summarizeToolOutput(value = '') {
+  if (Array.isArray(value)) {
+    return safeLedgerText(value.map((item) => item?.text || item?.content || '').join('\n'), MAX_TOOL_LEDGER_SUMMARY_CHARS);
+  }
+  if (value && typeof value === 'object') {
+    return safeLedgerText(JSON.stringify(redactForLog(value)), MAX_TOOL_LEDGER_SUMMARY_CHARS);
+  }
+  return safeLedgerText(String(value || ''), MAX_TOOL_LEDGER_SUMMARY_CHARS);
+}
+
+function inferToolAction(toolName = '', input = {}) {
+  const name = String(toolName || '').trim();
+  if (/^WebSearch$/i.test(name)) return 'web-search';
+  if (/^WebFetch$/i.test(name)) return 'web-fetch';
+  if (/^Read$|^NotebookRead$/i.test(name)) return 'file-read';
+  if (/^Write$|^Edit$|^MultiEdit$|^NotebookEdit$/i.test(name)) return 'file-write';
+  if (/^Bash$|^PowerShell$|^Cmd$/i.test(name)) return 'command';
+  if (/^Grep$|^Glob$|^LS$/i.test(name)) return 'file-discovery';
+  if (/^Todo(Read|Write)$/i.test(name)) return 'task-list';
+  if (/^Task$|^TaskCreate$|^SendMessage$/i.test(name)) return 'sub-agent';
+  if (/^mcp__/i.test(name)) return 'mcp';
+  if (/^ToolSearch$/i.test(name)) return String(input?.query || '').toLowerCase().includes('web') ? 'tool-search-web' : 'tool-search';
+  return 'tool';
+}
+
+function toolLedgerMapForSession(sessionId) {
+  const key = String(sessionId || 'global');
+  let map = agentToolLedger.get(key);
+  if (!map) {
+    map = new Map();
+    agentToolLedger.set(key, map);
+  }
+  return map;
+}
+
+function toolLedgerStartEvent(sessionId, tool = {}) {
+  const toolUseId = String(tool.id || crypto.randomUUID());
+  const toolName = String(tool.name || 'tool').trim() || 'tool';
+  const now = Date.now();
+  const entry = {
+    toolUseId,
+    toolName,
+    action: inferToolAction(toolName, tool.input || {}),
+    inputSummary: summarizeToolInput(tool.input || {}),
+    startedAt: now
+  };
+  toolLedgerMapForSession(sessionId).set(toolUseId, entry);
+  return {
+    type: 'tool',
+    phase: 'start',
+    toolUseId: publicStableId('tool-use', toolUseId),
+    toolName: publicAgentToolName(toolName),
+    action: entry.action,
+    inputSummary: entry.inputSummary,
+    startedAt: new Date(now).toISOString()
+  };
+}
+
+function toolLedgerFinishEvent(sessionId, toolUseId, result = {}) {
+  const sessionMap = toolLedgerMapForSession(sessionId);
+  const rawToolUseId = String(toolUseId || '').trim();
+  const started = sessionMap.get(rawToolUseId);
+  const now = Date.now();
+  const toolName = result.toolName || started?.toolName || 'tool';
+  const failed = Boolean(result.failed || result.isError || result.error);
+  return {
+    type: 'tool',
+    phase: 'finish',
+    toolUseId: rawToolUseId ? publicStableId('tool-use', rawToolUseId) : undefined,
+    toolName: publicAgentToolName(toolName),
+    action: started?.action || inferToolAction(toolName, {}),
+    inputSummary: started?.inputSummary || '',
+    outputSummary: summarizeToolOutput(result.output || result.text || ''),
+    status: failed ? 'failed' : 'completed',
+    exit: result.exitCode ?? undefined,
+    error: failed ? safeLedgerText(result.error || result.text || 'tool failed', 500) : undefined,
+    startedAt: started?.startedAt ? new Date(started.startedAt).toISOString() : undefined,
+    endedAt: new Date(now).toISOString(),
+    durationMs: started?.startedAt ? now - started.startedAt : undefined
+  };
+}
+
+function safeToolLedger(ledger = {}) {
+  if (!ledger || typeof ledger !== 'object') return undefined;
+  return {
+    type: ledger.type === 'tool' ? 'tool' : 'task',
+    phase: safeLedgerText(ledger.phase || '', 40),
+    toolUseId: ledger.toolUseId || undefined,
+    toolName: ledger.toolName ? safeLedgerText(ledger.toolName, 120) : undefined,
+    action: ledger.action ? safeLedgerText(ledger.action, 80) : undefined,
+    inputSummary: ledger.inputSummary ? safeLedgerText(ledger.inputSummary) : undefined,
+    outputSummary: ledger.outputSummary ? safeLedgerText(ledger.outputSummary) : undefined,
+    status: ledger.status ? safeLedgerText(ledger.status, 80) : undefined,
+    exit: ledger.exit,
+    error: ledger.error ? safeLedgerText(ledger.error, 500) : undefined,
+    startedAt: ledger.startedAt || undefined,
+    endedAt: ledger.endedAt || undefined,
+    durationMs: Number.isFinite(Number(ledger.durationMs)) ? Number(ledger.durationMs) : undefined
+  };
+}
+
+function inferredToolLedgerFromPayload(sessionId, payload = {}, status = '') {
+  if (payload.ledger || payload.kind !== 'tool') return undefined;
+  const isTerminal = status === 'completed' || status === 'failed';
+  if (!isTerminal || !payload.toolUseId) return undefined;
+  return toolLedgerFinishEvent(sessionId, payload.toolUseId, {
+    toolName: payload.toolName || payload.name || 'tool',
+    failed: status === 'failed',
+    output: payload.text || '',
+    text: payload.text || '',
+    error: status === 'failed' ? payload.text || '' : ''
+  });
+}
+
 function normalizeAgentEvent(payload = {}, options = {}) {
   const now = new Date().toISOString();
   const kind = String(payload.kind || 'debug').trim() || 'debug';
@@ -3938,6 +4275,7 @@ function normalizeAgentEvent(payload = {}, options = {}) {
     payload.taskId ||
     `${sessionId || 'agent'}:${taskType}:${String(taskName).toLowerCase().replace(/[^a-z0-9_.:-]+/g, '-').slice(0, 80)}`;
   const text = safeOutputText(payload.text || '', options.textLimit || MAX_AGENT_EVENT_TEXT_CHARS);
+  const ledger = payload.ledger || inferredToolLedgerFromPayload(sessionId, payload, status);
   const safeTools = Array.isArray(payload.tools)
     ? payload.tools.slice(0, 20).map((tool, index) => ({
         id: tool?.id ? publicStableId('capability', tool.id) : `capability-${index + 1}`,
@@ -3969,6 +4307,7 @@ function normalizeAgentEvent(payload = {}, options = {}) {
   };
 
   if (safeTools) event.tools = safeTools;
+  if (ledger) event.ledger = safeToolLedger(ledger);
   if (event.toolName) event.toolName = publicAgentToolLabel(event.toolName);
   if (options.includeBackend !== true) {
     delete event.permissionCliMode;
@@ -4052,18 +4391,19 @@ function emitAgentEvent(payload, options = {}) {
     setAgentStreamsPaused(sessionId, true);
   }
   if (queue.events.length > HARD_MAX_AGENT_EVENT_QUEUE) {
-    const overflow = queue.events.length - HARD_MAX_AGENT_EVENT_QUEUE;
-    queue.dropped += overflow;
+    const retainedEventCount = HARD_MAX_AGENT_EVENT_QUEUE - 1;
+    const droppedEvents = queue.events.length - retainedEventCount;
+    queue.dropped += droppedEvents;
     queue.events = [
       normalizeAgentEvent({
         sessionId,
         kind: 'status',
         status: 'backpressure',
-        text: `EcoreX buffered ${overflow} older events under renderer backpressure. Session transcript retained the durable summary.`
+        text: `EcoreX buffered ${droppedEvents} older events under renderer backpressure. Session transcript retained the durable summary.`
       }, { includeRaw: false }),
-      ...queue.events.slice(-HARD_MAX_AGENT_EVENT_QUEUE)
+      ...queue.events.slice(-retainedEventCount)
     ];
-    writeLog('error', 'Agent event queue hard limit reached', { sessionId, overflow });
+    writeLog('error', 'Agent event queue hard limit reached', { sessionId, droppedEvents });
   }
   if (queue.events.length >= AGENT_EVENT_PAUSE_HIGH_WATER) {
     setAgentStreamsPaused(sessionId, true);
@@ -4281,7 +4621,7 @@ function claimAgentStart(payload = {}, options = {}) {
     status: 'starting',
     state: 'running',
     runtimeKind: AGENT_RUNTIME_KIND,
-    promptPreview: publicPromptPreview(payload.prompt),
+    promptPreview: publicPromptPreview(payload.userPrompt || payload.prompt),
     workspacePath: publicWorkspacePath(payload.cwd),
     model: payload.model,
     accessMode: payload.accessMode,
@@ -4343,6 +4683,7 @@ function finalizeAgentSession(sessionId, entry, details = {}) {
   if (!entry || entry.finished) return false;
   entry.finished = true;
   runningAgents.delete(sessionId);
+  agentToolLedger.delete(sessionId);
   disposeAgentSessionActor(sessionId, details.reason || details.status || 'stopped');
   clearAgentTimers(entry);
   if (typeof entry.flushBufferedOutput === 'function') {
@@ -4361,6 +4702,13 @@ function finalizeAgentSession(sessionId, entry, details = {}) {
     recoveryHint: status === 'completed' ? undefined : agentRecoveryHint(status, details)
   };
   recordSessionEvent(entry, event);
+  appendRunJournalEntry(sessionId, entry, status, {
+    event: 'finish',
+    reason: details.reason,
+    code: details.code,
+    signal: details.signal,
+    endedAt: Date.now()
+  });
   writeSessionTranscript(sessionId, entry, {
     status,
     reason: details.reason,
@@ -4611,7 +4959,13 @@ async function runClaudeCommand(args, options = {}) {
   if (!claude.command) {
     return { ok: false, code: -1, stdout: '', stderr: 'Local agent bridge was not found.' };
   }
-  return commandOutput(claude.command, [...claude.baseArgs, ...args], options);
+  return commandOutput(claude.command, [...claude.baseArgs, ...args], {
+    ...options,
+    env: {
+      ...isolatedAgentRuntimeEnv(),
+      ...(options.env || {})
+    }
+  });
 }
 
 function parsePluginInventory() {
@@ -4631,6 +4985,7 @@ function parsePluginInventory() {
     const pluginName = String(plugin.name || '').trim();
     const fallbackSource = `plugins/${pluginName.replace(/[^a-zA-Z0-9_.-]/g, '')}`;
     const source = String(plugin.source || '').replace(/^\.\//, '') || fallbackSource;
+    if (isBlockedLocalSkillName(pluginName) || isBlockedLocalSkillName(source)) return null;
     const requestedRoot = path.resolve(repoRoot, source);
     const pluginRoot = isPathInside(safeRepoRoot, requestedRoot) ? requestedRoot : path.resolve(repoRoot, fallbackSource);
     const safeList = (relative) => {
@@ -4669,7 +5024,7 @@ function parsePluginInventory() {
       source: path.relative(repoRoot, pluginRoot).replace(/\\/g, '/'),
       available: fs.existsSync(pluginRoot)
     };
-  });
+  }).filter(Boolean);
 }
 
 function sourceMapStats() {
@@ -5117,6 +5472,7 @@ async function buildBackendStatus() {
     skillPacks: {
       summary: plugins?.ok ? 'Skill inventory is available.' : 'Skill inventory is unavailable.'
     },
+    previewEngine: publicKkFileViewStatus(),
     sourceMap: publicSourceMapStats()
   };
 }
@@ -5184,6 +5540,8 @@ function publicSessionSummary(sessionId, entry = {}, now = Date.now()) {
     permissionLabel: entry.permissionLabel || permissionPolicy.label,
     permissionPolicy,
     fullAccess: Boolean(entry.permissionSnapshot?.fullAccess || permissionPolicy.fullAccess),
+    attachmentCount: Number(entry.attachmentCount) || 0,
+    ledgerEventCount: Number(entry.ledgerEventCount) || 0,
     eventCount: Array.isArray(entry.transcript) ? entry.transcript.length : 0
   };
 }
@@ -5245,6 +5603,13 @@ function recordSessionEvent(entry, event) {
     entry.actor.state = normalized.state || entry.actor.state;
     entry.actor.lastActivityAt = entry.lastActivityAt;
   }
+  if (normalized.claudeResultStatus === 'failed') {
+    entry.claudeResultFailed = true;
+  }
+  if (normalized.ledger) {
+    entry.ledgerEventCount = (Number(entry.ledgerEventCount) || 0) + 1;
+  }
+  registerAgentArtifactsFromEvent(entry, normalized);
   entry.transcript.push({
     time: normalized.time,
     kind: normalized.kind,
@@ -5252,6 +5617,7 @@ function recordSessionEvent(entry, event) {
     state: normalized.state,
     detailStatus: normalized.detailStatus,
     task: normalized.task,
+    ledger: normalized.ledger ? safeToolLedger(normalized.ledger) : undefined,
     textPreview: safeTranscriptTextPreview(normalized.text)
   });
   if (entry.transcript.length > MAX_TRANSCRIPT_EVENTS) {
@@ -5278,6 +5644,8 @@ function writeSessionTranscript(sessionId, entry, result = {}) {
     projectName: entry.projectName || '',
     projectPath: entry.projectPath || '',
     projectMemoryLabel: entry.projectMemoryLabel || '',
+    attachmentCount: Number(entry.attachmentCount) || 0,
+    ledgerEventCount: Number(entry.ledgerEventCount) || 0,
     startedAt: new Date(entry.startedAt).toISOString(),
     endedAt: new Date(endedAt).toISOString(),
     durationMs: endedAt - entry.startedAt,
@@ -5295,6 +5663,112 @@ function writeSessionTranscript(sessionId, entry, result = {}) {
   }
 }
 
+function journalSessionSummary(sessionId, entry = {}, status = 'running', details = {}) {
+  return {
+    schema: 'ecorex.run-journal.v1',
+    time: new Date().toISOString(),
+    event: details.event || status,
+    sessionId,
+    publicSessionId: publicStableId('session', sessionId),
+    status,
+    reason: details.reason,
+    exitCode: details.code,
+    signal: details.signal,
+    startedAt: entry.startedAt ? new Date(entry.startedAt).toISOString() : undefined,
+    endedAt: details.endedAt ? new Date(details.endedAt).toISOString() : undefined,
+    durationMs: details.endedAt && entry.startedAt ? details.endedAt - entry.startedAt : undefined,
+    promptFingerprint: entry.promptHash ? String(entry.promptHash).slice(0, 12) : undefined,
+    workspacePath: entry.workspacePath || publicWorkspacePath(entry.cwd),
+    projectId: entry.projectId || null,
+    projectName: entry.projectName || '',
+    projectPath: entry.projectPath || '',
+    model: entry.model || null,
+    accessMode: entry.accessMode || undefined,
+    permissionMode: entry.permissionMode || undefined,
+    attachmentCount: Number(entry.attachmentCount) || 0,
+    ledgerEventCount: Number(entry.ledgerEventCount) || 0
+  };
+}
+
+function appendRunJournalEntry(sessionId, entry = {}, status = 'running', details = {}) {
+  const file = runJournalPath();
+  const payload = redactForLog(journalSessionSummary(sessionId, entry, status, details));
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.appendFileSync(file, `${JSON.stringify(payload)}\n`, 'utf8');
+    trimRunJournalFile(file);
+  } catch (error) {
+    writeLog('warn', 'Failed to append agent run journal', {
+      sessionId,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+}
+
+function trimRunJournalFile(file = runJournalPath()) {
+  try {
+    const stat = fs.statSync(file);
+    if (stat.size <= MAX_RUN_JOURNAL_BYTES) return;
+    const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).slice(-MAX_RUN_JOURNAL_ENTRIES);
+    fs.writeFileSync(file, `${lines.join('\n')}\n`, 'utf8');
+  } catch {
+    // Journal trimming is best-effort and must not affect task execution.
+  }
+}
+
+function readRunJournalEntries(limit = MAX_RUN_JOURNAL_ENTRIES) {
+  try {
+    const file = runJournalPath();
+    if (!fs.existsSync(file)) return [];
+    const stat = fs.statSync(file);
+    const start = Math.max(0, stat.size - MAX_RUN_JOURNAL_BYTES);
+    const fd = fs.openSync(file, 'r');
+    const buffer = Buffer.alloc(stat.size - start);
+    fs.readSync(fd, buffer, 0, buffer.length, start);
+    fs.closeSync(fd);
+    return buffer
+      .toString('utf8')
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .slice(-Math.min(Math.max(Number(limit) || 1, 1), MAX_RUN_JOURNAL_ENTRIES))
+      .map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function recentUnfinishedRunJournals(limit = 20) {
+  const latestBySession = new Map();
+  for (const entry of readRunJournalEntries(MAX_RUN_JOURNAL_ENTRIES)) {
+    if (!entry?.sessionId) continue;
+    latestBySession.set(entry.sessionId, entry);
+  }
+  return [...latestBySession.values()]
+    .filter((entry) => entry.event === 'start' || entry.status === 'running' || entry.status === 'started')
+    .sort((left, right) => new Date(right.time).getTime() - new Date(left.time).getTime())
+    .slice(0, Math.min(Math.max(Number(limit) || 1, 1), 50))
+    .map((entry) => ({
+      sessionId: entry.publicSessionId || publicStableId('session', entry.sessionId),
+      status: entry.status || 'running',
+      startedAt: entry.startedAt || entry.time,
+      workspacePath: entry.workspacePath,
+      projectId: entry.projectId || null,
+      projectName: entry.projectName || '',
+      model: entry.model || null,
+      accessMode: entry.accessMode,
+      permissionMode: entry.permissionMode,
+      attachmentCount: Number(entry.attachmentCount) || 0,
+      ledgerEventCount: Number(entry.ledgerEventCount) || 0
+    }));
+}
+
 function publicTranscriptEventSummary(event = {}, index = 0) {
   const kind = String(event.kind || 'status').slice(0, 40);
   const status = String(event.status || event.state || kind).slice(0, 80);
@@ -5307,6 +5781,7 @@ function publicTranscriptEventSummary(event = {}, index = 0) {
     status,
     state: event.state,
     task: taskName ? { name: taskName, type: event.task?.type || kind } : undefined,
+    ledger: event.ledger ? safeToolLedger(event.ledger) : undefined,
     textPreview
   };
 }
@@ -5334,6 +5809,8 @@ function sessionTranscriptSummaryFromFile(file, options = {}) {
       projectName: raw.projectName || '',
       projectPath: raw.projectPath || '',
       projectMemoryLabel: raw.projectMemoryLabel || '',
+      attachmentCount: Number(raw.attachmentCount) || 0,
+      ledgerEventCount: Number(raw.ledgerEventCount) || 0,
       startedAt: raw.startedAt,
       endedAt: raw.endedAt,
       modifiedAt: stat.mtime.toISOString(),
@@ -5418,6 +5895,1483 @@ function fileSummary(filePath) {
   }
 }
 
+function filePreviewMimeFromExtension(extension = '') {
+  if (extension === '.png') return 'image/png';
+  if (extension === '.jpg' || extension === '.jpeg') return 'image/jpeg';
+  if (extension === '.webp') return 'image/webp';
+  if (extension === '.gif') return 'image/gif';
+  if (extension === '.svg') return 'image/svg+xml';
+  if (extension === '.pdf') return 'application/pdf';
+  if (extension === '.html' || extension === '.htm') return 'text/html';
+  if (extension === '.md' || extension === '.markdown') return 'text/markdown';
+  if (extension === '.json' || extension === '.jsonl') return 'application/json';
+  if (extension === '.csv') return 'text/csv';
+  if (extension === '.css') return 'text/css';
+  if (['.js', '.mjs', '.cjs'].includes(extension)) return 'text/javascript';
+  if (extension === '.docx') return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  if (extension === '.doc') return 'application/msword';
+  if (extension === '.xlsx') return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  if (extension === '.xls') return 'application/vnd.ms-excel';
+  if (extension === '.pptx') return 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+  if (extension === '.ppt') return 'application/vnd.ms-powerpoint';
+  if (extension === '.txt' || extension === '.log') return 'text/plain';
+  return 'application/octet-stream';
+}
+
+function filePreviewLanguageFromExtension(extension = '') {
+  if (extension === '.html' || extension === '.htm') return 'html';
+  if (extension === '.md' || extension === '.markdown') return 'markdown';
+  if (extension === '.json' || extension === '.jsonl') return 'json';
+  if (extension === '.csv') return 'csv';
+  if (extension === '.css') return 'css';
+  if (['.js', '.mjs', '.cjs'].includes(extension)) return 'javascript';
+  if (extension === '.log') return 'log';
+  return 'text';
+}
+
+function isImagePreviewExtension(extension = '') {
+  return FILE_PREVIEW_IMAGE_EXTENSIONS.has(String(extension || '').toLowerCase());
+}
+
+function isDocumentMetadataPreviewExtension(extension = '') {
+  return FILE_PREVIEW_DOCUMENT_EXTENSIONS.has(String(extension || '').toLowerCase());
+}
+
+function isHtmlPreviewExtension(extension = '') {
+  return extension === '.html' || extension === '.htm';
+}
+
+function filePreviewRenderMode(extension = '') {
+  if (isHtmlPreviewExtension(extension)) return 'sandbox-srcdoc';
+  if (extension === '.md' || extension === '.markdown') return 'markdown';
+  if (extension === '.json' || extension === '.jsonl') return 'json';
+  if (extension === '.csv') return 'csv';
+  if (extension === '.css') return 'code';
+  if (['.js', '.mjs', '.cjs'].includes(extension)) return 'code';
+  return 'text';
+}
+
+function resolveWorkspacePathLabel(label = '', workspaceRoot = readSettings().workspaceRoot) {
+  const raw = String(label || '').trim();
+  if (!raw || !raw.startsWith('workspace:/')) return '';
+  return path.resolve(workspaceRoot, sanitizeWorkspaceRelativePath(raw.replace(/^workspace:\//, '')));
+}
+
+function filePreviewArtifactExtensions() {
+  return new Set([
+    ...FILE_PREVIEW_TEXT_EXTENSIONS,
+    ...FILE_PREVIEW_IMAGE_EXTENSIONS,
+    ...FILE_PREVIEW_DOCUMENT_EXTENSIONS,
+    ...KKFILEVIEW_DOCUMENT_EXTENSIONS
+  ]);
+}
+
+function isPreviewableArtifactExtension(target = '') {
+  return filePreviewArtifactExtensions().has(path.extname(target).toLowerCase());
+}
+
+function pruneAgentArtifactAccess(now = Date.now()) {
+  for (const [key, entry] of agentArtifactAccess.entries()) {
+    if (!entry || entry.expiresAt <= now) agentArtifactAccess.delete(key);
+  }
+  if (agentArtifactAccess.size <= MAX_AGENT_ARTIFACT_ACCESS) return;
+  const entries = [...agentArtifactAccess.entries()].sort((left, right) => left[1].createdAt - right[1].createdAt);
+  for (const [key] of entries.slice(0, agentArtifactAccess.size - MAX_AGENT_ARTIFACT_ACCESS)) {
+    agentArtifactAccess.delete(key);
+  }
+}
+
+function agentArtifactKey(sessionId, target) {
+  return `${sanitizeSessionId(sessionId)}:${path.resolve(target).toLowerCase()}`;
+}
+
+function cleanPreviewArtifactPath(raw = '') {
+  return String(raw || '')
+    .trim()
+    .replace(/^['"`<([{]+/, '')
+    .replace(/['"`>)\]}.,;，。；：:]+$/g, '')
+    .replace(/(?:#L?\d+(?:-L?\d+)?|:\d+(?::\d+)?)$/i, '')
+    .trim();
+}
+
+function extractPreviewArtifactTargets(text = '', workspaceRoot = readSettings().workspaceRoot) {
+  const source = String(text || '');
+  if (!source) return [];
+  const extPattern = [...filePreviewArtifactExtensions()]
+    .map((extension) => extension.replace(/^\./, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|');
+  const targets = [];
+
+  const addTarget = (rawValue) => {
+    const raw = cleanPreviewArtifactPath(rawValue);
+    if (!raw) return;
+    try {
+      const target = candidatePreviewPath(raw, workspaceRoot);
+      if (isPreviewableArtifactExtension(target) && !targets.some((item) => isSameWorkspacePath(item, target))) {
+        targets.push(target);
+      }
+    } catch {
+      // Ignore non-local or malformed path-like text.
+    }
+  };
+
+  const pathPatterns = [
+    new RegExp(
+      `(?:[A-Za-z]:[\\\\/]|workspace:/|\\.{1,2}[\\\\/]|~[\\\\/]|/|[A-Za-z0-9_.-]+[\\\\/])(?:[^\\s<>"'\`|]+[\\\\/])*[^\\s<>"'\`|]+?\\.(?:${extPattern})(?:#L?\\d+(?:-L?\\d+)?|:\\d+(?::\\d+)?)?`,
+      'gi'
+    ),
+    new RegExp(
+      `(?:[A-Za-z]:[\\\\/]|workspace:/|\\.{1,2}[\\\\/]|~[\\\\/]|/)[^\\r\\n<>"'\`|]{0,900}?\\.(?:${extPattern})(?:#L?\\d+(?:-L?\\d+)?|:\\d+(?::\\d+)?)?`,
+      'gi'
+    )
+  ];
+
+  for (const pattern of pathPatterns) {
+    for (const match of source.matchAll(pattern)) {
+      addTarget(match[1] || match[0]);
+      if (targets.length >= 24) return targets.slice(0, 24);
+    }
+  }
+  return targets.slice(0, 24);
+}
+
+function artifactCreationEvidenceText(event = {}) {
+  return [
+    event.text,
+    event.textPreview,
+    event.ledger?.inputSummary,
+    event.ledger?.outputSummary,
+    event.ledger?.error,
+    Array.isArray(event.tools) ? JSON.stringify(event.tools) : ''
+  ].filter(Boolean).join('\n');
+}
+
+function eventLooksLikeArtifactWrite(event = {}) {
+  if (event.kind !== 'tool') return false;
+  const text = artifactCreationEvidenceText(event);
+  return /(File created successfully|created successfully|created at|wrote|written|saved|generated|updated|modified|write|edit|创建|写入|保存|生成|更新|修改)/i.test(text);
+}
+
+function registerAgentArtifactAccess(sessionId, target, context = {}) {
+  const safeSessionId = sanitizeSessionId(sessionId);
+  if (!safeSessionId || !target || !isPreviewableArtifactExtension(target)) return;
+  pruneAgentArtifactAccess();
+  const resolved = path.resolve(target);
+  agentArtifactAccess.set(agentArtifactKey(safeSessionId, resolved), {
+    sessionId: safeSessionId,
+    target: resolved,
+    source: context.source || 'agent-tool',
+    createdAt: Date.now(),
+    expiresAt: Date.now() + AGENT_ARTIFACT_ACCESS_TTL_MS
+  });
+}
+
+function registerAgentArtifactsFromEvent(entry, event = {}) {
+  const sessionId = event.sessionId || entry?.sessionId;
+  if (!sessionId || !eventLooksLikeArtifactWrite(event)) return;
+  const workspaceRoot = readSettings().workspaceRoot;
+  const evidence = artifactCreationEvidenceText(event);
+  for (const target of extractPreviewArtifactTargets(evidence, workspaceRoot)) {
+    registerAgentArtifactAccess(sessionId, target, { source: 'agent-tool-event' });
+  }
+}
+
+function sessionTranscriptForPreview(sessionId) {
+  const safeSessionId = sanitizeSessionId(sessionId);
+  if (!safeSessionId) return null;
+  try {
+    const dir = sessionTranscriptDir();
+    const entry = fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((item) => item.isFile() && item.name.endsWith(`${safeSessionId}.json`))
+      .map((item) => path.join(dir, item.name))
+      .sort()
+      .at(-1);
+    if (!entry) return null;
+    const stat = fs.statSync(entry);
+    if (!stat.isFile() || stat.size > MAX_RUN_JOURNAL_BYTES) return null;
+    return JSON.parse(fs.readFileSync(entry, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function transcriptAuthorizesAgentArtifact(sessionId, target, workspaceRoot) {
+  const transcript = sessionTranscriptForPreview(sessionId);
+  if (!transcript || !Array.isArray(transcript.events)) return false;
+  const resolved = path.resolve(target);
+  return transcript.events.some((event) => {
+    if (!eventLooksLikeArtifactWrite(event)) return false;
+    return extractPreviewArtifactTargets(artifactCreationEvidenceText(event), workspaceRoot)
+      .some((candidate) => isSameWorkspacePath(candidate, resolved));
+  });
+}
+
+function isRegisteredAgentArtifact(target, input = {}, workspaceRoot = readSettings().workspaceRoot) {
+  pruneAgentArtifactAccess();
+  const sessionId = input.sessionId || input.agentSessionId;
+  if (!sessionId) return false;
+  const resolved = path.resolve(target);
+  const entry = agentArtifactAccess.get(agentArtifactKey(sessionId, resolved));
+  if (entry) return true;
+  return transcriptAuthorizesAgentArtifact(sessionId, resolved, workspaceRoot);
+}
+
+function addSessionPreviewRoots(roots, sessionId, workspaceRoot) {
+  const addRoot = (kind, label, root) => {
+    const value = String(root || '').trim();
+    if (!value) return;
+    const resolved = path.resolve(value);
+    if (!roots.some((entry) => isSameWorkspacePath(entry.root, resolved))) roots.push({ kind, label, root: resolved });
+  };
+  const safeSessionId = sanitizeSessionId(sessionId);
+  if (!safeSessionId) return;
+  const running = runningAgents.get(safeSessionId);
+  if (running?.cwd) addRoot('session', 'session', running.cwd);
+  if (running?.projectId) {
+    try {
+      addRoot('project', 'project', resolveProject({ id: running.projectId }, { allowArchived: true }).project.projectPath);
+    } catch {
+      // Historical project context may have been deleted or renamed.
+    }
+  }
+  const transcript = sessionTranscriptForPreview(safeSessionId);
+  if (!transcript) return;
+  const workspacePath = resolveWorkspacePathLabel(transcript.workspacePath, workspaceRoot);
+  const projectPath = resolveWorkspacePathLabel(transcript.projectPath, workspaceRoot);
+  addRoot('session', 'session', workspacePath);
+  addRoot('project', 'project', projectPath);
+}
+
+function filePreviewAllowedRoots(context = {}) {
+  const roots = [];
+  const addRoot = (kind, label, root) => {
+    const value = String(root || '').trim();
+    if (!value) return;
+    const resolved = path.resolve(value);
+    if (!roots.some((entry) => isSameWorkspacePath(entry.root, resolved))) roots.push({ kind, label, root: resolved });
+  };
+  try {
+    addRoot('workspace', 'workspace', readSettings().workspaceRoot);
+  } catch {
+    addRoot('workspace', 'workspace', defaultWorkspaceRoot());
+  }
+  const workspaceRoot = roots.find((root) => root.kind === 'workspace')?.root || defaultWorkspaceRoot();
+  if (context.projectId) {
+    try {
+      addRoot('project', 'project', resolveProject({ id: context.projectId }, { allowArchived: true }).project.projectPath);
+    } catch {
+      // Project-scoped preview falls back to the active workspace roots.
+    }
+  }
+  addSessionPreviewRoots(roots, context.sessionId || context.agentSessionId, workspaceRoot);
+  addRoot('diagnostics', 'diagnostics', diagnosticsExportDir());
+  addRoot('sessions', 'sessions', sessionTranscriptDir());
+  addRoot('runtime', 'runtime', process.cwd());
+  addRoot('app', 'app', ROOT_DIR);
+  return roots;
+}
+
+function candidatePreviewPath(rawPath, workspaceRoot) {
+  const raw = String(rawPath || '').trim();
+  if (!raw || raw.includes('\0') || raw.length > 1000) throw new Error('Invalid file preview path.');
+  if (raw.startsWith('workspace:/')) {
+    return path.resolve(workspaceRoot, sanitizeWorkspaceRelativePath(raw.replace(/^workspace:\//, '')));
+  }
+  if (/^file:/i.test(raw)) return path.resolve(fileURLToPath(raw));
+  if (/^[a-zA-Z][a-zA-Z\d+.-]*:\/\//.test(raw)) throw new Error('File preview only supports local files.');
+  const resolved = path.resolve(raw);
+  return path.isAbsolute(raw) ? resolved : path.resolve(workspaceRoot, raw);
+}
+
+function resolveFilePreviewTarget(payload = {}) {
+  const input = optionalObjectPayload(payload, 'file preview payload');
+  const roots = filePreviewAllowedRoots(input);
+  const workspaceRoot = roots.find((root) => root.kind === 'workspace')?.root || defaultWorkspaceRoot();
+  const rawPath = input.path || input.filePath || input.pathLabel || input.url;
+  const target = candidatePreviewPath(rawPath, workspaceRoot);
+  let root = roots.find((entry) => isPathInside(entry.root, target));
+  if (!root && isRegisteredSelectedAttachment(target, input)) {
+    root = { kind: 'selected', label: 'selected', root: path.dirname(target) };
+  }
+  if (!root && isRegisteredAgentArtifact(target, input, workspaceRoot)) {
+    root = { kind: 'agent-artifact', label: 'artifact', root: path.dirname(target) };
+  }
+  if (!root) throw new Error('File preview path is outside allowed roots.');
+  if (pathContainsSymlink(root.root, target)) throw new Error('File preview path crosses a symbolic link.');
+  return { target, root };
+}
+
+function filePreviewPathLabel(target, root) {
+  if (root?.kind === 'workspace' || root?.kind === 'project' || root?.kind === 'session') return publicWorkspacePathLabel(root.root, target);
+  if (root?.kind === 'selected') return `selected:/${redactSensitiveText(path.basename(target)).slice(0, 240)}`;
+  if (root?.kind === 'agent-artifact') return `artifact:/${redactSensitiveText(path.basename(target)).slice(0, 240)}`;
+  const relative = path.relative(root.root, target).replace(/\\/g, '/');
+  return `${root?.label || 'local'}:/${relative}`;
+}
+
+function looksLikeBinaryBuffer(buffer) {
+  if (!Buffer.isBuffer(buffer) || !buffer.length) return false;
+  const sample = buffer.subarray(0, Math.min(buffer.length, 4096));
+  let controlCount = 0;
+  for (const byte of sample) {
+    if (byte === 0) return true;
+    if (byte < 7 || (byte > 13 && byte < 32)) controlCount += 1;
+  }
+  return controlCount / sample.length > 0.08;
+}
+
+function sha256Hex(buffer) {
+  return crypto.createHash('sha256').update(buffer).digest('hex');
+}
+
+function safeAttachmentName(value = '', fallback = 'attachment') {
+  const name = redactSensitiveText(path.basename(String(value || '').trim() || fallback))
+    .replace(/[\r\n\t]+/g, ' ')
+    .slice(0, 240);
+  return name || fallback;
+}
+
+function isTextAttachmentMime(mimeType = '', extension = '') {
+  const mime = String(mimeType || '').toLowerCase();
+  if (mime.startsWith('text/')) return true;
+  if (mime === 'application/json' || mime === 'application/x-ndjson') return true;
+  return FILE_PREVIEW_TEXT_EXTENSIONS.has(String(extension || '').toLowerCase());
+}
+
+function isImageAttachmentMime(mimeType = '') {
+  return /^image\/(png|jpe?g|webp|gif|svg\+xml)$/i.test(String(mimeType || ''));
+}
+
+function parseAttachmentDataUrl(value = '') {
+  const raw = String(value || '').trim();
+  if (!raw || raw.length > ATTACHMENT_DATA_URL_MAX_CHARS || !raw.startsWith('data:')) return null;
+  const match = raw.match(/^data:([^;,]+)?(;base64)?,([\s\S]*)$/i);
+  if (!match) return null;
+  const mimeType = (match[1] || 'application/octet-stream').toLowerCase();
+  const isBase64 = Boolean(match[2]);
+  try {
+    const body = isBase64
+      ? Buffer.from(match[3] || '', 'base64')
+      : Buffer.from(decodeURIComponent(match[3] || ''), 'utf8');
+    return { mimeType, buffer: body, isBase64 };
+  } catch {
+    return null;
+  }
+}
+
+function publicAttachmentPathLabel(target, root) {
+  if (root?.kind === 'workspace' || root?.kind === 'project' || root?.kind === 'cwd') {
+    return publicWorkspacePathLabel(root.root, target);
+  }
+  if (root?.kind === 'selected') return `selected:/${safeAttachmentName(target)}`;
+  return filePreviewPathLabel(target, root);
+}
+
+function attachmentAllowedRoots(context = {}) {
+  const roots = [];
+  const addRoot = (kind, label, root) => {
+    const value = String(root || '').trim();
+    if (!value) return;
+    const resolved = path.resolve(value);
+    if (!roots.some((entry) => isSameWorkspacePath(entry.root, resolved))) {
+      roots.push({ kind, label, root: resolved });
+    }
+  };
+  try {
+    addRoot('workspace', 'workspace', readSettings().workspaceRoot);
+  } catch {
+    addRoot('workspace', 'workspace', defaultWorkspaceRoot());
+  }
+  addRoot('project', 'project', context.projectContext?.projectPath);
+  addRoot('cwd', 'cwd', context.cwd);
+  return roots;
+}
+
+function pruneSelectedAttachmentAccess(now = Date.now()) {
+  for (const [key, entry] of selectedAttachmentAccess.entries()) {
+    if (!entry || entry.expiresAt <= now) selectedAttachmentAccess.delete(key);
+  }
+  if (selectedAttachmentAccess.size <= MAX_SELECTED_ATTACHMENT_ACCESS) return;
+  const entries = [...selectedAttachmentAccess.entries()].sort((left, right) => left[1].selectedAt - right[1].selectedAt);
+  for (const [key] of entries.slice(0, selectedAttachmentAccess.size - MAX_SELECTED_ATTACHMENT_ACCESS)) {
+    selectedAttachmentAccess.delete(key);
+  }
+}
+
+function registerSelectedAttachmentAccess(filePath, summary = {}) {
+  pruneSelectedAttachmentAccess();
+  const target = path.resolve(filePath);
+  selectedAttachmentAccess.set(target, {
+    id: String(summary.id || '').trim(),
+    name: safeAttachmentName(summary.name || target),
+    sizeBytes: Number(summary.sizeBytes) || 0,
+    modifiedAt: summary.modifiedAt || null,
+    selectedAt: Date.now(),
+    expiresAt: Date.now() + SELECTED_ATTACHMENT_ACCESS_TTL_MS
+  });
+}
+
+function isRegisteredSelectedAttachment(target, input = {}) {
+  pruneSelectedAttachmentAccess();
+  const entry = selectedAttachmentAccess.get(path.resolve(target));
+  if (!entry) return false;
+  const requestedId = String(input.id || input.attachmentId || '').trim();
+  if (!requestedId || !entry.id || requestedId !== entry.id) return false;
+  try {
+    const stat = fs.statSync(target);
+    if (!stat.isFile()) return false;
+    if (entry.sizeBytes && stat.size !== entry.sizeBytes) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function candidateAttachmentPath(rawPath, workspaceRoot) {
+  const raw = String(rawPath || '').trim();
+  if (!raw || raw.includes('\0') || raw.length > 1000) throw new Error('Invalid attachment path.');
+  if (raw.startsWith('workspace:/')) {
+    return path.resolve(workspaceRoot, sanitizeWorkspaceRelativePath(raw.replace(/^workspace:\//, '')));
+  }
+  if (/^file:/i.test(raw)) return path.resolve(fileURLToPath(raw));
+  if (/^[a-zA-Z][a-zA-Z\d+.-]*:\/\//.test(raw)) throw new Error('Attachment path only supports local files.');
+  return path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(workspaceRoot, raw);
+}
+
+function resolveAttachmentTarget(input = {}, context = {}) {
+  const rawPath = input.path || input.filePath || input.localPath || '';
+  if (!rawPath) return null;
+  const roots = attachmentAllowedRoots(context);
+  const workspaceRoot = roots.find((root) => root.kind === 'workspace')?.root || defaultWorkspaceRoot();
+  const target = candidateAttachmentPath(rawPath, workspaceRoot);
+  let root = roots.find((entry) => isPathInside(entry.root, target));
+  if (!root && isRegisteredSelectedAttachment(target, input)) {
+    root = { kind: 'selected', label: 'selected', root: path.dirname(target) };
+  }
+  if (!root) throw new Error('Attachment path is outside the current workspace, project, or selected-file grant.');
+  if (pathContainsSymlink(root.root, target)) throw new Error('Attachment path crosses a symbolic link.');
+  return { target, root };
+}
+
+function attachmentMetadataFromPath(target, root, stat, input = {}) {
+  const extension = path.extname(target).toLowerCase();
+  const mimeType = String(input.mime || input.type || attachmentMimeFromPath(target) || filePreviewMimeFromExtension(extension)).toLowerCase();
+  return {
+    id: crypto.createHash('sha256').update(`${path.resolve(target)}:${stat?.size || 0}:${stat?.mtimeMs || 0}`).digest('hex').slice(0, 16),
+    name: safeAttachmentName(input.name || target),
+    source: root?.kind || 'file',
+    pathLabel: redactSensitiveText(publicAttachmentPathLabel(target, root)).slice(0, 500),
+    extension,
+    mimeType,
+    sizeBytes: stat?.isFile?.() ? stat.size : 0,
+    modifiedAt: stat?.mtime ? stat.mtime.toISOString() : null
+  };
+}
+
+function attachmentMetadataFromBuffer(input = {}, parsed = {}) {
+  const mimeType = String(input.mime || input.type || parsed.mimeType || 'application/octet-stream').toLowerCase();
+  return {
+    id: crypto.createHash('sha256').update(`${input.name || 'clipboard'}:${parsed.buffer?.length || 0}:${mimeType}`).digest('hex').slice(0, 16),
+    name: safeAttachmentName(input.name || 'clipboard-attachment'),
+    source: 'clipboard',
+    pathLabel: 'clipboard:/',
+    extension: '',
+    mimeType,
+    sizeBytes: parsed.buffer?.length || 0,
+    modifiedAt: null
+  };
+}
+
+function textAttachmentContextFromBuffer(buffer, metadata) {
+  if (buffer.length > ATTACHMENT_TEXT_MAX_BYTES) {
+    return { ...metadata, kind: 'text', previewable: false, reason: 'too-large', maxBytes: ATTACHMENT_TEXT_MAX_BYTES };
+  }
+  if (looksLikeBinaryBuffer(buffer)) {
+    return { ...metadata, kind: 'binary', previewable: false, reason: 'binary' };
+  }
+  const rawText = buffer.toString('utf8').replace(/^\uFEFF/, '');
+  const content = redactSensitiveText(rawText).slice(0, ATTACHMENT_INLINE_TEXT_CHARS);
+  return {
+    ...metadata,
+    kind: 'text',
+    previewable: true,
+    language: filePreviewLanguageFromExtension(metadata.extension),
+    content,
+    textExcerpt: content,
+    truncated: rawText.length > ATTACHMENT_INLINE_TEXT_CHARS,
+    redacted: content !== rawText.slice(0, ATTACHMENT_INLINE_TEXT_CHARS)
+  };
+}
+
+function imageAttachmentContextFromBuffer(buffer, metadata) {
+  if (buffer.length > ATTACHMENT_IMAGE_MAX_BYTES) {
+    return { ...metadata, kind: 'image', previewable: false, reason: 'too-large', maxBytes: ATTACHMENT_IMAGE_MAX_BYTES };
+  }
+  const digest = sha256Hex(buffer);
+  return {
+    ...metadata,
+    kind: 'image',
+    previewable: true,
+    sha256: digest,
+    base64Sample: buffer.toString('base64').slice(0, ATTACHMENT_IMAGE_BASE64_SAMPLE_CHARS),
+    base64SampleTruncated: buffer.toString('base64').length > ATTACHMENT_IMAGE_BASE64_SAMPLE_CHARS
+  };
+}
+
+function ingestAttachmentFromPath(input = {}, context = {}) {
+  const resolved = resolveAttachmentTarget(input, context);
+  if (!resolved) return null;
+  const { target, root } = resolved;
+  let stat;
+  try {
+    stat = fs.statSync(target);
+  } catch {
+    return {
+      ok: false,
+      kind: 'missing',
+      name: safeAttachmentName(input.name || target),
+      pathLabel: root ? publicAttachmentPathLabel(target, root) : 'attachment:/',
+      reason: 'not-found'
+    };
+  }
+  const metadata = attachmentMetadataFromPath(target, root, stat, input);
+  if (!stat.isFile()) return { ...metadata, kind: 'unsupported', previewable: false, reason: 'not-file' };
+  const isText = isTextAttachmentMime(metadata.mimeType, metadata.extension);
+  const isImage = isImageAttachmentMime(metadata.mimeType);
+  if (!isText && !isImage) {
+    return { ...metadata, kind: 'binary', previewable: false, reason: 'unsupported-type' };
+  }
+  if (stat.size > Math.max(ATTACHMENT_TEXT_MAX_BYTES, ATTACHMENT_IMAGE_MAX_BYTES)) {
+    return { ...metadata, kind: isImage ? 'image' : 'text', previewable: false, reason: 'too-large' };
+  }
+  const buffer = fs.readFileSync(target);
+  if (isText) return textAttachmentContextFromBuffer(buffer, metadata);
+  return imageAttachmentContextFromBuffer(buffer, metadata);
+}
+
+function ingestAttachmentFromDataUrl(input = {}) {
+  const dataUrl = input.previewUrl || input.previewDataUrl || input.dataUrl || '';
+  const parsed = parseAttachmentDataUrl(dataUrl);
+  if (!parsed) return null;
+  const metadata = attachmentMetadataFromBuffer(input, parsed);
+  if (isTextAttachmentMime(metadata.mimeType, metadata.extension)) {
+    return textAttachmentContextFromBuffer(parsed.buffer, metadata);
+  }
+  if (isImageAttachmentMime(metadata.mimeType)) {
+    return imageAttachmentContextFromBuffer(parsed.buffer, metadata);
+  }
+  return { ...metadata, kind: 'binary', previewable: false, reason: 'unsupported-type' };
+}
+
+function publicAttachmentContextItem(item = {}) {
+  const base = {
+    id: item.id,
+    name: item.name,
+    source: item.source,
+    pathLabel: item.pathLabel,
+    mimeType: item.mimeType,
+    sizeBytes: item.sizeBytes,
+    kind: item.kind,
+    previewable: Boolean(item.previewable),
+    reason: item.reason,
+    sha256: item.sha256 ? String(item.sha256).slice(0, 64) : undefined,
+    redacted: Boolean(item.redacted),
+    truncated: Boolean(item.truncated)
+  };
+  if (item.kind === 'text' && item.textExcerpt) base.textExcerpt = safeOutputText(item.textExcerpt, ATTACHMENT_INLINE_TEXT_CHARS);
+  if (item.kind === 'image' && item.base64Sample) {
+    base.base64Sample = item.base64Sample;
+    base.base64SampleTruncated = Boolean(item.base64SampleTruncated);
+  }
+  return base;
+}
+
+function rendererAttachmentNotes(payload = {}) {
+  if (!payload.attachmentContext) return '';
+  if (typeof payload.attachmentContext === 'string') {
+    return redactSensitiveText(payload.attachmentContext).slice(0, 4000);
+  }
+  return safeOutputText(JSON.stringify(redactForLog(payload.attachmentContext)), 4000);
+}
+
+function buildAttachmentPromptBlock(context = {}) {
+  const items = Array.isArray(context.items) ? context.items : [];
+  const lines = [];
+  if (items.length) {
+    lines.push('[EcoreX attachment context]');
+    lines.push('The following uploaded or pasted attachments were safely ingested by the desktop app. Use their content when answering. Path labels are public labels; do not assume hidden absolute paths.');
+  }
+  items.forEach((item, index) => {
+    lines.push(`Attachment ${index + 1}: ${item.name || 'attachment'}`);
+    lines.push(`- kind: ${item.kind || 'unknown'}`);
+    lines.push(`- mime: ${item.mimeType || 'application/octet-stream'}`);
+    lines.push(`- sizeBytes: ${item.sizeBytes || 0}`);
+    if (item.pathLabel) lines.push(`- source: ${item.pathLabel}`);
+    if (item.reason) lines.push(`- ingestion: ${item.reason}`);
+    if (item.kind === 'text' && item.textExcerpt) {
+      lines.push('- text excerpt:');
+      lines.push(item.textExcerpt);
+    } else if (item.kind === 'image') {
+      if (item.sha256) lines.push(`- sha256: ${item.sha256}`);
+      if (item.base64Sample) {
+        lines.push(`- base64 sample${item.base64SampleTruncated ? ' (truncated)' : ''}:`);
+        lines.push(item.base64Sample);
+      }
+    }
+  });
+  if (context.notes) {
+    if (!lines.length) lines.push('[EcoreX attachment context]');
+    lines.push('Renderer attachment notes:');
+    lines.push(context.notes);
+  }
+  if (!lines.length) return '';
+  const text = lines.join('\n').slice(0, MAX_ATTACHMENT_PROMPT_CHARS);
+  return `${text}\n[/EcoreX attachment context]`;
+}
+
+function ingestAgentAttachments(payload = {}, context = {}) {
+  const inputItems = [
+    ...(Array.isArray(payload.attachments) ? payload.attachments : []),
+    ...(Array.isArray(payload.attachmentContext?.attachments) ? payload.attachmentContext.attachments : [])
+  ].slice(0, MAX_AGENT_ATTACHMENTS);
+  const items = [];
+  const warnings = [];
+  for (const rawItem of inputItems) {
+    const item = rawItem && typeof rawItem === 'object' ? rawItem : {};
+    try {
+      const ingested = ingestAttachmentFromPath(item, context) || ingestAttachmentFromDataUrl(item);
+      if (ingested) {
+        items.push(publicAttachmentContextItem(ingested));
+      } else {
+        warnings.push({ name: safeAttachmentName(item.name || 'attachment'), reason: 'no-readable-source' });
+      }
+    } catch (error) {
+      warnings.push({
+        name: safeAttachmentName(item.name || item.path || 'attachment'),
+        reason: safeOutputText(error instanceof Error ? error.message : String(error), 500)
+      });
+    }
+  }
+  const notes = rendererAttachmentNotes(payload);
+  const publicContext = {
+    count: items.length,
+    items,
+    warnings,
+    notes
+  };
+  return {
+    ...publicContext,
+    promptText: buildAttachmentPromptBlock(publicContext)
+  };
+}
+
+function composePromptWithAttachmentContext(prompt, attachmentContext, maxPromptChars = MAX_PROMPT_CHARS) {
+  const block = String(attachmentContext?.promptText || '').trim();
+  if (!block) return prompt;
+  const max = Math.max(MIN_PROMPT_CHARS, Math.min(Number(maxPromptChars) || MAX_PROMPT_CHARS, MAX_PROMPT_CHARS));
+  const availablePromptChars = Math.max(MIN_PROMPT_CHARS, max - block.length - 2);
+  const safePrompt = String(prompt || '').slice(0, availablePromptChars);
+  return `${safePrompt}\n\n${block}`.slice(0, max);
+}
+
+function ingestAttachmentsForPreview(payload = {}) {
+  const input = optionalObjectPayload(payload, 'attachment ingest payload');
+  const settings = readSettings();
+  const workspaceRoot = settings.workspaceRoot;
+  const projectContext = input.projectId
+    ? projectContextFromProject(workspaceRoot, resolveProject({ id: input.projectId }, { allowArchived: false }).project)
+    : activeProjectContext();
+  const cwd = projectContext?.projectPath || workspaceRoot;
+  const attachmentContext = ingestAgentAttachments(input, { cwd, projectContext });
+  return { ok: true, attachmentContext };
+}
+
+function filePreviewMetadata(target, root, stat = null) {
+  const extension = path.extname(target).toLowerCase();
+  return {
+    id: crypto
+      .createHash('sha256')
+      .update(`${path.resolve(target)}:${stat?.size || 0}:${stat?.mtimeMs || 0}`)
+      .digest('hex')
+      .slice(0, 16),
+    name: redactSensitiveText(path.basename(target)).slice(0, 240),
+    pathLabel: redactSensitiveText(filePreviewPathLabel(target, root)).slice(0, 500),
+    extension,
+    mimeType: filePreviewMimeFromExtension(extension),
+    sizeBytes: stat?.isFile?.() ? stat.size : 0,
+    modifiedAt: stat?.mtime ? stat.mtime.toISOString() : null
+  };
+}
+
+function documentPreviewKind(extension = '') {
+  if (extension === '.pdf') return 'pdf';
+  if (['.doc', '.docx'].includes(extension)) return 'word';
+  if (['.xls', '.xlsx'].includes(extension)) return 'spreadsheet';
+  if (['.ppt', '.pptx'].includes(extension)) return 'presentation';
+  return 'document';
+}
+
+function previewMetadataOnly(file, reason = 'metadata-only') {
+  return {
+    ok: true,
+    previewable: false,
+    reason,
+    renderMode: 'metadata',
+    file,
+    metadata: {
+      documentType: documentPreviewKind(file.extension),
+      mimeType: file.mimeType,
+      sizeBytes: file.sizeBytes,
+      modifiedAt: file.modifiedAt
+    }
+  };
+}
+
+function kkFileViewResourceRoots() {
+  const roots = [];
+  const addRoot = (value) => {
+    const raw = String(value || '').trim();
+    if (!raw) return;
+    const resolved = path.resolve(raw);
+    if (!roots.some((entry) => isSameWorkspacePath(entry, resolved))) roots.push(resolved);
+  };
+  if (app.isPackaged) {
+    if (process.resourcesPath) addRoot(path.join(process.resourcesPath, KKFILEVIEW_VENDOR_DIR_NAME));
+  } else {
+    addRoot(process.env.ECOREX_KKFILEVIEW_HOME);
+    addRoot(path.join(ROOT_DIR, 'vendor', KKFILEVIEW_VENDOR_DIR_NAME));
+    if (isWindows) addRoot('C:\\kkFileView-master');
+  }
+  return roots;
+}
+
+function listDirectoryFiles(dir) {
+  try {
+    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return [];
+    return fs.readdirSync(dir).map((name) => path.join(dir, name));
+  } catch {
+    return [];
+  }
+}
+
+function firstExistingFile(candidates = []) {
+  for (const candidate of candidates.filter(Boolean)) {
+    try {
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return path.resolve(candidate);
+    } catch {
+      // Keep probing other packaged resource shapes.
+    }
+  }
+  return '';
+}
+
+function firstExistingDirectory(candidates = []) {
+  for (const candidate of candidates.filter(Boolean)) {
+    try {
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) return path.resolve(candidate);
+    } catch {
+      // Keep probing other packaged resource shapes.
+    }
+  }
+  return '';
+}
+
+function kkFileViewJavaExecutable(root) {
+  const exe = isWindows ? 'java.exe' : 'java';
+  const candidates = [
+    path.join(root, 'runtime', 'jre', 'bin', exe),
+    path.join(root, 'runtime', 'jdk', 'bin', exe),
+    path.join(root, 'jre', 'bin', exe),
+    path.join(root, 'jdk', 'bin', exe),
+    path.join(root, 'java', 'bin', exe)
+  ];
+  return firstExistingFile(candidates);
+}
+
+function kkFileViewJarFile(root) {
+  const directCandidates = [
+    path.join(root, 'server', 'bin', 'kkFileView.jar'),
+    path.join(root, 'server', 'bin', 'kkfileview.jar'),
+    path.join(root, 'server', 'kkFileView.jar'),
+    path.join(root, 'server', 'kkfileview.jar'),
+    path.join(root, 'server', 'server.jar'),
+    path.join(root, 'kkFileView.jar'),
+    path.join(root, 'kkfileview.jar'),
+    path.join(root, 'server.jar')
+  ];
+  const targetJars = [
+    ...listDirectoryFiles(path.join(root, 'server', 'bin')),
+    ...listDirectoryFiles(path.join(root, 'server', 'target')),
+    ...listDirectoryFiles(path.join(root, 'target'))
+  ]
+    .filter((file) => /\.jar$/i.test(file))
+    .filter((file) => !/(sources|javadoc|original|tests?)\.jar$/i.test(path.basename(file)))
+    .sort((left, right) => fs.statSync(right).size - fs.statSync(left).size);
+  return firstExistingFile([...directCandidates, ...targetJars]);
+}
+
+function kkFileViewOfficeHome(root) {
+  const candidates = [
+    path.join(root, 'libreoffice', 'LibreOfficePortable', 'App', 'libreoffice'),
+    path.join(root, 'office', 'LibreOfficePortable', 'App', 'libreoffice'),
+    path.join(root, 'server', 'LibreOfficePortable', 'App', 'libreoffice'),
+    path.join(root, 'LibreOfficePortable', 'App', 'libreoffice'),
+    path.join(root, 'office', 'LibreOffice.app', 'Contents'),
+    path.join(root, 'LibreOffice.app', 'Contents'),
+    path.join(root, 'office', 'libreoffice'),
+    path.join(root, 'libreoffice')
+  ];
+  return firstExistingDirectory(candidates);
+}
+
+function locateKkFileViewResource({ refresh = false } = {}) {
+  if (!refresh && kkFileViewState.resource) return kkFileViewState.resource;
+  for (const root of kkFileViewResourceRoots()) {
+    const jarPath = kkFileViewJarFile(root);
+    const javaPath = kkFileViewJavaExecutable(root);
+    const officeHome = kkFileViewOfficeHome(root);
+    if (jarPath && javaPath) {
+      kkFileViewState.resource = {
+        ok: true,
+        root,
+        jarPath,
+        javaPath,
+        officeHome: officeHome || '',
+        packaged: app.isPackaged
+      };
+      return kkFileViewState.resource;
+    }
+  }
+  kkFileViewState.resource = {
+    ok: false,
+    root: '',
+    jarPath: '',
+    javaPath: '',
+    officeHome: '',
+    error: 'kkFileView vendor runtime is not prepared.'
+  };
+  return kkFileViewState.resource;
+}
+
+function getFreeLocalPort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.unref();
+    server.on('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const port = server.address()?.port;
+      server.close(() => resolve(port));
+    });
+  });
+}
+
+function httpStatusOk(url, timeoutMs = 1500) {
+  return new Promise((resolve) => {
+    const request = http.get(url, { timeout: timeoutMs }, (response) => {
+      response.resume();
+      resolve(response.statusCode >= 200 && response.statusCode < 500);
+    });
+    request.on('timeout', () => {
+      request.destroy();
+      resolve(false);
+    });
+    request.on('error', () => resolve(false));
+  });
+}
+
+async function waitForKkFileViewReady(port, timeoutMs = KKFILEVIEW_START_TIMEOUT_MS) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await httpStatusOk(`http://127.0.0.1:${port}/`, 1200)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 450));
+  }
+  return false;
+}
+
+function pruneKkFileViewGrants(now = Date.now()) {
+  for (const [token, grant] of kkFileViewState.grants.entries()) {
+    if (!grant || grant.expiresAt <= now) kkFileViewState.grants.delete(token);
+  }
+  if (kkFileViewState.grants.size <= KKFILEVIEW_MAX_GRANTS) return;
+  const entries = [...kkFileViewState.grants.entries()].sort((left, right) => left[1].createdAt - right[1].createdAt);
+  for (const [token] of entries.slice(0, kkFileViewState.grants.size - KKFILEVIEW_MAX_GRANTS)) {
+    kkFileViewState.grants.delete(token);
+  }
+}
+
+function handleKkFileViewBridgeRequest(request, response) {
+  try {
+    if (!['GET', 'HEAD'].includes(request.method || '')) {
+      response.writeHead(405);
+      response.end();
+      return;
+    }
+    const url = new URL(request.url || '/', 'http://127.0.0.1');
+    const match = url.pathname.match(/^\/preview-file\/([a-f0-9]{32,64})(?:\/.*)?$/i);
+    if (!match) {
+      response.writeHead(404);
+      response.end();
+      return;
+    }
+    pruneKkFileViewGrants();
+    const grant = kkFileViewState.grants.get(match[1]);
+    if (!grant) {
+      response.writeHead(404);
+      response.end();
+      return;
+    }
+    const stat = fs.statSync(grant.target);
+    if (!stat.isFile() || stat.size !== grant.sizeBytes || stat.size > KKFILEVIEW_PREVIEW_MAX_BYTES) {
+      response.writeHead(403);
+      response.end();
+      return;
+    }
+    response.writeHead(200, {
+      'Content-Type': grant.mimeType || 'application/octet-stream',
+      'Content-Length': stat.size,
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(grant.name || 'preview-file')}`
+    });
+    if (request.method === 'HEAD') {
+      response.end();
+      return;
+    }
+    fs.createReadStream(grant.target).pipe(response);
+  } catch (error) {
+    response.writeHead(500);
+    response.end();
+    writeLog('warn', 'kkFileView bridge request failed', { error: safeOutputText(error?.message || String(error), 1000) });
+  }
+}
+
+function ensureKkFileViewBridgeServer() {
+  if (kkFileViewState.bridgeServer && kkFileViewState.bridgePort) {
+    return Promise.resolve({ ok: true, port: kkFileViewState.bridgePort });
+  }
+  return new Promise((resolve) => {
+    const server = http.createServer(handleKkFileViewBridgeRequest);
+    server.on('error', (error) => {
+      kkFileViewState.lastError = error?.message || String(error);
+      resolve({ ok: false, error: kkFileViewState.lastError });
+    });
+    server.listen(0, '127.0.0.1', () => {
+      kkFileViewState.bridgeServer = server;
+      kkFileViewState.bridgePort = server.address()?.port || 0;
+      resolve({ ok: Boolean(kkFileViewState.bridgePort), port: kkFileViewState.bridgePort });
+    });
+  });
+}
+
+function createKkFileViewSourceUrl(target, file) {
+  pruneKkFileViewGrants();
+  const token = crypto.randomBytes(24).toString('hex');
+  kkFileViewState.grants.set(token, {
+    target: path.resolve(target),
+    name: file.name || path.basename(target),
+    mimeType: file.mimeType || 'application/octet-stream',
+    sizeBytes: file.sizeBytes || fs.statSync(target).size,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + KKFILEVIEW_GRANT_TTL_MS
+  });
+  return `http://127.0.0.1:${kkFileViewState.bridgePort}/preview-file/${token}/${encodeURIComponent(file.name || path.basename(target))}`;
+}
+
+function kkFileViewOnlinePreviewUrl(port, sourceUrl, file) {
+  const encodedUrl = encodeURIComponent(Buffer.from(sourceUrl, 'utf8').toString('base64'));
+  const params = [
+    `url=${encodedUrl}`,
+    `fullfilename=${encodeURIComponent(file.name || 'preview-file')}`,
+    'officePreviewType=pdf',
+    'pdfAutoFetch=false'
+  ];
+  return `http://127.0.0.1:${port}/onlinePreview?${params.join('&')}`;
+}
+
+async function ensureKkFileViewEngine({ preload = false } = {}) {
+  if (kkFileViewState.process && kkFileViewState.port) {
+    return { ok: true, port: kkFileViewState.port, resource: kkFileViewState.resource, preloaded: preload };
+  }
+  if (kkFileViewState.starting) return kkFileViewState.starting;
+  kkFileViewState.starting = (async () => {
+    const resource = locateKkFileViewResource();
+    if (!resource.ok) {
+      kkFileViewState.lastError = resource.error;
+      return { ok: false, reason: 'missing-vendor', error: resource.error, resource };
+    }
+    const bridge = await ensureKkFileViewBridgeServer();
+    if (!bridge.ok) return { ok: false, reason: 'bridge-failed', error: bridge.error, resource };
+
+    const [serverPort, officePortA, officePortB] = await Promise.all([getFreeLocalPort(), getFreeLocalPort(), getFreeLocalPort()]);
+    const cacheDir = path.join(app.getPath('userData'), 'kkfileview-cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const args = [
+      '-Dfile.encoding=UTF-8',
+      '-jar',
+      resource.jarPath,
+      '--server.address=127.0.0.1',
+      `--server.port=${serverPort}`,
+      '--server.servlet.context-path=/',
+      `--base.url=http://127.0.0.1:${serverPort}/`,
+      `--file.dir=${cacheDir}`,
+      `--office.plugin.server.ports=${officePortA},${officePortB}`,
+      '--office.preview.type=pdf',
+      '--office.preview.switch.disabled=true',
+      '--file.upload.disable=true',
+      '--pdf.download.disable=true',
+      '--pdf.print.disable=true',
+      '--pdf.openFile.disable=true',
+      '--media.convert.disable=true',
+      '--cache.enabled=true',
+      '--cache.type=jdk',
+      '--trust.host=127.0.0.1,localhost',
+      '--not.trust.host=',
+      '--kk.enable.redirect=false'
+    ];
+    if (resource.officeHome) args.push(`--office.home=${resource.officeHome}`);
+    const env = {
+      ...process.env,
+      KK_SERVER_PORT: String(serverPort),
+      KK_BASE_URL: `http://127.0.0.1:${serverPort}/`,
+      KK_FILE_DIR: cacheDir,
+      KK_TRUST_HOST: '127.0.0.1,localhost',
+      KK_NOT_TRUST_HOST: '',
+      KK_OFFICE_PREVIEW_TYPE: 'pdf',
+      KK_OFFICE_PREVIEW_SWITCH_DISABLED: 'true',
+      KK_MEDIA_CONVERT_DISABLE: 'true'
+    };
+    if (resource.officeHome) env.KK_OFFICE_HOME = resource.officeHome;
+
+    const child = spawn(resource.javaPath, args, {
+      cwd: path.dirname(resource.jarPath),
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true
+    });
+    kkFileViewState.process = child;
+    kkFileViewState.port = serverPort;
+    child.stdout?.on('data', (chunk) => {
+      const text = safeKkFileViewOutputText(chunk.toString(), 1200);
+      if (text.trim()) writeLog('info', 'kkFileView stdout', { text });
+    });
+    child.stderr?.on('data', (chunk) => {
+      const text = safeKkFileViewOutputText(chunk.toString(), 1200);
+      if (text.trim()) writeLog('warn', 'kkFileView stderr', { text });
+    });
+    child.on('exit', (code, signal) => {
+      writeLog(code === 0 ? 'info' : 'warn', 'kkFileView process exited', { code, signal });
+      if (kkFileViewState.process === child) {
+        kkFileViewState.process = null;
+        kkFileViewState.port = 0;
+      }
+    });
+    child.on('error', (error) => {
+      kkFileViewState.lastError = error?.message || String(error);
+      writeLog('warn', 'kkFileView process error', { error: safeOutputText(kkFileViewState.lastError, 1000) });
+    });
+
+    const ready = await waitForKkFileViewReady(serverPort);
+    if (!ready) {
+      kkFileViewState.lastError = 'kkFileView did not become ready before timeout.';
+      try {
+        child.kill();
+      } catch {
+        // Best-effort cleanup.
+      }
+      kkFileViewState.process = null;
+      kkFileViewState.port = 0;
+      return { ok: false, reason: 'start-timeout', error: kkFileViewState.lastError, resource };
+    }
+    writeLog('info', 'kkFileView preview engine ready', { port: serverPort, bridgePort: kkFileViewState.bridgePort });
+    return { ok: true, port: serverPort, bridgePort: kkFileViewState.bridgePort, resource };
+  })().finally(() => {
+    kkFileViewState.starting = null;
+  });
+  return kkFileViewState.starting;
+}
+
+function stopKkFileViewEngine(reason = 'stop') {
+  if (kkFileViewState.process) {
+    try {
+      kkFileViewState.process.kill();
+    } catch {
+      // Best-effort cleanup during app shutdown.
+    }
+    kkFileViewState.process = null;
+    kkFileViewState.port = 0;
+  }
+  if (kkFileViewState.bridgeServer) {
+    try {
+      kkFileViewState.bridgeServer.close();
+    } catch {
+      // Best-effort cleanup during app shutdown.
+    }
+    kkFileViewState.bridgeServer = null;
+    kkFileViewState.bridgePort = 0;
+  }
+  kkFileViewState.grants.clear();
+  writeLog('info', 'kkFileView preview engine stopped', { reason });
+}
+
+function publicKkFileViewStatus() {
+  const resource = locateKkFileViewResource();
+  return {
+    available: Boolean(resource.ok && isKkFileViewRuntimeEnabled()),
+    enabled: isKkFileViewRuntimeEnabled(),
+    running: Boolean(kkFileViewState.process && kkFileViewState.port),
+    port: kkFileViewState.port || null,
+    bridgePort: kkFileViewState.bridgePort || null,
+    lastError: kkFileViewState.lastError || resource.error || '',
+    vendorRoot: resource.root ? redactSensitiveText(resource.root).slice(0, 500) : '',
+    hasJar: Boolean(resource.jarPath),
+    hasJava: Boolean(resource.javaPath),
+    hasOffice: Boolean(resource.officeHome)
+  };
+}
+
+function isKkFileViewRuntimeEnabled() {
+  return app.isPackaged || process.env.ECOREX_ENABLE_DEV_KKFILEVIEW === '1';
+}
+
+function canUseKkFileViewPreview(file, stat) {
+  if (!file || !stat?.isFile?.()) return false;
+  if (!isKkFileViewRuntimeEnabled()) return false;
+  if (!KKFILEVIEW_DOCUMENT_EXTENSIONS.has(file.extension)) return false;
+  if (KKFILEVIEW_PROHIBITED_EXTENSIONS.has(file.extension)) return false;
+  return stat.size > 0 && stat.size <= KKFILEVIEW_PREVIEW_MAX_BYTES;
+}
+
+async function previewWithKkFileView(target, file, stat) {
+  if (!canUseKkFileViewPreview(file, stat)) return null;
+  const engine = await ensureKkFileViewEngine();
+  if (!engine.ok) {
+    writeLog('warn', 'kkFileView preview unavailable; falling back', {
+      reason: engine.reason,
+      error: safeOutputText(engine.error || '', 1000),
+      file: file.name
+    });
+    return null;
+  }
+  const sourceUrl = createKkFileViewSourceUrl(target, file);
+  return {
+    ok: true,
+    previewable: true,
+    reason: null,
+    kind: file.extension === '.pdf' ? 'pdf' : 'office',
+    renderMode: 'kkfileview',
+    file,
+    previewUrl: kkFileViewOnlinePreviewUrl(engine.port, sourceUrl, file),
+    metadata: {
+      documentType: documentPreviewKind(file.extension),
+      mimeType: file.mimeType,
+      sizeBytes: file.sizeBytes,
+      modifiedAt: file.modifiedAt,
+      previewEngine: 'kkFileView',
+      selectionBridge: false
+    }
+  };
+}
+
+function previewImageFile(target, file, stat) {
+  if (stat.size > FILE_PREVIEW_IMAGE_MAX_BYTES) {
+    return {
+      ok: true,
+      previewable: false,
+      reason: 'too-large',
+      renderMode: 'image',
+      maxPreviewBytes: FILE_PREVIEW_IMAGE_MAX_BYTES,
+      file,
+      metadata: {
+        mimeType: file.mimeType,
+        sizeBytes: stat.size,
+        modifiedAt: file.modifiedAt
+      }
+    };
+  }
+  const buffer = fs.readFileSync(target);
+  const dataUrl = `data:${file.mimeType};base64,${buffer.toString('base64')}`;
+  return {
+    ok: true,
+    previewable: true,
+    reason: null,
+    renderMode: 'image',
+    file,
+    metadata: {
+      mimeType: file.mimeType,
+      sizeBytes: stat.size,
+      modifiedAt: file.modifiedAt,
+      sha256: sha256Hex(buffer)
+    },
+    dataUrl,
+    maxPreviewBytes: FILE_PREVIEW_IMAGE_MAX_BYTES
+  };
+}
+
+function decodeXmlEntities(value = '') {
+  return String(value || '')
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+    .replace(/&#x([0-9a-f]+);/gi, (_match, hex) => String.fromCodePoint(Number.parseInt(hex, 16) || 0))
+    .replace(/&#(\d+);/g, (_match, dec) => String.fromCodePoint(Number.parseInt(dec, 10) || 0))
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+function stripXmlTags(value = '') {
+  return decodeXmlEntities(String(value || '').replace(/<[^>]+>/g, ' '))
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\s+\n/g, '\n')
+    .trim();
+}
+
+function readZipEntries(buffer, wanted) {
+  const wantedSet = new Set(Array.isArray(wanted) ? wanted : []);
+  const result = new Map();
+  if (!Buffer.isBuffer(buffer) || buffer.length < 22) return result;
+  const maxCommentSearch = Math.max(0, buffer.length - 0xffff - 22);
+  let eocd = -1;
+  for (let offset = buffer.length - 22; offset >= maxCommentSearch; offset -= 1) {
+    if (buffer.readUInt32LE(offset) === 0x06054b50) {
+      eocd = offset;
+      break;
+    }
+  }
+  if (eocd < 0) return result;
+  const totalEntries = buffer.readUInt16LE(eocd + 10);
+  const centralOffset = buffer.readUInt32LE(eocd + 16);
+  let offset = centralOffset;
+  for (let index = 0; index < totalEntries && offset + 46 <= buffer.length; index += 1) {
+    if (buffer.readUInt32LE(offset) !== 0x02014b50) break;
+    const compression = buffer.readUInt16LE(offset + 10);
+    const compressedSize = buffer.readUInt32LE(offset + 20);
+    const fileNameLength = buffer.readUInt16LE(offset + 28);
+    const extraLength = buffer.readUInt16LE(offset + 30);
+    const commentLength = buffer.readUInt16LE(offset + 32);
+    const localOffset = buffer.readUInt32LE(offset + 42);
+    const nameStart = offset + 46;
+    const nameEnd = nameStart + fileNameLength;
+    const name = buffer.subarray(nameStart, nameEnd).toString('utf8').replace(/\\/g, '/');
+    if ((!wantedSet.size || wantedSet.has(name)) && localOffset + 30 <= buffer.length && compressedSize <= FILE_PREVIEW_OFFICE_MAX_BYTES) {
+      try {
+        if (buffer.readUInt32LE(localOffset) === 0x04034b50) {
+          const localNameLength = buffer.readUInt16LE(localOffset + 26);
+          const localExtraLength = buffer.readUInt16LE(localOffset + 28);
+          const dataStart = localOffset + 30 + localNameLength + localExtraLength;
+          const dataEnd = dataStart + compressedSize;
+          if (dataEnd <= buffer.length) {
+            const compressed = buffer.subarray(dataStart, dataEnd);
+            const data = compression === 0
+              ? compressed
+              : compression === 8
+                ? zlib.inflateRawSync(compressed)
+                : null;
+            if (data) result.set(name, data.toString('utf8'));
+          }
+        }
+      } catch {
+        // Keep preview best-effort; malformed entries simply fall back to metadata.
+      }
+    }
+    offset = nameEnd + extraLength + commentLength;
+  }
+  return result;
+}
+
+function xmlTextValues(xml = '', tagName = 't') {
+  const escaped = String(tagName || 't').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(`<[^:>/]*:?${escaped}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/[^:>]*:?${escaped}>`, 'gi');
+  return [...String(xml || '').matchAll(pattern)]
+    .map((match) => stripXmlTags(match[1]))
+    .filter(Boolean);
+}
+
+function excelColumnIndex(cellRef = '') {
+  const letters = String(cellRef || '').match(/^[A-Z]+/i)?.[0]?.toUpperCase() || '';
+  let index = 0;
+  for (const letter of letters) index = index * 26 + (letter.charCodeAt(0) - 64);
+  return Math.max(0, index - 1);
+}
+
+function parseSharedStrings(xml = '') {
+  return [...String(xml || '').matchAll(/<si[\s\S]*?<\/si>/gi)]
+    .map((match) => xmlTextValues(match[0], 't').join(' ').trim())
+    .map((value) => decodeXmlEntities(value));
+}
+
+function parseWorksheetPreview(xml = '', sharedStrings = []) {
+  const rows = [];
+  for (const rowMatch of String(xml || '').matchAll(/<row\b[\s\S]*?<\/row>/gi)) {
+    const cells = [];
+    for (const cellMatch of rowMatch[0].matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/gi)) {
+      const attrs = cellMatch[1] || '';
+      const body = cellMatch[2] || '';
+      const ref = attrs.match(/\br="([^"]+)"/i)?.[1] || '';
+      const type = attrs.match(/\bt="([^"]+)"/i)?.[1] || '';
+      const column = excelColumnIndex(ref) || cells.length;
+      let value = '';
+      if (type === 's') {
+        const indexText = body.match(/<v[^>]*>([\s\S]*?)<\/v>/i)?.[1];
+        value = sharedStrings[Number(indexText)] || '';
+      } else if (type === 'inlineStr') {
+        value = xmlTextValues(body, 't').join(' ');
+      } else {
+        value = stripXmlTags(body.match(/<v[^>]*>([\s\S]*?)<\/v>/i)?.[1] || '');
+      }
+      cells[column] = value;
+    }
+    if (cells.some(Boolean)) rows.push(cells.map((cell) => String(cell || '').trim()));
+    if (rows.length >= 40) break;
+  }
+  return rows;
+}
+
+function markdownTableFromRows(rows = []) {
+  const visible = rows.filter((row) => row.some(Boolean)).slice(0, 40);
+  if (!visible.length) return '';
+  const width = Math.min(12, Math.max(...visible.map((row) => row.length)));
+  const normalized = visible.map((row) => Array.from({ length: width }, (_item, index) => String(row[index] || '').replace(/\|/g, '\\|').slice(0, 120)));
+  const [first, ...rest] = normalized;
+  return [
+    `| ${first.join(' | ')} |`,
+    `| ${Array.from({ length: width }, () => '---').join(' | ')} |`,
+    ...rest.map((row) => `| ${row.join(' | ')} |`)
+  ].join('\n');
+}
+
+function previewOpenXmlOfficeFile(target, file, stat) {
+  if (stat.size > FILE_PREVIEW_OFFICE_MAX_BYTES) {
+    return previewMetadataOnly(file, 'too-large');
+  }
+  const buffer = fs.readFileSync(target);
+  const extension = file.extension;
+  if (extension === '.docx') {
+    const entries = readZipEntries(buffer, ['word/document.xml']);
+    const content = xmlTextValues(entries.get('word/document.xml') || '', 't').join('\n').trim();
+    return content
+      ? { ok: true, previewable: true, kind: 'text', renderMode: 'text', language: 'markdown', file, content: content.slice(0, FILE_PREVIEW_OFFICE_MAX_CHARS), text: content.slice(0, FILE_PREVIEW_OFFICE_MAX_CHARS), truncated: content.length > FILE_PREVIEW_OFFICE_MAX_CHARS, metadata: { documentType: 'word', mimeType: file.mimeType, sizeBytes: file.sizeBytes } }
+      : previewMetadataOnly(file, 'empty-document');
+  }
+  if (extension === '.pptx') {
+    const slideNames = [];
+    for (let index = 1; index <= 80; index += 1) slideNames.push(`ppt/slides/slide${index}.xml`);
+    const entries = readZipEntries(buffer, slideNames);
+    const slides = [...entries.entries()]
+      .sort(([left], [right]) => Number(left.match(/slide(\d+)/i)?.[1] || 0) - Number(right.match(/slide(\d+)/i)?.[1] || 0))
+      .map(([name, xml], index) => {
+        const lines = xmlTextValues(xml, 't').map((text) => text.trim()).filter(Boolean);
+        return lines.length ? `## 幻灯片 ${index + 1}\n${lines.map((line) => `- ${line}`).join('\n')}` : '';
+      })
+      .filter(Boolean);
+    const content = slides.join('\n\n').trim();
+    return content
+      ? { ok: true, previewable: true, kind: 'text', renderMode: 'text', language: 'markdown', file, content: content.slice(0, FILE_PREVIEW_OFFICE_MAX_CHARS), text: content.slice(0, FILE_PREVIEW_OFFICE_MAX_CHARS), truncated: content.length > FILE_PREVIEW_OFFICE_MAX_CHARS, metadata: { documentType: 'presentation', mimeType: file.mimeType, sizeBytes: file.sizeBytes } }
+      : previewMetadataOnly(file, 'empty-presentation');
+  }
+  if (extension === '.xlsx') {
+    const wanted = ['xl/sharedStrings.xml'];
+    for (let index = 1; index <= 20; index += 1) wanted.push(`xl/worksheets/sheet${index}.xml`);
+    const entries = readZipEntries(buffer, wanted);
+    const sharedStrings = parseSharedStrings(entries.get('xl/sharedStrings.xml') || '');
+    const sheets = [...entries.entries()]
+      .filter(([name]) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(name))
+      .sort(([left], [right]) => Number(left.match(/sheet(\d+)/i)?.[1] || 0) - Number(right.match(/sheet(\d+)/i)?.[1] || 0))
+      .map(([name, xml], index) => {
+        const table = markdownTableFromRows(parseWorksheetPreview(xml, sharedStrings));
+        return table ? `## 工作表 ${index + 1}\n${table}` : '';
+      })
+      .filter(Boolean);
+    const content = sheets.join('\n\n').trim();
+    return content
+      ? { ok: true, previewable: true, kind: 'text', renderMode: 'text', language: 'markdown', file, content: content.slice(0, FILE_PREVIEW_OFFICE_MAX_CHARS), text: content.slice(0, FILE_PREVIEW_OFFICE_MAX_CHARS), truncated: content.length > FILE_PREVIEW_OFFICE_MAX_CHARS, metadata: { documentType: 'spreadsheet', mimeType: file.mimeType, sizeBytes: file.sizeBytes } }
+      : previewMetadataOnly(file, 'empty-spreadsheet');
+  }
+  return previewMetadataOnly(file, 'metadata-only');
+}
+
+async function previewFile(payload = {}) {
+  const input = optionalObjectPayload(payload, 'file preview payload');
+  const { target, root } = resolveFilePreviewTarget(input);
+  let stat;
+  try {
+    stat = fs.statSync(target);
+  } catch {
+    return {
+      ok: false,
+      previewable: false,
+      reason: 'not-found',
+      file: filePreviewMetadata(target, root),
+      error: 'File was not found.'
+    };
+  }
+
+  const file = filePreviewMetadata(target, root, stat);
+  if (!stat.isFile()) {
+    return { ok: true, previewable: false, reason: 'not-file', renderMode: 'metadata', file };
+  }
+  if (input.validateOnly === true || input.metadataOnly === true) {
+    return {
+      ok: true,
+      previewable: true,
+      reason: null,
+      renderMode: 'metadata',
+      file
+    };
+  }
+  if (isImagePreviewExtension(file.extension)) {
+    return previewImageFile(target, file, stat);
+  }
+  if (KKFILEVIEW_DOCUMENT_EXTENSIONS.has(file.extension)) {
+    const richPreview = await previewWithKkFileView(target, file, stat);
+    if (richPreview) return richPreview;
+  }
+  if (['.docx', '.xlsx', '.pptx'].includes(file.extension)) {
+    return previewOpenXmlOfficeFile(target, file, stat);
+  }
+  if (isDocumentMetadataPreviewExtension(file.extension)) {
+    return previewMetadataOnly(file, 'metadata-only');
+  }
+  if (stat.size > FILE_PREVIEW_MAX_BYTES) {
+    return {
+      ok: true,
+      previewable: false,
+      reason: 'too-large',
+      renderMode: 'metadata',
+      maxPreviewBytes: FILE_PREVIEW_MAX_BYTES,
+      file
+    };
+  }
+  if (!FILE_PREVIEW_TEXT_EXTENSIONS.has(file.extension)) {
+    return { ok: true, previewable: false, reason: 'unsupported-type', renderMode: 'metadata', file };
+  }
+
+  const buffer = fs.readFileSync(target);
+  if (looksLikeBinaryBuffer(buffer)) {
+    return { ok: true, previewable: false, reason: 'binary', renderMode: 'metadata', file };
+  }
+
+  const rawText = buffer.toString('utf8').replace(/^\uFEFF/, '');
+  const content = redactSensitiveText(rawText);
+  return {
+    ok: true,
+    previewable: true,
+    reason: null,
+    file,
+    content,
+    text: content,
+    encoding: 'utf8',
+    language: filePreviewLanguageFromExtension(file.extension),
+    renderMode: filePreviewRenderMode(file.extension),
+    sandbox: isHtmlPreviewExtension(file.extension)
+      ? { allowScripts: false, allowSameOrigin: false, allowForms: false, allowPopups: false }
+      : undefined,
+    redacted: content !== rawText,
+    maxPreviewBytes: FILE_PREVIEW_MAX_BYTES
+  };
+}
+
 function attachmentMimeFromPath(filePath = '') {
   const ext = path.extname(filePath).toLowerCase();
   if (['.png'].includes(ext)) return 'image/png';
@@ -5427,7 +7381,10 @@ function attachmentMimeFromPath(filePath = '') {
   if (['.svg'].includes(ext)) return 'image/svg+xml';
   if (['.pdf'].includes(ext)) return 'application/pdf';
   if (['.csv'].includes(ext)) return 'text/csv';
-  if (['.txt', '.md', '.json', '.log'].includes(ext)) return 'text/plain';
+  if (ext === '.html' || ext === '.htm') return 'text/html';
+  if (ext === '.css') return 'text/css';
+  if (['.js', '.mjs', '.cjs'].includes(ext)) return 'text/javascript';
+  if (['.txt', '.md', '.markdown', '.json', '.jsonl', '.log'].includes(ext)) return 'text/plain';
   if (['.xlsx'].includes(ext)) return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
   if (['.xls'].includes(ext)) return 'application/vnd.ms-excel';
   if (['.docx'].includes(ext)) return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
@@ -5456,6 +7413,7 @@ function selectedAttachmentSummary(filePath) {
       entry.previewDataUrl = '';
     }
   }
+  registerSelectedAttachmentAccess(absolutePath, entry);
   return entry;
 }
 
@@ -5484,6 +7442,31 @@ async function selectAttachmentFiles(event, payload = {}) {
     }
   }
   return { ok: true, canceled: false, files };
+}
+
+async function openSelectedAttachmentFile(payload = {}) {
+  const input = optionalObjectPayload(payload, 'attachment open payload');
+  const rawPath = input.path || input.filePath || input.localPath || '';
+  if (!rawPath) return { ok: false, opened: false, error: 'Attachment has no local file path.' };
+  const target = path.resolve(fileURLToPath(/^file:/i.test(String(rawPath)) ? rawPath : pathToFileURL(path.resolve(rawPath)).toString()));
+  if (!isRegisteredSelectedAttachment(target, input)) {
+    throw new Error('Attachment open requires a selected-file grant.');
+  }
+  const parent = path.dirname(target);
+  if (pathContainsSymlink(parent, target) || fs.lstatSync(target).isSymbolicLink()) {
+    throw new Error('Attachment path crosses a symbolic link.');
+  }
+  const stat = fs.statSync(target);
+  if (!stat.isFile()) throw new Error('Attachment is not a file.');
+  const opened = await openPathSafely(target);
+  return {
+    ok: Boolean(opened.opened),
+    opened: Boolean(opened.opened),
+    method: 'openPath',
+    name: path.basename(target),
+    pathLabel: `selected:/${redactSensitiveText(path.basename(target)).slice(0, 240)}`,
+    error: opened.error || undefined
+  };
 }
 
 function collectReleaseInstallers() {
@@ -5661,6 +7644,8 @@ function safeSessionSummaryForDiagnostics(session = {}) {
     model: session.model ? safeDiagnosticText(session.model, 80) : undefined,
     accessMode: session.accessMode ? safeDiagnosticText(session.accessMode, 80) : undefined,
     permissionMode: session.permissionMode ? safeDiagnosticText(session.permissionMode, 80) : undefined,
+    attachmentCount: Number(session.attachmentCount) || 0,
+    ledgerEventCount: Number(session.ledgerEventCount) || 0,
     hasTranscript: Boolean(session.hasTranscript),
     lastEvent
   };
@@ -5768,7 +7753,8 @@ async function buildDiagnosticsPackage(payload = {}) {
     logs: safeLogSummary(logLimit),
     sessions: {
       running: getRunningSessionSummaries().map(safeSessionSummaryForDiagnostics),
-      recent: recentSessionFiles(sessionLimit).map(safeSessionSummaryForDiagnostics)
+      recent: recentSessionFiles(sessionLimit).map(safeSessionSummaryForDiagnostics),
+      unfinished: recentUnfinishedRunJournals(sessionLimit)
     },
     crashes,
     releaseArtifacts: releaseArtifactSummary(release),
@@ -5794,6 +7780,39 @@ async function openPathSafely(target) {
       error: safeDiagnosticText(error instanceof Error ? error.message : String(error), 500)
     };
   }
+}
+
+function normalizeExternalUrl(rawValue = '') {
+  const raw = String(rawValue || '').trim();
+  if (!raw || raw.length > 2048 || /[\u0000-\u001F\u007F]/.test(raw)) {
+    throw new Error('Invalid external URL.');
+  }
+  const value = /^www\./i.test(raw) ? `https://${raw}` : raw;
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error('Invalid external URL.');
+  }
+  if (!['http:', 'https:', 'mailto:'].includes(parsed.protocol)) {
+    throw new Error('Only http, https and mailto links can be opened.');
+  }
+  if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') && (parsed.username || parsed.password)) {
+    throw new Error('External URLs with embedded credentials are blocked.');
+  }
+  return parsed.toString();
+}
+
+async function openExternalUrl(payload = {}) {
+  const input = optionalObjectPayload(payload, 'external URL payload');
+  const url = normalizeExternalUrl(input.url || input.href || input.value || '');
+  await shell.openExternal(url, { activate: true });
+  return {
+    ok: true,
+    opened: true,
+    method: 'openExternal',
+    protocol: new URL(url).protocol
+  };
 }
 
 async function revealDiagnosticsPackage(savedPath) {
@@ -6047,6 +8066,11 @@ async function collectDiagnostics() {
       recent: readRecentLogs()
     },
     runningSessions: getRunningSessionSummaries(),
+    unfinishedRuns: recentUnfinishedRunJournals(),
+    runJournal: {
+      path: runJournalPath(),
+      recentUnfinished: recentUnfinishedRunJournals()
+    },
     recentSessionHistory: recentSessionFiles(),
     recentSessionFiles: recentSessionFiles(),
     crashes: readCrashSummary(),
@@ -6060,6 +8084,7 @@ async function collectDiagnostics() {
         ? fileSummary(devPath('node_modules', '@anthropic-ai', nativePackage))
         : { path: null, exists: false }
     },
+    previewEngine: publicKkFileViewStatus(),
     release: collectReleaseInstallers()
   };
 }
@@ -6104,7 +8129,7 @@ function normalizeClaudeEvent(sessionId, json) {
         ...base,
         kind: 'assistant',
         status: 'running',
-        text: delta.text,
+        text: publicAgentText(delta.text),
         contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined
       };
     }
@@ -6114,7 +8139,7 @@ function normalizeClaudeEvent(sessionId, json) {
           ...base,
           kind: 'assistant',
           status: 'running',
-          text: block.text,
+          text: publicAgentText(block.text),
           contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined
         };
       }
@@ -6124,12 +8149,14 @@ function normalizeClaudeEvent(sessionId, json) {
           name: block.name || block.tool_name || 'tool',
           input: safeJsonValue(block.input || {}, 8000)
         };
+        const ledger = toolLedgerStartEvent(sessionId, tool);
         return {
           ...base,
           kind: 'tool',
           status: 'running',
           toolName: publicAgentToolLabel(tool),
           tools: [tool],
+          ledger,
           text: `${publicAgentToolLabel(tool)}。`,
           contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined
         };
@@ -6172,6 +8199,19 @@ function normalizeClaudeEvent(sessionId, json) {
         contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined
       };
     }
+    if (streamType === 'error') {
+      const errorInfo = streamEvent.error || json.error || {};
+      const message = errorInfo.message || streamEvent.message || json.message || 'Agent stream error.';
+      return {
+        ...base,
+        kind: 'error',
+        status: 'failed',
+        claudeResultStatus: 'failed',
+        errorType: errorInfo.type || streamEvent.type || 'stream_error',
+        text: publicAgentText(message),
+        contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined
+      };
+    }
     return null;
   }
 
@@ -6198,17 +8238,34 @@ function normalizeClaudeEvent(sessionId, json) {
       : '';
     if (tools.length && !text.trim()) {
       const toolLabel = publicAgentToolLabel(tools[0]);
+      const ledger = tools.length === 1
+        ? toolLedgerStartEvent(sessionId, tools[0])
+        : {
+            type: 'tool',
+            phase: 'start',
+            toolName: 'tool-batch',
+            action: 'tool-batch',
+            inputSummary: safeLedgerText(JSON.stringify(tools.map((tool) => ({
+              name: publicAgentToolName(tool),
+              action: inferToolAction(tool.name, tool.input || {})
+            }))), MAX_TOOL_LEDGER_SUMMARY_CHARS),
+            startedAt: new Date().toISOString()
+          };
+      if (tools.length > 1) {
+        for (const tool of tools) toolLedgerStartEvent(sessionId, tool);
+      }
       return {
         ...base,
         kind: 'tool',
         status: 'running',
         toolName: toolLabel,
         tools,
+        ledger,
         text: `${toolLabel}。`,
         contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined
       };
     }
-    return { ...base, kind: 'assistant', tools, text, contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined };
+    return { ...base, kind: 'assistant', tools, text: publicAgentText(text), contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined };
   }
 
   if (json.type === 'user') {
@@ -6225,6 +8282,16 @@ function normalizeClaudeEvent(sessionId, json) {
           : resultInfo.query
             ? 'WebSearch'
             : resultInfo.commandName || '';
+      const outputText = publicAgentText(toolResults
+        .map((block) => {
+          if (typeof block.content === 'string') return block.content;
+          if (Array.isArray(block.content)) {
+            return block.content.map((item) => item?.text || '').join('\n');
+          }
+          return '';
+        })
+        .filter(Boolean)
+        .join('\n'));
       const resultLabel = resultToolName ? publicAgentToolLabel(resultToolName) : '工具返回结果';
       return {
         ...base,
@@ -6232,28 +8299,44 @@ function normalizeClaudeEvent(sessionId, json) {
         status: failed ? 'failed' : 'completed',
         toolName: resultLabel,
         toolUseId: toolResults[0].tool_use_id,
-        text: toolResults
-          .map((block) => {
-            if (typeof block.content === 'string') return block.content;
-            if (Array.isArray(block.content)) {
-              return block.content.map((item) => item?.text || '').join('\n');
-            }
-            return '';
-          })
-          .filter(Boolean)
-          .join('\n')
+        ledger: toolLedgerFinishEvent(sessionId, toolResults[0].tool_use_id, {
+          toolName: resultToolName || resultLabel,
+          failed,
+          output: outputText,
+          text: outputText,
+          error: failed ? outputText : ''
+        }),
+        text: outputText
       };
     }
   }
 
   if (json.type === 'result') {
+    const resultSubtype = String(json.subtype || '').trim();
+    const resultFailed = Boolean(json.is_error || json.error || /^error/i.test(resultSubtype));
     return {
       ...base,
-      kind: 'result',
-      status: 'completed',
-      text: json.result || '',
+      kind: resultFailed ? 'error' : 'result',
+      status: resultFailed ? 'failed' : 'completed',
+      subtype: resultSubtype || undefined,
+      claudeResultStatus: resultFailed ? 'failed' : 'completed',
+      text: publicAgentText(json.result || json.error?.message || (json.error ? JSON.stringify(json.error) : json.message || '')),
       costUsd: json.total_cost_usd,
       durationMs: json.duration_ms,
+      contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined
+    };
+  }
+
+  if (json.type === 'error') {
+    const errorInfo = json.error || {};
+    const message = errorInfo.message || json.message || JSON.stringify(Object.keys(errorInfo).length ? errorInfo : json);
+    return {
+      ...base,
+      kind: 'error',
+      status: 'failed',
+      claudeResultStatus: 'failed',
+      errorType: errorInfo.type || json.subtype || 'error',
+      text: publicAgentText(message),
       contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined
     };
   }
@@ -6263,7 +8346,7 @@ function normalizeClaudeEvent(sessionId, json) {
       ...base,
       kind: 'status',
       status: json.subtype || 'system',
-      text: json.cwd || json.session_id || json.message || '会话已初始化',
+      text: publicAgentText(json.cwd || json.session_id || json.message || '会话已初始化'),
       contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined
     };
   }
@@ -6274,11 +8357,11 @@ function normalizeClaudeEvent(sessionId, json) {
       kind: 'tool',
       status: json.type,
       toolName: publicAgentToolLabel(json.toolName || json.name || ''),
-      text: json.message || 'EcoreX 原生能力事件'
+      text: publicAgentText(json.message || 'EcoreX 原生能力事件')
     };
   }
 
-  return { ...base, kind: 'debug', text: JSON.stringify(json) };
+  return { ...base, kind: 'debug', text: publicAgentText(JSON.stringify(json)) };
 }
 
 function runAgent(payload = {}, options = {}) {
@@ -6357,6 +8440,7 @@ function runAgent(payload = {}, options = {}) {
     const permissionSnapshot = runtimeActor.permissionSnapshot;
     const args = [
       ...claude.baseArgs,
+      '--bare',
       '--print',
       '--output-format',
       'stream-json',
@@ -6399,10 +8483,11 @@ function runAgent(payload = {}, options = {}) {
     const child = spawn(claude.command, args, {
       cwd,
       env: filteredAgentEnv({
+        ...isolatedAgentRuntimeEnv(),
         ...modelProfileEnv,
         ...projectEnvForAgent(projectContext),
         CLAUDE_CODE_NO_FLICKER: '1',
-        CLAUDE_CODE_SIMPLE: safePayload.bare ? '1' : process.env.CLAUDE_CODE_SIMPLE || ''
+        CLAUDE_CODE_SIMPLE: '1'
       }),
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
@@ -6473,6 +8558,7 @@ function runAgent(payload = {}, options = {}) {
       actor: runtimeActor,
       actorId: runtimeActor.actorId,
       runtimeKind: AGENT_RUNTIME_KIND,
+      sessionId,
       permissionSnapshot,
       promptHash: crypto.createHash('sha256').update(prompt).digest('hex'),
       cwd,
@@ -6490,12 +8576,16 @@ function runAgent(payload = {}, options = {}) {
       projectName: projectContext?.name || '',
       projectPath: projectContext?.pathLabel || '',
       projectMemoryLabel: projectContext?.memoryLabel || '',
+      attachmentContext: safePayload.attachmentContext,
+      attachmentCount: safePayload.attachmentContext?.count || 0,
       promptPreview: startLock.promptPreview,
       workspacePath: startLock.workspacePath,
       startedAt: Date.now(),
       lastActivityAt: Date.now(),
       status: 'starting',
       state: 'running',
+      claudeResultFailed: false,
+      ledgerEventCount: 0,
       finished: false,
       transcript: [],
       transcriptWritten: false,
@@ -6503,6 +8593,7 @@ function runAgent(payload = {}, options = {}) {
       totalTimer: null,
       idleTimer: null
     };
+    appendRunJournalEntry(sessionId, entry, 'running', { event: 'start' });
     entry.flushBufferedOutput = () => {
       if (!lineBuffer.trim()) return;
       const buffered = lineBuffer.trim();
@@ -6622,16 +8713,18 @@ function runAgent(payload = {}, options = {}) {
       const entry = runningAgents.get(sessionId);
       if (!entry) return;
       entry.flushBufferedOutput?.();
+      const finalStatus = code === 0 && !entry.claudeResultFailed ? 'completed' : 'failed';
       finalizeAgentSession(sessionId, entry, {
-        status: code === 0 ? 'completed' : 'failed',
+        status: finalStatus,
         code,
         signal
       });
-      markClaudeSessionTranscriptSeen(entry.claudeSessionId);
-      writeLog(code === 0 ? 'info' : 'error', 'Agent session closed', {
+      refreshClaudeSessionTranscriptSeen(entry.claudeSessionId);
+      writeLog(finalStatus === 'completed' ? 'info' : 'error', 'Agent session closed', {
         sessionId,
         code,
         signal,
+        status: finalStatus,
         durationMs: Date.now() - entry.startedAt
       });
     });
@@ -6726,13 +8819,19 @@ handleSafe('telemetry:flush', (_event, payload) => flushAnonymousTelemetry(paylo
 handleSafe('workspace:select-directory', (event, payload) => selectWorkspaceDirectory(event, payload), { authRequired: true });
 handleSafe('workspace:list', (_event, payload) => listWorkspace(payload), { authRequired: true });
 handleSafe('workspace:ensure', (_event, payload) => ensureWorkspace(payload), { authRequired: true });
+handleSafe('file:preview', (_event, payload) => previewFile(payload), { authRequired: true });
+handleSafe('attachment:ingest', (_event, payload) => ingestAttachmentsForPreview(payload), { authRequired: true });
 handleSafe('attachment:select-files', (event, payload) => selectAttachmentFiles(event, payload), { authRequired: true });
+handleSafe('attachment:open-file', (_event, payload) => openSelectedAttachmentFile(payload), { authRequired: true });
+handleSafe('shell:open-external', (_event, payload) => openExternalUrl(payload), { authRequired: true });
 handleSafe('project:list', (_event, payload) => listProjects(payload), { authRequired: true });
 handleSafe('project:create', (_event, payload) => createProject(payload), { authRequired: true });
 handleSafe('project:switch', (_event, payload) => switchProject(payload), { authRequired: true });
 handleSafe('project:update', (_event, payload) => updateProject(payload), { authRequired: true });
 handleSafe('project:archive', (_event, payload) => archiveProject(payload), { authRequired: true });
+handleSafe('project:delete', (_event, payload) => deleteProject(payload), { authRequired: true });
 handleSafe('project:status', (_event, payload) => projectStatus(payload), { authRequired: true });
+handleSafe('project:open-folder', (_event, payload) => openProjectFolder(payload), { authRequired: true });
 handleSafe('mcp:list', (_event, payload) => collectMcpStatus(payload), { authRequired: true });
 handleSafe('mcp:status', (_event, payload) => collectMcpStatus(payload), { authRequired: true });
 handleSafe('mcp:refresh', (_event, payload) => collectMcpStatus(payload), { authRequired: true });
@@ -6754,7 +8853,7 @@ handleSafe('agent:stop', (_event, payload) => {
   return stopAgent(sessionId, 'cancelled');
 }, { authRequired: true });
 handleSafe('agent:sessions', () => {
-  return { ok: true, sessions: getRunningSessionSummaries() };
+  return { ok: true, sessions: getRunningSessionSummaries(), unfinishedRuns: recentUnfinishedRunJournals() };
 }, { authRequired: true });
 handleSafe('agent:session-history', (_event, payload = {}) => getSessionHistorySummary(payload), { authRequired: true });
 handleSafe('backend:open-auth', async () => {

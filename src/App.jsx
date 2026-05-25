@@ -277,6 +277,7 @@ const initialTimeline = [
 ];
 
 const messageStates = {
+  queued: { label: '排队中', icon: Clock3, tone: 'queued' },
   sending: { label: '发送中', icon: CircleDashed, tone: 'sending' },
   sent: { label: '已发送', icon: CircleCheck, tone: 'sent' },
   read: { label: '已读', icon: CheckCheck, tone: 'read' },
@@ -310,14 +311,32 @@ const CONTEXT_COMPACT_SOURCE_MESSAGES = 28;
 const NATIVE_SESSION_ROTATE_TRIGGER_MESSAGES = 18;
 const NATIVE_SESSION_ROTATE_STEP_MESSAGES = 14;
 const STARTUP_FRONTEND_TIMEOUT_MS = 9000;
+const ARTIFACT_PREVIEW_MAX_ITEMS = 8;
+const ARTIFACT_PREVIEW_MAX_CHARS = 140000;
+const ARTIFACT_PREVIEW_CACHE_MAX_ITEMS = 120;
+const ARTIFACT_PREVIEW_EXTENSIONS = [
+  'html', 'htm', 'md', 'markdown', 'txt', 'json', 'csv', 'log', 'yaml', 'yml', 'xml', 'css', 'js', 'jsx', 'ts', 'tsx',
+  'png', 'jpg', 'jpeg', 'webp', 'gif', 'svg', 'bmp', 'avif',
+  'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'
+];
+const ARTIFACT_TEXT_EXTENSIONS = ['md', 'markdown', 'txt', 'json', 'csv', 'log', 'yaml', 'yml', 'xml', 'css', 'js', 'jsx', 'ts', 'tsx'];
+const ARTIFACT_HTML_EXTENSIONS = ['html', 'htm'];
+const ARTIFACT_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg', 'bmp', 'avif'];
+const ARTIFACT_OFFICE_EXTENSIONS = ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'];
+const ATTACHMENT_PREVIEW_URL_MAX_CHARS = 1600000;
+const MAX_STORED_LEDGER_ITEMS = 80;
+const MAX_STORED_INGEST_ITEMS = 40;
+const MAX_COMPOSER_REFERENCES = 6;
+const COMPOSER_REFERENCE_SNIPPET_CHARS = 220;
 const AGENT_EVENT_QUEUE_LIMIT = 1600;
 const AGENT_EVENT_FLUSH_BATCH = 120;
 const AGENT_EVENT_FLUSH_DELAY_MS = 40;
 const AGENT_EVENT_PENDING_DELAY_MS = 140;
 const PENDING_AGENT_EVENT_TTL_MS = 7000;
 const AGENT_TIMELINE_BATCH_LIMIT = 24;
-const AGENT_EVENT_TERMINAL_KINDS = new Set(['done', 'error', 'cancelled', 'timeout']);
+const AGENT_EVENT_TERMINAL_KINDS = new Set(['result', 'done', 'error', 'cancelled', 'timeout']);
 const AGENT_DISCLOSURE_DELAYS_MS = [1800, 6500, 14000, 28000];
+const CONVERSATION_SAVE_DEBOUNCE_MS = 220;
 const MANAGED_SECRET_DEFINITIONS = [
   { key: 'ANTHROPIC_API_KEY', label: '模型服务密钥', hint: '用于亦芯调用模型服务' },
   { key: 'ANTHROPIC_AUTH_TOKEN', label: '模型授权令牌', hint: '用于企业授权会话' },
@@ -496,6 +515,50 @@ function isImageAttachment(attachment = {}) {
   return String(attachment.type || '').startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(attachment.name || '');
 }
 
+const CHAT_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.avif']);
+const CHAT_VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.ogg', '.ogv', '.mov', '.m4v']);
+
+function cleanChatUrlToken(value = '') {
+  let token = String(value || '')
+    .trim()
+    .replace(/^<|>$/g, '')
+    .replace(/\s+["'][\s\S]*$/, '');
+  while (/[)\]}.,;!?，。；：！？]$/.test(token)) {
+    token = token.slice(0, -1);
+  }
+  return token.trim();
+}
+
+function safeChatExternalUrl(value = '', { mediaOnly = false } = {}) {
+  const raw = cleanChatUrlToken(value);
+  if (!raw || raw.length > 2048 || /[\u0000-\u001F\u007F]/.test(raw)) return '';
+  const normalized = /^www\./i.test(raw) ? `https://${raw}` : raw;
+  try {
+    const parsed = new URL(normalized);
+    if (mediaOnly && !['http:', 'https:'].includes(parsed.protocol)) return '';
+    if (!mediaOnly && !['http:', 'https:', 'mailto:'].includes(parsed.protocol)) return '';
+    if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') && (parsed.username || parsed.password)) return '';
+    return parsed.toString();
+  } catch {
+    return '';
+  }
+}
+
+function chatMediaKind(url = '') {
+  const safeUrl = safeChatExternalUrl(url, { mediaOnly: true });
+  if (!safeUrl) return '';
+  try {
+    const parsed = new URL(safeUrl);
+    const pathname = decodeURIComponent(parsed.pathname || '').toLowerCase();
+    const ext = pathname.match(/\.[a-z0-9]+$/)?.[0] || '';
+    if (CHAT_IMAGE_EXTENSIONS.has(ext)) return 'image';
+    if (CHAT_VIDEO_EXTENSIONS.has(ext)) return 'video';
+  } catch {
+    return '';
+  }
+  return '';
+}
+
 function attachmentPromptSection(attachments = []) {
   if (!attachments.length) return '';
   const lines = attachments.map((attachment, index) => {
@@ -503,6 +566,271 @@ function attachmentPromptSection(attachments = []) {
     return `${index + 1}. ${attachment.name || `附件 ${index + 1}`}（${attachment.type || 'unknown'}，${formatFileSize(attachment.sizeBytes)}${location}）`;
   });
   return `已附加文件：\n${lines.join('\n')}`;
+}
+
+function attachmentStableKey(attachment = {}, index = 0) {
+  return String(
+    attachment.id
+    || attachment.path
+    || attachment.filePath
+    || `${attachment.name || 'attachment'}:${attachment.sizeBytes || attachment.size || 0}:${attachment.type || attachment.mimeType || ''}:${index}`
+  );
+}
+
+function safeAttachmentPreviewUrl(value = '', { persist = false } = {}) {
+  const previewUrl = String(value || '').trim();
+  if (!previewUrl || previewUrl.length > ATTACHMENT_PREVIEW_URL_MAX_CHARS) return '';
+  if (persist && !previewUrl.startsWith('data:')) return '';
+  return previewUrl;
+}
+
+function serializeAgentAttachment(attachment = {}, index = 0) {
+  const path = String(attachment.path || attachment.filePath || '').trim();
+  const previewUrl = safeAttachmentPreviewUrl(attachment.previewUrl || attachment.previewDataUrl || attachment.thumbnail || '');
+  const id = attachmentStableKey(attachment, index);
+  return {
+    id,
+    name: String(attachment.name || attachment.fileName || `attachment-${index + 1}`).slice(0, 240),
+    path,
+    filePath: path,
+    type: String(attachment.type || attachment.mimeType || '').slice(0, 120),
+    mimeType: String(attachment.mimeType || attachment.type || '').slice(0, 120),
+    sizeBytes: Number(attachment.sizeBytes || attachment.size) || 0,
+    source: String(attachment.source || 'upload').slice(0, 40),
+    previewUrl,
+    previewDataUrl: previewUrl.startsWith('data:') ? previewUrl : '',
+    status: String(attachment.status || 'ready').slice(0, 40),
+    progress: Number.isFinite(Number(attachment.progress)) ? Number(attachment.progress) : 100,
+    lastModified: attachment.lastModified || attachment.updatedAt || null
+  };
+}
+
+function serializeAgentAttachments(attachments = []) {
+  return (Array.isArray(attachments) ? attachments : [])
+    .filter(Boolean)
+    .slice(0, MAX_COMPOSER_ATTACHMENTS)
+    .map((attachment, index) => serializeAgentAttachment(attachment, index));
+}
+
+function sanitizeStoredAttachment(attachment = {}, index = 0) {
+  const serialized = serializeAgentAttachment(attachment, index);
+  return {
+    ...serialized,
+    previewUrl: safeAttachmentPreviewUrl(serialized.previewUrl, { persist: true }),
+    previewDataUrl: safeAttachmentPreviewUrl(serialized.previewDataUrl, { persist: true }),
+    ingest: attachment.ingest ? sanitizeAttachmentIngestItem(attachment.ingest, index) : undefined
+  };
+}
+
+function compactEventDetail(value, maxLength = 1100) {
+  if (value == null || value === '') return '';
+  if (typeof value === 'string') return value.replace(/\s+/g, ' ').trim().slice(0, maxLength);
+  try {
+    return JSON.stringify(value, null, 2).replace(/\s+$/g, '').slice(0, maxLength);
+  } catch {
+    return String(value).replace(/\s+/g, ' ').trim().slice(0, maxLength);
+  }
+}
+
+function toolToneFromStatus(status = '') {
+  const normalized = String(status || '').toLowerCase();
+  if (/error|fail|failed|timeout|denied|rejected|exception|异常|失败|错误|超时|拒绝/.test(normalized)) return 'danger';
+  if (/done|complete|completed|success|ok|finished|已完成|成功/.test(normalized)) return 'success';
+  if (/pending|queued|waiting|confirm|等待|确认|排队/.test(normalized)) return 'pending';
+  return 'running';
+}
+
+function readableToolStatus(status = '', fallback = '进行中') {
+  return formatAgentEventStatus(status || fallback, fallback);
+}
+
+function normalizeToolLedgerItem(raw = {}, event = {}, index = 0) {
+  const source = raw && typeof raw === 'object' ? raw : { text: raw };
+  const toolName = source.toolName
+    || source.name
+    || source.tool?.name
+    || source.tool
+    || event.toolName
+    || event.task?.name
+    || event.taskName
+    || event.name
+    || '工具调用';
+  const status = source.status || source.state || event.status || event.state || event.kind || 'running';
+  const action = source.action
+    || source.operation
+    || source.summary
+    || source.description
+    || source.text
+    || source.message
+    || event.text
+    || event.message
+    || agentDisclosureLabel(event)
+    || '执行工具';
+  const detail = [
+    source.path || source.filePath || source.cwd ? `path: ${source.path || source.filePath || source.cwd}` : '',
+    source.command ? `command: ${source.command}` : '',
+    source.exitCode != null ? `exit: ${source.exitCode}` : '',
+    source.input || source.args || source.parameters ? `input: ${compactEventDetail(source.input || source.args || source.parameters, 650)}` : '',
+    source.output || source.stdout || source.stderr ? `output: ${compactEventDetail(source.output || source.stdout || source.stderr, 800)}` : '',
+    source.error ? `error: ${compactEventDetail(source.error, 500)}` : ''
+  ].filter(Boolean).join('\n');
+  const id = String(source.id || source.callId || source.toolUseId || event.id || event.__seq || `${toolName}-${index}-${Date.now()}`);
+  return {
+    id,
+    toolName: sanitizeDisplayText(toolName, '工具调用').slice(0, 80),
+    action: sanitizeDisplayText(action, '执行工具').slice(0, 140),
+    path: String(source.path || source.filePath || source.cwd || '').slice(0, 600),
+    output: compactEventDetail(source.output || source.stdout || source.stderr || '', 800),
+    status: readableToolStatus(status, '进行中'),
+    tone: toolToneFromStatus(status),
+    detail,
+    time: formatAgentEventTime(event),
+    kind: event.kind || 'tool'
+  };
+}
+
+function normalizeToolLedgerItemsFromEvent(event = {}) {
+  const sources = [];
+  if (Array.isArray(event.ledger)) sources.push(...event.ledger);
+  else if (event.ledger && typeof event.ledger === 'object') sources.push(event.ledger);
+  if (Array.isArray(event.tools)) sources.push(...event.tools);
+  else if (event.tool && typeof event.tool === 'object') sources.push(event.tool);
+  if (
+    ['tool', 'ledger'].includes(event.kind)
+    || event.toolName
+    || event.command
+    || event.input
+    || event.output
+    || event.stdout
+    || event.stderr
+  ) {
+    sources.push(event);
+  }
+  const seen = new Set();
+  return sources
+    .filter(Boolean)
+    .map((source, index) => normalizeToolLedgerItem(source, event, index))
+    .filter((item) => {
+      const key = `${item.id}:${item.toolName}:${item.action}:${item.status}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 12);
+}
+
+function appendToolLedgerItems(current = [], incoming = []) {
+  if (!incoming.length) return current;
+  const byKey = new Map((Array.isArray(current) ? current : []).map((item) => [
+    `${item.id}:${item.toolName}:${item.action}`,
+    item
+  ]));
+  for (const item of incoming) {
+    const key = `${item.id}:${item.toolName}:${item.action}`;
+    byKey.set(key, { ...(byKey.get(key) || {}), ...item });
+  }
+  return Array.from(byKey.values()).slice(-MAX_STORED_LEDGER_ITEMS);
+}
+
+function ingestToneFromStatus(status = '', ok = true) {
+  const normalized = String(status || '').toLowerCase();
+  if (!ok || /error|fail|failed|unsupported|denied|too-large|blocked|异常|失败|不可|过大|拒绝/.test(normalized)) return 'warn';
+  if (/done|complete|completed|success|ok|ready|已完成|成功|已摄取/.test(normalized)) return 'success';
+  if (/pending|queued|waiting|uploading|等待|排队|上传/.test(normalized)) return 'pending';
+  return 'running';
+}
+
+function sanitizeAttachmentIngestItem(raw = {}, index = 0) {
+  const source = raw && typeof raw === 'object' ? raw : { summary: raw };
+  const name = source.name || source.fileName || source.attachmentName || source.path || source.filePath || `附件 ${index + 1}`;
+  const status = source.status || source.state || (source.ok === false ? 'failed' : 'ready');
+  const metadata = source.metadata || source.image || source.imageInfo || source.info || {};
+  const summary = source.summary
+    || source.textSummary
+    || source.preview
+    || source.description
+    || source.message
+    || '';
+  const reason = source.reason || source.error || source.unavailableReason || source.blockedReason || '';
+  return {
+    id: String(source.id || source.attachmentId || source.path || source.filePath || `${name}-${index}`).slice(0, 160),
+    attachmentId: String(source.attachmentId || source.id || '').slice(0, 120),
+    name: sanitizeDisplayText(name, `附件 ${index + 1}`).slice(0, 180),
+    path: String(source.path || source.filePath || '').slice(0, 600),
+    type: String(source.type || source.mimeType || '').slice(0, 120),
+    sizeBytes: Number(source.sizeBytes || source.size) || 0,
+    status: readableToolStatus(status, '已处理'),
+    tone: ingestToneFromStatus(status, source.ok !== false),
+    summary: sanitizeDisplayText(summary, reason ? '无法预览' : '已完成附件读取').slice(0, 280),
+    reason: sanitizeDisplayText(reason, '').slice(0, 260),
+    metadata: compactEventDetail(metadata, 420),
+    previewUrl: safeAttachmentPreviewUrl(source.previewUrl || source.previewDataUrl || source.thumbnail || ''),
+    time: source.time || source.updatedAt || null
+  };
+}
+
+function normalizeAttachmentIngestItemsFromEvent(event = {}) {
+  const sources = [];
+  if (Array.isArray(event.attachments)) sources.push(...event.attachments);
+  else if (event.attachment && typeof event.attachment === 'object') sources.push(event.attachment);
+  if (Array.isArray(event.ingestion)) sources.push(...event.ingestion);
+  else if (event.ingestion && typeof event.ingestion === 'object') sources.push(event.ingestion);
+  if (Array.isArray(event.attachmentIngest)) sources.push(...event.attachmentIngest);
+  else if (event.attachmentIngest && typeof event.attachmentIngest === 'object') sources.push(event.attachmentIngest);
+  if (['attachment', 'ingest'].includes(event.kind)) sources.push(event);
+  return sources
+    .filter(Boolean)
+    .map((source, index) => sanitizeAttachmentIngestItem(source, index))
+    .slice(0, 12);
+}
+
+function mergeAttachmentIngestItems(current = [], incoming = []) {
+  if (!incoming.length) return current;
+  const byKey = new Map((Array.isArray(current) ? current : []).map((item) => [
+    item.attachmentId || item.path || item.name || item.id,
+    item
+  ]));
+  for (const item of incoming) {
+    const key = item.attachmentId || item.path || item.name || item.id;
+    byKey.set(key, { ...(byKey.get(key) || {}), ...item });
+  }
+  return Array.from(byKey.values()).slice(-MAX_STORED_INGEST_ITEMS);
+}
+
+function recoveryStateFromStatus(status = '', fallback = 'recoverable') {
+  const normalized = String(status || fallback).toLowerCase();
+  if (/stop|stopped|cancel|cancelled|canceled|killed|已停止|已取消/.test(normalized)) {
+    return { state: 'stopped', label: '已停止', tone: 'pending' };
+  }
+  if (/error|fail|failed|crash|timeout|异常|失败|崩溃|超时/.test(normalized)) {
+    return { state: 'retryable', label: '可重试', tone: 'danger' };
+  }
+  if (/running|active|resume|recover|restored|进行|恢复/.test(normalized)) {
+    return { state: 'recoverable', label: '可恢复', tone: 'running' };
+  }
+  return { state: 'recoverable', label: '可恢复', tone: 'running' };
+}
+
+function recoveryStateFromSession(row = {}) {
+  const base = recoveryStateFromStatus(row.recoveryStatus || row.status || row.state, 'recoverable');
+  return {
+    ...base,
+    sessionId: row.sessionId || row.id || '',
+    prompt: sanitizeDisplayText(row.promptPreview || row.prompt || row.title || '', ''),
+    detail: sanitizeDisplayText(row.recoveryHint || row.detail || row.message, '窗口恢复后可继续查看这轮任务的输出。')
+  };
+}
+
+function recoveryStateFromAgentEvent(event = {}) {
+  if (!event || (event.kind !== 'recovery' && !event.recovery && !event.recoveryStatus)) return null;
+  const raw = event.recovery && typeof event.recovery === 'object' ? event.recovery : event;
+  const base = recoveryStateFromStatus(raw.status || raw.state || raw.recoveryStatus || event.status || event.state, 'recoverable');
+  return {
+    ...base,
+    sessionId: raw.sessionId || event.sessionId || '',
+    prompt: sanitizeDisplayText(raw.promptPreview || raw.prompt || event.promptPreview || event.prompt, ''),
+    detail: sanitizeDisplayText(raw.detail || raw.message || event.text || event.message, '任务状态已从本地运行记录恢复。')
+  };
 }
 
 function isContinuationPrompt(value = '') {
@@ -555,6 +883,542 @@ function readableMessageText(message = {}) {
     return `发送了 ${message.attachments.length} 个附件：${message.attachments.map((item) => item.name).filter(Boolean).slice(0, 4).join('、')}`;
   }
   return '';
+}
+
+function retryPromptFromMessage(message = {}) {
+  const text = String(message.originalPrompt || '').trim();
+  if (!text) return '';
+  const marker = '用户当前输入：';
+  const markerIndex = text.lastIndexOf(marker);
+  if (markerIndex < 0) return text;
+  const trailing = text.slice(markerIndex + marker.length).trim();
+  const nextSectionIndex = trailing.search(/\n{2,}/);
+  return (nextSectionIndex >= 0 ? trailing.slice(0, nextSectionIndex) : trailing).trim() || text;
+}
+
+function stripArtifactPathToken(value = '') {
+  return String(value || '')
+    .trim()
+    .replace(/^['"`<([{]+|['"`>)\]}.,;，。；：:]+$/g, '');
+}
+
+function isExplicitLocalArtifactPathToken(value = '') {
+  const raw = String(value || '').trim();
+  if (!raw) return false;
+  if (/^[a-zA-Z][a-zA-Z\d+.-]*:\/\//.test(raw) && !/^file:\/\//i.test(raw)) return false;
+  return /^file:\/\//i.test(raw)
+    || /^workspace:\//i.test(raw)
+    || /^[A-Za-z]:[\\/]/.test(raw)
+    || /^\\\\[^\\]/.test(raw)
+    || /^\.{1,2}[\\/]/.test(raw)
+    || /^~[\\/]/.test(raw)
+    || /^\//.test(raw)
+    || /[\\/]/.test(raw);
+}
+
+function artifactExtension(path = '') {
+  const match = String(path || '').match(/\.([a-z0-9]+)$/i);
+  return match ? match[1].toLowerCase() : '';
+}
+
+function extensionFromMimeType(type = '') {
+  const mime = String(type || '').toLowerCase();
+  if (mime.includes('png')) return 'png';
+  if (mime.includes('jpeg') || mime.includes('jpg')) return 'jpg';
+  if (mime.includes('webp')) return 'webp';
+  if (mime.includes('gif')) return 'gif';
+  if (mime.includes('svg')) return 'svg';
+  if (mime.includes('pdf')) return 'pdf';
+  if (mime.includes('csv')) return 'csv';
+  if (mime.includes('json')) return 'json';
+  if (mime.includes('html')) return 'html';
+  if (mime.includes('markdown')) return 'md';
+  if (mime.includes('spreadsheet') || mime.includes('ms-excel')) return 'xlsx';
+  if (mime.includes('presentation') || mime.includes('ms-powerpoint')) return 'pptx';
+  if (mime.includes('wordprocessing') || mime.includes('msword')) return 'docx';
+  if (mime.startsWith('text/')) return 'txt';
+  return '';
+}
+
+function artifactPreviewKind(ext = '', type = '') {
+  const normalizedExt = String(ext || extensionFromMimeType(type)).toLowerCase();
+  const normalizedType = String(type || '').toLowerCase();
+  if (ARTIFACT_HTML_EXTENSIONS.includes(normalizedExt)) return 'html';
+  if (ARTIFACT_TEXT_EXTENSIONS.includes(normalizedExt) || normalizedType.startsWith('text/')) return 'text';
+  if (ARTIFACT_IMAGE_EXTENSIONS.includes(normalizedExt) || normalizedType.startsWith('image/')) return 'image';
+  if (normalizedExt === 'pdf' || normalizedType.includes('pdf')) return 'pdf';
+  if (ARTIFACT_OFFICE_EXTENSIONS.includes(normalizedExt) || /officedocument|msword|ms-excel|ms-powerpoint/.test(normalizedType)) return 'office';
+  return 'binary';
+}
+
+function artifactCanUseTextPreview(artifact = {}) {
+  const kind = artifactPreviewKind(artifact.ext, artifact.type || artifact.mimeType);
+  return kind === 'text' || kind === 'html';
+}
+
+function fileNameFromArtifactPath(path = '') {
+  return String(path || '').split(/[\\/]/).filter(Boolean).at(-1) || path;
+}
+
+function artifactLanguageFromPath(path = '') {
+  const ext = artifactExtension(path);
+  if (ext === 'md' || ext === 'markdown') return 'markdown';
+  if (ext === 'htm' || ext === 'html') return 'html';
+  if (['js', 'jsx'].includes(ext)) return 'javascript';
+  if (['ts', 'tsx'].includes(ext)) return 'typescript';
+  if (['yml', 'yaml'].includes(ext)) return 'yaml';
+  return ext || 'text';
+}
+
+function parseArtifactPathToken(rawValue = '') {
+  let value = stripArtifactPathToken(rawValue);
+  if (!value || /^https?:\/\//i.test(value) || !isExplicitLocalArtifactPathToken(value)) return null;
+  try {
+    value = decodeURIComponent(value);
+  } catch {
+    // Keep the original value when the token is not URI encoded.
+  }
+  const extPattern = ARTIFACT_PREVIEW_EXTENSIONS.join('|');
+  const match = value.match(new RegExp(`^(.+?\\.(${extPattern}))(?:#L?(\\d+)(?:-L?(\\d+))?)?(?::(\\d+))?(?::(\\d+))?$`, 'i'));
+  if (!match) return null;
+  const path = stripArtifactPathToken(match[1]);
+  const ext = String(match[2] || '').toLowerCase();
+  if (!ARTIFACT_PREVIEW_EXTENSIONS.includes(ext)) return null;
+  const hashLine = Number(match[3]) || null;
+  const hashEndLine = Number(match[4]) || null;
+  const suffixLine = Number(match[5]) || null;
+  const suffixColumn = Number(match[6]) || null;
+  const line = hashLine || suffixLine || null;
+  return {
+    id: `${path}:${line || ''}:${suffixColumn || ''}`,
+    path,
+    name: fileNameFromArtifactPath(path),
+    ext,
+    line,
+    endLine: hashEndLine || null,
+    column: suffixColumn || null,
+    raw: rawValue
+  };
+}
+
+function extractArtifactReferences(text = '') {
+  const source = String(text || '');
+  if (!source) return [];
+  const found = new Map();
+  const add = (token) => {
+    const artifact = parseArtifactPathToken(token);
+    if (!artifact) return;
+    const key = artifact.id.toLowerCase();
+    if (!found.has(key)) found.set(key, artifact);
+  };
+
+  const markdownLinkPattern = /\[[^\]]{1,120}\]\(([^)\n]+)\)/g;
+  for (const match of source.matchAll(markdownLinkPattern)) add(match[1]);
+
+  const extPattern = ARTIFACT_PREVIEW_EXTENSIONS.join('|');
+  const pathPatterns = [
+    new RegExp(
+      `(?:[A-Za-z]:[\\\\/]|workspace:/|\\.{1,2}[\\\\/]|~[\\\\/]|/|[A-Za-z0-9_.-]+[\\\\/])(?:[^\\s<>"'\`|]+[\\\\/])*[^\\s<>"'\`|]+?\\.(?:${extPattern})(?:#L?\\d+(?:-L?\\d+)?|:\\d+(?::\\d+)?)?`,
+      'gi'
+    ),
+    new RegExp(
+      `(?:[A-Za-z]:[\\\\/]|workspace:/|\\.{1,2}[\\\\/]|~[\\\\/]|/)[^\\r\\n<>"'\`|]{0,900}?\\.(?:${extPattern})(?:#L?\\d+(?:-L?\\d+)?|:\\d+(?::\\d+)?)?`,
+      'gi'
+    )
+  ];
+  for (const pattern of pathPatterns) {
+    for (const match of source.matchAll(pattern)) add(match[0]);
+  }
+
+  return [...found.values()].slice(0, ARTIFACT_PREVIEW_MAX_ITEMS);
+}
+
+function finalArtifactsFromText(text = '') {
+  return extractArtifactReferences(text)
+    .map((artifact) => ({ ...artifact, source: 'assistant-final' }));
+}
+
+function artifactFromAttachment(attachment = {}, index = 0) {
+  const path = String(attachment.path || attachment.filePath || '').trim();
+  const name = String(attachment.name || attachment.fileName || fileNameFromArtifactPath(path) || `附件 ${index + 1}`).trim();
+  const ext = artifactExtension(path || name) || extensionFromMimeType(attachment.type || attachment.mimeType);
+  if (!ext || !ARTIFACT_PREVIEW_EXTENSIONS.includes(ext)) return null;
+  return {
+    id: `attachment:${attachmentStableKey(attachment, index)}:${ext}`,
+    path: path || name,
+    name,
+    ext,
+    type: attachment.type || attachment.mimeType || '',
+    sizeBytes: Number(attachment.sizeBytes || attachment.size) || 0,
+    previewUrl: safeAttachmentPreviewUrl(attachment.previewUrl || attachment.previewDataUrl || attachment.thumbnail || ''),
+    source: attachment.source || 'attachment',
+    raw: path || name
+  };
+}
+
+function attachmentKindFromName(name = '', type = '') {
+  const ext = artifactExtension(name);
+  const mime = String(type || '').toLowerCase();
+  if (mime.startsWith('image/') || ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(ext)) return 'image';
+  if (['xls', 'xlsx', 'xlsm', 'csv'].includes(ext)) return 'sheet';
+  if (['ppt', 'pptx', 'pptm'].includes(ext)) return 'slide';
+  if (['doc', 'docx', 'md', 'txt', 'pdf'].includes(ext)) return 'document';
+  if (['js', 'jsx', 'ts', 'tsx', 'json', 'css', 'html', 'htm', 'py', 'java', 'sql'].includes(ext)) return 'code';
+  return 'file';
+}
+
+function artifactsFromAttachments(attachments = []) {
+  return (Array.isArray(attachments) ? attachments : [])
+    .map((attachment, index) => artifactFromAttachment(attachment, index))
+    .filter(Boolean);
+}
+
+function artifactsFromLedger(ledger = []) {
+  return (Array.isArray(ledger) ? ledger : [])
+    .flatMap((item) => extractArtifactReferences([
+      item.path,
+      item.filePath,
+      item.action,
+      item.detail,
+      item.output
+    ].filter(Boolean).join('\n')));
+}
+
+function mergeArtifactReferences(artifacts = []) {
+  const byKey = new Map();
+  for (const artifact of artifacts.filter(Boolean)) {
+    const key = String(artifact.id || artifact.path || artifact.name || '').toLowerCase();
+    if (!key || byKey.has(key)) continue;
+    byKey.set(key, artifact);
+  }
+  return Array.from(byKey.values()).slice(0, ARTIFACT_PREVIEW_MAX_ITEMS);
+}
+
+function artifactLocationLabel(artifact = {}, fallback = '') {
+  const linePart = artifact.line ? `:${artifact.line}${artifact.column ? `:${artifact.column}` : ''}` : '';
+  const rangePart = artifact.endLine && artifact.endLine !== artifact.line ? `-${artifact.endLine}` : '';
+  return `${artifact.path || fallback}${linePart}${rangePart}`;
+}
+
+function normalizeArtifactPreviewResult(result = {}, artifact = {}) {
+  const file = result.file && typeof result.file === 'object' ? result.file : {};
+  const metadata = result.metadata && typeof result.metadata === 'object' ? result.metadata : {};
+  const path = String(result.path || result.filePath || file.path || file.pathLabel || artifact.path || '').trim();
+  const mimeType = result.mimeType
+    || result.type
+    || file.mimeType
+    || metadata.mimeType
+    || artifact.type
+    || artifact.mimeType
+    || '';
+  const ext = artifact.ext || artifactExtension(path || artifact.name) || extensionFromMimeType(mimeType);
+  const kind = result.kind || artifactPreviewKind(ext, mimeType);
+  const previewUrl = safeAttachmentPreviewUrl(result.previewUrl || result.previewDataUrl || result.dataUrl || result.thumbnail || artifact.previewUrl || '');
+  const rawContent = Array.isArray(result.lines)
+    ? result.lines.join('\n')
+    : (result.content ?? result.text ?? result.body ?? result.data ?? '');
+  const content = typeof rawContent === 'string' ? rawContent : JSON.stringify(rawContent ?? '', null, 2);
+  const metadataDetail = Object.keys(metadata).length || Object.keys(file).length
+    ? { ...file, ...metadata }
+    : (result.info || result.fileInfo || {});
+  return {
+    ok: result.ok !== false,
+    path,
+    name: result.name || file.name || artifact.name || fileNameFromArtifactPath(path),
+    kind,
+    ext,
+    language: result.language || file.language || artifactLanguageFromPath(path || artifact.name),
+    mimeType,
+    previewUrl,
+    sizeBytes: Number(result.sizeBytes || result.size || file.sizeBytes || metadata.sizeBytes || artifact.sizeBytes) || 0,
+    reason: result.reason || result.unavailableReason || result.error || '',
+    metadata: compactEventDetail(metadataDetail, 520),
+    content: content.slice(0, ARTIFACT_PREVIEW_MAX_CHARS),
+    previewId: String(result.previewId || metadata.previewId || '').slice(0, 120),
+    truncated: Boolean(result.truncated) || content.length > ARTIFACT_PREVIEW_MAX_CHARS,
+    startLine: Number(result.startLine || result.lineStart || artifact.line || 1) || 1,
+    column: Number(result.column || artifact.column || 0) || null,
+    previewable: result.previewable !== false,
+    renderMode: result.renderMode || '',
+    error: result.error || ''
+  };
+}
+
+const artifactPreviewRequestCache = new Map();
+
+function artifactPreviewCacheKey(artifact = {}) {
+  const pathKey = String(artifact.path || artifact.filePath || artifact.raw || '').trim();
+  const idKey = String(artifact.id || '').trim();
+  const sessionKey = String(artifact.sessionId || artifact.agentSessionId || artifact.claudeSessionId || '').trim();
+  const locationKey = `${artifact.line || ''}:${artifact.column || ''}`;
+  return [idKey, pathKey, sessionKey, locationKey].filter(Boolean).join('|');
+}
+
+function cacheArtifactPreviewRequest(cacheKey, request) {
+  if (!cacheKey) return request;
+  if (artifactPreviewRequestCache.size >= ARTIFACT_PREVIEW_CACHE_MAX_ITEMS) {
+    const oldestKey = artifactPreviewRequestCache.keys().next().value;
+    if (oldestKey) artifactPreviewRequestCache.delete(oldestKey);
+  }
+  artifactPreviewRequestCache.set(cacheKey, request);
+  return request;
+}
+
+async function previewArtifactWithBridge(artifact = {}) {
+  const cacheKey = artifactPreviewCacheKey(artifact);
+  if (cacheKey && artifactPreviewRequestCache.has(cacheKey)) {
+    return artifactPreviewRequestCache.get(cacheKey);
+  }
+  const request = previewArtifactWithBridgeUncached(artifact).catch((error) => {
+    if (cacheKey) artifactPreviewRequestCache.delete(cacheKey);
+    throw error;
+  });
+  return cacheArtifactPreviewRequest(cacheKey, request);
+}
+
+async function previewArtifactWithBridgeUncached(artifact = {}) {
+  const kind = artifactPreviewKind(artifact.ext, artifact.type || artifact.mimeType);
+  if (kind === 'image' && artifact.previewUrl) {
+    return {
+      ok: true,
+      kind,
+      path: artifact.path,
+      name: artifact.name,
+      mimeType: artifact.type || artifact.mimeType || '',
+      previewUrl: artifact.previewUrl,
+      sizeBytes: artifact.sizeBytes || 0
+    };
+  }
+  if (!artifact.path) {
+    return {
+      ok: false,
+      unsupported: true,
+      kind,
+      path: artifact.path,
+      name: artifact.name,
+      mimeType: artifact.type || artifact.mimeType || '',
+      sizeBytes: artifact.sizeBytes || 0,
+      reason: kind === 'pdf'
+        ? 'PDF 当前仅显示文件元信息，EcoreX 不会跳转系统应用。'
+        : kind === 'office'
+          ? 'Office 文件当前仅显示文件元信息，EcoreX 不会跳转系统应用。'
+          : '该二进制格式当前仅显示文件元信息，EcoreX 不会跳转系统应用。'
+    };
+  }
+  const payload = {
+    name: artifact.name,
+    path: artifact.path,
+    filePath: artifact.path,
+    mimeType: artifact.type || artifact.mimeType || '',
+    type: artifact.type || artifact.mimeType || '',
+    sizeBytes: artifact.sizeBytes || 0,
+    line: artifact.line,
+    column: artifact.column,
+    sessionId: artifact.sessionId || artifact.agentSessionId || '',
+    agentSessionId: artifact.agentSessionId || artifact.sessionId || '',
+    claudeSessionId: artifact.claudeSessionId || '',
+    projectId: artifact.projectId || '',
+    projectName: artifact.projectName || '',
+    source: artifact.source || 'assistant-artifact',
+    maxChars: ARTIFACT_PREVIEW_MAX_CHARS,
+    maxBytes: ARTIFACT_PREVIEW_MAX_CHARS
+  };
+  const candidates = [
+    'previewFile',
+    'files.preview',
+    'workspace.previewFile',
+    'getFilePreview',
+    'filePreview',
+    'readFilePreview'
+  ];
+  let lastError = null;
+  for (const candidate of candidates) {
+    const fn = getBridgeFunction(candidate);
+    if (typeof fn !== 'function') continue;
+    try {
+      return await fn(payload);
+    } catch (firstError) {
+      try {
+        return await fn(artifact.path, payload);
+      } catch (secondError) {
+        lastError = secondError || firstError;
+      }
+    }
+  }
+  return {
+    ok: false,
+    missing: true,
+    unauthorized: isUnauthorizedError(lastError),
+    error: lastError?.message || 'previewFile bridge is not available'
+  };
+}
+
+async function validateArtifactAvailabilityWithBridge(artifact = {}) {
+  if (!artifact.path) return false;
+  const bridge = window.ecorex;
+  if (!bridge) return true;
+  const payload = {
+    name: artifact.name,
+    path: artifact.path,
+    filePath: artifact.path,
+    mimeType: artifact.type || artifact.mimeType || '',
+    type: artifact.type || artifact.mimeType || '',
+    sessionId: artifact.sessionId || artifact.agentSessionId || '',
+    agentSessionId: artifact.agentSessionId || artifact.sessionId || '',
+    claudeSessionId: artifact.claudeSessionId || '',
+    projectId: artifact.projectId || '',
+    projectName: artifact.projectName || '',
+    source: artifact.source || 'assistant-artifact',
+    validateOnly: true
+  };
+  const candidates = [
+    'previewFile',
+    'files.preview',
+    'workspace.previewFile',
+    'workspace.preview'
+  ];
+  for (const candidate of candidates) {
+    const fn = getBridgeFunction(candidate);
+    if (typeof fn !== 'function') continue;
+    try {
+      const result = await fn(payload);
+      if (result?.ok !== false && (result?.file || result?.path || result?.content || result?.previewUrl)) return true;
+      if (result?.reason === 'not-found') return false;
+    } catch (firstError) {
+      try {
+        const result = await fn(artifact.path, payload);
+        if (result?.ok !== false && (result?.file || result?.path || result?.content || result?.previewUrl)) return true;
+        if (result?.reason === 'not-found') return false;
+      } catch {
+        // Try the next bridge shape.
+      }
+      if (/not found|outside allowed roots|only supports local files/i.test(firstError?.message || '')) return false;
+    }
+  }
+  return false;
+}
+
+async function openAttachmentFileWithBridge(attachment = {}) {
+  const payload = {
+    id: attachment.id,
+    attachmentId: attachment.id,
+    name: attachment.name,
+    path: attachment.path || attachment.filePath,
+    filePath: attachment.filePath || attachment.path,
+    sizeBytes: attachment.sizeBytes || attachment.size || 0,
+    mimeType: attachment.mimeType || attachment.type || '',
+    type: attachment.type || attachment.mimeType || ''
+  };
+  const candidates = [
+    'openAttachmentFile',
+    'attachments.openFile',
+    'attachment.openFile'
+  ];
+  let lastError = null;
+  for (const candidate of candidates) {
+    const fn = getBridgeFunction(candidate);
+    if (typeof fn !== 'function') continue;
+    try {
+      return await fn(payload);
+    } catch (firstError) {
+      try {
+        return await fn(payload.path, payload);
+      } catch (secondError) {
+        lastError = secondError || firstError;
+      }
+    }
+  }
+  return {
+    ok: false,
+    missing: true,
+    unauthorized: isUnauthorizedError(lastError),
+    error: lastError?.message || 'openAttachmentFile bridge is not available'
+  };
+}
+
+async function openExternalUrlWithBridge(url = '') {
+  const safeUrl = safeChatExternalUrl(url);
+  if (!safeUrl) return { ok: false, error: 'Invalid link.' };
+  if (!window.ecorex) {
+    window.open(safeUrl, '_blank', 'noopener,noreferrer');
+    return { ok: true, opened: true, fallback: 'window.open' };
+  }
+  return callEcorexAction(['openExternalUrl', 'shell.openExternal', 'shell.openExternalUrl'], { url: safeUrl });
+}
+
+function buildArtifactPromptReference(artifact = {}, selection = {}) {
+  const selectedLine = Number(selection.line || artifact.line || 0) || null;
+  const location = selectedLine
+    ? `${artifact.path || artifact.name}:${selectedLine}${artifact.column ? `:${artifact.column}` : ''}`
+    : artifactLocationLabel(artifact);
+  const snippet = String(selection.text || '').trim().slice(0, 900);
+  return [
+    `文件：${location}`,
+    snippet ? `片段：\n${snippet}` : '',
+    '修改意图：[在这里填写你希望如何修改这段产物]'
+  ].filter(Boolean).join('\n');
+}
+
+function sanitizeComposerReferenceItem(reference = {}, index = 0) {
+  const artifact = reference.artifact && typeof reference.artifact === 'object' ? reference.artifact : reference;
+  const selectedLine = Number(reference.line || artifact.line || 0) || null;
+  const existingLocation = String(reference.location || '').trim();
+  const location = existingLocation
+    ? (selectedLine && !/(?:#L?\d+|:\d+(?::\d+)?)$/i.test(existingLocation) ? `${existingLocation}:${selectedLine}` : existingLocation)
+    : selectedLine
+    ? `${artifact.path || artifact.name}:${selectedLine}${artifact.column ? `:${artifact.column}` : ''}`
+    : artifactLocationLabel(artifact, artifact.name || `文件 ${index + 1}`);
+  const snippet = String(reference.text || reference.snippet || '').trim().slice(0, COMPOSER_REFERENCE_SNIPPET_CHARS);
+  const name = sanitizeDisplayText(reference.name || artifact.name || fileNameFromArtifactPath(location), `文件 ${index + 1}`).slice(0, 160);
+  const createdTime = sanitizeDisplayText(reference.createdTime || reference.time || formatAgentEventTime(), '').slice(0, 16);
+  return {
+    id: String(reference.id || `${location}:${snippet}:${index}`).slice(0, 220),
+    name,
+    location: sanitizeDisplayText(location, name).slice(0, 600),
+    path: String(reference.path || artifact.path || '').slice(0, 600),
+    line: selectedLine,
+    text: snippet,
+    createdTime
+  };
+}
+
+function sanitizeComposerReferences(references = []) {
+  return (Array.isArray(references) ? references : [])
+    .filter(Boolean)
+    .slice(0, MAX_COMPOSER_REFERENCES)
+    .map((reference, index) => sanitizeComposerReferenceItem(reference, index));
+}
+
+function createComposerReferenceFromArtifact(artifact = {}, selection = {}) {
+  const selectedLine = Number(selection.line || artifact.line || 0) || null;
+  const location = selectedLine
+    ? `${artifact.path || artifact.name}:${selectedLine}${artifact.column ? `:${artifact.column}` : ''}`
+    : artifactLocationLabel(artifact, artifact.name);
+  const text = String(selection.text || '').trim().slice(0, COMPOSER_REFERENCE_SNIPPET_CHARS);
+  return sanitizeComposerReferenceItem({
+    id: `ref:${location}:${text}:${Date.now()}`,
+    artifact,
+    name: artifact.name || fileNameFromArtifactPath(location),
+    path: artifact.path || '',
+    line: selectedLine,
+    text,
+    createdTime: formatAgentEventTime()
+  });
+}
+
+function buildComposerReferenceSection(references = []) {
+  const items = sanitizeComposerReferences(references);
+  if (!items.length) return '';
+  return [
+    '[EcoreX selected file references]',
+    'The user selected the following generated/local file locations inside the desktop preview. Treat them as precise edit targets for the next answer.',
+    ...items.flatMap((item, index) => [
+      `Reference ${index + 1}: ${item.name}`,
+      `- location: ${item.location}`,
+      item.text ? `- selected text:\n${item.text}` : ''
+    ]).filter(Boolean),
+    '[/EcoreX selected file references]'
+  ].join('\n');
 }
 
 function sanitizeContextSummary(value = '') {
@@ -689,12 +1553,16 @@ function normalizeRecentChatItem(item, index = 0) {
   const fromTuple = Array.isArray(item);
   const title = String(fromTuple ? item[0] : item?.title || '').trim();
   if (!title) return null;
+  const projectId = String(fromTuple ? '' : item?.projectId || '').trim().slice(0, 120);
+  const projectName = String(fromTuple ? '' : item?.projectName || '').trim().slice(0, 120);
   return {
     id: String((fromTuple ? '' : item?.id) || `recent-${index}-${title}`).slice(0, 120),
     claudeSessionId: String((fromTuple ? '' : item?.claudeSessionId || item?.sessionId) || item?.id || '').slice(0, 120),
     title: title.slice(0, 80),
     time: String((fromTuple ? item[1] : item?.time) || '').trim() || recentChatTimeLabel(),
-    updatedAt: Number(fromTuple ? 0 : item?.updatedAt) || Date.now() - index
+    updatedAt: Number(fromTuple ? 0 : item?.updatedAt) || Date.now() - index,
+    projectId,
+    projectName
   };
 }
 
@@ -719,13 +1587,67 @@ function storeRecentChatItems(items = []) {
   }
 }
 
+function updateStoredRecentChatItem(id, patch = {}) {
+  const safeId = String(id || '').trim();
+  if (!safeId) return [];
+  const items = loadRecentChatItems().map((item) => (
+    item.id === safeId ? normalizeRecentChatItem({ ...item, ...patch, id: safeId }) : item
+  )).filter(Boolean);
+  storeRecentChatItems(items);
+  return items;
+}
+
+function deleteStoredRecentChatItem(id) {
+  const safeId = String(id || '').trim();
+  if (!safeId) return [];
+  const items = loadRecentChatItems().filter((item) => item.id !== safeId);
+  storeRecentChatItems(items);
+  deleteConversationState(safeId);
+  return items;
+}
+
+function updateStoredProjectChatReferences(projectId, projectName) {
+  const safeProjectId = String(projectId || '').trim();
+  if (!safeProjectId) return;
+  const safeProjectName = String(projectName || '').trim().slice(0, 120);
+  const items = loadRecentChatItems().map((item) => (
+    item.projectId === safeProjectId ? { ...item, projectName: safeProjectName } : item
+  ));
+  storeRecentChatItems(items);
+  const conversations = loadConversationMap();
+  let changed = false;
+  for (const [id, conversation] of Object.entries(conversations)) {
+    if (conversation?.projectId !== safeProjectId) continue;
+    conversations[id] = { ...conversation, projectName: safeProjectName };
+    changed = true;
+  }
+  if (changed) storeConversationMap(conversations);
+  window.dispatchEvent?.(new CustomEvent('ecorex:recent-chats-changed'));
+}
+
+function deleteStoredProjectChatReferences(projectId) {
+  const safeProjectId = String(projectId || '').trim();
+  if (!safeProjectId) return;
+  const removedIds = new Set(loadRecentChatItems().filter((item) => item.projectId === safeProjectId).map((item) => item.id));
+  storeRecentChatItems(loadRecentChatItems().filter((item) => item.projectId !== safeProjectId));
+  const conversations = loadConversationMap();
+  for (const id of Object.keys(conversations)) {
+    if (removedIds.has(id) || conversations[id]?.projectId === safeProjectId) delete conversations[id];
+  }
+  storeConversationMap(conversations);
+  window.dispatchEvent?.(new CustomEvent('ecorex:recent-chats-changed'));
+}
+
 function upsertRecentChatItem(items = [], item = {}) {
   const normalized = normalizeRecentChatItem({
     ...item,
     updatedAt: item.updatedAt || Date.now()
   });
   if (!normalized) return items;
-  const deduped = items.filter((entry) => entry.id !== normalized.id && entry.title !== normalized.title);
+  const deduped = items.filter((entry) => (
+    entry.id !== normalized.id
+    && !(entry.title === normalized.title && (entry.projectId || '') === (normalized.projectId || ''))
+  ));
   return [normalized, ...deduped].slice(0, MAX_RECENT_CHATS);
 }
 
@@ -779,16 +1701,40 @@ function sanitizeStoredMessages(messages = []) {
           }
         : undefined,
       timeline: sanitizeStoredTimeline(message.timeline || []),
+      ledger: Array.isArray(message.ledger)
+        ? message.ledger.slice(-MAX_STORED_LEDGER_ITEMS).map((item, index) => normalizeToolLedgerItem(item, {}, index))
+        : [],
+    attachmentIngest: Array.isArray(message.attachmentIngest)
+      ? message.attachmentIngest.slice(-MAX_STORED_INGEST_ITEMS).map((item, index) => sanitizeAttachmentIngestItem(item, index))
+      : [],
+    finalArtifacts: Array.isArray(message.finalArtifacts)
+      ? mergeArtifactReferences(message.finalArtifacts).map((artifact) => ({
+          ...artifact,
+          id: String(artifact.id || artifact.path || artifact.name || '').slice(0, 220),
+          path: String(artifact.path || '').slice(0, 1000),
+          name: String(artifact.name || fileNameFromArtifactPath(artifact.path || '') || 'artifact').slice(0, 240),
+          ext: String(artifact.ext || artifactExtension(artifact.path || artifact.name || '')).slice(0, 20),
+          source: String(artifact.source || 'assistant-final').slice(0, 40)
+        }))
+      : [],
+    recovery: message.recovery && typeof message.recovery === 'object'
+      ? {
+            state: String(message.recovery.state || '').slice(0, 40),
+            label: String(message.recovery.label || '').slice(0, 80),
+            tone: String(message.recovery.tone || '').slice(0, 40),
+            sessionId: String(message.recovery.sessionId || '').slice(0, 120),
+            prompt: String(message.recovery.prompt || '').slice(0, 240),
+            detail: String(message.recovery.detail || '').slice(0, 360)
+          }
+        : undefined,
       attachments: Array.isArray(message.attachments)
-        ? message.attachments.slice(0, MAX_COMPOSER_ATTACHMENTS).map((attachment) => ({
-            id: String(attachment.id || createLocalId('attachment')).slice(0, 120),
-            name: String(attachment.name || '附件').slice(0, 240),
-            type: String(attachment.type || '').slice(0, 120),
-            sizeBytes: Number(attachment.sizeBytes) || 0,
-            source: String(attachment.source || '').slice(0, 40),
-            status: String(attachment.status || 'ready').slice(0, 40),
-            progress: Number(attachment.progress) || 100
-          }))
+        ? message.attachments.slice(0, MAX_COMPOSER_ATTACHMENTS).map((attachment, index) => sanitizeStoredAttachment(attachment, index))
+        : [],
+      references: Array.isArray(message.references)
+        ? sanitizeComposerReferences(message.references)
+        : [],
+      hiddenArtifactIds: Array.isArray(message.hiddenArtifactIds)
+        ? message.hiddenArtifactIds.map((id) => String(id).slice(0, 220)).slice(0, ARTIFACT_PREVIEW_MAX_ITEMS)
         : []
     }));
 }
@@ -802,6 +1748,8 @@ function saveConversationState(id, patch = {}) {
     ...patch,
     id,
     claudeSessionId: String(patch.claudeSessionId || previous.claudeSessionId || id).slice(0, 120),
+    projectId: String(patch.projectId || previous.projectId || '').slice(0, 120),
+    projectName: String(patch.projectName || previous.projectName || '').slice(0, 120),
     contextSummary: sanitizeContextSummary(patch.contextSummary || previous.contextSummary || ''),
     contextCompactedAt: patch.contextCompactedAt || previous.contextCompactedAt || null,
     messages: sanitizeStoredMessages(patch.messages || previous.messages || []),
@@ -1314,6 +2262,11 @@ function Sidebar({ page, setPage, logout, collapsed = false, onToggleCollapsed }
   const [modelConfigOpen, setModelConfigOpen] = useState(false);
   const [currentModelLabel, setCurrentModelLabel] = useState('默认模型');
   const [recentItems, setRecentItems] = useState(loadRecentChatItems);
+  const [activeConversationId, setActiveConversationId] = useState(() => loadRecentChatItems()[0]?.id || '');
+  const [chatSearch, setChatSearch] = useState('');
+  const [projectState, setProjectState] = useState({ apiReady: false, loading: false, projects: [], currentProject: null, status: '项目服务未就绪', notice: '' });
+  const [quickProjectName, setQuickProjectName] = useState('');
+  const [projectBusy, setProjectBusy] = useState('');
   const profileRef = useRef(null);
 
   useEffect(() => {
@@ -1336,34 +2289,136 @@ function Sidebar({ page, setPage, logout, collapsed = false, onToggleCollapsed }
     setModelConfigOpen(true);
   }
 
-  function startNewChat() {
+  async function refreshSidebarProjects({ silent = false } = {}) {
+    if (!silent) setProjectState((current) => ({ ...current, loading: true, notice: '' }));
+    const result = await loadProjectState();
+    if (result.unauthorized) {
+      setProjectState((current) => ({ ...current, loading: false, apiReady: true, notice: '请重新登录后查看项目。' }));
+      return;
+    }
+    setProjectState({
+      apiReady: !result.missing,
+      loading: false,
+      projects: result.projects || [],
+      currentProject: result.currentProject || null,
+      status: result.status || (result.missing ? '项目服务未就绪' : '等待项目'),
+      notice: result.missing ? '项目服务未就绪' : ''
+    });
+  }
+
+  useEffect(() => {
+    refreshSidebarProjects({ silent: true });
+    const listener = () => refreshSidebarProjects({ silent: true });
+    window.addEventListener?.('ecorex:projects-changed', listener);
+    return () => window.removeEventListener?.('ecorex:projects-changed', listener);
+  }, []);
+
+  function startNewChat(project = null) {
     const id = createLocalId('conversation');
+    const projectId = project?.id || '';
+    const projectName = project?.name || '';
     const item = {
       id,
       claudeSessionId: id,
       title: '新会话',
       time: recentChatTimeLabel(),
-      updatedAt: Date.now()
+      updatedAt: Date.now(),
+      projectId,
+      projectName
     };
     setRecentItems((items) => {
       const nextItems = upsertRecentChatItem(items, item);
       storeRecentChatItems(nextItems);
       return nextItems;
     });
+    setActiveConversationId(id);
     setPage('chat');
     window.dispatchEvent?.(new CustomEvent('ecorex:new-chat', { detail: item }));
   }
 
-  function openRecentChat(item = {}) {
+  async function switchProjectForChat(project = {}) {
+    if (!project?.id || !projectState.apiReady) return false;
+    setProjectBusy(project.id);
+    const result = await switchManagedProject(project.id);
+    setProjectBusy('');
+    if (result?.ok === false || result?.unauthorized) {
+      setProjectState((current) => ({ ...current, notice: result?.unauthorized ? '请重新登录后切换项目。' : `项目切换失败：${sanitizeDisplayText(result?.error, '请稍后重试')}` }));
+      return false;
+    }
+    window.dispatchEvent?.(new CustomEvent('ecorex:projects-changed'));
+    window.dispatchEvent?.(new CustomEvent('ecorex:project-context', { detail: { project } }));
+    return true;
+  }
+
+  async function openRecentChat(item = {}) {
     if (!item?.id) return;
+    setActiveConversationId(item.id);
+    if (item.projectId) {
+      const project = projectState.projects.find((row) => row.id === item.projectId) || { id: item.projectId, name: item.projectName || '项目会话' };
+      await switchProjectForChat(project);
+    }
     setPage('chat');
     window.dispatchEvent?.(new CustomEvent('ecorex:open-chat', {
-      detail: { id: item.id, claudeSessionId: item.claudeSessionId, title: item.title }
+      detail: {
+        id: item.id,
+        claudeSessionId: item.claudeSessionId,
+        title: item.title,
+        projectId: item.projectId || '',
+        projectName: item.projectName || ''
+      }
     }));
+  }
+
+  async function openProject(project = {}) {
+    if (!project?.id || project.id === 'empty') return;
+    const ok = await switchProjectForChat(project);
+    if (!ok) return;
+    const latestSession = recentItems
+      .filter((item) => item.projectId === project.id)
+      .sort((left, right) => (Number(right.updatedAt) || 0) - (Number(left.updatedAt) || 0))[0];
+    if (latestSession) {
+      await openRecentChat(latestSession);
+    } else {
+      startNewChat(project);
+    }
+  }
+
+  async function createQuickProject(event) {
+    event?.preventDefault?.();
+    const name = quickProjectName.trim() || `新项目 ${new Date().toLocaleString('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    }).replace(/[/:]/g, '-')}`;
+    if (!name || !hasEcorexFunction(['createProject', 'projects.create'])) return;
+    setProjectBusy('create');
+    const result = await createManagedProject({ name });
+    setProjectBusy('');
+    if (result?.ok === false || result?.unauthorized) {
+      setProjectState((current) => ({ ...current, notice: result?.unauthorized ? '请重新登录后创建项目。' : `项目创建失败：${sanitizeDisplayText(result?.error, '请稍后重试')}` }));
+      return;
+    }
+    const created = normalizeProjectItem(result.project || result.currentProject || { name }, 0, result.project?.id);
+    setQuickProjectName('');
+    await refreshSidebarProjects({ silent: true });
+    window.dispatchEvent?.(new CustomEvent('ecorex:projects-changed'));
+    startNewChat(created);
+  }
+
+  async function revealProjectFolder(project = {}) {
+    if (!project?.id) return;
+    setProjectBusy(`open:${project.id}`);
+    const result = await openManagedProjectFolder(project.id);
+    setProjectBusy('');
+    if (result?.ok === false || result?.unauthorized || result?.missing) {
+      setProjectState((current) => ({ ...current, notice: result?.unauthorized ? '请重新登录后打开项目目录。' : `目录打开失败：${sanitizeDisplayText(result?.error, '请稍后重试')}` }));
+    }
   }
 
   function openBlankChatAfterDelete() {
     const id = createLocalId('conversation');
+    setActiveConversationId(id);
     setPage('chat');
     window.dispatchEvent?.(new CustomEvent('ecorex:new-chat', {
       detail: {
@@ -1389,15 +2444,95 @@ function Sidebar({ page, setPage, logout, collapsed = false, onToggleCollapsed }
 
   useEffect(() => {
     const upsert = (event) => {
+      if (event.detail?.id) setActiveConversationId(event.detail.id);
       setRecentItems((items) => {
         const nextItems = upsertRecentChatItem(items, event.detail || {});
         storeRecentChatItems(nextItems);
         return nextItems;
       });
     };
+    const reload = () => setRecentItems(loadRecentChatItems());
     window.addEventListener?.('ecorex:recent-chat-upsert', upsert);
-    return () => window.removeEventListener?.('ecorex:recent-chat-upsert', upsert);
+    window.addEventListener?.('ecorex:recent-chats-changed', reload);
+    return () => {
+      window.removeEventListener?.('ecorex:recent-chat-upsert', upsert);
+      window.removeEventListener?.('ecorex:recent-chats-changed', reload);
+    };
   }, []);
+
+  function renameProjectSession(session = {}) {
+    if (!session?.id) return;
+    const currentTitle = session.title || '项目会话';
+    const nextTitle = typeof window === 'undefined' || typeof window.prompt !== 'function'
+      ? currentTitle
+      : window.prompt('重命名项目会话', currentTitle);
+    const cleanTitle = sanitizeDisplayText(nextTitle, '').trim();
+    if (!cleanTitle || cleanTitle === currentTitle) return;
+    setRecentItems(() => updateStoredRecentChatItem(session.id, {
+      title: cleanTitle,
+      updatedAt: Date.now()
+    }));
+    saveConversationState(session.id, {
+      title: cleanTitle,
+      updatedAt: Date.now()
+    });
+  }
+
+  function deleteProjectSession(session = {}, project = {}) {
+    if (!session?.id) return;
+    setRecentItems(() => deleteStoredRecentChatItem(session.id));
+    if (session.id !== activeConversationId) return;
+    window.setTimeout(() => {
+      const nextSession = loadRecentChatItems()
+        .filter((item) => item.projectId === project.id)
+        .sort((left, right) => (Number(right.updatedAt) || 0) - (Number(left.updatedAt) || 0))[0];
+      if (nextSession) openRecentChat(nextSession);
+      else if (project?.id && project.id !== 'empty') startNewChat(project);
+      else openBlankChatAfterDelete();
+    }, 0);
+  }
+
+  const projectConversationMap = useMemo(() => {
+    const map = new Map();
+    for (const item of recentItems) {
+      if (!item.projectId) continue;
+      const list = map.get(item.projectId) || [];
+      list.push(item);
+      map.set(item.projectId, list);
+    }
+    for (const [projectId, items] of map.entries()) {
+      map.set(projectId, items.sort((left, right) => (Number(right.updatedAt) || 0) - (Number(left.updatedAt) || 0)));
+    }
+    return map;
+  }, [recentItems]);
+
+  const historyItems = useMemo(() => recentItems.filter((item) => !item.projectId), [recentItems]);
+  const sidebarSearchQuery = chatSearch.trim().toLowerCase();
+  const matchesSidebarSearch = (record = {}) => {
+    if (!sidebarSearchQuery) return true;
+    return [record.title, record.name, record.time, record.projectName, record.status, record.statusLabel, record.description]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+      .includes(sidebarSearchQuery);
+  };
+  const visibleProjectEntries = useMemo(() => {
+    const sourceProjects = projectState.projects.length
+      ? projectState.projects
+      : (sidebarSearchQuery ? [] : [{ id: 'empty', name: projectState.apiReady ? '暂无项目' : projectState.status }]);
+    return sourceProjects
+      .map((project) => {
+        const sessions = projectConversationMap.get(project.id) || [];
+        const projectMatches = matchesSidebarSearch(project);
+        const visibleSessions = sidebarSearchQuery && !projectMatches
+          ? sessions.filter((session) => matchesSidebarSearch(session))
+          : sessions;
+        return { project, sessions: visibleSessions, projectMatches };
+      })
+      .filter(({ sessions, projectMatches }) => !sidebarSearchQuery || projectMatches || sessions.length);
+  }, [projectState.projects, projectState.apiReady, projectState.status, projectConversationMap, sidebarSearchQuery]);
+  const visibleHistoryItems = useMemo(() => historyItems.filter((item) => matchesSidebarSearch(item)), [historyItems, sidebarSearchQuery]);
+  const canQuickCreateProject = hasEcorexFunction(['createProject', 'projects.create']);
 
   return (
     <aside className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
@@ -1413,27 +2548,106 @@ function Sidebar({ page, setPage, logout, collapsed = false, onToggleCollapsed }
           {collapsed ? <ChevronRight size={20} /> : <ChevronLeft size={20} />}
         </button>
       </div>
-      <button className="new-chat" type="button" title="新会话" onClick={startNewChat}>
+      <button className="new-chat" type="button" title="新会话" onClick={() => startNewChat()}>
         <Plus size={22} />
         新会话
       </button>
       <nav className="side-nav">
-        <button className={page === 'projects' ? 'active' : ''} type="button" title="项目" onClick={() => setPage('projects')}>
+        <button className={page === 'projects' ? 'active' : ''} type="button" title="项目管理" data-testid="sidebar-projects-nav" onClick={() => setPage('projects')}>
           <LayoutDashboard size={25} />
-          项目
+          项目管理
         </button>
       </nav>
+      <label className="sidebar-search">
+        <Search size={14} />
+        <input
+          value={chatSearch}
+          onChange={(event) => setChatSearch(event.target.value)}
+          placeholder="搜索项目或对话"
+          aria-label="搜索项目或对话"
+        />
+        {chatSearch && (
+          <button type="button" title="清空搜索" aria-label="清空搜索" onClick={() => setChatSearch('')}>
+            <X size={13} />
+          </button>
+        )}
+      </label>
+      <section className="sidebar-projects">
+        <header>
+          <h3>项目</h3>
+          <button type="button" title="刷新项目" onClick={() => refreshSidebarProjects()} disabled={projectState.loading}>
+            <Loader2 size={13} className={projectState.loading ? 'spin-icon' : ''} />
+          </button>
+        </header>
+        <form className="sidebar-project-create" onSubmit={createQuickProject}>
+          <input
+            data-testid="sidebar-project-create-input"
+            value={quickProjectName}
+            onChange={(event) => setQuickProjectName(event.target.value)}
+            placeholder={canQuickCreateProject ? '快速创建项目' : '项目未连接'}
+            disabled={!canQuickCreateProject || projectBusy === 'create'}
+          />
+          <button type="button" data-testid="sidebar-project-create-button" title="创建项目" onClick={createQuickProject} disabled={!canQuickCreateProject || projectBusy === 'create'}>
+            <Plus size={14} />
+          </button>
+        </form>
+        <div className="sidebar-project-list">
+          {visibleProjectEntries.length === 0 && (
+            <div className="sidebar-empty">没有匹配的项目或对话</div>
+          )}
+          {visibleProjectEntries.slice(0, sidebarSearchQuery ? 20 : 8).map(({ project, sessions }) => {
+            return (
+              <div className={`sidebar-project ${project.current ? 'active' : ''}`} key={project.id}>
+                <div className="sidebar-project-row">
+                  <button type="button" data-testid="sidebar-project-open" title={project.name} onClick={() => openProject(project)} disabled={project.id === 'empty' || projectBusy === project.id}>
+                    <FolderOpen size={15} />
+                    <span>{project.name}</span>
+                    <em>{sessions.length || project.sessionCount || 0}</em>
+                  </button>
+                  {project.id !== 'empty' && (
+                    <button type="button" data-testid="sidebar-project-open-folder" title="在资源管理器中打开" onClick={() => revealProjectFolder(project)} disabled={projectBusy === `open:${project.id}`}>
+                      <FolderOpen size={13} />
+                    </button>
+                  )}
+                </div>
+                {sessions.slice(0, sidebarSearchQuery ? 8 : 4).map((session) => (
+                  <div className={`sidebar-project-session-row ${session.id === activeConversationId ? 'active' : ''}`} key={session.id}>
+                    <button className={`sidebar-project-session ${session.id === activeConversationId ? 'active' : ''}`} type="button" title={session.title} onClick={() => openRecentChat(session)}>
+                      <Bot size={13} />
+                      <span>{session.title}</span>
+                      <em>{session.time}</em>
+                    </button>
+                    <button className="sidebar-project-session-action" type="button" title="重命名会话" aria-label="重命名会话" onClick={(event) => {
+                      event.stopPropagation();
+                      renameProjectSession(session);
+                    }}>
+                      <Pencil size={12} />
+                    </button>
+                    <button className="sidebar-project-session-action danger" type="button" title="删除会话" aria-label="删除会话" onClick={(event) => {
+                      event.stopPropagation();
+                      deleteProjectSession(session, project);
+                    }}>
+                      <X size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+        {projectState.notice && <p>{projectState.notice}</p>}
+      </section>
       <div className="recent">
-        <h3>最近对话</h3>
-        {recentItems.length === 0 && (
+        <h3>历史对话</h3>
+        {visibleHistoryItems.length === 0 && (
           <div className="recent-empty">
             <Bot size={17} />
-            <strong>暂无最近对话</strong>
-            <span>发送第一条消息后会出现在这里</span>
+            <strong>{sidebarSearchQuery ? '没有匹配对话' : '暂无历史对话'}</strong>
+            <span>{sidebarSearchQuery ? '换个关键词再试试' : '未关联项目的会话会出现在这里'}</span>
           </div>
         )}
-        {recentItems.map(({ id, claudeSessionId, title, time }, index) => (
-          <div className={`recent-row ${index === 0 ? 'active' : ''}`} key={id || title}>
+        {visibleHistoryItems.map(({ id, claudeSessionId, title, time }, index) => (
+          <div className={`recent-row ${id === activeConversationId || (!activeConversationId && index === 0) ? 'active' : ''}`} key={id || title}>
             <button
               className="recent-open"
               type="button"
@@ -1459,7 +2673,8 @@ function Sidebar({ page, setPage, logout, collapsed = false, onToggleCollapsed }
                   deleteConversationState(id);
                   if (index === 0) {
                     window.setTimeout(() => {
-                      if (nextItems[0]) openRecentChat(nextItems[0]);
+                      const nextHistory = nextItems.find((item) => !item.projectId);
+                      if (nextHistory) openRecentChat(nextHistory);
                       else openBlankChatAfterDelete();
                     }, 0);
                   }
@@ -2330,6 +3545,9 @@ function timelineItemFromAgentEvent(event) {
   const labelMap = {
     status: taskLabel || '准备执行任务',
     tool: taskLabel || '调用本地工具',
+    ledger: taskLabel || '记录工具调用',
+    attachment: '读取附件内容',
+    recovery: '恢复运行任务',
     stderr: '记录执行日志',
     debug: '同步任务进度',
     assistant: '生成回复内容',
@@ -2342,6 +3560,9 @@ function timelineItemFromAgentEvent(event) {
   const statusMap = {
     status: formatAgentEventStatus(event.status || event.state, '进行中'),
     tool: formatAgentEventStatus(event.status || event.state, '能力调用'),
+    ledger: formatAgentEventStatus(event.status || event.state, '能力调用'),
+    attachment: formatAgentEventStatus(event.status || event.state, '附件读取'),
+    recovery: formatAgentEventStatus(event.status || event.state, '可恢复'),
     stderr: '日志',
     debug: formatAgentEventStatus(event.status || event.state, '同步中'),
     assistant: '生成中',
@@ -2354,6 +3575,9 @@ function timelineItemFromAgentEvent(event) {
   const toneMap = {
     status: 'running',
     tool: 'running',
+    ledger: toolToneFromStatus(event.status || event.state),
+    attachment: ingestToneFromStatus(event.status || event.state, event.ok !== false),
+    recovery: recoveryStateFromStatus(event.status || event.state).tone,
     stderr: 'warn',
     debug: 'pending',
     assistant: 'running',
@@ -2419,6 +3643,18 @@ function normalizeAgentEventKind(kind) {
     output: 'assistant',
     message: 'assistant',
     text: 'assistant',
+    ledger_event: 'ledger',
+    tool_call: 'tool',
+    tool_use: 'tool',
+    tool_result: 'tool',
+    command: 'tool',
+    attachment_ingest: 'attachment',
+    attachment_ingestion: 'attachment',
+    file_ingest: 'attachment',
+    file_preview: 'attachment',
+    restore: 'recovery',
+    restored: 'recovery',
+    session_recovery: 'recovery',
     cancel: 'cancelled',
     canceled: 'cancelled',
     failure: 'error'
@@ -2504,11 +3740,26 @@ function cleanAssistantOutputText(value = '') {
     .replace(/^\s*\*\s+/gm, '- ')
     .replace(/\*\*([^*\n]+)\*\*/g, '$1')
     .replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '$1')
-    .replace(/\*/g, '');
+    .replace(/\*/g, '')
+    .replace(/\bClaude\s*Code\s*CLI\b/gi, 'EcoreX')
+    .replace(/\bClaude\s*Code\b/gi, 'EcoreX')
+    .replace(/\bClaude\s*CLI\b/gi, 'EcoreX')
+    .replace(/\bAnthropic\s*CLI\b/gi, 'EcoreX')
+    .replace(/\bclaude\s+mcp\b/gi, 'EcoreX MCP')
+    .replace(/\bclaude\s+(plugin|plugins)\b/gi, 'EcoreX SKILLS')
+    .replace(/\bClaude\b/gi, 'EcoreX');
 }
 
 function mergeAssistantOutputText(existing = '', incoming = '') {
   return cleanAssistantOutputText(mergeAssistantText(existing, incoming));
+}
+
+function finalizeAssistantOutputText(existing = '', incoming = '') {
+  const existingText = cleanAssistantOutputText(existing);
+  const incomingText = cleanAssistantOutputText(incoming);
+  if (!incomingText) return existingText;
+  if (!existingText) return incomingText;
+  return mergeAssistantOutputText(existingText, incomingText);
 }
 
 function promptDisclosureProfile(prompt = '', attachments = []) {
@@ -2594,7 +3845,6 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
   const [permissionMode, setPermissionMode] = useState(() => readStoredDefaultAccessMode());
   const [model, setModel] = useState('sonnet');
   const [modelProfiles, setModelProfiles] = useState([]);
-  const [railExpanded, setRailExpanded] = useState(false);
   const [currentSessionId, setCurrentSessionId] = useState(null);
   const [visibleMessageCount, setVisibleMessageCount] = useState(MESSAGE_WINDOW_SIZE);
   const [messages, setMessages] = useState(() => createInitialMessages(authDisplayName));
@@ -2603,6 +3853,9 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
   const [contextCompactedAt, setContextCompactedAt] = useState(null);
   const [runningSessions, setRunningSessions] = useState([]);
   const [attachments, setAttachments] = useState([]);
+  const [composerReferences, setComposerReferences] = useState([]);
+  const [focusArtifact, setFocusArtifact] = useState(null);
+  const [chatProject, setChatProject] = useState(null);
   const [conversationId, setConversationId] = useState(() => createLocalId('conversation'));
   const fileInputRef = useRef(null);
   const messageListRef = useRef(null);
@@ -2613,16 +3866,22 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
   const currentSessionIdRef = useRef(null);
   const eventQueueRef = useRef([]);
   const eventSeqRef = useRef(0);
+  const pendingFollowUpsRef = useRef([]);
+  const followUpFlushInFlightRef = useRef(false);
   const messagesRef = useRef(messages);
   const contextSummaryRef = useRef('');
   const contextCompactedMessageCountRef = useRef(0);
   const nativeSessionRotatedMessageCountRef = useRef(0);
   const flushTimerRef = useRef(null);
+  const conversationSaveTimerRef = useRef(null);
+  const conversationSaveSnapshotRef = useRef(null);
   const pendingCancelsRef = useRef(new Set());
+  const permissionContinuationLocksRef = useRef(new Set());
   const statusTimers = useRef([]);
   const attachmentObjectUrlsRef = useRef(new Set());
   const conversationIdRef = useRef(conversationId);
   const conversationSessionIdRef = useRef(conversationId);
+  const conversationProjectRef = useRef(null);
 
   const selectedPlugins = useMemo(() => {
     return ['feature-dev', 'code-review', 'security-guidance', 'plugin-dev'];
@@ -2673,6 +3932,22 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     }
   }
 
+  function scheduleStatusTimer(callback, delay) {
+    const timer = window.setTimeout(() => {
+      statusTimers.current = statusTimers.current.filter((item) => item !== timer);
+      callback();
+    }, delay);
+    statusTimers.current.push(timer);
+    return timer;
+  }
+
+  function flushConversationSave() {
+    const snapshot = conversationSaveSnapshotRef.current;
+    if (!snapshot) return;
+    conversationSaveSnapshotRef.current = null;
+    saveConversationState(snapshot.id, snapshot.state);
+  }
+
   function rememberAttachmentObjectUrl(url) {
     if (url) attachmentObjectUrlsRef.current.add(url);
     return url;
@@ -2695,7 +3970,8 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       type: file?.type || '',
       sizeBytes: file?.size || 0,
       previewUrl,
-      source
+      source,
+      lastModified: file?.lastModified || null
     };
   }
 
@@ -2730,12 +4006,11 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     });
     for (const item of normalized) {
       if (item.status !== 'uploading') continue;
-      const timer = window.setTimeout(() => {
+      scheduleStatusTimer(() => {
         setAttachments((items) => items.map((current) => (
           current.id === item.id ? { ...current, status: 'ready', progress: 100 } : current
         )));
       }, 500);
-      statusTimers.current.push(timer);
     }
   }
 
@@ -2821,11 +4096,18 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
   function startFreshConversation(item = {}) {
     conversationIdRef.current = item?.id || createLocalId('conversation');
     conversationSessionIdRef.current = item?.claudeSessionId || item?.sessionId || conversationIdRef.current;
+    const nextProject = item?.projectId
+      ? { id: item.projectId, name: item.projectName || '项目会话' }
+      : null;
+    conversationProjectRef.current = nextProject;
+    setChatProject(nextProject);
     setConversationId(conversationIdRef.current);
     clearAttachments();
     attachmentObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     attachmentObjectUrlsRef.current.clear();
     setPrompt('');
+    setComposerReferences([]);
+    setFocusArtifact(null);
     setVisibleMessageCount(MESSAGE_WINDOW_SIZE);
     contextSummaryRef.current = '';
     contextCompactedMessageCountRef.current = 0;
@@ -2846,11 +4128,19 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     const stored = loadConversationState(nextId);
     conversationIdRef.current = nextId;
     conversationSessionIdRef.current = stored?.claudeSessionId || item?.claudeSessionId || item?.sessionId || nextId;
+    const nextProjectId = stored?.projectId || item?.projectId || '';
+    const nextProject = nextProjectId
+      ? { id: nextProjectId, name: stored?.projectName || item?.projectName || '项目会话' }
+      : null;
+    conversationProjectRef.current = nextProject;
+    setChatProject(nextProject);
     setConversationId(nextId);
     clearAttachments();
     attachmentObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     attachmentObjectUrlsRef.current.clear();
     setPrompt('');
+    setComposerReferences([]);
+    setFocusArtifact(null);
     setVisibleMessageCount(MESSAGE_WINDOW_SIZE);
     const storedSummary = sanitizeContextSummary(stored?.contextSummary || '');
     contextSummaryRef.current = storedSummary;
@@ -2874,13 +4164,16 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
 
   function syncRecentChatFromPrompt(conversationId, text) {
     const title = sanitizeDisplayText(text, '新会话').replace(/\s+/g, ' ').slice(0, 34);
+    const activeProject = conversationProjectRef.current;
     window.dispatchEvent?.(new CustomEvent('ecorex:recent-chat-upsert', {
       detail: {
         id: conversationId || conversationIdRef.current || createLocalId('conversation'),
         claudeSessionId: conversationSessionIdRef.current || conversationId || conversationIdRef.current,
         title: title || '新会话',
         time: recentChatTimeLabel(),
-        updatedAt: Date.now()
+        updatedAt: Date.now(),
+        projectId: activeProject?.id || '',
+        projectName: activeProject?.name || ''
       }
     }));
   }
@@ -2956,6 +4249,9 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       currentSessionIdRef.current = nextSessionId;
       setCurrentSessionId(nextSessionId);
     }
+    if (!runningSessionsRef.current.size && !nextRows.length && pendingFollowUpsRef.current.length) {
+      scheduleStatusTimer(() => flushQueuedFollowUps(), 80);
+    }
   }
 
   function applyAgentEvents(events) {
@@ -2967,13 +4263,13 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     for (const event of events) {
       if (sessionMap.current.has(event.sessionId)) {
         relevantEvents.push(event);
-      } else if (now - (event.__queuedAt || now) < 5000) {
+      } else if (now - (event.__queuedAt || now) < PENDING_AGENT_EVENT_TTL_MS) {
         pendingEvents.push({ ...event, __queuedAt: event.__queuedAt || now });
       }
     }
 
     if (pendingEvents.length) {
-      eventQueueRef.current = compactAgentEventQueue([...pendingEvents, ...eventQueueRef.current]);
+      eventQueueRef.current = compactAgentEventQueue([...eventQueueRef.current, ...pendingEvents]);
     }
 
     if (!relevantEvents.length) return pendingEvents.length > 0;
@@ -3006,14 +4302,23 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       return items.map((item) => {
         const messageEvents = eventsByMessage.get(item.id);
         if (!messageEvents?.length) return item;
+        const terminalEvent = [...messageEvents].reverse().find((event) =>
+          event.kind === 'result' || AGENT_EVENT_TERMINAL_KINDS.has(event.kind)
+        );
         const timelineItems = compactTimelineEvents(messageEvents).map((event) => timelineItemFromAgentEvent(event));
+        const ledgerItems = messageEvents.flatMap((event) => normalizeToolLedgerItemsFromEvent(event));
+        const attachmentIngestItems = messageEvents.flatMap((event) => normalizeAttachmentIngestItemsFromEvent(event));
+        const recoveryEvent = [...messageEvents].reverse().map(recoveryStateFromAgentEvent).find(Boolean);
         let nextItem = {
           ...item,
-          timeline: appendTimelineItems(item.timeline || [], timelineItems)
+          timeline: appendTimelineItems(item.timeline || [], timelineItems),
+          ledger: appendToolLedgerItems(item.ledger || [], ledgerItems),
+          attachmentIngest: mergeAttachmentIngestItems(item.attachmentIngest || [], attachmentIngestItems),
+          recovery: recoveryEvent || item.recovery
         };
 
         for (const event of messageEvents) {
-          if (['status', 'tool', 'stderr', 'debug'].includes(event.kind)) {
+          if (['status', 'tool', 'ledger', 'attachment', 'recovery', 'stderr', 'debug'].includes(event.kind)) {
             nextItem = {
               ...nextItem,
               status: nextItem.status === 'generating' ? 'generating' : 'thinking',
@@ -3033,9 +4338,11 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           }
 
           if (event.kind === 'result') {
+            const finalArtifacts = finalArtifactsFromText(event.text);
             nextItem = {
               ...nextItem,
-              text: cleanAssistantOutputText(event.text || nextItem.text),
+              text: finalizeAssistantOutputText(nextItem.text, event.text),
+              finalArtifacts: mergeArtifactReferences([...(nextItem.finalArtifacts || []), ...finalArtifacts]),
               streaming: false,
               status: 'complete',
               meta: ''
@@ -3044,12 +4351,16 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           }
 
           if (event.kind === 'done') {
+            const finalArtifacts = finalArtifactsFromText(event.text);
             nextItem = {
               ...nextItem,
               streaming: false,
               status: 'complete',
               error: false,
-              text: cleanAssistantOutputText(nextItem.text || event.text)
+              text: cleanAssistantOutputText(nextItem.text || event.text),
+              finalArtifacts: finalArtifacts.length
+                ? mergeArtifactReferences([...(nextItem.finalArtifacts || []), ...finalArtifacts])
+                : nextItem.finalArtifacts
             };
             continue;
           }
@@ -3085,6 +4396,18 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
               text: cleanAssistantOutputText(nextItem.text || event.text || agentRecoveryText(event))
             };
           }
+        }
+
+        if (nextItem.permissionDecision?.status === 'running' && terminalEvent) {
+          permissionContinuationLocksRef.current.delete(item.id);
+          nextItem = {
+            ...nextItem,
+            permissionDecision: {
+              ...nextItem.permissionDecision,
+              status: ['done', 'result'].includes(terminalEvent.kind) ? 'complete' : terminalEvent.kind,
+              at: Date.now()
+            }
+          };
         }
 
         return nextItem;
@@ -3144,22 +4467,25 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       const sessionId = row.sessionId || row.id;
       let messageId = row.messageId || sessionMap.current.get(sessionId);
       if (sessionId && !messageId) {
+        const active = isRunningSessionActive(row);
+        const recovery = recoveryStateFromSession(row);
         messageId = `assistant-resumed-${sessionId}`;
         sessionMap.current.set(sessionId, messageId);
         recoveredMessages.push({
           id: messageId,
           role: 'assistant',
-          text: '正在恢复本地运行会话，新的输出会继续追加到这里。',
+          text: active ? '正在恢复本地运行会话，新的输出会继续追加到这里。' : '已从本地运行记录恢复这轮任务状态。',
           time: formatAgentEventTime(row),
-          streaming: true,
-          status: row.status === 'error' ? 'error' : 'thinking',
+          streaming: active,
+          status: active ? (row.status === 'error' ? 'error' : 'thinking') : (recovery.state === 'retryable' ? 'error' : 'cancelled'),
           sessionId,
           originalPrompt: row.prompt || row.promptPreview || '',
+          recovery,
           timeline: [[
             `恢复运行会话 ${index + 1}`,
             formatSessionStatus(row.status || row.state || 'running'),
             formatAgentEventTime(row),
-            row.status === 'error' ? 'danger' : 'running'
+            recovery.tone || (row.status === 'error' ? 'danger' : 'running')
           ]]
         });
       } else if (sessionId && messageId) {
@@ -3264,6 +4590,9 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
   useEffect(() => () => {
     statusTimers.current.forEach((timer) => clearTimeout(timer));
     clearTimeout(flushTimerRef.current);
+    clearTimeout(conversationSaveTimerRef.current);
+    conversationSaveTimerRef.current = null;
+    flushConversationSave();
     attachmentObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     attachmentObjectUrlsRef.current.clear();
   }, []);
@@ -3291,14 +4620,30 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
   }, [contextSummary]);
 
   useEffect(() => {
-    saveConversationState(conversationId, {
-      claudeSessionId: conversationSessionIdRef.current || conversationId,
-      contextSummary,
-      contextCompactedAt,
-      messages,
-      timeline,
-      updatedAt: Date.now()
-    });
+    if (conversationSaveSnapshotRef.current?.id && conversationSaveSnapshotRef.current.id !== conversationId) {
+      clearTimeout(conversationSaveTimerRef.current);
+      conversationSaveTimerRef.current = null;
+      flushConversationSave();
+    }
+    conversationSaveSnapshotRef.current = {
+      id: conversationId,
+      state: {
+        claudeSessionId: conversationSessionIdRef.current || conversationId,
+        projectId: conversationProjectRef.current?.id || '',
+        projectName: conversationProjectRef.current?.name || '',
+        contextSummary,
+        contextCompactedAt,
+        messages,
+        timeline,
+        updatedAt: Date.now()
+      }
+    };
+    if (!conversationSaveTimerRef.current) {
+      conversationSaveTimerRef.current = window.setTimeout(() => {
+        conversationSaveTimerRef.current = null;
+        flushConversationSave();
+      }, CONVERSATION_SAVE_DEBOUNCE_MS);
+    }
   }, [conversationId, contextSummary, contextCompactedAt, messages, timeline]);
 
   useEffect(() => {
@@ -3309,21 +4654,32 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     const listener = (event) => startFreshConversation(event.detail || {});
     window.addEventListener?.('ecorex:new-chat', listener);
     return () => window.removeEventListener?.('ecorex:new-chat', listener);
-  }, []);
+  }, [authDisplayName]);
 
   useEffect(() => {
     const listener = (event) => openStoredConversation(event.detail || {});
     window.addEventListener?.('ecorex:open-chat', listener);
     return () => window.removeEventListener?.('ecorex:open-chat', listener);
+  }, [authDisplayName]);
+
+  useEffect(() => {
+    const listener = (event) => {
+      const project = event.detail?.project;
+      if (!project?.id) return;
+      const nextProject = { id: project.id, name: project.name || '项目会话' };
+      conversationProjectRef.current = nextProject;
+      setChatProject(nextProject);
+    };
+    window.addEventListener?.('ecorex:project-context', listener);
+    return () => window.removeEventListener?.('ecorex:project-context', listener);
   }, []);
 
   function scheduleMessageStatus(id, status, delay) {
-    const timer = setTimeout(() => {
+    scheduleStatusTimer(() => {
       setMessages((items) =>
         items.map((item) => (item.id === id ? { ...item, status } : item))
       );
     }, delay);
-    statusTimers.current.push(timer);
   }
 
   function appendAssistantTimelineItem(assistantId, item, { revealTrace = true } = {}) {
@@ -3351,7 +4707,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     const steps = buildDisclosureProgressSteps(promptText, attachmentList);
     steps.forEach(([label, status, kind], index) => {
       const delay = AGENT_DISCLOSURE_DELAYS_MS[index] || (AGENT_DISCLOSURE_DELAYS_MS.at(-1) + index * 12000);
-      const timer = setTimeout(() => {
+      scheduleStatusTimer(() => {
         const current = messagesRef.current.find((message) => message.id === assistantId);
         if (!current?.streaming) return;
         const hasVisibleAnswer = cleanAssistantOutputText(current.text || '').trim().length > 24;
@@ -3362,20 +4718,112 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           { revealTrace: profile !== 'simple' }
         );
       }, delay);
-      statusTimers.current.push(timer);
     });
   }
 
-  async function sendPrompt(text = prompt, attachmentList = attachments) {
+  function enqueueFollowUpPrompt(cleanPrompt, cleanAttachments = []) {
+    const now = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    const userId = `user-queued-${Date.now()}`;
+    const cleanReferences = sanitizeComposerReferences(composerReferences);
+    const item = {
+      id: userId,
+      conversationId: conversationIdRef.current,
+      claudeSessionId: conversationSessionIdRef.current || conversationIdRef.current,
+      prompt: cleanPrompt,
+      attachments: cleanAttachments,
+      references: cleanReferences,
+      createdAt: Date.now(),
+      time: now
+    };
+    pendingFollowUpsRef.current = [...pendingFollowUpsRef.current, item];
+    syncRecentChatFromPrompt(item.conversationId, cleanPrompt || cleanReferences[0]?.name || cleanAttachments[0]?.name || '追加消息');
+    setMessages((items) => [
+      ...items,
+      {
+        id: userId,
+        role: 'user',
+        text: cleanPrompt || (cleanReferences.length ? '已选中文件片段，请继续修改。' : '已添加附件，请继续分析。'),
+        time: now,
+        status: 'queued',
+        attachments: cleanAttachments,
+        references: cleanReferences
+      }
+    ]);
+    setTimeline((items) => appendTimeline(items, ['已追加用户消息', '当前任务结束后继续处理', formatAgentEventTime(), 'pending']));
+    setPrompt('');
+    setComposerReferences([]);
+    clearAttachments({ revoke: false });
+  }
+
+  function buildQueuedFollowUpPrompt(items = []) {
+    if (items.length === 1) {
+      const item = items[0];
+      return item.prompt || (item.references?.length ? '请继续处理刚才追加的文件定位。' : '请继续处理刚才追加的附件。');
+    }
+    return [
+      '以下是用户在上一轮运行中追加的消息，请在同一会话中合并处理：',
+      ...items.map((item, index) => [
+        '',
+        `追加 ${index + 1}（${item.time || formatAgentEventTime()}）：`,
+        item.prompt || (item.references?.length ? '请继续处理这条追加消息中的文件定位。' : item.attachments?.length ? '请继续处理这条追加消息中的附件。' : '')
+      ].filter(Boolean).join('\n'))
+    ].join('\n');
+  }
+
+  async function flushQueuedFollowUps() {
+    if (followUpFlushInFlightRef.current || runningRef.current) return;
+    const currentConversationId = conversationIdRef.current;
+    const readyItems = pendingFollowUpsRef.current.filter((item) => item.conversationId === currentConversationId);
+    if (!readyItems.length) return;
+    pendingFollowUpsRef.current = pendingFollowUpsRef.current.filter((item) => item.conversationId !== currentConversationId);
+    followUpFlushInFlightRef.current = true;
+    const queuedMessageIds = readyItems.map((item) => item.id);
+    const queuedClaudeSessionId = readyItems[0]?.claudeSessionId || conversationSessionIdRef.current || currentConversationId;
+    const mergedPrompt = buildQueuedFollowUpPrompt(readyItems);
+    const mergedAttachments = readyItems.flatMap((item) => item.attachments || []);
+    const mergedReferences = readyItems.flatMap((item) => item.references || []);
+    try {
+      await sendPrompt(mergedPrompt, mergedAttachments, {
+        forceRun: true,
+        fromQueue: true,
+        queuedMessageIds,
+        queuedConversationId: currentConversationId,
+        queuedClaudeSessionId,
+        queuedReferences: mergedReferences
+      });
+    } finally {
+      followUpFlushInFlightRef.current = false;
+      if (!runningRef.current && pendingFollowUpsRef.current.some((item) => item.conversationId === conversationIdRef.current)) {
+        scheduleStatusTimer(() => flushQueuedFollowUps(), 80);
+      }
+    }
+  }
+
+  async function sendPrompt(text = prompt, attachmentList = attachments, options = {}) {
+    const {
+      forceRun = false,
+      fromQueue = false,
+      queuedMessageIds = [],
+      queuedClaudeSessionId = null,
+      queuedReferences = null
+    } = options || {};
     const cleanPrompt = String(text || '').trim();
-    const cleanAttachments = Array.isArray(attachmentList) ? attachmentList : [];
-    if (!cleanPrompt && !cleanAttachments.length) return;
+    const cleanAttachments = serializeAgentAttachments(attachmentList);
+    const cleanReferences = sanitizeComposerReferences(Array.isArray(queuedReferences) ? queuedReferences : composerReferences);
+    if (!cleanPrompt && !cleanAttachments.length && !cleanReferences.length) return;
+    if (runningRef.current && !forceRun) {
+      enqueueFollowUpPrompt(cleanPrompt, cleanAttachments);
+      return;
+    }
     const attachmentSection = attachmentPromptSection(cleanAttachments);
+    const referenceSection = buildComposerReferenceSection(cleanReferences);
     const nativeDesktop = Boolean(window.ecorex);
-    let nextClaudeSessionId = conversationSessionIdRef.current || conversationIdRef.current;
+    const queuedMessageIdSet = new Set(queuedMessageIds);
+    const useQueuedMessages = queuedMessageIdSet.size > 0;
+    let nextClaudeSessionId = queuedClaudeSessionId || conversationSessionIdRef.current || conversationIdRef.current;
     let contextSection = '';
     let compactedForNativeSession = false;
-    if (nativeDesktop && shouldRotateNativeClaudeSession(messagesRef.current, nativeSessionRotatedMessageCountRef.current)) {
+    if (nativeDesktop && !fromQueue && shouldRotateNativeClaudeSession(messagesRef.current, nativeSessionRotatedMessageCountRef.current)) {
       const compactSummary = sanitizeContextSummary(contextSummaryRef.current)
         || buildConversationContextSummary(messagesRef.current, '', 'ecorex-fast-compact');
       contextSummaryRef.current = compactSummary;
@@ -3387,11 +4835,13 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       compactedForNativeSession = true;
       setContextSummary(compactSummary);
       setContextCompactedAt(Date.now());
+    } else if (queuedClaudeSessionId) {
+      conversationSessionIdRef.current = queuedClaudeSessionId;
     } else if (!nativeDesktop) {
-      contextSection = conversationContextSection(messages, cleanPrompt, contextSummaryRef.current);
+      contextSection = conversationContextSection(messagesRef.current, cleanPrompt, contextSummaryRef.current);
     }
-    const currentUserTask = `用户当前输入：${cleanPrompt || '请分析这些附件，并给出可执行建议。'}`;
-    const promptForAgent = [contextSection, agentRunPolicySection(cleanPrompt), currentUserTask, attachmentSection]
+    const currentUserTask = `用户当前输入：${cleanPrompt || (cleanReferences.length ? '请根据我选中的文件片段继续修改。' : '请分析这些附件，并给出可执行建议。')}`;
+    const promptForAgent = [contextSection, agentRunPolicySection(cleanPrompt), currentUserTask, referenceSection, attachmentSection]
       .filter(Boolean)
       .join('\n\n');
 
@@ -3403,7 +4853,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     const accessMode = normalizeAccessMode(permissionMode);
     const requestedPermissionMode = permissionModeFromAccessMode(accessMode);
     sessionMap.current.set(requestedSessionId, assistantId);
-    syncRecentChatFromPrompt(conversationIdRef.current, cleanPrompt || cleanAttachments[0]?.name || '新会话');
+    syncRecentChatFromPrompt(conversationIdRef.current, cleanPrompt || cleanReferences[0]?.name || cleanAttachments[0]?.name || '新会话');
     trackSession(requestedSessionId, {
       messageId: assistantId,
       prompt: promptForAgent,
@@ -3413,15 +4863,17 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     });
 
     setMessages((items) => [
-      ...items,
+      ...items.map((item) => (queuedMessageIdSet.has(item.id) ? { ...item, status: 'sending' } : item)),
+      ...(!useQueuedMessages ? [
       {
         id: userId,
         role: 'user',
-        text: cleanPrompt || '已添加附件，请分析。',
+        text: cleanPrompt || (cleanReferences.length ? '已选中文件片段，请继续修改。' : '已添加附件，请分析。'),
         time: now,
         status: 'sending',
-        attachments: cleanAttachments
-      },
+        attachments: cleanAttachments,
+        references: cleanReferences
+      }] : []),
       {
         id: assistantId,
         role: 'assistant',
@@ -3430,21 +4882,30 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         streaming: true,
         status: 'thinking',
         sessionId: requestedSessionId,
-        originalPrompt: promptForAgent,
+        claudeSessionId: nextClaudeSessionId,
+        projectId: conversationProjectRef.current?.id || '',
+        projectName: conversationProjectRef.current?.name || '',
+        originalPrompt: cleanPrompt,
         showTrace: promptDisclosureProfile(cleanPrompt, cleanAttachments) !== 'simple',
         timeline: initialDisclosureTimeline
       }
     ]);
-    setPrompt('');
-    clearAttachments({ revoke: false });
+    if (!fromQueue) {
+      setPrompt('');
+      setComposerReferences([]);
+      clearAttachments({ revoke: false });
+    }
     setTimeline((items) => appendTimelineItems(items, initialDisclosureTimeline));
     scheduleAssistantProgressDisclosure(assistantId, cleanPrompt, cleanAttachments);
-    scheduleMessageStatus(userId, 'sent', 280);
-    scheduleMessageStatus(userId, 'read', 760);
+    const statusMessageIds = useQueuedMessages ? queuedMessageIds : [userId];
+    statusMessageIds.forEach((id) => {
+      scheduleMessageStatus(id, 'sent', 280);
+      scheduleMessageStatus(id, 'read', 760);
+    });
 
     if (!window.ecorex) {
       scheduleMessageStatus(assistantId, 'generating', 420);
-      const timer = setTimeout(() => {
+      scheduleStatusTimer(() => {
         setMessages((items) =>
           items.map((item) =>
             item.id === assistantId
@@ -3460,7 +4921,6 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         );
         finishSession(requestedSessionId);
       }, 800);
-      statusTimers.current.push(timer);
       return;
     }
 
@@ -3470,6 +4930,13 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         conversationId: conversationIdRef.current,
         claudeSessionId: nextClaudeSessionId,
         prompt: promptForAgent,
+        rawPrompt: cleanPrompt,
+        userPrompt: cleanPrompt,
+        attachments: cleanAttachments,
+        attachmentMetadata: cleanAttachments,
+        selectedReferences: cleanReferences,
+        projectId: conversationProjectRef.current?.id || null,
+        disableProjectContext: !conversationProjectRef.current?.id,
         accessMode,
         permissionMode: requestedPermissionMode,
         defaultPermissionMode: requestedPermissionMode,
@@ -3511,7 +4978,13 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       currentSessionIdRef.current = sessionId;
       setCurrentSessionId(sessionId);
       setMessages((items) =>
-        items.map((item) => (item.id === assistantId ? { ...item, sessionId } : item))
+        items.map((item) => (item.id === assistantId ? {
+          ...item,
+          sessionId,
+          claudeSessionId: result.claudeSessionId || nextClaudeSessionId || item.claudeSessionId,
+          projectId: result.projectId || conversationProjectRef.current?.id || item.projectId || '',
+          projectName: result.projectName || conversationProjectRef.current?.name || item.projectName || ''
+        } : item))
       );
       if (pendingCancelsRef.current.has(requestedSessionId) || pendingCancelsRef.current.has(sessionId)) {
         pendingCancelsRef.current.delete(requestedSessionId);
@@ -3577,10 +5050,9 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         if (result?.ok === false && result.reason === 'not-found') {
           finishSession(sessionId);
         } else {
-          const fallbackTimer = setTimeout(() => {
+          scheduleStatusTimer(() => {
             if (sessionMap.current.has(sessionId)) finishSession(sessionId);
           }, 5000);
-          statusTimers.current.push(fallbackTimer);
         }
       } catch (error) {
         if (isUnauthorizedError(error)) onUnauthorized?.();
@@ -3595,11 +5067,13 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
   }
 
   function retryMessage(message) {
-    if (message?.originalPrompt) sendPrompt(message.originalPrompt);
+    const retryPrompt = retryPromptFromMessage(message);
+    if (retryPrompt) sendPrompt(retryPrompt);
   }
 
   async function continueFromPermission(message = {}, actionValue = 'allow') {
-    if (!message?.id) return;
+    if (!message?.id || permissionContinuationLocksRef.current.has(message.id)) return;
+    permissionContinuationLocksRef.current.add(message.id);
     const decision = permissionActionFromValue(actionValue);
     const requestedSessionId = createLocalId('session');
     const continuationPrompt = permissionContinuationPrompt(decision);
@@ -3623,6 +5097,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
               streaming: true,
               status: 'thinking',
               error: false,
+              sessionId: requestedSessionId,
+              claudeSessionId: conversationSessionIdRef.current || conversationIdRef.current,
+              projectId: conversationProjectRef.current?.id || item.projectId || '',
+              projectName: conversationProjectRef.current?.name || item.projectName || '',
               permissionDecision: {
                 action: decision.action,
                 label: decision.label,
@@ -3651,6 +5129,24 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
 
     if (!window.ecorex?.runPrompt) {
       finishSession(requestedSessionId);
+      permissionContinuationLocksRef.current.delete(message.id);
+      setMessages((items) =>
+        items.map((item) =>
+          item.id === message.id
+            ? {
+                ...item,
+                streaming: false,
+                status: 'complete',
+                permissionDecision: {
+                  action: decision.action,
+                  label: decision.label,
+                  status: 'unavailable',
+                  at: Date.now()
+                }
+              }
+            : item
+        )
+      );
       return;
     }
 
@@ -3663,6 +5159,8 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         accessMode,
         permissionMode: requestedPermissionMode,
         defaultPermissionMode: requestedPermissionMode,
+        projectId: conversationProjectRef.current?.id || null,
+        disableProjectContext: !conversationProjectRef.current?.id,
         ...fullAccessConfirmationFields(accessMode),
         model,
         plugins: selectedPlugins,
@@ -3671,6 +5169,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
 
       if (!result.ok) {
         finishSession(requestedSessionId);
+        permissionContinuationLocksRef.current.delete(message.id);
         if (result.unauthorized) onUnauthorized?.();
         setMessages((items) =>
           items.map((item) =>
@@ -3699,11 +5198,18 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       currentSessionIdRef.current = sessionId;
       setCurrentSessionId(sessionId);
       setMessages((items) =>
-        items.map((item) => (item.id === message.id ? { ...item, sessionId } : item))
+        items.map((item) => (item.id === message.id ? {
+          ...item,
+          sessionId,
+          claudeSessionId: result.claudeSessionId || conversationSessionIdRef.current || conversationIdRef.current || item.claudeSessionId,
+          projectId: result.projectId || conversationProjectRef.current?.id || item.projectId || '',
+          projectName: result.projectName || conversationProjectRef.current?.name || item.projectName || ''
+        } : item))
       );
       if (result.initialEvent) queueAgentEvents(result.initialEvent);
     } catch (error) {
       finishSession(requestedSessionId);
+      permissionContinuationLocksRef.current.delete(message.id);
       if (isUnauthorizedError(error)) onUnauthorized?.();
       setMessages((items) =>
         items.map((item) =>
@@ -3752,8 +5258,56 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     }, 80);
   }
 
+  function insertArtifactReference(artifact, selection = {}) {
+    const nextReference = createComposerReferenceFromArtifact(artifact, selection);
+    setComposerReferences((current) => {
+      const byLocation = new Map(sanitizeComposerReferences(current).map((item) => [item.location, item]));
+      byLocation.set(nextReference.location, nextReference);
+      return Array.from(byLocation.values()).slice(-MAX_COMPOSER_REFERENCES);
+    });
+    window.setTimeout(() => {
+      const input = document.querySelector('[data-testid="chat-input"]');
+      input?.focus?.();
+      input?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+    }, 0);
+  }
+
+  function removeComposerReference(id) {
+    setComposerReferences((items) => items.filter((item) => item.id !== id));
+  }
+
+  function hideMessageArtifact(messageId, artifactId) {
+    setMessages((items) => items.map((message) => {
+      if (message.id !== messageId) return message;
+      const hidden = new Set(message.hiddenArtifactIds || []);
+      hidden.add(String(artifactId || ''));
+      return { ...message, hiddenArtifactIds: Array.from(hidden).filter(Boolean).slice(0, ARTIFACT_PREVIEW_MAX_ITEMS) };
+    }));
+    if (focusArtifact?.id === artifactId) setFocusArtifact(null);
+  }
+
+  async function openUserAttachment(attachment = {}) {
+    if (!attachment.path && !attachment.filePath) return;
+    const result = await openAttachmentFileWithBridge(attachment);
+    if (result?.unauthorized) {
+      onUnauthorized?.();
+      return;
+    }
+    if (result?.ok === false && !result?.missing) {
+      console.warn('Attachment open failed', result.error || result);
+    }
+  }
+
+  const pendingPermissionRequest = useMemo(() => {
+    for (const message of [...messages].reverse()) {
+      const request = permissionRequestFromMessage(message, message.timeline || timeline);
+      if (request) return { message, request };
+    }
+    return null;
+  }, [messages, timeline]);
+
   return (
-    <div className={`chat-layout ${railExpanded ? 'rail-expanded' : 'rail-collapsed'}`}>
+    <div className={`chat-layout ${focusArtifact ? 'preview-focus' : 'chat-only'}`}>
       <section className="chat-main panel">
         <HeaderBar
           title="EcoreX"
@@ -3803,6 +5357,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
               showTrace={message.showTrace === true || message.streaming || message.error || message.status === 'timeout' || message.status === 'cancelled'}
               onRetry={retryMessage}
               onPermissionReply={continueFromPermission}
+              onInsertArtifactReference={insertArtifactReference}
+              onOpenArtifact={(artifact) => setFocusArtifact(artifact)}
+              onHideArtifact={hideMessageArtifact}
+              onOpenAttachment={openUserAttachment}
             />
           ))}
         </div>
@@ -3814,6 +5372,8 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           onSelectFiles={selectAttachmentFiles}
           onPasteFiles={handlePastedFiles}
           onRemoveAttachment={removeAttachment}
+          references={composerReferences}
+          onRemoveReference={removeComposerReference}
           running={running}
           currentSessionId={currentSessionId}
           sendPrompt={sendPrompt}
@@ -3824,6 +5384,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           setModel={setModel}
           permissionOptions={permissionOptions}
           modelOptions={modelOptions}
+          permissionRequest={pendingPermissionRequest?.request}
+          onPermissionReply={(action) => {
+            if (pendingPermissionRequest?.message) continueFromPermission(pendingPermissionRequest.message, action);
+          }}
         />
         <input
           ref={fileInputRef}
@@ -3837,22 +5401,13 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         />
       </section>
 
-      <aside className={`right-rail ${railExpanded ? 'expanded' : 'collapsed'}`}>
-        <ProjectCard
-          backendStatus={backendStatus}
-          expanded={railExpanded}
-          onToggle={() => setRailExpanded((next) => !next)}
-          onUnauthorized={onUnauthorized}
-          onOpenProjects={() => setPage('projects')}
+      {focusArtifact ? (
+        <ArtifactFocusPanel
+          artifact={focusArtifact}
+          onClose={() => setFocusArtifact(null)}
+          onInsertReference={insertArtifactReference}
         />
-        {railExpanded && (
-          <>
-            <TaskOverview timeline={timeline} />
-            <QuickActions onRun={sendPrompt} />
-            <AbilityGrid setPage={setPage} />
-          </>
-        )}
-      </aside>
+      ) : null}
     </div>
   );
 }
@@ -3969,16 +5524,155 @@ function HeaderBar({ title, badge, subtitle, backendStatus, onRefresh }) {
   );
 }
 
-function ChatMessage({ message, timeline, sourceMap, showTrace = false, onRetry, onPermissionReply }) {
+function ChatExternalLink({ url, label }) {
+  const safeUrl = safeChatExternalUrl(url);
+  if (!safeUrl) return <>{label || url}</>;
+  return (
+    <a
+      className="chat-rich-link"
+      href={safeUrl}
+      rel="noreferrer"
+      onClick={(event) => {
+        event.preventDefault();
+        openExternalUrlWithBridge(safeUrl);
+      }}
+    >
+      {label || safeUrl}
+    </a>
+  );
+}
+
+function ChatInlineMedia({ url, kind, label }) {
+  const safeUrl = safeChatExternalUrl(url, { mediaOnly: true });
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    setFailed(false);
+  }, [safeUrl]);
+  if (!safeUrl || failed) return <ChatExternalLink url={url} label={label || url} />;
+  const caption = label && label !== safeUrl ? label : kind === 'video' ? '视频' : '图片';
+  return (
+    <figure className={`chat-rich-media ${kind}`}>
+      {kind === 'video' ? (
+        <video src={safeUrl} controls playsInline preload="none" onError={() => setFailed(true)} />
+      ) : (
+        <img src={safeUrl} alt={caption} loading="lazy" onError={() => setFailed(true)} />
+      )}
+      <figcaption>
+        <span>{caption}</span>
+        <button type="button" onClick={() => openExternalUrlWithBridge(safeUrl)}>打开</button>
+      </figcaption>
+    </figure>
+  );
+}
+
+function RichMessageText({ text = '', className = '' }) {
+  const nodes = useMemo(() => {
+    const source = String(text || '');
+    if (!source) return null;
+    const tokenPattern = /!\[([^\]\n]{0,180})\]\(([^)\n]{1,2000})\)|\[([^\]\n]{1,180})\]\(([^)\n]{1,2000})\)|((?:https?:\/\/|www\.)[^\s<>"'`]+)/gi;
+    const output = [];
+    let cursor = 0;
+    let index = 0;
+    const pushText = (value) => {
+      if (value) output.push(value);
+    };
+    for (const match of source.matchAll(tokenPattern)) {
+      const full = match[0] || '';
+      const start = match.index || 0;
+      pushText(source.slice(cursor, start));
+      cursor = start + full.length;
+
+      const markdownImage = match[1] !== undefined;
+      const label = match[1] || match[3] || '';
+      const cleanUrl = cleanChatUrlToken(match[2] || match[4] || match[5] || '');
+      const safeUrl = safeChatExternalUrl(cleanUrl);
+      if (!safeUrl) {
+        pushText(full);
+        continue;
+      }
+
+      const mediaKind = chatMediaKind(safeUrl);
+      if ((markdownImage || mediaKind) && mediaKind) {
+        output.push(<ChatInlineMedia key={`media-${index += 1}`} url={safeUrl} kind={mediaKind} label={label} />);
+      } else {
+        output.push(<ChatExternalLink key={`link-${index += 1}`} url={safeUrl} label={label || cleanUrl} />);
+      }
+    }
+    pushText(source.slice(cursor));
+    return output;
+  }, [text]);
+
+  return <div className={`rich-message-text ${className}`}>{nodes}</div>;
+}
+
+function ChatMessage({
+  message,
+  timeline,
+  sourceMap,
+  showTrace = false,
+  onRetry,
+  onPermissionReply,
+  onInsertArtifactReference,
+  onOpenArtifact,
+  onHideArtifact,
+  onOpenAttachment
+}) {
   const [expanded, setExpanded] = useState(false);
+  const [availableArtifactIds, setAvailableArtifactIds] = useState(() => new Set());
+  const rawText = message.text || '';
+  const hiddenArtifactIds = useMemo(() => new Set(message.hiddenArtifactIds || []), [message.hiddenArtifactIds]);
+  const artifactContext = useMemo(() => ({
+    sessionId: message.sessionId || message.agentSessionId || '',
+    claudeSessionId: message.claudeSessionId || '',
+    projectId: message.projectId || message.project?.id || '',
+    projectName: message.projectName || message.project?.name || ''
+  }), [message.sessionId, message.agentSessionId, message.claudeSessionId, message.projectId, message.project, message.projectName]);
+  const candidateArtifactReferences = useMemo(
+    () => mergeArtifactReferences([
+      ...(message.role === 'assistant' ? (message.finalArtifacts || []) : [])
+    ])
+      .map((artifact) => ({ ...artifact, ...artifactContext }))
+      .filter((artifact) => !hiddenArtifactIds.has(artifact.id)),
+    [message.role, message.finalArtifacts, hiddenArtifactIds, artifactContext]
+  );
+  useEffect(() => {
+    let cancelled = false;
+    if (!candidateArtifactReferences.length) {
+      setAvailableArtifactIds(new Set());
+      return () => {
+        cancelled = true;
+      };
+    }
+    Promise.all(candidateArtifactReferences.map(async (artifact) => ({
+      id: artifact.id,
+      available: await validateArtifactAvailabilityWithBridge(artifact)
+    }))).then((results) => {
+      if (cancelled) return;
+      setAvailableArtifactIds(new Set(results.filter((item) => item.available).map((item) => item.id)));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [candidateArtifactReferences]);
+  const artifactReferences = useMemo(
+    () => candidateArtifactReferences.filter((artifact) => availableArtifactIds.has(artifact.id)),
+    [candidateArtifactReferences, availableArtifactIds]
+  );
+  const userAttachmentIngest = useMemo(() => (
+    Array.isArray(message.attachments)
+      ? message.attachments.map((attachment) => attachment.ingest).filter(Boolean)
+      : []
+  ), [message.attachments]);
   if (message.role === 'user') {
     return (
       <div className="user-row" id={`message-${message.id}`}>
         <div className="user-bubble">
-          <span>{message.text}</span>
+          <RichMessageText text={message.text} className="user-text" />
           {Boolean(message.attachments?.length) && (
-            <AttachmentPreviewList attachments={message.attachments} compact />
+            <AttachmentPreviewList attachments={message.attachments} compact onOpen={onOpenAttachment} />
           )}
+          <MessageReferenceList references={message.references || []} compact />
+          <AttachmentIngestionSummary items={userAttachmentIngest} compact />
           <MessageStatus status={message.status || 'read'} time={message.time} compact />
         </div>
         <div className="avatar user-avatar">张</div>
@@ -3986,13 +5680,10 @@ function ChatMessage({ message, timeline, sourceMap, showTrace = false, onRetry,
     );
   }
 
-  const rawText = message.text || '';
   const shouldCollapse = message.role === 'assistant' && rawText.length > ASSISTANT_COLLAPSE_CHARS;
   const displayText = shouldCollapse && !expanded
     ? `${rawText.slice(0, ASSISTANT_COLLAPSE_CHARS)}...`
     : rawText;
-  const permissionRequest = permissionRequestFromMessage(message, timeline);
-
   return (
     <div className={`assistant-row ${message.error ? 'error' : ''}`} id={`message-${message.id}`}>
       <Logo compact />
@@ -4001,13 +5692,24 @@ function ChatMessage({ message, timeline, sourceMap, showTrace = false, onRetry,
           <span className="time">{message.time}</span>
           <MessageStatus status={message.status || (message.streaming ? 'thinking' : 'complete')} compact />
         </div>
-        <p className={shouldCollapse && !expanded ? 'assistant-text collapsed' : 'assistant-text'}>{displayText}</p>
+        <RichMessageText
+          text={displayText}
+          className={shouldCollapse && !expanded ? 'assistant-text collapsed' : 'assistant-text'}
+        />
         {shouldCollapse && (
           <button className="text-expand" type="button" onClick={() => setExpanded((value) => !value)}>
             {expanded ? '收起长回复' : `展开全文（${rawText.length.toLocaleString('zh-CN')} 字符）`}
           </button>
         )}
-        {permissionRequest && <InlinePermissionRequest request={permissionRequest} onReply={(action) => onPermissionReply?.(message, action)} />}
+        <ArtifactPreviewShelf
+          artifacts={artifactReferences}
+          createdTime={message.time}
+          onOpenArtifact={onOpenArtifact}
+          onHideArtifact={(artifact) => onHideArtifact?.(message.id, artifact.id)}
+        />
+        <AttachmentIngestionSummary items={message.attachmentIngest || []} />
+        <ToolLedgerDisclosure items={message.ledger || []} />
+        <RecoveryStateNotice recovery={message.recovery} status={message.status} onRetry={() => onRetry?.(message)} />
         {showTrace && <InlineAgentTrace timeline={timeline} sourceMap={sourceMap} />}
         {message.rich && <CampaignPerformanceReport />}
         {message.streaming && <ThinkingIndicator phase={message.status} />}
@@ -4022,25 +5724,483 @@ function ChatMessage({ message, timeline, sourceMap, showTrace = false, onRetry,
   );
 }
 
-function AttachmentPreviewList({ attachments = [], onRemove, compact = false }) {
+function AttachmentIngestionSummary({ items = [], compact = false }) {
+  const visibleItems = useMemo(() => (
+    (Array.isArray(items) ? items : []).filter(Boolean).slice(0, compact ? 2 : 5)
+  ), [items, compact]);
+  if (!visibleItems.length) return null;
+  return (
+    <div className={`attachment-ingest-summary ${compact ? 'compact' : ''}`}>
+      {visibleItems.map((item, index) => (
+        <div className={`attachment-ingest-item ${item.tone || 'running'}`} key={item.id || `${item.name}-${index}`}>
+          <span className="attachment-ingest-icon">
+            {isImageAttachment(item) ? <Eye size={14} /> : <FileText size={14} />}
+          </span>
+          <div>
+            <strong>{item.name || `附件 ${index + 1}`}</strong>
+            <span>{item.reason || item.summary || item.metadata || item.status}</span>
+            {!compact && item.metadata && !item.reason && <em>{item.metadata}</em>}
+          </div>
+          <small>{item.status}</small>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ToolLedgerDisclosure({ items = [] }) {
+  const [expanded, setExpanded] = useState(false);
+  const ledgerItems = useMemo(() => (
+    (Array.isArray(items) ? items : []).filter(Boolean).slice(-MAX_STORED_LEDGER_ITEMS)
+  ), [items]);
+  const latest = ledgerItems.at(-1);
+  const visibleItems = useMemo(() => (expanded ? ledgerItems.slice(-10) : []), [expanded, ledgerItems]);
+  if (!latest) return null;
+  const hasDetails = ledgerItems.some((item) => item.detail);
+  return (
+    <div className={`tool-ledger ${expanded ? 'expanded' : 'compact'}`}>
+      <button className="tool-ledger-summary" type="button" onClick={() => setExpanded((value) => !value)}>
+        <span className={`agent-trace-node ${latest.tone || 'running'}`} />
+        <strong>{latest.toolName}</strong>
+        <em>{latest.action}</em>
+        <small>{latest.status}</small>
+        <b>{expanded ? '收起' : `工具 ${ledgerItems.length}`}</b>
+      </button>
+      {expanded && (
+        <div className="tool-ledger-list">
+          {visibleItems.map((item, index) => (
+            <div className={`tool-ledger-row ${item.tone || 'running'}`} key={`${item.id}-${index}`}>
+              <span className={`agent-trace-node ${item.tone || 'running'}`} />
+              <div>
+                <strong>{item.toolName}</strong>
+                <em>{item.action}</em>
+              </div>
+              <small>{item.status}</small>
+              {item.time && <time>{item.time}</time>}
+              {item.detail && (
+                <details>
+                  <summary>{hasDetails ? '详情' : '查看'}</summary>
+                  <pre>{item.detail}</pre>
+                </details>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RecoveryStateNotice({ recovery, status, onRetry }) {
+  if (!recovery?.state) return null;
+  const completed = ['complete', 'completed'].includes(String(status || '').toLowerCase());
+  if (completed && recovery.state === 'recoverable') return null;
+  const canRetry = recovery.state === 'retryable' || ['error', 'timeout'].includes(String(status || '').toLowerCase());
+  return (
+    <div className={`message-recovery-state ${recovery.tone || 'running'}`}>
+      <Clock3 size={15} />
+      <div>
+        <strong>{recovery.label || '可恢复'}</strong>
+        <span>{recovery.detail || recovery.prompt || '这轮任务来自本地运行记录，可在当前会话继续处理。'}</span>
+      </div>
+      {canRetry && (
+        <button type="button" onClick={onRetry}>
+          <RotateCcw size={14} />
+          重试
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ArtifactPreviewShelf({ artifacts = [], createdTime = '', onOpenArtifact, onHideArtifact, compact = false }) {
+  if (!artifacts.length) return null;
+
+  return (
+    <div className={`artifact-preview-shelf ${compact ? 'compact' : ''}`}>
+      <div className="artifact-card-list">
+        {artifacts.map((artifact) => (
+          <ArtifactThumbnailCard
+            artifact={artifact}
+            createdTime={createdTime}
+            key={artifact.id}
+            onOpen={() => onOpenArtifact?.(artifact)}
+            onHide={() => onHideArtifact?.(artifact)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ArtifactThumbnailCard({ artifact, createdTime = '', onOpen, onHide }) {
+  const kind = artifactPreviewKind(artifact.ext, artifact.type || artifact.mimeType);
+  const title = artifact.name || fileNameFromArtifactPath(artifact.path);
+  const timeLabel = createdTime || formatAgentEventTime();
+  return (
+    <div className={`artifact-thumb-card artifact-file-card ${kind}`} data-testid="artifact-file-card">
+      <button
+        className="artifact-thumb-open artifact-file-open"
+        data-testid="artifact-file-open"
+        type="button"
+        title={artifactLocationLabel(artifact)}
+        aria-label={`打开 ${title}`}
+        onClick={onOpen}
+      >
+        <span className="artifact-thumb-icon artifact-file-icon" data-testid="artifact-file-icon">
+          {kind === 'image' ? <Eye size={18} /> : kind === 'html' ? <Code2 size={18} /> : <FileText size={18} />}
+        </span>
+        <span className="artifact-thumb-main">
+          <strong>{title}</strong>
+          <time className="artifact-file-time" data-testid="artifact-file-produced-at">创建时间：{timeLabel}</time>
+        </span>
+        <ChevronRight size={18} />
+      </button>
+      <button
+        className="artifact-thumb-remove artifact-file-hide"
+        data-testid="artifact-file-hide"
+        type="button"
+        title="隐藏这张预览卡片"
+        aria-label={`隐藏 ${title}`}
+        onClick={onHide}
+      >
+        <X size={14} />
+      </button>
+    </div>
+  );
+}
+
+function MessageReferenceList({ references = [], compact = false, onRemove }) {
+  const items = sanitizeComposerReferences(references);
+  if (!items.length) return null;
+  return (
+    <div className={`composer-reference-tray ${compact ? 'compact' : ''}`}>
+      {items.map((item) => (
+        <div className="composer-reference-chip" key={item.id}>
+          <span />
+          <strong>{item.text || item.location}</strong>
+          <em>{item.location || item.name}</em>
+          {onRemove && (
+            <button type="button" title="移除引用" onClick={() => onRemove(item.id)}>
+              <X size={13} />
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ComposerReferenceTray({ references = [], onRemove }) {
+  return <MessageReferenceList references={references} onRemove={onRemove} />;
+}
+
+function ArtifactFocusPanel({ artifact, onClose, onInsertReference }) {
+  if (!artifact) return null;
+  return (
+    <aside className="artifact-focus-panel">
+      <div className="artifact-focus-head">
+        <div>
+          <span>文件预览</span>
+          <strong>{artifact.name || fileNameFromArtifactPath(artifact.path)}</strong>
+        </div>
+        <button type="button" title="关闭预览" onClick={onClose}>
+          <X size={16} />
+        </button>
+      </div>
+      <ArtifactPreviewCard
+        artifact={artifact}
+        focus
+        onClose={onClose}
+        onInsertReference={onInsertReference}
+      />
+    </aside>
+  );
+}
+
+function ArtifactPreviewCard({ artifact, onClose, onInsertReference, focus = false }) {
+  const [preview, setPreview] = useState({ status: 'idle' });
+  const [selectedLine, setSelectedLine] = useState(artifact.line || null);
+  const [selectedText, setSelectedText] = useState('');
+  const [copyNotice, setCopyNotice] = useState('');
+  const previewRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setPreview({ status: 'loading' });
+    setSelectedLine(artifact.line || null);
+    setSelectedText('');
+    previewArtifactWithBridge(artifact).then((result) => {
+      if (cancelled) return;
+      const normalizedResult = typeof result === 'string' ? { ok: true, content: result } : (result || {});
+      if (normalizedResult.ok === false) {
+        setPreview({
+          status: normalizedResult.unsupported ? 'unsupported' : normalizedResult.missing ? 'missing' : 'error',
+          ...normalizeArtifactPreviewResult(normalizedResult, artifact),
+          error: normalizedResult.unauthorized
+            ? '登录状态已过期，重新登录后可继续预览。'
+            : (normalizedResult.reason || normalizedResult.error || '暂时无法预览这个文件。')
+        });
+        return;
+      }
+      setPreview({ status: 'ready', ...normalizeArtifactPreviewResult(normalizedResult, artifact) });
+    }).catch((error) => {
+      if (!cancelled) {
+        setPreview({ status: 'error', error: error?.message || String(error) });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [artifact.id]);
+
+  useEffect(() => {
+    function handlePreviewSelection(event) {
+      const payload = event?.data && typeof event.data === 'object' ? event.data : null;
+      if (!payload || payload.type !== 'ecorex-preview-selection') return;
+      if (payload.previewId && preview.previewId && payload.previewId !== preview.previewId) return;
+      const text = String(payload.text || '').trim().slice(0, 900);
+      if (!text) return;
+      const page = Number(payload.page || payload.pageNumber || 0) || null;
+      const range = String(payload.range || payload.cellRange || '').trim();
+      const locationText = range ? `${range}` : page ? `第 ${page} 页` : '';
+      const nextText = locationText ? `${locationText}\n${text}` : text;
+      setSelectedText(nextText);
+      syncSelectionToComposer({ line: selectedLine || artifact.line, text: nextText });
+    }
+    window.addEventListener('message', handlePreviewSelection);
+    return () => window.removeEventListener('message', handlePreviewSelection);
+  }, [artifact.id, artifact.line, preview.previewId, selectedLine]);
+
+  function syncSelectionToComposer(selection = {}) {
+    onInsertReference?.(artifact, selection);
+  }
+
+  function captureSelectedText() {
+    const selection = window.getSelection?.();
+    if (!selection || selection.isCollapsed || !previewRef.current) return;
+    if (!previewRef.current.contains(selection.anchorNode) || !previewRef.current.contains(selection.focusNode)) return;
+    const text = selection.toString().trim();
+    if (text) {
+      const nextText = text.slice(0, 900);
+      setSelectedText(nextText);
+      syncSelectionToComposer({ line: selectedLine || artifact.line, text: nextText });
+    }
+  }
+
+  async function copyPath() {
+    const copied = await copyTextToClipboard(artifactLocationLabel(artifact));
+    setCopyNotice(copied ? '已复制' : '复制失败');
+    window.setTimeout(() => setCopyNotice(''), 1400);
+  }
+
+  function insertReference() {
+    onInsertReference?.(artifact, {
+      line: selectedLine || artifact.line,
+      text: selectedText
+    });
+  }
+
+  const content = preview.status === 'ready' ? preview.content || '' : '';
+  const language = preview.status === 'ready' ? preview.language : artifactLanguageFromPath(artifact.path || artifact.name);
+  const metadataOnly = preview.status === 'ready'
+    && (preview.previewable === false || preview.renderMode === 'metadata' || (preview.renderMode !== 'kkfileview' && ['pdf', 'office', 'binary'].includes(preview.kind)));
+  const canRenderKkFileView = preview.status === 'ready' && !metadataOnly && preview.renderMode === 'kkfileview' && preview.previewUrl;
+  const canRenderHtml = preview.status === 'ready' && !metadataOnly && preview.kind === 'html';
+  const canRenderImage = preview.status === 'ready' && !metadataOnly && preview.kind === 'image' && preview.previewUrl;
+  const canRenderText = preview.status === 'ready' && !metadataOnly && !canRenderImage && !canRenderKkFileView;
+
+  return (
+    <div className={`artifact-preview-card ${focus ? 'focus' : ''}`}>
+      <header>
+        <div>
+          <strong>{artifact.name}</strong>
+          <span>{artifactLocationLabel(artifact)}</span>
+        </div>
+        <button type="button" title="关闭预览" onClick={onClose}>
+          <X size={15} />
+        </button>
+      </header>
+
+      {preview.status === 'loading' && (
+        <div className="artifact-preview-state">
+          <Loader2 size={16} className="spin-icon" />
+          正在打开预览
+        </div>
+      )}
+
+      {preview.status === 'missing' && (
+        <div className="artifact-preview-state warn">
+          <AlertTriangle size={16} />
+          桌面端暂未提供 previewFile 接口，已保留路径定位，可直接回填到输入框。
+        </div>
+      )}
+
+      {preview.status === 'error' && (
+        <div className="artifact-preview-state error">
+          <AlertTriangle size={16} />
+          {preview.error}
+        </div>
+      )}
+
+      {preview.status === 'unsupported' && (
+        <ArtifactMetaPreview preview={preview} artifact={artifact} />
+      )}
+
+      {preview.status === 'ready' && (
+        <>
+          {metadataOnly && (
+            <ArtifactMetaPreview preview={preview} artifact={artifact} />
+          )}
+          {canRenderImage && (
+            <div className="artifact-image-preview">
+              <img src={preview.previewUrl} alt={artifact.name} />
+            </div>
+          )}
+          {canRenderHtml && (
+            <iframe
+              className="artifact-html-frame"
+              title={`${artifact.name} preview`}
+              sandbox=""
+              srcDoc={content}
+            />
+          )}
+          {canRenderKkFileView && (
+            <iframe
+              className="artifact-html-frame artifact-kkfileview-frame"
+              title={`${artifact.name} preview`}
+              sandbox="allow-scripts allow-same-origin allow-forms"
+              referrerPolicy="no-referrer"
+              src={preview.previewUrl}
+            />
+          )}
+          {canRenderText && (
+            <ArtifactTextPreview
+              content={content}
+              language={language}
+              startLine={preview.startLine}
+              selectedLine={selectedLine}
+              onSelectLine={(line, text) => {
+                const nextText = text.trim().slice(0, 900);
+                setSelectedLine(line);
+                setSelectedText(nextText);
+                syncSelectionToComposer({ line, text: nextText });
+              }}
+              onMouseUp={captureSelectedText}
+              previewRef={previewRef}
+            />
+          )}
+          {preview.truncated && <div className="artifact-preview-note">内容较长，当前只显示前部预览。</div>}
+        </>
+      )}
+
+      <footer>
+        <span>{selectedText ? '已选片段' : selectedLine ? `定位到第 ${selectedLine} 行` : '未选择片段'}</span>
+        {copyNotice && <em>{copyNotice}</em>}
+        <button type="button" onClick={copyPath}>
+          <Copy size={14} />
+          复制路径
+        </button>
+        <button className="primary-inline" type="button" onClick={insertReference}>
+          <Plus size={14} />
+          回填定位
+        </button>
+      </footer>
+    </div>
+  );
+}
+
+function ArtifactMetaPreview({ preview = {}, artifact = {} }) {
+  const kindLabels = {
+    pdf: 'PDF 文件',
+    office: 'Office 文件',
+    image: '图片文件',
+    binary: '二进制文件'
+  };
+  const kind = preview.kind || artifactPreviewKind(artifact.ext, artifact.type || artifact.mimeType);
+  const rows = [
+    ['类型', kindLabels[kind] || artifact.ext || '未知格式'],
+    ['大小', formatFileSize(preview.sizeBytes || artifact.sizeBytes || 0)],
+    ['MIME', preview.mimeType || artifact.type || artifact.mimeType || '未知'],
+    ['路径', preview.path || artifact.path || artifact.name],
+    preview.metadata ? ['元信息', preview.metadata] : null,
+    ['说明', preview.reason || preview.error || '当前格式不在 EcoreX 内直接渲染，已禁止跳转系统应用。']
+  ].filter(Boolean);
+  return (
+    <div className="artifact-meta-preview">
+      <div className="artifact-meta-icon">
+        {kind === 'pdf' ? <FileText size={24} /> : kind === 'office' ? <ClipboardList size={24} /> : <Archive size={24} />}
+      </div>
+      <div className="artifact-meta-grid">
+        {rows.map(([label, value]) => (
+          <div key={label}>
+            <strong>{label}</strong>
+            <span>{value || '无'}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ArtifactTextPreview({ content, language, startLine = 1, selectedLine, onSelectLine, onMouseUp, previewRef }) {
+  const visibleLines = useMemo(() => {
+    const lines = String(content || '').split(/\r?\n/);
+    return lines.length ? lines : [''];
+  }, [content]);
+  return (
+    <div className="artifact-text-preview" data-language={language} onMouseUp={onMouseUp} ref={previewRef}>
+      {visibleLines.map((line, index) => {
+        const lineNumber = startLine + index;
+        return (
+          <button
+            className={lineNumber === selectedLine ? 'artifact-line selected' : 'artifact-line'}
+            key={`${lineNumber}-${index}`}
+            type="button"
+            onClick={() => onSelectLine?.(lineNumber, line)}
+          >
+            <span>{lineNumber}</span>
+            <code>{line || ' '}</code>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function AttachmentPreviewList({ attachments = [], onRemove, onOpen, compact = false }) {
   if (!attachments.length) return null;
   return (
     <div className={`attachment-tray ${compact ? 'compact' : ''}`}>
       {attachments.map((attachment) => {
         const image = isImageAttachment(attachment);
+        const clickable = typeof onOpen === 'function' && Boolean(attachment.path || attachment.filePath);
         const progress = Math.max(0, Math.min(100, Math.round(Number(attachment.progress) || 0)));
         const statusText = attachment.status === 'uploading'
           ? `上传中... ${progress}%`
-          : '已添加';
+          : clickable ? '单击打开' : '已添加';
         return (
-          <div className={`attachment-chip ${image ? 'image' : 'file'}`} key={attachment.id || attachment.name}>
+          <div
+            className={`attachment-chip ${image ? 'image' : 'file'} ${clickable ? 'clickable' : ''}`}
+            key={attachment.id || attachment.name}
+            role={clickable ? 'button' : undefined}
+            tabIndex={clickable ? 0 : undefined}
+            title={clickable ? '用本机默认应用打开' : attachment.name}
+            onClick={clickable ? () => onOpen(attachment) : undefined}
+            onKeyDown={clickable ? (event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                onOpen(attachment);
+              }
+            } : undefined}
+          >
             <AttachmentThumb attachment={attachment} compact={compact} />
             <div>
               <strong>{attachment.name || '未命名附件'}</strong>
               <span>{statusText} · {formatFileSize(attachment.sizeBytes)}</span>
             </div>
             {onRemove && (
-              <button type="button" onClick={() => onRemove(attachment.id)} title="移除附件">
+              <button type="button" onClick={(event) => { event.stopPropagation(); onRemove(attachment.id); }} title="移除附件">
                 <X size={13} />
               </button>
             )}
@@ -4054,16 +6214,24 @@ function AttachmentPreviewList({ attachments = [], onRemove, compact = false }) 
 function AttachmentThumb({ attachment, compact = false }) {
   const [failed, setFailed] = useState(false);
   const image = isImageAttachment(attachment);
+  const kind = attachmentKindFromName(attachment.name || attachment.path || '', attachment.type || attachment.mimeType);
+  const Icon = kind === 'sheet'
+    ? BarChart3
+    : kind === 'slide'
+      ? LayoutDashboard
+      : kind === 'code'
+        ? Code2
+        : FileText;
 
   useEffect(() => {
     setFailed(false);
   }, [attachment.previewUrl]);
 
   return (
-    <div className="attachment-thumb">
+    <div className={`attachment-thumb ${kind}`}>
       {image && attachment.previewUrl && !failed
         ? <img src={attachment.previewUrl} alt="" onError={() => setFailed(true)} />
-        : <FileText size={compact ? 14 : 17} />}
+        : <Icon size={compact ? 14 : 17} />}
     </div>
   );
 }
@@ -4169,6 +6337,8 @@ function Composer({
   onSelectFiles,
   onPasteFiles,
   onRemoveAttachment,
+  references = [],
+  onRemoveReference,
   running,
   currentSessionId,
   sendPrompt,
@@ -4178,7 +6348,9 @@ function Composer({
   model,
   setModel,
   permissionOptions,
-  modelOptions
+  modelOptions,
+  permissionRequest,
+  onPermissionReply
 }) {
   const textareaRef = useRef(null);
 
@@ -4194,9 +6366,83 @@ function Composer({
     textarea.style.overflowY = textarea.scrollHeight > maxHeight ? 'auto' : 'hidden';
   }, [prompt]);
 
+  function insertPromptText(text = '') {
+    const nextText = String(text || '').trim();
+    if (!nextText) return;
+    const textarea = textareaRef.current;
+    const currentValue = String(prompt || '');
+    if (!textarea) {
+      setPrompt(currentValue ? `${currentValue}\n${nextText}` : nextText);
+      return;
+    }
+    const start = Number.isFinite(textarea.selectionStart) ? textarea.selectionStart : currentValue.length;
+    const end = Number.isFinite(textarea.selectionEnd) ? textarea.selectionEnd : start;
+    const needsLeadingBreak = start > 0 && currentValue[start - 1] && !/\s/.test(currentValue[start - 1]);
+    const needsTrailingBreak = end < currentValue.length && currentValue[end] && !/\s/.test(currentValue[end]);
+    const insertion = `${needsLeadingBreak ? '\n' : ''}${nextText}${needsTrailingBreak ? '\n' : ''}`;
+    const updated = `${currentValue.slice(0, start)}${insertion}${currentValue.slice(end)}`;
+    const cursor = start + insertion.length;
+    setPrompt(updated);
+    window.setTimeout(() => {
+      textarea.focus();
+      textarea.setSelectionRange(cursor, cursor);
+    }, 0);
+  }
+
+  function filesFromDataTransfer(dataTransfer) {
+    const files = Array.from(dataTransfer?.items || [])
+      .filter((item) => item.kind === 'file')
+      .map((item) => item.getAsFile())
+      .filter(Boolean);
+    return files.length ? files : Array.from(dataTransfer?.files || []);
+  }
+
+  function transferText(dataTransfer) {
+    const uriList = String(dataTransfer?.getData?.('text/uri-list') || '')
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith('#'))
+      .join('\n');
+    return uriList || String(dataTransfer?.getData?.('text/plain') || '').trim();
+  }
+
+  function stageTransferredInput(event, dataTransfer) {
+    const types = Array.from(dataTransfer?.types || []);
+    const files = filesFromDataTransfer(dataTransfer);
+    if (files.length) {
+      event.preventDefault();
+      onPasteFiles?.(files);
+      return true;
+    }
+    const text = transferText(dataTransfer);
+    if (text && event.type === 'drop') {
+      event.preventDefault();
+      insertPromptText(text);
+      return true;
+    }
+    if (text && types.includes('text/uri-list')) {
+      event.preventDefault();
+      insertPromptText(text);
+      return true;
+    }
+    return false;
+  }
+
   return (
-    <div className="composer" data-testid="chat-composer">
+    <div
+      className="composer"
+      data-testid="chat-composer"
+      onDragOver={(event) => {
+        const types = Array.from(event.dataTransfer?.types || []);
+        if (types.some((type) => ['Files', 'text/uri-list', 'text/plain'].includes(type))) {
+          event.preventDefault();
+        }
+      }}
+      onDrop={(event) => stageTransferredInput(event, event.dataTransfer)}
+    >
       <AttachmentPreviewList attachments={attachments} onRemove={onRemoveAttachment} />
+      <ComposerReferenceTray references={references} onRemove={onRemoveReference} />
+      <ComposerPermissionPopover request={permissionRequest} onReply={onPermissionReply} />
       <textarea
         data-testid="chat-input"
         ref={textareaRef}
@@ -4205,8 +6451,7 @@ function Composer({
         onKeyDown={(event) => {
           if (event.key === 'Enter' && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.isComposing) {
             event.preventDefault();
-            if (running && currentSessionId) cancelPrompt();
-            else sendPrompt(prompt, attachments);
+            sendPrompt(prompt, attachments);
           }
           if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
             event.preventDefault();
@@ -4214,14 +6459,7 @@ function Composer({
           }
         }}
         onPaste={(event) => {
-          const files = Array.from(event.clipboardData?.items || [])
-            .filter((item) => item.kind === 'file')
-            .map((item) => item.getAsFile())
-            .filter(Boolean);
-          if (files.length) {
-            event.preventDefault();
-            onPasteFiles?.(files);
-          }
+          stageTransferredInput(event, event.clipboardData);
         }}
         placeholder="你可以问我任何问题"
       />
@@ -4246,12 +6484,23 @@ function Composer({
           <button
             className="send"
             data-testid="chat-send-button"
-            title={running ? '停止当前会话' : '发送'}
+            title={running ? '追加发送' : '发送'}
             type="button"
-            onClick={() => (running && currentSessionId ? cancelPrompt() : sendPrompt(prompt, attachments))}
+            onClick={() => sendPrompt(prompt, attachments)}
           >
-            {running ? <Pause size={22} /> : <Send size={24} />}
+            <Send size={24} />
           </button>
+          {running && currentSessionId && (
+            <button
+              className="stop-current"
+              data-testid="chat-stop-button"
+              title="停止当前任务"
+              type="button"
+              onClick={() => cancelPrompt()}
+            >
+              <Pause size={20} />
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -4587,6 +6836,10 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
       setProjectState((current) => ({ ...current, notice: result.missing ? '项目服务未就绪' : `项目保存失败：${sanitizeDisplayText(result.error, '请稍后重试')}` }));
     } else {
       setProjectState((current) => ({ ...current, notice: '项目信息已保存。' }));
+      const updatedProject = normalizeProjectItem(result.project || { ...selectedProject, ...payload }, 0, selectedProject.id);
+      updateStoredProjectChatReferences(selectedProject.id, updatedProject.name);
+      window.dispatchEvent?.(new CustomEvent('ecorex:projects-changed'));
+      window.dispatchEvent?.(new CustomEvent('ecorex:project-context', { detail: { project: updatedProject } }));
       await refreshProjects({ silent: true, preferId: selectedProject.id });
       refreshBackend?.({ refresh: true });
     }
@@ -4629,6 +6882,49 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
     setBusy('');
   }
 
+  async function deleteProject(project = selectedProject) {
+    if (!project?.id || !projectState.apiReady || !hasEcorexFunction(['deleteProject', 'projects.delete', 'removeProject', 'projects.remove'])) return;
+    const confirmed = typeof window === 'undefined' || typeof window.confirm !== 'function'
+      ? true
+      : window.confirm([
+          `删除项目「${project.name}」？`,
+          '',
+          '这会同步删除该项目在本机工作区中的全部项目文件、项目记忆和会话资源引用。此操作不可撤销。'
+        ].join('\n'));
+    if (!confirmed) return;
+    setBusy(`delete:${project.id}`);
+    const result = await deleteManagedProject(project.id);
+    if (result?.unauthorized) {
+      onUnauthorized?.();
+      setProjectState((current) => ({ ...current, notice: '请重新登录后删除项目。' }));
+    } else if (result?.ok === false) {
+      setProjectState((current) => ({ ...current, notice: result.missing ? '项目服务未就绪' : `项目删除失败：${sanitizeDisplayText(result.error, '请稍后重试')}` }));
+    } else {
+      setProjectState((current) => ({ ...current, notice: `项目「${project.name}」及本地文件已删除。` }));
+      deleteStoredProjectChatReferences(project.id);
+      setSelectedProjectId('');
+      window.dispatchEvent?.(new CustomEvent('ecorex:projects-changed'));
+      await refreshProjects({ silent: true });
+      refreshBackend?.({ refresh: true });
+    }
+    setBusy('');
+  }
+
+  async function openProjectFolder(project = selectedProject) {
+    if (!project?.id || !projectState.apiReady || !hasEcorexFunction(['openProjectFolder', 'projects.openFolder', 'projects.open'])) return;
+    setBusy(`open:${project.id}`);
+    const result = await openManagedProjectFolder(project.id);
+    if (result?.unauthorized) {
+      onUnauthorized?.();
+      setProjectState((current) => ({ ...current, notice: '请重新登录后打开项目目录。' }));
+    } else if (result?.ok === false || result?.missing) {
+      setProjectState((current) => ({ ...current, notice: `项目目录打开失败：${sanitizeDisplayText(result?.error, '请稍后重试')}` }));
+    } else {
+      setProjectState((current) => ({ ...current, notice: '项目目录已在资源管理器中打开。' }));
+    }
+    setBusy('');
+  }
+
   const activeProjects = projectState.projects.filter((project) => !project.archived);
   const archivedProjects = projectState.projects.filter((project) => project.archived);
   const currentProject = projectState.currentProject;
@@ -4636,6 +6932,7 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
   const canUpdateProject = projectState.apiReady && hasEcorexFunction(['updateProject', 'projects.update']);
   const canArchiveProject = projectState.apiReady && hasEcorexFunction(['archiveProject', 'projects.archive', 'updateProject', 'projects.update']);
   const canSwitchProject = projectState.apiReady && hasEcorexFunction(['switchProject', 'projects.switch']);
+  const canDeleteProject = projectState.apiReady && hasEcorexFunction(['deleteProject', 'projects.delete', 'removeProject', 'projects.remove']);
 
   return (
     <section className="projects-page panel">
@@ -4668,7 +6965,7 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
       </div>
 
       <div className="projects-grid">
-        <section className="projects-list-panel">
+        <section className="projects-list-panel" data-testid="projects-list-panel">
           <header>
             <div>
               <h3>项目列表</h3>
@@ -4683,6 +6980,7 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
             {(projectState.projects.length ? projectState.projects : [{ id: 'empty', name: projectState.apiReady ? '暂无项目' : '项目服务未就绪', statusLabel: projectState.status }]).map((project) => (
               <button
                 className={`project-list-entry ${selectedProject?.id === project.id ? 'selected' : ''} ${project.current ? 'active' : ''} ${project.archived ? 'archived' : ''}`}
+                data-testid="projects-list-entry"
                 disabled={project.id === 'empty'}
                 key={project.id}
                 type="button"
@@ -4699,20 +6997,28 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
           </div>
         </section>
 
-        <section className="project-detail-panel">
+        <section className="project-detail-panel" data-testid="project-detail-panel">
           <header>
             <div>
               <h3>{selectedProject?.name || '项目详情'}</h3>
               <small>{selectedProject ? `${selectedProject.statusLabel} · ${selectedProject.pathLabel || 'workspace:/'}` : '选择项目后编辑广告业务上下文'}</small>
             </div>
             <div className="project-detail-actions">
-              <button type="button" onClick={() => switchProject(selectedProject)} disabled={!selectedProject || selectedProject.current || selectedProject.archived || !canSwitchProject || busy === `switch:${selectedProject?.id}`}>
+              <button type="button" data-testid="project-detail-switch" onClick={() => switchProject(selectedProject)} disabled={!selectedProject || selectedProject.current || selectedProject.archived || !canSwitchProject || busy === `switch:${selectedProject?.id}`}>
                 {busy === `switch:${selectedProject?.id}` ? <Loader2 size={14} className="spin-icon" /> : <Check size={14} />}
                 {selectedProject?.current ? '当前' : '切换'}
               </button>
-              <button type="button" onClick={() => toggleArchive(selectedProject)} disabled={!selectedProject || !canArchiveProject || busy === `archive:${selectedProject?.id}`}>
+              <button type="button" data-testid="project-detail-archive" onClick={() => toggleArchive(selectedProject)} disabled={!selectedProject || !canArchiveProject || busy === `archive:${selectedProject?.id}`}>
                 {busy === `archive:${selectedProject?.id}` ? <Loader2 size={14} className="spin-icon" /> : <Archive size={14} />}
                 {selectedProject?.archived ? '恢复' : '归档'}
+              </button>
+              <button type="button" data-testid="project-detail-open-folder" onClick={() => openProjectFolder(selectedProject)} disabled={!selectedProject || busy === `open:${selectedProject?.id}`}>
+                {busy === `open:${selectedProject?.id}` ? <Loader2 size={14} className="spin-icon" /> : <FolderOpen size={14} />}
+                打开目录
+              </button>
+              <button className="danger" type="button" data-testid="project-detail-delete" onClick={() => deleteProject(selectedProject)} disabled={!selectedProject || !canDeleteProject || busy === `delete:${selectedProject?.id}`}>
+                {busy === `delete:${selectedProject?.id}` ? <Loader2 size={14} className="spin-icon" /> : <X size={14} />}
+                删除
               </button>
             </div>
           </header>
@@ -4726,8 +7032,8 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
               </div>
               <div className="project-edit-form">
                 <label>
-                  <span>项目名称</span>
-                  <input value={editDraft.name} onChange={(event) => updateEditField('name', event.target.value)} disabled={!canUpdateProject} />
+                  <span>项目名称 / 本地目录</span>
+                  <input data-testid="project-edit-name" value={editDraft.name} onChange={(event) => updateEditField('name', event.target.value)} disabled={!canUpdateProject} />
                 </label>
                 <label>
                   <span>客户 / 品牌</span>
@@ -4766,9 +7072,9 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
               </div>
               <div className="project-detail-footer">
                 <span>{selectedProject.fileCount || 0} 文件 · {selectedProject.sessionCount || 0} 会话 · {selectedProject.updatedAt ? formatDateTime(selectedProject.updatedAt) : '更新时间待返回'}</span>
-                <button type="button" onClick={saveProject} disabled={!canUpdateProject || !editDraft.name.trim() || busy === `save:${selectedProject.id}`}>
+                <button type="button" data-testid="project-detail-save" onClick={saveProject} disabled={!canUpdateProject || !editDraft.name.trim() || busy === `save:${selectedProject.id}`}>
                   {busy === `save:${selectedProject.id}` ? <Loader2 size={15} className="spin-icon" /> : <Check size={15} />}
-                  保存
+                  保存 / 重命名
                 </button>
               </div>
             </>
@@ -4781,7 +7087,7 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
           )}
         </section>
 
-        <section className="project-create-panel">
+        <section className="project-create-panel" data-testid="project-create-panel">
           <header>
             <div>
               <h3>新建广告项目</h3>
@@ -4791,7 +7097,7 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
           <form className="project-create-form" onSubmit={createProject}>
             <label>
               <span>项目名称</span>
-              <input value={createDraft.name} onChange={(event) => updateCreateField('name', event.target.value)} placeholder="如：618 短视频投放" disabled={!canCreateProject || busy === 'create'} />
+              <input data-testid="projects-create-name" value={createDraft.name} onChange={(event) => updateCreateField('name', event.target.value)} placeholder="如：618 短视频投放" disabled={!canCreateProject || busy === 'create'} />
             </label>
             <label>
               <span>客户 / 品牌</span>
@@ -4821,7 +7127,7 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
               <span>交付物</span>
               <textarea value={createDraft.deliverablesText} onChange={(event) => updateCreateField('deliverablesText', event.target.value)} placeholder="投放计划、素材脚本、复盘报告..." disabled={!canCreateProject || busy === 'create'} />
             </label>
-            <button type="submit" disabled={!canCreateProject || !createDraft.name.trim() || busy === 'create'}>
+            <button type="submit" data-testid="projects-create-submit" disabled={!canCreateProject || !createDraft.name.trim() || busy === 'create'}>
               {busy === 'create' ? <Loader2 size={16} className="spin-icon" /> : <Plus size={16} />}
               新建并切换
             </button>
@@ -4936,7 +7242,7 @@ function AbilityGrid({ setPage }) {
 function isPublicTraceItem(item = []) {
   const [label = '', status = '', , tone = '', kind = ''] = item;
   if (/能力索引|source map|57MB/i.test(`${label} ${status}`)) return false;
-  const publicKinds = new Set(['tool', 'stderr', 'result', 'done', 'cancelled', 'error', 'timeout']);
+  const publicKinds = new Set(['tool', 'ledger', 'attachment', 'recovery', 'stderr', 'result', 'done', 'cancelled', 'error', 'timeout']);
   if (tone === 'danger') return true;
   if (publicKinds.has(kind)) return true;
   if (kind === 'debug' || kind === 'assistant') return false;
@@ -4990,9 +7296,9 @@ function permissionRequestFromMessage(message = {}, timeline = []) {
 
 function InlineAgentTrace({ timeline = [], sourceMap }) {
   const [expanded, setExpanded] = useState(false);
-  const publicItems = publicTraceItems(timeline);
-  const summary = traceDisclosureSummary(publicItems);
-  const visibleItems = expanded ? publicItems.slice(-6) : [];
+  const publicItems = useMemo(() => publicTraceItems(timeline), [timeline]);
+  const summary = useMemo(() => traceDisclosureSummary(publicItems), [publicItems]);
+  const visibleItems = useMemo(() => (expanded ? publicItems.slice(-6) : []), [expanded, publicItems]);
   const expandable = publicItems.length > 4 || publicItems.some((item) => ['danger', 'warn', 'pending'].includes(item[3]));
 
   if (!summary) return null;
@@ -5041,6 +7347,24 @@ function InlinePermissionRequest({ request, onReply }) {
             {label}
           </button>
         ))}
+      </div>
+    </div>
+  );
+}
+
+function ComposerPermissionPopover({ request, onReply }) {
+  if (!request) return null;
+  return (
+    <div className="composer-permission-popover inline-permission-request">
+      <ShieldCheck size={18} />
+      <div>
+        <strong>{request.title}</strong>
+        <span>{request.description}</span>
+      </div>
+      <div className="inline-permission-actions">
+        <button type="button" onClick={() => onReply?.('允许一次')}>允许一次</button>
+        <button type="button" onClick={() => onReply?.('拒绝')}>拒绝</button>
+        <button type="button" onClick={() => onReply?.('只做计划')}>只做计划</button>
       </div>
     </div>
   );
@@ -5410,6 +7734,10 @@ function normalizeRunningSession(raw = {}, index = 0, source = 'api') {
     accessMode,
     permissionMode: permissionModeFromAccessMode(accessMode),
     accessLabel: permissionOptionByValue(accessMode).label,
+    recoverable: boolFrom(raw.recoverable ?? raw.canResume ?? raw.resumeAvailable ?? raw.pendingRecovery, false),
+    retryable: boolFrom(raw.retryable ?? raw.canRetry, false),
+    recoveryStatus: raw.recoveryStatus || raw.recoveryState || '',
+    recoveryHint: raw.recoveryHint || raw.detail || raw.message || '',
     startedAt: sessionTimestamp(raw.startedAt || raw.startedAtIso || raw.startedAtMs),
     updatedAt,
     source,
@@ -5442,9 +7770,14 @@ function mergeRunningSessionRows(current = [], incoming = [], options = {}) {
     .slice(0, 12);
 }
 
+function shouldSurfaceAgentSession(row = {}) {
+  return isRunningSessionActive(row)
+    || Boolean(row.recoverable || row.retryable || row.recoveryStatus || row.recoveryHint);
+}
+
 function extractAgentSessionRows(result) {
   const rows = extractCollection(result, ['sessions', 'runningSessions', 'activeSessions', 'items', 'data']);
-  return rows.map((session, index) => normalizeRunningSession(session, index, 'api')).filter(isRunningSessionActive);
+  return rows.map((session, index) => normalizeRunningSession(session, index, 'api')).filter(shouldSurfaceAgentSession);
 }
 
 function boolFrom(value, fallback = false) {
@@ -6253,6 +8586,19 @@ async function updateManagedProject(projectId, patch = {}) {
 
 async function archiveManagedProject(projectId) {
   return callEcorexAction(['archiveProject', 'projects.archive'], { id: projectId, projectId });
+}
+
+async function deleteManagedProject(projectId) {
+  return callEcorexAction(['deleteProject', 'projects.delete', 'removeProject', 'projects.remove'], {
+    id: projectId,
+    projectId,
+    confirmDelete: true,
+    deleteFilesConfirmed: true
+  });
+}
+
+async function openManagedProjectFolder(projectId) {
+  return callEcorexAction(['openProjectFolder', 'projects.openFolder', 'projects.open'], { id: projectId, projectId });
 }
 
 function DiagnosticsView({ backendStatus, backendError, capabilities, authStatus, startupState, refreshBackend, onUnauthorized, embedded = false }) {

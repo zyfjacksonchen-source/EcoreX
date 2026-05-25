@@ -12,6 +12,15 @@ release/*.exe.blockmap
 release/latest.yml
 release/real-agent-stress-*.json
 
+# Accidental root-level renderer/main build copies.
+/index-*.js
+/index-*.css
+/main.cjs
+
+# Large local preview runtime prepared by scripts/prepare-kkfileview.cjs.
+# Commit the integration scripts, not the generated JRE/LibreOffice/vendor payload.
+vendor/kkfileview/
+
 # Local secrets and transient logs.
 .env
 .env.*

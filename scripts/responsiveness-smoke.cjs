@@ -57,7 +57,7 @@ async function main() {
   results.push(await runTimed('Vite production build', process.execPath, [viteCli, 'build'], {
     budgetMs: buildBudget
   }));
-  results.push(await runTimed('Electron E2E @responsive', process.execPath, [
+  results.push(await runTimed('Electron E2E @responsive including large message ledger input and file preview', process.execPath, [
     playwrightCli,
     'test',
     '-c',
@@ -66,7 +66,10 @@ async function main() {
     '@responsive'
   ], {
     budgetMs: e2eBudget,
-    env: { ECOREX_RESPONSIVE_SMOKE: '1' }
+    env: {
+      ECOREX_RESPONSIVE_SMOKE: '1',
+      ECOREX_E2E_LARGE_LEDGER_INPUT_BUDGET_MS: process.env.ECOREX_E2E_LARGE_LEDGER_INPUT_BUDGET_MS || '1500'
+    }
   }));
 
   console.log('\n[responsive-smoke] summary');

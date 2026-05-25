@@ -133,11 +133,369 @@ function parseJson(text) {
   }
 }
 
+function firstFiniteInteger(values = []) {
+  for (const value of values) {
+    const number = Number(value);
+    if (Number.isFinite(number) && number > 0) return Math.floor(number);
+  }
+  return null;
+}
+
+function optionalBoolean(...values) {
+  for (const value of values) {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+      if (/^(true|yes|1)$/i.test(value.trim())) return true;
+      if (/^(false|no|0)$/i.test(value.trim())) return false;
+    }
+  }
+  return null;
+}
+
 function errorMessageFromData(data, text, statusCode) {
   const errorValue = data?.error?.message || data?.message || data?.error;
   if (typeof errorValue === 'string') return errorValue;
   if (errorValue && typeof errorValue === 'object') return JSON.stringify(errorValue);
   return text || (statusCode ? `HTTP ${statusCode}` : 'Request failed.');
+}
+
+function textFromTextValue(value) {
+  if (typeof value === 'string') return value;
+  if (!value || typeof value !== 'object') return '';
+  if (typeof value.value === 'string') return value.value;
+  if (typeof value.text === 'string') return value.text;
+  if (typeof value.content === 'string') return value.content;
+  return '';
+}
+
+function textFromContentPart(part) {
+  if (typeof part === 'string') return part;
+  if (Array.isArray(part)) return part.map(textFromContentPart).join('');
+  if (!part || typeof part !== 'object') return '';
+  if (/(tool|function)_?call/i.test(String(part.type || ''))) return '';
+  const directText =
+    textFromTextValue(part.text) ||
+    textFromTextValue(part.output_text) ||
+    textFromTextValue(part.input_text) ||
+    textFromTextValue(part.delta);
+  if (directText) return directText;
+  if (typeof part.content === 'string') return part.content;
+  if (Array.isArray(part.content)) return part.content.map(textFromContentPart).join('');
+  if (part.message) return textFromContentPart(part.message.content);
+  return '';
+}
+
+function extractOpenAIText(data) {
+  if (!data || typeof data !== 'object') return '';
+  if (typeof data.output_text === 'string') return data.output_text;
+  if (typeof data.delta === 'string') return data.delta;
+  if (typeof data.text === 'string' && /(?:text|message|delta|output|completion)/i.test(String(data.type || ''))) return data.text;
+  if (Array.isArray(data.choices)) {
+    return data.choices
+      .map((choice) => {
+        if (typeof choice?.text === 'string') return choice.text;
+        return (
+          textFromContentPart(choice?.message?.content) ||
+          textFromContentPart(choice?.delta?.content) ||
+          textFromContentPart(choice?.message) ||
+          textFromContentPart(choice?.delta)
+        );
+      })
+      .join('');
+  }
+  if (Array.isArray(data.output)) {
+    return data.output
+      .map((item) => textFromContentPart(item?.content) || textFromContentPart(item))
+      .join('');
+  }
+  if (Array.isArray(data.content)) return data.content.map(textFromContentPart).join('');
+  return textFromContentPart(data.message?.content);
+}
+
+function extractOpenAIToolCalls(data) {
+  if (!data || typeof data !== 'object') return [];
+  const calls = [];
+  const pushCall = (call) => {
+    if (!call || typeof call !== 'object') return;
+    const type = String(call.type || '').trim();
+    const name =
+      call.name ||
+      call.function?.name ||
+      call.tool_name ||
+      call.server_label ||
+      call.mcp_tool_call?.name ||
+      null;
+    if (!type && !name && !call.id && !call.call_id) return;
+    calls.push({
+      id: call.id || call.call_id || null,
+      type: type || (call.function ? 'function_call' : 'tool_call'),
+      name,
+      status: call.status || null,
+      arguments: call.arguments || call.function?.arguments || call.input || null
+    });
+  };
+  for (const choice of Array.isArray(data.choices) ? data.choices : []) {
+    for (const call of choice?.message?.tool_calls || []) pushCall(call);
+    for (const call of choice?.delta?.tool_calls || []) pushCall(call);
+    pushCall(choice?.message?.function_call);
+    pushCall(choice?.delta?.function_call);
+  }
+  for (const item of Array.isArray(data.output) ? data.output : []) {
+    pushCall(item);
+    for (const part of Array.isArray(item?.content) ? item.content : []) pushCall(part);
+  }
+  pushCall(data.tool_call);
+  pushCall(data.function_call);
+  return calls;
+}
+
+function extractOpenAIUsage(data) {
+  if (!data || typeof data !== 'object') return null;
+  const usage = data.usage || data.response?.usage || null;
+  if (!usage || typeof usage !== 'object') return null;
+  return {
+    inputTokens: firstFiniteInteger([usage.input_tokens, usage.prompt_tokens, usage.promptTokens]),
+    outputTokens: firstFiniteInteger([usage.output_tokens, usage.completion_tokens, usage.completionTokens]),
+    totalTokens: firstFiniteInteger([usage.total_tokens, usage.totalTokens])
+  };
+}
+
+function extractImageArtifacts(data) {
+  if (!data || typeof data !== 'object') return [];
+  const artifacts = [];
+  const pushArtifact = (item) => {
+    if (!item || typeof item !== 'object') return;
+    const url = typeof item.url === 'string' ? item.url : item.image_url?.url;
+    const b64 = typeof item.b64_json === 'string'
+      ? item.b64_json
+      : (typeof item.image_base64 === 'string' ? item.image_base64 : '');
+    if (!url && !b64) return;
+    artifacts.push({
+      url: url || null,
+      b64_json: b64 || null,
+      mimeType: item.mime_type || item.mimeType || item.image_url?.mime_type || null,
+      revisedPrompt: item.revised_prompt || item.revisedPrompt || null
+    });
+  };
+  for (const item of Array.isArray(data.data) ? data.data : []) pushArtifact(item);
+  for (const item of Array.isArray(data.images) ? data.images : []) pushArtifact(item);
+  for (const item of Array.isArray(data.output) ? data.output : []) {
+    pushArtifact(item);
+    for (const part of Array.isArray(item?.content) ? item.content : []) pushArtifact(part);
+  }
+  pushArtifact(data.image);
+  return artifacts;
+}
+
+function extractOpenAIModel(data) {
+  if (!data || typeof data !== 'object') return null;
+  return data.model || data.response?.model || null;
+}
+
+function extractOpenAIError(data) {
+  if (!data || typeof data !== 'object') return '';
+  const error = data.error || data.response?.error;
+  if (typeof error === 'string') return error;
+  if (error && typeof error === 'object') return error.message || JSON.stringify(error);
+  if (/error/i.test(String(data.type || '')) && typeof data.message === 'string') return data.message;
+  if (/error/i.test(String(data.event || '')) && typeof data.message === 'string') return data.message;
+  return '';
+}
+
+function parseServerSentEventData(text = '') {
+  const frames = [];
+  let event = '';
+  let dataLines = [];
+  const pushFrame = () => {
+    if (!dataLines.length) return;
+    frames.push({ event, data: dataLines.join('\n') });
+    event = '';
+    dataLines = [];
+  };
+  for (const line of String(text || '').split(/\r?\n/)) {
+    if (!line.trim()) {
+      pushFrame();
+      continue;
+    }
+    if (line.startsWith(':')) continue;
+    const separator = line.indexOf(':');
+    const field = separator >= 0 ? line.slice(0, separator) : line;
+    const value = separator >= 0 ? line.slice(separator + 1).replace(/^ /, '') : '';
+    if (field === 'event') event = value;
+    if (field === 'data') dataLines.push(value);
+  }
+  pushFrame();
+  return frames;
+}
+
+function extractOpenAIStreamText(data, eventName = '') {
+  if (!data || typeof data !== 'object') return '';
+  const type = String(data.type || eventName || '');
+  if (/error/i.test(type)) return '';
+  if (/delta/i.test(type) && typeof data.delta === 'string') return data.delta;
+  if (/delta/i.test(type) && typeof data.text === 'string') return data.text;
+  if (Array.isArray(data.choices)) {
+    return data.choices
+      .map((choice) => textFromContentPart(choice?.delta?.content) || (typeof choice?.text === 'string' ? choice.text : ''))
+      .join('');
+  }
+  return '';
+}
+
+function parseOpenAIStream(text = '') {
+  const frames = parseServerSentEventData(text);
+  if (!frames.length) return null;
+  const textParts = [];
+  const toolCalls = [];
+  let parsedFrames = 0;
+  let model = null;
+  let errorMessage = '';
+  for (const frame of frames) {
+    const trimmed = String(frame.data || '').trim();
+    if (!trimmed || trimmed === '[DONE]') continue;
+    const data = parseJson(trimmed);
+    if (!data) continue;
+    parsedFrames += 1;
+    if (frame.event) data.event = frame.event;
+    model = model || extractOpenAIModel(data);
+    errorMessage = errorMessage || extractOpenAIError(data);
+    toolCalls.push(...extractOpenAIToolCalls(data));
+    const textPart = extractOpenAIStreamText(data, frame.event);
+    if (textPart) textParts.push(textPart);
+  }
+  if (!parsedFrames) return null;
+  return {
+    stream: true,
+    model,
+    text: textParts.join(''),
+    errorMessage,
+    toolCalls
+  };
+}
+
+function heuristicContextWindow(modelName = '') {
+  const model = String(modelName || '').toLowerCase();
+  if (!model) return null;
+  if (/gemini-(?:1\.5|2|2\.5)|gpt-4\.1|gpt-5|o3|o4|qwen.*(?:long|coder|plus|max)|kimi|moonshot/.test(model)) return 1_000_000;
+  if (/claude-(?:3|4)|sonnet|opus|haiku/.test(model)) return 200_000;
+  if (/gpt-4o|gpt-4\.5|gpt-4-turbo|deepseek|doubao|glm-4/.test(model)) return 128_000;
+  if (/gpt-4-32k/.test(model)) return 32_768;
+  if (/gpt-3\.5|gpt-4/.test(model)) return 16_384;
+  if (/image|dall-e|imagen|flux|sdxl|midjourney/.test(model)) return null;
+  return 128_000;
+}
+
+function inferModelCapabilities({ profile = {}, request = {}, options = {}, endpoint = '', type = '', model = '', data = null, stream = false } = {}) {
+  const caps = profile.capabilities && typeof profile.capabilities === 'object' ? profile.capabilities : {};
+  const requestBody = request.body || {};
+  const resolvedModel = model || requestBody.model || options.model || profile.model || '';
+  const imageModel = profile.imageModel || profile.imageModelName || (type === 'image' ? resolvedModel : '') || DEFAULT_IMAGE_MODEL;
+  const modelText = String(resolvedModel || '').toLowerCase();
+  const routedModelText = `${resolvedModel} ${imageModel}`.toLowerCase();
+  const endpointText = String(endpoint || '').toLowerCase();
+  const typeText = String(type || '').toLowerCase();
+  const isImageModel = typeText === 'image' || /(gpt-image|image|dall-e|imagen|flux|sdxl|midjourney)/i.test(String(resolvedModel || ''));
+  const supportsResponses = optionalBoolean(
+    profile.supportsResponses,
+    caps.supportsResponses,
+    options.supportsResponses
+  ) ?? (endpointText.includes('responses') || /gpt-[45]|o[134]|claude|responses|gemini|qwen|deepseek/i.test(routedModelText));
+  const supportsChatCompletions = optionalBoolean(
+    profile.supportsChatCompletions,
+    caps.supportsChatCompletions,
+    options.supportsChatCompletions
+  ) ?? !isImageModel;
+  const supportsVision = optionalBoolean(
+    profile.supportsVision,
+    caps.supportsVision,
+    options.supportsVision
+  ) ?? /gpt-4o|gpt-4\.1|gpt-4\.5|gpt-5|o3|o4|vision|gemini|claude-3|claude-4|qwen.*vl|deepseek.*vl/i.test(modelText);
+  const supportsImages = optionalBoolean(
+    profile.supportsImages,
+    caps.supportsImages,
+    options.supportsImages
+  ) ?? Boolean(imageModel || isImageModel);
+  const supportsStreaming = optionalBoolean(
+    profile.supportsStreaming,
+    caps.supportsStreaming,
+    options.supportsStreaming
+  ) ?? Boolean(stream || requestBody.stream || typeText === 'responses' || typeText === 'chat');
+  const contextWindow = firstFiniteInteger([
+    profile.contextWindow,
+    profile.context_window,
+    profile.maxContextTokens,
+    profile.max_context_tokens,
+    caps.contextWindow,
+    caps.context_window,
+    data?.model_details?.context_window,
+    data?.model?.context_window
+  ]) || heuristicContextWindow(resolvedModel);
+  return {
+    model: resolvedModel || null,
+    imageModel: imageModel || DEFAULT_IMAGE_MODEL,
+    supportsResponses: Boolean(supportsResponses),
+    supportsChatCompletions: Boolean(supportsChatCompletions),
+    supportsVision: Boolean(supportsVision),
+    supportsImages: Boolean(supportsImages),
+    supportsStreaming: Boolean(supportsStreaming),
+    contextWindow
+  };
+}
+
+function normalizeAdapterErrorMessage({ type = '', message = '', statusCode = null, timedOut = false, networkError = false } = {}) {
+  let base = String(message || '').trim();
+  if (!base) {
+    if (timedOut) base = 'Request timed out.';
+    else if (networkError) base = 'Network request failed.';
+    else base = statusCode ? `HTTP ${statusCode}` : 'Request failed.';
+  }
+  const kind = String(type || '').toLowerCase();
+  if (kind === 'image' && !/^image generation failed:/i.test(base)) return `Image generation failed: ${base}`;
+  if (kind === 'responses' && !/^responses api request failed:/i.test(base)) return `Responses API request failed: ${base}`;
+  if (kind === 'chat' && !/^chat completion request failed:/i.test(base)) return `Chat completion request failed: ${base}`;
+  return base;
+}
+
+function normalizeOpenAIResponse(text = '', data = null) {
+  if (data) {
+    return {
+      data,
+      stream: false,
+      model: extractOpenAIModel(data),
+      text: extractOpenAIText(data),
+      errorMessage: extractOpenAIError(data),
+      toolCalls: extractOpenAIToolCalls(data),
+      usage: extractOpenAIUsage(data),
+      imageArtifacts: extractImageArtifacts(data)
+    };
+  }
+  const stream = parseOpenAIStream(text);
+  if (stream) {
+    return {
+      data: {
+        stream: true,
+        model: stream.model,
+        text: stream.text
+      },
+      stream: true,
+      model: stream.model,
+      text: stream.text,
+      errorMessage: stream.errorMessage,
+      toolCalls: stream.toolCalls || [],
+      usage: null,
+      imageArtifacts: []
+    };
+  }
+  return {
+    data: null,
+    stream: false,
+    model: null,
+    text: '',
+    errorMessage: '',
+    toolCalls: [],
+    usage: null,
+    imageArtifacts: []
+  };
 }
 
 function shouldRetry(result, attempt, retries) {
@@ -206,26 +564,62 @@ class ModelAdapter {
         const limited = await readLimitedText(response, maxResponseBytes);
         const redactedText = redactText(limited.text, secrets);
         const data = parseJson(limited.text);
-        const safeData = data ? redactValue(data, secrets) : null;
+        const normalized = normalizeOpenAIResponse(limited.text, data);
+        const safeData = normalized.data ? redactValue(normalized.data, secrets) : null;
+        let normalizedText = redactText(normalized.text, secrets);
+        let normalizedFailureMessage = normalized.errorMessage || '';
+        if (type === 'image' && response.ok && !normalizedFailureMessage && !normalized.imageArtifacts.length) {
+          normalizedFailureMessage = 'Image generation response did not include image data or a URL.';
+        }
+        const responseOk = Boolean(response.ok && !normalized.errorMessage);
+        const finalResponseOk = Boolean(responseOk && !normalizedFailureMessage);
+        if (!finalResponseOk) normalizedText = '';
         const latencyMs = Date.now() - attemptStartedAt;
         const statusCode = response.status || null;
+        const capabilityMetadata = inferModelCapabilities({
+          profile,
+          request,
+          options,
+          endpoint,
+          type,
+          model: normalized.model || safeData?.model || model,
+          data: normalized.data || data,
+          stream: normalized.stream
+        });
+        const failureMessage = finalResponseOk
+          ? ''
+          : normalizeAdapterErrorMessage({
+              type,
+              message: normalizedFailureMessage || errorMessageFromData(safeData, redactedText, statusCode),
+              statusCode
+            });
         lastResult = {
-          ok: Boolean(response.ok),
+          ok: finalResponseOk,
           type,
           endpoint,
           statusCode,
           latencyMs,
           totalLatencyMs: Date.now() - startedAt,
           attempts: attempt + 1,
-          model: safeData?.model || model,
-          data: response.ok ? safeData : null,
-          responseText: response.ok && !safeData ? redactedText : '',
+          model: normalized.model || safeData?.model || model,
+          capabilities: capabilityMetadata,
+          capabilityMetadata,
+          data: finalResponseOk ? safeData : null,
+          text: responseOk ? normalizedText : '',
+          stream: Boolean(normalized.stream),
+          toolCalls: finalResponseOk ? redactValue(normalized.toolCalls || [], secrets) : [],
+          usage: finalResponseOk ? normalized.usage : null,
+          imageArtifacts: finalResponseOk ? redactValue(normalized.imageArtifacts || [], secrets) : [],
+          responseText: finalResponseOk && !safeData ? redactedText : '',
           responseBytes: limited.bytes,
           responseTruncated: limited.truncated,
-          error: response.ok
+          error: finalResponseOk
             ? null
             : {
-                message: redactText(errorMessageFromData(safeData, redactedText, statusCode), secrets).slice(0, 2000),
+                message: redactText(
+                  failureMessage,
+                  secrets
+                ).slice(0, 2000),
                 statusCode
               }
         };
@@ -240,14 +634,29 @@ class ModelAdapter {
           totalLatencyMs: Date.now() - startedAt,
           attempts: attempt + 1,
           model,
+          capabilities: inferModelCapabilities({ profile, request, options, endpoint, type, model }),
+          capabilityMetadata: inferModelCapabilities({ profile, request, options, endpoint, type, model }),
           data: null,
+          text: '',
+          stream: false,
+          toolCalls: [],
+          usage: null,
+          imageArtifacts: [],
           responseText: '',
           responseBytes: 0,
           responseTruncated: false,
           timedOut,
           networkError: !timedOut,
           error: {
-            message: redactText(timedOut ? 'Request timed out.' : error?.message || 'Request failed.', secrets),
+            message: redactText(
+              normalizeAdapterErrorMessage({
+                type,
+                message: timedOut ? 'Request timed out.' : error?.message || 'Request failed.',
+                timedOut,
+                networkError: !timedOut
+              }),
+              secrets
+            ),
             statusCode: null
           }
         };
@@ -368,6 +777,12 @@ module.exports = {
   createModelAdapter,
   endpointUrl,
   normalizeBaseUrl,
+  inferModelCapabilities,
+  extractOpenAIText,
+  extractOpenAIToolCalls,
+  extractImageArtifacts,
+  normalizeOpenAIResponse,
+  parseOpenAIStream,
   redactText,
   redactValue
 };

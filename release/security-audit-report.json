@@ -1,6 +1,6 @@
 {
   "schema": "ecorex.security-audit.v1",
-  "generatedAt": "2026-05-22T08:26:46.985Z",
+  "generatedAt": "2026-05-25T03:07:14.853Z",
   "strict": false,
   "production": {
     "info": 0,
@@ -134,10 +134,71 @@
       }
     ]
   },
+  "attachmentPreviewAndLogPolicy": {
+    "total": 10,
+    "passed": 10,
+    "failed": [],
+    "checks": [
+      {
+        "name": "file preview IPC requires auth",
+        "passed": true
+      },
+      {
+        "name": "file preview has a hard 512KB text limit",
+        "passed": true
+      },
+      {
+        "name": "file preview redacts content before returning it",
+        "passed": true
+      },
+      {
+        "name": "attachment picker IPC requires auth",
+        "passed": true
+      },
+      {
+        "name": "agent attachment ingestion uses structured payloads",
+        "passed": true
+      },
+      {
+        "name": "attachment previews are size limited",
+        "passed": true
+      },
+      {
+        "name": "logs are redacted through redactForLog",
+        "passed": true
+      },
+      {
+        "name": "diagnostics package declares secret and prompt redaction",
+        "passed": true
+      },
+      {
+        "name": "HTML artifact previews are sandboxed inside the renderer",
+        "passed": true
+      },
+      {
+        "name": "artifact preview renderer does not call external shell open APIs",
+        "passed": true
+      }
+    ]
+  },
+  "secretLeakScan": {
+    "scannedFiles": 27,
+    "maxFileBytes": 1048576,
+    "roots": [
+      "electron",
+      "src",
+      "scripts",
+      "tests",
+      "release"
+    ],
+    "findings": []
+  },
   "policy": {
     "productionCriticalOrHighFails": true,
     "productionAnyVulnerabilityFails": true,
     "devCriticalOrHighFailsOnlyInStrict": true,
+    "attachmentPreviewAndLogPolicyFails": true,
+    "secretLeakScanFails": true,
     "electronRuntimeUpgradeRequiredBeforePublicRelease": true
   }
 }
