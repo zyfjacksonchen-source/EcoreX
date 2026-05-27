@@ -17,6 +17,11 @@ release/latest*.yml
 release/*.json
 release/real-agent-stress-*.json
 
+# Static landing deployment payloads. Source stays in landing/, large downloads
+# are deployed separately.
+landing/*-deploy-*.tar
+landing/*/downloads/*.zip
+
 # Local QA reports generated during release readiness checks.
 reports/qa/
 
