@@ -50,6 +50,7 @@ import {
   Settings,
   ShieldCheck,
   SquareTerminal,
+  Star,
   Target,
   Upload,
   User,
@@ -291,7 +292,16 @@ const messageStates = {
 
 const PREVIEW_SESSION_KEY = 'ecorex-session';
 const PREVIEW_MODEL_PROFILES_KEY = 'ecorex-preview-model-profiles';
-const DEFAULT_IMAGE_MODEL_NAME = 'gpt-image-2';
+const DEFAULT_IMAGE_MODEL_NAME = 'image-2';
+const LEGACY_IMAGE_MODEL_ALIASES = new Map([
+  ['gpt-image-2', DEFAULT_IMAGE_MODEL_NAME]
+]);
+
+function defaultImageModelName(value = '') {
+  const model = String(value || '').trim();
+  if (!model) return DEFAULT_IMAGE_MODEL_NAME;
+  return LEGACY_IMAGE_MODEL_ALIASES.get(model.toLowerCase()) || model;
+}
 const DEFAULT_PERMISSION_MODE_KEY = 'ecorex-default-permission-mode';
 const MAX_COMPOSER_ATTACHMENTS = 10;
 const RECENT_CHAT_STORAGE_KEY = 'ecorex-recent-chats';
@@ -522,7 +532,7 @@ async function preloadStartupState() {
     ['settings', window.ecorex.getSettings],
     ['agentSessions', window.ecorex.getAgentSessions],
     ['modelProfiles', window.ecorex.listModelProfiles],
-    ['projects', window.ecorex.getProjects]
+    ['projects', window.ecorex.listProjects || window.ecorex.getProjects]
   ].filter(([, fn]) => typeof fn === 'function');
   if (!entries.length) {
     const skipped = { status: 'skipped', label: '未接入', detail: '预加载接口不可用', total: 0, fulfilled: 0 };
@@ -561,6 +571,10 @@ function formatFileSize(bytes = 0) {
 
 function isImageAttachment(attachment = {}) {
   return String(attachment.type || '').startsWith('image/') || /\.(png|jpe?g|webp|gif|svg)$/i.test(attachment.name || '');
+}
+
+function isVideoAttachment(attachment = {}) {
+  return String(attachment.type || '').startsWith('video/') || /\.(mp4|webm|ogg|ogv|mov|m4v)$/i.test(attachment.name || '');
 }
 
 const CHAT_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.avif']);
@@ -697,7 +711,7 @@ function looksLikeNoisyLocalPath(value = '') {
   const text = String(value || '').trim();
   if (!text) return false;
   if (text.includes('\uFFFD')) return true;
-  if (/[A-Za-z]:[\\/]|\\\\|\/(?:Users|home|tmp|var|mnt|private)\//.test(text)) return true;
+  if (/(^|[^A-Za-z])[A-Za-z]:[\\/]|\\\\|\/(?:Users|home|tmp|var|mnt|private)\//.test(text)) return true;
   if (/\b(?:path|filePath|cwd|installPath|projectPath|raw)\b/i.test(text)) return true;
   return false;
 }
@@ -1170,6 +1184,7 @@ function attachmentKindFromName(name = '', type = '') {
   const ext = artifactExtension(name);
   const mime = String(type || '').toLowerCase();
   if (mime.startsWith('image/') || ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(ext)) return 'image';
+  if (mime.startsWith('video/') || ['mp4', 'webm', 'ogg', 'ogv', 'mov', 'm4v'].includes(ext)) return 'video';
   if (['xls', 'xlsx', 'xlsm', 'csv'].includes(ext)) return 'sheet';
   if (['ppt', 'pptx', 'pptm'].includes(ext)) return 'slide';
   if (['doc', 'docx', 'md', 'txt', 'pdf'].includes(ext)) return 'document';
@@ -2601,6 +2616,8 @@ function Sidebar({ page, setPage, logout, authStatus, collapsed = false, onToggl
   const [projectState, setProjectState] = useState({ apiReady: false, loading: false, projects: [], currentProject: null, status: '项目服务未就绪', notice: '' });
   const [quickProjectName, setQuickProjectName] = useState('');
   const [projectBusy, setProjectBusy] = useState('');
+  const [renamingProjectSessionId, setRenamingProjectSessionId] = useState('');
+  const [renamingProjectSessionTitle, setRenamingProjectSessionTitle] = useState('');
   const profileRef = useRef(null);
   const currentAuthUser = authUserFromStatus(authStatus);
   const currentDisplayName = displayUserNameFromAuth(authStatus);
@@ -2801,11 +2818,16 @@ function Sidebar({ page, setPage, logout, authStatus, collapsed = false, onToggl
 
   function renameProjectSession(session = {}) {
     if (!session?.id) return;
+    setRenamingProjectSessionId(session.id);
+    setRenamingProjectSessionTitle(session.title || '项目会话');
+  }
+
+  function saveProjectSessionRename(session = {}) {
+    if (!session?.id) return;
     const currentTitle = session.title || '项目会话';
-    const nextTitle = typeof window === 'undefined' || typeof window.prompt !== 'function'
-      ? currentTitle
-      : window.prompt('重命名项目会话', currentTitle);
-    const cleanTitle = sanitizeDisplayText(nextTitle, '').trim();
+    const cleanTitle = sanitizeDisplayText(renamingProjectSessionTitle, '').trim();
+    setRenamingProjectSessionId('');
+    setRenamingProjectSessionTitle('');
     if (!cleanTitle || cleanTitle === currentTitle) return;
     setRecentItems(() => updateStoredRecentChatItem(session.id, {
       title: cleanTitle,
@@ -2951,23 +2973,48 @@ function Sidebar({ page, setPage, logout, authStatus, collapsed = false, onToggl
                 </div>
                 {sessions.slice(0, sidebarSearchQuery ? 8 : 4).map((session) => (
                   <div className={`sidebar-project-session-row ${session.id === activeConversationId ? 'active' : ''}`} key={session.id}>
-                    <button className={`sidebar-project-session ${session.id === activeConversationId ? 'active' : ''}`} type="button" title={session.title} onClick={() => openRecentChat(session)}>
-                      <Bot size={13} />
-                      <span>{session.title}</span>
-                      <em>{session.time}</em>
-                    </button>
-                    <button className="sidebar-project-session-action" type="button" title="重命名会话" aria-label="重命名会话" onClick={(event) => {
-                      event.stopPropagation();
-                      renameProjectSession(session);
-                    }}>
-                      <Pencil size={12} />
-                    </button>
-                    <button className="sidebar-project-session-action danger" type="button" title="删除会话" aria-label="删除会话" onClick={(event) => {
-                      event.stopPropagation();
-                      deleteProjectSession(session, project);
-                    }}>
-                      <X size={12} />
-                    </button>
+                    {renamingProjectSessionId === session.id ? (
+                      <form className="sidebar-project-session-rename-form" onSubmit={(event) => {
+                        event.preventDefault();
+                        saveProjectSessionRename(session);
+                      }}>
+                        <input
+                          data-testid="sidebar-project-session-rename-input"
+                          value={renamingProjectSessionTitle}
+                          onChange={(event) => setRenamingProjectSessionTitle(event.target.value)}
+                          autoFocus
+                        />
+                        <button type="submit" data-testid="sidebar-project-session-rename-save" title="保存">
+                          <Check size={12} />
+                        </button>
+                        <button type="button" title="取消" onClick={() => {
+                          setRenamingProjectSessionId('');
+                          setRenamingProjectSessionTitle('');
+                        }}>
+                          <X size={12} />
+                        </button>
+                      </form>
+                    ) : (
+                      <>
+                        <button className={`sidebar-project-session ${session.id === activeConversationId ? 'active' : ''}`} type="button" title={session.title} onClick={() => openRecentChat(session)}>
+                          <Bot size={13} />
+                          <span>{session.title}</span>
+                          <em>{session.time}</em>
+                        </button>
+                        <button className="sidebar-project-session-action" type="button" data-testid="sidebar-project-session-rename" title="重命名会话" aria-label="重命名会话" onClick={(event) => {
+                          event.stopPropagation();
+                          renameProjectSession(session);
+                        }}>
+                          <Pencil size={12} />
+                        </button>
+                        <button className="sidebar-project-session-action danger" type="button" data-testid="sidebar-project-session-delete" title="删除会话" aria-label="删除会话" onClick={(event) => {
+                          event.stopPropagation();
+                          deleteProjectSession(session, project);
+                        }}>
+                          <X size={12} />
+                        </button>
+                      </>
+                    )}
                   </div>
                 ))}
               </div>
@@ -3648,7 +3695,7 @@ function LegacyEvaluationViewDisabled({ onUnauthorized }) {
 function normalizeModelProfile(raw = {}, index = 0, currentId = '') {
   const id = String(raw.id || raw.profileId || raw.key || raw.name || `profile-${index + 1}`);
   const modelName = String(raw.modelName || raw.model || raw.defaultModel || '').trim();
-  const imageModelName = String(raw.imageModelName || raw.imageModel || raw.visionModel || DEFAULT_IMAGE_MODEL_NAME).trim();
+  const imageModelName = defaultImageModelName(raw.imageModelName || raw.imageModel || raw.visionModel || DEFAULT_IMAGE_MODEL_NAME);
   const statusText = String(raw.status || raw.state || '').toLowerCase();
   const latencyValue = raw.latencyMs ?? raw.latency ?? raw.lastLatencyMs ?? raw.responseTimeMs;
   const latencyMs = Number.isFinite(Number(latencyValue)) ? Math.max(0, Math.round(Number(latencyValue))) : null;
@@ -3687,7 +3734,7 @@ function modelProfileDraft(profile = {}) {
     baseUrl: profile.baseUrl || '',
     apiKey: '',
     modelName: profile.modelName || '',
-    imageModelName: profile.imageModelName || profile.imageModel || DEFAULT_IMAGE_MODEL_NAME
+    imageModelName: defaultImageModelName(profile.imageModelName || profile.imageModel || DEFAULT_IMAGE_MODEL_NAME)
   };
 }
 
@@ -3782,7 +3829,7 @@ function savePreviewModelProfile(draft) {
     name: draft.name || draft.modelName || '未命名模型',
     baseUrl: draft.baseUrl,
     modelName: draft.modelName,
-    imageModelName: draft.imageModelName || DEFAULT_IMAGE_MODEL_NAME,
+    imageModelName: defaultImageModelName(draft.imageModelName || DEFAULT_IMAGE_MODEL_NAME),
     maskedKey: draft.apiKey ? maskApiKey(draft.apiKey) : existing.maskedKey,
     apiKeySet: Boolean(draft.apiKey || existing.apiKeySet || existing.maskedKey),
     status: existing.status || '待测试',
@@ -3806,8 +3853,8 @@ async function saveModelProfile(draft) {
     baseUrl: draft.baseUrl,
     model: draft.modelName,
     modelName: draft.modelName,
-    imageModel: draft.imageModelName || DEFAULT_IMAGE_MODEL_NAME,
-    imageModelName: draft.imageModelName || DEFAULT_IMAGE_MODEL_NAME
+    imageModel: defaultImageModelName(draft.imageModelName || DEFAULT_IMAGE_MODEL_NAME),
+    imageModelName: defaultImageModelName(draft.imageModelName || DEFAULT_IMAGE_MODEL_NAME)
   };
   if (String(draft.apiKey || '').trim()) payload.apiKey = draft.apiKey.trim();
 
@@ -3878,8 +3925,8 @@ async function testModelAdapterProfile(draft) {
     baseUrl: draft.baseUrl,
     model: draft.modelName,
     modelName: draft.modelName,
-    imageModel: draft.imageModelName || DEFAULT_IMAGE_MODEL_NAME,
-    imageModelName: draft.imageModelName || DEFAULT_IMAGE_MODEL_NAME
+    imageModel: defaultImageModelName(draft.imageModelName || DEFAULT_IMAGE_MODEL_NAME),
+    imageModelName: defaultImageModelName(draft.imageModelName || DEFAULT_IMAGE_MODEL_NAME)
   };
   if (String(draft.apiKey || '').trim()) payload.apiKey = draft.apiKey.trim();
 
@@ -3903,8 +3950,8 @@ async function testModelProfile(draft) {
     baseUrl: draft.baseUrl,
     model: draft.modelName,
     modelName: draft.modelName,
-    imageModel: draft.imageModelName || DEFAULT_IMAGE_MODEL_NAME,
-    imageModelName: draft.imageModelName || DEFAULT_IMAGE_MODEL_NAME
+    imageModel: defaultImageModelName(draft.imageModelName || DEFAULT_IMAGE_MODEL_NAME),
+    imageModelName: defaultImageModelName(draft.imageModelName || DEFAULT_IMAGE_MODEL_NAME)
   };
   if (String(draft.apiKey || '').trim()) payload.apiKey = draft.apiKey.trim();
 
@@ -3931,7 +3978,7 @@ function extractImagePreviewSrc(result) {
 }
 
 async function generateModelImagePreview(draft) {
-  const imageModelName = draft.imageModelName || DEFAULT_IMAGE_MODEL_NAME;
+  const imageModelName = defaultImageModelName(draft.imageModelName || DEFAULT_IMAGE_MODEL_NAME);
   const payload = {
     id: draft.id || undefined,
     profileId: draft.id || undefined,
@@ -4022,7 +4069,7 @@ function ModelConfigModal({ open, initialModelName, onClose, onCurrentChange }) 
       name: draft.name || draft.modelName,
       baseUrl: draft.baseUrl.trim(),
       modelName: draft.modelName.trim(),
-      imageModelName: draft.imageModelName.trim() || DEFAULT_IMAGE_MODEL_NAME
+      imageModelName: defaultImageModelName(draft.imageModelName)
     });
     if (result?.unauthorized) {
       setNotice('登录状态已过期，请重新登录后保存模型配置。');
@@ -4084,7 +4131,7 @@ function ModelConfigModal({ open, initialModelName, onClose, onCurrentChange }) 
     try {
       const result = await testModelAdapterProfile({
         ...draft,
-        imageModelName: draft.imageModelName.trim() || DEFAULT_IMAGE_MODEL_NAME
+        imageModelName: defaultImageModelName(draft.imageModelName)
       });
       if (result?.unauthorized) {
         setNotice('登录状态已过期，请重新登录后测试连接。');
@@ -4133,7 +4180,7 @@ function ModelConfigModal({ open, initialModelName, onClose, onCurrentChange }) 
     try {
       const result = await generateModelImagePreview({
         ...draft,
-        imageModelName: draft.imageModelName.trim() || DEFAULT_IMAGE_MODEL_NAME
+        imageModelName: defaultImageModelName(draft.imageModelName)
       });
       if (result?.unauthorized) {
         setNotice('登录状态已过期，请重新登录后测试图像模型。');
@@ -4270,7 +4317,7 @@ function ModelConfigModal({ open, initialModelName, onClose, onCurrentChange }) 
               </label>
               <label>
                 <span>图像模型名称</span>
-                <input value={draft.imageModelName} onChange={(event) => updateDraft('imageModelName', event.target.value)} placeholder="gpt-image-2" />
+                <input value={draft.imageModelName} onChange={(event) => updateDraft('imageModelName', event.target.value)} placeholder="image-2" />
               </label>
             </div>
 
@@ -4286,7 +4333,7 @@ function ModelConfigModal({ open, initialModelName, onClose, onCurrentChange }) 
                 {imageTest?.imageSrc ? <img src={imageTest.imageSrc} alt="" /> : <Eye size={16} />}
                 <div>
                   <strong>{imageTest?.status || '等待图像模型测试'}</strong>
-                  <span>{imageTest?.latencyMs ? `${imageTest.latencyMs} ms · ${draft.imageModelName || DEFAULT_IMAGE_MODEL_NAME}` : draft.imageModelName || DEFAULT_IMAGE_MODEL_NAME}</span>
+                  <span>{imageTest?.latencyMs ? `${imageTest.latencyMs} ms · ${defaultImageModelName(draft.imageModelName)}` : defaultImageModelName(draft.imageModelName)}</span>
                 </div>
               </div>
             </div>
@@ -5034,7 +5081,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     clearAttachments();
     attachmentObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     attachmentObjectUrlsRef.current.clear();
-    setPrompt('');
+    setPrompt(item?.initialPrompt || '');
     setComposerReferences([]);
     setFocusArtifact(null);
     setVisibleMessageCount(MESSAGE_WINDOW_SIZE);
@@ -5306,14 +5353,28 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     mirrorCliContextCompaction(relevantEvents);
 
     const eventsByConversation = new Map();
+    const deferredEvents = [];
     for (const event of relevantEvents) {
       const messageId = sessionMap.current.get(event.sessionId);
       if (!messageId) continue;
       const owner = sessionOwnerForSession(event.sessionId, { messageId });
       const ownerConversationId = owner?.conversationId || conversationIdRef.current;
+      const ownerMessages = String(ownerConversationId) === String(conversationIdRef.current)
+        ? messagesRef.current
+        : (loadConversationState(ownerConversationId)?.messages || storedEventsByConversation.current.get(ownerConversationId)?.messages || []);
+      if (!ownerMessages.some((message) => message.id === messageId)) {
+        if (now - (event.__queuedAt || now) < PENDING_AGENT_EVENT_TTL_MS) {
+          deferredEvents.push({ ...event, __queuedAt: event.__queuedAt || now });
+        }
+        continue;
+      }
       const conversationEvents = eventsByConversation.get(ownerConversationId) || [];
       conversationEvents.push(event);
       eventsByConversation.set(ownerConversationId, conversationEvents);
+    }
+
+    if (deferredEvents.length) {
+      eventQueueRef.current = compactAgentEventQueue([...eventQueueRef.current, ...deferredEvents]);
     }
 
     for (const [ownerConversationId, ownerEvents] of eventsByConversation.entries()) {
@@ -5442,6 +5503,27 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           }
         }
 
+        if (terminalEvent && !cleanAssistantOutputText(nextItem.text || '').trim()) {
+          const terminalText = terminalEvent.kind === 'result'
+            ? finalizeAssistantOutputText('', terminalEvent.text, { preserveArtifactLabels: true })
+            : isGenericTerminalText(terminalEvent.text)
+              ? ''
+              : cleanResultOutputText(terminalEvent.text);
+          if (terminalText.trim()) {
+            const finalArtifacts = finalArtifactsFromText(terminalText);
+            nextItem = {
+              ...nextItem,
+              text: terminalText,
+              finalArtifacts: finalArtifacts.length
+                ? mergeArtifactReferences([...(nextItem.finalArtifacts || []), ...finalArtifacts])
+                : nextItem.finalArtifacts,
+              streaming: false,
+              status: terminalEvent.kind === 'error' ? 'error' : 'complete',
+              error: terminalEvent.kind === 'error'
+            };
+          }
+        }
+
         if (nextItem.permissionDecision?.status === 'running' && terminalEvent) {
           permissionContinuationLocksRef.current.delete(item.id);
           nextItem = {
@@ -5466,9 +5548,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
 
     relevantEvents
       .filter((event) => AGENT_EVENT_TERMINAL_KINDS.has(event.kind))
+      .filter((event) => !deferredEvents.some((deferred) => deferred.__seq === event.__seq))
       .forEach((event) => finishSession(event.sessionId));
 
-    return pendingEvents.length > 0;
+    return pendingEvents.length > 0 || deferredEvents.length > 0;
   }
 
   function scheduleAgentFlush(delay = AGENT_EVENT_FLUSH_DELAY_MS) {
@@ -6498,8 +6581,11 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
               || message.finalArtifacts?.length
               || message.rich
             );
+            const hasPublicTrace = (message.timeline || timeline || []).some(isPublicTraceItem);
             const shouldShowTrace = Boolean(
-              message.error
+              message.showTrace
+              || hasPublicTrace
+              || message.error
               || message.status === 'timeout'
               || message.status === 'cancelled'
               || (message.streaming && !hasAnswerPreview)
@@ -6964,6 +7050,7 @@ function ChatMessage({
           onHideArtifact={(artifact) => onHideArtifact?.(message.id, artifact.id)}
         />
         <AttachmentIngestionSummary items={message.attachmentIngest || []} />
+        <ToolResultInline items={message.ledger || []} />
         <ToolLedgerDisclosure items={message.ledger || []} />
         <RecoveryStateNotice recovery={message.recovery} status={message.status} onRetry={() => onRetry?.(message)} />
         {message.rich && <CampaignPerformanceReport />}
@@ -7000,6 +7087,32 @@ function AttachmentIngestionSummary({ items = [], compact = false }) {
           <small>{item.status}</small>
         </div>
       ))}
+    </div>
+  );
+}
+
+function inlineToolResultText(item = {}) {
+  const raw = item.output || item.detail || item.action || '';
+  const text = compactEventDetail(cleanPublicAgentText(raw, { dropPathLines: true }), 520);
+  if (!text || text.length < 18) return '';
+  if (/^(?:WebSearch|WebFetch|Read|Bash|PowerShell|TodoWrite|TodoRead|Grep|Glob|LS)\s+(?:completed|running|done)$/i.test(text)) return '';
+  if (/^large ledger tool \d+/i.test(text)) return '';
+  if (looksLikeNoisyLocalPath(text)) return '';
+  return text;
+}
+
+function ToolResultInline({ items = [] }) {
+  const visible = useMemo(() => (
+    (Array.isArray(items) ? items : [])
+      .filter((item) => ['success', 'completed'].includes(String(item.tone || item.status || '').toLowerCase()))
+      .map(inlineToolResultText)
+      .filter(Boolean)
+      .slice(-2)
+  ), [items]);
+  if (!visible.length) return null;
+  return (
+    <div className="tool-result-inline" data-testid="tool-result-inline">
+      {visible.map((text, index) => <span key={`${index}-${text.slice(0, 30)}`}>{text}</span>)}
     </div>
   );
 }
@@ -7457,6 +7570,8 @@ function AttachmentPreviewList({ attachments = [], onRemove, onOpen, compact = f
     <div className={`attachment-tray ${compact ? 'compact' : ''}`}>
       {attachments.map((attachment) => {
         const image = isImageAttachment(attachment);
+        const video = isVideoAttachment(attachment);
+        const kindClass = image ? 'image' : video ? 'video' : 'file';
         const clickable = typeof onOpen === 'function' && Boolean(attachment.path || attachment.filePath);
         const progress = Math.max(0, Math.min(100, Math.round(Number(attachment.progress) || 0)));
         const statusText = attachment.status === 'uploading'
@@ -7464,7 +7579,7 @@ function AttachmentPreviewList({ attachments = [], onRemove, onOpen, compact = f
           : clickable ? '单击打开' : '已添加';
         return (
           <div
-            className={`attachment-chip ${image ? 'image' : 'file'} ${clickable ? 'clickable' : ''}`}
+            className={`attachment-chip ${kindClass} ${clickable ? 'clickable' : ''}`}
             key={attachment.id || attachment.name}
             role={clickable ? 'button' : undefined}
             tabIndex={clickable ? 0 : undefined}
@@ -8031,7 +8146,21 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
   const [createDraft, setCreateDraft] = useState(() => emptyProjectDraft());
   const [editDraft, setEditDraft] = useState(() => emptyProjectDraft());
   const [selectedProjectId, setSelectedProjectId] = useState('');
+  const [projectSearch, setProjectSearch] = useState('');
+  const [sortMode, setSortMode] = useState('activity');
+  const [menuProjectId, setMenuProjectId] = useState('');
+  const [starredProjectIds, setStarredProjectIds] = useState(() => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem('ecorex-starred-projects') || '[]'));
+    } catch {
+      return new Set();
+    }
+  });
+  const [recentItems, setRecentItems] = useState(loadRecentChatItems);
+  const [projectFiles, setProjectFiles] = useState([]);
+  const [projectPrompt, setProjectPrompt] = useState('');
   const [busy, setBusy] = useState('');
+  const [fileBusy, setFileBusy] = useState('');
 
   async function refreshProjects({ silent = false, preferId = '' } = {}) {
     if (!silent) setProjectState((current) => ({ ...current, loading: true, notice: '' }));
@@ -8061,7 +8190,7 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
       const preferred = preferId && nextProjects.find((project) => project.id === preferId);
       if (preferred) return preferred.id;
       if (current && nextProjects.find((project) => project.id === current)) return current;
-      return nextCurrent?.id || nextProjects[0]?.id || '';
+      return current ? (nextCurrent?.id || nextProjects[0]?.id || '') : '';
     });
   }
 
@@ -8069,10 +8198,43 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
     refreshProjects({ silent: true });
   }, [backendStatus?.ok]);
 
-  const selectedProject = projectState.projects.find((project) => project.id === selectedProjectId) || projectState.currentProject || projectState.projects[0] || null;
+  useEffect(() => {
+    const reload = () => setRecentItems(loadRecentChatItems());
+    window.addEventListener?.('ecorex:recent-chats-changed', reload);
+    window.addEventListener?.('ecorex:recent-chat-upsert', reload);
+    return () => {
+      window.removeEventListener?.('ecorex:recent-chats-changed', reload);
+      window.removeEventListener?.('ecorex:recent-chat-upsert', reload);
+    };
+  }, []);
+
+  const selectedProject = selectedProjectId
+    ? (projectState.projects.find((project) => project.id === selectedProjectId) || projectState.currentProject || null)
+    : null;
 
   useEffect(() => {
     setEditDraft(projectDraftFromProject(selectedProject || {}));
+  }, [selectedProject?.id, selectedProject?.updatedAt]);
+
+  async function refreshProjectFiles(project = selectedProject) {
+    if (!project?.id || !hasEcorexFunction(['listProjectFiles', 'projects.listFiles'])) {
+      setProjectFiles([]);
+      return;
+    }
+    const result = await listManagedProjectFiles(project.id);
+    if (result?.unauthorized) {
+      onUnauthorized?.();
+      return;
+    }
+    if (result?.ok === false) {
+      setProjectFiles([]);
+      return;
+    }
+    setProjectFiles(Array.isArray(result?.files) ? result.files : []);
+  }
+
+  useEffect(() => {
+    refreshProjectFiles(selectedProject);
   }, [selectedProject?.id, selectedProject?.updatedAt]);
 
   function updateCreateField(field, value) {
@@ -8098,6 +8260,7 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
       setCreateDraft(emptyProjectDraft());
       setProjectState((current) => ({ ...current, notice: '项目已创建，并切换为当前项目。' }));
       await refreshProjects({ silent: true, preferId: result.project?.id });
+      setSelectedProjectId(result.project?.id || '');
       refreshBackend?.({ refresh: true });
     }
     setBusy('');
@@ -8137,6 +8300,7 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
       setProjectState((current) => ({ ...current, notice: result.missing ? '项目服务未就绪' : `项目切换失败：${sanitizeDisplayText(result.error, '请稍后重试')}` }));
     } else {
       setProjectState((current) => ({ ...current, notice: '当前项目已切换。' }));
+      window.dispatchEvent?.(new CustomEvent('ecorex:project-context', { detail: { project } }));
       await refreshProjects({ silent: true, preferId: project.id });
       refreshBackend?.({ refresh: true });
     }
@@ -8205,220 +8369,359 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
     setBusy('');
   }
 
+  async function openProject(project = {}) {
+    if (!project?.id || project.id === 'empty') return;
+    setSelectedProjectId(project.id);
+    if (!project.current && !project.archived) await switchProject(project);
+    else window.dispatchEvent?.(new CustomEvent('ecorex:project-context', { detail: { project } }));
+  }
+
+  function toggleProjectStar(project = {}) {
+    if (!project?.id) return;
+    setStarredProjectIds((current) => {
+      const next = new Set(current);
+      if (next.has(project.id)) next.delete(project.id);
+      else next.add(project.id);
+      try {
+        localStorage.setItem('ecorex-starred-projects', JSON.stringify([...next]));
+      } catch {
+        // Starred state is a local UI preference.
+      }
+      return next;
+    });
+  }
+
+  async function addFilesToProject() {
+    if (!selectedProject?.id || !hasEcorexFunction(['addProjectFiles', 'projects.addFiles'])) return;
+    setFileBusy('add');
+    const result = await addManagedProjectFiles(selectedProject.id);
+    if (result?.unauthorized) {
+      onUnauthorized?.();
+    } else if (result?.ok === false) {
+      setProjectState((current) => ({ ...current, notice: `项目文件添加失败：${sanitizeDisplayText(result.error, '请稍后重试')}` }));
+    } else if (!result?.canceled) {
+      setProjectState((current) => ({ ...current, notice: `已加入 ${result.files?.length || 0} 个项目文件。` }));
+      await refreshProjectFiles(selectedProject);
+      await refreshProjects({ silent: true, preferId: selectedProject.id });
+    }
+    setFileBusy('');
+  }
+
+  async function openProjectFile(file = {}) {
+    if (!selectedProject?.id) return;
+    setFileBusy(file.id || file.pathLabel || 'open');
+    const result = await openManagedProjectFile(selectedProject.id, file);
+    if (result?.unauthorized) onUnauthorized?.();
+    else if (result?.ok === false) setProjectState((current) => ({ ...current, notice: `项目文件打开失败：${sanitizeDisplayText(result.error, '请稍后重试')}` }));
+    setFileBusy('');
+  }
+
+  async function removeProjectFile(file = {}) {
+    if (!selectedProject?.id || !hasEcorexFunction(['removeProjectFile', 'projects.removeFile'])) return;
+    const confirmed = typeof window === 'undefined' || typeof window.confirm !== 'function'
+      ? true
+      : window.confirm(`从项目中移除「${file.name || '文件'}」？`);
+    if (!confirmed) return;
+    setFileBusy(file.id || file.pathLabel || 'remove');
+    const result = await removeManagedProjectFile(selectedProject.id, file);
+    if (result?.unauthorized) onUnauthorized?.();
+    else if (result?.ok === false) setProjectState((current) => ({ ...current, notice: `项目文件移除失败：${sanitizeDisplayText(result.error, '请稍后重试')}` }));
+    else {
+      await refreshProjectFiles(selectedProject);
+      await refreshProjects({ silent: true, preferId: selectedProject.id });
+    }
+    setFileBusy('');
+  }
+
+  function routeProjectSession(session = {}) {
+    if (!session?.id) return;
+    window.dispatchEvent?.(new CustomEvent('ecorex:open-chat', { detail: session }));
+    setPage?.('chat');
+  }
+
+  async function routeProjectPrompt() {
+    const cleanPrompt = projectPrompt.trim();
+    if (!selectedProject?.id || !cleanPrompt) return;
+    if (!selectedProject.current && !selectedProject.archived) await switchProject(selectedProject);
+    const id = createLocalId('conversation');
+    const item = {
+      id,
+      claudeSessionId: id,
+      title: cleanPrompt.slice(0, 44),
+      time: recentChatTimeLabel(),
+      updatedAt: Date.now(),
+      projectId: selectedProject.id,
+      projectName: selectedProject.name
+    };
+    const nextItems = upsertRecentChatItem(loadRecentChatItems(), item);
+    storeRecentChatItems(nextItems);
+    setRecentItems(nextItems);
+    window.dispatchEvent?.(new CustomEvent('ecorex:new-chat', { detail: { ...item, initialPrompt: cleanPrompt } }));
+    window.dispatchEvent?.(new CustomEvent('ecorex:project-context', { detail: { project: selectedProject } }));
+    window.dispatchEvent?.(new CustomEvent('ecorex:recent-chats-changed'));
+    setProjectPrompt('');
+    setPage?.('chat');
+  }
+
   const activeProjects = projectState.projects.filter((project) => !project.archived);
   const archivedProjects = projectState.projects.filter((project) => project.archived);
-  const currentProject = projectState.currentProject;
   const canCreateProject = projectState.apiReady && hasEcorexFunction(['createProject', 'projects.create']);
   const canUpdateProject = projectState.apiReady && hasEcorexFunction(['updateProject', 'projects.update']);
   const canArchiveProject = projectState.apiReady && hasEcorexFunction(['archiveProject', 'projects.archive', 'updateProject', 'projects.update']);
   const canSwitchProject = projectState.apiReady && hasEcorexFunction(['switchProject', 'projects.switch']);
   const canDeleteProject = projectState.apiReady && hasEcorexFunction(['deleteProject', 'projects.delete', 'removeProject', 'projects.remove']);
+  const projectSessions = selectedProject
+    ? recentItems.filter((item) => item.projectId === selectedProject.id)
+    : [];
+  const filteredProjects = projectState.projects
+    .filter((project) => {
+      const query = projectSearch.trim().toLowerCase();
+      if (!query) return true;
+      return [project.name, project.description, project.client, project.goal, project.statusLabel]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query));
+    })
+    .sort((left, right) => {
+      if (starredProjectIds.has(left.id) !== starredProjectIds.has(right.id)) {
+        return starredProjectIds.has(left.id) ? -1 : 1;
+      }
+      if (sortMode === 'name') return String(left.name).localeCompare(String(right.name), 'zh-CN');
+      if (sortMode === 'created') return String(right.id).localeCompare(String(left.id));
+      return (new Date(right.updatedAt || 0).getTime() || 0) - (new Date(left.updatedAt || 0).getTime() || 0);
+    });
+  const listProjects = filteredProjects.length
+    ? filteredProjects
+    : (projectState.projects.length ? [] : [{ id: 'empty', name: projectState.apiReady ? '暂无项目' : '项目服务未就绪', statusLabel: projectState.status }]);
 
   return (
-    <section className="projects-page panel">
-      <HeaderBar
-        title="项目"
-        badge="广告 Agent"
-        subtitle="以客户项目为单位隔离工作目录、长期记忆、投放目标、预算周期与交付物"
-        backendStatus={backendStatus}
-        onRefresh={() => {
-          refreshBackend?.({ refresh: true });
-          refreshProjects();
-        }}
-      />
-
-      <div className="projects-overview">
-        {[
-          ['当前项目', currentProject?.name || '未选择', currentProject ? projectBusinessSummary(currentProject) : '发送任务前建议先选择项目', LayoutDashboard, currentProject ? 'ok' : 'warn'],
-          ['活跃项目', `${activeProjects.length} 个`, `${projectState.projects.length} 个项目 · ${archivedProjects.length} 个已归档`, Target, activeProjects.length ? 'ok' : 'warn'],
-          ['项目记忆', currentProject?.memoryLabel || '待初始化', currentProject ? 'runPrompt 会绑定当前项目记忆' : '选择项目后自动创建记忆文件', ClipboardList, currentProject ? 'ok' : 'running']
-        ].map(([label, value, detail, Icon, tone]) => (
-          <article className={`project-overview-card ${tone}`} key={label}>
-            <span><Icon size={22} /></span>
-            <div>
-              <em>{label}</em>
-              <strong>{value}</strong>
-              <small>{detail}</small>
-            </div>
-          </article>
-        ))}
-      </div>
-
-      <div className="projects-grid">
-        <section className="projects-list-panel" data-testid="projects-list-panel">
-          <header>
-            <div>
-              <h3>项目列表</h3>
-              <small>{projectState.apiReady ? `${activeProjects.length} 个活跃 · ${archivedProjects.length} 个归档` : '项目服务未就绪'}</small>
-            </div>
-            <button type="button" onClick={() => refreshProjects()} disabled={projectState.loading}>
-              <Loader2 size={14} className={projectState.loading ? 'spin-icon' : ''} />
-              刷新
-            </button>
-          </header>
-          <div className="project-list-full">
-            {(projectState.projects.length ? projectState.projects : [{ id: 'empty', name: projectState.apiReady ? '暂无项目' : '项目服务未就绪', statusLabel: projectState.status }]).map((project) => (
-              <button
-                className={`project-list-entry ${selectedProject?.id === project.id ? 'selected' : ''} ${project.current ? 'active' : ''} ${project.archived ? 'archived' : ''}`}
-                data-testid="projects-list-entry"
-                disabled={project.id === 'empty'}
-                key={project.id}
-                type="button"
-                onClick={() => setSelectedProjectId(project.id)}
-              >
-                <LayoutDashboard size={17} />
-                <div>
-                  <strong>{project.name}</strong>
-                  <em>{projectBusinessSummary(project)}</em>
-                </div>
-                <span>{project.current ? '当前' : project.statusLabel || projectStatusLabel(project.status)}</span>
+    <section className={`projects-page panel ${selectedProject ? 'project-detail-mode' : 'project-list-mode'}`} title="项目">
+      {!selectedProject ? (
+        <div className="projects-home-shell">
+          <header className="projects-home-head">
+            <h1>项目</h1>
+            <div className="projects-home-actions">
+              <label>
+                排序
+                <select value={sortMode} onChange={(event) => setSortMode(event.target.value)}>
+                  <option value="activity">最近活动</option>
+                  <option value="name">名称</option>
+                  <option value="created">创建时间</option>
+                </select>
+              </label>
+              <button type="button" onClick={() => document.querySelector('[data-testid="projects-create-name"]')?.focus()}>
+                <Plus size={16} />
+                新建项目
               </button>
+            </div>
+          </header>
+
+          <div className="projects-search">
+            <Search size={18} />
+            <input value={projectSearch} onChange={(event) => setProjectSearch(event.target.value)} placeholder="搜索项目..." />
+          </div>
+
+          <form className="projects-create-strip" onSubmit={createProject}>
+            <input data-testid="projects-create-name" value={createDraft.name} onChange={(event) => updateCreateField('name', event.target.value)} placeholder="新项目名称" disabled={!canCreateProject || busy === 'create'} />
+            <input value={createDraft.client} onChange={(event) => updateCreateField('client', event.target.value)} placeholder="客户 / 品牌" disabled={!canCreateProject || busy === 'create'} />
+            <button type="submit" data-testid="projects-create-submit" disabled={!canCreateProject || !createDraft.name.trim() || busy === 'create'}>
+              {busy === 'create' ? <Loader2 size={16} className="spin-icon" /> : <Plus size={16} />}
+              新建项目
+            </button>
+          </form>
+
+          <section className="projects-list-panel visual-hidden-panel" data-testid="projects-list-panel" aria-label="项目列表" />
+          <div className="projects-card-grid">
+            {listProjects.map((project) => (
+              <article
+                className={`project-home-card project-list-entry ${project.current ? 'active' : ''} ${project.archived ? 'archived' : ''}`}
+                data-testid="projects-list-entry"
+                key={project.id}
+                role="button"
+                tabIndex={project.id === 'empty' ? -1 : 0}
+                onClick={() => openProject(project)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') openProject(project);
+                }}
+              >
+                <div className="project-card-actions">
+                  <button type="button" title="更多" onClick={(event) => { event.stopPropagation(); setMenuProjectId((current) => current === project.id ? '' : project.id); }}>
+                    <MoreHorizontal size={17} />
+                  </button>
+                </div>
+                <strong>{project.name}</strong>
+                <span>{project.updatedAt ? `更新于 ${formatDateTime(project.updatedAt)}` : project.statusLabel || '最近更新'}</span>
+                <em>{projectBusinessSummary(project)}</em>
+                <span>{project.sessionCount || 0} 个会话 · {project.fileCount || 0} 个文件</span>
+                {menuProjectId === project.id && project.id !== 'empty' && (
+                  <div className="project-card-menu" onClick={(event) => event.stopPropagation()}>
+                    <button type="button" onClick={() => { toggleProjectStar(project); setMenuProjectId(''); }}>
+                      <Star size={17} />
+                      {starredProjectIds.has(project.id) ? '取消收藏' : '收藏'}
+                    </button>
+                    <button type="button" onClick={() => { setSelectedProjectId(project.id); setMenuProjectId(''); }}>
+                      <Pencil size={17} />
+                      编辑详情
+                    </button>
+                    <span />
+                    <button type="button" onClick={() => { toggleArchive(project); setMenuProjectId(''); }} disabled={!canArchiveProject}>
+                      <Archive size={17} />
+                      {project.archived ? '恢复' : '归档'}
+                    </button>
+                    <button className="danger" type="button" onClick={() => { deleteProject(project); setMenuProjectId(''); }} disabled={!canDeleteProject}>
+                      <X size={17} />
+                      删除
+                    </button>
+                  </div>
+                )}
+              </article>
             ))}
           </div>
-        </section>
-
-        <section className="project-detail-panel" data-testid="project-detail-panel">
-          <header>
-            <div>
-              <h3>{selectedProject?.name || '项目详情'}</h3>
-              <small>{selectedProject ? `${selectedProject.statusLabel} · ${selectedProject.pathLabel || 'workspace:/'}` : '选择项目后编辑广告业务上下文'}</small>
-            </div>
-            <div className="project-detail-actions">
-              <button type="button" data-testid="project-detail-switch" onClick={() => switchProject(selectedProject)} disabled={!selectedProject || selectedProject.current || selectedProject.archived || !canSwitchProject || busy === `switch:${selectedProject?.id}`}>
-                {busy === `switch:${selectedProject?.id}` ? <Loader2 size={14} className="spin-icon" /> : <Check size={14} />}
-                {selectedProject?.current ? '当前' : '切换'}
+        </div>
+      ) : (
+        <div className="project-detail-shell">
+          <header className="project-detail-hero">
+            <button className="project-back-button" type="button" onClick={() => setSelectedProjectId('')}>
+              <ChevronLeft size={17} />
+              全部项目
+            </button>
+            <div className="project-detail-actions compact">
+              <button type="button" title={starredProjectIds.has(selectedProject.id) ? '取消收藏' : '收藏'} onClick={() => toggleProjectStar(selectedProject)}>
+                <Star size={17} />
               </button>
-              <button type="button" data-testid="project-detail-archive" onClick={() => toggleArchive(selectedProject)} disabled={!selectedProject || !canArchiveProject || busy === `archive:${selectedProject?.id}`}>
-                {busy === `archive:${selectedProject?.id}` ? <Loader2 size={14} className="spin-icon" /> : <Archive size={14} />}
-                {selectedProject?.archived ? '恢复' : '归档'}
-              </button>
-              <button type="button" data-testid="project-detail-open-folder" onClick={() => openProjectFolder(selectedProject)} disabled={!selectedProject || busy === `open:${selectedProject?.id}`}>
-                {busy === `open:${selectedProject?.id}` ? <Loader2 size={14} className="spin-icon" /> : <FolderOpen size={14} />}
+              <button type="button" data-testid="project-detail-open-folder" onClick={() => openProjectFolder(selectedProject)} disabled={busy === `open:${selectedProject.id}`}>
+                {busy === `open:${selectedProject.id}` ? <Loader2 size={15} className="spin-icon" /> : <FolderOpen size={15} />}
                 打开目录
               </button>
-              <button className="danger" type="button" data-testid="project-detail-delete" onClick={() => deleteProject(selectedProject)} disabled={!selectedProject || !canDeleteProject || busy === `delete:${selectedProject?.id}`}>
-                {busy === `delete:${selectedProject?.id}` ? <Loader2 size={14} className="spin-icon" /> : <X size={14} />}
+              <button type="button" data-testid="project-detail-archive" onClick={() => toggleArchive(selectedProject)} disabled={!canArchiveProject || busy === `archive:${selectedProject.id}`}>
+                {busy === `archive:${selectedProject.id}` ? <Loader2 size={15} className="spin-icon" /> : <Archive size={15} />}
+                {selectedProject.archived ? '恢复' : '归档'}
+              </button>
+              <button className="danger" type="button" data-testid="project-detail-delete" onClick={() => deleteProject(selectedProject)} disabled={!canDeleteProject || busy === `delete:${selectedProject.id}`}>
+                {busy === `delete:${selectedProject.id}` ? <Loader2 size={15} className="spin-icon" /> : <X size={15} />}
                 删除
               </button>
             </div>
           </header>
 
-          {selectedProject ? (
-            <>
-              <div className="project-context-strip">
-                <span><Building2 size={15} />{selectedProject.client || '客户待补充'}</span>
-                <span><Target size={15} />{selectedProject.goal || '目标待补充'}</span>
-                <span><Clock3 size={15} />{[selectedProject.budget, selectedProject.period].filter(Boolean).join(' / ') || '预算周期待补充'}</span>
-              </div>
-              <div className="project-edit-form">
-                <label>
-                  <span>项目名称 / 本地目录</span>
-                  <input data-testid="project-edit-name" value={editDraft.name} onChange={(event) => updateEditField('name', event.target.value)} disabled={!canUpdateProject} />
-                </label>
-                <label>
-                  <span>客户 / 品牌</span>
-                  <input value={editDraft.client} onChange={(event) => updateEditField('client', event.target.value)} disabled={!canUpdateProject} />
-                </label>
-                <label>
-                  <span>行业</span>
-                  <input value={editDraft.industry} onChange={(event) => updateEditField('industry', event.target.value)} disabled={!canUpdateProject} />
-                </label>
-                <label>
-                  <span>场景 / 渠道</span>
-                  <input value={editDraft.scenario} onChange={(event) => updateEditField('scenario', event.target.value)} disabled={!canUpdateProject} />
-                </label>
-                <label>
-                  <span>预算</span>
-                  <input value={editDraft.budget} onChange={(event) => updateEditField('budget', event.target.value)} disabled={!canUpdateProject} />
-                </label>
-                <label>
-                  <span>周期</span>
-                  <input value={editDraft.period} onChange={(event) => updateEditField('period', event.target.value)} disabled={!canUpdateProject} />
-                </label>
-                <label>
-                  <span>状态</span>
-                  <select value={editDraft.status} onChange={(event) => updateEditField('status', event.target.value)} disabled={!canUpdateProject}>
-                    {PROJECT_STATUS_OPTIONS.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
-                  </select>
-                </label>
-                <label className="wide">
-                  <span>广告目标</span>
-                  <textarea value={editDraft.goal} onChange={(event) => updateEditField('goal', event.target.value)} disabled={!canUpdateProject} />
-                </label>
-                <label className="wide">
-                  <span>交付物</span>
-                  <textarea value={editDraft.deliverablesText} onChange={(event) => updateEditField('deliverablesText', event.target.value)} disabled={!canUpdateProject} />
-                </label>
-              </div>
-              <div className="project-detail-footer">
-                <span>{selectedProject.fileCount || 0} 文件 · {selectedProject.sessionCount || 0} 会话 · {selectedProject.updatedAt ? formatDateTime(selectedProject.updatedAt) : '更新时间待返回'}</span>
-                <button type="button" data-testid="project-detail-save" onClick={saveProject} disabled={!canUpdateProject || !editDraft.name.trim() || busy === `save:${selectedProject.id}`}>
-                  {busy === `save:${selectedProject.id}` ? <Loader2 size={15} className="spin-icon" /> : <Check size={15} />}
-                  保存 / 重命名
-                </button>
-              </div>
-            </>
-          ) : (
-            <div className="project-empty-state">
-              <LayoutDashboard size={34} />
-              <strong>暂无项目</strong>
-              <span>先创建一个客户项目，亦芯会把任务目录和长期记忆隔离在该项目下。</span>
-            </div>
-          )}
-        </section>
+          <input className="project-title-input" data-testid="project-edit-name" value={editDraft.name} onChange={(event) => updateEditField('name', event.target.value)} disabled={!canUpdateProject} />
 
-        <section className="project-create-panel" data-testid="project-create-panel">
-          <header>
+          <div className="project-chat-composer">
+            <textarea value={projectPrompt} onChange={(event) => setProjectPrompt(event.target.value)} placeholder="今天想推进什么项目任务？" />
             <div>
-              <h3>新建广告项目</h3>
-              <small>客户、目标、预算周期和交付物会写入项目元数据</small>
+              <button type="button" title="添加项目文件" onClick={addFilesToProject} disabled={fileBusy === 'add'}>
+                {fileBusy === 'add' ? <Loader2 size={18} className="spin-icon" /> : <Plus size={20} />}
+              </button>
+              <span>{selectedProject.statusLabel} · {selectedProject.pathLabel || 'workspace:/'} · {projectFiles.length} 个文件</span>
+              <button className="project-send-button" type="button" title="进入项目会话" onClick={routeProjectPrompt} disabled={!projectPrompt.trim()}>
+                <Send size={18} />
+              </button>
             </div>
-          </header>
-          <form className="project-create-form" onSubmit={createProject}>
-            <label>
-              <span>项目名称</span>
-              <input data-testid="projects-create-name" value={createDraft.name} onChange={(event) => updateCreateField('name', event.target.value)} placeholder="如：618 短视频投放" disabled={!canCreateProject || busy === 'create'} />
-            </label>
-            <label>
-              <span>客户 / 品牌</span>
-              <input value={createDraft.client} onChange={(event) => updateCreateField('client', event.target.value)} placeholder="客户或品牌名" disabled={!canCreateProject || busy === 'create'} />
-            </label>
-            <label>
-              <span>行业</span>
-              <input value={createDraft.industry} onChange={(event) => updateCreateField('industry', event.target.value)} placeholder="美妆、汽车、本地生活..." disabled={!canCreateProject || busy === 'create'} />
-            </label>
-            <label>
-              <span>场景 / 渠道</span>
-              <input value={createDraft.scenario} onChange={(event) => updateCreateField('scenario', event.target.value)} placeholder="信息流、搜索、达人种草..." disabled={!canCreateProject || busy === 'create'} />
-            </label>
-            <label>
-              <span>预算</span>
-              <input value={createDraft.budget} onChange={(event) => updateCreateField('budget', event.target.value)} placeholder="如：50 万 / 月" disabled={!canCreateProject || busy === 'create'} />
-            </label>
-            <label>
-              <span>周期</span>
-              <input value={createDraft.period} onChange={(event) => updateCreateField('period', event.target.value)} placeholder="如：2026 Q2" disabled={!canCreateProject || busy === 'create'} />
-            </label>
-            <label className="wide">
-              <span>广告目标</span>
-              <textarea value={createDraft.goal} onChange={(event) => updateCreateField('goal', event.target.value)} placeholder="转化、线索、品牌曝光、A/B 测试目标..." disabled={!canCreateProject || busy === 'create'} />
-            </label>
-            <label className="wide">
-              <span>交付物</span>
-              <textarea value={createDraft.deliverablesText} onChange={(event) => updateCreateField('deliverablesText', event.target.value)} placeholder="投放计划、素材脚本、复盘报告..." disabled={!canCreateProject || busy === 'create'} />
-            </label>
-            <button type="submit" data-testid="projects-create-submit" disabled={!canCreateProject || !createDraft.name.trim() || busy === 'create'}>
-              {busy === 'create' ? <Loader2 size={16} className="spin-icon" /> : <Plus size={16} />}
-              新建并切换
-            </button>
-          </form>
-          <div className="project-memory-note">
-            <ClipboardList size={16} />
-            <span>每个项目会拥有独立目录与 `.ecorex-memory/project-memory.md`，后续任务默认只读取当前项目上下文。</span>
           </div>
-          {projectState.notice && <p className="diagnostics-notice compact">{projectState.notice}</p>}
-        </section>
-      </div>
+
+          <section className="project-detail-panel" data-testid="project-detail-panel">
+            <div className="project-detail-content">
+              <section className="project-thread-panel">
+                <header>
+                  <div>
+                    <h3>项目会话</h3>
+                    <small>{projectSessions.length ? `${projectSessions.length} 个项目会话` : '暂无项目会话'}</small>
+                  </div>
+                </header>
+                <div className="project-session-list">
+                  {projectSessions.length ? projectSessions.map((session) => (
+                    <div className="project-session-entry" key={session.id}>
+                      <button type="button" onClick={() => routeProjectSession(session)}>
+                        <strong>{session.title}</strong>
+                        <span>最近消息 {session.time || '刚刚'}</span>
+                      </button>
+                    </div>
+                  )) : (
+                    <div className="project-empty-state compact">
+                      <Bot size={28} />
+                      <strong>从上方输入开始项目会话</strong>
+                      <span>这里创建的新会话会自动路由到当前项目。</span>
+                    </div>
+                  )}
+                </div>
+              </section>
+
+              <section className="project-context-panel">
+                <button className="project-context-row" type="button">
+                  <div>
+                    <strong>项目指令</strong>
+                    <span>添加指令，让 EcoreX 在当前项目里按固定偏好回复。</span>
+                  </div>
+                  <Plus size={20} />
+                </button>
+                <div className="project-edit-form project-instructions-form">
+                  <label className="wide">
+                    <span>项目指令</span>
+                    <textarea value={editDraft.instructions} onChange={(event) => updateEditField('instructions', event.target.value)} disabled={!canUpdateProject} placeholder="例如：输出面向广告投放负责人；默认使用中文；复盘时优先关注 CTR/CVR/CPA。" />
+                  </label>
+                  <label>
+                    <span>客户 / 品牌</span>
+                    <input value={editDraft.client} onChange={(event) => updateEditField('client', event.target.value)} disabled={!canUpdateProject} />
+                  </label>
+                  <label>
+                    <span>目标</span>
+                    <input value={editDraft.goal} onChange={(event) => updateEditField('goal', event.target.value)} disabled={!canUpdateProject} />
+                  </label>
+                  <label>
+                    <span>预算</span>
+                    <input value={editDraft.budget} onChange={(event) => updateEditField('budget', event.target.value)} disabled={!canUpdateProject} />
+                  </label>
+                  <label>
+                    <span>周期</span>
+                    <input value={editDraft.period} onChange={(event) => updateEditField('period', event.target.value)} disabled={!canUpdateProject} />
+                  </label>
+                  <label className="wide">
+                    <span>交付物</span>
+                    <textarea value={editDraft.deliverablesText} onChange={(event) => updateEditField('deliverablesText', event.target.value)} disabled={!canUpdateProject} />
+                  </label>
+                  <button type="button" data-testid="project-detail-save" onClick={saveProject} disabled={!canUpdateProject || !editDraft.name.trim() || busy === `save:${selectedProject.id}`}>
+                    {busy === `save:${selectedProject.id}` ? <Loader2 size={15} className="spin-icon" /> : <Check size={15} />}
+                    保存
+                  </button>
+                </div>
+
+                <div className="project-files-block">
+                  <header>
+                    <div>
+                      <strong>项目文件</strong>
+                      <span>添加 PDF、文档或其他资料，供当前项目引用；project-memory.md 用于保存长期记忆。</span>
+                    </div>
+                    <button type="button" data-testid="project-file-add" onClick={addFilesToProject} disabled={fileBusy === 'add'}>
+                      {fileBusy === 'add' ? <Loader2 size={17} className="spin-icon" /> : <Plus size={20} />}
+                    </button>
+                  </header>
+                  {projectFiles.length ? (
+                    <div className="project-reference-list">
+                      {projectFiles.map((file) => (
+                        <div className="project-reference-file" key={file.id || file.pathLabel || file.name}>
+                          <FileText size={17} />
+                          <button type="button" onClick={() => openProjectFile(file)}>
+                            <strong>{file.name}</strong>
+                            <span>{formatFileSize(file.sizeBytes)} · {file.modifiedAt ? formatDateTime(file.modifiedAt) : '项目文件'}</span>
+                          </button>
+                          <button type="button" title="移除" onClick={() => removeProjectFile(file)} disabled={fileBusy === (file.id || file.pathLabel)}>
+                            <X size={15} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <button className="project-file-drop" type="button" onClick={addFilesToProject}>
+                      <Upload size={30} />
+                      <span>添加 PDF、文档或其他文本资料，供当前项目引用。</span>
+                    </button>
+                  )}
+                </div>
+              </section>
+            </div>
+          </section>
+        </div>
+      )}
+      {projectState.notice && <p className="diagnostics-notice compact project-page-notice">{projectState.notice}</p>}
     </section>
   );
 }
@@ -9752,6 +10055,7 @@ function emptyProjectDraft() {
     budget: '',
     period: '',
     deliverablesText: '',
+    instructions: '',
     status: 'active'
   };
 }
@@ -9766,6 +10070,7 @@ function projectDraftFromProject(project = {}) {
     budget: project.budget || '',
     period: project.period || '',
     deliverablesText: normalizeProjectDeliverables(project.deliverables).join('、'),
+    instructions: project.instructions || '',
     status: normalizeProjectStatusValue(project.status, project.archived)
   };
 }
@@ -9780,6 +10085,7 @@ function projectPayloadFromDraft(draft = {}) {
     budget: String(draft.budget || '').trim(),
     period: String(draft.period || '').trim(),
     deliverables: normalizeProjectDeliverables(draft.deliverablesText),
+    instructions: String(draft.instructions || '').trim(),
     status: normalizeProjectStatusValue(draft.status)
   };
 }
@@ -9807,6 +10113,7 @@ function normalizeProjectItem(raw = {}, index = 0, currentId = '') {
     period: sanitizeDisplayText(raw.period || raw.timeline || raw.cycle, ''),
     deliverables,
     memoryLabel: sanitizeDisplayText(raw.memoryLabel || raw.memoryPath, ''),
+    instructions: sanitizeDisplayText(raw.instructions || raw.systemInstructions || raw.projectInstructions, ''),
     pathLabel: sanitizeDisplayText(raw.pathLabel || raw.workspacePath, ''),
     archived: status === 'archived'
   };
@@ -9899,6 +10206,22 @@ async function deleteManagedProject(projectId) {
 
 async function openManagedProjectFolder(projectId) {
   return callEcorexAction(['openProjectFolder', 'projects.openFolder', 'projects.open'], { id: projectId, projectId });
+}
+
+async function listManagedProjectFiles(projectId) {
+  return callEcorexAction(['listProjectFiles', 'projects.listFiles'], { id: projectId, projectId });
+}
+
+async function addManagedProjectFiles(projectId) {
+  return callEcorexAction(['addProjectFiles', 'projects.addFiles'], { id: projectId, projectId });
+}
+
+async function openManagedProjectFile(projectId, file = {}) {
+  return callEcorexAction(['openProjectFile', 'projects.openFile'], { ...file, id: projectId, projectId });
+}
+
+async function removeManagedProjectFile(projectId, file = {}) {
+  return callEcorexAction(['removeProjectFile', 'projects.removeFile'], { ...file, id: projectId, projectId });
 }
 
 function DiagnosticsView({ backendStatus, backendError, capabilities, authStatus, startupState, refreshBackend, onUnauthorized, embedded = false }) {

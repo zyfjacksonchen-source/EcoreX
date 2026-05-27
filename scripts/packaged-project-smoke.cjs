@@ -194,7 +194,9 @@ async function main() {
       await page.locator('[data-testid="projects-create-name"]').waitFor({ state: 'visible', timeout: 20_000 });
       await page.locator('[data-testid="projects-create-name"]').fill(originalName);
       await page.locator('[data-testid="projects-create-submit"]').click();
-      await page.locator('[data-testid="projects-list-entry"]').filter({ hasText: originalName }).first().waitFor({ state: 'visible', timeout: 20_000 });
+      await page.locator('[data-testid="project-detail-panel"]').waitFor({ state: 'visible', timeout: 20_000 });
+      await page.locator('[data-testid="project-edit-name"]').waitFor({ state: 'visible', timeout: 20_000 });
+      await page.locator('[data-testid="project-edit-name"]').waitFor({ state: 'attached', timeout: 20_000 });
 
       const created = await page.evaluate(async (name) => {
         const listed = await window.ecorex.listProjects();
@@ -206,6 +208,7 @@ async function main() {
 
       await page.locator('[data-testid="project-edit-name"]').fill(renamedName);
       await page.locator('[data-testid="project-detail-save"]').click();
+      await page.locator('.project-back-button').click();
       await page.locator('[data-testid="projects-list-entry"]').filter({ hasText: renamedName }).first().waitFor({ state: 'visible', timeout: 20_000 });
 
       const renamed = await page.evaluate(async (name) => {
@@ -218,6 +221,7 @@ async function main() {
       if (!fs.existsSync(renamedDir)) throw new Error(`Renamed project directory missing: ${renamedDir}`);
 
       page.once('dialog', (dialog) => dialog.accept());
+      await page.locator('[data-testid="projects-list-entry"]').filter({ hasText: renamedName }).first().click();
       await page.locator('[data-testid="project-detail-delete"]').click();
       await page.locator('[data-testid="projects-list-entry"]').filter({ hasText: renamedName }).waitFor({ state: 'detached', timeout: 20_000 });
 

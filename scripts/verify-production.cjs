@@ -754,7 +754,8 @@ check('agent attachments, tool ledger and run journal are production-safe', () =
       'function toolLedgerStartEvent',
       'function toolLedgerFinishEvent',
       'function safeToolLedger',
-      'ledger: toolLedgerFinishEvent',
+      'function safeToolLedgerValue',
+      'const finishLedgers = toolResults.map',
       'function appendRunJournalEntry',
       'function recentUnfinishedRunJournals',
       "handleSafe('attachment:ingest', (_event, payload) => ingestAttachmentsForPreview(payload), { authRequired: true })",
@@ -847,7 +848,6 @@ check('agent runtime production guardrails', () => {
       'function isBlockedLocalSkillName',
       "'--session-id'",
       "'--resume'",
-      "'--bare'",
       'claudeSessionId',
       'contextManagement',
       'const CLAUDE_AUTO_ALLOWED_TOOL_SET',
@@ -858,8 +858,11 @@ check('agent runtime production guardrails', () => {
     'agent runtime guardrails'
   );
   assertMatches(main, /'--output-format',\s*'stream-json',\s*'--verbose'/, 'stream-json output must always be paired with --verbose.');
-  assertMatches(main, /'--bare'[\s\S]*'--print'[\s\S]*'--plugin-dir'/, 'agent runtime must run in bare isolated mode while explicitly loading bundled plugins.');
-  assertMatches(main, /env:\s*filteredAgentEnv\(\{[\s\S]*isolatedAgentRuntimeEnv\(\)[\s\S]*CLAUDE_CODE_SIMPLE:\s*'1'/, 'agent runtime must isolate config and disable inherited user skills/memory.');
+  assertMatches(main, /'--print'[\s\S]*'--output-format'[\s\S]*'stream-json'[\s\S]*'--plugin-dir'/, 'agent runtime must stream through the full isolated CLI tool surface while explicitly loading bundled plugins.');
+  assertNotMatches(main, /'--bare'/, 'agent runtime must not pass --bare because it can hide MCP, Skill, WebSearch, Todo and PowerShell tools.');
+  assertMatches(main, /const runtimeEnv = \{[\s\S]*isolatedAgentRuntimeEnv\(\)[\s\S]*CLAUDE_CODE_NO_FLICKER:\s*'1'/, 'agent runtime must isolate config while preserving the full default tool surface.');
+  assertMatches(main, /process\.platform === 'win32' \? \{ CLAUDE_CODE_USE_POWERSHELL_TOOL:\s*'1' \}/, 'Windows agent runs must enable the PowerShell tool surface.');
+  assertNotMatches(main, /CLAUDE_CODE_SIMPLE:\s*'1'/, 'agent runtime must not force simple mode because it hides WebSearch, Skill, Todo and PowerShell tools.');
   assertMatches(main, /function isolatedAgentRuntimeEnv\(\)[\s\S]*HOME:\s*configDir[\s\S]*USERPROFILE:\s*configDir[\s\S]*APPDATA:\s*appDataDir[\s\S]*LOCALAPPDATA:\s*localAppDataDir/, 'agent runtime must isolate home/appdata so local Claude skills and MCP state are not inherited.');
   assertMatches(main, /function claudeProjectsRoot\(\) \{[\s\S]*agentRuntimeConfigDir\(\)[\s\S]*'projects'/, 'Claude transcript discovery must only use the EcoreX runtime project root.');
   assertNotMatches(main, /function claudeProjectsRoot\(\) \{[\s\S]*process\.env\.USERPROFILE[\s\S]*\.claude[\s\S]*projects/, 'Claude transcript discovery must not scan the user global ~/.claude project history.');
@@ -1047,9 +1050,10 @@ check('model adapter defaults and smoke tests are offline-safe', () => {
   includesAll(
     adapter,
     [
-      "const DEFAULT_IMAGE_MODEL = 'gpt-image-2'",
-      'model: body.model || profile.imageModel || DEFAULT_IMAGE_MODEL',
+      "const DEFAULT_IMAGE_MODEL = 'image-2'",
+      'model: normalizeImageModelName(body.model || profile.imageModel || profile.imageModelName || DEFAULT_IMAGE_MODEL)',
       'DEFAULT_IMAGE_MODEL',
+      'function normalizeImageModelName',
       'function extractOpenAIText',
       'function parseOpenAIStream',
       'function normalizeOpenAIResponse',
@@ -1469,8 +1473,9 @@ check('package build config excludes local model/secrets storage', () => {
   assert(
     pkg.scripts['verify:production'].includes('npm run test:agent-runtime') &&
       pkg.scripts['verify:production'].includes('node scripts/verify-production.cjs') &&
-      pkg.scripts['verify:production'].includes('npm run test:model-adapter'),
-    'verify:production must be the P0/P1 entry and include agent runtime and model adapter smoke tests.'
+      pkg.scripts['verify:production'].includes('npm run test:model-adapter') &&
+      pkg.scripts['verify:production'].includes('npm run verify:release-clean'),
+    'verify:production must be the P0/P1 entry and include agent runtime, model adapter, and release cleanliness smoke tests.'
   );
   assert(
     pkg.scripts['test:agent-runtime'] === 'node scripts/agent-runtime-smoke.cjs',
@@ -1485,19 +1490,29 @@ check('package build config excludes local model/secrets storage', () => {
     'release:fix-metadata must run the release metadata repair script.'
   );
   assert(
-    pkg.scripts['verify:production:strict'] === 'npm run test:agent-runtime && node scripts/verify-production.cjs --strict && npm run test:model-adapter',
+    pkg.scripts['release:clean'] === 'node scripts/clean-release-artifacts.cjs',
+    'release:clean must run the release cleanup script.'
+  );
+  assert(
+    pkg.scripts['verify:release-clean'] === 'node scripts/verify-release-clean.cjs',
+    'verify:release-clean must run the release cleanliness verifier.'
+  );
+  assert(
+    pkg.scripts['verify:production:strict'] === 'npm run test:agent-runtime && node scripts/verify-production.cjs --strict && npm run test:model-adapter && npm run verify:release-clean',
     'verify:production:strict must enable strict release signing gates while staying offline.'
   );
   assert(
-    pkg.scripts['verify:production:release'] === 'npm run test:agent-runtime && node scripts/verify-production.cjs --strict --require-signed-artifact && npm run test:model-adapter',
+    pkg.scripts['verify:production:release'] === 'npm run test:agent-runtime && node scripts/verify-production.cjs --strict --require-signed-artifact && npm run test:model-adapter && npm run verify:release-clean',
     'verify:production:release must require signed release artifacts after packaging.'
   );
   for (const scriptName of ['pack', 'dist', 'dist:release']) {
     const script = pkg.scripts[scriptName] || '';
     const builderIndex = script.indexOf('electron-builder');
     const fixIndex = script.indexOf('npm run release:fix-metadata');
+    const cleanIndex = script.indexOf('npm run release:clean');
     const forbiddenReleaseActions = /\bgit\s+(?:push|tag|commit|add)|\bgh\s+release|\bnpm\s+publish|\belectron-builder\s+.*\s--publish\b/i;
     assert(!forbiddenReleaseActions.test(script), `${scriptName} must not upload, publish, tag, or commit artifacts.`);
+    assert(cleanIndex > -1 && cleanIndex < builderIndex, `${scriptName} must clean old release/local artifacts before electron-builder.`);
     assert(
       builderIndex > -1 && script.indexOf('npm run verify:production') > -1 && script.indexOf('npm run verify:production') < builderIndex,
       `${scriptName} must run verify:production before electron-builder.`
@@ -1517,6 +1532,11 @@ check('package build config excludes local model/secrets storage', () => {
     (pkg.scripts['dist:release'] || '').includes('npm run verify:production:strict') &&
       (pkg.scripts['dist:release'] || '').includes('npm run verify:production:release'),
     'dist:release must use strict signing gates before packaging and signed-artifact gates after metadata repair.'
+  );
+  assert(
+    (pkg.scripts['dist:mac'] || '').includes('npm run release:clean') &&
+      (pkg.scripts['dist:mac'] || '').includes('npm run verify:release-clean'),
+    'dist:mac must clean old release artifacts and verify release cleanliness.'
   );
   assert(
     (pkg.scripts.pack || '').lastIndexOf('npm run verify:production') > (pkg.scripts.pack || '').indexOf('npm run release:fix-metadata'),

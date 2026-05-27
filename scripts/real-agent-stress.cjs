@@ -6,7 +6,7 @@ const path = require('path');
 const { closeEcorex, launchEcorex, login } = require('../tests/e2e/helpers/electron-app.cjs');
 
 const rootDir = path.resolve(__dirname, '..');
-const reportDir = path.join(rootDir, 'release');
+const reportDir = path.join(rootDir, 'reports', 'qa');
 
 function envInt(name, fallback, min, max) {
   const value = Number(process.env[name]);
@@ -19,7 +19,7 @@ function requiredConfig() {
     baseUrl: String(process.env.ECOREX_REAL_MODEL_BASE_URL || '').trim(),
     apiKey: String(process.env.ECOREX_REAL_MODEL_API_KEY || '').trim(),
     model: String(process.env.ECOREX_REAL_MODEL_NAME || '').trim(),
-    imageModel: String(process.env.ECOREX_REAL_IMAGE_MODEL || 'gpt-image-2').trim(),
+    imageModel: String(process.env.ECOREX_REAL_IMAGE_MODEL || 'image-2').trim(),
     concurrency: envInt('ECOREX_REAL_AGENT_CONCURRENCY', 2, 1, 4),
     timeoutMs: envInt('ECOREX_REAL_AGENT_TIMEOUT_MS', 10 * 60 * 1000, 60 * 1000, 30 * 60 * 1000),
     cancelAfterMs: envInt('ECOREX_REAL_AGENT_CANCEL_AFTER_MS', 8000, 2000, 60 * 1000),

@@ -9,8 +9,16 @@ release/win-unpacked/
 release/__uninstaller-nsis-*.exe
 release/*.exe
 release/*.exe.blockmap
+release/*.dmg
+release/*.zip
+release/*.blockmap
 release/latest.yml
+release/latest*.yml
+release/*.json
 release/real-agent-stress-*.json
+
+# Local QA reports generated during release readiness checks.
+reports/qa/
 
 # Accidental root-level renderer/main build copies.
 /index-*.js

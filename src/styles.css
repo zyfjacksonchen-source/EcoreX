@@ -1642,6 +1642,42 @@ select,
   background: rgba(255, 68, 68, 0.16);
 }
 
+.sidebar-project-session-rename-form {
+  grid-column: 1 / -1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px 28px;
+  gap: 5px;
+  align-items: center;
+}
+
+.sidebar-project-session-rename-form input {
+  min-width: 0;
+  height: 30px;
+  border: 1px solid rgba(255, 90, 0, 0.35);
+  border-radius: 8px;
+  background: #0c131c;
+  color: var(--text);
+  padding: 0 8px;
+  outline: 0;
+}
+
+.sidebar-project-session-rename-form button {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #101822;
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+}
+
+.sidebar-project-session-rename-form button:hover {
+  border-color: rgba(255, 90, 0, 0.42);
+  color: var(--orange);
+}
+
 .sidebar-project-row svg,
 .sidebar-project-session svg {
   width: 13px;
@@ -7256,7 +7292,20 @@ select,
   grid-template-columns: 30px minmax(0, 1fr) 30px;
 }
 
-.project-reference-file button {
+.project-reference-file > button:first-of-type {
+  width: auto;
+  height: auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  justify-content: flex-start;
+}
+
+.project-reference-file > button:last-child {
   width: 28px;
   height: 28px;
   border-radius: 8px;
@@ -7264,9 +7313,84 @@ select,
   background: transparent;
 }
 
-.project-reference-file button:hover {
+.project-reference-file > button:last-child:hover {
   color: var(--danger);
   background: rgba(255, 68, 68, 0.12);
+}
+
+.visual-hidden-panel {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.project-card-menu {
+  position: absolute;
+  top: 48px;
+  right: 16px;
+  z-index: 8;
+  min-width: 170px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: #111a25;
+  box-shadow: var(--shadow-high);
+  padding: 8px;
+  display: grid;
+  gap: 2px;
+}
+
+.project-card-menu button {
+  min-height: 36px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 0 10px;
+  text-align: left;
+}
+
+.project-card-menu button:hover {
+  background: rgba(255, 90, 0, 0.1);
+  color: var(--orange);
+}
+
+.project-card-menu button.danger {
+  color: #ff7777;
+}
+
+.project-card-menu > span {
+  height: 1px;
+  margin: 4px 10px;
+  background: var(--line);
+}
+
+.project-instructions-form {
+  padding: 0 16px 16px;
+  overflow: auto;
+}
+
+.project-instructions-form button[data-testid="project-detail-save"] {
+  min-height: 34px;
+  border: 1px solid rgba(255, 90, 0, 0.35);
+  border-radius: 8px;
+  background: rgba(255, 90, 0, 0.16);
+  color: var(--orange);
+  font-weight: 800;
+}
+
+.project-page-notice {
+  position: absolute;
+  right: 18px;
+  bottom: 14px;
+  max-width: min(520px, 50vw);
+  z-index: 10;
 }
 
 .project-empty-state.compact {

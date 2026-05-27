@@ -1,7 +1,10 @@
 const DEFAULT_CHAT_ENDPOINT = '/chat/completions';
 const DEFAULT_RESPONSES_ENDPOINT = '/responses';
 const DEFAULT_IMAGE_ENDPOINT = '/images/generations';
-const DEFAULT_IMAGE_MODEL = 'gpt-image-2';
+const DEFAULT_IMAGE_MODEL = 'image-2';
+const LEGACY_IMAGE_MODEL_ALIASES = new Map([
+  ['gpt-image-2', DEFAULT_IMAGE_MODEL]
+]);
 const DEFAULT_TIMEOUT_MS = 15 * 1000;
 const MIN_TIMEOUT_MS = 1000;
 const MAX_TIMEOUT_MS = 60 * 1000;
@@ -29,6 +32,12 @@ function normalizeBaseUrl(value) {
   if (url.username || url.password || url.hash) throw new Error('Invalid baseUrl.');
   url.search = '';
   return url.toString().replace(/\/+$/, '');
+}
+
+function normalizeImageModelName(value = '') {
+  const model = String(value || '').trim();
+  if (!model) return DEFAULT_IMAGE_MODEL;
+  return LEGACY_IMAGE_MODEL_ALIASES.get(model.toLowerCase()) || model;
 }
 
 function endpointUrl(baseUrl, endpointPath) {
@@ -389,7 +398,7 @@ function inferModelCapabilities({ profile = {}, request = {}, options = {}, endp
   const caps = profile.capabilities && typeof profile.capabilities === 'object' ? profile.capabilities : {};
   const requestBody = request.body || {};
   const resolvedModel = model || requestBody.model || options.model || profile.model || '';
-  const imageModel = profile.imageModel || profile.imageModelName || (type === 'image' ? resolvedModel : '') || DEFAULT_IMAGE_MODEL;
+  const imageModel = normalizeImageModelName(profile.imageModel || profile.imageModelName || (type === 'image' ? resolvedModel : '') || DEFAULT_IMAGE_MODEL);
   const modelText = String(resolvedModel || '').toLowerCase();
   const routedModelText = `${resolvedModel} ${imageModel}`.toLowerCase();
   const endpointText = String(endpoint || '').toLowerCase();
@@ -432,7 +441,7 @@ function inferModelCapabilities({ profile = {}, request = {}, options = {}, endp
   ]) || heuristicContextWindow(resolvedModel);
   return {
     model: resolvedModel || null,
-    imageModel: imageModel || DEFAULT_IMAGE_MODEL,
+    imageModel: normalizeImageModelName(imageModel || DEFAULT_IMAGE_MODEL),
     supportsResponses: Boolean(supportsResponses),
     supportsChatCompletions: Boolean(supportsChatCompletions),
     supportsVision: Boolean(supportsVision),
@@ -733,7 +742,7 @@ class ModelAdapter {
         endpoint: DEFAULT_IMAGE_ENDPOINT,
         body: {
           ...body,
-          model: body.model || profile.imageModel || DEFAULT_IMAGE_MODEL
+          model: normalizeImageModelName(body.model || profile.imageModel || profile.imageModelName || DEFAULT_IMAGE_MODEL)
         }
       },
       { ...options, type: 'image', endpoint: DEFAULT_IMAGE_ENDPOINT }
@@ -798,6 +807,7 @@ module.exports = {
   createModelAdapter,
   endpointUrl,
   normalizeBaseUrl,
+  normalizeImageModelName,
   inferModelCapabilities,
   extractOpenAIText,
   extractOpenAIToolCalls,

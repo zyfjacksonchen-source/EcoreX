@@ -340,8 +340,8 @@ check('attachment ingestion, tool ledger and run journal', () => {
   );
   assertMatches(
     main,
-    /ledger:\s*toolLedgerFinishEvent\(sessionId,\s*toolResults\[0\]\.tool_use_id/,
-    'tool result events must carry structured ledger completions.'
+    /const finishLedgers = toolResults\.map[\s\S]*ledger:\s*finishLedgers\.length === 1 \? finishLedgers\[0\] : finishLedgers/,
+    'tool result events must carry structured ledger completions for every returned tool result.'
   );
 });
 

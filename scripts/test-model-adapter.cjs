@@ -11,6 +11,8 @@ const {
 } = require('../electron/model-adapter.cjs');
 
 async function main() {
+  assert.equal(DEFAULT_IMAGE_MODEL, 'image-2');
+
   assert.equal(
     endpointUrl('https://api.example.test/v1/chat/completions', '/responses'),
     'https://api.example.test/v1/responses'
@@ -126,6 +128,12 @@ async function main() {
   assert.equal(imageCalls[0].model, DEFAULT_IMAGE_MODEL);
   assert.equal(imageResult.capabilities.supportsImages, true);
   assert.equal(imageResult.imageArtifacts.length, 1);
+
+  await imageAdapter.generateImage(
+    { baseUrl: 'https://api.example.test/v1', apiKey: secret, imageModel: 'gpt-image-2' },
+    { prompt: 'legacy default image model' }
+  );
+  assert.equal(imageCalls[1].model, DEFAULT_IMAGE_MODEL);
 
   const imageFailureAdapter = createModelAdapter({
     fetchImpl: async () => new Response(JSON.stringify({ model: DEFAULT_IMAGE_MODEL, data: [] }), { status: 200 })

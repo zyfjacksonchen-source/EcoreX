@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const zlib = require('zlib');
 const { pathToFileURL } = require('url');
 const { fileURLToPath } = require('url');
-const { createModelAdapter, DEFAULT_IMAGE_MODEL } = require('./model-adapter.cjs');
+const { createModelAdapter, DEFAULT_IMAGE_MODEL, normalizeImageModelName } = require('./model-adapter.cjs');
 const {
   listEvaluationFramework,
   runEvaluationFramework,
@@ -85,6 +85,7 @@ const PROJECT_METADATA_FILE_NAME = '.ecorex-project.json';
 const PROJECT_MEMORY_DIR_NAME = '.ecorex-memory';
 const PROJECT_MEMORY_FILE_NAME = 'project-memory.md';
 const PROJECT_CONTEXT_FILE_NAME = 'project-context.json';
+const PROJECT_FILES_DIR_NAME = 'files';
 const LOG_FILE_NAME = 'ecorex-agent.log';
 const MAX_LOG_LINES = 200;
 const MAX_CRASH_EVENTS = 50;
@@ -169,6 +170,8 @@ const AUTH_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const AUTH_SESSION_REFRESH_THRESHOLD_MS = 30 * 60 * 1000;
 const MAX_PROJECTS = 100;
 const MAX_PROJECT_STATS_ITEMS = 2000;
+const MAX_PROJECT_FILE_SELECTION = 20;
+const MAX_PROJECT_FILE_BYTES = 100 * 1024 * 1024;
 const FULL_ACCESS_PERMISSION_MODE = 'fullAccess';
 const FULL_ACCESS_CLAUDE_FLAG = '--dangerously-skip-permissions';
 const CLAUDE_AUTO_ALLOWED_TOOL_SET = 'WebFetch,WebSearch,Task,TodoRead,TodoWrite,mcp__*';
@@ -2942,10 +2945,10 @@ function readModelProfilesFile() {
         baseUrl,
         apiKey: apiKeyItem,
         model: normalizeModelProfileText(rawProfile.model, 'model', { maxLength: 160 }),
-        imageModel: normalizeModelProfileText(rawProfile.imageModel || '', 'imageModel', {
+        imageModel: normalizeImageModelName(normalizeModelProfileText(rawProfile.imageModel || '', 'imageModel', {
           required: false,
           maxLength: 160
-        }),
+        })),
         isActive: Boolean(rawProfile.isActive),
         createdAt: typeof rawProfile.createdAt === 'string' ? rawProfile.createdAt : null,
         updatedAt: typeof rawProfile.updatedAt === 'string' ? rawProfile.updatedAt : null
@@ -2976,10 +2979,10 @@ function writeModelProfilesFile(store = {}) {
       baseUrl: normalizeModelBaseUrl(profile.baseUrl),
       apiKey: profile.apiKey || null,
       model: normalizeModelProfileText(profile.model, 'model', { maxLength: 160 }),
-      imageModel: normalizeModelProfileText(profile.imageModel || '', 'imageModel', {
+      imageModel: normalizeImageModelName(normalizeModelProfileText(profile.imageModel || DEFAULT_IMAGE_MODEL, 'imageModel', {
         required: false,
         maxLength: 160
-      }),
+      })),
       isActive: Boolean(profile.isActive),
       createdAt: profile.createdAt || now,
       updatedAt: profile.updatedAt || now
@@ -3024,8 +3027,8 @@ function publicModelProfile(profile = {}, options = {}) {
     apiKeyMasked: profile.apiKey?.masked || (configured ? maskSecret(value) : ''),
     model: profile.model,
     modelName: profile.model,
-    imageModel: profile.imageModel || '',
-    imageModelName: profile.imageModel || '',
+    imageModel: profile.imageModel ? normalizeImageModelName(profile.imageModel) : '',
+    imageModelName: profile.imageModel ? normalizeImageModelName(profile.imageModel) : '',
     isActive: Boolean(profile.isActive),
     active: Boolean(profile.isActive),
     current: Boolean(profile.isActive),
@@ -3076,7 +3079,7 @@ function modelCapabilityOptions() {
         value: profile.model,
         label: profile.label ? `${profile.label} · ${profile.model}` : profile.model,
         profileName: profile.name,
-        imageModel: profile.imageModel || '',
+        imageModel: profile.imageModel ? normalizeImageModelName(profile.imageModel) : '',
         isActive: Boolean(profile.isActive)
       });
     }
@@ -3097,7 +3100,7 @@ function modelProfileEnvForModel(model) {
     const env = {
       ECOREX_ACTIVE_MODEL: profile.model,
       ECOREX_MODEL_PROFILE: profile.name,
-      ECOREX_IMAGE_MODEL: profile.imageModel || ''
+      ECOREX_IMAGE_MODEL: normalizeImageModelName(profile.imageModel || DEFAULT_IMAGE_MODEL)
     };
     if (profile.baseUrl) {
       env.ANTHROPIC_BASE_URL = profile.baseUrl;
@@ -3153,8 +3156,8 @@ function saveModelProfile(payload = {}) {
       ? normalizeModelProfileText(modelValue, 'model', { maxLength: 160 })
       : existing?.model,
     imageModel: imageModelValue !== undefined
-      ? normalizeModelProfileText(imageModelValue || '', 'imageModel', { required: false, maxLength: 160 })
-      : existing?.imageModel || '',
+      ? normalizeImageModelName(normalizeModelProfileText(imageModelValue || DEFAULT_IMAGE_MODEL, 'imageModel', { required: false, maxLength: 160 }))
+      : normalizeImageModelName(existing?.imageModel || DEFAULT_IMAGE_MODEL),
     isActive: Boolean(existing?.isActive),
     createdAt: existing?.createdAt || now,
     updatedAt: now
@@ -3246,8 +3249,8 @@ function modelProfileFromTestPayload(payload = {}) {
       ? normalizeModelProfileText(modelValue, 'model', { maxLength: 160 })
       : stored?.model,
     imageModel: imageModelValue !== undefined
-      ? normalizeModelProfileText(imageModelValue || '', 'imageModel', { required: false, maxLength: 160 })
-      : stored?.imageModel || ''
+      ? normalizeImageModelName(normalizeModelProfileText(imageModelValue || DEFAULT_IMAGE_MODEL, 'imageModel', { required: false, maxLength: 160 }))
+      : normalizeImageModelName(stored?.imageModel || DEFAULT_IMAGE_MODEL)
   };
 }
 
@@ -3321,8 +3324,8 @@ async function testModelProfile(payload = {}) {
     latency: Date.now() - startedAt,
     latencyMs: Date.now() - startedAt,
     model: result.model || profile.model,
-    imageModel: profile.imageModel || DEFAULT_IMAGE_MODEL,
-    imageModelName: profile.imageModel || DEFAULT_IMAGE_MODEL,
+    imageModel: normalizeImageModelName(profile.imageModel || DEFAULT_IMAGE_MODEL),
+    imageModelName: normalizeImageModelName(profile.imageModel || DEFAULT_IMAGE_MODEL),
     endpoint: result.endpoint,
     attempts: result.attempts,
     fallbackUsed: result.endpoint === 'responses',
@@ -3348,9 +3351,9 @@ function imageBodyFromPayload(payload = {}, profile = {}) {
     'user'
   ]);
   const body = {
-    model: normalizeModelProfileText(input.model || profile.imageModel || DEFAULT_IMAGE_MODEL, 'imageModel', {
+    model: normalizeImageModelName(normalizeModelProfileText(input.model || profile.imageModel || DEFAULT_IMAGE_MODEL, 'imageModel', {
       maxLength: 160
-    }),
+    })),
     prompt
   };
   for (const key of allowedKeys) {
@@ -3377,7 +3380,7 @@ async function generateModelProfileImage(payload = {}) {
     latencyMs: result.totalLatencyMs || result.latencyMs,
     endpoint: String(result.endpoint || '').replace(/^\/+/, ''),
     attempts: result.attempts,
-    model: result.model || profile.imageModel || DEFAULT_IMAGE_MODEL,
+    model: normalizeImageModelName(result.model || profile.imageModel || DEFAULT_IMAGE_MODEL),
     profileName: profile.name,
     responseBytes: result.responseBytes,
     responseTruncated: Boolean(result.responseTruncated),
@@ -3740,7 +3743,8 @@ function normalizeProjectBusinessFields(raw = {}) {
     budget: sanitizeProjectText(raw.budget || raw.spend || '', 'project budget', 80),
     period: sanitizeProjectText(raw.period || raw.timeline || raw.cycle || '', 'project period', 100),
     deliverables: sanitizeProjectDeliverables(raw.deliverables || raw.outputs || raw.assets),
-    description: sanitizeProjectText(raw.description || raw.summary || raw.note || '', 'project description', 260)
+    description: sanitizeProjectText(raw.description || raw.summary || raw.note || '', 'project description', 260),
+    instructions: sanitizeProjectText(raw.instructions || raw.systemInstructions || raw.projectInstructions || '', 'project instructions', 5000)
   };
   if (!fields.description) {
     fields.description = [fields.client, fields.goal, fields.industry || fields.scenario].filter(Boolean).join(' · ');
@@ -3955,10 +3959,11 @@ function projectMemoryTemplate(project = {}) {
     `- 行业/场景：${[project.industry, project.scenario].filter(Boolean).join(' / ') || '待补充'}`,
     `- 预算/周期：${[project.budget, project.period].filter(Boolean).join(' / ') || '待补充'}`,
     `- 交付物：${Array.isArray(project.deliverables) && project.deliverables.length ? project.deliverables.join('、') : '待补充'}`,
+    project.instructions ? `- 项目指令：${project.instructions}` : '',
     '',
     '## 长期记忆',
     '- '
-  ];
+  ].filter((line) => line !== '');
   return `${lines.join('\n')}\n`;
 }
 
@@ -3984,6 +3989,7 @@ function ensureProjectMemory(project = {}) {
     budget: project.budget || '',
     period: project.period || '',
     deliverables: Array.isArray(project.deliverables) ? project.deliverables : [],
+    instructions: project.instructions || '',
     updatedAt: new Date().toISOString(),
     memoryFile: PROJECT_MEMORY_FILE_NAME
   });
@@ -4010,6 +4016,7 @@ function projectContextFromProject(workspaceRoot, project) {
     budget: project.budget || '',
     period: project.period || '',
     deliverables: Array.isArray(project.deliverables) ? project.deliverables : [],
+    instructions: project.instructions || '',
     description: project.description || '',
     projectPath: project.projectPath,
     pathLabel: publicWorkspacePathLabel(workspaceRoot, project.projectPath),
@@ -4033,6 +4040,7 @@ function publicProjectSummary(project, workspaceRoot, options = {}) {
     budget: project.budget || '',
     period: project.period || '',
     deliverables: Array.isArray(project.deliverables) ? project.deliverables : [],
+    instructions: project.instructions || '',
     description: project.description || '',
     pathLabel: publicWorkspacePathLabel(workspaceRoot, project.projectPath),
     memoryLabel,
@@ -4127,6 +4135,7 @@ function createProject(payload = {}) {
       budget: payload.budget,
       period: payload.period,
       deliverables: payload.deliverables,
+      instructions: payload.instructions,
       description: payload.description
     }),
     createdAt: now,
@@ -4210,6 +4219,7 @@ function updateProject(payload = {}) {
     budget: Object.prototype.hasOwnProperty.call(payload, 'budget') ? payload.budget : project.budget,
     period: Object.prototype.hasOwnProperty.call(payload, 'period') ? payload.period : project.period,
     deliverables: Object.prototype.hasOwnProperty.call(payload, 'deliverables') ? payload.deliverables : project.deliverables,
+    instructions: Object.prototype.hasOwnProperty.call(payload, 'instructions') ? payload.instructions : project.instructions,
     description: Object.prototype.hasOwnProperty.call(payload, 'description') ? payload.description : project.description,
     createdAt: project.createdAt,
     updatedAt: now
@@ -4283,6 +4293,168 @@ function projectStatus(payload = {}) {
           stats: includeStats ? active.stats : undefined
         }
       : null
+  };
+}
+
+function projectFilesDir(projectPath) {
+  const dir = path.join(projectPath, PROJECT_FILES_DIR_NAME);
+  if (!isPathInside(projectPath, dir)) throw new Error('Project files path escapes project.');
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function projectFileEntryFromPath(workspaceRoot, projectPath, filePath) {
+  const target = path.resolve(filePath);
+  if (!isPathInside(projectPath, target)) throw new Error('Project file path escapes project.');
+  const stat = fs.statSync(target);
+  if (!stat.isFile()) return null;
+  const name = path.basename(target);
+  return {
+    id: crypto.createHash('sha256').update(`${target}:${stat.size}:${stat.mtimeMs}`).digest('hex').slice(0, 16),
+    name: redactSensitiveText(name).slice(0, 240),
+    path: target,
+    pathLabel: publicWorkspacePathLabel(workspaceRoot, target),
+    type: attachmentMimeFromPath(target) || filePreviewMimeFromExtension(path.extname(target).toLowerCase()),
+    sizeBytes: stat.size,
+    sizeMb: Number((stat.size / 1024 / 1024).toFixed(2)),
+    modifiedAt: stat.mtime.toISOString()
+  };
+}
+
+function resolveProjectFileTarget(workspaceRoot, project, payload = {}) {
+  const rawPath = payload.path || payload.filePath || payload.pathLabel || '';
+  if (!rawPath) throw new Error('Project file path is required.');
+  const target = candidatePreviewPath(rawPath, workspaceRoot);
+  const filesDir = projectFilesDir(project.projectPath);
+  if (!isPathInside(filesDir, target)) throw new Error('Project file is outside the project files directory.');
+  if (pathContainsSymlink(filesDir, target) || fs.lstatSync(target).isSymbolicLink()) {
+    throw new Error('Project file path crosses a symbolic link.');
+  }
+  return { target, filesDir };
+}
+
+function listProjectFiles(payload = {}) {
+  const { workspaceRoot, project } = resolveProject(payload, { allowArchived: true });
+  const dir = projectFilesDir(project.projectPath);
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && !entry.isSymbolicLink())
+      .map((entry) => {
+        try {
+          return projectFileEntryFromPath(workspaceRoot, project.projectPath, path.join(dir, entry.name));
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean)
+      .sort((left, right) => new Date(right.modifiedAt).getTime() - new Date(left.modifiedAt).getTime())
+      .slice(0, 200);
+  } catch {
+    entries = [];
+  }
+  return {
+    ok: true,
+    projectId: project.id,
+    files: entries
+  };
+}
+
+function uniqueProjectFileTarget(dir, sourceName) {
+  const parsed = path.parse(safeAttachmentName(sourceName || 'project-file'));
+  const base = (parsed.name || 'project-file').replace(/[<>:"/\\|?*\x00-\x1f]+/g, '-').slice(0, 120) || 'project-file';
+  const ext = (parsed.ext || '').replace(/[<>:"/\\|?*\x00-\x1f]+/g, '').slice(0, 24);
+  for (let index = 0; index < 100; index += 1) {
+    const name = index === 0 ? `${base}${ext}` : `${base}-${index + 1}${ext}`;
+    const target = path.resolve(dir, name);
+    if (!isPathInside(dir, target)) throw new Error('Project file target escapes project.');
+    if (!fs.existsSync(target)) return target;
+  }
+  throw new Error('Unable to allocate project file name.');
+}
+
+async function addProjectFiles(event, payload = {}) {
+  const input = optionalObjectPayload(payload, 'project file payload');
+  const { workspaceRoot, project } = resolveProject(input, { allowArchived: false });
+  const dir = projectFilesDir(project.projectPath);
+  let filePaths = Array.isArray(input.files)
+    ? input.files.map((item) => typeof item === 'string' ? item : item?.path || item?.filePath).filter(Boolean)
+    : [];
+  if (!filePaths.length) {
+    const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender) || mainWindow, {
+      title: '选择要加入项目记忆的文件',
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        { name: '项目资料', extensions: ['pdf', 'docx', 'pptx', 'xlsx', 'xlsm', 'csv', 'txt', 'md', 'json', 'html', 'png', 'jpg', 'jpeg', 'webp'] },
+        { name: '所有文件', extensions: ['*'] }
+      ]
+    });
+    if (result.canceled || !result.filePaths?.length) {
+      return { ok: true, canceled: true, files: [] };
+    }
+    filePaths = result.filePaths;
+  }
+
+  const copied = [];
+  const skipped = [];
+  for (const sourcePath of filePaths.slice(0, MAX_PROJECT_FILE_SELECTION)) {
+    try {
+      const source = path.resolve(sourcePath);
+      const linkStat = fs.lstatSync(source);
+      if (!linkStat.isFile() || linkStat.isSymbolicLink()) throw new Error('不是安全文件');
+      const stat = fs.statSync(source);
+      if (stat.size > MAX_PROJECT_FILE_BYTES) throw new Error('文件超过 100MB');
+      const target = uniqueProjectFileTarget(dir, path.basename(source));
+      fs.copyFileSync(source, target);
+      copied.push(projectFileEntryFromPath(workspaceRoot, project.projectPath, target));
+    } catch (error) {
+      skipped.push({
+        name: path.basename(String(sourcePath || 'file')),
+        reason: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+  const now = new Date().toISOString();
+  writeProjectMetadata(project.projectPath, { ...project, updatedAt: now });
+  return {
+    ok: true,
+    canceled: false,
+    projectId: project.id,
+    files: copied,
+    skipped
+  };
+}
+
+async function openProjectFile(payload = {}) {
+  const input = optionalObjectPayload(payload, 'project file open payload');
+  const { workspaceRoot, project } = resolveProject(input, { allowArchived: true });
+  const { target } = resolveProjectFileTarget(workspaceRoot, project, input);
+  const stat = fs.statSync(target);
+  if (!stat.isFile()) throw new Error('Project file is not a file.');
+  const opened = await openPathSafely(target);
+  return {
+    ok: Boolean(opened.opened),
+    opened: Boolean(opened.opened),
+    method: 'openPath',
+    name: redactSensitiveText(path.basename(target)).slice(0, 240),
+    pathLabel: publicWorkspacePathLabel(workspaceRoot, target),
+    error: opened.error || undefined
+  };
+}
+
+function removeProjectFile(payload = {}) {
+  const input = optionalObjectPayload(payload, 'project file remove payload');
+  const { workspaceRoot, project } = resolveProject(input, { allowArchived: false });
+  const { target } = resolveProjectFileTarget(workspaceRoot, project, input);
+  const stat = fs.statSync(target);
+  if (!stat.isFile()) throw new Error('Project file is not a file.');
+  fs.rmSync(target, { force: true });
+  writeProjectMetadata(project.projectPath, { ...project, updatedAt: new Date().toISOString() });
+  return {
+    ok: true,
+    removed: true,
+    projectId: project.id,
+    pathLabel: publicWorkspacePathLabel(workspaceRoot, target)
   };
 }
 
@@ -4870,7 +5042,9 @@ function agentSystemPromptForProject(projectContext) {
       ? `预算/周期：${[projectContext.budget, projectContext.period].filter(Boolean).join(' / ')}`
       : '',
     projectContext.deliverables?.length ? `交付物：${projectContext.deliverables.join('、')}` : '',
+    projectContext.instructions ? `项目指令：${projectContext.instructions}` : '',
     `项目目录：${projectContext.pathLabel}`,
+    `项目资料目录：${publicWorkspacePathLabel(projectContext.projectPath, path.join(projectContext.projectPath, PROJECT_FILES_DIR_NAME))}`,
     `项目记忆：${projectContext.memoryLabel}`
   ].filter(Boolean);
   const memoryPreview = readProjectMemoryPreview(projectContext);
@@ -4896,8 +5070,10 @@ function projectEnvForAgent(projectContext) {
     ECOREX_PROJECT_SCENARIO: projectContext.scenario || '',
     ECOREX_PROJECT_BUDGET: projectContext.budget || '',
     ECOREX_PROJECT_PERIOD: projectContext.period || '',
+    ECOREX_PROJECT_INSTRUCTIONS: projectContext.instructions || '',
     ECOREX_PROJECT_MEMORY_FILE: PROJECT_MEMORY_FILE_NAME,
     ECOREX_PROJECT_MEMORY_DIR: PROJECT_MEMORY_DIR_NAME,
+    ECOREX_PROJECT_FILES_DIR: PROJECT_FILES_DIR_NAME,
     ECOREX_PROJECT_MEMORY_LABEL: projectContext.memoryLabel || ''
   };
 }
@@ -5454,7 +5630,7 @@ function toolLedgerFinishEvent(sessionId, toolUseId, result = {}) {
   if (rawToolUseId) sessionMap.delete(rawToolUseId);
   if (!sessionMap.size) agentToolLedger.delete(String(sessionId || 'global'));
   const now = Date.now();
-  const toolName = result.toolName || started?.toolName || 'tool';
+  const toolName = started?.toolName || result.toolName || 'tool';
   const failed = Boolean(result.failed || result.isError || result.error);
   return {
     type: 'tool',
@@ -5490,6 +5666,16 @@ function safeToolLedger(ledger = {}) {
     endedAt: ledger.endedAt || undefined,
     durationMs: Number.isFinite(Number(ledger.durationMs)) ? Number(ledger.durationMs) : undefined
   };
+}
+
+function safeToolLedgerValue(ledger) {
+  if (Array.isArray(ledger)) {
+    return ledger
+      .map((item) => safeToolLedger(item))
+      .filter(Boolean)
+      .slice(0, 20);
+  }
+  return safeToolLedger(ledger);
 }
 
 function inferredToolLedgerFromPayload(sessionId, payload = {}, status = '') {
@@ -5556,7 +5742,7 @@ function normalizeAgentEvent(payload = {}, options = {}) {
   };
 
   if (safeTools) event.tools = safeTools;
-  if (ledger) event.ledger = safeToolLedger(ledger);
+  if (ledger) event.ledger = safeToolLedgerValue(ledger);
   if (event.toolName) event.toolName = publicAgentToolLabel(event.toolName);
   if (options.includeBackend !== true) {
     delete event.permissionCliMode;
@@ -9641,7 +9827,7 @@ function normalizeClaudeEvent(sessionId, json) {
     const content = json.message?.content || json.content || [];
     const tools = Array.isArray(content)
       ? content
-          .filter((block) => block?.type === 'tool_use')
+          .filter((block) => block?.type === 'tool_use' || block?.type === 'server_tool_use')
           .map((block) => ({
             id: block.id,
             name: block.name || 'tool',
@@ -9653,7 +9839,7 @@ function normalizeClaudeEvent(sessionId, json) {
         .map((block) => {
           if (typeof block === 'string') return block;
           if (block?.type === 'text') return block.text;
-          if (block?.type === 'tool_use') return '';
+          if (block?.type === 'tool_use' || block?.type === 'server_tool_use') return '';
           return '';
         })
           .join('')
@@ -9697,23 +9883,42 @@ function normalizeClaudeEvent(sessionId, json) {
       : [];
     if (toolResults.length) {
       const failed = toolResults.some((block) => block.is_error);
-      const resultInfo = json.toolUseResult || {};
-      const resultToolName =
-        resultInfo.commandName === 'using-superpowers'
-          ? 'SKILLS'
-          : resultInfo.query
-            ? 'WebSearch'
-            : resultInfo.commandName || '';
+      const resultInfos = Array.isArray(json.toolUseResult)
+        ? json.toolUseResult
+        : [json.toolUseResult || {}];
+      const toolResultText = (block = {}) => {
+        if (typeof block.content === 'string') return block.content;
+        if (Array.isArray(block.content)) {
+          return block.content.map((item) => item?.text || '').join('\n');
+        }
+        return '';
+      };
+      const resultToolNameFor = (block = {}, index = 0) => {
+        const match = resultInfos.find((item) =>
+          item &&
+          (item.tool_use_id === block.tool_use_id || item.toolUseId === block.tool_use_id || item.id === block.tool_use_id)
+        ) || resultInfos[index] || resultInfos[0] || {};
+        if (match.commandName === 'using-superpowers') return 'SKILLS';
+        if (match.query) return 'WebSearch';
+        return match.commandName || match.name || match.toolName || '';
+      };
+      const resultToolName = resultToolNameFor(toolResults[0], 0);
       const outputText = publicAgentText(toolResults
-        .map((block) => {
-          if (typeof block.content === 'string') return block.content;
-          if (Array.isArray(block.content)) {
-            return block.content.map((item) => item?.text || '').join('\n');
-          }
-          return '';
-        })
+        .map(toolResultText)
         .filter(Boolean)
         .join('\n'));
+      const finishLedgers = toolResults.map((block, index) => {
+        const blockOutputText = publicAgentText(toolResultText(block));
+        const blockFailed = Boolean(block.is_error);
+        const blockToolName = resultToolNameFor(block, index);
+        return toolLedgerFinishEvent(sessionId, block.tool_use_id, {
+          toolName: blockToolName,
+          failed: blockFailed,
+          output: blockOutputText,
+          text: blockOutputText,
+          error: blockFailed ? blockOutputText : ''
+        });
+      }).filter(Boolean);
       const resultLabel = resultToolName ? publicAgentToolLabel(resultToolName) : '工具返回结果';
       return {
         ...base,
@@ -9721,13 +9926,7 @@ function normalizeClaudeEvent(sessionId, json) {
         status: failed ? 'failed' : 'completed',
         toolName: resultLabel,
         toolUseId: toolResults[0].tool_use_id,
-        ledger: toolLedgerFinishEvent(sessionId, toolResults[0].tool_use_id, {
-          toolName: resultToolName || resultLabel,
-          failed,
-          output: outputText,
-          text: outputText,
-          error: failed ? outputText : ''
-        }),
+        ledger: finishLedgers.length === 1 ? finishLedgers[0] : finishLedgers,
         text: outputText
       };
     }
@@ -9876,7 +10075,6 @@ function runAgent(payload = {}, options = {}) {
     const permissionSnapshot = runtimeActor.permissionSnapshot;
     const args = [
       ...claude.baseArgs,
-      '--bare',
       '--print',
       '--output-format',
       'stream-json',
@@ -9919,15 +10117,16 @@ function runAgent(payload = {}, options = {}) {
     }
 
     const modelProfileEnv = modelProfileEnvForModel(model);
+    const runtimeEnv = {
+      ...isolatedAgentRuntimeEnv(),
+      ...modelProfileEnv,
+      ...projectEnvForAgent(projectContext),
+      CLAUDE_CODE_NO_FLICKER: '1',
+      ...(process.platform === 'win32' ? { CLAUDE_CODE_USE_POWERSHELL_TOOL: '1' } : {})
+    };
     const child = spawn(claude.command, args, {
       cwd,
-      env: filteredAgentEnv({
-        ...isolatedAgentRuntimeEnv(),
-        ...modelProfileEnv,
-        ...projectEnvForAgent(projectContext),
-        CLAUDE_CODE_NO_FLICKER: '1',
-        CLAUDE_CODE_SIMPLE: '1'
-      }),
+      env: filteredAgentEnv(runtimeEnv),
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
       shell: false
@@ -10310,6 +10509,10 @@ handleSafe('project:archive', (_event, payload) => archiveProject(payload), { au
 handleSafe('project:delete', (_event, payload) => deleteProject(payload), { authRequired: true });
 handleSafe('project:status', (_event, payload) => projectStatus(payload), { authRequired: true });
 handleSafe('project:open-folder', (_event, payload) => openProjectFolder(payload), { authRequired: true });
+handleSafe('project:list-files', (_event, payload) => listProjectFiles(payload), { authRequired: true });
+handleSafe('project:add-files', (event, payload) => addProjectFiles(event, payload), { authRequired: true });
+handleSafe('project:open-file', (_event, payload) => openProjectFile(payload), { authRequired: true });
+handleSafe('project:remove-file', (_event, payload) => removeProjectFile(payload), { authRequired: true });
 handleSafe('mcp:list', (_event, payload) => collectMcpStatus(payload), { authRequired: true });
 handleSafe('mcp:status', (_event, payload) => collectMcpStatus(payload), { authRequired: true });
 handleSafe('mcp:refresh', (_event, payload) => collectMcpStatus(payload), { authRequired: true });

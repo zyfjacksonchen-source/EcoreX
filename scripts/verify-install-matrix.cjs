@@ -6,7 +6,8 @@ const path = require('path');
 
 const rootDir = path.resolve(__dirname, '..');
 const releaseDir = path.join(rootDir, 'release');
-const reportPath = path.join(releaseDir, 'install-matrix-report.json');
+const reportDir = path.join(rootDir, 'reports', 'qa');
+const reportPath = path.join(reportDir, 'install-matrix-report.json');
 
 const platforms = [
   {
@@ -50,7 +51,7 @@ function fileSummary(file) {
 }
 
 function main() {
-  fs.mkdirSync(releaseDir, { recursive: true });
+  fs.mkdirSync(reportDir, { recursive: true });
   const artifacts = fs
     .readdirSync(releaseDir, { withFileTypes: true })
     .filter((entry) => entry.isFile())

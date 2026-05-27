@@ -6,7 +6,8 @@ const path = require('path');
 
 const rootDir = path.resolve(__dirname, '..');
 const releaseDir = path.join(rootDir, 'release');
-const reportPath = path.join(releaseDir, 'security-audit-report.json');
+const reportDir = path.join(rootDir, 'reports', 'qa');
+const reportPath = path.join(reportDir, 'security-audit-report.json');
 const strict = process.argv.includes('--strict') || process.env.ECOREX_AUDIT_STRICT === '1';
 const secretScanMaxBytes = Number(process.env.ECOREX_SECRET_SCAN_MAX_BYTES || 1024 * 1024);
 const secretScanRoots = ['electron', 'src', 'scripts', 'tests', 'release'];
@@ -243,7 +244,7 @@ function runSecretLeakScan() {
 }
 
 function main() {
-  fs.mkdirSync(releaseDir, { recursive: true });
+  fs.mkdirSync(reportDir, { recursive: true });
   const prod = runAudit(['--omit=dev']);
   const all = runAudit([]);
   const securityChecks = staticSecurityChecks();
