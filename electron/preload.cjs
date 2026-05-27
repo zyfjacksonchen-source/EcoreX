@@ -37,6 +37,15 @@ contextBridge.exposeInMainWorld('ecorex', {
   authLogin: (payload) => safeInvoke('auth:login', payload).then(rememberAuth),
   authLogout: () => safeInvoke('auth:logout', { authToken }).then(rememberAuth),
   getAuthStatus: () => safeInvoke('auth:status', { includeToken: !authToken, refresh: true }).then(rememberAuth),
+  listUsers: (payload) => safeInvoke('auth:users:list', withAuth(payload)),
+  createUser: (payload) => safeInvoke('auth:user:create', withAuth(payload)),
+  updateUser: (payload) => safeInvoke('auth:user:update', withAuth(payload)),
+  deleteUser: (payload) => safeInvoke('auth:user:delete', withAuth(typeof payload === 'string' ? { id: payload } : payload)),
+  updateProfile: (payload) => safeInvoke('auth:profile:update', withAuth(payload)).then((result) => {
+    if (result?.auth) rememberAuth(result.auth);
+    return result;
+  }),
+  runEnterpriseAction: (payload) => safeInvoke('enterprise:action', withAuth(payload)),
   getBackendStatus: (payload) => safeInvoke('backend:status', payload),
   getCapabilities: () => safeInvoke('backend:capabilities'),
   getPermissionModes: () => safeInvoke('backend:capabilities').then((result) => result?.permissionModes || []),
@@ -55,6 +64,8 @@ contextBridge.exposeInMainWorld('ecorex', {
   generateModelImage: (payload) => ipcRenderer.invoke('modelAdapter:generateImage', withAuth(payload)).catch((error) => ({ ok: false, error: publicError(error), channel: 'modelAdapter:generateImage' })),
   getSettings: () => safeInvoke('settings:get', { authToken }),
   updateSettings: (payload) => safeInvoke('settings:update', withAuth(payload)),
+  listEvaluations: (payload) => safeInvoke('evaluation:list', withAuth(payload)),
+  runEvaluations: (payload) => safeInvoke('evaluation:run', withAuth(payload)),
   getStartupHealth: (payload) => safeInvoke('startup:health', withAuth(payload)),
   getDiagnostics: () => safeInvoke('diagnostics:get', { authToken }),
   exportDiagnosticsPackage: (payload) => safeInvoke('diagnostics:export', withAuth(payload)),
@@ -72,6 +83,8 @@ contextBridge.exposeInMainWorld('ecorex', {
   ingestAttachments: (payload) => safeInvoke('attachment:ingest', withAuth(payload)),
   selectAttachmentFiles: (payload) => safeInvoke('attachment:select-files', withAuth(payload)),
   openAttachmentFile: (payload) => safeInvoke('attachment:open-file', withAuth(typeof payload === 'string' ? { path: payload } : payload)),
+  openArtifactFile: (payload) => safeInvoke('artifact:open-file', withAuth(typeof payload === 'string' ? { path: payload } : payload)),
+  openGeneratedFile: (payload) => safeInvoke('artifact:open-file', withAuth(typeof payload === 'string' ? { path: payload } : payload)),
   listProjects: (payload) => safeInvoke('project:list', withAuth(payload)),
   createProject: (payload) => safeInvoke('project:create', withAuth(payload)),
   switchProject: (payload) => safeInvoke('project:switch', withAuth(typeof payload === 'string' ? { id: payload } : payload)),

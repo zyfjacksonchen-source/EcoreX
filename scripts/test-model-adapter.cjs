@@ -5,7 +5,9 @@ const {
   endpointUrl,
   inferModelCapabilities,
   normalizeOpenAIResponse,
-  parseOpenAIStream
+  parseOpenAIStream,
+  retryDelayMs,
+  shouldRetry
 } = require('../electron/model-adapter.cjs');
 
 async function main() {
@@ -100,6 +102,12 @@ async function main() {
   assert.equal(inferred.supportsImages, true);
   assert.equal(inferred.supportsStreaming, true);
   assert.ok(inferred.contextWindow >= 128000);
+
+  assert.equal(shouldRetry({ statusCode: 429 }, 0, 2), true);
+  assert.equal(shouldRetry({ statusCode: 401 }, 0, 2), false);
+  assert.equal(shouldRetry({ networkError: true }, 2, 2), false);
+  const retryDelay = retryDelayMs(2, { baseDelayMs: 500, maxDelayMs: 6000, jitterRatio: 0.35 });
+  assert.ok(retryDelay >= 1000 && retryDelay <= 3000);
 
   const imageCalls = [];
   const imageAdapter = createModelAdapter({

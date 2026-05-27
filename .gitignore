@@ -17,9 +17,8 @@ release/real-agent-stress-*.json
 /index-*.css
 /main.cjs
 
-# Large local preview runtime prepared by scripts/prepare-kkfileview.cjs.
-# Commit the integration scripts, not the generated JRE/LibreOffice/vendor payload.
-vendor/kkfileview/
+# Keep full upstream preview checkouts outside this repository; only commit/copy
+# the small static vendor/vue-office runtime produced by prepare:vue-office.
 
 # Local secrets and transient logs.
 .env

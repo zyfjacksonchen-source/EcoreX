@@ -62,6 +62,42 @@ async function writeCrashSummary(electronApp, events) {
   return crashFile;
 }
 
+async function writeManagedSkillStateWithBom(electronApp, packs) {
+  const userData = await appUserDataPath(electronApp);
+  const configDir = path.join(userData, 'agent-runtime-config');
+  const packRoot = path.join(configDir, 'skill-packs');
+  fs.mkdirSync(packRoot, { recursive: true });
+  const rows = packs.map((pack) => {
+    const installPath = path.join(packRoot, pack.name);
+    fs.mkdirSync(installPath, { recursive: true });
+    return {
+      id: `skillpack-${pack.name}`,
+      name: pack.name,
+      title: pack.title || pack.name,
+      version: pack.version || '1.0.0',
+      description: pack.description || `${pack.name} E2E capability`,
+      category: pack.category || 'EcoreX',
+      enabled: pack.enabled !== false,
+      installed: true,
+      installPath,
+      sourcePath: pack.sourcePath || installPath,
+      sourceKind: pack.sourceKind || 'plugin',
+      generatedWrapper: Boolean(pack.generatedWrapper),
+      mcpConfig: pack.mcpConfig || null,
+      installedAt: '2026-05-26T00:00:00.000Z',
+      lastUpdated: '2026-05-26T00:00:00.000Z'
+    };
+  });
+  fs.writeFileSync(
+    path.join(configDir, 'skill-packs.json'),
+    Buffer.concat([
+      Buffer.from([0xef, 0xbb, 0xbf]),
+      Buffer.from(`${JSON.stringify(rows, null, 2)}\n`, 'utf8')
+    ])
+  );
+  return { userData, rows };
+}
+
 async function startChatMediaServer() {
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lS5nWQAAAABJRU5ErkJggg==', 'base64');
   const server = http.createServer((request, response) => {
@@ -272,6 +308,276 @@ test.describe('EcoreX Agent Electron E2E', () => {
     await expect(healthPanel.getByText('模型配置', { exact: true })).toBeVisible();
   });
 
+  test('manages local users, roles and enterprise actions from system settings', async ({ ecorex }) => {
+    const { page } = ecorex;
+    await login(page);
+
+    await page.locator('.profile-trigger').click();
+    await page.locator('.profile-menu-grid').getByRole('button', { name: /系统设置/ }).click();
+    await page.locator('[data-testid="system-settings-tab-users"]').click();
+    await expect(page.locator('[data-testid="enterprise-users-page"]')).toBeVisible();
+    await expect(page.locator('[data-testid="users-admin-panel"]')).toBeVisible();
+
+    const ownerResult = await page.evaluate(async () => {
+      const listBefore = await window.ecorex.listUsers();
+      const profile = await window.ecorex.updateProfile({ displayName: 'E2E Owner', title: '超级管理员', team: 'QA' });
+      const admin = await window.ecorex.createUser({
+        email: 'e2e.admin@ecorex.local',
+        displayName: 'E2E Admin',
+        role: 'admin',
+        password: 'EcoreX123!'
+      });
+      const member = await window.ecorex.createUser({
+        email: 'e2e.member@ecorex.local',
+        displayName: 'E2E Member',
+        role: 'user',
+        password: 'EcoreX123!'
+      });
+      const enterprise = await window.ecorex.runEnterpriseAction({ action: 'syncMcp', summary: 'E2E sync' });
+      const listAfter = await window.ecorex.listUsers();
+      return { listBefore, profile, admin, member, enterprise, listAfter };
+    });
+
+    expect(ownerResult.listBefore.users.some((user) => user.role === 'super_admin')).toBe(true);
+    expect(ownerResult.profile.ok).toBe(true);
+    expect(ownerResult.admin.ok).toBe(true);
+    expect(ownerResult.member.ok).toBe(true);
+    expect(ownerResult.enterprise.ok).toBe(true);
+    expect(ownerResult.listAfter.canManageUsers).toBe(true);
+    expect(ownerResult.listAfter.users.some((user) => user.email === 'e2e.admin@ecorex.local' && user.role === 'admin')).toBe(true);
+
+    await page.evaluate(async () => {
+      await window.ecorex.authLogout();
+      window.dispatchEvent(new Event('ecorex:auth-updated'));
+    });
+    await expect(page.locator('[data-testid="login-form"], form.login-panel').first()).toBeVisible({ timeout: 10_000 });
+    await login(page, { email: 'e2e.member@ecorex.local', password: 'EcoreX123!' });
+
+    const memberResult = await page.evaluate(async () => {
+      const listed = await window.ecorex.listUsers();
+      const ownProfile = await window.ecorex.updateProfile({ displayName: 'Member Self Update' });
+      const forbiddenUser = await window.ecorex.createUser({
+        email: 'blocked@ecorex.local',
+        role: 'admin',
+        password: 'EcoreX123!'
+      });
+      const forbiddenEnterprise = await window.ecorex.runEnterpriseAction({ action: 'pushSkill', summary: 'blocked' });
+      return { listed, ownProfile, forbiddenUser, forbiddenEnterprise };
+    });
+
+    expect(memberResult.listed.ok).toBe(true);
+    expect(memberResult.listed.canManageUsers).toBe(false);
+    expect(memberResult.listed.users).toHaveLength(1);
+    expect(memberResult.listed.users[0].email).toBe('e2e.member@ecorex.local');
+    expect(memberResult.ownProfile.ok).toBe(true);
+    expect(memberResult.forbiddenUser.forbidden || memberResult.forbiddenUser.ok === false).toBeTruthy();
+    expect(memberResult.forbiddenEnterprise.forbidden || memberResult.forbiddenEnterprise.ok === false).toBeTruthy();
+  });
+
+  test('installs and toggles managed SKILLS through super administrator push', async ({ ecorex }) => {
+    const { page, paths } = ecorex;
+    await login(page);
+
+    const skillSource = path.join(paths.root, 'e2e-managed-skill-source');
+    const skillDir = path.join(skillSource, 'skills', 'e2e-managed-skill');
+    fs.mkdirSync(path.join(skillSource, '.claude-plugin'), { recursive: true });
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillSource, '.claude-plugin', 'plugin.json'), JSON.stringify({
+      name: 'e2e-managed-skill-pack',
+      description: 'E2E managed skill pack',
+      version: '1.0.0',
+      skills: './skills'
+    }, null, 2), 'utf8');
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), [
+      '---',
+      'name: e2e-managed-skill',
+      'description: E2E managed skill.',
+      '---',
+      '',
+      '# E2E Managed Skill',
+      '',
+      'Use this skill to verify EcoreX managed skill push.'
+    ].join('\n'), 'utf8');
+
+    const result = await page.evaluate(async (sourcePath) => {
+      const pushed = await window.ecorex.runEnterpriseAction({
+        action: 'pushSkill',
+        sourcePaths: [sourcePath],
+        summary: 'E2E push managed skill'
+      });
+      const listedAfterPush = await window.ecorex.listSkills({ refresh: true });
+      const skill = listedAfterPush.skills.find((item) => item.name === 'e2e-managed-skill-pack');
+      const childSkill = listedAfterPush.childSkills.find((item) => item.name === 'e2e-managed-skill');
+      const disabled = await window.ecorex.disableSkill({ id: skill?.id, name: skill?.name });
+      const listedAfterDisable = await window.ecorex.listSkills({ refresh: true });
+      const enabled = await window.ecorex.enableSkill({ id: skill?.id, name: skill?.name });
+      const listedAfterEnable = await window.ecorex.listSkills({ refresh: true });
+      return { pushed, listedAfterPush, skill, childSkill, disabled, listedAfterDisable, enabled, listedAfterEnable };
+    }, skillSource);
+
+    expect(result.pushed.ok).toBe(true);
+    expect(result.pushed.installedSkills.some((item) => item.name === 'e2e-managed-skill-pack')).toBe(true);
+    expect(result.skill?.name).toBe('e2e-managed-skill-pack');
+    expect(result.skill?.installed).toBe(true);
+    expect(result.skill?.enabled).toBe(true);
+    expect(result.skill?.skillCount).toBe(1);
+    expect(result.skill?.childSkillCount).toBe(1);
+    expect(result.childSkill?.name).toBe('e2e-managed-skill');
+    expect(result.disabled.ok).toBe(true);
+    expect(result.listedAfterDisable.skills.find((item) => item.name === 'e2e-managed-skill-pack')?.enabled).toBe(false);
+    expect(result.enabled.ok).toBe(true);
+    expect(result.listedAfterEnable.skills.find((item) => item.name === 'e2e-managed-skill-pack')?.enabled).toBe(true);
+  });
+
+  test('installs skill collection directories as one managed SKILLS package', async ({ ecorex }) => {
+    const { page, paths } = ecorex;
+    await login(page);
+
+    const collectionSource = path.join(paths.root, 'e2e-skill-collection-source');
+    const firstSkillDir = path.join(collectionSource, 'skills', 'e2e-collection-alpha');
+    const secondSkillDir = path.join(collectionSource, 'skills', 'e2e-collection-beta');
+    fs.mkdirSync(firstSkillDir, { recursive: true });
+    fs.mkdirSync(secondSkillDir, { recursive: true });
+    fs.writeFileSync(path.join(collectionSource, 'package.json'), JSON.stringify({
+      name: '@ecorex/e2e-collection',
+      version: '1.2.3',
+      description: 'E2E managed skill collection'
+    }, null, 2), 'utf8');
+    fs.writeFileSync(path.join(firstSkillDir, 'SKILL.md'), [
+      '---',
+      'name: e2e-collection-alpha',
+      'description: E2E collection alpha skill.',
+      '---',
+      '',
+      '# E2E Collection Alpha'
+    ].join('\n'), 'utf8');
+    fs.writeFileSync(path.join(secondSkillDir, 'SKILL.md'), [
+      '---',
+      'name: e2e-collection-beta',
+      'description: E2E collection beta skill.',
+      '---',
+      '',
+      '# E2E Collection Beta'
+    ].join('\n'), 'utf8');
+
+    const result = await page.evaluate(async (sourcePath) => {
+      const pushed = await window.ecorex.runEnterpriseAction({
+        action: 'pushSkill',
+        sourcePaths: [sourcePath],
+        summary: 'E2E push managed skill collection'
+      });
+      const listedAfterPush = await window.ecorex.listSkills({ refresh: true });
+      const collection = listedAfterPush.skills.find((item) => item.name === 'ecorex-e2e-collection');
+      const alpha = listedAfterPush.childSkills.find((item) => item.name === 'e2e-collection-alpha');
+      const beta = listedAfterPush.childSkills.find((item) => item.name === 'e2e-collection-beta');
+      const disabled = await window.ecorex.disableSkill({ id: pushed.installedSkills?.[0]?.id });
+      const listedAfterDisable = await window.ecorex.listSkills({ refresh: true });
+      const enabled = await window.ecorex.enableSkill({ id: pushed.installedSkills?.[0]?.id });
+      const listedAfterEnable = await window.ecorex.listSkills({ refresh: true });
+      return { pushed, listedAfterPush, collection, alpha, beta, disabled, listedAfterDisable, enabled, listedAfterEnable };
+    }, collectionSource);
+
+    expect(result.pushed.ok).toBe(true);
+    expect(result.pushed.installedSkills.some((item) => item.name === 'ecorex-e2e-collection')).toBe(true);
+    expect(result.collection?.installed).toBe(true);
+    expect(result.collection?.skillCount).toBe(1);
+    expect(result.collection?.childSkillCount).toBe(2);
+    expect(result.alpha?.installed).toBe(true);
+    expect(result.beta?.installed).toBe(true);
+    expect(result.disabled.ok).toBe(true);
+    expect(result.listedAfterDisable.skills.find((item) => item.name === 'ecorex-e2e-collection')?.enabled).toBe(false);
+    expect(result.enabled.ok).toBe(true);
+    expect(result.listedAfterEnable.skills.find((item) => item.name === 'ecorex-e2e-collection')?.enabled).toBe(true);
+  });
+
+  test('surfaces MCP-backed managed skills in the MCP manager', async ({ ecorex }) => {
+    const { page, paths } = ecorex;
+    await login(page);
+
+    const mcpSource = path.join(paths.root, 'e2e-mcp-backed-skill');
+    fs.mkdirSync(mcpSource, { recursive: true });
+    fs.writeFileSync(path.join(mcpSource, 'manifest.json'), JSON.stringify({
+      name: 'e2e-excel-mcp',
+      version: '1.0.0',
+      description: 'E2E Excel MCP server',
+      server: {
+        mcp_config: {
+          command: 'uvx',
+          args: ['e2e-excel-mcp', 'stdio']
+        }
+      },
+      tools: [{ name: 'workbook_read' }, { name: 'workbook_write' }]
+    }, null, 2), 'utf8');
+
+    const result = await page.evaluate(async (sourcePath) => {
+      const pushed = await window.ecorex.runEnterpriseAction({
+        action: 'pushSkill',
+        sourcePaths: [sourcePath],
+        summary: 'E2E push MCP-backed managed skill'
+      });
+      const skills = await window.ecorex.listSkills({ refresh: true });
+      const mcp = await window.ecorex.listMcpServers({ refresh: true });
+      return { pushed, skills, mcp };
+    }, mcpSource);
+
+    expect(result.pushed.ok).toBe(true);
+    expect(result.skills.skills.find((item) => item.name === 'e2e-excel-mcp')?.sourceKind).toBe('mcp-wrapper');
+    expect(result.mcp.ok).toBe(true);
+    expect(result.mcp.services.find((item) => item.packageName === 'e2e-excel-mcp')?.enabled).toBe(true);
+  });
+
+  test('loads BOM encoded managed skill state in settings pages', async ({ ecorex }) => {
+    const { electronApp, page } = ecorex;
+    await login(page);
+
+    await writeManagedSkillStateWithBom(electronApp, [
+      {
+        name: 'ppt-master',
+        title: 'ppt-master',
+        sourceKind: 'plugin',
+        category: 'productivity',
+        description: 'Generate natively editable PPTX from PDF, DOCX, URL, or Markdown.'
+      },
+      {
+        name: 'excel-mcp-server',
+        title: 'excel-mcp-server',
+        sourceKind: 'mcp-wrapper',
+        category: 'MCP',
+        description: 'A Model Context Protocol server for Excel file manipulation',
+        generatedWrapper: true,
+        mcpConfig: { command: 'uvx', args: ['excel-mcp-server', 'stdio'] }
+      },
+      {
+        name: 'lark-cli',
+        title: 'lark-cli',
+        sourceKind: 'skill-collection',
+        category: 'EcoreX',
+        description: 'Feishu/Lark CLI skill collection.'
+      }
+    ]);
+
+    const direct = await page.evaluate(async () => {
+      const skills = await window.ecorex.listSkills({ refresh: true });
+      const mcp = await window.ecorex.listMcpServers({ refresh: true });
+      return { skills, mcp };
+    });
+    expect(direct.skills.ok).toBe(true);
+    expect(direct.skills.skills.map((item) => item.name).sort()).toEqual(['excel-mcp-server', 'lark-cli', 'ppt-master']);
+    expect(direct.skills.counts.totalSkills).toBe(3);
+    expect(direct.mcp.ok).toBe(true);
+    expect(direct.mcp.services.map((item) => item.packageName)).toContain('excel-mcp-server');
+
+    await page.locator('.profile-trigger').click();
+    await page.locator('.profile-menu-grid').getByRole('button', { name: /系统设置|settings/i }).click();
+    await expect(page.locator('[data-testid="system-settings-page"]')).toBeVisible();
+    await page.locator('[data-testid="system-settings-tab-skills"]').click();
+    await expect(page.locator('[data-testid="skills-page"]')).toContainText('ppt-master');
+    await expect(page.locator('[data-testid="skills-page"]')).toContainText(/excel[-\s]?MCP[-\s]?server/i);
+    await expect(page.locator('[data-testid="skills-page"]')).toContainText(/lark|飞书|execution bridge/i);
+    await page.locator('[data-testid="system-settings-tab-mcp"]').click();
+    await expect(page.locator('[data-testid="mcp-page"]')).toContainText(/excel[-\s]?mcp[-\s]?server/i);
+  });
+
   test('keeps model test validation local when required fields are missing', async ({ ecorex }) => {
     const { page } = ecorex;
     await login(page);
@@ -464,6 +770,20 @@ test.describe('EcoreX Agent Electron E2E', () => {
     await expect(page.locator('.attachment-chip').filter({ hasText: 'pasted-creative.png' }).first()).toBeVisible();
     await expect(page.locator('.attachment-chip img').first()).toHaveAttribute('src', /^data:image\/png/);
     await page.locator('[data-testid="chat-input"]').evaluate((textarea) => {
+      const file = new File([new Uint8Array([0, 1, 2, 3])], 'pasted-demo.webm', { type: 'video/webm' });
+      const transfer = new DataTransfer();
+      transfer.items.add(file);
+      const event = new ClipboardEvent('paste', {
+        clipboardData: transfer,
+        bubbles: true,
+        cancelable: true
+      });
+      textarea.dispatchEvent(event);
+    });
+    const videoAttachment = page.locator('.attachment-chip.video').filter({ hasText: 'pasted-demo.webm' }).first();
+    await expect(videoAttachment).toBeVisible();
+    await expect(videoAttachment.locator('img')).toHaveCount(0);
+    await page.locator('[data-testid="chat-input"]').evaluate((textarea) => {
       const transfer = new DataTransfer();
       transfer.setData('text/uri-list', 'https://www.bing.com/search?q=ecorex');
       transfer.setData('text/plain', 'https://www.bing.com/search?q=ecorex');
@@ -651,7 +971,7 @@ test.describe('EcoreX Agent Electron E2E', () => {
 
     await expect(page.locator('.recent-row')).toHaveCount(0);
     await expect(page.locator('.recent-empty')).toBeVisible();
-    await expect(page.locator('.recent-empty')).toContainText('暂无最近对话');
+    await expect(page.locator('.recent-empty')).toContainText(/暂无(最近|历史)对话/);
 
     const firstPrompt = '最近对话删除到空状态';
     await page.locator('[data-testid="chat-input"]').fill(firstPrompt);
@@ -669,7 +989,7 @@ test.describe('EcoreX Agent Electron E2E', () => {
 
     await expect(recentRows).toHaveCount(0);
     await expect(page.locator('.recent-empty')).toBeVisible();
-    await expect(page.locator('.recent-empty')).toContainText('暂无最近对话');
+    await expect(page.locator('.recent-empty')).toContainText(/暂无(最近|历史)对话/);
     await expect(page.locator('[data-testid="chat-input"]')).toHaveValue('');
     await expect(page.locator('.assistant-card').first()).toContainText('接下来我们做些什么');
     await expect(page.locator('.user-bubble').filter({ hasText: firstPrompt })).toHaveCount(0);
@@ -996,7 +1316,8 @@ test.describe('EcoreX Agent Electron E2E', () => {
     await page.locator('[data-testid="projects-create-name"]').fill(originalName);
     await expect(page.locator('[data-testid="projects-create-submit"]')).toBeEnabled();
     await page.locator('[data-testid="projects-create-submit"]').click();
-    await expect(page.locator('[data-testid="projects-list-entry"]').filter({ hasText: originalName }).first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-testid="project-detail-panel"]')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-testid="project-edit-name"]')).toHaveValue(originalName, { timeout: 15_000 });
 
     const createdProject = await page.evaluate(async (name) => {
       const listed = await window.ecorex.listProjects();
@@ -1007,7 +1328,11 @@ test.describe('EcoreX Agent Electron E2E', () => {
     expect(fs.existsSync(createdDir)).toBe(true);
 
     await page.locator('[data-testid="project-edit-name"]').fill(renamedName);
+    await expect(page.locator('[data-testid="project-detail-save"]')).toBeEnabled();
     await page.locator('[data-testid="project-detail-save"]').click();
+    await expect(page.locator('[data-testid="project-edit-name"]')).toHaveValue(renamedName, { timeout: 15_000 });
+    await page.locator('.project-back-button').click();
+    await expect(page.locator('[data-testid="projects-list-panel"]')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('[data-testid="projects-list-entry"]').filter({ hasText: renamedName }).first()).toBeVisible({ timeout: 15_000 });
 
     const renamedProject = await page.evaluate(async (name) => {
@@ -1038,22 +1363,19 @@ test.describe('EcoreX Agent Electron E2E', () => {
       window.dispatchEvent(new CustomEvent('ecorex:recent-chats-changed'));
     }, { sessionId, projectId: renamedProject.id, projectName: renamedName });
     await expect(page.locator('.sidebar-project-session-row').filter({ hasText: 'Project Session Draft' })).toBeVisible();
-    await page.evaluate(() => {
-      window.__ecorexOriginalPrompt = window.prompt;
-      window.prompt = () => 'Project Session Renamed';
-    });
-    await page.locator('.sidebar-project-session-row').filter({ hasText: 'Project Session Draft' }).locator('[aria-label="重命名会话"]').click({ force: true });
+    await page.locator('.sidebar-project-session-row').filter({ hasText: 'Project Session Draft' }).locator('[data-testid="sidebar-project-session-rename"]').click({ force: true });
+    await expect(page.locator('[data-testid="sidebar-project-session-rename-input"]')).toBeVisible({ timeout: 10_000 });
+    await page.locator('[data-testid="sidebar-project-session-rename-input"]').fill('Project Session Renamed');
+    await expect(page.locator('[data-testid="sidebar-project-session-rename-save"]')).toBeVisible();
+    await page.locator('[data-testid="sidebar-project-session-rename-save"]').click({ force: true });
     await expect(page.locator('.sidebar-project-session-row').filter({ hasText: 'Project Session Renamed' })).toBeVisible();
     const renamedSession = await page.evaluate((sessionId) => {
       const items = JSON.parse(localStorage.getItem('ecorex-recent-chats') || '[]');
       return items.find((item) => item.id === sessionId);
     }, sessionId);
     expect(renamedSession.title).toBe('Project Session Renamed');
-    await page.locator('.sidebar-project-session-row').filter({ hasText: 'Project Session Renamed' }).locator('[aria-label="删除会话"]').click({ force: true });
+    await page.locator('.sidebar-project-session-row').filter({ hasText: 'Project Session Renamed' }).locator('[data-testid="sidebar-project-session-delete"]').click({ force: true });
     await expect(page.locator('.sidebar-project-session-row').filter({ hasText: 'Project Session Renamed' })).toHaveCount(0);
-    await page.evaluate(() => {
-      if (window.__ecorexOriginalPrompt) window.prompt = window.__ecorexOriginalPrompt;
-    });
 
     await electronApp.evaluate(({ shell }) => {
       global.__ecorexProjectOpenPathCalls = [];
@@ -1066,6 +1388,7 @@ test.describe('EcoreX Agent Electron E2E', () => {
         shell.openPath = originalOpenPath;
       };
     });
+    await page.locator('[data-testid="projects-list-entry"]').filter({ hasText: renamedName }).first().click();
     await page.locator('[data-testid="project-detail-open-folder"]').click();
     await expect.poll(() => electronApp.evaluate(() => global.__ecorexProjectOpenPathCalls?.length || 0), { timeout: 10_000 }).toBe(1);
     const openCalls = await electronApp.evaluate(({ shell }) => {
@@ -1083,6 +1406,7 @@ test.describe('EcoreX Agent Electron E2E', () => {
       await dialog.accept();
     });
     await page.locator('[data-testid="project-detail-delete"]').click();
+    await expect(page.locator('[data-testid="projects-list-panel"]')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('[data-testid="projects-list-entry"]').filter({ hasText: renamedName })).toHaveCount(0, { timeout: 15_000 });
     const listedAfterDelete = await page.evaluate(async () => window.ecorex.listProjects());
     expect(listedAfterDelete.projects.some((project) => project.id === renamedProject.id)).toBe(false);
@@ -1303,6 +1627,48 @@ test.describe('EcoreX Agent Electron E2E', () => {
     await expect(trace.locator('.agent-trace-row')).toHaveCount(6);
   });
 
+  test('places readable tool return values into the assistant message', async ({ ecorex }) => {
+    const { electronApp, page } = ecorex;
+    await login(page);
+
+    await electronApp.evaluate(({ ipcMain, BrowserWindow }) => {
+      ipcMain.removeHandler('agent:run');
+      ipcMain.handle('agent:run', (event, payload) => {
+        const win = BrowserWindow.fromWebContents(event.sender);
+        setTimeout(() => {
+          if (!win || win.isDestroyed()) return;
+          win.webContents.send('agent:events', {
+            sessionId: payload.sessionId,
+            events: [
+              {
+                sessionId: payload.sessionId,
+                kind: 'tool',
+                status: 'completed',
+                toolName: 'WebSearch',
+                toolUseId: 'weather-result',
+                text: 'Shanghai: Light Rain Shower, Mist, +27°C, feels like +33°C, humidity 94%, wind 10km/h.'
+              },
+              { sessionId: payload.sessionId, kind: 'done', status: 'completed', text: 'done' }
+            ]
+          });
+        }, 50);
+        return {
+          ok: true,
+          sessionId: payload.sessionId,
+          initialEvent: { sessionId: payload.sessionId, kind: 'status', status: 'started', text: 'started' }
+        };
+      });
+    });
+
+    await page.locator('[data-testid="chat-input"]').fill('查询下上海今天的天气');
+    await page.locator('[data-testid="chat-input"]').press('Enter');
+
+    const assistant = page.locator('.assistant-card').filter({ hasText: 'Shanghai: Light Rain Shower' }).first();
+    await expect(assistant).toBeVisible({ timeout: 10_000 });
+    await expect(assistant.locator('[data-testid="tool-result-inline"]')).toContainText('humidity 94%');
+    await expect(assistant.locator('.artifact-thumb-card')).toHaveCount(0);
+  });
+
   test('keeps composer responsive after large assistant output and folded ledger @responsive', async ({ ecorex }) => {
     const { electronApp, page } = ecorex;
     await login(page);
@@ -1369,7 +1735,8 @@ test.describe('EcoreX Agent Electron E2E', () => {
       text: path.join(artifactRoot, 'preview-report.md').replace(/\\/g, '/'),
       html: path.join(artifactRoot, 'preview-page.html').replace(/\\/g, '/'),
       image: path.join(artifactRoot, 'creative.png').replace(/\\/g, '/'),
-      pdf: path.join(artifactRoot, 'media-plan.pdf').replace(/\\/g, '/')
+      pdf: path.join(artifactRoot, 'media-plan.pdf').replace(/\\/g, '/'),
+      pptx: path.join(artifactRoot, 'strategy-deck.pptx').replace(/\\/g, '/')
     };
 
     await electronApp.evaluate(({ ipcMain, BrowserWindow, shell }, artifactPaths) => {
@@ -1436,13 +1803,27 @@ test.describe('EcoreX Agent Electron E2E', () => {
             ok: true,
             previewable: true,
             kind: 'pdf',
-            renderMode: 'kkfileview',
+            renderMode: 'vue-office',
             path: targetPath,
             name: 'media-plan.pdf',
             mimeType: 'application/pdf',
             sizeBytes: 8192,
-            previewUrl: 'http://127.0.0.1:65535/onlinePreview?url=stub',
-            metadata: { pages: 7, title: 'Media Plan', previewEngine: 'kkFileView' }
+            previewUrl: 'http://127.0.0.1:65535/index.html?type=pdf&src=stub',
+            metadata: { pages: 7, title: 'Media Plan', previewEngine: 'vue-office' }
+          };
+        }
+        if (targetPath.endsWith('strategy-deck.pptx')) {
+          return {
+            ok: true,
+            previewable: true,
+            kind: 'office',
+            renderMode: 'vue-office',
+            path: targetPath,
+            name: 'strategy-deck.pptx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            sizeBytes: 16384,
+            previewUrl: 'http://127.0.0.1:65535/index.html?type=pptx&src=stub',
+            metadata: { slides: 12, title: 'Strategy Deck', previewEngine: 'vue-office' }
           };
         }
         return { ok: false, error: 'unknown preview target' };
@@ -1465,7 +1846,8 @@ test.describe('EcoreX Agent Electron E2E', () => {
                   `- [preview-report.md](${artifactPaths.text}#L2)`,
                   `- [preview-page.html](${artifactPaths.html})`,
                   `- [creative.png](${artifactPaths.image})`,
-                  `- [media-plan.pdf](${artifactPaths.pdf})`
+                  `- [media-plan.pdf](${artifactPaths.pdf})`,
+                  `- [strategy-deck.pptx](${artifactPaths.pptx})`
                 ].join('\n')
               },
               { sessionId: payload.sessionId, kind: 'done', status: 'completed', text: 'done' }
@@ -1493,7 +1875,8 @@ test.describe('EcoreX Agent Electron E2E', () => {
       await expect(page.locator('.chat-layout')).toHaveClass(/preview-focus/);
       const card = page.locator('.artifact-focus-panel .artifact-preview-card');
       await expect(card).toBeVisible({ timeout: 10_000 });
-      await expect(card.locator('header')).toContainText(name);
+      await expect(page.locator('.artifact-focus-head')).toContainText(name);
+      await expect(card.locator('header')).toHaveCount(0);
       return card;
     }
 
@@ -1516,10 +1899,15 @@ test.describe('EcoreX Agent Electron E2E', () => {
     await expect(imageCard).toContainText('1024x768');
 
     const pdfCard = await openArtifact('media-plan.pdf');
-    const kkFrame = pdfCard.locator('iframe.artifact-kkfileview-frame');
-    await expect(kkFrame).toBeVisible();
-    await expect(kkFrame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms');
-    await expect(kkFrame).toHaveAttribute('src', /127\.0\.0\.1:65535\/onlinePreview/);
+    const vueOfficeFrame = pdfCard.locator('iframe.artifact-vue-office-frame');
+    await expect(vueOfficeFrame).toBeVisible();
+    await expect(vueOfficeFrame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms');
+    await expect(vueOfficeFrame).toHaveAttribute('src', /127\.0\.0\.1:65535\/index\.html/);
+
+    const pptxCard = await openArtifact('strategy-deck.pptx');
+    const pptxFrame = pptxCard.locator('iframe.artifact-vue-office-frame');
+    await expect(pptxFrame).toBeVisible();
+    await expect(pptxFrame).toHaveAttribute('src', /type=pptx/);
 
     await page.locator('.artifact-thumb-card').filter({ hasText: 'creative.png' }).locator('.artifact-thumb-remove').first().click();
     await expect(page.locator('.artifact-thumb-card').filter({ hasText: 'creative.png' })).toHaveCount(0);
@@ -1541,7 +1929,8 @@ test.describe('EcoreX Agent Electron E2E', () => {
       'creative.png',
       'media-plan.pdf',
       'preview-page.html',
-      'preview-report.md'
+      'preview-report.md',
+      'strategy-deck.pptx'
     ]);
     expect(externalOpenCalls).toEqual([]);
   });
@@ -1600,15 +1989,18 @@ test.describe('EcoreX Agent Electron E2E', () => {
   });
 
   test('renders AI artifact outputs as hideable file cards before previewing them', async ({ ecorex }) => {
-    const { electronApp, page, paths } = ecorex;
+    const { electronApp, page } = ecorex;
     await login(page);
 
-    const artifactRoot = path.join(paths.root, 'artifact-cards');
+    const userData = await appUserDataPath(electronApp);
+    const artifactRoot = path.join(userData, 'workspace', 'artifact-cards');
     fs.mkdirSync(artifactRoot, { recursive: true });
     const artifactPaths = {
       md: path.join(artifactRoot, 'card-report.md').replace(/\\/g, '/'),
       html: path.join(artifactRoot, 'card-page.html').replace(/\\/g, '/')
     };
+    fs.writeFileSync(artifactPaths.md, ['# Card Report', 'select this exact card line', 'closing line'].join('\n'));
+    fs.writeFileSync(artifactPaths.html, '<h1>Card Preview</h1>');
 
     await electronApp.evaluate(({ ipcMain, BrowserWindow, shell }, artifactPaths) => {
       global.__ecorexExternalOpenCalls = [];
@@ -1673,9 +2065,10 @@ test.describe('EcoreX Agent Electron E2E', () => {
     const initialWindowCount = await electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length);
     await page.locator('[data-testid="chat-input"]').fill('produce artifact cards');
     await page.locator('[data-testid="chat-input"]').press('Enter');
-    await expect(page.locator('.assistant-card').filter({ hasText: 'Artifact cards acceptance output' }).first()).toBeVisible({ timeout: 10_000 });
+    const assistantCard = page.locator('.assistant-card').filter({ hasText: 'Artifact cards acceptance output' }).first();
+    await expect(assistantCard).toBeVisible({ timeout: 10_000 });
 
-    const fileCards = page.locator('[data-testid="artifact-file-card"], .artifact-file-card');
+    const fileCards = assistantCard.locator('[data-testid="artifact-file-card"], .artifact-file-card');
     const legacyPills = page.locator('.artifact-preview-strip button');
     expect.soft(await fileCards.count()).toBe(2);
     expect.soft(await legacyPills.count()).toBe(0);
@@ -1692,6 +2085,7 @@ test.describe('EcoreX Agent Electron E2E', () => {
       await page.locator('.artifact-line').filter({ hasText: 'select this exact card line' }).click();
       await expect.soft(page.locator('.composer-reference-chip')).toContainText(/card-report\.md:2/);
       await expect.soft(page.locator('.composer-reference-chip')).toContainText(/select this exact card line/);
+      await page.locator('[data-testid="artifact-preview-local-open"]').first().click();
     }
 
     const hideButton = reportCard.locator('[data-testid="artifact-file-hide"], [data-testid="artifact-file-delete"], .artifact-file-hide, .artifact-file-delete, [aria-label*="隐藏"], [title*="隐藏"]').first();
@@ -1713,7 +2107,7 @@ test.describe('EcoreX Agent Electron E2E', () => {
       };
     });
     expect.soft(finalWindowCount).toBe(initialWindowCount);
-    expect.soft(externalOpenCalls).toEqual([]);
+    expect.soft(externalOpenCalls.some((call) => call.method === 'openPath' && String(call.args?.[0] || '').endsWith('card-report.md'))).toBe(true);
   });
 
   test('shows only final deliverable artifacts and keeps spaced paths previewable', async ({ ecorex }) => {
@@ -1809,6 +2203,87 @@ test.describe('EcoreX Agent Electron E2E', () => {
     const previewRequests = await electronApp.evaluate(() => global.__ecorexPreviewRequests || []);
     expect(previewRequests).toContain(finalPath);
     expect(previewRequests).not.toContain(draftPath);
+  });
+
+  test('creates separate final artifact cards from tool result paths named in the final reply', async ({ ecorex }) => {
+    const { electronApp, page, paths } = ecorex;
+    await login(page);
+
+    const artifactRoot = path.join(paths.root, 'final-tool-result-artifacts');
+    fs.mkdirSync(artifactRoot, { recursive: true });
+    const artifactPaths = {
+      docx: path.join(artifactRoot, 'hello.docx'),
+      pptx: path.join(artifactRoot, 'hello.pptx'),
+      xlsx: path.join(artifactRoot, 'hello.xlsx')
+    };
+    for (const targetPath of Object.values(artifactPaths)) {
+      fs.writeFileSync(targetPath, `placeholder for ${path.basename(targetPath)}`, 'utf8');
+    }
+
+    await electronApp.evaluate(({ ipcMain, BrowserWindow }, payload) => {
+      ipcMain.removeHandler('file:preview');
+      ipcMain.handle('file:preview', (_event, previewPayload = {}) => {
+        const targetPath = String(previewPayload.path || previewPayload.filePath || '');
+        if (Object.values(payload.artifactPaths).includes(targetPath)) {
+          return {
+            ok: true,
+            path: targetPath,
+            file: { path: targetPath, name: targetPath.split(/[\\/]/).pop() },
+            mimeType: 'application/octet-stream',
+            content: `preview ${targetPath}`
+          };
+        }
+        return { ok: false, error: 'not found' };
+      });
+      ipcMain.removeHandler('agent:run');
+      ipcMain.handle('agent:run', (event, runPayload) => {
+        const win = BrowserWindow.fromWebContents(event.sender);
+        const rootLabel = payload.artifactRoot.endsWith('\\') || payload.artifactRoot.endsWith('/')
+          ? payload.artifactRoot
+          : `${payload.artifactRoot}\\`;
+        setTimeout(() => {
+          if (!win || win.isDestroyed()) return;
+          win.webContents.send('agent:events', {
+            sessionId: runPayload.sessionId,
+            events: [
+              {
+                sessionId: runPayload.sessionId,
+                kind: 'tool',
+                status: 'completed',
+                toolName: 'Write',
+                text: [
+                  `${payload.artifactPaths.docx} (934 bytes)`,
+                  `${payload.artifactPaths.pptx} (1868 bytes)`,
+                  `${payload.artifactPaths.xlsx} (1613 bytes)`
+                ].join('\n')
+              },
+              {
+                sessionId: runPayload.sessionId,
+                kind: 'result',
+                status: 'completed',
+                text: [
+                  'Created final files:',
+                  '1. hello.docx',
+                  '2. hello.pptx',
+                  '3. hello.xlsx',
+                  '',
+                  `Path: ${rootLabel}`
+                ].join('\n')
+              },
+              { sessionId: runPayload.sessionId, kind: 'done', status: 'completed', text: 'done' }
+            ]
+          });
+        }, 40);
+        return { ok: true, sessionId: runPayload.sessionId, status: 'running' };
+      });
+    }, { artifactRoot, artifactPaths });
+
+    await page.locator('[data-testid="chat-input"]').fill('create office deliverables');
+    await page.locator('[data-testid="chat-input"]').press('Enter');
+    await expect(page.locator('.assistant-card').filter({ hasText: 'Created final files' }).first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.artifact-thumb-card').filter({ hasText: 'hello.docx' })).toHaveCount(1);
+    await expect(page.locator('.artifact-thumb-card').filter({ hasText: 'hello.pptx' })).toHaveCount(1);
+    await expect(page.locator('.artifact-thumb-card').filter({ hasText: 'hello.xlsx' })).toHaveCount(1);
   });
 
   test('does not render remote urls or bare filenames as AI artifact cards', async ({ ecorex }) => {

@@ -504,6 +504,16 @@ function shouldRetry(result, attempt, retries) {
   return [408, 409, 425, 429, 500, 502, 503, 504].includes(Number(result?.statusCode));
 }
 
+function retryDelayMs(attempt, options = {}) {
+  const baseDelayMs = clampInteger(options.baseDelayMs, 500, 100, 5000);
+  const maxDelayMs = clampInteger(options.maxDelayMs, 6000, baseDelayMs, 30000);
+  const jitterRatio = Math.max(0, Math.min(Number(options.jitterRatio) || 0.35, 0.8));
+  const exponential = Math.min(baseDelayMs * 2 ** Math.max(0, Number(attempt) || 0), maxDelayMs);
+  const jitterWindow = Math.round(exponential * jitterRatio);
+  const jitter = jitterWindow ? Math.floor(Math.random() * (jitterWindow * 2 + 1)) - jitterWindow : 0;
+  return Math.max(100, Math.min(maxDelayMs, exponential + jitter));
+}
+
 function shouldFallbackToResponses(result) {
   if (!result || result.ok) return false;
   if ([404, 405].includes(Number(result.statusCode))) return true;
@@ -547,6 +557,7 @@ class ModelAdapter {
     const url = endpointUrl(profile.baseUrl, endpoint);
     const startedAt = Date.now();
     let lastResult = null;
+    const retrySchedule = [];
 
     for (let attempt = 0; attempt <= retries; attempt += 1) {
       const attemptStartedAt = Date.now();
@@ -665,11 +676,21 @@ class ModelAdapter {
       }
 
       if (!shouldRetry(lastResult, attempt, retries)) break;
-      await delay(Math.min(1000 * 2 ** attempt, 3000));
+      const waitMs = retryDelayMs(attempt);
+      retrySchedule.push({
+        attempt: attempt + 1,
+        nextAttempt: attempt + 2,
+        delayMs: waitMs,
+        statusCode: lastResult?.statusCode || null,
+        timedOut: Boolean(lastResult?.timedOut),
+        networkError: Boolean(lastResult?.networkError)
+      });
+      await delay(waitMs);
     }
 
     return {
       ...lastResult,
+      retrySchedule,
       totalLatencyMs: Date.now() - startedAt
     };
   }
@@ -783,6 +804,8 @@ module.exports = {
   extractImageArtifacts,
   normalizeOpenAIResponse,
   parseOpenAIStream,
+  retryDelayMs,
+  shouldRetry,
   redactText,
   redactValue
 };

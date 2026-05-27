@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EcoreX Document Preview</title>
+  <link rel="stylesheet" href="./js-preview-lib/docx.css">
+  <link rel="stylesheet" href="./js-preview-lib/excel.css">
+  <style>
+    html,
+    body,
+    #app {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #0b121b;
+      color: #dbe5f1;
+      font-family: Inter, "Segoe UI", Arial, sans-serif;
+    }
+
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 90, 0, 0.72) rgba(15, 23, 34, 0.96);
+    }
+
+    *::-webkit-scrollbar {
+      width: 10px;
+      height: 10px;
+    }
+
+    *::-webkit-scrollbar-track {
+      background: #0d1520;
+      border-radius: 999px;
+    }
+
+    *::-webkit-scrollbar-thumb {
+      min-height: 44px;
+      border: 2px solid #0d1520;
+      border-radius: 999px;
+      background: linear-gradient(180deg, #ff6a00, #e65000);
+    }
+
+    *::-webkit-scrollbar-thumb:hover {
+      background: linear-gradient(180deg, #ff7a1a, #ff5a00);
+    }
+
+    *::-webkit-scrollbar-corner {
+      background: #0d1520;
+    }
+
+    #viewer {
+      width: 100%;
+      height: 100%;
+      overflow: auto;
+      background: #0b121b;
+      color: #111827;
+    }
+
+    #status {
+      position: fixed;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background: #0b121b;
+      color: #dbe5f1;
+      text-align: center;
+      line-height: 1.5;
+      z-index: 10;
+    }
+
+    #status.ready {
+      display: none;
+    }
+
+    #status.error {
+      color: #ff9a9a;
+    }
+
+    .vue-office-docx,
+    .vue-office-docx-main,
+    .vue-office-excel,
+    .vue-office-excel-main,
+    .vue-office-pdf,
+    .pptx-preview-wrapper {
+      width: 100%;
+      min-height: 100%;
+    }
+
+    .pptx-preview-wrapper {
+      box-sizing: border-box;
+      max-width: 100%;
+    }
+
+    .pptx-preview-slide-wrapper {
+      box-shadow: 0 14px 34px rgba(15, 23, 42, 0.18);
+    }
+
+    .x-spreadsheet-scrollbar {
+      background: #0d1520 !important;
+      opacity: 1 !important;
+    }
+
+    .x-spreadsheet-scrollbar.horizontal,
+    .x-spreadsheet-scrollbar.vertical {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255, 90, 0, 0.72) #0d1520;
+    }
+
+    .x-spreadsheet-scrollbar.horizontal::-webkit-scrollbar,
+    .x-spreadsheet-scrollbar.vertical::-webkit-scrollbar {
+      width: 10px;
+      height: 10px;
+    }
+
+    .x-spreadsheet-scrollbar.horizontal::-webkit-scrollbar-track,
+    .x-spreadsheet-scrollbar.vertical::-webkit-scrollbar-track {
+      background: #0d1520;
+    }
+
+    .x-spreadsheet-scrollbar.horizontal::-webkit-scrollbar-thumb,
+    .x-spreadsheet-scrollbar.vertical::-webkit-scrollbar-thumb {
+      border: 2px solid #0d1520;
+      border-radius: 999px;
+      background: linear-gradient(180deg, #ff6a00, #e65000);
+    }
+
+    .x-spreadsheet-scrollbar.horizontal > div,
+    .x-spreadsheet-scrollbar.vertical > div {
+      background: transparent !important;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="viewer"></div>
+    <div id="status">Loading preview...</div>
+  </div>
+  <script src="./js-preview-lib/docx.umd.js"></script>
+  <script src="./js-preview-lib/excel.umd.js"></script>
+  <script src="./js-preview-lib/pdf.umd.js"></script>
+  <script src="./js-preview-lib/pptx-preview.umd.js"></script>
+  <script>
+    (function () {
+      const params = new URLSearchParams(window.location.search);
+      const viewer = document.getElementById('viewer');
+      const status = document.getElementById('status');
+      const src = params.get('src') || '';
+      const name = params.get('name') || 'preview-file';
+      const type = normalizeType(params.get('type') || '', name);
+
+      function setStatus(text, tone) {
+        status.textContent = text;
+        status.className = tone || '';
+      }
+
+      function normalizeType(rawType, fileName) {
+        const normalized = String(rawType || '').toLowerCase();
+        if (['pdf', 'docx', 'excel', 'pptx'].includes(normalized)) return normalized;
+        const extension = String(fileName || '').toLowerCase().split('.').pop();
+        if (extension === 'pdf') return 'pdf';
+        if (extension === 'docx') return 'docx';
+        if (['xls', 'xlsx', 'xlsm'].includes(extension)) return 'excel';
+        if (['pptx', 'pptm'].includes(extension)) return 'pptx';
+        return '';
+      }
+
+      function previewSourceUrl(value) {
+        const url = new URL(value, window.location.href);
+        if (url.origin !== window.location.origin || !url.pathname.startsWith('/preview-file/')) {
+          throw new Error('Preview source is not a local authorized file URL.');
+        }
+        return url.href;
+      }
+
+      function notify(kind, detail) {
+        try {
+          window.parent.postMessage({
+            type: 'ecorex-vue-office-preview',
+            kind,
+            name,
+            detail: detail || ''
+          }, '*');
+        } catch {
+          // Parent notifications are best-effort only.
+        }
+      }
+
+      function notifySelection() {
+        try {
+          const text = String(window.getSelection && window.getSelection().toString() || '').trim();
+          if (!text) return;
+          window.parent.postMessage({
+            type: 'ecorex-preview-selection',
+            text: text.slice(0, 900),
+            fileName: name
+          }, '*');
+        } catch {
+          // Selection bridge is best-effort only.
+        }
+      }
+
+      let selectionTimer = 0;
+      document.addEventListener('selectionchange', () => {
+        window.clearTimeout(selectionTimer);
+        selectionTimer = window.setTimeout(notifySelection, 160);
+      });
+
+      async function run() {
+        if (!src || !type) throw new Error('Preview URL or document type is missing.');
+        const sourceUrl = previewSourceUrl(src);
+        let previewer = null;
+        if (type === 'pdf') {
+          previewer = window.jsPreviewPdf.init(viewer, {
+            staticFileUrl: './js-preview-lib/',
+            onError: (error) => notify('error', String(error && error.message || error || 'preview failed')),
+            onRendered: () => notify('rendered')
+          });
+        } else if (type === 'docx') {
+          previewer = window.jsPreviewDocx.init(viewer);
+        } else if (type === 'excel') {
+          previewer = window.jsPreviewExcel.init(viewer, { xls: /\.xls$/i.test(name), showContextmenu: false });
+        } else if (type === 'pptx') {
+          if (!window.pptxPreview || typeof window.pptxPreview.init !== 'function') {
+            throw new Error('PPTX preview engine is unavailable.');
+          }
+          const width = Math.max(640, Math.min(1180, viewer.clientWidth || window.innerWidth || 960));
+          previewer = window.pptxPreview.init(viewer, {
+            width,
+            height: Math.round(width * 9 / 16),
+            mode: 'scroll'
+          });
+          const response = await fetch(sourceUrl, { cache: 'no-store' });
+          if (!response.ok) throw new Error(`Preview source request failed: ${response.status}`);
+          const data = await response.arrayBuffer();
+          await previewer.preview(data);
+          setStatus('', 'ready');
+          notify('rendered');
+          return;
+        }
+        if (!previewer || typeof previewer.preview !== 'function') throw new Error('Preview engine is unavailable.');
+        await previewer.preview(sourceUrl);
+        setStatus('', 'ready');
+        notify('rendered');
+      }
+
+      run().catch((error) => {
+        const message = error && error.message ? error.message : String(error || 'Preview failed.');
+        setStatus(message, 'error');
+        notify('error', message);
+      });
+    }());
+  </script>
+</body>
+</html>

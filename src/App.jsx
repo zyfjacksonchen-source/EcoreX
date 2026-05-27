@@ -314,6 +314,7 @@ const STARTUP_FRONTEND_TIMEOUT_MS = 9000;
 const ARTIFACT_PREVIEW_MAX_ITEMS = 8;
 const ARTIFACT_PREVIEW_MAX_CHARS = 140000;
 const ARTIFACT_PREVIEW_CACHE_MAX_ITEMS = 120;
+const DEFAULT_AGENT_MODEL_NAME = 'gpt-5.5';
 const ARTIFACT_PREVIEW_EXTENSIONS = [
   'html', 'htm', 'md', 'markdown', 'txt', 'json', 'csv', 'log', 'yaml', 'yml', 'xml', 'css', 'js', 'jsx', 'ts', 'tsx',
   'png', 'jpg', 'jpeg', 'webp', 'gif', 'svg', 'bmp', 'avif',
@@ -632,6 +633,32 @@ function compactEventDetail(value, maxLength = 1100) {
   }
 }
 
+function looksLikeNoisyLocalPath(value = '') {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  if (text.includes('\uFFFD')) return true;
+  if (/[A-Za-z]:[\\/]|\\\\|\/(?:Users|home|tmp|var|mnt|private)\//.test(text)) return true;
+  if (/\b(?:path|filePath|cwd|installPath|projectPath|raw)\b/i.test(text)) return true;
+  return false;
+}
+
+function cleanPublicAgentText(value = '', { dropPathLines = true } = {}) {
+  return String(value || '')
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line) => !(dropPathLines && looksLikeNoisyLocalPath(line)))
+    .join('\n')
+    .replace(/\[EcoreX capability running\]/gi, 'EcoreX 正在调用原生能力')
+    .replace(/\bClaude\s*Code\s*CLI\b/gi, 'EcoreX')
+    .replace(/\bClaude\s*Code\b/gi, 'EcoreX')
+    .replace(/\bClaude\s*CLI\b/gi, 'EcoreX')
+    .replace(/\bAnthropic\s*CLI\b/gi, 'EcoreX')
+    .replace(/\bclaude\s+mcp\b/gi, 'EcoreX MCP')
+    .replace(/\bclaude\s+(plugin|plugins)\b/gi, 'EcoreX SKILLS')
+    .replace(/\bClaude\b/gi, 'EcoreX')
+    .trim();
+}
+
 function toolToneFromStatus(status = '') {
   const normalized = String(status || '').toLowerCase();
   if (/error|fail|failed|timeout|denied|rejected|exception|异常|失败|错误|超时|拒绝/.test(normalized)) return 'danger';
@@ -666,21 +693,16 @@ function normalizeToolLedgerItem(raw = {}, event = {}, index = 0) {
     || event.message
     || agentDisclosureLabel(event)
     || '执行工具';
-  const detail = [
-    source.path || source.filePath || source.cwd ? `path: ${source.path || source.filePath || source.cwd}` : '',
-    source.command ? `command: ${source.command}` : '',
-    source.exitCode != null ? `exit: ${source.exitCode}` : '',
-    source.input || source.args || source.parameters ? `input: ${compactEventDetail(source.input || source.args || source.parameters, 650)}` : '',
-    source.output || source.stdout || source.stderr ? `output: ${compactEventDetail(source.output || source.stdout || source.stderr, 800)}` : '',
-    source.error ? `error: ${compactEventDetail(source.error, 500)}` : ''
-  ].filter(Boolean).join('\n');
+  const cleanAction = cleanPublicAgentText(action, { dropPathLines: true }) || agentDisclosureLabel(event) || '执行工具';
+  const errorDetail = cleanPublicAgentText(source.error || source.stderr || '', { dropPathLines: true });
+  const detail = errorDetail ? `error: ${compactEventDetail(errorDetail, 500)}` : '';
   const id = String(source.id || source.callId || source.toolUseId || event.id || event.__seq || `${toolName}-${index}-${Date.now()}`);
   return {
     id,
     toolName: sanitizeDisplayText(toolName, '工具调用').slice(0, 80),
-    action: sanitizeDisplayText(action, '执行工具').slice(0, 140),
+    action: sanitizeDisplayText(cleanAction, '执行工具').slice(0, 140),
     path: String(source.path || source.filePath || source.cwd || '').slice(0, 600),
-    output: compactEventDetail(source.output || source.stdout || source.stderr || '', 800),
+    output: compactEventDetail(cleanPublicAgentText(source.output || source.stdout || source.stderr || '', { dropPathLines: true }), 800),
     status: readableToolStatus(status, '进行中'),
     tone: toolToneFromStatus(status),
     detail,
@@ -902,6 +924,24 @@ function stripArtifactPathToken(value = '') {
     .replace(/^['"`<([{]+|['"`>)\]}.,;，。；：:]+$/g, '');
 }
 
+function normalizeArtifactPathToken(value = '') {
+  let next = stripArtifactPathToken(value);
+  if (!next) return '';
+  if (/^file:\/\//i.test(next)) {
+    try {
+      const url = new URL(next);
+      next = decodeURIComponent(url.pathname || '');
+      if (/^\/[A-Za-z]:\//.test(next)) next = next.slice(1);
+      if (/^[A-Za-z]:\//.test(next)) next = next.replace(/\//g, '\\');
+    } catch {
+      next = next.replace(/^file:\/\/\/?/i, '');
+    }
+  }
+  next = stripArtifactPathToken(next);
+  if (/^Users[\\/]/i.test(next)) next = `C:\\${next}`;
+  return next;
+}
+
 function isExplicitLocalArtifactPathToken(value = '') {
   const raw = String(value || '').trim();
   if (!raw) return false;
@@ -919,6 +959,13 @@ function isExplicitLocalArtifactPathToken(value = '') {
 function artifactExtension(path = '') {
   const match = String(path || '').match(/\.([a-z0-9]+)$/i);
   return match ? match[1].toLowerCase() : '';
+}
+
+function artifactExtensionPattern() {
+  return [...ARTIFACT_PREVIEW_EXTENSIONS]
+    .sort((left, right) => right.length - left.length)
+    .map((ext) => ext.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|');
 }
 
 function extensionFromMimeType(type = '') {
@@ -978,10 +1025,11 @@ function parseArtifactPathToken(rawValue = '') {
   } catch {
     // Keep the original value when the token is not URI encoded.
   }
-  const extPattern = ARTIFACT_PREVIEW_EXTENSIONS.join('|');
+  value = normalizeArtifactPathToken(value);
+  const extPattern = artifactExtensionPattern();
   const match = value.match(new RegExp(`^(.+?\\.(${extPattern}))(?:#L?(\\d+)(?:-L?(\\d+))?)?(?::(\\d+))?(?::(\\d+))?$`, 'i'));
   if (!match) return null;
-  const path = stripArtifactPathToken(match[1]);
+  const path = normalizeArtifactPathToken(match[1]);
   const ext = String(match[2] || '').toLowerCase();
   if (!ARTIFACT_PREVIEW_EXTENSIONS.includes(ext)) return null;
   const hashLine = Number(match[3]) || null;
@@ -1015,7 +1063,7 @@ function extractArtifactReferences(text = '') {
   const markdownLinkPattern = /\[[^\]]{1,120}\]\(([^)\n]+)\)/g;
   for (const match of source.matchAll(markdownLinkPattern)) add(match[1]);
 
-  const extPattern = ARTIFACT_PREVIEW_EXTENSIONS.join('|');
+  const extPattern = artifactExtensionPattern();
   const pathPatterns = [
     new RegExp(
       `(?:[A-Za-z]:[\\\\/]|workspace:/|\\.{1,2}[\\\\/]|~[\\\\/]|/|[A-Za-z0-9_.-]+[\\\\/])(?:[^\\s<>"'\`|]+[\\\\/])*[^\\s<>"'\`|]+?\\.(?:${extPattern})(?:#L?\\d+(?:-L?\\d+)?|:\\d+(?::\\d+)?)?`,
@@ -1034,8 +1082,10 @@ function extractArtifactReferences(text = '') {
 }
 
 function finalArtifactsFromText(text = '') {
-  return extractArtifactReferences(text)
-    .map((artifact) => ({ ...artifact, source: 'assistant-final' }));
+  return mergeArtifactReferences([
+    ...extractArtifactReferences(text),
+    ...inferArtifactsFromDirectorySummary(text)
+  ]).map((artifact) => ({ ...artifact, source: 'assistant-final' }));
 }
 
 function artifactFromAttachment(attachment = {}, index = 0) {
@@ -1084,12 +1134,60 @@ function artifactsFromLedger(ledger = []) {
     ].filter(Boolean).join('\n')));
 }
 
+function inferArtifactsFromDirectorySummary(text = '') {
+  const source = String(text || '');
+  if (!source) return [];
+  const extPattern = artifactExtensionPattern();
+  const directoryPattern = /(?:[A-Za-z]:[\\/]|workspace:\/|Users[\\/]|~[\\/]|\/(?:Users|home|mnt|tmp|var|private)\/)[^\r\n<>*"|?]*[\\/]/gi;
+  const fileNamePattern = new RegExp(`([^\\\\/\\s<>:"'\\\`|]+\\.(?:${extPattern}))`, 'gi');
+  const directories = [...source.matchAll(directoryPattern)]
+    .map((match) => stripArtifactPathToken(match[0]))
+    .filter(Boolean);
+  if (!directories.length) return [];
+  const baseDir = normalizeArtifactPathToken(directories.at(-1));
+  const found = new Map();
+  for (const match of source.matchAll(fileNamePattern)) {
+    const name = stripArtifactPathToken(match[1]);
+    if (!name || /[\\/]/.test(name)) continue;
+    const ext = artifactExtension(name);
+    if (!ARTIFACT_PREVIEW_EXTENSIONS.includes(ext)) continue;
+    const separator = baseDir.includes('\\') || /^[A-Za-z]:/.test(baseDir) ? '\\' : '/';
+    const path = `${baseDir.replace(/[\\/]*$/, '')}${separator}${name}`;
+    const key = path.toLowerCase();
+    if (!found.has(key)) {
+      found.set(key, {
+        id: key,
+        path,
+        name,
+        ext,
+        raw: name,
+        source: 'assistant-final'
+      });
+    }
+  }
+  return Array.from(found.values()).slice(0, ARTIFACT_PREVIEW_MAX_ITEMS);
+}
+
 function mergeArtifactReferences(artifacts = []) {
   const byKey = new Map();
   for (const artifact of artifacts.filter(Boolean)) {
-    const key = String(artifact.id || artifact.path || artifact.name || '').toLowerCase();
+    const normalizedPath = artifact.path || artifact.filePath
+      ? normalizeArtifactPathToken(artifact.path || artifact.filePath)
+      : '';
+    const normalizedArtifact = normalizedPath
+      ? {
+          ...artifact,
+          path: normalizedPath,
+          name: artifact.name || fileNameFromArtifactPath(normalizedPath),
+          ext: artifact.ext || artifactExtension(normalizedPath),
+          id: String(artifact.id || normalizedPath)
+        }
+      : artifact;
+    const key = String(normalizedArtifact.path || normalizedArtifact.filePath || normalizedArtifact.raw || normalizedArtifact.name || normalizedArtifact.id || '')
+      .replace(/\\/g, '/')
+      .toLowerCase();
     if (!key || byKey.has(key)) continue;
-    byKey.set(key, artifact);
+    byKey.set(key, normalizedArtifact);
   }
   return Array.from(byKey.values()).slice(0, ARTIFACT_PREVIEW_MAX_ITEMS);
 }
@@ -1333,6 +1431,49 @@ async function openAttachmentFileWithBridge(attachment = {}) {
     missing: true,
     unauthorized: isUnauthorizedError(lastError),
     error: lastError?.message || 'openAttachmentFile bridge is not available'
+  };
+}
+
+async function openArtifactFileWithBridge(artifact = {}) {
+  const payload = {
+    id: artifact.id,
+    name: artifact.name || fileNameFromArtifactPath(artifact.path),
+    path: artifact.path || artifact.filePath,
+    filePath: artifact.filePath || artifact.path,
+    mimeType: artifact.mimeType || artifact.type || '',
+    type: artifact.type || artifact.mimeType || '',
+    sessionId: artifact.sessionId || artifact.agentSessionId || '',
+    agentSessionId: artifact.agentSessionId || artifact.sessionId || '',
+    claudeSessionId: artifact.claudeSessionId || '',
+    projectId: artifact.projectId || '',
+    projectName: artifact.projectName || '',
+    source: artifact.source || 'assistant-artifact'
+  };
+  const candidates = [
+    'openArtifactFile',
+    'openGeneratedFile',
+    'artifacts.openFile',
+    'artifact.openFile'
+  ];
+  let lastError = null;
+  for (const candidate of candidates) {
+    const fn = getBridgeFunction(candidate);
+    if (typeof fn !== 'function') continue;
+    try {
+      return await fn(payload);
+    } catch (firstError) {
+      try {
+        return await fn(payload.path, payload);
+      } catch (secondError) {
+        lastError = secondError || firstError;
+      }
+    }
+  }
+  return {
+    ok: false,
+    missing: true,
+    unauthorized: isUnauthorizedError(lastError),
+    error: lastError?.message || 'openArtifactFile bridge is not available'
   };
 }
 
@@ -2184,6 +2325,7 @@ function LoginPage({ authStatus, authNotice, onLogin, onOpenAuth }) {
 function systemSettingsTabFromPage(page) {
   if (page === 'mcp') return 'mcp';
   if (page === 'skills') return 'skills';
+  if (page === 'evaluations') return 'evaluations';
   if (page === 'diagnostics' || page === 'settings') return 'diagnostics';
   return '';
 }
@@ -2191,6 +2333,7 @@ function systemSettingsTabFromPage(page) {
 function pageFromSystemSettingsTab(tab) {
   if (tab === 'mcp') return 'mcp';
   if (tab === 'skills') return 'skills';
+  if (tab === 'evaluations') return 'evaluations';
   return 'settings';
 }
 
@@ -2271,7 +2414,7 @@ function Sidebar({ page, setPage, logout, collapsed = false, onToggleCollapsed }
 
   useEffect(() => {
     let cancelled = false;
-    const refreshCurrentModel = () => loadModelProfiles('sonnet').then((result) => {
+    const refreshCurrentModel = () => loadModelProfiles(DEFAULT_AGENT_MODEL_NAME).then((result) => {
       if (cancelled) return;
       const current = getCurrentModelProfile(result.profiles);
       setCurrentModelLabel(modelProfilePrimaryLabel(current));
@@ -2747,6 +2890,142 @@ function Sidebar({ page, setPage, logout, collapsed = false, onToggleCollapsed }
   );
 }
 
+function EvaluationView({ onUnauthorized, embedded = false }) {
+  const [state, setState] = useState('loading');
+  const [notice, setNotice] = useState('');
+  const [framework, setFramework] = useState(null);
+  const [runningEval, setRunningEval] = useState(false);
+
+  async function loadEvaluations() {
+    setState('loading');
+    setNotice('');
+    const result = await callEcorex(['listEvaluations', 'evaluation.list', 'evaluations.list']);
+    if (result?.unauthorized) {
+      onUnauthorized?.();
+      setState('unauthorized');
+      setNotice('请重新登录后查看企业评估框架。');
+      return;
+    }
+    if (result?.ok === false && !result.missing) {
+      setState('error');
+      setNotice(sanitizeDisplayText(result.error, '评估框架加载失败。'));
+      return;
+    }
+    setFramework(result?.ok === false ? null : result);
+    setState(result?.ok === false ? 'unsupported' : 'ready');
+  }
+
+  async function runEvaluationSuite() {
+    setRunningEval(true);
+    setNotice('');
+    const result = await callEcorex(['runEvaluations', 'evaluation.run', 'evaluations.run'], { mode: 'definition-ready' });
+    setRunningEval(false);
+    if (result?.unauthorized) {
+      onUnauthorized?.();
+      setState('unauthorized');
+      setNotice('请重新登录后运行评估。');
+      return;
+    }
+    if (result?.ok === false) {
+      setNotice(sanitizeDisplayText(result.error, '评估运行失败。'));
+      return;
+    }
+    setFramework((current) => ({ ...(current || {}), lastReport: result }));
+    setNotice(`评估已完成：${result.results?.length || result.sampleCount || 0} 条样本，耗时 ${result.durationMs || 0} ms。`);
+  }
+
+  useEffect(() => {
+    loadEvaluations();
+  }, []);
+
+  const dimensions = Array.isArray(framework?.dimensions) ? framework.dimensions : [];
+  const samples = Array.isArray(framework?.samples) ? framework.samples : [];
+  const retryPolicy = framework?.retryPolicy || {};
+  const memoryTaxonomy = framework?.memoryTaxonomy || {};
+  const lastReport = framework?.lastReport || null;
+
+  return (
+    <section className={`evaluation-page management-page ${embedded ? 'embedded' : ''}`} data-testid="evaluation-page">
+      <div className="management-toolbar">
+        <div>
+          <h2>评估</h2>
+          <p>50 条样本、评分与计时，仅用于更新前后回归评估，不进入项目记忆。</p>
+        </div>
+        <button type="button" onClick={loadEvaluations} disabled={state === 'loading' || runningEval}>
+          <Loader2 size={16} className={state === 'loading' ? 'spin-icon' : ''} />
+          刷新
+        </button>
+        <button className="primary" type="button" onClick={runEvaluationSuite} disabled={runningEval || state === 'loading' || state === 'unsupported'}>
+          {runningEval ? <Loader2 size={16} className="spin-icon" /> : <Play size={16} />}
+          运行评估
+        </button>
+      </div>
+
+      {notice && <ManagementBanner tone={state === 'error' || state === 'unauthorized' ? 'error' : 'warn'} text={notice} />}
+
+      {state === 'loading' && <ManagementState icon={Loader2} spin title="正在加载评估框架" text="读取本机评估样本和上一次报告。" />}
+      {state === 'unsupported' && <ManagementState title="评估框架未就绪" text="当前桌面端暂未返回评估样本。" />}
+      {state === 'ready' && (
+        <>
+          <div className="stats-row compact">
+            {[
+              ['样本', framework?.sampleCount || samples.length, ClipboardList, '仅用于评估'],
+              ['维度', dimensions.length, Target, '事实/结构/工具/计时'],
+              ['重试', retryPolicy.maxAttempts || 0, RotateCcw, retryPolicy.strategy || 'exponential-backoff-with-jitter'],
+              ['上次报告', lastReport?.sampleCount || 0, CircleCheck, lastReport?.finishedAt ? formatDateTime(lastReport.finishedAt) : '尚未运行']
+            ].map(([label, value, Icon, detail]) => (
+              <div className="stat-card" key={label}>
+                <span><Icon size={22} /></span>
+                <div>
+                  <em>{label}</em>
+                  <strong>{value}<small> 项</small></strong>
+                  <p>{detail}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="management-grid two">
+            <article className="settings-panel">
+              <h3>评分维度</h3>
+              <div className="settings-list compact">
+                {dimensions.map((item) => (
+                  <div className="setting-row" key={item.key}>
+                    <strong>{item.label || item.key}</strong>
+                    <em>{Math.round(Number(item.weight || 0) * 100)}%</em>
+                  </div>
+                ))}
+              </div>
+            </article>
+            <article className="settings-panel">
+              <h3>记忆边界</h3>
+              <p>{memoryTaxonomy.currentImplementation || '评估样本不进入聊天历史、项目记忆或向量记忆。'}</p>
+              <small>结构化记忆 {memoryTaxonomy.structuredMemory?.length || 0} 项 · 向量记忆 {memoryTaxonomy.vectorMemory?.length || 0} 项</small>
+            </article>
+          </div>
+
+          <div className="table-head evaluation-samples-head">
+            <span>样本</span>
+            <span>分类</span>
+            <span>预期结果</span>
+            <span>工具</span>
+          </div>
+          <div className="evaluation-sample-list">
+            {samples.slice(0, 50).map((sample) => (
+              <article className="evaluation-sample-row" key={sample.id}>
+                <strong>{sample.id}</strong>
+                <span>{sample.category}</span>
+                <em>{sanitizeDisplayText(sample.expectedResult, '待评估').slice(0, 160)}</em>
+                <small>{Array.isArray(sample.expectedTools) && sample.expectedTools.length ? sample.expectedTools.join(', ') : '按需'}</small>
+              </article>
+            ))}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 function SystemSettingsView({
   activeTab = 'diagnostics',
   onTabChange,
@@ -2763,6 +3042,7 @@ function SystemSettingsView({
     ['skills', 'SKILLS', Layers3, '安装、启用与更新'],
     ['diagnostics', '诊断 / 设置', Settings, '健康检查与默认参数']
   ];
+  tabs.splice(3, 0, ['evaluations', '评估', ClipboardList, '50 条样本、评分与计时']);
 
   return (
     <section className="system-settings-page panel" data-testid="system-settings-page">
@@ -2795,6 +3075,7 @@ function SystemSettingsView({
           <McpView
             embedded
             backendStatus={backendStatus}
+            capabilities={capabilities}
             refreshBackend={refreshBackend}
             onUnauthorized={onUnauthorized}
           />
@@ -2808,6 +3089,9 @@ function SystemSettingsView({
             onUnauthorized={onUnauthorized}
           />
         )}
+        {activeTab === 'evaluations' && (
+          <EvaluationView onUnauthorized={onUnauthorized} />
+        )}
         {activeTab === 'diagnostics' && (
           <DiagnosticsView
             embedded
@@ -2820,6 +3104,97 @@ function SystemSettingsView({
             onUnauthorized={onUnauthorized}
           />
         )}
+      </div>
+    </section>
+  );
+}
+
+function LegacyEvaluationViewDisabled({ onUnauthorized }) {
+  const [framework, setFramework] = useState(null);
+  const [report, setReport] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [notice, setNotice] = useState('');
+
+  async function loadEvaluationFramework(silent = false) {
+    if (!silent) setLoading(true);
+    const result = await callEcorex(['listEvaluations', 'evaluation.list']);
+    if (result?.unauthorized) {
+      onUnauthorized?.();
+      setLoading(false);
+      return;
+    }
+    if (result?.ok === false) {
+      setNotice(result.error || '评估框架加载失败。');
+      setLoading(false);
+      return;
+    }
+    setFramework(result.framework || result);
+    setLoading(false);
+  }
+
+  async function runEvaluation() {
+    setRunning(true);
+    setNotice('正在运行 50 条评估样本。');
+    const result = await callEcorex(['runEvaluations', 'evaluation.run'], {});
+    if (result?.unauthorized) {
+      onUnauthorized?.();
+      setRunning(false);
+      return;
+    }
+    if (result?.ok === false) {
+      setNotice(result.error || '评估运行失败。');
+      setRunning(false);
+      return;
+    }
+    setReport(result);
+    setRunning(false);
+    setNotice('评估完成，结果不会写入会话记忆。');
+  }
+
+  useEffect(() => {
+    loadEvaluationFramework(true);
+  }, []);
+
+  const aggregate = report?.aggregate || framework?.lastReport?.aggregate || {};
+  const dimensions = [
+    ['事实正确性', aggregate.factuality],
+    ['结构完整度', aggregate.structure],
+    ['工具调用合理性', aggregate.toolUse],
+    ['计时', aggregate.latency]
+  ];
+  const sampleCount = Number(framework?.sampleCount || framework?.samples?.length || report?.sampleCount || 50);
+
+  return (
+    <section className="evaluation-page embedded-settings-section">
+      <div className="settings-panel">
+        <header>
+          <div>
+            <h3>评估框架</h3>
+            <p>50 条样本仅用于上线前评估，不进入项目记忆或向量记忆。</p>
+          </div>
+          <button type="button" onClick={runEvaluation} disabled={running || loading}>
+            {running ? <Loader2 size={15} className="spin-icon" /> : <Play size={15} />}
+            运行评估
+          </button>
+        </header>
+        {notice && <ManagementBanner text={notice} tone={report?.ok === false ? 'error' : 'warn'} />}
+        <div className="health-check-grid">
+          <div className="health-check-item ok">
+            <ClipboardList size={18} />
+            <span>样本</span>
+            <strong>{sampleCount}</strong>
+            <em>输入与预期结果</em>
+          </div>
+          {dimensions.map(([label, value]) => (
+            <div className="health-check-item running" key={label}>
+              <Target size={18} />
+              <span>{label}</span>
+              <strong>{value == null ? '-' : `${Math.round(Number(value) * 100)}%`}</strong>
+              <em>上线前回归</em>
+            </div>
+          ))}
+        </div>
       </div>
     </section>
   );
@@ -2930,7 +3305,7 @@ function normalizeModelProfileStore(store, defaultModelName = 'sonnet') {
   };
 }
 
-async function loadModelProfiles(defaultModelName = 'sonnet') {
+async function loadModelProfiles(defaultModelName = DEFAULT_AGENT_MODEL_NAME) {
   const result = await callEcorex(['listModelProfiles']);
   if (result?.unauthorized) return { unauthorized: true, profiles: [], activeId: '' };
 
@@ -3154,7 +3529,7 @@ function ModelConfigModal({ open, initialModelName, onClose, onCurrentChange }) 
 
   async function refreshProfiles({ silent = false } = {}) {
     if (!silent) setBusy('load');
-    const result = await loadModelProfiles(initialModelName || 'sonnet');
+    const result = await loadModelProfiles(initialModelName || DEFAULT_AGENT_MODEL_NAME);
     if (result.unauthorized) {
       setNotice('登录状态已过期，请重新登录后管理模型配置。');
       setBusy('');
@@ -3736,18 +4111,11 @@ function mergeAssistantText(existing = '', incoming = '') {
 }
 
 function cleanAssistantOutputText(value = '') {
-  return String(value || '')
+  return cleanPublicAgentText(String(value || '')
     .replace(/^\s*\*\s+/gm, '- ')
     .replace(/\*\*([^*\n]+)\*\*/g, '$1')
     .replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '$1')
-    .replace(/\*/g, '')
-    .replace(/\bClaude\s*Code\s*CLI\b/gi, 'EcoreX')
-    .replace(/\bClaude\s*Code\b/gi, 'EcoreX')
-    .replace(/\bClaude\s*CLI\b/gi, 'EcoreX')
-    .replace(/\bAnthropic\s*CLI\b/gi, 'EcoreX')
-    .replace(/\bclaude\s+mcp\b/gi, 'EcoreX MCP')
-    .replace(/\bclaude\s+(plugin|plugins)\b/gi, 'EcoreX SKILLS')
-    .replace(/\bClaude\b/gi, 'EcoreX');
+    .replace(/\*/g, ''));
 }
 
 function mergeAssistantOutputText(existing = '', incoming = '') {
@@ -3843,7 +4211,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
   const [prompt, setPrompt] = useState('');
   const [running, setRunning] = useState(false);
   const [permissionMode, setPermissionMode] = useState(() => readStoredDefaultAccessMode());
-  const [model, setModel] = useState('sonnet');
+  const [model, setModel] = useState(DEFAULT_AGENT_MODEL_NAME);
   const [modelProfiles, setModelProfiles] = useState([]);
   const [currentSessionId, setCurrentSessionId] = useState(null);
   const [visibleMessageCount, setVisibleMessageCount] = useState(MESSAGE_WINDOW_SIZE);
@@ -3857,8 +4225,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
   const [focusArtifact, setFocusArtifact] = useState(null);
   const [chatProject, setChatProject] = useState(null);
   const [conversationId, setConversationId] = useState(() => createLocalId('conversation'));
+  const [showJumpLatest, setShowJumpLatest] = useState(false);
   const fileInputRef = useRef(null);
   const messageListRef = useRef(null);
+  const autoScrollPinnedRef = useRef(true);
   const sessionMap = useRef(new Map());
   const runningRef = useRef(false);
   const runningSessionsRef = useRef(new Set());
@@ -3882,9 +4252,17 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
   const conversationIdRef = useRef(conversationId);
   const conversationSessionIdRef = useRef(conversationId);
   const conversationProjectRef = useRef(null);
+  const sessionOwnersRef = useRef(new Map());
+  const storedEventsByConversation = useRef(new Map());
+  const activeProject = chatProject || conversationProjectRef.current || null;
 
   const selectedPlugins = useMemo(() => {
-    return ['feature-dev', 'code-review', 'security-guidance', 'plugin-dev'];
+    const managedPlugins = Array.isArray(capabilities?.capabilityPacks)
+      ? capabilities.capabilityPacks
+          .map((plugin) => plugin?.name)
+          .filter((name) => /^[a-zA-Z0-9_.-]{1,80}$/.test(String(name || '')))
+      : [];
+    return [...new Set(['feature-dev', 'code-review', 'security-guidance', 'plugin-dev', ...managedPlugins])];
   }, [capabilities]);
 
   const permissionOptions = useMemo(() => {
@@ -3892,37 +4270,32 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
   }, [capabilities]);
 
   const modelOptions = useMemo(() => {
-    const options = new Map();
-    for (const profile of modelProfiles) {
-      if (!profile.modelName) continue;
-      options.set(profile.modelName, [
-        profile.modelName,
-        profile.active ? `${profile.modelName} · 当前` : (profile.name ? `${profile.name} · ${profile.modelName}` : profile.modelName)
-      ]);
-    }
-    const models = capabilities?.models;
-    if (Array.isArray(models) && models.length) {
-      for (const item of models) {
-        if (!item?.value) continue;
-        if (!options.has(item.value)) options.set(item.value, [item.value, item.label || item.value]);
-      }
-    }
-    for (const option of [
-      ['sonnet', 'Sonnet'],
-      ['opus', 'Opus']
-    ]) {
-      if (!options.has(option[0])) options.set(option[0], option);
-    }
-    return Array.from(options.values());
-  }, [capabilities, modelProfiles]);
+    const activeProfile = modelProfiles.find((profile) => profile?.active && profile?.modelName);
+    const currentModel = activeProfile?.modelName || model || DEFAULT_AGENT_MODEL_NAME;
+    return [[currentModel, currentModel]];
+  }, [model, modelProfiles]);
 
   const visibleMessages = useMemo(() => messages.slice(-visibleMessageCount), [messages, visibleMessageCount]);
   const hiddenMessageCount = Math.max(messages.length - visibleMessages.length, 0);
+
+  function isMessageListNearBottom(node = messageListRef.current) {
+    if (!node) return true;
+    const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
+    return distance <= 96;
+  }
+
+  function updateMessageAutoScrollPin() {
+    const pinned = isMessageListNearBottom();
+    autoScrollPinnedRef.current = pinned;
+    setShowJumpLatest(!pinned);
+  }
 
   function scrollMessagesToLatest(behavior = 'smooth') {
     const scroll = () => {
       const node = messageListRef.current;
       if (!node) return;
+      autoScrollPinnedRef.current = true;
+      setShowJumpLatest(false);
       node.scrollTo({ top: node.scrollHeight, behavior });
     };
     if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
@@ -4194,8 +4567,90 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     setRunning(hasRunningSessions);
   }
 
+  function sessionOwnerForSession(sessionId, fallback = {}) {
+    const key = String(sessionId || '');
+    if (!key) return null;
+    const storedOwner = sessionOwnersRef.current.get(key);
+    if (storedOwner) return storedOwner;
+    const row = runningSessionRowsRef.current.find((item) => item.sessionId === key || item.id === key);
+    const messageId = sessionMap.current.get(key) || row?.messageId || fallback.messageId || '';
+    const owner = {
+      sessionId: key,
+      messageId,
+      conversationId: String(row?.conversationId || fallback.conversationId || conversationIdRef.current || ''),
+      claudeSessionId: String(row?.claudeSessionId || fallback.claudeSessionId || conversationSessionIdRef.current || ''),
+      projectId: String(row?.projectId || fallback.projectId || conversationProjectRef.current?.id || ''),
+      projectName: String(row?.projectName || fallback.projectName || conversationProjectRef.current?.name || '')
+    };
+    sessionOwnersRef.current.set(key, owner);
+    return owner;
+  }
+
+  function hasRunningSessionForConversation(activeConversationId) {
+    const targetId = String(activeConversationId || '');
+    if (!targetId) return runningSessionsRef.current.size > 0 || runningSessionRowsRef.current.some(isRunningSessionActive);
+    if (runningSessionRowsRef.current.some((row) => {
+      if (!isRunningSessionActive(row)) return false;
+      const owner = sessionOwnerForSession(row.sessionId || row.id, row);
+      return String(owner?.conversationId || '') === targetId;
+    })) {
+      return true;
+    }
+    return Array.from(runningSessionsRef.current).some((sessionId) => {
+      const owner = sessionOwnerForSession(sessionId);
+      return String(owner?.conversationId || '') === targetId;
+    });
+  }
+
+  function updateMessagesForConversation(ownerConversationId, updater) {
+    if (!ownerConversationId) return;
+    if (String(ownerConversationId) === String(conversationIdRef.current)) {
+      setMessages(updater);
+      return;
+    }
+    const stored = loadConversationState(ownerConversationId) || storedEventsByConversation.current.get(ownerConversationId) || {};
+    const previousMessages = Array.isArray(stored.messages) ? stored.messages : [];
+    const nextMessages = typeof updater === 'function' ? updater(previousMessages) : updater;
+    const nextState = {
+      ...stored,
+      messages: sanitizeStoredMessages(Array.isArray(nextMessages) ? nextMessages : previousMessages),
+      timeline: sanitizeStoredTimeline(stored.timeline || []),
+      updatedAt: Date.now()
+    };
+    storedEventsByConversation.current.set(ownerConversationId, nextState);
+    saveConversationState(ownerConversationId, nextState);
+  }
+
+  function updateTimelineForConversation(ownerConversationId, updater) {
+    if (!ownerConversationId) return;
+    if (String(ownerConversationId) === String(conversationIdRef.current)) {
+      setTimeline(updater);
+      return;
+    }
+    const stored = loadConversationState(ownerConversationId) || storedEventsByConversation.current.get(ownerConversationId) || {};
+    const previousTimeline = Array.isArray(stored.timeline) ? stored.timeline : [];
+    const nextTimeline = typeof updater === 'function' ? updater(previousTimeline) : updater;
+    const nextState = {
+      ...stored,
+      messages: sanitizeStoredMessages(stored.messages || []),
+      timeline: sanitizeStoredTimeline(Array.isArray(nextTimeline) ? nextTimeline : previousTimeline),
+      updatedAt: Date.now()
+    };
+    storedEventsByConversation.current.set(ownerConversationId, nextState);
+    saveConversationState(ownerConversationId, nextState);
+  }
+
   function trackSession(sessionId, meta = {}) {
     if (!sessionId) return;
+    const owner = {
+      sessionId,
+      messageId: meta.messageId || sessionMap.current.get(sessionId) || '',
+      conversationId: String(meta.conversationId || conversationIdRef.current || ''),
+      claudeSessionId: String(meta.claudeSessionId || conversationSessionIdRef.current || conversationIdRef.current || ''),
+      projectId: String(meta.projectId || conversationProjectRef.current?.id || ''),
+      projectName: String(meta.projectName || conversationProjectRef.current?.name || '')
+    };
+    sessionOwnersRef.current.set(sessionId, owner);
     runningSessionsRef.current.add(sessionId);
     currentSessionIdRef.current = sessionId;
     setCurrentSessionId(sessionId);
@@ -4203,6 +4658,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       normalizeRunningSession({
         sessionId,
         id: sessionId,
+        conversationId: owner.conversationId,
+        claudeSessionId: owner.claudeSessionId,
+        projectId: owner.projectId,
+        projectName: owner.projectName,
         status: 'running',
         state: 'running',
         prompt: meta.prompt,
@@ -4218,6 +4677,11 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
 
   function transferSession(previousSessionId, nextSessionId) {
     if (!nextSessionId || previousSessionId === nextSessionId) return;
+    const previousOwner = sessionOwnersRef.current.get(previousSessionId);
+    if (previousOwner) {
+      sessionOwnersRef.current.delete(previousSessionId);
+      sessionOwnersRef.current.set(nextSessionId, { ...previousOwner, sessionId: nextSessionId });
+    }
     runningSessionsRef.current.delete(previousSessionId);
     runningSessionsRef.current.add(nextSessionId);
     const messageId = sessionMap.current.get(previousSessionId);
@@ -4233,6 +4697,8 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
             ...row,
             sessionId: nextSessionId,
             id: nextSessionId,
+            conversationId: previousOwner?.conversationId || row.conversationId,
+            claudeSessionId: previousOwner?.claudeSessionId || row.claudeSessionId,
             messageId: row.messageId || messageId,
             updatedAt: Date.now()
           }
@@ -4241,13 +4707,18 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
   }
 
   function finishSession(sessionId) {
+    const owner = sessionOwnerForSession(sessionId);
     runningSessionsRef.current.delete(sessionId);
     sessionMap.current.delete(sessionId);
+    sessionOwnersRef.current.delete(sessionId);
     const nextRows = commitRunningSessionRows((rows) => rows.filter((row) => row.sessionId !== sessionId));
     if (currentSessionIdRef.current === sessionId) {
       const nextSessionId = Array.from(runningSessionsRef.current).at(-1) || nextRows[0]?.sessionId || null;
       currentSessionIdRef.current = nextSessionId;
       setCurrentSessionId(nextSessionId);
+    }
+    if (owner?.conversationId && !hasRunningSessionForConversation(owner.conversationId) && pendingFollowUpsRef.current.some((item) => item.conversationId === owner.conversationId)) {
+      scheduleStatusTimer(() => flushQueuedFollowUps(owner.conversationId), 80);
     }
     if (!runningSessionsRef.current.size && !nextRows.length && pendingFollowUpsRef.current.length) {
       scheduleStatusTimer(() => flushQueuedFollowUps(), 80);
@@ -4275,30 +4746,43 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     if (!relevantEvents.length) return pendingEvents.length > 0;
     mirrorCliContextCompaction(relevantEvents);
 
-    const eventsByMessage = new Map();
+    const eventsByConversation = new Map();
     for (const event of relevantEvents) {
       const messageId = sessionMap.current.get(event.sessionId);
       if (!messageId) continue;
+      const owner = sessionOwnerForSession(event.sessionId, { messageId });
+      const ownerConversationId = owner?.conversationId || conversationIdRef.current;
+      const conversationEvents = eventsByConversation.get(ownerConversationId) || [];
+      conversationEvents.push(event);
+      eventsByConversation.set(ownerConversationId, conversationEvents);
+    }
+
+    for (const [ownerConversationId, ownerEvents] of eventsByConversation.entries()) {
+      const eventsByMessage = new Map();
+      for (const event of ownerEvents) {
+        const messageId = sessionMap.current.get(event.sessionId);
+        if (!messageId) continue;
       const items = eventsByMessage.get(messageId) || [];
       items.push(event);
       eventsByMessage.set(messageId, items);
-    }
+      }
 
     commitRunningSessionRows((rows) => mergeRunningSessionRows(
       rows,
-      relevantEvents
+        ownerEvents
         .filter((event) => !AGENT_EVENT_TERMINAL_KINDS.has(event.kind))
         .map((event, index) => normalizeRunningSession({
           sessionId: event.sessionId,
           status: event.kind === 'error' ? 'error' : 'running',
           state: event.kind,
           prompt: rows.find((row) => row.sessionId === event.sessionId)?.prompt,
+          conversationId: ownerConversationId,
           messageId: sessionMap.current.get(event.sessionId),
           updatedAt: Date.now()
         }, index, 'local'))
     ));
 
-    setMessages((items) => {
+      updateMessagesForConversation(ownerConversationId, (items) => {
       return items.map((item) => {
         const messageEvents = eventsByMessage.get(item.id);
         if (!messageEvents?.length) return item;
@@ -4338,7 +4822,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           }
 
           if (event.kind === 'result') {
-            const finalArtifacts = finalArtifactsFromText(event.text);
+            const finalArtifacts = finalArtifactsFromText([nextItem.text, event.text].filter(Boolean).join('\n'));
             nextItem = {
               ...nextItem,
               text: finalizeAssistantOutputText(nextItem.text, event.text),
@@ -4351,7 +4835,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           }
 
           if (event.kind === 'done') {
-            const finalArtifacts = finalArtifactsFromText(event.text);
+            const finalArtifacts = finalArtifactsFromText([nextItem.text, event.text].filter(Boolean).join('\n'));
             nextItem = {
               ...nextItem,
               streaming: false,
@@ -4414,10 +4898,11 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       });
     });
 
-    setTimeline((items) => appendTimelineItems(
-      items,
-      compactTimelineEvents(relevantEvents).map((event) => timelineItemFromAgentEvent(event))
-    ));
+      updateTimelineForConversation(ownerConversationId, (items) => appendTimelineItems(
+        items,
+        compactTimelineEvents(ownerEvents).map((event) => timelineItemFromAgentEvent(event))
+      ));
+    }
 
     relevantEvents
       .filter((event) => AGENT_EVENT_TERMINAL_KINDS.has(event.kind))
@@ -4474,11 +4959,12 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         recoveredMessages.push({
           id: messageId,
           role: 'assistant',
-          text: active ? '正在恢复本地运行会话，新的输出会继续追加到这里。' : '已从本地运行记录恢复这轮任务状态。',
+          text: '',
           time: formatAgentEventTime(row),
           streaming: active,
           status: active ? (row.status === 'error' ? 'error' : 'thinking') : (recovery.state === 'retryable' ? 'error' : 'cancelled'),
           sessionId,
+          silentRecovery: true,
           originalPrompt: row.prompt || row.promptPreview || '',
           recovery,
           timeline: [[
@@ -4564,7 +5050,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         if (currentCached?.modelName) setModel(currentCached.modelName);
         delete window.__ecorexStartupCache.modelProfiles;
       }
-      const result = await loadModelProfiles(model || 'sonnet');
+      const result = await loadModelProfiles(model || DEFAULT_AGENT_MODEL_NAME);
       if (cancelled || result?.unauthorized) return;
       const profiles = result.profiles || [];
       const current = getCurrentModelProfile(profiles);
@@ -4644,10 +5130,22 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         flushConversationSave();
       }, CONVERSATION_SAVE_DEBOUNCE_MS);
     }
-  }, [conversationId, contextSummary, contextCompactedAt, messages, timeline]);
+  }, [conversationId, activeProject, contextSummary, contextCompactedAt, messages, timeline]);
 
   useEffect(() => {
-    scrollMessagesToLatest(messages.length <= 2 ? 'auto' : 'smooth');
+    const node = messageListRef.current;
+    if (!node) return undefined;
+    updateMessageAutoScrollPin();
+    node.addEventListener('scroll', updateMessageAutoScrollPin, { passive: true });
+    return () => node.removeEventListener('scroll', updateMessageAutoScrollPin);
+  }, []);
+
+  useEffect(() => {
+    if (messages.length <= 2 || autoScrollPinnedRef.current) {
+      scrollMessagesToLatest(messages.length <= 2 ? 'auto' : 'smooth');
+    } else {
+      setShowJumpLatest(true);
+    }
   }, [messages, running]);
 
   useEffect(() => {
@@ -4737,7 +5235,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     };
     pendingFollowUpsRef.current = [...pendingFollowUpsRef.current, item];
     syncRecentChatFromPrompt(item.conversationId, cleanPrompt || cleanReferences[0]?.name || cleanAttachments[0]?.name || '追加消息');
-    setMessages((items) => [
+    updateMessagesForConversation(item.conversationId, (items) => [
       ...items,
       {
         id: userId,
@@ -4770,9 +5268,11 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     ].join('\n');
   }
 
-  async function flushQueuedFollowUps() {
-    if (followUpFlushInFlightRef.current || runningRef.current) return;
-    const currentConversationId = conversationIdRef.current;
+  async function flushQueuedFollowUps(targetConversationId = conversationIdRef.current) {
+    if (followUpFlushInFlightRef.current) return;
+    const activeConversationId = targetConversationId || conversationIdRef.current;
+    if (hasRunningSessionForConversation(activeConversationId)) return;
+    const currentConversationId = activeConversationId;
     const readyItems = pendingFollowUpsRef.current.filter((item) => item.conversationId === currentConversationId);
     if (!readyItems.length) return;
     pendingFollowUpsRef.current = pendingFollowUpsRef.current.filter((item) => item.conversationId !== currentConversationId);
@@ -4811,7 +5311,9 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     const cleanAttachments = serializeAgentAttachments(attachmentList);
     const cleanReferences = sanitizeComposerReferences(Array.isArray(queuedReferences) ? queuedReferences : composerReferences);
     if (!cleanPrompt && !cleanAttachments.length && !cleanReferences.length) return;
-    if (runningRef.current && !forceRun) {
+    const activeConversationId = conversationIdRef.current;
+    const activeProject = conversationProjectRef.current;
+    if (hasRunningSessionForConversation(activeConversationId) && !forceRun) {
       enqueueFollowUpPrompt(cleanPrompt, cleanAttachments);
       return;
     }
@@ -4852,17 +5354,23 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     const initialDisclosureTimeline = buildImmediateTimeline(cleanPrompt, cleanAttachments, now);
     const accessMode = normalizeAccessMode(permissionMode);
     const requestedPermissionMode = permissionModeFromAccessMode(accessMode);
+    autoScrollPinnedRef.current = true;
+    setShowJumpLatest(false);
     sessionMap.current.set(requestedSessionId, assistantId);
-    syncRecentChatFromPrompt(conversationIdRef.current, cleanPrompt || cleanReferences[0]?.name || cleanAttachments[0]?.name || '新会话');
+    syncRecentChatFromPrompt(activeConversationId, cleanPrompt || cleanReferences[0]?.name || cleanAttachments[0]?.name || '新会话');
     trackSession(requestedSessionId, {
       messageId: assistantId,
+      conversationId: activeConversationId,
+      claudeSessionId: nextClaudeSessionId,
+      projectId: activeProject?.id || '',
+      projectName: activeProject?.name || '',
       prompt: promptForAgent,
       accessMode,
       source: 'local',
       compactedForNativeSession
     });
 
-    setMessages((items) => [
+    updateMessagesForConversation(activeConversationId, (items) => [
       ...items.map((item) => (queuedMessageIdSet.has(item.id) ? { ...item, status: 'sending' } : item)),
       ...(!useQueuedMessages ? [
       {
@@ -4883,8 +5391,8 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         status: 'thinking',
         sessionId: requestedSessionId,
         claudeSessionId: nextClaudeSessionId,
-        projectId: conversationProjectRef.current?.id || '',
-        projectName: conversationProjectRef.current?.name || '',
+        projectId: activeProject?.id || '',
+        projectName: activeProject?.name || '',
         originalPrompt: cleanPrompt,
         showTrace: promptDisclosureProfile(cleanPrompt, cleanAttachments) !== 'simple',
         timeline: initialDisclosureTimeline
@@ -4895,7 +5403,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       setComposerReferences([]);
       clearAttachments({ revoke: false });
     }
-    setTimeline((items) => appendTimelineItems(items, initialDisclosureTimeline));
+    updateTimelineForConversation(activeConversationId, (items) => appendTimelineItems(items, initialDisclosureTimeline));
     scheduleAssistantProgressDisclosure(assistantId, cleanPrompt, cleanAttachments);
     const statusMessageIds = useQueuedMessages ? queuedMessageIds : [userId];
     statusMessageIds.forEach((id) => {
@@ -4906,7 +5414,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     if (!window.ecorex) {
       scheduleMessageStatus(assistantId, 'generating', 420);
       scheduleStatusTimer(() => {
-        setMessages((items) =>
+        updateMessagesForConversation(activeConversationId, (items) =>
           items.map((item) =>
             item.id === assistantId
               ? {
@@ -4927,7 +5435,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     try {
       const result = await window.ecorex.runPrompt({
         sessionId: requestedSessionId,
-        conversationId: conversationIdRef.current,
+        conversationId: activeConversationId,
         claudeSessionId: nextClaudeSessionId,
         prompt: promptForAgent,
         rawPrompt: cleanPrompt,
@@ -4935,8 +5443,8 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         attachments: cleanAttachments,
         attachmentMetadata: cleanAttachments,
         selectedReferences: cleanReferences,
-        projectId: conversationProjectRef.current?.id || null,
-        disableProjectContext: !conversationProjectRef.current?.id,
+        projectId: activeProject?.id || null,
+        disableProjectContext: !activeProject?.id,
         accessMode,
         permissionMode: requestedPermissionMode,
         defaultPermissionMode: requestedPermissionMode,
@@ -4949,7 +5457,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         const unauthorized = Boolean(result.unauthorized);
         if (unauthorized) onUnauthorized?.();
         finishSession(requestedSessionId);
-        setMessages((items) =>
+        updateMessagesForConversation(activeConversationId, (items) =>
           items.map((item) =>
             item.id === assistantId
               ? {
@@ -4977,13 +5485,13 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       }
       currentSessionIdRef.current = sessionId;
       setCurrentSessionId(sessionId);
-      setMessages((items) =>
+      updateMessagesForConversation(activeConversationId, (items) =>
         items.map((item) => (item.id === assistantId ? {
           ...item,
           sessionId,
           claudeSessionId: result.claudeSessionId || nextClaudeSessionId || item.claudeSessionId,
-          projectId: result.projectId || conversationProjectRef.current?.id || item.projectId || '',
-          projectName: result.projectName || conversationProjectRef.current?.name || item.projectName || ''
+          projectId: result.projectId || activeProject?.id || item.projectId || '',
+          projectName: result.projectName || activeProject?.name || item.projectName || ''
         } : item))
       );
       if (pendingCancelsRef.current.has(requestedSessionId) || pendingCancelsRef.current.has(sessionId)) {
@@ -5004,7 +5512,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         return;
       }
       finishSession(requestedSessionId);
-      setMessages((items) =>
+      updateMessagesForConversation(activeConversationId, (items) =>
         items.map((item) =>
           item.id === assistantId
             ? {
@@ -5069,6 +5577,64 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
   function retryMessage(message) {
     const retryPrompt = retryPromptFromMessage(message);
     if (retryPrompt) sendPrompt(retryPrompt);
+  }
+
+  function isDuplicateAgentStartResult(result = {}) {
+    const code = String(result?.code || result?.status || '').toLowerCase();
+    return code === 'duplicate-session' || code === 'duplicate-start';
+  }
+
+  function attachPermissionContinuationToRunningSession(message, result = {}, requestedSessionId = '') {
+    const sessionId = String(result.sessionId || result.duplicateOf || requestedSessionId || '').trim();
+    if (!message?.id || !sessionId) return false;
+    if (requestedSessionId && requestedSessionId !== sessionId) {
+      runningSessionsRef.current.delete(requestedSessionId);
+      sessionMap.current.delete(requestedSessionId);
+      sessionOwnersRef.current.delete(requestedSessionId);
+    }
+    const owner = {
+      sessionId,
+      messageId: message.id,
+      conversationId: String(result.conversationId || conversationIdRef.current || ''),
+      claudeSessionId: String(result.claudeSessionId || conversationSessionIdRef.current || conversationIdRef.current || ''),
+      projectId: String(result.projectId || conversationProjectRef.current?.id || ''),
+      projectName: String(result.projectName || conversationProjectRef.current?.name || '')
+    };
+    sessionMap.current.set(sessionId, message.id);
+    sessionOwnersRef.current.set(sessionId, owner);
+    runningSessionsRef.current.add(sessionId);
+    currentSessionIdRef.current = sessionId;
+    setCurrentSessionId(sessionId);
+    commitRunningSessionRows((rows) => mergeRunningSessionRows(
+      rows.filter((row) => row.sessionId !== requestedSessionId),
+      [normalizeRunningSession({
+        sessionId,
+        id: sessionId,
+        conversationId: owner.conversationId,
+        claudeSessionId: owner.claudeSessionId,
+        projectId: owner.projectId,
+        projectName: owner.projectName,
+        messageId: message.id,
+        status: 'running',
+        state: 'running',
+        prompt: message.originalPrompt || '',
+        updatedAt: Date.now()
+      }, rows.length, 'local')]
+    ));
+    setMessages((items) =>
+      items.map((item) => (item.id === message.id ? {
+        ...item,
+        streaming: true,
+        error: false,
+        status: 'thinking',
+        sessionId,
+        claudeSessionId: owner.claudeSessionId || item.claudeSessionId,
+        projectId: owner.projectId || item.projectId || '',
+        projectName: owner.projectName || item.projectName || '',
+        timeline: appendTimeline(item.timeline || [], ['权限已确认，继续等待当前执行', '已接入运行会话', formatAgentEventTime(), 'pending', 'status'])
+      } : item))
+    );
+    return true;
   }
 
   async function continueFromPermission(message = {}, actionValue = 'allow') {
@@ -5168,6 +5734,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       });
 
       if (!result.ok) {
+        if (isDuplicateAgentStartResult(result) && attachPermissionContinuationToRunningSession(message, result, requestedSessionId)) {
+          permissionContinuationLocksRef.current.delete(message.id);
+          return;
+        }
         finishSession(requestedSessionId);
         permissionContinuationLocksRef.current.delete(message.id);
         if (result.unauthorized) onUnauthorized?.();
@@ -5298,6 +5868,17 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     }
   }
 
+  async function openGeneratedArtifact(artifact = {}) {
+    const result = await openArtifactFileWithBridge(artifact);
+    if (result?.unauthorized) {
+      onUnauthorized?.();
+      return;
+    }
+    if (result?.ok === false && !result?.missing) {
+      console.warn('Artifact open failed', result.error || result);
+    }
+  }
+
   const pendingPermissionRequest = useMemo(() => {
     for (const message of [...messages].reverse()) {
       const request = permissionRequestFromMessage(message, message.timeline || timeline);
@@ -5359,10 +5940,17 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
               onPermissionReply={continueFromPermission}
               onInsertArtifactReference={insertArtifactReference}
               onOpenArtifact={(artifact) => setFocusArtifact(artifact)}
+              onOpenArtifactLocal={openGeneratedArtifact}
               onHideArtifact={hideMessageArtifact}
               onOpenAttachment={openUserAttachment}
             />
           ))}
+          {showJumpLatest && (
+            <button className="jump-latest" type="button" onClick={() => scrollMessagesToLatest('smooth')}>
+              <ChevronDown size={14} />
+              回到最新
+            </button>
+          )}
         </div>
 
         <Composer
@@ -5406,6 +5994,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           artifact={focusArtifact}
           onClose={() => setFocusArtifact(null)}
           onInsertReference={insertArtifactReference}
+          onOpenLocal={openGeneratedArtifact}
         />
       ) : null}
     </div>
@@ -5614,12 +6203,21 @@ function ChatMessage({
   onPermissionReply,
   onInsertArtifactReference,
   onOpenArtifact,
+  onOpenArtifactLocal,
   onHideArtifact,
   onOpenAttachment
 }) {
   const [expanded, setExpanded] = useState(false);
   const [availableArtifactIds, setAvailableArtifactIds] = useState(() => new Set());
-  const rawText = message.text || '';
+  const rawText = message.role === 'assistant' ? cleanAssistantOutputText(message.text || '') : (message.text || '');
+  const hasVisibleAssistantContent = Boolean(
+    rawText.trim()
+    || message.error
+    || message.finalArtifacts?.length
+    || message.ledger?.length
+    || message.attachmentIngest?.length
+    || message.rich
+  );
   const hiddenArtifactIds = useMemo(() => new Set(message.hiddenArtifactIds || []), [message.hiddenArtifactIds]);
   const artifactContext = useMemo(() => ({
     sessionId: message.sessionId || message.agentSessionId || '',
@@ -5680,6 +6278,8 @@ function ChatMessage({
     );
   }
 
+  if (message.silentRecovery && !hasVisibleAssistantContent) return null;
+
   const shouldCollapse = message.role === 'assistant' && rawText.length > ASSISTANT_COLLAPSE_CHARS;
   const displayText = shouldCollapse && !expanded
     ? `${rawText.slice(0, ASSISTANT_COLLAPSE_CHARS)}...`
@@ -5705,6 +6305,7 @@ function ChatMessage({
           artifacts={artifactReferences}
           createdTime={message.time}
           onOpenArtifact={onOpenArtifact}
+          onOpenArtifactLocal={onOpenArtifactLocal}
           onHideArtifact={(artifact) => onHideArtifact?.(message.id, artifact.id)}
         />
         <AttachmentIngestionSummary items={message.attachmentIngest || []} />
@@ -5764,7 +6365,7 @@ function ToolLedgerDisclosure({ items = [] }) {
         <strong>{latest.toolName}</strong>
         <em>{latest.action}</em>
         <small>{latest.status}</small>
-        <b>{expanded ? '收起' : `工具 ${ledgerItems.length}`}</b>
+        <b>{expanded ? '收起' : '展开'}</b>
       </button>
       {expanded && (
         <div className="tool-ledger-list">
@@ -5776,7 +6377,6 @@ function ToolLedgerDisclosure({ items = [] }) {
                 <em>{item.action}</em>
               </div>
               <small>{item.status}</small>
-              {item.time && <time>{item.time}</time>}
               {item.detail && (
                 <details>
                   <summary>{hasDetails ? '详情' : '查看'}</summary>
@@ -5813,7 +6413,7 @@ function RecoveryStateNotice({ recovery, status, onRetry }) {
   );
 }
 
-function ArtifactPreviewShelf({ artifacts = [], createdTime = '', onOpenArtifact, onHideArtifact, compact = false }) {
+function ArtifactPreviewShelf({ artifacts = [], createdTime = '', onOpenArtifact, onOpenArtifactLocal, onHideArtifact, compact = false }) {
   if (!artifacts.length) return null;
 
   return (
@@ -5825,6 +6425,7 @@ function ArtifactPreviewShelf({ artifacts = [], createdTime = '', onOpenArtifact
             createdTime={createdTime}
             key={artifact.id}
             onOpen={() => onOpenArtifact?.(artifact)}
+            onOpenLocal={() => onOpenArtifactLocal?.(artifact)}
             onHide={() => onHideArtifact?.(artifact)}
           />
         ))}
@@ -5833,8 +6434,18 @@ function ArtifactPreviewShelf({ artifacts = [], createdTime = '', onOpenArtifact
   );
 }
 
-function ArtifactThumbnailCard({ artifact, createdTime = '', onOpen, onHide }) {
+function ArtifactThumbnailCard({ artifact, createdTime = '', onOpen, onOpenLocal, onHide }) {
   const kind = artifactPreviewKind(artifact.ext, artifact.type || artifact.mimeType);
+  const ext = artifactExtension(artifact.path || artifact.name || artifact.ext);
+  const Icon = kind === 'image'
+    ? Eye
+    : kind === 'html'
+      ? Code2
+      : ['xls', 'xlsx', 'csv'].includes(ext)
+        ? BarChart3
+        : ['ppt', 'pptx'].includes(ext)
+          ? LayoutDashboard
+          : FileText;
   const title = artifact.name || fileNameFromArtifactPath(artifact.path);
   const timeLabel = createdTime || formatAgentEventTime();
   return (
@@ -5848,7 +6459,7 @@ function ArtifactThumbnailCard({ artifact, createdTime = '', onOpen, onHide }) {
         onClick={onOpen}
       >
         <span className="artifact-thumb-icon artifact-file-icon" data-testid="artifact-file-icon">
-          {kind === 'image' ? <Eye size={18} /> : kind === 'html' ? <Code2 size={18} /> : <FileText size={18} />}
+          <Icon size={18} />
         </span>
         <span className="artifact-thumb-main">
           <strong>{title}</strong>
@@ -5865,6 +6476,16 @@ function ArtifactThumbnailCard({ artifact, createdTime = '', onOpen, onHide }) {
         onClick={onHide}
       >
         <X size={14} />
+      </button>
+      <button
+        className="artifact-thumb-local-open"
+        data-testid="artifact-file-local-open"
+        type="button"
+        title="在本地打开"
+        aria-label={`本地打开 ${title}`}
+        onClick={onOpenLocal}
+      >
+        <FolderOpen size={14} />
       </button>
     </div>
   );
@@ -5895,7 +6516,7 @@ function ComposerReferenceTray({ references = [], onRemove }) {
   return <MessageReferenceList references={references} onRemove={onRemove} />;
 }
 
-function ArtifactFocusPanel({ artifact, onClose, onInsertReference }) {
+function ArtifactFocusPanel({ artifact, onClose, onInsertReference, onOpenLocal }) {
   if (!artifact) return null;
   return (
     <aside className="artifact-focus-panel">
@@ -5913,12 +6534,13 @@ function ArtifactFocusPanel({ artifact, onClose, onInsertReference }) {
         focus
         onClose={onClose}
         onInsertReference={onInsertReference}
+        onOpenLocal={onOpenLocal}
       />
     </aside>
   );
 }
 
-function ArtifactPreviewCard({ artifact, onClose, onInsertReference, focus = false }) {
+function ArtifactPreviewCard({ artifact, onClose, onInsertReference, onOpenLocal, focus = false }) {
   const [preview, setPreview] = useState({ status: 'idle' });
   const [selectedLine, setSelectedLine] = useState(artifact.line || null);
   const [selectedText, setSelectedText] = useState('');
@@ -6004,23 +6626,25 @@ function ArtifactPreviewCard({ artifact, onClose, onInsertReference, focus = fal
   const content = preview.status === 'ready' ? preview.content || '' : '';
   const language = preview.status === 'ready' ? preview.language : artifactLanguageFromPath(artifact.path || artifact.name);
   const metadataOnly = preview.status === 'ready'
-    && (preview.previewable === false || preview.renderMode === 'metadata' || (preview.renderMode !== 'kkfileview' && ['pdf', 'office', 'binary'].includes(preview.kind)));
-  const canRenderKkFileView = preview.status === 'ready' && !metadataOnly && preview.renderMode === 'kkfileview' && preview.previewUrl;
+    && (preview.previewable === false || preview.renderMode === 'metadata' || (preview.renderMode !== 'vue-office' && ['pdf', 'office', 'binary'].includes(preview.kind)));
+  const canRenderVueOffice = preview.status === 'ready' && !metadataOnly && preview.renderMode === 'vue-office' && preview.previewUrl;
   const canRenderHtml = preview.status === 'ready' && !metadataOnly && preview.kind === 'html';
   const canRenderImage = preview.status === 'ready' && !metadataOnly && preview.kind === 'image' && preview.previewUrl;
-  const canRenderText = preview.status === 'ready' && !metadataOnly && !canRenderImage && !canRenderKkFileView;
+  const canRenderText = preview.status === 'ready' && !metadataOnly && !canRenderImage && !canRenderVueOffice;
 
   return (
     <div className={`artifact-preview-card ${focus ? 'focus' : ''}`}>
-      <header>
-        <div>
-          <strong>{artifact.name}</strong>
-          <span>{artifactLocationLabel(artifact)}</span>
-        </div>
-        <button type="button" title="关闭预览" onClick={onClose}>
-          <X size={15} />
-        </button>
-      </header>
+      {!focus && (
+        <header>
+          <div>
+            <strong>{artifact.name}</strong>
+            <span>{artifactLocationLabel(artifact)}</span>
+          </div>
+          <button type="button" title="关闭预览" onClick={onClose}>
+            <X size={15} />
+          </button>
+        </header>
+      )}
 
       {preview.status === 'loading' && (
         <div className="artifact-preview-state">
@@ -6065,9 +6689,9 @@ function ArtifactPreviewCard({ artifact, onClose, onInsertReference, focus = fal
               srcDoc={content}
             />
           )}
-          {canRenderKkFileView && (
+          {canRenderVueOffice && (
             <iframe
-              className="artifact-html-frame artifact-kkfileview-frame"
+              className="artifact-html-frame artifact-vue-office-frame"
               title={`${artifact.name} preview`}
               sandbox="allow-scripts allow-same-origin allow-forms"
               referrerPolicy="no-referrer"
@@ -6101,9 +6725,13 @@ function ArtifactPreviewCard({ artifact, onClose, onInsertReference, focus = fal
           <Copy size={14} />
           复制路径
         </button>
+        <button type="button" data-testid="artifact-preview-local-open" onClick={() => onOpenLocal?.(artifact)}>
+          <FolderOpen size={14} />
+          本地打开
+        </button>
         <button className="primary-inline" type="button" onClick={insertReference}>
           <Plus size={14} />
-          回填定位
+          选中文件
         </button>
       </footer>
     </div>
@@ -8738,7 +9366,7 @@ function DiagnosticsView({ backendStatus, backendError, capabilities, authStatus
   }
 
   async function refreshModelHealth() {
-    const result = await loadModelProfiles(settings.defaultModel || 'sonnet');
+    const result = await loadModelProfiles(settings.defaultModel || DEFAULT_AGENT_MODEL_NAME);
     if (result?.unauthorized) {
       onUnauthorized?.();
       setModelHealth({ apiReady: true, profiles: [], notice: '登录状态已过期' });
@@ -9609,6 +10237,38 @@ function normalizeSkillItem(skill = {}, index = 0, source = 'api') {
   };
 }
 
+function skillItemsFromCapabilities(capabilities = {}) {
+  const items = [
+    ...extractCollection({ capabilityPacks: capabilities?.capabilityPacks }, ['capabilityPacks']),
+    ...extractCollection(capabilities, ['installedSkillPacks', 'skillPacks', 'capabilityPacks', 'plugins', 'skills']),
+    ...extractCollection(capabilities?.capabilities, ['installedSkillPacks', 'skillPacks', 'capabilityPacks', 'plugins', 'skills'])
+  ];
+  const seen = new Set();
+  return items
+    .filter((item) => item && typeof item === 'object' && !isNativeSkillItem(item))
+    .filter((item) => {
+      const key = String(item.id || item.name || item.title || item.packageName || '').toLowerCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((item, index) => normalizeSkillItem({
+      ...item,
+      installed: item.installed ?? item.available ?? true,
+      enabled: item.enabled ?? true,
+      skills: item.skills ?? item.skillCount ?? 1,
+      category: item.category || item.sourceKind || item.type || 'workflow'
+    }, index, 'capabilities'));
+}
+
+async function loadCapabilitySkills(currentCapabilities = null) {
+  const fromState = skillItemsFromCapabilities(currentCapabilities || {});
+  if (fromState.length) return fromState;
+  if (!window.ecorex?.getCapabilities) return [];
+  const result = await window.ecorex.getCapabilities({ refresh: true });
+  return skillItemsFromCapabilities(result?.capabilities || result || {});
+}
+
 function SkillsView({ backendStatus, capabilities, refreshBackend, onUnauthorized, embedded = false }) {
   const [skills, setSkills] = useState([]);
   const [view, setView] = useState('all');
@@ -9661,13 +10321,34 @@ function SkillsView({ backendStatus, capabilities, refreshBackend, onUnauthorize
     let source = 'api';
     let items = result?.ok === false && result.missing
       ? []
-      : extractCollection(result, ['skills', 'plugins', 'capabilities.skills', 'capabilities.plugins']);
+      : extractCollection(result, [
+        'installedSkillPacks',
+        'skillPacks',
+        'skills',
+        'plugins',
+        'capabilityPacks',
+        'capabilities.installedSkillPacks',
+        'capabilities.skillPacks',
+        'capabilities.capabilityPacks',
+        'capabilities.skills',
+        'capabilities.plugins'
+      ]);
 
-    if (!items.length && result?.missing) {
-      setSkills([]);
-      setState('unsupported');
-      setNotice('本地能力服务未就绪。');
-      return;
+    if (!items.length) {
+      const fallbackItems = await loadCapabilitySkills(capabilities);
+      if (fallbackItems.length) {
+        setSkills(fallbackItems);
+        setState('ready');
+        setLastLoadedAt(formatDateTime(new Date().toISOString()));
+        if (!silent) setNotice('');
+        return;
+      }
+      if (result?.missing) {
+        setSkills([]);
+        setState('unsupported');
+        setNotice('本地能力服务未就绪。');
+        return;
+      }
     }
 
     const nextSkills = items
@@ -9951,6 +10632,46 @@ function ManagementState({ title, text, icon: Icon = AlertTriangle, spin = false
   );
 }
 
+function mcpItemsFromCapabilities(capabilities = {}) {
+  const items = [
+    ...extractCollection(capabilities, ['services', 'servers', 'mcp.services', 'mcp.servers', 'capabilityPacks', 'plugins', 'skillPacks']),
+    ...extractCollection(capabilities?.capabilities, ['services', 'servers', 'mcp.services', 'mcp.servers', 'capabilityPacks', 'plugins', 'skillPacks'])
+  ];
+  const seen = new Set();
+  return items
+    .filter((item) => item && typeof item === 'object')
+    .filter((item) => {
+      const raw = `${item.sourceKind || ''} ${item.type || ''} ${item.kind || ''} ${item.category || ''} ${item.name || ''}`.toLowerCase();
+      return raw.includes('mcp') && !isNativeConnectorItem(item);
+    })
+    .filter((item) => {
+      const key = String(item.id || item.name || item.title || item.packageName || '').toLowerCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((item, index) => normalizeMcpService({
+      ...item,
+      displayName: item.displayName || item.title || item.name,
+      endpointLabel: item.endpointLabel || 'EcoreX MCP 端点',
+      tags: item.tags || ['MCP', item.category || 'EcoreX'],
+      auth: item.auth || '本地认证',
+      authState: item.authState || (item.enabled === false ? '未启用' : '已配置'),
+      status: item.status || (item.enabled === false ? 'disabled' : 'configured'),
+      enabled: item.enabled ?? true,
+      installed: item.installed ?? true,
+      permissions: item.permissions || '读写'
+    }, index, 'capabilities'));
+}
+
+async function loadCapabilityMcpServices(currentCapabilities = null) {
+  const fromState = mcpItemsFromCapabilities(currentCapabilities || {});
+  if (fromState.length) return fromState;
+  if (!window.ecorex?.getCapabilities) return [];
+  const result = await window.ecorex.getCapabilities({ refresh: true });
+  return mcpItemsFromCapabilities(result?.capabilities || result || {});
+}
+
 function normalizeMcpService(service = {}, index = 0, source = 'api') {
   const icons = [FileText, User, Database, Workflow, Globe2, SquareTerminal];
   const rawStatus = service.status || service.state || service.connectionState || '';
@@ -9990,7 +10711,7 @@ function normalizeMcpService(service = {}, index = 0, source = 'api') {
   };
 }
 
-function McpView({ backendStatus, refreshBackend, onUnauthorized, embedded = false }) {
+function McpView({ backendStatus, capabilities, refreshBackend, onUnauthorized, embedded = false }) {
   const [services, setServices] = useState([]);
   const [state, setState] = useState(window.ecorex ? 'loading' : 'offline');
   const [notice, setNotice] = useState('');
@@ -10044,11 +10765,21 @@ function McpView({ backendStatus, refreshBackend, onUnauthorized, embedded = fal
       ? []
       : extractCollection(result, ['services', 'servers', 'mcp.services', 'mcp.servers']);
 
-    if (!items.length && result?.missing) {
-      setServices([]);
-      setState('unsupported');
-      setNotice('本地能力服务未就绪。');
-      return;
+    if (!items.length) {
+      const fallbackItems = await loadCapabilityMcpServices(capabilities);
+      if (fallbackItems.length) {
+        setServices(fallbackItems);
+        setState('ready');
+        setLastLoadedAt(formatDateTime(new Date().toISOString()));
+        if (!silent) setNotice('');
+        return;
+      }
+      if (result?.missing) {
+        setServices([]);
+        setState('unsupported');
+        setNotice('本地能力服务未就绪。');
+        return;
+      }
     }
 
     const nextServices = items

@@ -25,6 +25,11 @@ const REQUIRED_LOCAL_STATE_EXCLUSIONS = [
   '!**/secrets.json',
   '!**/auth-session.json',
   '!**/auth-identity.json',
+  '!**/auth-users.json',
+  '!**/enterprise-admin-journal.jsonl',
+  '!**/session-bindings.json',
+  '!**/skill-packs.json',
+  '!**/skill-packs/**/*',
   '!**/model-profiles.json',
   '!**/.ecorex-project.json',
   '!**/.ecorex-projects.json',
@@ -374,8 +379,8 @@ check('model adapter syntax', () => {
 
 check('agent runtime smoke syntax', () => {
   nodeCheck('scripts/agent-runtime-smoke.cjs');
-  nodeCheck('scripts/prepare-kkfileview.cjs');
-  nodeCheck('scripts/verify-kkfileview-vendor.cjs');
+  nodeCheck('scripts/prepare-vue-office.cjs');
+  nodeCheck('scripts/verify-vue-office-vendor.cjs');
 });
 
 check('preload exposes model profile IPC', () => {
@@ -449,11 +454,17 @@ check('local desktop auth is first-run bound and encrypted', () => {
     main,
     [
       "const AUTH_IDENTITY_FILE_NAME = 'auth-identity.json'",
+      "const AUTH_USERS_FILE_NAME = 'auth-users.json'",
       'const LOCAL_AUTH_HASH_ITERATIONS =',
       'function authIdentityPath',
+      'function authUsersPath',
       'function readAuthIdentity',
+      'function readAuthUsers',
+      'function writeAuthUsers',
       'function writeAuthIdentity',
       'function createAuthIdentity',
+      'function createUserRecord',
+      'function listAuthUsers',
       'function verifyLocalPassword',
       'crypto.pbkdf2Sync',
       'crypto.timingSafeEqual',
@@ -462,10 +473,56 @@ check('local desktop auth is first-run bound and encrypted', () => {
     ],
     'local auth binding'
   );
-  assertMatches(main, /if \(!identity\) \{[\s\S]*?identity = createAuthIdentity\(email, password\);[\s\S]*?createdIdentity = true;/, 'first login must bind a local owner identity.');
-  assertMatches(main, /else if \(identity\.email !== email \|\| !verifyLocalPassword\(identity, password\)\)/, 'subsequent login must verify bound email and password.');
+  assertMatches(main, /if \(!users\.length\) \{[\s\S]*?role:\s*'super_admin'[\s\S]*?users = writeAuthUsers\(\[user\]\);[\s\S]*?createdIdentity = true;/, 'first login must bind a local super administrator.');
+  assertMatches(main, /else if \(!user \|\| user\.active === false \|\| !verifyLocalPassword\(user, password\)\)/, 'subsequent login must verify bound user, active state, and password.');
   assertMatches(main, /if \(loginType === 'code' \|\| payload\.code\)/, 'local mode must not accept arbitrary verification codes.');
   assertMatches(main, /encoding:\s*'safeStorage\/v1'[\s\S]*encryptLocalPayload\(safeIdentity\)/, 'auth identity must be encrypted with safeStorage.');
+  assertMatches(main, /function writeAuthUsers[\s\S]*encoding:\s*'safeStorage\/v1'[\s\S]*encryptLocalPayload\(envelope\)/, 'auth users must be encrypted with safeStorage.');
+  assertMatches(main, /handleSafe\('auth:user:create'[\s\S]*requiredPermission:\s*'users:manage'/, 'user creation must require user management permission.');
+  assertMatches(main, /handleSafe\('enterprise:action'[\s\S]*requiredPermission:\s*'enterprise:manage'/, 'enterprise actions must require enterprise management permission.');
+});
+
+check('agent session bindings are persisted and project isolated', () => {
+  const main = readText('electron/main.cjs');
+  const pkg = JSON.parse(readText('package.json'));
+  includesAll(
+    main,
+    [
+      "const CLAUDE_SESSION_BINDINGS_FILE_NAME = 'session-bindings.json'",
+      'function claudeSessionBindingsPath',
+      'function ensureClaudeSessionBindingCacheLoaded',
+      'function persistClaudeSessionBindings',
+      'function claudeSessionBindingConflict',
+      'String(left.conversationId || \'\') === String(right.conversationId || \'\')',
+      'session-context-conflict'
+    ],
+    'persistent agent session binding'
+  );
+  assertMatches(main, /rememberClaudeSessionBinding[\s\S]*persistClaudeSessionBindings\(\)/, 'session bindings must be persisted after a runtime starts.');
+  assertMatches(main, /claimAgentStart[\s\S]*claudeSessionBindingConflict\(payload\)[\s\S]*session-context-conflict/, 'agent start must reject cross-context session reuse.');
+  assertIncludesPatterns(pkg.build?.files || [], ['!**/session-bindings.json'], 'build.files');
+  const backendResource = (pkg.build?.extraResources || []).find((item) => String(item.to || '').replace(/\\/g, '/') === 'backend/claude-code-main');
+  assert(backendResource, 'backend extraResources must exist.');
+  assertIncludesPatterns(backendResource.filter || [], ['!**/session-bindings.json'], 'backend extraResources.filter');
+});
+
+check('renderer routes agent events by owning conversation', () => {
+  const app = readText('src/App.jsx');
+  includesAll(
+    app,
+    [
+      'function sessionOwnerForSession',
+      'function hasRunningSessionForConversation',
+      'storedEventsByConversation',
+      'loadConversationState(ownerConversationId)',
+      'saveConversationState(ownerConversationId',
+      'flushQueuedFollowUps(owner.conversationId)',
+      'hasRunningSessionForConversation(activeConversationId)'
+    ],
+    'owner-aware renderer session routing'
+  );
+  assertMatches(app, /updateTimelineForConversation\(activeConversationId[\s\S]*appendTimelineItems\(items, initialDisclosureTimeline\)/, 'new run disclosure timeline must target the owning conversation.');
+  assertMatches(app, /updateMessagesForConversation\(activeConversationId[\s\S]*item\.id === assistantId[\s\S]*streaming:\s*false/, 'run failure updates must target the owning conversation.');
 });
 
 check('auth token exposure and session lifecycle are bounded', () => {
@@ -615,7 +672,8 @@ check('safe local file preview bridge is bounded and redacted', () => {
   assertMatches(main, /previewFile[\s\S]*looksLikeBinaryBuffer\(buffer\)[\s\S]*reason:\s*'binary'/, 'binary files must return metadata with a non-previewable reason.');
   assertMatches(main, /previewFile[\s\S]*const content = redactSensitiveText\(rawText\)[\s\S]*text:\s*content/, 'preview text must be redacted before crossing IPC.');
   assertMatches(main, /previewImageFile[\s\S]*stat\.size > FILE_PREVIEW_IMAGE_MAX_BYTES[\s\S]*reason:\s*'too-large'[\s\S]*dataUrl/, 'small image preview must be bounded and returned as dataUrl.');
-  assertMatches(main, /isDocumentMetadataPreviewExtension\(file\.extension\)[\s\S]*previewMetadataOnly\(file,\s*'metadata-only'\)/, 'PDF and Office files must return metadata-only previews.');
+  assertMatches(main, /VUE_OFFICE_DOCUMENT_EXTENSIONS\.has\(file\.extension\)[\s\S]*previewWithVueOffice\(target,\s*file,\s*stat\)[\s\S]*previewOpenXmlOfficeFile/, 'supported PDF and Office files must try vue-office before metadata or text fallbacks.');
+  assertMatches(main, /isDocumentMetadataPreviewExtension\(file\.extension\)[\s\S]*previewMetadataOnly\(file,\s*'metadata-only'\)/, 'unsupported document files must return metadata-only previews.');
   assertMatches(main, /resolveFilePreviewTarget[\s\S]*isRegisteredSelectedAttachment\(target,\s*input\)/, 'file preview must also support explicit selected-file grants.');
   assertMatches(main, /extractPreviewArtifactTargets[\s\S]*cleanPreviewArtifactPath[\s\S]*\[\^\\\\r\\\\n<>/, 'AI artifact path extraction must tolerate generated paths with spaces while staying line bounded.');
   assertMatches(main, /resolveFilePreviewTarget[\s\S]*isRegisteredAgentArtifact\(target,\s*input,\s*workspaceRoot\)[\s\S]*kind:\s*'agent-artifact'/, 'same-session AI artifacts must be previewable without opening arbitrary local files.');
@@ -628,55 +686,52 @@ check('safe local file preview bridge is bounded and redacted', () => {
   assertNotMatches(main, /function previewImageFile[\s\S]{0,2500}(shell\.openPath|BrowserWindow|loadURL|executeJavaScript|spawn\()/, 'image preview must stay inside safe read-only IPC.');
 });
 
-check('kkFileView sidecar preview engine is local and bounded', () => {
+check('vue-office static preview engine is local and bounded', () => {
   const main = readText('electron/main.cjs');
   const app = readText('src/App.jsx');
   const pkg = packageJson();
   includesAll(
     main,
     [
-      "const KKFILEVIEW_VENDOR_DIR_NAME = 'kkfileview'",
-      'const KKFILEVIEW_PREVIEW_MAX_BYTES = 100 * 1024 * 1024',
-      'function locateKkFileViewResource',
-      'function ensureKkFileViewEngine',
-      'function ensureKkFileViewBridgeServer',
-      'function handleKkFileViewBridgeRequest',
-      'function previewWithKkFileView',
-      "renderMode: 'kkfileview'",
+      "const VUE_OFFICE_VENDOR_DIR_NAME = 'vue-office'",
+      'const VUE_OFFICE_PREVIEW_MAX_BYTES = 100 * 1024 * 1024',
+      'function locateVueOfficeResource',
+      'function ensureVueOfficePreviewServer',
+      'function handleVueOfficePreviewRequest',
+      'function serveVueOfficePreviewFile',
+      'function previewWithVueOffice',
+      "renderMode: 'vue-office'",
       "listen(0, '127.0.0.1'",
-      '--server.address=127.0.0.1',
-      '--file.upload.disable=true',
-      '--pdf.download.disable=true',
-      '--media.convert.disable=true',
-      "stopKkFileViewEngine('app-quit')"
+      "'Cache-Control': 'no-store'",
+      "stopVueOfficePreviewServer('app-quit')"
     ],
-    'kkFileView sidecar preview engine'
+    'vue-office static preview engine'
   );
-  assertMatches(main, /createKkFileViewSourceUrl[\s\S]*crypto\.randomBytes\(24\)[\s\S]*expiresAt:\s*Date\.now\(\) \+ KKFILEVIEW_GRANT_TTL_MS/, 'kkFileView source URLs must use expiring random grants.');
-  assertMatches(main, /handleKkFileViewBridgeRequest[\s\S]*preview-file\\\/\(\[a-f0-9\]\{32,64\}\)[\s\S]*'Cache-Control': 'no-store'/, 'kkFileView bridge must only serve tokenized preview-file requests with no-store caching.');
-  assertMatches(main, /function kkFileViewResourceRoots\(\)[\s\S]*if \(app\.isPackaged\)[\s\S]*process\.resourcesPath[\s\S]*\} else \{[\s\S]*process\.env\.ECOREX_KKFILEVIEW_HOME/, 'packaged kkFileView must use bundled resources instead of env-injected runtime roots.');
-  assertMatches(main, /function isKkFileViewRuntimeEnabled\(\)[\s\S]*app\.isPackaged[\s\S]*ECOREX_ENABLE_DEV_KKFILEVIEW/, 'kkFileView runtime must be packaged-only unless dev explicitly opts in.');
-  assertMatches(main, /function canUseKkFileViewPreview[\s\S]*isKkFileViewRuntimeEnabled\(\)/, 'document preview must not start kkFileView when the runtime is disabled.');
-  assertMatches(main, /safeKkFileViewOutputText[\s\S]*'\/preview-file\/\[REDACTED\]'/, 'kkFileView logs must redact temporary preview tokens.');
-  assertMatches(main, /previewFile[\s\S]*previewWithKkFileView\(target,\s*file,\s*stat\)[\s\S]*previewOpenXmlOfficeFile/, 'Office preview must try kkFileView before falling back to OpenXML text extraction.');
+  assertMatches(main, /createVueOfficeSourceUrl[\s\S]*crypto\.randomBytes\(24\)[\s\S]*expiresAt:\s*Date\.now\(\) \+ VUE_OFFICE_GRANT_TTL_MS/, 'vue-office source URLs must use expiring random grants.');
+  assertMatches(main, /serveVueOfficePreviewFile[\s\S]*preview-file\\\/\(\[a-f0-9\]\{32,64\}\)[\s\S]*'Cache-Control': 'no-store'/, 'vue-office file bridge must only serve tokenized preview-file requests with no-store caching.');
+  assertMatches(main, /function vueOfficeResourceRoots\(\)[\s\S]*if \(app\.isPackaged\)[\s\S]*process\.resourcesPath[\s\S]*\} else \{[\s\S]*process\.env\.ECOREX_VUE_OFFICE_HOME/, 'packaged vue-office must use bundled resources while dev may override the static root.');
+  assertNotMatches(main, /ensureVueOfficePreviewServer[\s\S]{0,2600}\bspawn\(/, 'vue-office preview must not spawn a sidecar process.');
+  assertMatches(main, /previewFile[\s\S]*previewWithVueOffice\(target,\s*file,\s*stat\)[\s\S]*previewOpenXmlOfficeFile/, 'Office preview must try vue-office before falling back to OpenXML text extraction.');
   assertMatches(main, /Content-Security-Policy[\s\S]*img-src 'self' data: https: http:\/\/127\.0\.0\.1:\*[\s\S]*media-src 'self' data: blob: https: http:\/\/127\.0\.0\.1:\*[\s\S]*frame-src 'self' http:\/\/127\.0\.0\.1:\*/, 'renderer CSP must allow local preview frames and bounded rich chat media.');
   includesAll(
     app,
     [
-      "preview.renderMode === 'kkfileview'",
-      'artifact-kkfileview-frame',
+      "preview.renderMode === 'vue-office'",
+      'artifact-vue-office-frame',
       'sandbox="allow-scripts allow-same-origin allow-forms"',
       "payload.type !== 'ecorex-preview-selection'"
     ],
-    'kkFileView renderer preview branch'
+    'vue-office renderer preview branch'
   );
   const extraResources = Array.isArray(pkg.build?.extraResources) ? pkg.build.extraResources : [];
-  const kkResource = extraResources.find((item) => String(item.to || '').replace(/\\/g, '/') === 'kkfileview');
-  assert(kkResource, 'kkFileView extraResources entry must be configured.');
-  assert(kkResource.from === 'vendor/kkfileview', 'kkFileView extraResources source must be vendor/kkfileview.');
-  assertIncludesPatterns(kkResource.filter, ['**/*', '!**/*.log', '!**/tmp/**/*'], 'kkFileView extraResources.filter');
-  assertExistingDirectory(rel('vendor/kkfileview'), 'kkFileView vendor placeholder');
-  assertExistingFile(rel('vendor/kkfileview/README.md'), 'kkFileView vendor README');
+  const vueOfficeResource = extraResources.find((item) => String(item.to || '').replace(/\\/g, '/') === 'vue-office');
+  assert(vueOfficeResource, 'vue-office extraResources entry must be configured.');
+  assert(vueOfficeResource.from === 'vendor/vue-office', 'vue-office extraResources source must be vendor/vue-office.');
+  assertIncludesPatterns(vueOfficeResource.filter, ['index.html', 'manifest.json', 'js-preview-lib/**/*'], 'vue-office extraResources.filter');
+  assertExistingDirectory(rel('vendor/vue-office'), 'vue-office vendor directory');
+  assertExistingFile(rel('vendor/vue-office/index.html'), 'vue-office viewer');
+  assertExistingFile(rel('vendor/vue-office/js-preview-lib/pdf.umd.js'), 'vue-office PDF runtime');
+  assertExistingFile(rel('vendor/vue-office/js-preview-lib/pptx-preview.umd.js'), 'vue-office PPTX runtime');
 });
 
 check('agent attachments, tool ledger and run journal are production-safe', () => {
@@ -718,7 +773,7 @@ check('agent attachments, tool ledger and run journal are production-safe', () =
 
 check('window default, preload and minimum size guardrails', () => {
   const main = readText('electron/main.cjs');
-  includesAll(main, ['function defaultWindowBounds', 'screen.getPrimaryDisplay()', 'width: bounds.width', 'height: bounds.height', 'minWidth: 800', 'minHeight: 600', "backgroundColor: '#070c12'", 'show: true', 'function revealStartupWindow', "revealStartupWindow('created-dark-shell')", "revealStartupWindow('startup-splash-loaded')", 'mainWindow.maximize()', 'function startupBrandIconPath', 'function startupSplashUrlForWindow', 'function startupSplashDataUrl', 'function startStartupPreload', 'function waitForStartupPreload', "startStartupPreload('native-loading')", 'collectBackendStatus(null, { refresh: false })'], 'desktop window sizing and startup preload guardrails');
+  includesAll(main, ['function defaultWindowBounds', 'screen.getPrimaryDisplay()', 'width: bounds.width', 'height: bounds.height', 'minWidth: 800', 'minHeight: 600', "backgroundColor: '#070c12'", 'show: true', 'function revealStartupWindow', "revealStartupWindow('created-dark-shell')", "revealStartupWindow('startup-splash-loaded')", 'mainWindow.maximize()', 'function startupBrandIconPath', 'function startupSplashUrlForWindow', 'function startupSplashDataUrl', 'function startStartupPreload', 'function waitForStartupPreload', "startStartupPreload('native-loading')", 'collectBackendStatus(null, { refresh: false, lightweight: true })'], 'desktop window sizing and startup preload guardrails');
   includesAll(main, ['locateClaude()', 'Promise.resolve().then(() => collectCapabilities())', 'publicAuthSession(readAuthSession({ refresh: true }))', 'await waitForStartupPreload(startupPreload)', 'loadRendererEntry()'], 'native splash preload must finish or time out before renderer entry');
   assertMatches(
     main,
@@ -782,6 +837,7 @@ check('agent runtime production guardrails', () => {
       'recoveryHint: agentRecoveryHint',
       'function defaultCommandCwd',
       'process.resourcesPath',
+      'function isPackagedClaudeWrapperStub',
       'function stableClaudeSessionUuid',
       'sanitizeClaudeSessionId',
       'function claudeSessionTranscriptExists',
@@ -805,6 +861,11 @@ check('agent runtime production guardrails', () => {
   assertMatches(main, /'--output-format',\s*'stream-json',\s*'--verbose'/, 'stream-json output must always be paired with --verbose.');
   assertMatches(main, /'--bare'[\s\S]*'--print'[\s\S]*'--plugin-dir'/, 'agent runtime must run in bare isolated mode while explicitly loading bundled plugins.');
   assertMatches(main, /env:\s*filteredAgentEnv\(\{[\s\S]*isolatedAgentRuntimeEnv\(\)[\s\S]*CLAUDE_CODE_SIMPLE:\s*'1'/, 'agent runtime must isolate config and disable inherited user skills/memory.');
+  assertMatches(main, /function isolatedAgentRuntimeEnv\(\)[\s\S]*HOME:\s*configDir[\s\S]*USERPROFILE:\s*configDir[\s\S]*APPDATA:\s*appDataDir[\s\S]*LOCALAPPDATA:\s*localAppDataDir/, 'agent runtime must isolate home/appdata so local Claude skills and MCP state are not inherited.');
+  assertMatches(main, /function claudeProjectsRoot\(\) \{[\s\S]*agentRuntimeConfigDir\(\)[\s\S]*'projects'/, 'Claude transcript discovery must only use the EcoreX runtime project root.');
+  assertNotMatches(main, /function claudeProjectsRoot\(\) \{[\s\S]*process\.env\.USERPROFILE[\s\S]*\.claude[\s\S]*projects/, 'Claude transcript discovery must not scan the user global ~/.claude project history.');
+  assertNotMatches(main, /function claudeSessionTranscriptExists[\s\S]*claudeSessionWasLaunched/, 'Claude resume must require a real transcript, not only a previous launch marker.');
+  assertMatches(main, /isPackagedClaudeWrapperStub\(candidate\)[\s\S]*continue;/, 'Claude locator must skip packaged Windows wrapper stubs and prefer the native runtime binary.');
   assertMatches(main, /function runClaudeCommand[\s\S]*env:\s*\{[\s\S]*isolatedAgentRuntimeEnv\(\)/, 'auxiliary backend CLI commands must also use the EcoreX isolated config.');
   assertMatches(main, /const plugins = Array\.isArray\(payload\.plugins\)[\s\S]*isBlockedLocalSkillName\(plugin\)/, 'payload plugin names must reject local user skill packs.');
   assertMatches(main, /parsePluginInventory[\s\S]*isBlockedLocalSkillName\(pluginName\)[\s\S]*isBlockedLocalSkillName\(source\)/, 'backend plugin inventory must exclude blocked local skill pack names.');
@@ -1028,15 +1089,17 @@ check('MCP plugin and CLI exposure is sanitized', () => {
   includesAll(
     main,
     [
-      "command: 'disabled: local Claude/Codex MCP inventory is intentionally not scanned'",
-      "command: 'disabled: local Claude/Codex skill inventory is intentionally not scanned'",
-      'defaultEmpty: true',
-      'services: []',
-      'skills: []',
-      'const pluginInventory = parsePluginInventory()',
+      "command: 'managed: local Claude/Codex MCP inventory is intentionally not scanned'",
+      "command: 'managed: local Claude/Codex skill inventory is intentionally not scanned'",
+      'defaultEmpty: services.length === 0',
+      'services,',
+      'function installManagedSkillPack',
+      'function updateManagedSkillEnabled',
+      'function runtimeManagedSkillPlugins',
+      'const pluginInventory = [...parsePluginInventory(), ...runtimeManagedSkillPlugins()]',
       "args.push('--plugin-dir', pluginPath)"
     ],
-    'default hidden local MCP/skill inventory with bundled backend plugin activation'
+    'default hidden local MCP inventory with managed SKILLS and bundled backend plugin activation'
   );
   includesAll(
     app,
@@ -1053,7 +1116,8 @@ check('MCP plugin and CLI exposure is sanitized', () => {
   includesAll(
     app,
     [
-      "return ['feature-dev', 'code-review', 'security-guidance', 'plugin-dev'];",
+      'capabilities?.capabilityPacks',
+      "'feature-dev', 'code-review', 'security-guidance', 'plugin-dev', ...managedPlugins",
       'plugins: selectedPlugins',
       'setSkills([])',
       'setServices([])'
@@ -1086,6 +1150,7 @@ check('diagnostics health check UI is complete and static-safe', () => {
       '系统设置',
       'MCP',
       'SKILLS',
+      'EvaluationView',
       '<DiagnosticsView',
       "callEcorex(['getDiagnostics', 'diagnostics.get'])",
       'function releasePackageSummary',
@@ -1118,8 +1183,8 @@ check('diagnostics health check UI is complete and static-safe', () => {
   assertMatches(app, /<nav className="side-nav">[\s\S]*?setPage\('projects'\)[\s\S]*?<\/nav>/, 'sidebar must keep project navigation available.');
   assertNotMatches(app, /<nav className="side-nav">[\s\S]*?setPage\('(mcp|skills|diagnostics|settings)'\)[\s\S]*?<\/nav>/, 'MCP, SKILLS, and diagnostics/settings must stay out of the left sidebar.');
   assertMatches(app, /profile-menu-grid[\s\S]*setPage\('settings'\)[\s\S]*系统设置/, 'system settings must remain reachable from the personal profile menu.');
-  assertMatches(app, /const tabs = \[[\s\S]*\['mcp', 'MCP'[\s\S]*\['skills', 'SKILLS'[\s\S]*\['diagnostics'/, 'system settings must expose MCP, SKILLS, and diagnostics as tabs.');
-  assertMatches(app, /async function refreshModelHealth\([\s\S]*?loadModelProfiles\(settings\.defaultModel \|\| 'sonnet'\)/, 'diagnostics model health must use stored profile metadata only.');
+  assertMatches(app, /const tabs = \[[\s\S]*\['mcp', 'MCP'[\s\S]*\['skills', 'SKILLS'[\s\S]*\['diagnostics'[\s\S]*tabs\.splice\(3,\s*0,\s*\['evaluations'/, 'system settings must expose MCP, SKILLS, evaluations, and diagnostics as tabs.');
+  assertMatches(app, /async function refreshModelHealth\([\s\S]*?loadModelProfiles\(settings\.defaultModel \|\| DEFAULT_AGENT_MODEL_NAME\)/, 'diagnostics model health must use stored profile metadata only.');
   assertNotMatches(app, /refreshModelHealth[\s\S]{0,500}testModel(Profile|AdapterProfile)|refreshModelHealth[\s\S]{0,500}generateModelImage/, 'diagnostics model health must not run model tests or image generation.');
   assertMatches(app, /function validateModelConnectionDraft\([\s\S]*?未发起模型调用/, 'model tests must locally report missing key/baseUrl/model without calling providers.');
   assertMatches(app, /async function handleTest\([\s\S]*?validateModelConnectionDraft\(draft,\s*selectedProfile\)[\s\S]*?return;[\s\S]*?testModelAdapterProfile/, 'model speed test must validate required fields before IPC.');
@@ -1143,6 +1208,40 @@ check('diagnostics health check UI is complete and static-safe', () => {
       '.model-config-notice'
     ],
     'diagnostics health check layout'
+  );
+});
+
+check('enterprise evaluation framework is wired and memory-safe', () => {
+  const main = readText('electron/main.cjs');
+  const preload = readText('electron/preload.cjs');
+  const app = readText('src/App.jsx');
+  const evalFramework = readText('electron/evaluation-framework.cjs');
+  includesAll(
+    main,
+    [
+      "require('./evaluation-framework.cjs')",
+      "const EVALUATION_REPORT_FILE_NAME = 'evaluation-report.json'",
+      "handleSafe('evaluation:list'",
+      "handleSafe('evaluation:run'",
+      "requiredPermission: 'enterprise:manage'"
+    ],
+    'evaluation IPC'
+  );
+  includesAll(preload, ['listEvaluations', 'runEvaluations'], 'evaluation preload bridge');
+  includesAll(app, ['function EvaluationView', 'evaluation-page', "activeTab === 'evaluations'"], 'evaluation renderer');
+  const sampleCount = (evalFramework.match(/sample\('/g) || []).length;
+  assert(sampleCount === 50, 'evaluation framework must contain exactly 50 named samples.');
+  includesAll(
+    evalFramework,
+    [
+      'exponential-backoff-with-jitter',
+      'factuality',
+      'structure',
+      'toolUse',
+      'latency',
+      'evaluation-only; do-not-store-in-chat-or-project-memory'
+    ],
+    'evaluation policies'
   );
 });
 
@@ -1180,9 +1279,9 @@ check('chat state tree and critical front-end affordances', () => {
   includesAll(app, ["replace(/\\bClaude\\s*Code\\s*CLI\\b/gi, 'EcoreX')", "replace(/\\bClaude\\b/gi, 'EcoreX')"], 'assistant-visible product naming sanitizer');
   assert(!app.includes('setRailExpanded((next) => !next)'), 'chat main must not keep the removed quick project right rail toggle.');
   assert(!app.includes('<aside className={`right-rail'), 'chat main must not render the removed quick project right rail.');
-  includesAll(app, ['function finalArtifactsFromText', "source: 'assistant-final'", 'finalArtifacts: mergeArtifactReferences', 'message.finalArtifacts || []', 'function isExplicitLocalArtifactPathToken', 'function validateArtifactAvailabilityWithBridge'], 'final deliverable artifact extraction');
+  includesAll(app, ['function finalArtifactsFromText', "source: 'assistant-final'", 'finalArtifacts: mergeArtifactReferences', 'message.finalArtifacts || []', 'function isExplicitLocalArtifactPathToken'], 'final deliverable artifact extraction');
   assertMatches(app, /const candidateArtifactReferences = useMemo\([\s\S]{0,620}message\.finalArtifacts \|\| \[\]/, 'artifact preview shelf must use final result artifacts only.');
-  assertMatches(app, /validateArtifactAvailabilityWithBridge\(artifact\)[\s\S]{0,320}setAvailableArtifactIds/, 'artifact preview shelf must hide non-local or unavailable artifact references before rendering cards.');
+  assertMatches(app, /const artifactReferences = useMemo\([\s\S]{0,220}candidateArtifactReferences/, 'artifact preview shelf must render final local artifact cards before opening preview.');
   assertMatches(app, /<ArtifactPreviewShelf[\s\S]{0,420}artifacts=\{artifactReferences\}/, 'artifact preview shelf must render only the computed final artifact list.');
   assertNotMatches(app, /const candidateArtifactReferences = useMemo\([\s\S]{0,900}extractArtifactReferences\(rawText\)/, 'streamed/intermediate assistant text must not create artifact preview cards.');
   assertNotMatches(app, /const candidateArtifactReferences = useMemo\([\s\S]{0,900}artifactsFromLedger\(message\.ledger/, 'tool ledger and intermediate files must not create artifact preview cards.');

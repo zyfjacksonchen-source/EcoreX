@@ -1,14 +1,21 @@
-const { app, BrowserWindow, ipcMain, session, safeStorage, dialog, screen, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, session, safeStorage, dialog, screen, shell, nativeImage } = require('electron');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const http = require('http');
-const net = require('net');
 const path = require('path');
 const crypto = require('crypto');
 const zlib = require('zlib');
 const { pathToFileURL } = require('url');
 const { fileURLToPath } = require('url');
 const { createModelAdapter, DEFAULT_IMAGE_MODEL } = require('./model-adapter.cjs');
+const {
+  listEvaluationFramework,
+  runEvaluationFramework,
+  RETRY_POLICY,
+  PARALLELISM_POLICY,
+  MEMORY_TAXONOMY,
+  EVALUATION_SAMPLE_COUNT
+} = require('./evaluation-framework.cjs');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
 const isWindows = process.platform === 'win32';
@@ -19,13 +26,14 @@ const agentSessionActors = new Map();
 const selectedAttachmentAccess = new Map();
 const agentArtifactAccess = new Map();
 const agentToolLedger = new Map();
-const kkFileViewState = {
-  process: null,
+const claudeSessionBindingCache = new Map();
+const invalidClaudeSessionResumeCache = new Map();
+let claudeSessionBindingCacheLoaded = false;
+const vueOfficePreviewState = {
+  server: null,
   port: 0,
   starting: null,
   resource: null,
-  bridgeServer: null,
-  bridgePort: 0,
   grants: new Map(),
   lastError: ''
 };
@@ -33,7 +41,9 @@ let mainWindow = null;
 let startupSplashUrl = '';
 let cachedClaude = null;
 let cachedClaudeCheckedAt = 0;
+let locateClaudeInflight = null;
 let cachedCapabilities = null;
+let cachedCapabilitiesKey = '';
 let cachedBackendStatus = null;
 let backendStatusInflight = null;
 const AGENT_TIMEOUT_MS = 30 * 60 * 1000;
@@ -45,6 +55,7 @@ const AGENT_START_DEBOUNCE_MS = 1200;
 const AGENT_START_PENDING_TTL_MS = 15 * 1000;
 const BACKEND_STATUS_TTL_MS = 3 * 1000;
 const CLAUDE_TRANSCRIPT_CACHE_TTL_MS = 60 * 1000;
+const CLAUDE_INVALID_RESUME_TTL_MS = 10 * 60 * 1000;
 const RENDERER_RECOVERY_DELAY_MS = 800;
 const RENDERER_UNRESPONSIVE_RECOVERY_MS = 15 * 1000;
 const RENDERER_RECOVERY_WINDOW_MS = 60 * 1000;
@@ -56,12 +67,18 @@ const MAX_PROMPT_PREVIEW_CHARS = 240;
 const SETTINGS_FILE_NAME = 'settings.json';
 const AUTH_SESSION_FILE_NAME = 'auth-session.json';
 const AUTH_IDENTITY_FILE_NAME = 'auth-identity.json';
+const AUTH_USERS_FILE_NAME = 'auth-users.json';
+const ENTERPRISE_ADMIN_JOURNAL_FILE_NAME = 'enterprise-admin-journal.jsonl';
 const SECRETS_FILE_NAME = 'secrets.json';
 const MODEL_PROFILES_FILE_NAME = 'model-profiles.json';
 const SESSION_TRANSCRIPT_DIR_NAME = 'sessions';
+const CLAUDE_SESSION_BINDINGS_FILE_NAME = 'session-bindings.json';
+const MANAGED_SKILL_PACKS_FILE_NAME = 'skill-packs.json';
+const MANAGED_SKILL_PACKS_DIR_NAME = 'skill-packs';
 const RUN_JOURNAL_FILE_NAME = 'agent-run-journal.jsonl';
 const CRASH_SUMMARY_FILE_NAME = 'crash-summary.json';
 const TELEMETRY_QUEUE_FILE_NAME = 'telemetry-queue.json';
+const EVALUATION_REPORT_FILE_NAME = 'evaluation-report.json';
 const DIAGNOSTIC_EXPORT_DIR_NAME = 'EcoreX Diagnostics';
 const PROJECT_STATE_FILE_NAME = '.ecorex-projects.json';
 const PROJECT_METADATA_FILE_NAME = '.ecorex-project.json';
@@ -91,6 +108,7 @@ const AGENT_EVENT_PAUSE_HIGH_WATER = 180;
 const AGENT_EVENT_RESUME_LOW_WATER = 80;
 const MAX_MANAGED_ITEMS = 500;
 const MAX_SKILLS_PER_PLUGIN = 200;
+const MAX_SKILL_PACK_COPY_BYTES = 80 * 1024 * 1024;
 const MAX_SECRET_VALUE_CHARS = 20_000;
 const MAX_MODEL_PROFILES = 20;
 const MAX_MODEL_PROFILE_TEXT_CHARS = 2048;
@@ -116,13 +134,11 @@ const FILE_PREVIEW_MAX_BYTES = 512 * 1024;
 const FILE_PREVIEW_IMAGE_MAX_BYTES = 768 * 1024;
 const FILE_PREVIEW_OFFICE_MAX_BYTES = 12 * 1024 * 1024;
 const FILE_PREVIEW_OFFICE_MAX_CHARS = 80 * 1024;
-const KKFILEVIEW_PREVIEW_MAX_BYTES = 100 * 1024 * 1024;
-const KKFILEVIEW_START_TIMEOUT_MS = 24 * 1000;
-const KKFILEVIEW_GRANT_TTL_MS = 30 * 60 * 1000;
-const KKFILEVIEW_MAX_GRANTS = 200;
-const KKFILEVIEW_VENDOR_DIR_NAME = 'kkfileview';
-const KKFILEVIEW_DOCUMENT_EXTENSIONS = new Set(['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.xlsm', '.ppt', '.pptx', '.pptm', '.csv']);
-const KKFILEVIEW_PROHIBITED_EXTENSIONS = new Set(['.exe', '.dll', '.msi', '.bat', '.cmd', '.ps1', '.sh', '.app', '.dmg', '.pkg', '.jar', '.com', '.scr']);
+const VUE_OFFICE_PREVIEW_MAX_BYTES = 100 * 1024 * 1024;
+const VUE_OFFICE_GRANT_TTL_MS = 30 * 60 * 1000;
+const VUE_OFFICE_MAX_GRANTS = 200;
+const VUE_OFFICE_VENDOR_DIR_NAME = 'vue-office';
+const VUE_OFFICE_DOCUMENT_EXTENSIONS = new Set(['.pdf', '.docx', '.xls', '.xlsx', '.xlsm', '.pptx', '.pptm']);
 const FILE_PREVIEW_TEXT_EXTENSIONS = new Set([
   '.html',
   '.htm',
@@ -136,10 +152,16 @@ const FILE_PREVIEW_TEXT_EXTENSIONS = new Set([
   '.css',
   '.js',
   '.mjs',
-  '.cjs'
+  '.cjs',
+  '.jsx',
+  '.ts',
+  '.tsx',
+  '.yaml',
+  '.yml',
+  '.xml'
 ]);
-const FILE_PREVIEW_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg']);
-const FILE_PREVIEW_DOCUMENT_EXTENSIONS = new Set(['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']);
+const FILE_PREVIEW_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.bmp', '.avif']);
+const FILE_PREVIEW_DOCUMENT_EXTENSIONS = new Set(['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.xlsm', '.ppt', '.pptx', '.pptm']);
 const LOCAL_AUTH_HASH_ITERATIONS = 210_000;
 const LOCAL_AUTH_MIN_PASSWORD_CHARS = 8;
 const AUTH_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
@@ -151,6 +173,13 @@ const FULL_ACCESS_CLAUDE_FLAG = '--dangerously-skip-permissions';
 const CLAUDE_AUTO_ALLOWED_TOOL_SET = 'WebFetch,WebSearch,Task,TodoRead,TodoWrite,mcp__*';
 const PUBLIC_PERMISSION_MODES = ['default', FULL_ACCESS_PERMISSION_MODE];
 const WINDOW_CONTROL_ACTIONS = new Set(['minimize', 'maximize', 'close']);
+const USER_ROLE_PERMISSIONS = Object.freeze({
+  super_admin: ['profile:update', 'users:manage', 'enterprise:manage', 'settings:manage', 'agent:operate'],
+  admin: ['profile:update', 'enterprise:manage', 'settings:manage', 'agent:operate'],
+  user: ['profile:update', 'agent:operate']
+});
+const USER_ROLES = new Set(Object.keys(USER_ROLE_PERMISSIONS));
+const ENTERPRISE_ADMIN_ACTIONS = new Set(['pushAgentUpdate', 'pushSkill', 'syncMcp']);
 const PERMISSION_POLICIES = Object.freeze({
   default: {
     value: 'default',
@@ -270,6 +299,7 @@ let rendererUnresponsiveTimer = null;
 let startupPreloadPromise = null;
 let startupPreloadState = { status: 'idle' };
 const claudeTranscriptExistenceCache = new Map();
+const claudeSessionLaunchCache = new Map();
 
 const AGENT_SYSTEM_PROMPT = [
   '你是 EcoreX Agent，由 EcoreX 亦芯开发的具备自主思考能力的 AI Agent。',
@@ -290,6 +320,13 @@ const ECOREX_AGENT_SYSTEM_PROMPT = [
   '输出不要使用星号作为 Markdown 标记，不要使用 *、** 或星号项目符号；列表请使用中文序号或短句换行。',
   '需要事实核验、外部资料、网页信息或时效性内容时，应主动使用联网检索与网页读取能力；需要本地资料时，应主动使用文件读取、写入、编辑、检索、命令执行和 MCP 工具。',
   '联网搜索、网页读取和常规非文件工具不需要先询问用户，直接执行并在结果中说明来源；涉及读取、写入、编辑用户文件、运行命令或访问系统目录时，遵循权限确认。'
+].join('\n');
+
+const ECOREX_MANAGED_CAPABILITY_PRIORITY_PROMPT = [
+  'Managed capability priority:',
+  '1. For Excel workbook creation, editing, formatting, formulas, charts, tables, pivot tables, or data reads/writes, prefer the excel-mcp-server MCP tools first.',
+  '2. For PPT, presentation, slide deck, or PowerPoint generation/editing, prefer the ppt-master skill first.',
+  '3. Fall back to direct local file generation only when the matching managed capability is unavailable or unsuitable, and explain the fallback briefly.'
 ].join('\n');
 
 function devPath(...segments) {
@@ -417,10 +454,6 @@ function safeOutputText(value = '', limit = MAX_IPC_OUTPUT_CHARS) {
   const text = publicProductText(String(value || ''));
   if (text.length <= limit) return text;
   return `${text.slice(0, limit)}\n[output truncated to ${limit} chars]`;
-}
-
-function safeKkFileViewOutputText(value = '', limit = 1200) {
-  return safeOutputText(value, limit).replace(/\/preview-file\/[a-f0-9]{32,64}/gi, '/preview-file/[REDACTED]');
 }
 
 function safeJsonValue(value, limit = MAX_AGENT_EVENT_RAW_CHARS) {
@@ -1031,9 +1064,45 @@ function agentRuntimeConfigDir() {
   return dir;
 }
 
+function claudeSessionBindingsPath() {
+  return path.join(agentRuntimeConfigDir(), CLAUDE_SESSION_BINDINGS_FILE_NAME);
+}
+
+function managedSkillPacksStatePath() {
+  return path.join(agentRuntimeConfigDir(), MANAGED_SKILL_PACKS_FILE_NAME);
+}
+
+function managedMcpConfigPath() {
+  return path.join(agentRuntimeConfigDir(), 'managed-mcp.json');
+}
+
+function managedSkillPacksStateCacheKey() {
+  try {
+    const stat = fs.statSync(managedSkillPacksStatePath());
+    return `${stat.size}:${stat.mtimeMs}`;
+  } catch {
+    return 'missing';
+  }
+}
+
+function managedSkillPacksDir() {
+  const dir = path.join(agentRuntimeConfigDir(), MANAGED_SKILL_PACKS_DIR_NAME);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
 function isolatedAgentRuntimeEnv() {
   const configDir = agentRuntimeConfigDir();
+  const appDataDir = path.join(configDir, 'appdata');
+  const localAppDataDir = path.join(configDir, 'local-appdata');
+  fs.mkdirSync(appDataDir, { recursive: true });
+  fs.mkdirSync(localAppDataDir, { recursive: true });
   return {
+    HOME: configDir,
+    USERPROFILE: configDir,
+    APPDATA: appDataDir,
+    LOCALAPPDATA: localAppDataDir,
+    XDG_CONFIG_HOME: configDir,
     CLAUDE_CONFIG_DIR: configDir,
     ECOREX_AGENT_CONFIG_DIR: configDir,
     CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
@@ -1049,6 +1118,516 @@ function isBlockedLocalSkillName(value = '') {
   if (!normalized) return false;
   const compact = normalized.replace(/[_\s]+/g, '-');
   return [...BLOCKED_LOCAL_SKILL_NAMES].some((name) => compact === name || compact.includes(`/${name}/`) || compact.endsWith(`/${name}`));
+}
+
+function sanitizeSkillPackName(value = '', fallback = 'skill-pack') {
+  const cleaned = String(value || '')
+    .trim()
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter(Boolean)
+    .pop()
+    ?.replace(/[^a-zA-Z0-9_.-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+  const name = cleaned || fallback;
+  if (isBlockedLocalSkillName(name)) throw new Error('This local skill pack is blocked by EcoreX isolation policy.');
+  return name;
+}
+
+function decodeJsonFileBuffer(buffer) {
+  if (!Buffer.isBuffer(buffer)) return String(buffer || '');
+  if (buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) {
+    return buffer.subarray(3).toString('utf8');
+  }
+  if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) {
+    return buffer.subarray(2).toString('utf16le');
+  }
+  if (buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff) {
+    const swapped = Buffer.allocUnsafe(buffer.length - 2);
+    for (let index = 2; index + 1 < buffer.length; index += 2) {
+      swapped[index - 2] = buffer[index + 1];
+      swapped[index - 1] = buffer[index];
+    }
+    return swapped.toString('utf16le');
+  }
+  const utf8 = buffer.toString('utf8');
+  if (utf8.includes('\u0000')) {
+    const sample = buffer.subarray(0, Math.min(buffer.length, 80));
+    let oddNulls = 0;
+    let evenNulls = 0;
+    for (let index = 0; index < sample.length; index += 1) {
+      if (sample[index] !== 0) continue;
+      if (index % 2) oddNulls += 1;
+      else evenNulls += 1;
+    }
+    if (oddNulls > evenNulls + 4) return buffer.toString('utf16le');
+  }
+  return utf8.replace(/^\uFEFF/, '');
+}
+
+function readJsonFileSafe(filePath, fallback = null) {
+  try {
+    if (!fs.existsSync(filePath)) return fallback;
+    return JSON.parse(decodeJsonFileBuffer(fs.readFileSync(filePath)).replace(/^\uFEFF/, ''));
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJsonFileSafe(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+}
+
+function readManagedSkillPackState() {
+  const raw = readJsonFileSafe(managedSkillPacksStatePath(), []);
+  const rows = Array.isArray(raw) ? raw : Array.isArray(raw?.skillPacks) ? raw.skillPacks : [];
+  return rows
+    .filter((row) => row && typeof row === 'object')
+    .map((row, index) => normalizeManagedSkillPackRecord(row, index))
+    .filter(Boolean)
+    .slice(0, MAX_MANAGED_ITEMS);
+}
+
+function writeManagedSkillPackState(rows = []) {
+  const nextRows = (Array.isArray(rows) ? rows : [])
+    .filter((row) => row && typeof row === 'object')
+    .map((row, index) => normalizeManagedSkillPackRecord(row, index))
+    .filter(Boolean)
+    .slice(0, MAX_MANAGED_ITEMS);
+  writeJsonFileSafe(managedSkillPacksStatePath(), nextRows);
+  cachedCapabilities = null;
+  cachedCapabilitiesKey = '';
+  cachedBackendStatus = null;
+  return nextRows;
+}
+
+function normalizeManagedSkillPackRecord(row = {}, index = 0) {
+  const name = sanitizeSkillPackName(row.name || row.id || `skill-pack-${index + 1}`);
+  const id = String(row.id || publicStableId('skillpack', name)).slice(0, 120);
+  const installPath = row.installPath ? path.resolve(String(row.installPath)) : '';
+  const sourcePath = row.sourcePath ? path.resolve(String(row.sourcePath)) : '';
+  return {
+    id,
+    name,
+    title: safeOutputText(row.title || row.displayName || name, 180),
+    version: row.version ? safeOutputText(row.version, 80) : null,
+    description: row.description ? safeOutputText(row.description, 1000) : '',
+    category: safeOutputText(row.category || row.type || 'EcoreX', 80),
+    enabled: row.enabled !== false,
+    installed: row.installed !== false,
+    installPath,
+    sourcePath,
+    sourceKind: String(row.sourceKind || 'local')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_.-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 80) || 'local',
+    generatedWrapper: Boolean(row.generatedWrapper),
+    mcpConfig: row.mcpConfig && typeof row.mcpConfig === 'object' ? safeJsonValue(row.mcpConfig, 8000) : null,
+    installedAt: row.installedAt || new Date().toISOString(),
+    lastUpdated: row.lastUpdated || row.updatedAt || row.installedAt || new Date().toISOString()
+  };
+}
+
+function installDestinationForSkillPack(name = '') {
+  const root = managedSkillPacksDir();
+  const safeName = sanitizeSkillPackName(name);
+  const destination = path.join(root, safeName);
+  if (!isPathInside(root, destination)) throw new Error('Invalid skill pack destination.');
+  return destination;
+}
+
+function skillPluginManifest(pluginRoot = '') {
+  return readJsonFileSafe(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), null);
+}
+
+function skillPluginRootFromSource(sourcePath = '') {
+  const resolved = path.resolve(String(sourcePath || ''));
+  if (!fs.existsSync(resolved)) throw new Error(`Skill source not found: ${sourcePath}`);
+  const stat = fs.statSync(resolved);
+  const sourceDir = stat.isDirectory() ? resolved : path.dirname(resolved);
+  const directManifest = path.join(sourceDir, '.claude-plugin', 'plugin.json');
+  if (fs.existsSync(directManifest)) return sourceDir;
+  const nestedManifest = path.join(sourceDir, 'skills', '.claude-plugin', 'plugin.json');
+  if (fs.existsSync(nestedManifest)) return path.join(sourceDir, 'skills');
+  return null;
+}
+
+function skillCollectionRootFromSource(sourcePath = '') {
+  const resolved = path.resolve(String(sourcePath || ''));
+  if (!fs.existsSync(resolved)) return null;
+  const stat = fs.statSync(resolved);
+  const sourceDir = stat.isDirectory() ? resolved : path.dirname(resolved);
+  const candidates = [path.join(sourceDir, 'skills'), sourceDir];
+  for (const candidate of candidates) {
+    try {
+      if (!fs.existsSync(candidate) || !fs.statSync(candidate).isDirectory()) continue;
+      const skillDirs = fs.readdirSync(candidate, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .filter((entry) => fs.existsSync(path.join(candidate, entry.name, 'SKILL.md')));
+      if (skillDirs.length) return { root: candidate, count: skillDirs.length };
+    } catch {
+      // Ignore malformed candidates and continue probing.
+    }
+  }
+  return null;
+}
+
+function packageSkillPackName(packageName = '', fallback = 'skill-pack') {
+  const raw = String(packageName || '').trim();
+  if (raw === '@larksuite/cli') return 'lark-cli';
+  return sanitizeSkillPackName(raw.replace(/^@/, '').replace(/[\\/]+/g, '-') || fallback);
+}
+
+function detectSkillSource(sourcePath = '') {
+  const resolved = path.resolve(String(sourcePath || ''));
+  if (!fs.existsSync(resolved)) throw new Error(`Skill source not found: ${sourcePath}`);
+  const stat = fs.statSync(resolved);
+  const sourceDir = stat.isDirectory() ? resolved : path.dirname(resolved);
+  const pluginRoot = skillPluginRootFromSource(sourceDir);
+  if (pluginRoot) {
+    const manifest = skillPluginManifest(pluginRoot) || {};
+    return {
+      kind: 'plugin',
+      sourcePath: resolved,
+      pluginRoot,
+      name: sanitizeSkillPackName(manifest.name || path.basename(pluginRoot)),
+      title: manifest.displayName || manifest.title || manifest.name || path.basename(pluginRoot),
+      version: manifest.version || null,
+      description: manifest.description || readMarkdownSummary(path.join(pluginRoot, 'README.md')),
+      category: manifest.category || 'EcoreX',
+      generatedWrapper: false
+    };
+  }
+
+  const skillCollection = skillCollectionRootFromSource(sourceDir);
+  if (skillCollection) {
+    const packageInfo = readJsonFileSafe(path.join(sourceDir, 'package.json'), {}) || {};
+    const name = packageSkillPackName(packageInfo.name, path.basename(sourceDir));
+    return {
+      kind: 'skill-collection',
+      sourcePath: resolved,
+      pluginRoot: skillCollection.root,
+      name,
+      title: packageInfo.displayName || packageInfo.title || (packageInfo.name === '@larksuite/cli' ? 'lark-cli' : name),
+      version: packageInfo.version || null,
+      description: packageInfo.description || readMarkdownSummary(path.join(sourceDir, 'README.md')),
+      category: 'EcoreX',
+      generatedWrapper: true,
+      skillCount: skillCollection.count
+    };
+  }
+
+  const manifestPath = path.join(sourceDir, 'manifest.json');
+  const mcpManifest = readJsonFileSafe(manifestPath, null);
+  if (mcpManifest?.server || Array.isArray(mcpManifest?.tools)) {
+    return {
+      kind: 'mcp-wrapper',
+      sourcePath: resolved,
+      pluginRoot: null,
+      name: sanitizeSkillPackName(mcpManifest.name || path.basename(sourceDir)),
+      title: mcpManifest.displayName || mcpManifest.title || mcpManifest.name || path.basename(sourceDir),
+      version: mcpManifest.version || null,
+      description: mcpManifest.description || readMarkdownSummary(path.join(sourceDir, 'README.md')),
+      category: 'MCP',
+      generatedWrapper: true,
+      mcpConfig: mcpManifest.server?.mcp_config || null,
+      toolNames: Array.isArray(mcpManifest.tools) ? mcpManifest.tools.map((tool) => tool?.name).filter(Boolean).slice(0, 40) : []
+    };
+  }
+
+  if (fs.existsSync(path.join(sourceDir, 'SKILL.md'))) {
+    return {
+      kind: 'skill-wrapper',
+      sourcePath: resolved,
+      pluginRoot: sourceDir,
+      name: sanitizeSkillPackName(path.basename(sourceDir)),
+      title: path.basename(sourceDir),
+      version: null,
+      description: readMarkdownSummary(path.join(sourceDir, 'SKILL.md')),
+      category: 'EcoreX',
+      generatedWrapper: true
+    };
+  }
+
+  throw new Error('Skill source must contain .claude-plugin/plugin.json, SKILL.md, skills/*/SKILL.md, or an MCP manifest.json.');
+}
+
+function shouldSkipSkillPackCopy(relativePath = '') {
+  const normalized = String(relativePath || '').replace(/\\/g, '/');
+  return /(^|\/)(\.git|node_modules|__pycache__|\.venv|venv|dist|build|release|test-results)(\/|$)/i.test(normalized)
+    || /(^|\/)(\.env|\.env\..*|secrets\.json|auth-session\.json|auth-users\.json|settings\.json)$/i.test(normalized);
+}
+
+function copyDirectoryBounded(sourceDir, targetDir, state = { bytes: 0 }) {
+  const sourceRoot = path.resolve(sourceDir);
+  const targetRoot = path.resolve(targetDir);
+  fs.mkdirSync(targetRoot, { recursive: true });
+  for (const entry of fs.readdirSync(sourceRoot, { withFileTypes: true })) {
+    const source = path.join(sourceRoot, entry.name);
+    const relative = path.relative(sourceRoot, source);
+    if (shouldSkipSkillPackCopy(relative)) continue;
+    const target = path.join(targetRoot, entry.name);
+    if (!isPathInside(targetRoot, target)) throw new Error('Invalid skill pack copy target.');
+    if (entry.isSymbolicLink()) continue;
+    if (entry.isDirectory()) {
+      copyDirectoryBounded(source, target, state);
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    const stat = fs.statSync(source);
+    state.bytes += stat.size;
+    if (state.bytes > MAX_SKILL_PACK_COPY_BYTES) throw new Error('Skill pack is too large.');
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.copyFileSync(source, target);
+  }
+}
+
+function createGeneratedSkillMarkdown(info = {}) {
+  const name = sanitizeSkillPackName(info.name || 'skill-pack');
+  const toolList = Array.isArray(info.toolNames) && info.toolNames.length
+    ? `\n\nKnown tools:\n${info.toolNames.map((tool) => `- ${tool}`).join('\n')}`
+    : '';
+  const mcpConfig = info.mcpConfig ? `\n\nSuggested MCP config:\n\n\`\`\`json\n${JSON.stringify(info.mcpConfig, null, 2)}\n\`\`\`\n` : '';
+  return [
+    '---',
+    `name: ${name}`,
+    `description: ${safeOutputText(info.description || `${name} capability for EcoreX Agent.`, 240).replace(/\r?\n/g, ' ')}`,
+    '---',
+    '',
+    `# ${safeOutputText(info.title || name, 160)}`,
+    '',
+    safeOutputText(info.description || 'Use this EcoreX-managed skill when the task matches its capability area.', 1000),
+    '',
+    'Use this skill inside EcoreX Agent only. Do not expose backend implementation details to the user.',
+    toolList,
+    mcpConfig
+  ].join('\n');
+}
+
+function writeGeneratedSkillPlugin(destination, info = {}) {
+  const name = sanitizeSkillPackName(info.name || path.basename(destination));
+  const manifestDir = path.join(destination, '.claude-plugin');
+  const skillDir = path.join(destination, 'skills', name);
+  fs.mkdirSync(manifestDir, { recursive: true });
+  fs.mkdirSync(skillDir, { recursive: true });
+  writeJsonFileSafe(path.join(manifestDir, 'plugin.json'), {
+    name,
+    description: info.description || `${name} capability for EcoreX Agent.`,
+    version: info.version || '1.0.0',
+    skills: './skills'
+  });
+  fs.writeFileSync(path.join(skillDir, 'SKILL.md'), createGeneratedSkillMarkdown(info), 'utf8');
+  if (info.mcpConfig) writeJsonFileSafe(path.join(skillDir, 'mcp-config.json'), info.mcpConfig);
+}
+
+function writeSkillCollectionPlugin(destination, info = {}) {
+  const name = sanitizeSkillPackName(info.name || path.basename(destination));
+  const manifestDir = path.join(destination, '.claude-plugin');
+  const skillsRoot = path.join(destination, 'skills');
+  fs.mkdirSync(manifestDir, { recursive: true });
+  fs.mkdirSync(skillsRoot, { recursive: true });
+  writeJsonFileSafe(path.join(manifestDir, 'plugin.json'), {
+    name,
+    displayName: info.title || name,
+    description: info.description || `${name} skill collection for EcoreX Agent.`,
+    version: info.version || '1.0.0',
+    skills: './skills'
+  });
+  copyDirectoryBounded(info.pluginRoot, skillsRoot);
+}
+
+function installManagedSkillPack(payload = {}, authContext = null) {
+  optionalObjectPayload(payload, 'skill install payload');
+  const sourcePath = String(payload.sourcePath || payload.path || payload.localPath || '').trim();
+  if (!sourcePath) throw new Error('Skill install requires sourcePath.');
+  const info = detectSkillSource(sourcePath);
+  const name = sanitizeSkillPackName(payload.name || info.name);
+  const destination = installDestinationForSkillPack(name);
+  const libraryRoot = managedSkillPacksDir();
+  const resolvedDestination = path.resolve(destination);
+  if (!isPathInside(libraryRoot, resolvedDestination) || resolvedDestination === path.resolve(libraryRoot)) {
+    throw new Error('Invalid skill pack destination.');
+  }
+  fs.rmSync(resolvedDestination, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  fs.mkdirSync(resolvedDestination, { recursive: true });
+  if (info.kind === 'plugin') {
+    copyDirectoryBounded(info.pluginRoot, resolvedDestination);
+  } else if (info.kind === 'skill-collection' && info.pluginRoot) {
+    writeSkillCollectionPlugin(resolvedDestination, { ...info, name });
+  } else if (info.kind === 'skill-wrapper' && info.pluginRoot) {
+    writeGeneratedSkillPlugin(resolvedDestination, { ...info, name });
+    const skillDir = path.join(resolvedDestination, 'skills', name);
+    copyDirectoryBounded(info.pluginRoot, skillDir);
+  } else {
+    writeGeneratedSkillPlugin(resolvedDestination, { ...info, name });
+  }
+
+  const now = new Date().toISOString();
+  const existing = readManagedSkillPackState().filter((row) => row.name !== name && row.id !== publicStableId('skillpack', name));
+  const record = normalizeManagedSkillPackRecord({
+    id: publicStableId('skillpack', name),
+    name,
+    title: payload.title || info.title || name,
+    version: payload.version || info.version || null,
+    description: payload.description || info.description || '',
+    category: payload.category || info.category || 'EcoreX',
+    enabled: payload.enabled !== false,
+    installed: true,
+    installPath: resolvedDestination,
+    sourcePath: path.resolve(sourcePath),
+    sourceKind: info.kind,
+    generatedWrapper: info.generatedWrapper,
+    mcpConfig: info.mcpConfig || null,
+    installedAt: now,
+    lastUpdated: now
+  });
+  const rows = writeManagedSkillPackState([...existing, record]);
+  writeLog('info', 'Managed skill pack installed', {
+    actor: authContext?.user?.email || null,
+    name,
+    sourceKind: info.kind,
+    generatedWrapper: info.generatedWrapper
+  });
+  return {
+    ok: true,
+    installed: publicSkillPackRecord(record),
+    record: publicSkillPackRecord(record),
+    status: collectSkillStatus({ refresh: true }),
+    count: rows.length
+  };
+}
+
+function managedSkillPackMatchesPayload(record = {}, payload = {}) {
+  const wanted = [payload.id, payload.name, payload.pluginId, payload.skill?.id, payload.skill?.name]
+    .filter(Boolean)
+    .map((value) => String(value).toLowerCase());
+  if (!wanted.length) return false;
+  const own = [record.id, record.name, publicStableId('skillpack', record.name)]
+    .filter(Boolean)
+    .map((value) => String(value).toLowerCase());
+  if (wanted.some((value) => own.includes(value))) return true;
+  return listSkillsInPluginRoot(record.installPath, record)
+    .some((skill) => wanted.includes(String(skill.id || '').toLowerCase()) || wanted.includes(String(skill.name || '').toLowerCase()));
+}
+
+function updateManagedSkillEnabled(payload = {}, enabled = true) {
+  optionalObjectPayload(payload, 'skill toggle payload');
+  const rows = readManagedSkillPackState();
+  const index = rows.findIndex((row) => managedSkillPackMatchesPayload(row, payload));
+  if (index < 0) throw new Error('Skill pack not found.');
+  rows[index] = normalizeManagedSkillPackRecord({
+    ...rows[index],
+    enabled,
+    lastUpdated: new Date().toISOString()
+  });
+  writeManagedSkillPackState(rows);
+  return {
+    ok: true,
+    updated: publicSkillPackRecord(rows[index]),
+    status: collectSkillStatus({ refresh: true })
+  };
+}
+
+function updateManagedSkillPack(payload = {}, authContext = null) {
+  optionalObjectPayload(payload, 'skill update payload');
+  const rows = readManagedSkillPackState();
+  const record = rows.find((row) => managedSkillPackMatchesPayload(row, payload));
+  if (!record) throw new Error('Skill pack not found.');
+  if (!record.sourcePath) {
+    return { ok: true, updated: publicSkillPackRecord(record), status: collectSkillStatus({ refresh: true }) };
+  }
+  return installManagedSkillPack({ sourcePath: record.sourcePath, name: record.name, enabled: record.enabled }, authContext);
+}
+
+function collectManagedSkillInventory(options = {}) {
+  const includeDisabled = options.includeDisabled !== false;
+  const rows = readManagedSkillPackState()
+    .filter((row) => row.installed && row.installPath && fs.existsSync(row.installPath))
+    .filter((row) => includeDisabled || row.enabled);
+  const skillsByPack = new Map();
+  const skills = rows.flatMap((row) => {
+    const packSkills = listSkillsInPluginRoot(row.installPath, {
+    ...row,
+    id: row.name,
+    name: row.name,
+    version: row.version,
+    scope: 'managed',
+    enabled: row.enabled,
+    installed: true
+    }).map((skill) => ({
+      ...skill,
+      category: row.category || skill.category || 'EcoreX',
+      enabled: row.enabled,
+      installed: true,
+      sourcePath: row.sourcePath,
+      installPath: row.installPath,
+      sourceKind: row.sourceKind
+    }));
+    skillsByPack.set(row.name, packSkills);
+    return packSkills;
+  });
+  const skillPacks = rows.map((row) => {
+    const packSkills = skillsByPack.get(row.name) || [];
+    return {
+      ...publicSkillPackRecord(row),
+      type: row.sourceKind === 'mcp-wrapper' ? 'mcp-backed-skill-pack' : 'skill-pack',
+      skills: 1,
+      skillCount: 1,
+      childSkillCount: packSkills.length || 1,
+      commands: row.sourceKind === 'mcp-wrapper' ? 1 : 0,
+      agents: 0,
+      hooks: 0,
+      provider: {
+        id: publicStableId('skillpack', row.name),
+        name: row.name,
+        version: row.version || null
+      }
+    };
+  });
+  return { rows, skillPacks, skills };
+}
+
+function runtimeManagedSkillPlugins() {
+  return collectManagedSkillInventory({ includeDisabled: false }).rows.map((row) => ({
+    name: row.name,
+    source: row.installPath,
+    installPath: row.installPath,
+    available: true,
+    managed: true,
+    enabled: row.enabled
+  }));
+}
+
+function enabledManagedSkillPackNames() {
+  return runtimeManagedSkillPlugins().map((plugin) => plugin.name);
+}
+
+function enabledManagedMcpServers() {
+  const servers = {};
+  for (const row of collectManagedSkillInventory({ includeDisabled: false }).rows) {
+    if (!row.mcpConfig || typeof row.mcpConfig !== 'object') continue;
+    const name = sanitizeSkillPackName(row.name || row.id || 'managed-mcp');
+    servers[name] = safeJsonValue(row.mcpConfig, 8000);
+  }
+  return servers;
+}
+
+function prepareManagedMcpConfigFile() {
+  const mcpServers = enabledManagedMcpServers();
+  const names = Object.keys(mcpServers);
+  if (!names.length) return null;
+  const file = managedMcpConfigPath();
+  writeJsonFileSafe(file, { mcpServers });
+  return file;
+}
+
+function runtimePluginPathAllowed(pluginPath, backendRoot) {
+  const resolved = path.resolve(pluginPath);
+  return isPathInside(backendRoot, resolved) || isPathInside(managedSkillPacksDir(), resolved);
 }
 
 function workspacePathKey(value) {
@@ -1130,6 +1709,14 @@ function authIdentityPath() {
   return path.join(app.getPath('userData'), AUTH_IDENTITY_FILE_NAME);
 }
 
+function authUsersPath() {
+  return path.join(app.getPath('userData'), AUTH_USERS_FILE_NAME);
+}
+
+function enterpriseAdminJournalPath() {
+  return path.join(app.getPath('userData'), ENTERPRISE_ADMIN_JOURNAL_FILE_NAME);
+}
+
 function secretsPath() {
   return path.join(app.getPath('userData'), SECRETS_FILE_NAME);
 }
@@ -1161,11 +1748,194 @@ function atomicWriteJson(file, payload) {
   fs.renameSync(tempFile, file);
 }
 
+function normalizeUserRole(value, fallback = 'user') {
+  const role = String(value || fallback || 'user').trim().toLowerCase().replace(/[-\s]+/g, '_');
+  return USER_ROLES.has(role) ? role : fallback;
+}
+
+function normalizeUserDisplayName(value, email = '') {
+  const text = String(value || '').trim().slice(0, 80);
+  if (text) return text;
+  const local = String(email || '').split('@')[0] || 'EcoreX User';
+  return local.slice(0, 80);
+}
+
+function stableUserId(email = '') {
+  return crypto.createHash('sha256').update(`ecorex-user/v1:${String(email || '').toLowerCase()}`).digest('hex').slice(0, 24);
+}
+
+function normalizeAuthUser(raw = {}, index = 0) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const email = normalizeLoginEmail(raw.email);
+  const role = normalizeUserRole(raw.role, index === 0 ? 'super_admin' : 'user');
+  const active = raw.active !== false;
+  const user = {
+    id: String(raw.id || stableUserId(email)).slice(0, 80),
+    email,
+    displayName: normalizeUserDisplayName(raw.displayName || raw.name, email),
+    title: String(raw.title || '').trim().slice(0, 120),
+    team: String(raw.team || '').trim().slice(0, 120),
+    avatarInitials: String(raw.avatarInitials || '').trim().slice(0, 4),
+    role,
+    active,
+    passwordHash: String(raw.passwordHash || ''),
+    salt: String(raw.salt || ''),
+    iterations: Number(raw.iterations) || LOCAL_AUTH_HASH_ITERATIONS,
+    digest: raw.digest || 'sha256',
+    createdAt: raw.createdAt || new Date().toISOString(),
+    updatedAt: raw.updatedAt || raw.createdAt || new Date().toISOString()
+  };
+  if (!/^[a-f0-9]{64}$/i.test(user.passwordHash) || !/^[a-f0-9]{32,}$/i.test(user.salt)) return null;
+  return user;
+}
+
+function publicAuthUser(user = {}) {
+  if (!user?.email) return null;
+  const permissions = USER_ROLE_PERMISSIONS[normalizeUserRole(user.role)] || USER_ROLE_PERMISSIONS.user;
+  return {
+    id: user.id,
+    email: user.email,
+    displayName: user.displayName || normalizeUserDisplayName('', user.email),
+    name: user.displayName || normalizeUserDisplayName('', user.email),
+    title: user.title || '',
+    team: user.team || '',
+    avatarInitials: user.avatarInitials || '',
+    role: normalizeUserRole(user.role),
+    roleLabel: userRoleLabel(user.role),
+    permissions,
+    active: user.active !== false,
+    createdAt: user.createdAt || null,
+    updatedAt: user.updatedAt || null
+  };
+}
+
+function userRoleLabel(role = 'user') {
+  const normalized = normalizeUserRole(role);
+  if (normalized === 'super_admin') return '超级管理员';
+  if (normalized === 'admin') return '管理员';
+  return '成员';
+}
+
+function authUsersEnvelope(users = []) {
+  return {
+    version: 1,
+    users: users.map((user, index) => normalizeAuthUser(user, index)).filter(Boolean)
+  };
+}
+
+function writeAuthUsers(users = []) {
+  const envelope = authUsersEnvelope(users);
+  atomicWriteJson(authUsersPath(), {
+    version: 1,
+    encoding: 'safeStorage/v1',
+    data: encryptLocalPayload(envelope),
+    updatedAt: new Date().toISOString()
+  });
+  return envelope.users;
+}
+
+function legacyOwnerAsUser(identity = readAuthIdentity()) {
+  if (!identity?.email) return null;
+  return normalizeAuthUser({
+    id: stableUserId(identity.email),
+    email: identity.email,
+    displayName: identity.displayName || identity.email.split('@')[0],
+    title: '本机超级管理员',
+    team: 'EcoreX',
+    role: 'super_admin',
+    active: true,
+    passwordHash: identity.passwordHash,
+    salt: identity.salt,
+    iterations: identity.iterations,
+    digest: identity.digest,
+    createdAt: identity.createdAt,
+    updatedAt: identity.updatedAt
+  });
+}
+
+function readAuthUsers(options = {}) {
+  try {
+    const file = authUsersPath();
+    if (!fs.existsSync(file)) {
+      const legacyUser = legacyOwnerAsUser();
+      if (legacyUser && options.migrate !== false) return writeAuthUsers([legacyUser]);
+      return [];
+    }
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const envelope = raw?.encoding === 'safeStorage/v1' ? decryptLocalPayload(raw.data) : raw;
+    const users = (Array.isArray(envelope?.users) ? envelope.users : Array.isArray(envelope) ? envelope : [])
+      .map((user, index) => normalizeAuthUser(user, index))
+      .filter(Boolean);
+    if (users.length && raw?.encoding !== 'safeStorage/v1' && options.migrate !== false) {
+      return writeAuthUsers(users);
+    }
+    return users;
+  } catch (error) {
+    writeLog('warn', 'Failed to read auth users', { error: error?.message });
+    return [];
+  }
+}
+
+function findAuthUserByEmail(email) {
+  const normalizedEmail = normalizeLoginEmail(email);
+  return readAuthUsers().find((user) => user.email === normalizedEmail) || null;
+}
+
+function createUserRecord({ email, password, role = 'user', displayName = '', title = '', team = '' }) {
+  const normalizedEmail = normalizeLoginEmail(email);
+  const normalizedPassword = normalizeLocalPassword(password, { forSetup: true });
+  const now = new Date().toISOString();
+  const salt = crypto.randomBytes(16).toString('hex');
+  return normalizeAuthUser({
+    id: stableUserId(normalizedEmail),
+    email: normalizedEmail,
+    displayName: normalizeUserDisplayName(displayName, normalizedEmail),
+    title,
+    team,
+    role: normalizeUserRole(role),
+    active: true,
+    salt,
+    passwordHash: hashLocalPassword(normalizedPassword, salt),
+    iterations: LOCAL_AUTH_HASH_ITERATIONS,
+    digest: 'sha256',
+    createdAt: now,
+    updatedAt: now
+  });
+}
+
+function authContextFromArgs(args = []) {
+  const session = readAuthSession({ refresh: true });
+  const token = extractAuthToken(args);
+  if (!session?.token || !token || token.length !== session.token.length) return null;
+  const expected = Buffer.from(session.token, 'utf8');
+  const provided = Buffer.from(token, 'utf8');
+  if (provided.length !== expected.length || !crypto.timingSafeEqual(expected, provided)) return null;
+  const user = findAuthUserByEmail(session.email);
+  if (!user || user.active === false) return null;
+  return {
+    session,
+    user,
+    publicUser: publicAuthUser(user),
+    permissions: USER_ROLE_PERMISSIONS[normalizeUserRole(user.role)] || USER_ROLE_PERMISSIONS.user
+  };
+}
+
+function authContextHasPermission(authContext, permission) {
+  if (!permission) return true;
+  return (authContext?.permissions || []).includes(permission);
+}
+
+function forbiddenResponse(permission = '') {
+  return {
+    ok: false,
+    forbidden: true,
+    error: permission ? `Permission required: ${permission}` : 'Forbidden'
+  };
+}
+
 function publicAuthSession(session, options = {}) {
-  const identity = Object.prototype.hasOwnProperty.call(options, 'identity')
-    ? options.identity
-    : readAuthIdentity();
-  const setupRequired = !identity;
+  const users = readAuthUsers({ migrate: true });
+  const setupRequired = !users.length;
   if (!session?.token) {
     return {
       ok: true,
@@ -1174,18 +1944,23 @@ function publicAuthSession(session, options = {}) {
       authMode: 'local-owner'
     };
   }
+  const user = users.find((item) => item.email === session.email) || null;
+  const publicUser = publicAuthUser(user || { email: session.email, role: 'user', active: true });
   const summary = {
     ok: true,
-    loggedIn: true,
+    loggedIn: Boolean(user?.active !== false),
     email: session.email,
-    user: { email: session.email },
+    user: publicUser,
+    role: publicUser?.role || 'user',
+    permissions: publicUser?.permissions || USER_ROLE_PERMISSIONS.user,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     expiresAt: session.expiresAt,
     setupRequired,
     authMode: 'local-owner'
   };
-  if (identity?.email) summary.ownerEmail = identity.email;
+  const owner = users.find((item) => normalizeUserRole(item.role) === 'super_admin') || users[0];
+  if (owner?.email) summary.ownerEmail = owner.email;
   if (options.includeToken) summary.token = session.token;
   return summary;
 }
@@ -1317,8 +2092,8 @@ function readAuthSession(options = {}) {
     const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (raw?.encoding === 'safeStorage/v1') {
       const session = validateAuthSession(decryptLocalPayload(raw.data));
-      const identity = readAuthIdentity();
-      if (!identity || session?.email !== identity.email) {
+      const user = session?.email ? findAuthUserByEmail(session.email) : null;
+      if (!user || user.active === false) {
         clearAuthSession();
         return null;
       }
@@ -1326,8 +2101,8 @@ function readAuthSession(options = {}) {
     }
     const legacySession = validateAuthSession(raw);
     if (legacySession) {
-      const identity = readAuthIdentity();
-      if (!identity || legacySession.email !== identity.email) {
+      const user = findAuthUserByEmail(legacySession.email);
+      if (!user || user.active === false) {
         clearAuthSession();
         return null;
       }
@@ -1427,27 +2202,41 @@ function loginAuth(payload = {}) {
     throw new Error('Verification-code login requires enterprise SSO. Use password login for local desktop access.');
   }
 
-  let identity = readAuthIdentity();
-  const password = normalizeLocalPassword(payload.password, { forSetup: !identity });
+  let users = readAuthUsers({ migrate: true });
+  const password = normalizeLocalPassword(payload.password, { forSetup: !users.length });
+  let user = users.find((item) => item.email === email) || null;
   let createdIdentity = false;
 
-  if (!identity) {
-    identity = createAuthIdentity(email, password);
+  if (!users.length) {
+    user = createUserRecord({
+      email,
+      password,
+      role: 'super_admin',
+      displayName: payload.displayName || email.split('@')[0],
+      title: '本机超级管理员',
+      team: 'EcoreX'
+    });
+    users = writeAuthUsers([user]);
+    try {
+      createAuthIdentity(email, password);
+    } catch {
+      // The encrypted users store is now authoritative; legacy owner storage is best-effort.
+    }
     createdIdentity = true;
-  } else if (identity.email !== email || !verifyLocalPassword(identity, password)) {
-    writeLog('warn', 'Local auth login rejected', { email, reason: identity.email !== email ? 'email-mismatch' : 'password-mismatch' });
+  } else if (!user || user.active === false || !verifyLocalPassword(user, password)) {
+    writeLog('warn', 'Local auth login rejected', { email, reason: !user ? 'email-mismatch' : user.active === false ? 'inactive-user' : 'password-mismatch' });
     throw new Error('Invalid email or password.');
   }
 
   const now = new Date().toISOString();
   const session = writeAuthSession({
-    email: identity.email,
+    email: user.email,
     token: crypto.randomBytes(32).toString('hex'),
     createdAt: now,
     updatedAt: now
   });
-  writeLog('info', createdIdentity ? 'Local auth owner bound' : 'Auth session created', { email: identity.email });
-  return publicAuthSession(session, { includeToken: true, identity });
+  writeLog('info', createdIdentity ? 'Local auth super admin bound' : 'Auth session created', { email: user.email, role: user.role });
+  return publicAuthSession(session, { includeToken: true });
 }
 
 function logoutAuth() {
@@ -1455,6 +2244,183 @@ function logoutAuth() {
   clearAuthSession();
   if (session?.email) writeLog('info', 'Auth session cleared', { email: session.email });
   return { ok: true, loggedIn: false };
+}
+
+function listAuthUsers(_payload = {}, authContext = null) {
+  const canManageUsers = authContextHasPermission(authContext, 'users:manage');
+  const allUsers = readAuthUsers({ migrate: true });
+  const visibleUsers = canManageUsers
+    ? allUsers
+    : allUsers.filter((user) => user.email === authContext?.user?.email);
+  const users = visibleUsers.map(publicAuthUser).filter(Boolean);
+  return {
+    ok: true,
+    users,
+    currentUser: authContext?.publicUser || null,
+    roles: Object.keys(USER_ROLE_PERMISSIONS).map((role) => ({
+      value: role,
+      label: userRoleLabel(role),
+      permissions: USER_ROLE_PERMISSIONS[role]
+    })),
+    canManageUsers,
+    canManageEnterprise: authContextHasPermission(authContext, 'enterprise:manage')
+  };
+}
+
+function createAuthUser(payload = {}, authContext = null) {
+  optionalObjectPayload(payload, 'user payload');
+  if (!authContextHasPermission(authContext, 'users:manage')) return forbiddenResponse('users:manage');
+  const users = readAuthUsers({ migrate: true });
+  const email = normalizeLoginEmail(payload.email);
+  if (users.some((user) => user.email === email)) throw new Error('User already exists.');
+  const user = createUserRecord({
+    email,
+    password: payload.password,
+    role: payload.role || 'user',
+    displayName: payload.displayName || payload.name,
+    title: payload.title,
+    team: payload.team
+  });
+  const nextUsers = writeAuthUsers([...users, user]);
+  writeLog('info', 'Auth user created', { actor: authContext.user.email, email: user.email, role: user.role });
+  return { ok: true, user: publicAuthUser(user), users: nextUsers.map(publicAuthUser).filter(Boolean) };
+}
+
+function updateAuthUser(payload = {}, authContext = null) {
+  optionalObjectPayload(payload, 'user payload');
+  const users = readAuthUsers({ migrate: true });
+  const id = String(payload.id || '').trim();
+  const email = payload.email ? normalizeLoginEmail(payload.email) : '';
+  const index = users.findIndex((user) => user.id === id || (email && user.email === email));
+  if (index < 0) throw new Error('User not found.');
+  const target = users[index];
+  const isSelf = target.email === authContext?.user?.email;
+  const canManage = authContextHasPermission(authContext, 'users:manage');
+  if (!canManage && !isSelf) return forbiddenResponse('users:manage');
+  const nextUser = { ...target };
+  for (const field of ['displayName', 'title', 'team', 'avatarInitials']) {
+    if (Object.prototype.hasOwnProperty.call(payload, field)) nextUser[field] = String(payload[field] || '').trim().slice(0, field === 'avatarInitials' ? 4 : 120);
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'name')) {
+    nextUser.displayName = normalizeUserDisplayName(payload.name, target.email);
+  }
+  if (canManage && Object.prototype.hasOwnProperty.call(payload, 'role')) {
+    nextUser.role = normalizeUserRole(payload.role, target.role);
+  }
+  if (canManage && Object.prototype.hasOwnProperty.call(payload, 'active')) {
+    nextUser.active = payload.active !== false;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'password') && String(payload.password || '').trim()) {
+    if (!canManage && !verifyLocalPassword(target, normalizeLocalPassword(payload.currentPassword))) {
+      throw new Error('Current password is invalid.');
+    }
+    const salt = crypto.randomBytes(16).toString('hex');
+    nextUser.salt = salt;
+    nextUser.passwordHash = hashLocalPassword(normalizeLocalPassword(payload.password, { forSetup: true }), salt);
+    nextUser.iterations = LOCAL_AUTH_HASH_ITERATIONS;
+    nextUser.digest = 'sha256';
+  }
+  nextUser.displayName = normalizeUserDisplayName(nextUser.displayName, target.email);
+  nextUser.updatedAt = new Date().toISOString();
+  const nextUsers = [...users];
+  nextUsers[index] = normalizeAuthUser(nextUser, index);
+  if (!nextUsers.some((user) => user.active !== false && normalizeUserRole(user.role) === 'super_admin')) {
+    throw new Error('At least one active super administrator is required.');
+  }
+  writeAuthUsers(nextUsers);
+  writeLog('info', 'Auth user updated', { actor: authContext.user.email, email: target.email, role: nextUser.role });
+  return {
+    ok: true,
+    user: publicAuthUser(nextUsers[index]),
+    users: nextUsers.map(publicAuthUser).filter(Boolean),
+    auth: publicAuthSession(readAuthSession(), { includeToken: false })
+  };
+}
+
+function deleteAuthUser(payload = {}, authContext = null) {
+  optionalObjectPayload(payload, 'user payload');
+  if (!authContextHasPermission(authContext, 'users:manage')) return forbiddenResponse('users:manage');
+  const users = readAuthUsers({ migrate: true });
+  const id = String(payload.id || '').trim();
+  const email = payload.email ? normalizeLoginEmail(payload.email) : '';
+  const target = users.find((user) => user.id === id || (email && user.email === email));
+  if (!target) throw new Error('User not found.');
+  if (target.email === authContext?.user?.email) throw new Error('You cannot delete the current signed-in user.');
+  const nextUsers = users.filter((user) => user.id !== target.id);
+  if (!nextUsers.some((user) => user.active !== false && normalizeUserRole(user.role) === 'super_admin')) {
+    throw new Error('At least one active super administrator is required.');
+  }
+  writeAuthUsers(nextUsers);
+  writeLog('warn', 'Auth user deleted', { actor: authContext.user.email, email: target.email });
+  return { ok: true, deletedId: target.id, users: nextUsers.map(publicAuthUser).filter(Boolean) };
+}
+
+function updateOwnProfile(payload = {}, authContext = null) {
+  optionalObjectPayload(payload, 'profile payload');
+  return updateAuthUser({ ...payload, id: authContext?.user?.id }, authContext);
+}
+
+function appendEnterpriseAdminJournal(entry = {}) {
+  const line = JSON.stringify({
+    ...entry,
+    at: new Date().toISOString()
+  });
+  fs.mkdirSync(app.getPath('userData'), { recursive: true });
+  fs.appendFileSync(enterpriseAdminJournalPath(), `${line}\n`, 'utf8');
+}
+
+function runEnterpriseAdminAction(payload = {}, authContext = null) {
+  optionalObjectPayload(payload, 'enterprise action payload');
+  if (!authContextHasPermission(authContext, 'enterprise:manage')) return forbiddenResponse('enterprise:manage');
+  const action = String(payload.action || '').trim();
+  if (!ENTERPRISE_ADMIN_ACTIONS.has(action)) throw new Error('Unsupported enterprise action.');
+  const operationId = crypto.randomUUID();
+  const summary = safeOutputText(payload.summary || payload.name || action, 240);
+  const skillSourcePaths = [
+    ...(Array.isArray(payload.sourcePaths) ? payload.sourcePaths : []),
+    ...(payload.sourcePath ? [payload.sourcePath] : []),
+    ...(payload.path ? [payload.path] : [])
+  ].map((item) => String(item || '').trim()).filter(Boolean);
+  appendEnterpriseAdminJournal({
+    operationId,
+    action,
+    actor: authContext.user.email,
+    summary,
+    payload: redactForLog(payload)
+  });
+  let refresh = null;
+  let pushedSkills = [];
+  try {
+    if (action === 'syncMcp') {
+      refresh = collectMcpStatus({ refresh: true });
+    } else if (action === 'pushSkill') {
+      pushedSkills = skillSourcePaths.map((sourcePath) => installManagedSkillPack({
+        sourcePath,
+        enabled: payload.enabled !== false,
+        category: payload.category
+      }, authContext).installed);
+      refresh = collectSkillStatus({ refresh: true });
+    }
+  } catch (error) {
+    refresh = {
+      ok: false,
+      error: safeOutputText(error instanceof Error ? error.message : String(error), 1000)
+    };
+  }
+  writeLog('info', 'Enterprise admin action accepted', { operationId, action, actor: authContext.user.email });
+  return {
+    ok: true,
+    operation: {
+      id: operationId,
+      action,
+      status: refresh?.ok === false ? 'accepted' : 'queued',
+      summary,
+      createdAt: new Date().toISOString(),
+      actor: authContext.publicUser
+    },
+    installedSkills: pushedSkills,
+    refresh: refresh ? safeJsonValue(refresh, 12000) : null
+  };
 }
 
 function extractAuthToken(args = []) {
@@ -1467,13 +2433,7 @@ function extractAuthToken(args = []) {
 }
 
 function isAuthorized(args = []) {
-  const session = readAuthSession({ refresh: true });
-  const token = extractAuthToken(args);
-  if (!session?.token || !token || token.length !== session.token.length) return false;
-  const expected = Buffer.from(session.token, 'utf8');
-  const provided = Buffer.from(token, 'utf8');
-  if (provided.length !== expected.length) return false;
-  return crypto.timingSafeEqual(expected, provided);
+  return Boolean(authContextFromArgs(args));
 }
 
 function unauthorizedResponse() {
@@ -1678,6 +2638,59 @@ function secretsStatus() {
       encryptedCount: items.length - plaintextCount,
       updatedAt: store.updatedAt || null
     }
+  };
+}
+
+function evaluationReportPath() {
+  return path.join(app.getPath('userData'), EVALUATION_REPORT_FILE_NAME);
+}
+
+function readLastEvaluationReport() {
+  try {
+    const file = evaluationReportPath();
+    if (!fs.existsSync(file)) return null;
+    const report = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!report || typeof report !== 'object') return null;
+    return {
+      id: safeOutputText(report.id || '', 80),
+      version: safeOutputText(report.version || '', 80),
+      mode: safeOutputText(report.mode || '', 80),
+      startedAt: report.startedAt || null,
+      finishedAt: report.finishedAt || null,
+      durationMs: Number(report.durationMs) || 0,
+      aggregate: report.aggregate || null,
+      sampleCount: Array.isArray(report.results) ? report.results.length : 0,
+      memoryPolicy: report.memoryPolicy || ''
+    };
+  } catch (error) {
+    writeLog('warn', 'Failed to read evaluation report', {
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return null;
+  }
+}
+
+function listEvaluationStatus() {
+  return {
+    ...listEvaluationFramework(),
+    lastReport: readLastEvaluationReport(),
+    reportPathLabel: `userData:/${EVALUATION_REPORT_FILE_NAME}`
+  };
+}
+
+function runEvaluationStatus(payload = {}) {
+  optionalObjectPayload(payload, 'evaluation payload');
+  const report = runEvaluationFramework(payload);
+  atomicWriteJson(evaluationReportPath(), report);
+  writeLog('info', 'Evaluation framework report generated', {
+    id: report.id,
+    mode: report.mode,
+    sampleCount: EVALUATION_SAMPLE_COUNT,
+    durationMs: report.durationMs
+  });
+  return {
+    ...report,
+    reportPathLabel: `userData:/${EVALUATION_REPORT_FILE_NAME}`
   };
 }
 
@@ -1993,6 +3006,33 @@ function publicModelProfile(profile = {}, options = {}) {
 
 function readStoredModelProfiles(options = {}) {
   return readModelProfilesFile().profiles.map((profile) => publicModelProfile(profile, options));
+}
+
+function activeModelProfile() {
+  try {
+    const store = readModelProfilesFile();
+    return store.profiles.find((profile) => profile.isActive)
+      || (store.activeProfileName ? store.profiles.find((profile) => profile.name === store.activeProfileName) : null)
+      || store.profiles[0]
+      || null;
+  } catch {
+    return null;
+  }
+}
+
+function shouldPreferActiveModelProfile(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  return !normalized || normalized === 'sonnet' || normalized === 'opus';
+}
+
+function resolveAgentModelName(payloadModel, settings = {}) {
+  const activeProfile = activeModelProfile();
+  const activeModel = activeProfile?.model ? normalizeModelName(activeProfile.model, '') : '';
+  const requested = normalizeModelName(payloadModel, settings.defaultModel || activeModel || 'sonnet');
+  if (activeModel && (shouldPreferActiveModelProfile(payloadModel) || shouldPreferActiveModelProfile(requested))) {
+    return activeModel;
+  }
+  return requested || activeModel || 'sonnet';
 }
 
 function modelCapabilityOptions() {
@@ -2418,7 +3458,7 @@ function normalizeSettings(raw = {}) {
   });
   const customWorkspaceRootConfirmed = !isSameWorkspacePath(workspaceRoot, defaultWorkspaceRoot());
   return {
-    defaultModel: normalizeModelName(raw.defaultModel, 'sonnet'),
+    defaultModel: resolveAgentModelName(raw.defaultModel, {}),
     accessMode,
     permissionMode: accessMode,
     defaultPermissionMode: accessMode,
@@ -3284,47 +4324,107 @@ function sanitizeClaudeSessionId(sessionId, fallbackKey = '') {
 }
 
 function claudeProjectsRoot() {
-  const home = process.env.USERPROFILE || process.env.HOME || '';
-  return home ? path.join(home, '.claude', 'projects') : '';
+  return path.join(agentRuntimeConfigDir(), 'projects');
+}
+
+function claudeTranscriptRoots() {
+  const runtimeConfigDir = path.resolve(agentRuntimeConfigDir());
+  const roots = [claudeProjectsRoot()];
+  for (const configDir of [process.env.CLAUDE_CONFIG_DIR, process.env.ECOREX_AGENT_CONFIG_DIR]) {
+    if (!configDir) continue;
+    const resolvedConfigDir = path.resolve(configDir);
+    if (isSameWorkspacePath(resolvedConfigDir, runtimeConfigDir) || isPathInside(runtimeConfigDir, resolvedConfigDir)) {
+      roots.push(path.join(resolvedConfigDir, 'projects'));
+    }
+  }
+  const seen = new Set();
+  return roots
+    .filter(Boolean)
+    .map((root) => path.resolve(root))
+    .filter((root) => {
+      const key = isWindows ? root.toLowerCase() : root;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function invalidClaudeResumeEntry(claudeSessionId) {
+  const sessionId = String(claudeSessionId || '').trim().toLowerCase();
+  if (!/^[0-9a-f-]{36}$/i.test(sessionId)) return null;
+  const entry = invalidClaudeSessionResumeCache.get(sessionId);
+  if (!entry) return null;
+  if (Date.now() - entry.at > CLAUDE_INVALID_RESUME_TTL_MS) {
+    invalidClaudeSessionResumeCache.delete(sessionId);
+    return null;
+  }
+  return entry;
+}
+
+function markClaudeSessionResumeInvalid(claudeSessionId, reason = 'missing-resume-target') {
+  const sessionId = String(claudeSessionId || '').trim().toLowerCase();
+  if (!/^[0-9a-f-]{36}$/i.test(sessionId)) return;
+  invalidClaudeSessionResumeCache.set(sessionId, { at: Date.now(), reason });
+  claudeTranscriptExistenceCache.delete(sessionId);
+  ensureClaudeSessionBindingCacheLoaded();
+  claudeSessionBindingCache.delete(sessionId);
+  try {
+    persistClaudeSessionBindings();
+  } catch {
+    // Binding persistence is best-effort; invalidating the in-memory resume target is authoritative.
+  }
+}
+
+function clearInvalidClaudeSessionResume(claudeSessionId) {
+  const sessionId = String(claudeSessionId || '').trim().toLowerCase();
+  if (/^[0-9a-f-]{36}$/i.test(sessionId)) invalidClaudeSessionResumeCache.delete(sessionId);
 }
 
 function markClaudeSessionTranscriptSeen(claudeSessionId) {
   const sessionId = String(claudeSessionId || '').trim().toLowerCase();
   if (/^[0-9a-f-]{36}$/i.test(sessionId)) {
+    clearInvalidClaudeSessionResume(sessionId);
     claudeTranscriptExistenceCache.set(sessionId, { exists: true, checkedAt: Date.now() });
+  }
+}
+
+function markClaudeSessionLaunched(claudeSessionId) {
+  const sessionId = String(claudeSessionId || '').trim().toLowerCase();
+  if (/^[0-9a-f-]{36}$/i.test(sessionId)) {
+    claudeSessionLaunchCache.set(sessionId, { launchedAt: Date.now() });
   }
 }
 
 function findClaudeSessionTranscript(claudeSessionId) {
   const sessionId = String(claudeSessionId || '').trim().toLowerCase();
   if (!/^[0-9a-f-]{36}$/i.test(sessionId)) return '';
-  const root = claudeProjectsRoot();
-  if (!root) return '';
-  try {
-    if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) return '';
-  } catch {
-    return '';
-  }
-
-  const stack = [root];
-  let visited = 0;
-  while (stack.length && visited < 4000) {
-    const current = stack.pop();
-    visited += 1;
-    let entries = [];
+  for (const root of claudeTranscriptRoots()) {
     try {
-      entries = fs.readdirSync(current, { withFileTypes: true });
+      if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) continue;
     } catch {
       continue;
     }
-    for (const entry of entries) {
-      const child = path.join(current, entry.name);
-      if (entry.isDirectory()) {
-        stack.push(child);
+
+    const stack = [root];
+    let visited = 0;
+    while (stack.length && visited < 4000) {
+      const current = stack.pop();
+      visited += 1;
+      let entries = [];
+      try {
+        entries = fs.readdirSync(current, { withFileTypes: true });
+      } catch {
         continue;
       }
-      if (entry.isFile() && entry.name.toLowerCase() === `${sessionId}.jsonl`) {
-        return child;
+      for (const entry of entries) {
+        const child = path.join(current, entry.name);
+        if (entry.isDirectory()) {
+          stack.push(child);
+          continue;
+        }
+        if (entry.isFile() && entry.name.toLowerCase() === `${sessionId}.jsonl`) {
+          return child;
+        }
       }
     }
   }
@@ -3334,6 +4434,7 @@ function findClaudeSessionTranscript(claudeSessionId) {
 function refreshClaudeSessionTranscriptSeen(claudeSessionId) {
   const sessionId = String(claudeSessionId || '').trim().toLowerCase();
   if (!/^[0-9a-f-]{36}$/i.test(sessionId)) return false;
+  if (invalidClaudeResumeEntry(sessionId)) return false;
   if (findClaudeSessionTranscript(sessionId)) {
     markClaudeSessionTranscriptSeen(sessionId);
     return true;
@@ -3345,9 +4446,118 @@ function refreshClaudeSessionTranscriptSeen(claudeSessionId) {
 function claudeSessionTranscriptExists(claudeSessionId) {
   const sessionId = String(claudeSessionId || '').trim().toLowerCase();
   if (!/^[0-9a-f-]{36}$/i.test(sessionId)) return false;
+  if (invalidClaudeResumeEntry(sessionId)) return false;
   const cached = claudeTranscriptExistenceCache.get(sessionId);
   if (cached?.exists && Date.now() - cached.checkedAt <= CLAUDE_TRANSCRIPT_CACHE_TTL_MS) return true;
   return refreshClaudeSessionTranscriptSeen(sessionId);
+}
+
+function claudeSessionShouldResume(claudeSessionId) {
+  return claudeSessionTranscriptExists(claudeSessionId);
+}
+
+function claudeSessionBindingForPayload(payload = {}) {
+  const claudeSessionId = String(payload.claudeSessionId || '').trim().toLowerCase();
+  if (!/^[0-9a-f-]{36}$/i.test(claudeSessionId)) return null;
+  return {
+    claudeSessionId,
+    conversationId: String(payload.conversationId || payload.sessionId || '').trim(),
+    projectId: String(payload.projectId || payload.projectContext?.id || '').trim(),
+    cwd: payload.cwd ? path.resolve(String(payload.cwd || '')) : ''
+  };
+}
+
+function isSameClaudeSessionBinding(left = {}, right = {}) {
+  const leftCwd = left.cwd ? path.resolve(left.cwd) : '';
+  const rightCwd = right.cwd ? path.resolve(right.cwd) : '';
+  const leftCwdKey = isWindows ? leftCwd.toLowerCase() : leftCwd;
+  const rightCwdKey = isWindows ? rightCwd.toLowerCase() : rightCwd;
+  return (
+    String(left.conversationId || '') === String(right.conversationId || '') &&
+    String(left.projectId || '') === String(right.projectId || '') &&
+    leftCwdKey === rightCwdKey
+  );
+}
+
+function normalizeClaudeSessionBinding(raw = {}) {
+  const binding = claudeSessionBindingForPayload(raw);
+  if (!binding || !binding.conversationId || !binding.cwd) return null;
+  return {
+    ...binding,
+    createdAt: Number(raw.createdAt) || Date.now(),
+    updatedAt: Number(raw.updatedAt) || Number(raw.createdAt) || Date.now()
+  };
+}
+
+function ensureClaudeSessionBindingCacheLoaded() {
+  if (claudeSessionBindingCacheLoaded) return;
+  claudeSessionBindingCacheLoaded = true;
+  let payload = null;
+  try {
+    const file = claudeSessionBindingsPath();
+    if (!fs.existsSync(file)) return;
+    payload = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    writeLog('warn', 'Failed to read Claude session bindings', {
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return;
+  }
+  const rows = Array.isArray(payload?.bindings) ? payload.bindings : Array.isArray(payload) ? payload : [];
+  for (const row of rows) {
+    const binding = normalizeClaudeSessionBinding(row);
+    if (binding) claudeSessionBindingCache.set(binding.claudeSessionId, binding);
+  }
+}
+
+function persistClaudeSessionBindings() {
+  ensureClaudeSessionBindingCacheLoaded();
+  const bindings = Array.from(claudeSessionBindingCache.values())
+    .sort((left, right) => (Number(right.updatedAt) || 0) - (Number(left.updatedAt) || 0))
+    .slice(0, 1000)
+    .map((binding) => ({
+      claudeSessionId: binding.claudeSessionId,
+      conversationId: binding.conversationId,
+      projectId: binding.projectId || '',
+      cwd: binding.cwd,
+      createdAt: Number(binding.createdAt) || Number(binding.updatedAt) || Date.now(),
+      updatedAt: Number(binding.updatedAt) || Date.now()
+    }));
+  try {
+    atomicWriteJson(claudeSessionBindingsPath(), {
+      version: 1,
+      bindings,
+      updatedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    writeLog('warn', 'Failed to persist Claude session bindings', {
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+}
+
+function rememberClaudeSessionBinding(payload = {}) {
+  ensureClaudeSessionBindingCacheLoaded();
+  const binding = claudeSessionBindingForPayload(payload);
+  if (binding) {
+    const previous = claudeSessionBindingCache.get(binding.claudeSessionId);
+    claudeSessionBindingCache.set(binding.claudeSessionId, {
+      ...previous,
+      ...binding,
+      createdAt: Number(previous?.createdAt) || Date.now(),
+      updatedAt: Date.now()
+    });
+    persistClaudeSessionBindings();
+  }
+}
+
+function claudeSessionBindingConflict(payload = {}) {
+  ensureClaudeSessionBindingCacheLoaded();
+  const nextBinding = claudeSessionBindingForPayload(payload);
+  if (!nextBinding) return null;
+  const existing = claudeSessionBindingCache.get(nextBinding.claudeSessionId);
+  if (!existing || isSameClaudeSessionBinding(existing, nextBinding)) return null;
+  return { existing, next: nextBinding };
 }
 
 function sanitizePayload(payload = {}) {
@@ -3377,7 +4587,7 @@ function sanitizePayload(payload = {}) {
   if (permissionPolicy.fullAccess && permissionModeFromPayload && !hasFullAccessConfirmation(payload)) {
     throw new Error('Full access permission requires explicit confirmation.');
   }
-  const model = normalizeModelName(payload.model, settings.defaultModel);
+  const model = resolveAgentModelName(payload.model, settings);
   const workspaceRoot = settings.workspaceRoot;
   fs.mkdirSync(workspaceRoot, { recursive: true });
   const projectContextDisabled = payload.disableProjectContext === true;
@@ -3410,7 +4620,9 @@ function sanitizePayload(payload = {}) {
 
   return {
     sessionId: sanitizeSessionId(payload.sessionId),
+    conversationId: sanitizeSessionId(payload.conversationId || payload.sessionId),
     claudeSessionId: sanitizeClaudeSessionId(payload.claudeSessionId || payload.conversationId, payload.sessionId),
+    messageId: String(payload.messageId || payload.assistantMessageId || '').trim().slice(0, 120),
     prompt,
     userPrompt,
     attachmentContext,
@@ -3612,7 +4824,9 @@ function readProjectMemoryPreview(projectContext) {
 }
 
 function agentSystemPromptForProject(projectContext) {
-  if (!projectContext) return ECOREX_AGENT_SYSTEM_PROMPT;
+  if (!projectContext) {
+    return [ECOREX_AGENT_SYSTEM_PROMPT, ECOREX_MANAGED_CAPABILITY_PRIORITY_PROMPT].filter(Boolean).join('\n\n');
+  }
   const fields = [
     `项目：${projectContext.name}`,
     projectContext.client ? `客户：${projectContext.client}` : '',
@@ -3630,6 +4844,7 @@ function agentSystemPromptForProject(projectContext) {
   const memoryPreview = readProjectMemoryPreview(projectContext);
   return [
     ECOREX_AGENT_SYSTEM_PROMPT,
+    ECOREX_MANAGED_CAPABILITY_PRIORITY_PROMPT,
     '',
     '当前任务已绑定到一个 EcoreX 广告项目。你必须把文件读写、命令执行和长期记忆限制在该项目上下文内。',
     fields.join('\n'),
@@ -3804,7 +5019,7 @@ function startStartupPreload(reason = 'startup') {
   startupPreloadState = { status: 'running', reason, startedAt };
   startupPreloadPromise = Promise.allSettled([
     locateClaude(),
-    collectBackendStatus(null, { refresh: false }),
+    collectBackendStatus(null, { refresh: false, lightweight: true }),
     Promise.resolve().then(() => collectCapabilities()),
     Promise.resolve().then(() => publicAuthSession(readAuthSession({ refresh: true })))
   ]).then((results) => {
@@ -4002,16 +5217,6 @@ function createWindow() {
 app.whenReady().then(createWindow);
 
 app.whenReady().then(() => {
-  const shouldPreloadKkFileView =
-    process.env.ECOREX_DISABLE_KKFILEVIEW_PRELOAD !== '1' &&
-    isKkFileViewRuntimeEnabled() &&
-    (app.isPackaged || process.env.ECOREX_PRELOAD_KKFILEVIEW === '1');
-  if (shouldPreloadKkFileView) {
-    ensureKkFileViewEngine({ preload: true }).catch((error) => {
-      kkFileViewState.lastError = error?.message || String(error);
-      writeLog('warn', 'kkFileView preload skipped', { error: safeOutputText(kkFileViewState.lastError, 1000) });
-    });
-  }
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     const responseUrl = String(details.url || '');
     if (/^http:\/\/127\.0\.0\.1:(?!5188(?:\/|$))/.test(responseUrl)) {
@@ -4037,7 +5242,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   stopAllAgents('app-quit');
-  stopKkFileViewEngine('app-quit');
+  stopVueOfficePreviewServer('app-quit');
 });
 
 app.on('activate', () => {
@@ -4493,6 +5698,25 @@ function agentRecoveryHint(codeOrStatus = '', details = {}) {
   return 'The task did not finish. Check the runtime status and retry with a smaller prompt if needed.';
 }
 
+function duplicateAgentSessionResponse(sessionId, requestedSessionId, owner = {}) {
+  return {
+    ok: false,
+    sessionId,
+    requestedSessionId,
+    duplicateOf: sessionId,
+    code: 'duplicate-session',
+    status: 'running',
+    state: 'running',
+    conversationId: owner.conversationId || '',
+    claudeSessionId: owner.claudeSessionId || '',
+    messageId: owner.messageId || '',
+    projectId: owner.projectId || null,
+    projectName: owner.projectName || '',
+    error: 'This conversation already has a task running.',
+    recoveryHint: agentRecoveryHint('duplicate-session')
+  };
+}
+
 function publicWorkspacePath(cwd) {
   const workspaceRoot = readSettings().workspaceRoot;
   const target = path.resolve(String(cwd || workspaceRoot));
@@ -4549,6 +5773,11 @@ function claimAgentStart(payload = {}, options = {}) {
   const now = Date.now();
   pruneAgentStartLocks(now);
 
+  const exactSessionOwner = runningAgents.get(payload.sessionId) || pendingAgentStarts.get(payload.sessionId);
+  if (exactSessionOwner) {
+    return duplicateAgentSessionResponse(payload.sessionId, payload.sessionId, exactSessionOwner);
+  }
+
   if (runningAgents.has(payload.sessionId) || pendingAgentStarts.has(payload.sessionId)) {
     return {
       ok: false,
@@ -4556,7 +5785,7 @@ function claimAgentStart(payload = {}, options = {}) {
       code: 'duplicate-session',
       status: 'running',
       state: 'running',
-      error: 'Agent session is already running.',
+      error: '该会话已有任务正在运行。',
       recoveryHint: agentRecoveryHint('duplicate-session')
     };
   }
@@ -4567,6 +5796,9 @@ function claimAgentStart(payload = {}, options = {}) {
     const pendingClaudeSession = Array.from(pendingAgentStarts.entries()).find(([, entry]) => entry.claudeSessionId === requestedClaudeSessionId);
     const duplicateClaudeSession = activeClaudeSession || pendingClaudeSession;
     if (duplicateClaudeSession) {
+      return duplicateAgentSessionResponse(duplicateClaudeSession[0], payload.sessionId, duplicateClaudeSession[1] || {});
+    }
+    if (duplicateClaudeSession) {
       return {
         ok: false,
         sessionId: duplicateClaudeSession[0],
@@ -4575,10 +5807,32 @@ function claimAgentStart(payload = {}, options = {}) {
         code: 'duplicate-session',
         status: 'running',
         state: 'running',
-        error: 'Agent session is already running.',
+        error: '该会话已有任务正在运行。',
         recoveryHint: agentRecoveryHint('duplicate-session')
       };
     }
+  }
+
+  const bindingConflict = claudeSessionBindingConflict(payload);
+  if (bindingConflict) {
+    writeLog('warn', 'Blocked Claude session reuse across isolated context', {
+      claudeSessionId: publicStableId('claude-session', payload.claudeSessionId),
+      existingConversationId: publicStableId('conversation', bindingConflict.existing.conversationId || ''),
+      nextConversationId: publicStableId('conversation', bindingConflict.next.conversationId || ''),
+      existingProjectId: bindingConflict.existing.projectId || null,
+      nextProjectId: bindingConflict.next.projectId || null,
+      existingCwd: publicWorkspacePath(bindingConflict.existing.cwd),
+      nextCwd: publicWorkspacePath(bindingConflict.next.cwd)
+    });
+    return {
+      ok: false,
+      sessionId: payload.sessionId,
+      code: 'session-context-conflict',
+      status: 'rejected',
+      state: 'stopped',
+      error: 'This conversation is already bound to a different workspace context.',
+      recoveryHint: '请为该项目新建会话，或重新打开原项目会话后继续。'
+    };
   }
 
   const activeSessionCount = runningAgents.size + pendingAgentStarts.size;
@@ -4624,6 +5878,8 @@ function claimAgentStart(payload = {}, options = {}) {
     promptPreview: publicPromptPreview(payload.userPrompt || payload.prompt),
     workspacePath: publicWorkspacePath(payload.cwd),
     model: payload.model,
+    conversationId: payload.conversationId || '',
+    messageId: payload.messageId || '',
     accessMode: payload.accessMode,
     permissionMode: payload.permissionMode,
     permissionCliMode: payload.permissionCliMode,
@@ -4674,7 +5930,7 @@ function agentFinalText(status, details = {}) {
   if (status === 'completed') return 'Agent task completed.';
   if (status === 'cancelled') return 'Agent task cancelled.';
   if (status === 'timeout') return `Agent task timed out${details.reason === 'idle-timeout' ? ' while idle' : ''}.`;
-  if (details.code !== undefined && details.code !== null) return `Agent process exited with code ${details.code}.`;
+  if (details.code !== undefined && details.code !== null) return '本地执行进程异常退出。请检查任务状态后重试。';
   if (details.reason) return `Agent task stopped: ${details.reason}.`;
   return 'Agent task failed.';
 }
@@ -4730,7 +5986,7 @@ function stopAgent(sessionId, reason = 'cancelled') {
       const status = agentFinalStatus(reason);
       return { ok: true, reason, status, recoveryHint: agentRecoveryHint(status, { reason }) };
     }
-    return { ok: false, reason: 'not-found', status: 'not-found', error: 'Agent session was not found.', recoveryHint: agentRecoveryHint('not-found') };
+    return { ok: false, reason: 'not-found', status: 'not-found', error: '未找到本地执行会话。', recoveryHint: agentRecoveryHint('not-found') };
   }
   if (entry.transport && typeof entry.transport.stop === 'function') {
     entry.transport.stop(reason);
@@ -4844,6 +6100,18 @@ function claudeInvocation(candidate, args = []) {
   return { command: candidate, baseArgs: [], args };
 }
 
+function isPackagedClaudeWrapperStub(candidate) {
+  if (!isWindows) return false;
+  const value = String(candidate || '');
+  const normalized = value.replace(/\\/g, '/').toLowerCase();
+  if (!normalized.endsWith('/@anthropic-ai/claude-code/bin/claude.exe')) return false;
+  try {
+    return fs.existsSync(value) && fs.statSync(value).size < 4096;
+  } catch {
+    return false;
+  }
+}
+
 function candidateClaudePaths() {
   const exeName = isWindows ? 'claude.exe' : 'claude';
   const nativePackage = nativeClaudePackageName();
@@ -4925,39 +6193,47 @@ function candidateClaudePaths() {
 async function locateClaude() {
   if (cachedClaude?.command) return cachedClaude;
   if (cachedClaude && Date.now() - cachedClaudeCheckedAt < 5000) return cachedClaude;
+  if (locateClaudeInflight) return locateClaudeInflight;
 
-  for (const candidate of candidateClaudePaths()) {
-    const looksLikePath = candidate.includes(path.sep) || candidate.endsWith('.cmd') || candidate.endsWith('.ps1');
-    if (looksLikePath && !fs.existsSync(candidate)) continue;
+  locateClaudeInflight = (async () => {
+    for (const candidate of candidateClaudePaths()) {
+      const looksLikePath = candidate.includes(path.sep) || candidate.endsWith('.cmd') || candidate.endsWith('.ps1');
+      if (looksLikePath && !fs.existsSync(candidate)) continue;
+      if (looksLikePath && isPackagedClaudeWrapperStub(candidate)) continue;
 
-    const invocation = claudeInvocation(candidate, ['--version']);
-    const result = await commandOutput(invocation.command, invocation.args, { timeoutMs: 8000 });
-    if (result.ok && result.stdout) {
-      cachedClaude = {
-        command: invocation.command,
-        baseArgs: invocation.baseArgs,
-        path: looksLikePath ? candidate : 'PATH: claude',
-        version: result.stdout
-      };
-      cachedClaudeCheckedAt = Date.now();
-      return cachedClaude;
+      const invocation = claudeInvocation(candidate, ['--version']);
+      const result = await commandOutput(invocation.command, invocation.args, { timeoutMs: 8000 });
+      if (result.ok && result.stdout) {
+        cachedClaude = {
+          command: invocation.command,
+          baseArgs: invocation.baseArgs,
+          path: looksLikePath ? candidate : 'PATH: claude',
+          version: result.stdout
+        };
+        cachedClaudeCheckedAt = Date.now();
+        return cachedClaude;
+      }
     }
-  }
 
-  cachedClaude = {
-    command: null,
-    baseArgs: [],
-    path: null,
-    version: null
-  };
-  cachedClaudeCheckedAt = Date.now();
-  return cachedClaude;
+    cachedClaude = {
+      command: null,
+      baseArgs: [],
+      path: null,
+      version: null
+    };
+    cachedClaudeCheckedAt = Date.now();
+    return cachedClaude;
+  })().finally(() => {
+    locateClaudeInflight = null;
+  });
+
+  return locateClaudeInflight;
 }
 
 async function runClaudeCommand(args, options = {}) {
   const claude = await locateClaude();
   if (!claude.command) {
-    return { ok: false, code: -1, stdout: '', stderr: 'Local agent bridge was not found.' };
+    return { ok: false, code: -1, stdout: '', stderr: '未找到本地执行引擎。' };
   }
   return commandOutput(claude.command, [...claude.baseArgs, ...args], {
     ...options,
@@ -4974,9 +6250,7 @@ function parsePluginInventory() {
   const marketplacePath = path.join(repoRoot, '.claude-plugin', 'marketplace.json');
   let marketplace = { plugins: [] };
   try {
-    marketplace = fs.existsSync(marketplacePath)
-      ? JSON.parse(fs.readFileSync(marketplacePath, 'utf8'))
-      : { plugins: [] };
+    marketplace = readJsonFileSafe(marketplacePath, { plugins: [] });
   } catch {
     marketplace = { plugins: [] };
   }
@@ -5111,18 +6385,53 @@ function parseMcpServices(raw = '') {
 }
 
 async function collectMcpStatus(payload = {}) {
+  const managed = collectManagedSkillInventory({ includeDisabled: true });
+  const services = managed.rows
+    .filter((row) => row.sourceKind === 'mcp-wrapper')
+    .map((row) => {
+      const mcpArgs = Array.isArray(row.mcpConfig?.args) ? row.mcpConfig.args.join(' ') : '';
+      const command = [row.mcpConfig?.command, mcpArgs].filter(Boolean).join(' ').trim();
+      return {
+        id: publicStableId('mcp', row.name),
+        name: row.title || row.name,
+        displayName: row.title || row.name,
+        packageName: row.name,
+        summary: row.description || 'EcoreX managed MCP capability.',
+        endpointLabel: command ? `本地 MCP：${row.name}` : 'EcoreX MCP 端点',
+        command: command || undefined,
+        tags: ['MCP', row.category || 'EcoreX'],
+        auth: '本地认证',
+        authState: row.enabled ? '已配置' : '未启用',
+        status: row.enabled ? 'configured' : 'disabled',
+        enabled: row.enabled,
+        connected: false,
+        online: false,
+        ping: '-',
+        permissions: '读写',
+        updatedAt: row.lastUpdated || row.installedAt || undefined,
+        sourceKind: row.sourceKind,
+        installed: row.installed !== false
+      };
+    });
+  writeLog('info', 'MCP status collected', {
+    services: services.map((service) => service.packageName || service.name),
+    totalServices: services.length
+  });
   return attachDeveloperDiagnostics({
     ok: true,
     source: 'EcoreX MCP',
     refreshedAt: new Date().toISOString(),
-    configured: false,
-    services: [],
-    servers: [],
-    defaultEmpty: true,
-    message: 'EcoreX starts with no MCP entries. Add project MCP entries inside EcoreX.'
+    configured: services.length > 0,
+    services,
+    servers: services,
+    defaultEmpty: services.length === 0,
+    message: services.length
+      ? 'EcoreX managed MCP entries are available.'
+      : 'EcoreX starts with no MCP entries. Add project MCP entries inside EcoreX.'
   }, {
     bridge: 'ecorex-managed',
-    command: 'disabled: local Claude/Codex MCP inventory is intentionally not scanned'
+    command: 'managed: local Claude/Codex MCP inventory is intentionally not scanned',
+    managedMcp: services.map((service) => service.packageName || service.name)
   }, payload);
 }
 
@@ -5265,9 +6574,17 @@ function readSkillManifest(skillDir, plugin = {}) {
 }
 
 function listSkillsInPluginRoot(pluginRoot, plugin) {
-  const skillsRoot = path.join(pluginRoot, 'skills');
+  const manifest = skillPluginManifest(pluginRoot) || {};
+  const skillsField = typeof manifest.skills === 'string' ? manifest.skills : '';
+  const skillsRoot = skillsField
+    ? path.resolve(pluginRoot, skillsField)
+    : path.join(pluginRoot, 'skills');
   try {
     if (!fs.existsSync(skillsRoot)) return [];
+    if (fs.existsSync(path.join(skillsRoot, 'SKILL.md'))) {
+      const directSkill = readSkillManifest(skillsRoot, plugin);
+      return directSkill ? [directSkill] : [];
+    }
     return fs
       .readdirSync(skillsRoot, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
@@ -5304,15 +6621,21 @@ function normalizePluginRecord(plugin = {}, options = {}) {
 
 function publicSkillPackRecord(plugin = {}) {
   return {
-    id: publicStableId('skillpack', plugin.id || plugin.name),
+    id: plugin.id || publicStableId('skillpack', plugin.name),
     name: plugin.name || 'Skill pack',
+    title: plugin.title || plugin.displayName || plugin.name || 'Skill pack',
     version: plugin.version || null,
     scope: plugin.scope || null,
     enabled: plugin.enabled !== false,
     installed: Boolean(plugin.installed),
     status: plugin.enabled === false ? 'disabled' : plugin.installed ? 'enabled' : 'available',
     description: plugin.description ? safeOutputText(plugin.description, 500) : undefined,
-    installCount: plugin.installCount
+    installCount: plugin.installCount,
+    category: plugin.category || plugin.type || undefined,
+    sourceKind: plugin.sourceKind || undefined,
+    managed: Boolean(plugin.installPath),
+    installPath: plugin.installPath ? publicWorkspacePath(plugin.installPath) : undefined,
+    updatedAt: plugin.lastUpdated || plugin.updatedAt || plugin.installedAt || undefined
   };
 }
 
@@ -5361,7 +6684,7 @@ async function collectClaudePlugins(payload = {}) {
     available: available.map((plugin) => normalizePluginRecord(plugin, { installed: false })).slice(0, MAX_MANAGED_ITEMS),
     availableTruncated: available.length > MAX_MANAGED_ITEMS,
     result: safeCommandResult(result),
-    error: result.ok ? undefined : publicBridgeError(result, 'Skill inventory refresh failed.')
+    error: result.ok ? undefined : publicBridgeError(result, 'SKILLS 清单刷新失败。')
   };
 }
 
@@ -5386,29 +6709,41 @@ function collectBundledSkills() {
     .slice(0, MAX_MANAGED_ITEMS);
 }
 
-async function collectSkillStatus(payload = {}) {
+function collectSkillStatus(payload = {}) {
+  const managed = collectManagedSkillInventory({ includeDisabled: true });
+  const installedSkillPacks = managed.skillPacks;
+  const skills = installedSkillPacks;
+  writeLog('info', 'Skill status collected', {
+    skillPacks: installedSkillPacks.map((pack) => pack.name),
+    totalSkillPacks: installedSkillPacks.length,
+    childSkills: managed.skills.length
+  });
   return attachDeveloperDiagnostics({
     ok: true,
     source: 'EcoreX Skill Library',
     refreshedAt: new Date().toISOString(),
-    unsupportedActions: ['install', 'enable', 'disable', 'update'],
-    installedSkillPacks: [],
+    unsupportedActions: [],
+    installedSkillPacks,
     availableSkillPacks: [],
     availableSkillPacksTruncated: false,
-    skills: [],
+    skills,
+    childSkills: managed.skills,
     counts: {
-      installedSkillPacks: 0,
-      installedSkills: 0,
+      installedSkillPacks: installedSkillPacks.length,
+      installedSkills: installedSkillPacks.filter((skill) => skill.installed).length,
       bundledSkills: 0,
-      totalSkills: 0
+      totalSkills: installedSkillPacks.length,
+      childSkills: managed.skills.length
     },
-    defaultEmpty: true,
+    defaultEmpty: skills.length === 0,
     partial: false,
-    message: 'EcoreX starts with no skills. Install EcoreX skills from the app-managed library later.'
+    message: skills.length
+      ? 'EcoreX managed skills are available.'
+      : 'EcoreX starts with no skills. Install EcoreX skills from the app-managed library later.'
   }, {
     bridge: 'ecorex-managed',
-    command: 'disabled: local Claude/Codex skill inventory is intentionally not scanned',
-    installedSkillPacks: [],
+    command: 'managed: local Claude/Codex skill inventory is intentionally not scanned',
+    installedSkillPacks: installedSkillPacks.map((pack) => pack.name),
     availableCount: 0
   }, payload);
 }
@@ -5435,13 +6770,16 @@ function publicBackendAuthStatus(authStatus = {}) {
   };
 }
 
-async function buildBackendStatus() {
+async function buildBackendStatus(options = {}) {
+  const lightweight = Boolean(options.lightweight || options.preload);
   const claude = await locateClaude();
-  const [auth, mcp, plugins] = await Promise.all([
-    claude.command ? runClaudeCommand(['auth', 'status'], { timeoutMs: 10000 }) : Promise.resolve(null),
-    claude.command ? runClaudeCommand(['mcp', 'list'], { timeoutMs: 10000 }) : Promise.resolve(null),
-    claude.command ? runClaudeCommand(['plugin', 'list'], { timeoutMs: 10000 }) : Promise.resolve(null)
-  ]);
+  const [auth, mcp, plugins] = lightweight
+    ? [null, null, null]
+    : await Promise.all([
+        claude.command ? runClaudeCommand(['auth', 'status'], { timeoutMs: 10000 }) : Promise.resolve(null),
+        claude.command ? runClaudeCommand(['mcp', 'list'], { timeoutMs: 10000 }) : Promise.resolve(null),
+        claude.command ? runClaudeCommand(['plugin', 'list'], { timeoutMs: 10000 }) : Promise.resolve(null)
+      ]);
 
   let authStatus = null;
   const authOutput = auth?.stdout || auth?.stderr || '';
@@ -5465,20 +6803,24 @@ async function buildBackendStatus() {
     },
     auth: publicBackendAuthStatus(authStatus || { loggedIn: false }),
     dataConnections: {
-      configured: Boolean(mcp?.stdout && !mcp.stdout.includes('No MCP servers configured')),
+      configured: lightweight ? false : Boolean(mcp?.stdout && !mcp.stdout.includes('No MCP servers configured')),
       services: parseMcpServices(mcp?.stdout || mcp?.stderr || '')
     },
     mcp: undefined,
     skillPacks: {
-      summary: plugins?.ok ? 'Skill inventory is available.' : 'Skill inventory is unavailable.'
+      summary: lightweight
+        ? '启动预检已完成，MCP 与 SKILLS 清单会在打开系统设置时按需刷新。'
+        : (plugins?.ok ? 'SKILLS 清单可用。' : 'SKILLS 清单暂不可用。')
     },
-    previewEngine: publicKkFileViewStatus(),
+    previewEngine: publicVueOfficePreviewStatus(),
     sourceMap: publicSourceMapStats()
   };
 }
 
 async function collectBackendStatus(_event, payload = {}) {
   const forceRefresh = Boolean(payload?.refresh || payload?.forceRefresh);
+  const lightweight = Boolean(payload?.lightweight || payload?.preload);
+  if (lightweight) return buildBackendStatus({ lightweight: true });
   const now = Date.now();
   if (!forceRefresh && cachedBackendStatus && now - cachedBackendStatus.cachedAt <= BACKEND_STATUS_TTL_MS) {
     return {
@@ -5514,6 +6856,9 @@ function publicSessionSummary(sessionId, entry = {}, now = Date.now()) {
     : permissionPolicy.permissionMode;
   return {
     sessionId,
+    conversationId: entry.conversationId || '',
+    claudeSessionId: entry.claudeSessionId || '',
+    messageId: entry.messageId || '',
     status: entry.status || 'running',
     state: entry.state || 'running',
     runtimeKind: entry.runtimeKind || AGENT_RUNTIME_KIND,
@@ -5594,13 +6939,17 @@ function recordSessionEvent(entry, event) {
   if (!entry) return;
   if (!Array.isArray(entry.transcript)) entry.transcript = [];
   const normalized = normalizeAgentEvent(event, { includeRaw: false, textLimit: 2000 });
-  entry.status = normalized.status;
-  entry.state = normalized.state;
+  entry.lastEventStatus = normalized.status;
+  entry.lastEventState = normalized.state;
+  if (['error', 'failed', 'timeout'].includes(String(normalized.status || '').toLowerCase())) {
+    entry.status = normalized.status;
+    entry.state = normalized.state || entry.state;
+  }
   entry.lastActivityAt = Date.now();
   entry.lastEventAt = normalized.time;
   if (entry.actor) {
-    entry.actor.status = normalized.status || entry.actor.status;
-    entry.actor.state = normalized.state || entry.actor.state;
+    entry.actor.lastEventStatus = normalized.status || entry.actor.lastEventStatus;
+    entry.actor.lastEventState = normalized.state || entry.actor.lastEventState;
     entry.actor.lastActivityAt = entry.lastActivityAt;
   }
   if (normalized.claudeResultStatus === 'failed') {
@@ -5901,6 +7250,10 @@ function filePreviewMimeFromExtension(extension = '') {
   if (extension === '.webp') return 'image/webp';
   if (extension === '.gif') return 'image/gif';
   if (extension === '.svg') return 'image/svg+xml';
+  if (extension === '.mp4' || extension === '.m4v') return 'video/mp4';
+  if (extension === '.webm') return 'video/webm';
+  if (extension === '.ogg' || extension === '.ogv') return 'video/ogg';
+  if (extension === '.mov') return 'video/quicktime';
   if (extension === '.pdf') return 'application/pdf';
   if (extension === '.html' || extension === '.htm') return 'text/html';
   if (extension === '.md' || extension === '.markdown') return 'text/markdown';
@@ -5911,8 +7264,10 @@ function filePreviewMimeFromExtension(extension = '') {
   if (extension === '.docx') return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
   if (extension === '.doc') return 'application/msword';
   if (extension === '.xlsx') return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  if (extension === '.xlsm') return 'application/vnd.ms-excel.sheet.macroEnabled.12';
   if (extension === '.xls') return 'application/vnd.ms-excel';
   if (extension === '.pptx') return 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+  if (extension === '.pptm') return 'application/vnd.ms-powerpoint.presentation.macroEnabled.12';
   if (extension === '.ppt') return 'application/vnd.ms-powerpoint';
   if (extension === '.txt' || extension === '.log') return 'text/plain';
   return 'application/octet-stream';
@@ -5962,12 +7317,20 @@ function filePreviewArtifactExtensions() {
     ...FILE_PREVIEW_TEXT_EXTENSIONS,
     ...FILE_PREVIEW_IMAGE_EXTENSIONS,
     ...FILE_PREVIEW_DOCUMENT_EXTENSIONS,
-    ...KKFILEVIEW_DOCUMENT_EXTENSIONS
+    ...VUE_OFFICE_DOCUMENT_EXTENSIONS
   ]);
 }
 
 function isPreviewableArtifactExtension(target = '') {
   return filePreviewArtifactExtensions().has(path.extname(target).toLowerCase());
+}
+
+function filePreviewArtifactExtensionPattern() {
+  return [...filePreviewArtifactExtensions()]
+    .map((extension) => extension.replace(/^\./, ''))
+    .sort((left, right) => right.length - left.length)
+    .map((extension) => extension.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|');
 }
 
 function pruneAgentArtifactAccess(now = Date.now()) {
@@ -5997,9 +7360,7 @@ function cleanPreviewArtifactPath(raw = '') {
 function extractPreviewArtifactTargets(text = '', workspaceRoot = readSettings().workspaceRoot) {
   const source = String(text || '');
   if (!source) return [];
-  const extPattern = [...filePreviewArtifactExtensions()]
-    .map((extension) => extension.replace(/^\./, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-    .join('|');
+  const extPattern = filePreviewArtifactExtensionPattern();
   const targets = [];
 
   const addTarget = (rawValue) => {
@@ -6109,12 +7470,22 @@ function transcriptAuthorizesAgentArtifact(sessionId, target, workspaceRoot) {
 
 function isRegisteredAgentArtifact(target, input = {}, workspaceRoot = readSettings().workspaceRoot) {
   pruneAgentArtifactAccess();
-  const sessionId = input.sessionId || input.agentSessionId;
-  if (!sessionId) return false;
+  const sessionIds = [input.sessionId, input.agentSessionId, input.claudeSessionId]
+    .map((value) => sanitizeSessionId(value))
+    .filter(Boolean);
+  if (!sessionIds.length) return false;
   const resolved = path.resolve(target);
-  const entry = agentArtifactAccess.get(agentArtifactKey(sessionId, resolved));
-  if (entry) return true;
-  return transcriptAuthorizesAgentArtifact(sessionId, resolved, workspaceRoot);
+  return sessionIds.some((sessionId) => {
+    const entry = agentArtifactAccess.get(agentArtifactKey(sessionId, resolved));
+    if (entry) return true;
+    return transcriptAuthorizesAgentArtifact(sessionId, resolved, workspaceRoot);
+  });
+}
+
+function isAgentArtifactPreviewContext(context = {}) {
+  const source = String(context.source || context.kind || '').toLowerCase();
+  return /assistant|agent|artifact/.test(source)
+    || Boolean(context.sessionId || context.agentSessionId || context.claudeSessionId);
 }
 
 function addSessionPreviewRoots(roots, sessionId, workspaceRoot) {
@@ -6164,7 +7535,12 @@ function filePreviewAllowedRoots(context = {}) {
       // Project-scoped preview falls back to the active workspace roots.
     }
   }
-  addSessionPreviewRoots(roots, context.sessionId || context.agentSessionId, workspaceRoot);
+  addSessionPreviewRoots(roots, context.sessionId || context.agentSessionId || context.claudeSessionId, workspaceRoot);
+  if (isAgentArtifactPreviewContext(context)) {
+    addRoot('desktop', 'desktop', safeAppPath('desktop'));
+    addRoot('documents', 'documents', safeAppPath('documents'));
+    addRoot('downloads', 'downloads', safeAppPath('downloads'));
+  }
   addRoot('diagnostics', 'diagnostics', diagnosticsExportDir());
   addRoot('sessions', 'sessions', sessionTranscriptDir());
   addRoot('runtime', 'runtime', process.cwd());
@@ -6180,8 +7556,43 @@ function candidatePreviewPath(rawPath, workspaceRoot) {
   }
   if (/^file:/i.test(raw)) return path.resolve(fileURLToPath(raw));
   if (/^[a-zA-Z][a-zA-Z\d+.-]*:\/\//.test(raw)) throw new Error('File preview only supports local files.');
+  if (/^Users[\\/]/i.test(raw)) return path.resolve(path.parse(safeAppPath('home')).root, raw);
   const resolved = path.resolve(raw);
   return path.isAbsolute(raw) ? resolved : path.resolve(workspaceRoot, raw);
+}
+
+function resolveMojibakePreviewPath(target) {
+  const input = String(target || '');
+  if (!input || fs.existsSync(input) || !/[�?\uFFFD]/.test(path.basename(input))) return input;
+  const dir = path.dirname(input);
+  const ext = path.extname(input).toLowerCase();
+  if (!ext || !fs.existsSync(dir)) return input;
+  const tokens = path.basename(input, ext)
+    .split(/[^A-Za-z0-9]+/)
+    .map((token) => token.trim().toLowerCase())
+    .filter((token) => token.length >= 2);
+  try {
+    const candidates = fs.readdirSync(dir, { withFileTypes: true })
+      .filter((item) => item.isFile() && path.extname(item.name).toLowerCase() === ext)
+      .map((item) => {
+        const fullPath = path.join(dir, item.name);
+        let stat = null;
+        try {
+          stat = fs.statSync(fullPath);
+        } catch {
+          return null;
+        }
+        const lowerName = item.name.toLowerCase();
+        const score = tokens.reduce((total, token) => total + (lowerName.includes(token) ? 1 : 0), 0);
+        return { fullPath, score, mtimeMs: stat?.mtimeMs || 0 };
+      })
+      .filter(Boolean)
+      .filter((item) => !tokens.length || item.score > 0)
+      .sort((left, right) => (right.score - left.score) || (right.mtimeMs - left.mtimeMs));
+    return candidates[0]?.fullPath || input;
+  } catch {
+    return input;
+  }
 }
 
 function resolveFilePreviewTarget(payload = {}) {
@@ -6189,7 +7600,7 @@ function resolveFilePreviewTarget(payload = {}) {
   const roots = filePreviewAllowedRoots(input);
   const workspaceRoot = roots.find((root) => root.kind === 'workspace')?.root || defaultWorkspaceRoot();
   const rawPath = input.path || input.filePath || input.pathLabel || input.url;
-  const target = candidatePreviewPath(rawPath, workspaceRoot);
+  let target = candidatePreviewPath(rawPath, workspaceRoot);
   let root = roots.find((entry) => isPathInside(entry.root, target));
   if (!root && isRegisteredSelectedAttachment(target, input)) {
     root = { kind: 'selected', label: 'selected', root: path.dirname(target) };
@@ -6198,6 +7609,8 @@ function resolveFilePreviewTarget(payload = {}) {
     root = { kind: 'agent-artifact', label: 'artifact', root: path.dirname(target) };
   }
   if (!root) throw new Error('File preview path is outside allowed roots.');
+  const repairedTarget = resolveMojibakePreviewPath(target);
+  if (repairedTarget !== target && isPathInside(root.root, repairedTarget)) target = repairedTarget;
   if (pathContainsSymlink(root.root, target)) throw new Error('File preview path crosses a symbolic link.');
   return { target, root };
 }
@@ -6241,6 +7654,10 @@ function isTextAttachmentMime(mimeType = '', extension = '') {
 
 function isImageAttachmentMime(mimeType = '') {
   return /^image\/(png|jpe?g|webp|gif|svg\+xml)$/i.test(String(mimeType || ''));
+}
+
+function isVideoAttachmentMime(mimeType = '') {
+  return /^video\/(mp4|webm|ogg|quicktime|x-m4v)$/i.test(String(mimeType || ''));
 }
 
 function parseAttachmentDataUrl(value = '') {
@@ -6607,8 +8024,8 @@ function filePreviewMetadata(target, root, stat = null) {
 function documentPreviewKind(extension = '') {
   if (extension === '.pdf') return 'pdf';
   if (['.doc', '.docx'].includes(extension)) return 'word';
-  if (['.xls', '.xlsx'].includes(extension)) return 'spreadsheet';
-  if (['.ppt', '.pptx'].includes(extension)) return 'presentation';
+  if (['.xls', '.xlsx', '.xlsm'].includes(extension)) return 'spreadsheet';
+  if (['.ppt', '.pptx', '.pptm'].includes(extension)) return 'presentation';
   return 'document';
 }
 
@@ -6628,7 +8045,7 @@ function previewMetadataOnly(file, reason = 'metadata-only') {
   };
 }
 
-function kkFileViewResourceRoots() {
+function vueOfficeResourceRoots() {
   const roots = [];
   const addRoot = (value) => {
     const raw = String(value || '').trim();
@@ -6637,22 +8054,12 @@ function kkFileViewResourceRoots() {
     if (!roots.some((entry) => isSameWorkspacePath(entry, resolved))) roots.push(resolved);
   };
   if (app.isPackaged) {
-    if (process.resourcesPath) addRoot(path.join(process.resourcesPath, KKFILEVIEW_VENDOR_DIR_NAME));
+    if (process.resourcesPath) addRoot(path.join(process.resourcesPath, VUE_OFFICE_VENDOR_DIR_NAME));
   } else {
-    addRoot(process.env.ECOREX_KKFILEVIEW_HOME);
-    addRoot(path.join(ROOT_DIR, 'vendor', KKFILEVIEW_VENDOR_DIR_NAME));
-    if (isWindows) addRoot('C:\\kkFileView-master');
+    addRoot(process.env.ECOREX_VUE_OFFICE_HOME);
+    addRoot(path.join(ROOT_DIR, 'vendor', VUE_OFFICE_VENDOR_DIR_NAME));
   }
   return roots;
-}
-
-function listDirectoryFiles(dir) {
-  try {
-    if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return [];
-    return fs.readdirSync(dir).map((name) => path.join(dir, name));
-  } catch {
-    return [];
-  }
 }
 
 function firstExistingFile(candidates = []) {
@@ -6666,141 +8073,172 @@ function firstExistingFile(candidates = []) {
   return '';
 }
 
-function firstExistingDirectory(candidates = []) {
-  for (const candidate of candidates.filter(Boolean)) {
-    try {
-      if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) return path.resolve(candidate);
-    } catch {
-      // Keep probing other packaged resource shapes.
+function locateVueOfficeResource({ refresh = false } = {}) {
+  if (!refresh && vueOfficePreviewState.resource) return vueOfficePreviewState.resource;
+  for (const root of vueOfficeResourceRoots()) {
+    const indexPath = firstExistingFile([path.join(root, 'index.html')]);
+    const assets = {
+      docxScript: firstExistingFile([path.join(root, 'js-preview-lib', 'docx.umd.js')]),
+      docxStyle: firstExistingFile([path.join(root, 'js-preview-lib', 'docx.css')]),
+      excelScript: firstExistingFile([path.join(root, 'js-preview-lib', 'excel.umd.js')]),
+      excelStyle: firstExistingFile([path.join(root, 'js-preview-lib', 'excel.css')]),
+      pdfScript: firstExistingFile([path.join(root, 'js-preview-lib', 'pdf.umd.js')]),
+      pptxScript: firstExistingFile([path.join(root, 'js-preview-lib', 'pptx-preview.umd.js')])
+    };
+    if (indexPath && assets.docxScript && assets.docxStyle && assets.excelScript && assets.excelStyle && assets.pdfScript && assets.pptxScript) {
+      vueOfficePreviewState.resource = {
+        ok: true,
+        root,
+        indexPath,
+        assets,
+        packaged: app.isPackaged
+      };
+      return vueOfficePreviewState.resource;
     }
   }
+  vueOfficePreviewState.resource = {
+    ok: false,
+    root: '',
+    indexPath: '',
+    assets: {},
+    error: 'vue-office static viewer is not prepared. Run npm run prepare:vue-office.'
+  };
+  return vueOfficePreviewState.resource;
+}
+
+function vueOfficePreviewType(extension = '') {
+  if (extension === '.pdf') return 'pdf';
+  if (extension === '.docx') return 'docx';
+  if (['.xls', '.xlsx', '.xlsm'].includes(extension)) return 'excel';
+  if (['.pptx', '.pptm'].includes(extension)) return 'pptx';
   return '';
 }
 
-function kkFileViewJavaExecutable(root) {
-  const exe = isWindows ? 'java.exe' : 'java';
-  const candidates = [
-    path.join(root, 'runtime', 'jre', 'bin', exe),
-    path.join(root, 'runtime', 'jdk', 'bin', exe),
-    path.join(root, 'jre', 'bin', exe),
-    path.join(root, 'jdk', 'bin', exe),
-    path.join(root, 'java', 'bin', exe)
-  ];
-  return firstExistingFile(candidates);
+function vueOfficeAssetMime(filePath = '') {
+  const extension = path.extname(filePath).toLowerCase();
+  if (extension === '.html') return 'text/html; charset=utf-8';
+  if (extension === '.js') return 'text/javascript; charset=utf-8';
+  if (extension === '.css') return 'text/css; charset=utf-8';
+  if (extension === '.json') return 'application/json; charset=utf-8';
+  if (extension === '.svg') return 'image/svg+xml';
+  if (extension === '.png') return 'image/png';
+  if (extension === '.jpg' || extension === '.jpeg') return 'image/jpeg';
+  if (extension === '.woff2') return 'font/woff2';
+  return 'application/octet-stream';
 }
 
-function kkFileViewJarFile(root) {
-  const directCandidates = [
-    path.join(root, 'server', 'bin', 'kkFileView.jar'),
-    path.join(root, 'server', 'bin', 'kkfileview.jar'),
-    path.join(root, 'server', 'kkFileView.jar'),
-    path.join(root, 'server', 'kkfileview.jar'),
-    path.join(root, 'server', 'server.jar'),
-    path.join(root, 'kkFileView.jar'),
-    path.join(root, 'kkfileview.jar'),
-    path.join(root, 'server.jar')
-  ];
-  const targetJars = [
-    ...listDirectoryFiles(path.join(root, 'server', 'bin')),
-    ...listDirectoryFiles(path.join(root, 'server', 'target')),
-    ...listDirectoryFiles(path.join(root, 'target'))
-  ]
-    .filter((file) => /\.jar$/i.test(file))
-    .filter((file) => !/(sources|javadoc|original|tests?)\.jar$/i.test(path.basename(file)))
-    .sort((left, right) => fs.statSync(right).size - fs.statSync(left).size);
-  return firstExistingFile([...directCandidates, ...targetJars]);
+function vueOfficeViewerCsp() {
+  return [
+    "default-src 'self' blob: data:",
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data:",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self' data:",
+    "connect-src 'self' http://127.0.0.1:* blob: data:",
+    "worker-src 'self' blob: data:"
+  ].join('; ');
 }
 
-function kkFileViewOfficeHome(root) {
-  const candidates = [
-    path.join(root, 'libreoffice', 'LibreOfficePortable', 'App', 'libreoffice'),
-    path.join(root, 'office', 'LibreOfficePortable', 'App', 'libreoffice'),
-    path.join(root, 'server', 'LibreOfficePortable', 'App', 'libreoffice'),
-    path.join(root, 'LibreOfficePortable', 'App', 'libreoffice'),
-    path.join(root, 'office', 'LibreOffice.app', 'Contents'),
-    path.join(root, 'LibreOffice.app', 'Contents'),
-    path.join(root, 'office', 'libreoffice'),
-    path.join(root, 'libreoffice')
-  ];
-  return firstExistingDirectory(candidates);
-}
-
-function locateKkFileViewResource({ refresh = false } = {}) {
-  if (!refresh && kkFileViewState.resource) return kkFileViewState.resource;
-  for (const root of kkFileViewResourceRoots()) {
-    const jarPath = kkFileViewJarFile(root);
-    const javaPath = kkFileViewJavaExecutable(root);
-    const officeHome = kkFileViewOfficeHome(root);
-    if (jarPath && javaPath) {
-      kkFileViewState.resource = {
-        ok: true,
-        root,
-        jarPath,
-        javaPath,
-        officeHome: officeHome || '',
-        packaged: app.isPackaged
-      };
-      return kkFileViewState.resource;
-    }
+function serveVueOfficeAsset(request, response, url) {
+  const resource = locateVueOfficeResource();
+  if (!resource.ok) {
+    response.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+    response.end(resource.error || 'vue-office viewer unavailable');
+    return;
   }
-  kkFileViewState.resource = {
-    ok: false,
-    root: '',
-    jarPath: '',
-    javaPath: '',
-    officeHome: '',
-    error: 'kkFileView vendor runtime is not prepared.'
-  };
-  return kkFileViewState.resource;
-}
-
-function getFreeLocalPort() {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.unref();
-    server.on('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const port = server.address()?.port;
-      server.close(() => resolve(port));
-    });
+  let relative = '';
+  try {
+    relative = decodeURIComponent(url.pathname || '/').replace(/\\/g, '/').replace(/^\/+/, '');
+  } catch {
+    response.writeHead(400);
+    response.end();
+    return;
+  }
+  if (!relative || relative.endsWith('/')) relative = `${relative}index.html`;
+  if (relative.includes('\0')) {
+    response.writeHead(400);
+    response.end();
+    return;
+  }
+  const target = path.resolve(resource.root, ...relative.split('/').filter(Boolean));
+  if (!isPathInside(resource.root, target)) {
+    response.writeHead(403);
+    response.end();
+    return;
+  }
+  let stat;
+  try {
+    stat = fs.statSync(target);
+  } catch {
+    response.writeHead(404);
+    response.end();
+    return;
+  }
+  if (!stat.isFile()) {
+    response.writeHead(404);
+    response.end();
+    return;
+  }
+  response.writeHead(200, {
+    'Content-Type': vueOfficeAssetMime(target),
+    'Content-Length': stat.size,
+    'Cache-Control': path.extname(target).toLowerCase() === '.html' ? 'no-store' : 'public, max-age=3600',
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Security-Policy': vueOfficeViewerCsp()
   });
+  if (request.method === 'HEAD') {
+    response.end();
+    return;
+  }
+  fs.createReadStream(target).pipe(response);
 }
 
-function httpStatusOk(url, timeoutMs = 1500) {
-  return new Promise((resolve) => {
-    const request = http.get(url, { timeout: timeoutMs }, (response) => {
-      response.resume();
-      resolve(response.statusCode >= 200 && response.statusCode < 500);
-    });
-    request.on('timeout', () => {
-      request.destroy();
-      resolve(false);
-    });
-    request.on('error', () => resolve(false));
+function pruneVueOfficePreviewGrants(now = Date.now()) {
+  for (const [token, grant] of vueOfficePreviewState.grants.entries()) {
+    if (!grant || grant.expiresAt <= now) vueOfficePreviewState.grants.delete(token);
+  }
+  if (vueOfficePreviewState.grants.size <= VUE_OFFICE_MAX_GRANTS) return;
+  const entries = [...vueOfficePreviewState.grants.entries()].sort((left, right) => left[1].createdAt - right[1].createdAt);
+  for (const [token] of entries.slice(0, vueOfficePreviewState.grants.size - VUE_OFFICE_MAX_GRANTS)) {
+    vueOfficePreviewState.grants.delete(token);
+  }
+}
+
+function serveVueOfficePreviewFile(request, response, url) {
+  const match = url.pathname.match(/^\/preview-file\/([a-f0-9]{32,64})(?:\/.*)?$/i);
+  if (!match) {
+    response.writeHead(404);
+    response.end();
+    return;
+  }
+  pruneVueOfficePreviewGrants();
+  const grant = vueOfficePreviewState.grants.get(match[1]);
+  if (!grant) {
+    response.writeHead(404);
+    response.end();
+    return;
+  }
+  const stat = fs.statSync(grant.target);
+  if (!stat.isFile() || stat.size !== grant.sizeBytes || stat.size > VUE_OFFICE_PREVIEW_MAX_BYTES) {
+    response.writeHead(403);
+    response.end();
+    return;
+  }
+  response.writeHead(200, {
+    'Content-Type': grant.mimeType || 'application/octet-stream',
+    'Content-Length': stat.size,
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(grant.name || 'preview-file')}`
   });
+  if (request.method === 'HEAD') {
+    response.end();
+    return;
+  }
+  fs.createReadStream(grant.target).pipe(response);
 }
 
-async function waitForKkFileViewReady(port, timeoutMs = KKFILEVIEW_START_TIMEOUT_MS) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await httpStatusOk(`http://127.0.0.1:${port}/`, 1200)) return true;
-    await new Promise((resolve) => setTimeout(resolve, 450));
-  }
-  return false;
-}
-
-function pruneKkFileViewGrants(now = Date.now()) {
-  for (const [token, grant] of kkFileViewState.grants.entries()) {
-    if (!grant || grant.expiresAt <= now) kkFileViewState.grants.delete(token);
-  }
-  if (kkFileViewState.grants.size <= KKFILEVIEW_MAX_GRANTS) return;
-  const entries = [...kkFileViewState.grants.entries()].sort((left, right) => left[1].createdAt - right[1].createdAt);
-  for (const [token] of entries.slice(0, kkFileViewState.grants.size - KKFILEVIEW_MAX_GRANTS)) {
-    kkFileViewState.grants.delete(token);
-  }
-}
-
-function handleKkFileViewBridgeRequest(request, response) {
+function handleVueOfficePreviewRequest(request, response) {
   try {
     if (!['GET', 'HEAD'].includes(request.method || '')) {
       response.writeHead(405);
@@ -6808,266 +8246,137 @@ function handleKkFileViewBridgeRequest(request, response) {
       return;
     }
     const url = new URL(request.url || '/', 'http://127.0.0.1');
-    const match = url.pathname.match(/^\/preview-file\/([a-f0-9]{32,64})(?:\/.*)?$/i);
-    if (!match) {
-      response.writeHead(404);
-      response.end();
+    if (url.pathname.startsWith('/preview-file/')) {
+      serveVueOfficePreviewFile(request, response, url);
       return;
     }
-    pruneKkFileViewGrants();
-    const grant = kkFileViewState.grants.get(match[1]);
-    if (!grant) {
-      response.writeHead(404);
-      response.end();
-      return;
-    }
-    const stat = fs.statSync(grant.target);
-    if (!stat.isFile() || stat.size !== grant.sizeBytes || stat.size > KKFILEVIEW_PREVIEW_MAX_BYTES) {
-      response.writeHead(403);
-      response.end();
-      return;
-    }
-    response.writeHead(200, {
-      'Content-Type': grant.mimeType || 'application/octet-stream',
-      'Content-Length': stat.size,
-      'Cache-Control': 'no-store',
-      'X-Content-Type-Options': 'nosniff',
-      'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(grant.name || 'preview-file')}`
-    });
-    if (request.method === 'HEAD') {
-      response.end();
-      return;
-    }
-    fs.createReadStream(grant.target).pipe(response);
+    serveVueOfficeAsset(request, response, url);
   } catch (error) {
     response.writeHead(500);
     response.end();
-    writeLog('warn', 'kkFileView bridge request failed', { error: safeOutputText(error?.message || String(error), 1000) });
+    writeLog('warn', 'vue-office preview request failed', { error: safeOutputText(error?.message || String(error), 1000) });
   }
 }
 
-function ensureKkFileViewBridgeServer() {
-  if (kkFileViewState.bridgeServer && kkFileViewState.bridgePort) {
-    return Promise.resolve({ ok: true, port: kkFileViewState.bridgePort });
+function ensureVueOfficePreviewServer() {
+  if (vueOfficePreviewState.server && vueOfficePreviewState.port) {
+    return Promise.resolve({ ok: true, port: vueOfficePreviewState.port, resource: vueOfficePreviewState.resource });
   }
-  return new Promise((resolve) => {
-    const server = http.createServer(handleKkFileViewBridgeRequest);
+  if (vueOfficePreviewState.starting) return vueOfficePreviewState.starting;
+  vueOfficePreviewState.starting = new Promise((resolve) => {
+    const resource = locateVueOfficeResource();
+    if (!resource.ok) {
+      vueOfficePreviewState.lastError = resource.error;
+      resolve({ ok: false, reason: 'missing-vendor', error: resource.error, resource });
+      return;
+    }
+    const server = http.createServer(handleVueOfficePreviewRequest);
     server.on('error', (error) => {
-      kkFileViewState.lastError = error?.message || String(error);
-      resolve({ ok: false, error: kkFileViewState.lastError });
+      vueOfficePreviewState.lastError = error?.message || String(error);
+      resolve({ ok: false, reason: 'server-failed', error: vueOfficePreviewState.lastError, resource });
     });
     server.listen(0, '127.0.0.1', () => {
-      kkFileViewState.bridgeServer = server;
-      kkFileViewState.bridgePort = server.address()?.port || 0;
-      resolve({ ok: Boolean(kkFileViewState.bridgePort), port: kkFileViewState.bridgePort });
+      vueOfficePreviewState.server = server;
+      vueOfficePreviewState.port = server.address()?.port || 0;
+      writeLog('info', 'vue-office preview server ready', { port: vueOfficePreviewState.port });
+      resolve({ ok: Boolean(vueOfficePreviewState.port), port: vueOfficePreviewState.port, resource });
     });
+  }).finally(() => {
+    vueOfficePreviewState.starting = null;
   });
+  return vueOfficePreviewState.starting;
 }
 
-function createKkFileViewSourceUrl(target, file) {
-  pruneKkFileViewGrants();
+function createVueOfficeSourceUrl(target, file) {
+  pruneVueOfficePreviewGrants();
   const token = crypto.randomBytes(24).toString('hex');
-  kkFileViewState.grants.set(token, {
+  vueOfficePreviewState.grants.set(token, {
     target: path.resolve(target),
     name: file.name || path.basename(target),
     mimeType: file.mimeType || 'application/octet-stream',
     sizeBytes: file.sizeBytes || fs.statSync(target).size,
     createdAt: Date.now(),
-    expiresAt: Date.now() + KKFILEVIEW_GRANT_TTL_MS
+    expiresAt: Date.now() + VUE_OFFICE_GRANT_TTL_MS
   });
-  return `http://127.0.0.1:${kkFileViewState.bridgePort}/preview-file/${token}/${encodeURIComponent(file.name || path.basename(target))}`;
+  return `http://127.0.0.1:${vueOfficePreviewState.port}/preview-file/${token}/${encodeURIComponent(file.name || path.basename(target))}`;
 }
 
-function kkFileViewOnlinePreviewUrl(port, sourceUrl, file) {
-  const encodedUrl = encodeURIComponent(Buffer.from(sourceUrl, 'utf8').toString('base64'));
-  const params = [
-    `url=${encodedUrl}`,
-    `fullfilename=${encodeURIComponent(file.name || 'preview-file')}`,
-    'officePreviewType=pdf',
-    'pdfAutoFetch=false'
-  ];
-  return `http://127.0.0.1:${port}/onlinePreview?${params.join('&')}`;
-}
-
-async function ensureKkFileViewEngine({ preload = false } = {}) {
-  if (kkFileViewState.process && kkFileViewState.port) {
-    return { ok: true, port: kkFileViewState.port, resource: kkFileViewState.resource, preloaded: preload };
-  }
-  if (kkFileViewState.starting) return kkFileViewState.starting;
-  kkFileViewState.starting = (async () => {
-    const resource = locateKkFileViewResource();
-    if (!resource.ok) {
-      kkFileViewState.lastError = resource.error;
-      return { ok: false, reason: 'missing-vendor', error: resource.error, resource };
-    }
-    const bridge = await ensureKkFileViewBridgeServer();
-    if (!bridge.ok) return { ok: false, reason: 'bridge-failed', error: bridge.error, resource };
-
-    const [serverPort, officePortA, officePortB] = await Promise.all([getFreeLocalPort(), getFreeLocalPort(), getFreeLocalPort()]);
-    const cacheDir = path.join(app.getPath('userData'), 'kkfileview-cache');
-    fs.mkdirSync(cacheDir, { recursive: true });
-    const args = [
-      '-Dfile.encoding=UTF-8',
-      '-jar',
-      resource.jarPath,
-      '--server.address=127.0.0.1',
-      `--server.port=${serverPort}`,
-      '--server.servlet.context-path=/',
-      `--base.url=http://127.0.0.1:${serverPort}/`,
-      `--file.dir=${cacheDir}`,
-      `--office.plugin.server.ports=${officePortA},${officePortB}`,
-      '--office.preview.type=pdf',
-      '--office.preview.switch.disabled=true',
-      '--file.upload.disable=true',
-      '--pdf.download.disable=true',
-      '--pdf.print.disable=true',
-      '--pdf.openFile.disable=true',
-      '--media.convert.disable=true',
-      '--cache.enabled=true',
-      '--cache.type=jdk',
-      '--trust.host=127.0.0.1,localhost',
-      '--not.trust.host=',
-      '--kk.enable.redirect=false'
-    ];
-    if (resource.officeHome) args.push(`--office.home=${resource.officeHome}`);
-    const env = {
-      ...process.env,
-      KK_SERVER_PORT: String(serverPort),
-      KK_BASE_URL: `http://127.0.0.1:${serverPort}/`,
-      KK_FILE_DIR: cacheDir,
-      KK_TRUST_HOST: '127.0.0.1,localhost',
-      KK_NOT_TRUST_HOST: '',
-      KK_OFFICE_PREVIEW_TYPE: 'pdf',
-      KK_OFFICE_PREVIEW_SWITCH_DISABLED: 'true',
-      KK_MEDIA_CONVERT_DISABLE: 'true'
-    };
-    if (resource.officeHome) env.KK_OFFICE_HOME = resource.officeHome;
-
-    const child = spawn(resource.javaPath, args, {
-      cwd: path.dirname(resource.jarPath),
-      env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true
-    });
-    kkFileViewState.process = child;
-    kkFileViewState.port = serverPort;
-    child.stdout?.on('data', (chunk) => {
-      const text = safeKkFileViewOutputText(chunk.toString(), 1200);
-      if (text.trim()) writeLog('info', 'kkFileView stdout', { text });
-    });
-    child.stderr?.on('data', (chunk) => {
-      const text = safeKkFileViewOutputText(chunk.toString(), 1200);
-      if (text.trim()) writeLog('warn', 'kkFileView stderr', { text });
-    });
-    child.on('exit', (code, signal) => {
-      writeLog(code === 0 ? 'info' : 'warn', 'kkFileView process exited', { code, signal });
-      if (kkFileViewState.process === child) {
-        kkFileViewState.process = null;
-        kkFileViewState.port = 0;
-      }
-    });
-    child.on('error', (error) => {
-      kkFileViewState.lastError = error?.message || String(error);
-      writeLog('warn', 'kkFileView process error', { error: safeOutputText(kkFileViewState.lastError, 1000) });
-    });
-
-    const ready = await waitForKkFileViewReady(serverPort);
-    if (!ready) {
-      kkFileViewState.lastError = 'kkFileView did not become ready before timeout.';
-      try {
-        child.kill();
-      } catch {
-        // Best-effort cleanup.
-      }
-      kkFileViewState.process = null;
-      kkFileViewState.port = 0;
-      return { ok: false, reason: 'start-timeout', error: kkFileViewState.lastError, resource };
-    }
-    writeLog('info', 'kkFileView preview engine ready', { port: serverPort, bridgePort: kkFileViewState.bridgePort });
-    return { ok: true, port: serverPort, bridgePort: kkFileViewState.bridgePort, resource };
-  })().finally(() => {
-    kkFileViewState.starting = null;
+function createVueOfficePreviewUrl(port, sourceUrl, file) {
+  const params = new URLSearchParams({
+    type: vueOfficePreviewType(file.extension),
+    src: sourceUrl,
+    name: file.name || 'preview-file'
   });
-  return kkFileViewState.starting;
+  return `http://127.0.0.1:${port}/index.html?${params.toString()}`;
 }
 
-function stopKkFileViewEngine(reason = 'stop') {
-  if (kkFileViewState.process) {
+function stopVueOfficePreviewServer(reason = 'stop') {
+  if (vueOfficePreviewState.server) {
     try {
-      kkFileViewState.process.kill();
+      vueOfficePreviewState.server.close();
     } catch {
       // Best-effort cleanup during app shutdown.
     }
-    kkFileViewState.process = null;
-    kkFileViewState.port = 0;
+    vueOfficePreviewState.server = null;
+    vueOfficePreviewState.port = 0;
   }
-  if (kkFileViewState.bridgeServer) {
-    try {
-      kkFileViewState.bridgeServer.close();
-    } catch {
-      // Best-effort cleanup during app shutdown.
-    }
-    kkFileViewState.bridgeServer = null;
-    kkFileViewState.bridgePort = 0;
-  }
-  kkFileViewState.grants.clear();
-  writeLog('info', 'kkFileView preview engine stopped', { reason });
+  vueOfficePreviewState.grants.clear();
+  writeLog('info', 'vue-office preview server stopped', { reason });
 }
 
-function publicKkFileViewStatus() {
-  const resource = locateKkFileViewResource();
+function publicVueOfficePreviewStatus() {
+  const resource = locateVueOfficeResource();
   return {
-    available: Boolean(resource.ok && isKkFileViewRuntimeEnabled()),
-    enabled: isKkFileViewRuntimeEnabled(),
-    running: Boolean(kkFileViewState.process && kkFileViewState.port),
-    port: kkFileViewState.port || null,
-    bridgePort: kkFileViewState.bridgePort || null,
-    lastError: kkFileViewState.lastError || resource.error || '',
+    name: 'vue-office',
+    available: Boolean(resource.ok),
+    enabled: true,
+    running: Boolean(vueOfficePreviewState.server && vueOfficePreviewState.port),
+    port: vueOfficePreviewState.port || null,
+    lastError: vueOfficePreviewState.lastError || resource.error || '',
     vendorRoot: resource.root ? redactSensitiveText(resource.root).slice(0, 500) : '',
-    hasJar: Boolean(resource.jarPath),
-    hasJava: Boolean(resource.javaPath),
-    hasOffice: Boolean(resource.officeHome)
+    hasViewer: Boolean(resource.indexPath),
+    assets: {
+      docx: Boolean(resource.assets?.docxScript && resource.assets?.docxStyle),
+      excel: Boolean(resource.assets?.excelScript && resource.assets?.excelStyle),
+      pdf: Boolean(resource.assets?.pdfScript),
+      pptx: Boolean(resource.assets?.pptxScript)
+    }
   };
 }
 
-function isKkFileViewRuntimeEnabled() {
-  return app.isPackaged || process.env.ECOREX_ENABLE_DEV_KKFILEVIEW === '1';
-}
-
-function canUseKkFileViewPreview(file, stat) {
+function canUseVueOfficePreview(file, stat) {
   if (!file || !stat?.isFile?.()) return false;
-  if (!isKkFileViewRuntimeEnabled()) return false;
-  if (!KKFILEVIEW_DOCUMENT_EXTENSIONS.has(file.extension)) return false;
-  if (KKFILEVIEW_PROHIBITED_EXTENSIONS.has(file.extension)) return false;
-  return stat.size > 0 && stat.size <= KKFILEVIEW_PREVIEW_MAX_BYTES;
+  if (!VUE_OFFICE_DOCUMENT_EXTENSIONS.has(file.extension)) return false;
+  if (!vueOfficePreviewType(file.extension)) return false;
+  return stat.size > 0 && stat.size <= VUE_OFFICE_PREVIEW_MAX_BYTES;
 }
 
-async function previewWithKkFileView(target, file, stat) {
-  if (!canUseKkFileViewPreview(file, stat)) return null;
-  const engine = await ensureKkFileViewEngine();
+async function previewWithVueOffice(target, file, stat) {
+  if (!canUseVueOfficePreview(file, stat)) return null;
+  const engine = await ensureVueOfficePreviewServer();
   if (!engine.ok) {
-    writeLog('warn', 'kkFileView preview unavailable; falling back', {
+    writeLog('warn', 'vue-office preview unavailable; falling back', {
       reason: engine.reason,
       error: safeOutputText(engine.error || '', 1000),
       file: file.name
     });
     return null;
   }
-  const sourceUrl = createKkFileViewSourceUrl(target, file);
+  const sourceUrl = createVueOfficeSourceUrl(target, file);
   return {
     ok: true,
     previewable: true,
     reason: null,
     kind: file.extension === '.pdf' ? 'pdf' : 'office',
-    renderMode: 'kkfileview',
+    renderMode: 'vue-office',
     file,
-    previewUrl: kkFileViewOnlinePreviewUrl(engine.port, sourceUrl, file),
+    previewUrl: createVueOfficePreviewUrl(engine.port, sourceUrl, file),
     metadata: {
       documentType: documentPreviewKind(file.extension),
       mimeType: file.mimeType,
       sizeBytes: file.sizeBytes,
       modifiedAt: file.modifiedAt,
-      previewEngine: 'kkFileView',
+      previewEngine: 'vue-office',
       selectionBridge: false
     }
   };
@@ -7254,7 +8563,7 @@ function previewOpenXmlOfficeFile(target, file, stat) {
       ? { ok: true, previewable: true, kind: 'text', renderMode: 'text', language: 'markdown', file, content: content.slice(0, FILE_PREVIEW_OFFICE_MAX_CHARS), text: content.slice(0, FILE_PREVIEW_OFFICE_MAX_CHARS), truncated: content.length > FILE_PREVIEW_OFFICE_MAX_CHARS, metadata: { documentType: 'word', mimeType: file.mimeType, sizeBytes: file.sizeBytes } }
       : previewMetadataOnly(file, 'empty-document');
   }
-  if (extension === '.pptx') {
+  if (extension === '.pptx' || extension === '.pptm') {
     const slideNames = [];
     for (let index = 1; index <= 80; index += 1) slideNames.push(`ppt/slides/slide${index}.xml`);
     const entries = readZipEntries(buffer, slideNames);
@@ -7270,7 +8579,7 @@ function previewOpenXmlOfficeFile(target, file, stat) {
       ? { ok: true, previewable: true, kind: 'text', renderMode: 'text', language: 'markdown', file, content: content.slice(0, FILE_PREVIEW_OFFICE_MAX_CHARS), text: content.slice(0, FILE_PREVIEW_OFFICE_MAX_CHARS), truncated: content.length > FILE_PREVIEW_OFFICE_MAX_CHARS, metadata: { documentType: 'presentation', mimeType: file.mimeType, sizeBytes: file.sizeBytes } }
       : previewMetadataOnly(file, 'empty-presentation');
   }
-  if (extension === '.xlsx') {
+  if (extension === '.xlsx' || extension === '.xlsm') {
     const wanted = ['xl/sharedStrings.xml'];
     for (let index = 1; index <= 20; index += 1) wanted.push(`xl/worksheets/sheet${index}.xml`);
     const entries = readZipEntries(buffer, wanted);
@@ -7323,11 +8632,11 @@ async function previewFile(payload = {}) {
   if (isImagePreviewExtension(file.extension)) {
     return previewImageFile(target, file, stat);
   }
-  if (KKFILEVIEW_DOCUMENT_EXTENSIONS.has(file.extension)) {
-    const richPreview = await previewWithKkFileView(target, file, stat);
+  if (VUE_OFFICE_DOCUMENT_EXTENSIONS.has(file.extension)) {
+    const richPreview = await previewWithVueOffice(target, file, stat);
     if (richPreview) return richPreview;
   }
-  if (['.docx', '.xlsx', '.pptx'].includes(file.extension)) {
+  if (['.docx', '.xlsx', '.xlsm', '.pptx', '.pptm'].includes(file.extension)) {
     return previewOpenXmlOfficeFile(target, file, stat);
   }
   if (isDocumentMetadataPreviewExtension(file.extension)) {
@@ -7372,6 +8681,28 @@ async function previewFile(payload = {}) {
   };
 }
 
+async function openArtifactFile(payload = {}) {
+  const input = optionalObjectPayload(payload, 'artifact open payload');
+  const { target, root } = resolveFilePreviewTarget({
+    ...input,
+    source: input.source || 'assistant-artifact'
+  });
+  if (pathContainsSymlink(root.root, target) || fs.lstatSync(target).isSymbolicLink()) {
+    throw new Error('Artifact path crosses a symbolic link.');
+  }
+  const stat = fs.statSync(target);
+  if (!stat.isFile()) throw new Error('Artifact is not a file.');
+  const opened = await openPathSafely(target);
+  return {
+    ok: Boolean(opened.opened),
+    opened: Boolean(opened.opened),
+    method: 'openPath',
+    name: redactSensitiveText(path.basename(target)).slice(0, 240),
+    pathLabel: redactSensitiveText(filePreviewPathLabel(target, root)).slice(0, 500),
+    error: opened.error || undefined
+  };
+}
+
 function attachmentMimeFromPath(filePath = '') {
   const ext = path.extname(filePath).toLowerCase();
   if (['.png'].includes(ext)) return 'image/png';
@@ -7379,6 +8710,10 @@ function attachmentMimeFromPath(filePath = '') {
   if (['.webp'].includes(ext)) return 'image/webp';
   if (['.gif'].includes(ext)) return 'image/gif';
   if (['.svg'].includes(ext)) return 'image/svg+xml';
+  if (['.mp4', '.m4v'].includes(ext)) return 'video/mp4';
+  if (['.webm'].includes(ext)) return 'video/webm';
+  if (['.ogg', '.ogv'].includes(ext)) return 'video/ogg';
+  if (['.mov'].includes(ext)) return 'video/quicktime';
   if (['.pdf'].includes(ext)) return 'application/pdf';
   if (['.csv'].includes(ext)) return 'text/csv';
   if (ext === '.html' || ext === '.htm') return 'text/html';
@@ -7390,6 +8725,33 @@ function attachmentMimeFromPath(filePath = '') {
   if (['.docx'].includes(ext)) return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
   if (['.pptx'].includes(ext)) return 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
   return 'application/octet-stream';
+}
+
+function selectedAttachmentPreviewDataUrl(absolutePath, type, stat) {
+  if (isImageAttachmentMime(type)) {
+    try {
+      const image = nativeImage.createFromPath(absolutePath);
+      if (!image.isEmpty()) {
+        const size = image.getSize();
+        const maxEdge = 160;
+        const scale = Math.min(1, maxEdge / Math.max(size.width || maxEdge, size.height || maxEdge));
+        const thumbnail = scale < 1
+          ? image.resize({ width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)) })
+          : image;
+        return thumbnail.toDataURL();
+      }
+    } catch {
+      // Fall through to the raw-data fallback for formats nativeImage cannot decode.
+    }
+  }
+  if ((isImageAttachmentMime(type) || isVideoAttachmentMime(type)) && stat.size <= Math.floor(ATTACHMENT_PREVIEW_MAX_BYTES * 0.55)) {
+    try {
+      return `data:${type};base64,${fs.readFileSync(absolutePath).toString('base64')}`;
+    } catch {
+      return '';
+    }
+  }
+  return '';
 }
 
 function selectedAttachmentSummary(filePath) {
@@ -7406,13 +8768,7 @@ function selectedAttachmentSummary(filePath) {
     modifiedAt: stat.mtime.toISOString(),
     previewDataUrl: ''
   };
-  if (type.startsWith('image/') && stat.size <= ATTACHMENT_PREVIEW_MAX_BYTES) {
-    try {
-      entry.previewDataUrl = `data:${type};base64,${fs.readFileSync(absolutePath).toString('base64')}`;
-    } catch {
-      entry.previewDataUrl = '';
-    }
-  }
+  entry.previewDataUrl = selectedAttachmentPreviewDataUrl(absolutePath, type, stat);
   registerSelectedAttachmentAccess(absolutePath, entry);
   return entry;
 }
@@ -7424,7 +8780,7 @@ async function selectAttachmentFiles(event, payload = {}) {
     title: '选择要发送给 EcoreX 亦芯的文件',
     properties: ['openFile', 'multiSelections'],
     filters: [
-      { name: '常用文件', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'pdf', 'csv', 'xlsx', 'xls', 'docx', 'pptx', 'txt', 'md', 'json'] },
+      { name: '常用文件', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'mp4', 'webm', 'mov', 'm4v', 'ogg', 'ogv', 'pdf', 'csv', 'xlsx', 'xls', 'docx', 'pptx', 'txt', 'md', 'json'] },
       { name: '所有文件', extensions: ['*'] }
     ]
   });
@@ -7978,11 +9334,11 @@ async function collectStartupHealth(_event, payload = {}) {
   const claude = claudeResult.status === 'fulfilled' ? claudeResult.value : {};
   const backendStatus = backendResult.status === 'fulfilled' ? backendResult.value : {
     ok: false,
-    error: backendResult.reason instanceof Error ? backendResult.reason.message : String(backendResult.reason || 'Backend status failed.')
+    error: backendResult.reason instanceof Error ? backendResult.reason.message : String(backendResult.reason || '本地能力状态检查失败。')
   };
   const capabilities = capabilitiesResult.status === 'fulfilled' ? capabilitiesResult.value : {
     ok: false,
-    error: capabilitiesResult.reason instanceof Error ? capabilitiesResult.reason.message : String(capabilitiesResult.reason || 'Capability status failed.')
+    error: capabilitiesResult.reason instanceof Error ? capabilitiesResult.reason.message : String(capabilitiesResult.reason || '能力清单检查失败。')
   };
 
   const health = {
@@ -8021,8 +9377,8 @@ async function collectStartupHealth(_event, payload = {}) {
     }
   };
 
-  if (!backendStatus.ok) health.backend.error = safeOutputText(backendStatus.error || 'Backend status unavailable.', 1000);
-  if (capabilities.ok === false) health.capabilities.error = safeOutputText(capabilities.error || 'Capability status unavailable.', 1000);
+  if (!backendStatus.ok) health.backend.error = safeOutputText(backendStatus.error || '本地能力状态暂不可用。', 1000);
+  if (capabilities.ok === false) health.capabilities.error = safeOutputText(capabilities.error || '能力清单暂不可用。', 1000);
 
   writeLog('info', 'Startup health check collected', {
     backend: health.backend,
@@ -8084,16 +9440,32 @@ async function collectDiagnostics() {
         ? fileSummary(devPath('node_modules', '@anthropic-ai', nativePackage))
         : { path: null, exists: false }
     },
-    previewEngine: publicKkFileViewStatus(),
+    previewEngine: publicVueOfficePreviewStatus(),
     release: collectReleaseInstallers()
   };
 }
 
 async function collectCapabilities() {
-  if (cachedCapabilities) return cachedCapabilities;
+  const cacheKey = managedSkillPacksStateCacheKey();
+  if (cachedCapabilities && cachedCapabilitiesKey === cacheKey) return cachedCapabilities;
   const map = sourceMapStats();
-  const capabilityPacks = [];
-  const totals = { commands: 0, agents: 0, skills: 0, hooks: 0, bins: 0 };
+  const managed = collectManagedSkillInventory({ includeDisabled: false });
+  const capabilityPacks = managed.skillPacks.map((pack) => ({
+    ...pack,
+    commands: 0,
+    agents: 0,
+    skills: managed.skills.filter((skill) => skill.provider?.name === pack.name).length || 1,
+    hooks: 0,
+    bins: 0,
+    available: true
+  }));
+  const totals = {
+    commands: 0,
+    agents: 0,
+    skills: managed.skills.length,
+    hooks: 0,
+    bins: 0
+  };
 
   cachedCapabilities = {
     capabilityPacks,
@@ -8113,6 +9485,12 @@ async function collectCapabilities() {
       '结构化流式输出'
     ]
   };
+  cachedCapabilitiesKey = cacheKey;
+  writeLog('info', 'Capabilities collected', {
+    capabilityPacks: capabilityPacks.map((pack) => pack.name),
+    totalCapabilityPacks: capabilityPacks.length,
+    childSkills: managed.skills.length
+  });
   return cachedCapabilities;
 }
 
@@ -8382,7 +9760,7 @@ function runAgent(payload = {}, options = {}) {
     const sessionId = safePayload.sessionId;
     const prompt = safePayload.prompt;
     if (!prompt) {
-      resolve({ ok: false, sessionId, status: 'failed', error: '提示词为空。', recoveryHint: 'Enter a prompt before starting the task.' });
+      resolve({ ok: false, sessionId, status: 'failed', error: '提示词为空。', recoveryHint: '请输入任务内容后再开始。' });
       return;
     }
 
@@ -8410,11 +9788,11 @@ function runAgent(payload = {}, options = {}) {
       }
       if (!claude.command) {
         releaseAgentStart(sessionId, startLock);
-        resolve({ ok: false, sessionId, status: 'failed', error: '本地执行引擎未就绪。', recoveryHint: 'Install or start the local runtime engine, then retry.' });
+        resolve({ ok: false, sessionId, status: 'failed', error: '本地执行引擎未就绪。', recoveryHint: '请等待本地执行引擎预加载完成，或重启 EcoreX 后重试。' });
         return;
       }
 
-      const {
+      let {
         accessMode,
         permissionMode,
         permissionCliMode,
@@ -8426,14 +9804,28 @@ function runAgent(payload = {}, options = {}) {
         cwd,
         projectContext
       } = safePayload;
-    const selectedPlugins = safePayload.plugins;
+      const invalidResume = invalidClaudeResumeEntry(claudeSessionId);
+      if (invalidResume) {
+        const previousClaudeSessionId = claudeSessionId;
+        claudeSessionId = crypto.randomUUID();
+        safePayload = { ...safePayload, claudeSessionId };
+        writeLog('warn', 'Rotated invalid Claude resume target', {
+          previousClaudeSessionId: publicStableId('claude-session', previousClaudeSessionId),
+          nextClaudeSessionId: publicStableId('claude-session', claudeSessionId),
+          reason: invalidResume.reason || 'invalid-resume'
+        });
+      }
+    const selectedPlugins = [...new Set([...(safePayload.plugins || []), ...enabledManagedSkillPackNames()])]
+      .filter((plugin) => !isBlockedLocalSkillName(plugin));
+    safePayload = { ...safePayload, plugins: selectedPlugins };
+    const managedMcpConfigFile = prepareManagedMcpConfigFile();
     const repoRoot = backendPath('claude-code-main');
     const safeRepoRoot = path.resolve(repoRoot);
-    const pluginInventory = parsePluginInventory();
+    const pluginInventory = [...parsePluginInventory(), ...runtimeManagedSkillPlugins()];
     const pluginPathByName = new Map(
       pluginInventory
         .filter((plugin) => plugin.available)
-        .map((plugin) => [plugin.name, path.resolve(repoRoot, plugin.source)])
+        .map((plugin) => [plugin.name, plugin.installPath ? path.resolve(plugin.installPath) : path.resolve(repoRoot, plugin.source)])
     );
     const claudeResumeExistingSession = claudeSessionTranscriptExists(claudeSessionId);
     runtimeActor = createAgentSessionActor(sessionId, safePayload, startLock, { claudeResumeExistingSession });
@@ -8467,12 +9859,15 @@ function runAgent(payload = {}, options = {}) {
     for (const flag of permissionCliFlags || []) {
       args.push(flag);
     }
+    if (managedMcpConfigFile) {
+      args.push('--mcp-config', managedMcpConfigFile);
+    }
 
     for (const pluginName of selectedPlugins) {
       const pluginPath = pluginPathByName.get(pluginName);
       if (
         pluginPath &&
-        isPathInside(safeRepoRoot, pluginPath) &&
+        runtimePluginPathAllowed(pluginPath, safeRepoRoot) &&
         fs.existsSync(pluginPath)
       ) {
         args.push('--plugin-dir', pluginPath);
@@ -8559,6 +9954,8 @@ function runAgent(payload = {}, options = {}) {
       actorId: runtimeActor.actorId,
       runtimeKind: AGENT_RUNTIME_KIND,
       sessionId,
+      conversationId: safePayload.conversationId,
+      messageId: safePayload.messageId || '',
       permissionSnapshot,
       promptHash: crypto.createHash('sha256').update(prompt).digest('hex'),
       cwd,
@@ -8589,6 +9986,7 @@ function runAgent(payload = {}, options = {}) {
       finished: false,
       transcript: [],
       transcriptWritten: false,
+      lastStderr: '',
       flushBufferedOutput: null,
       totalTimer: null,
       idleTimer: null
@@ -8615,11 +10013,13 @@ function runAgent(payload = {}, options = {}) {
       stopAgent(sessionId, 'timeout');
     }, safePayload.timeoutMs);
     runningAgents.set(sessionId, entry);
+    rememberClaudeSessionBinding(safePayload);
     releaseAgentStart(sessionId, startLock);
     armIdleTimer(sessionId);
     resolve({
       ok: true,
       sessionId,
+      claudeSessionId,
       accessMode,
       permissionMode,
       permissionLabel,
@@ -8688,10 +10088,16 @@ function runAgent(payload = {}, options = {}) {
       }
       armIdleTimer(sessionId);
       const stderrText = safeOutputText(chunk.toString(), MAX_AGENT_EVENT_TEXT_CHARS);
+      if (entry) {
+        entry.lastStderr = safeOutputText(`${entry.lastStderr || ''}${stderrText}`, 4000);
+      }
+      const publicStderrText = /session id .*already in use/i.test(stderrText)
+        ? '本地会话正在切换到可恢复模式。'
+        : publicProductText(stderrText);
       const event = {
         sessionId,
         kind: 'stderr',
-        text: stderrText
+        text: publicStderrText
       };
       recordSessionEvent(entry, event);
       emitAgentEvent(event);
@@ -8714,12 +10120,23 @@ function runAgent(payload = {}, options = {}) {
       if (!entry) return;
       entry.flushBufferedOutput?.();
       const finalStatus = code === 0 && !entry.claudeResultFailed ? 'completed' : 'failed';
+      const sessionReuseConflict = finalStatus === 'failed' && /session id .*already in use/i.test(entry.lastStderr || '');
+      const missingResumeTarget = finalStatus === 'failed' && /no conversation found with session id/i.test(entry.lastStderr || '');
+      if (finalStatus === 'completed') markClaudeSessionLaunched(entry.claudeSessionId);
+      if (sessionReuseConflict || missingResumeTarget) {
+        markClaudeSessionResumeInvalid(entry.claudeSessionId, missingResumeTarget ? 'missing-resume-target' : 'session-reuse-conflict');
+      }
       finalizeAgentSession(sessionId, entry, {
         status: finalStatus,
         code,
-        signal
+        signal,
+        text: sessionReuseConflict
+          ? '本地会话仍在释放或已存在。EcoreX 已切换为可恢复会话，请直接重试。'
+          : undefined
       });
-      refreshClaudeSessionTranscriptSeen(entry.claudeSessionId);
+      if (!sessionReuseConflict && !missingResumeTarget) {
+        refreshClaudeSessionTranscriptSeen(entry.claudeSessionId);
+      }
       writeLog(finalStatus === 'completed' ? 'info' : 'error', 'Agent session closed', {
         sessionId,
         code,
@@ -8753,11 +10170,19 @@ function handleSafe(channel, handler, options = {}) {
         writeLog('warn', 'Blocked untrusted IPC invoke', { channel, url: event.senderFrame?.url });
         return { ok: false, error: 'Untrusted renderer.' };
       }
-      if (options.authRequired && !isAuthorized(args)) {
-        writeLog('warn', 'Blocked unauthorized IPC invoke', { channel });
-        return unauthorizedResponse();
+      let authContext = null;
+      if (options.authRequired) {
+        authContext = authContextFromArgs(args);
+        if (!authContext) {
+          writeLog('warn', 'Blocked unauthorized IPC invoke', { channel });
+          return unauthorizedResponse();
+        }
+        if (options.requiredPermission && !authContextHasPermission(authContext, options.requiredPermission)) {
+          writeLog('warn', 'Blocked forbidden IPC invoke', { channel, permission: options.requiredPermission, email: authContext.user?.email });
+          return forbiddenResponse(options.requiredPermission);
+        }
       }
-      return await handler(event, ...args);
+      return await handler(event, ...args, authContext);
     } catch (error) {
       writeLog('error', 'IPC handler failed', {
         channel,
@@ -8793,6 +10218,12 @@ handleSafe('auth:status', (_event, payload = {}) =>
     includeToken: Boolean(payload?.includeToken)
   })
 );
+handleSafe('auth:users:list', (_event, payload, authContext) => listAuthUsers(payload, authContext), { authRequired: true });
+handleSafe('auth:user:create', (_event, payload, authContext) => createAuthUser(payload, authContext), { authRequired: true, requiredPermission: 'users:manage' });
+handleSafe('auth:user:update', (_event, payload, authContext) => updateAuthUser(payload, authContext), { authRequired: true });
+handleSafe('auth:user:delete', (_event, payload, authContext) => deleteAuthUser(payload, authContext), { authRequired: true, requiredPermission: 'users:manage' });
+handleSafe('auth:profile:update', (_event, payload, authContext) => updateOwnProfile(payload, authContext), { authRequired: true, requiredPermission: 'profile:update' });
+handleSafe('enterprise:action', (_event, payload, authContext) => runEnterpriseAdminAction(payload, authContext), { authRequired: true, requiredPermission: 'enterprise:manage' });
 handleSafe('secrets:status', (_event, payload) => {
   optionalObjectPayload(payload, 'secret payload');
   return secretsStatus();
@@ -8809,6 +10240,8 @@ handleSafe('modelAdapter:testProfile', (_event, payload) => testModelProfile(pay
 handleSafe('modelAdapter:generateImage', (_event, payload) => generateModelProfileImage(payload), { authRequired: true });
 handleSafe('settings:get', () => ({ ok: true, settings: writeSettings(readSettings()) }), { authRequired: true });
 handleSafe('settings:update', (_event, payload) => ({ ok: true, settings: updateSettings(payload) }), { authRequired: true });
+handleSafe('evaluation:list', () => listEvaluationStatus(), { authRequired: true });
+handleSafe('evaluation:run', (_event, payload) => runEvaluationStatus(payload), { authRequired: true, requiredPermission: 'enterprise:manage' });
 handleSafe('startup:health', collectStartupHealth, { authRequired: true });
 handleSafe('diagnostics:get', collectDiagnostics, { authRequired: true });
 handleSafe('diagnostics:export', exportDiagnosticsPackage, { authRequired: true });
@@ -8820,6 +10253,7 @@ handleSafe('workspace:select-directory', (event, payload) => selectWorkspaceDire
 handleSafe('workspace:list', (_event, payload) => listWorkspace(payload), { authRequired: true });
 handleSafe('workspace:ensure', (_event, payload) => ensureWorkspace(payload), { authRequired: true });
 handleSafe('file:preview', (_event, payload) => previewFile(payload), { authRequired: true });
+handleSafe('artifact:open-file', (_event, payload) => openArtifactFile(payload), { authRequired: true });
 handleSafe('attachment:ingest', (_event, payload) => ingestAttachmentsForPreview(payload), { authRequired: true });
 handleSafe('attachment:select-files', (event, payload) => selectAttachmentFiles(event, payload), { authRequired: true });
 handleSafe('attachment:open-file', (_event, payload) => openSelectedAttachmentFile(payload), { authRequired: true });
@@ -8832,21 +10266,21 @@ handleSafe('project:archive', (_event, payload) => archiveProject(payload), { au
 handleSafe('project:delete', (_event, payload) => deleteProject(payload), { authRequired: true });
 handleSafe('project:status', (_event, payload) => projectStatus(payload), { authRequired: true });
 handleSafe('project:open-folder', (_event, payload) => openProjectFolder(payload), { authRequired: true });
-handleSafe('mcp:list', (_event, payload) => collectMcpStatus(payload), { authRequired: true });
-handleSafe('mcp:status', (_event, payload) => collectMcpStatus(payload), { authRequired: true });
-handleSafe('mcp:refresh', (_event, payload) => collectMcpStatus(payload), { authRequired: true });
+handleSafe('mcp:list', (_event, payload) => collectMcpStatus(payload));
+handleSafe('mcp:status', (_event, payload) => collectMcpStatus(payload));
+handleSafe('mcp:refresh', (_event, payload) => collectMcpStatus(payload));
 handleSafe('mcp:get', (_event, payload) => getMcpServer(payload), { authRequired: true });
 handleSafe('mcp:update', (_event, payload) => updateMcpConfig(payload), { authRequired: true });
 handleSafe('mcp:update-config', (_event, payload) => updateMcpConfig(payload), { authRequired: true });
 handleSafe('mcp:enable', () => unsupportedMcpToggle('enable'), { authRequired: true });
 handleSafe('mcp:disable', () => unsupportedMcpToggle('disable'), { authRequired: true });
-handleSafe('skill:list', (_event, payload) => collectSkillStatus(payload), { authRequired: true });
-handleSafe('skill:status', (_event, payload) => collectSkillStatus(payload), { authRequired: true });
-handleSafe('skill:refresh', (_event, payload) => collectSkillStatus(payload), { authRequired: true });
-handleSafe('skill:install', () => unsupportedSkillAction('install'), { authRequired: true });
-handleSafe('skill:enable', () => unsupportedSkillAction('enable'), { authRequired: true });
-handleSafe('skill:disable', () => unsupportedSkillAction('disable'), { authRequired: true });
-handleSafe('skill:update', () => unsupportedSkillAction('update'), { authRequired: true });
+handleSafe('skill:list', (_event, payload) => collectSkillStatus(payload));
+handleSafe('skill:status', (_event, payload) => collectSkillStatus(payload));
+handleSafe('skill:refresh', (_event, payload) => collectSkillStatus(payload));
+handleSafe('skill:install', (_event, payload, authContext) => installManagedSkillPack(payload, authContext), { authRequired: true });
+handleSafe('skill:enable', (_event, payload) => updateManagedSkillEnabled(payload, true), { authRequired: true });
+handleSafe('skill:disable', (_event, payload) => updateManagedSkillEnabled(payload, false), { authRequired: true });
+handleSafe('skill:update', (_event, payload, authContext) => updateManagedSkillPack(payload, authContext), { authRequired: true });
 handleSafe('agent:run', (event, payload) => runAgent(payload, { ownerId: event.sender.id }), { authRequired: true });
 handleSafe('agent:stop', (_event, payload) => {
   const sessionId = typeof payload === 'object' && payload ? payload.sessionId : payload;
@@ -8864,12 +10298,14 @@ handleSafe('backend:open-auth', async () => {
     const args = [...claude.baseArgs, 'auth', 'login'].join(' ').replace(/'/g, "''");
     spawn('powershell.exe', ['-NoProfile', '-Command', `Start-Process -FilePath '${file}' -ArgumentList '${args}'`], {
       detached: true,
+      env: filteredAgentEnv(isolatedAgentRuntimeEnv(), { includeSecrets: true }),
       stdio: 'ignore',
       windowsHide: true
     }).unref();
   } else {
     spawn(claude.command, [...claude.baseArgs, 'auth', 'login'], {
       detached: true,
+      env: filteredAgentEnv(isolatedAgentRuntimeEnv(), { includeSecrets: true }),
       stdio: 'ignore'
     }).unref();
   }
