@@ -2779,6 +2779,7 @@ function MainShell({
           <SystemSettingsView
             activeTab={systemSettingsTab}
             onTabChange={(tab) => setPage(pageFromSystemSettingsTab(tab))}
+            onBack={() => setPage('chat')}
             backendStatus={backendStatus}
             backendError={backendError}
             capabilities={capabilities}
@@ -2794,6 +2795,7 @@ function MainShell({
             refreshBackend={refreshBackend}
             onUnauthorized={onUnauthorized}
             setPage={setPage}
+            onBack={() => setPage('chat')}
           />
         )}
       </main>
@@ -3791,6 +3793,7 @@ function EvaluationView({ onUnauthorized, embedded = false }) {
 function SystemSettingsView({
   activeTab = 'diagnostics',
   onTabChange,
+  onBack,
   backendStatus,
   backendError,
   capabilities,
@@ -3815,6 +3818,7 @@ function SystemSettingsView({
         subtitle="集中管理 MCP、SKILLS、运行诊断与默认偏好"
         backendStatus={backendStatus}
         onRefresh={() => refreshBackend?.({ refresh: true })}
+        onBack={onBack}
       />
       <div className="system-settings-tabs" role="tablist" aria-label="系统设置">
         {tabs.map(([value, label, Icon, desc]) => (
@@ -7097,7 +7101,7 @@ function RunningSessionStrip({ sessions = [], currentSessionId, onSelect, onStop
   );
 }
 
-function HeaderBar({ title, badge, subtitle, backendStatus, onRefresh }) {
+function HeaderBar({ title, badge, subtitle, backendStatus, onRefresh, onBack, backLabel = '返回' }) {
   const [refreshNotice, setRefreshNotice] = useState('');
   const lastRefreshAt = useRef(0);
   const noticeTimer = useRef(null);
@@ -7129,6 +7133,12 @@ function HeaderBar({ title, badge, subtitle, backendStatus, onRefresh }) {
   return (
     <header className="view-header">
       <div>
+        {onBack && (
+          <button className="view-back-button" type="button" onClick={onBack}>
+            <ChevronLeft size={16} />
+            {backLabel}
+          </button>
+        )}
         <h1>
           {title} {badge && <span>{badge}</span>}
         </h1>
@@ -8796,7 +8806,7 @@ function ProjectCard({ backendStatus, expanded = true, onToggle, onUnauthorized,
   );
 }
 
-function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }) {
+function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage, onBack }) {
   const [projectState, setProjectState] = useState({
     apiReady: false,
     loading: false,
@@ -9281,7 +9291,15 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
       {!selectedProject ? (
         <div className="projects-home-shell">
           <header className="projects-home-head">
-            <h1>项目</h1>
+            <div className="projects-page-title">
+              {onBack && (
+                <button className="view-back-button" type="button" onClick={onBack}>
+                  <ChevronLeft size={16} />
+                  返回
+                </button>
+              )}
+              <h1>项目管理</h1>
+            </div>
             <div className="projects-home-actions">
               <label>
                 排序
@@ -9354,10 +9372,13 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
       ) : (
         <div className="project-detail-shell">
           <header className="project-detail-hero">
-            <button className="project-back-button" type="button" onClick={() => setSelectedProjectId('')}>
-              <ChevronLeft size={17} />
-              全部项目
-            </button>
+            <div className="projects-page-title">
+              <button className="project-back-button" type="button" onClick={() => setSelectedProjectId('')}>
+                <ChevronLeft size={17} />
+                全部项目
+              </button>
+              <h1>项目管理</h1>
+            </div>
             <div className="project-detail-actions compact">
               <button type="button" title={starredProjectIds.has(selectedProject.id) ? '取消收藏' : '收藏'} onClick={() => toggleProjectStar(selectedProject)}>
                 <Star size={17} />

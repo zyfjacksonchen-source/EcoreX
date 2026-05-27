@@ -7122,10 +7122,34 @@ select,
   gap: 14px;
 }
 
+.projects-page-title {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+
+.projects-page-title .view-back-button,
+.projects-page-title .project-back-button {
+  margin-bottom: 0;
+}
+
+.projects-page-title h1,
 .projects-home-head h1 {
   margin: 0;
-  font-size: 28px;
-  line-height: 1.1;
+  color: var(--text);
+  font-size: 22px;
+  line-height: 1.15;
+}
+
+.system-settings-page .view-header h1 {
+  font-size: 22px;
+  line-height: 1.15;
+}
+
+.system-settings-page .view-header p {
+  margin-top: 5px;
+  font-size: 13px;
 }
 
 .projects-home-head span,
