@@ -191,6 +191,8 @@ async function main() {
       const renamedName = `Packaged Project Renamed ${suffix}`;
 
       await page.locator('[data-testid="sidebar-projects-nav"]').click();
+      await page.locator('[data-testid="projects-new-button"]').waitFor({ state: 'visible', timeout: 20_000 });
+      await page.locator('[data-testid="projects-new-button"]').click();
       await page.locator('[data-testid="projects-create-name"]').waitFor({ state: 'visible', timeout: 20_000 });
       await page.locator('[data-testid="projects-create-name"]').fill(originalName);
       await page.locator('[data-testid="projects-create-submit"]').click();

@@ -1844,17 +1844,28 @@ test.describe('EcoreX Agent Electron E2E', () => {
 
     await page.locator('[data-testid="sidebar-projects-nav"]').click();
     await expect(page.locator('[data-testid="projects-list-panel"]')).toBeVisible();
-    await expect(page.locator('[data-testid="projects-create-name"]')).toBeEnabled({ timeout: 15_000 });
+    await expect(page.locator('[data-testid="projects-new-button"]')).toBeEnabled({ timeout: 15_000 });
 
     const suffix = Date.now();
     const originalName = `UI Project ${suffix}`;
     const renamedName = `UI Project Renamed ${suffix}`;
 
+    await page.locator('[data-testid="projects-new-button"]').click();
+    await expect(page.locator('[data-testid="projects-create-name"]')).toBeEnabled({ timeout: 15_000 });
     await page.locator('[data-testid="projects-create-name"]').fill(originalName);
     await expect(page.locator('[data-testid="projects-create-submit"]')).toBeEnabled();
     await page.locator('[data-testid="projects-create-submit"]').click();
     await expect(page.locator('[data-testid="project-detail-panel"]')).toBeVisible({ timeout: 15_000 });
     await expect(page.locator('[data-testid="project-edit-name"]')).toHaveValue(originalName, { timeout: 15_000 });
+    await page.locator('[data-testid="project-prompt-input"]').fill('请整理这个项目的投放复盘任务');
+    await expect(page.locator('[data-testid="project-prompt-input"]')).toHaveValue('请整理这个项目的投放复盘任务');
+    await page.locator('[data-testid="project-prompt-input"]').clear();
+    await page.locator('[data-testid="project-detail-edit-button"]').click();
+    await expect(page.locator('[data-testid="project-edit-client"]')).toBeVisible({ timeout: 10_000 });
+    await page.locator('[data-testid="project-edit-client"]').fill('EcoreX 测试品牌');
+    await page.locator('[data-testid="project-edit-goal"]').fill('验证项目弹窗填写');
+    await page.locator('[data-testid="project-detail-modal-save"]').click();
+    await expect(page.locator('.project-context-summary')).toContainText('EcoreX 测试品牌');
 
     const createdProject = await page.evaluate(async (name) => {
       const listed = await window.ecorex.listProjects();

@@ -8161,6 +8161,8 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
   const [projectPrompt, setProjectPrompt] = useState('');
   const [busy, setBusy] = useState('');
   const [fileBusy, setFileBusy] = useState('');
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [projectDetailsOpen, setProjectDetailsOpen] = useState(false);
 
   async function refreshProjects({ silent = false, preferId = '' } = {}) {
     if (!silent) setProjectState((current) => ({ ...current, loading: true, notice: '' }));
@@ -8214,6 +8216,7 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
 
   useEffect(() => {
     setEditDraft(projectDraftFromProject(selectedProject || {}));
+    setProjectDetailsOpen(false);
   }, [selectedProject?.id, selectedProject?.updatedAt]);
 
   async function refreshProjectFiles(project = selectedProject) {
@@ -8258,6 +8261,7 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
       setProjectState((current) => ({ ...current, notice: result.missing ? '项目服务未就绪' : `项目创建失败：${sanitizeDisplayText(result.error, '请稍后重试')}` }));
     } else {
       setCreateDraft(emptyProjectDraft());
+      setCreateDialogOpen(false);
       setProjectState((current) => ({ ...current, notice: '项目已创建，并切换为当前项目。' }));
       await refreshProjects({ silent: true, preferId: result.project?.id });
       setSelectedProjectId(result.project?.id || '');
@@ -8279,6 +8283,7 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
       setProjectState((current) => ({ ...current, notice: result.missing ? '项目服务未就绪' : `项目保存失败：${sanitizeDisplayText(result.error, '请稍后重试')}` }));
     } else {
       setProjectState((current) => ({ ...current, notice: '项目信息已保存。' }));
+      setProjectDetailsOpen(false);
       const updatedProject = normalizeProjectItem(result.project || { ...selectedProject, ...payload }, 0, selectedProject.id);
       updateStoredProjectChatReferences(selectedProject.id, updatedProject.name);
       window.dispatchEvent?.(new CustomEvent('ecorex:projects-changed'));
@@ -8508,7 +8513,7 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
                   <option value="created">创建时间</option>
                 </select>
               </label>
-              <button type="button" onClick={() => document.querySelector('[data-testid="projects-create-name"]')?.focus()}>
+              <button type="button" data-testid="projects-new-button" onClick={() => setCreateDialogOpen(true)}>
                 <Plus size={16} />
                 新建项目
               </button>
@@ -8519,15 +8524,6 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
             <Search size={18} />
             <input value={projectSearch} onChange={(event) => setProjectSearch(event.target.value)} placeholder="搜索项目..." />
           </div>
-
-          <form className="projects-create-strip" onSubmit={createProject}>
-            <input data-testid="projects-create-name" value={createDraft.name} onChange={(event) => updateCreateField('name', event.target.value)} placeholder="新项目名称" disabled={!canCreateProject || busy === 'create'} />
-            <input value={createDraft.client} onChange={(event) => updateCreateField('client', event.target.value)} placeholder="客户 / 品牌" disabled={!canCreateProject || busy === 'create'} />
-            <button type="submit" data-testid="projects-create-submit" disabled={!canCreateProject || !createDraft.name.trim() || busy === 'create'}>
-              {busy === 'create' ? <Loader2 size={16} className="spin-icon" /> : <Plus size={16} />}
-              新建项目
-            </button>
-          </form>
 
           <section className="projects-list-panel visual-hidden-panel" data-testid="projects-list-panel" aria-label="项目列表" />
           <div className="projects-card-grid">
@@ -8592,6 +8588,14 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
                 {busy === `open:${selectedProject.id}` ? <Loader2 size={15} className="spin-icon" /> : <FolderOpen size={15} />}
                 打开目录
               </button>
+              <button type="button" data-testid="project-detail-edit-button" onClick={() => setProjectDetailsOpen(true)} disabled={!canUpdateProject}>
+                <Pencil size={15} />
+                编辑资料
+              </button>
+              <button type="button" data-testid="project-detail-save" onClick={saveProject} disabled={!canUpdateProject || !editDraft.name.trim() || busy === `save:${selectedProject.id}`}>
+                {busy === `save:${selectedProject.id}` ? <Loader2 size={15} className="spin-icon" /> : <Check size={15} />}
+                保存
+              </button>
               <button type="button" data-testid="project-detail-archive" onClick={() => toggleArchive(selectedProject)} disabled={!canArchiveProject || busy === `archive:${selectedProject.id}`}>
                 {busy === `archive:${selectedProject.id}` ? <Loader2 size={15} className="spin-icon" /> : <Archive size={15} />}
                 {selectedProject.archived ? '恢复' : '归档'}
@@ -8606,7 +8610,7 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
           <input className="project-title-input" data-testid="project-edit-name" value={editDraft.name} onChange={(event) => updateEditField('name', event.target.value)} disabled={!canUpdateProject} />
 
           <div className="project-chat-composer">
-            <textarea value={projectPrompt} onChange={(event) => setProjectPrompt(event.target.value)} placeholder="今天想推进什么项目任务？" />
+            <textarea data-testid="project-prompt-input" value={projectPrompt} onChange={(event) => setProjectPrompt(event.target.value)} placeholder="今天想推进什么项目任务？" />
             <div>
               <button type="button" title="添加项目文件" onClick={addFilesToProject} disabled={fileBusy === 'add'}>
                 {fileBusy === 'add' ? <Loader2 size={18} className="spin-icon" /> : <Plus size={20} />}
@@ -8646,42 +8650,34 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
               </section>
 
               <section className="project-context-panel">
-                <button className="project-context-row" type="button">
+                <button className="project-context-row" type="button" onClick={() => setProjectDetailsOpen(true)}>
                   <div>
-                    <strong>项目指令</strong>
-                    <span>添加指令，让 EcoreX 在当前项目里按固定偏好回复。</span>
+                    <strong>项目资料与指令</strong>
+                    <span>点击展开填写客户、目标、预算、周期、交付物和长期指令。</span>
                   </div>
-                  <Plus size={20} />
+                  <Pencil size={20} />
                 </button>
-                <div className="project-edit-form project-instructions-form">
-                  <label className="wide">
-                    <span>项目指令</span>
-                    <textarea value={editDraft.instructions} onChange={(event) => updateEditField('instructions', event.target.value)} disabled={!canUpdateProject} placeholder="例如：输出面向广告投放负责人；默认使用中文；复盘时优先关注 CTR/CVR/CPA。" />
-                  </label>
-                  <label>
+                <div className="project-context-summary">
+                  <div>
                     <span>客户 / 品牌</span>
-                    <input value={editDraft.client} onChange={(event) => updateEditField('client', event.target.value)} disabled={!canUpdateProject} />
-                  </label>
-                  <label>
+                    <strong>{editDraft.client || '未填写'}</strong>
+                  </div>
+                  <div>
                     <span>目标</span>
-                    <input value={editDraft.goal} onChange={(event) => updateEditField('goal', event.target.value)} disabled={!canUpdateProject} />
-                  </label>
-                  <label>
+                    <strong>{editDraft.goal || '未填写'}</strong>
+                  </div>
+                  <div>
                     <span>预算</span>
-                    <input value={editDraft.budget} onChange={(event) => updateEditField('budget', event.target.value)} disabled={!canUpdateProject} />
-                  </label>
-                  <label>
+                    <strong>{editDraft.budget || '未填写'}</strong>
+                  </div>
+                  <div>
                     <span>周期</span>
-                    <input value={editDraft.period} onChange={(event) => updateEditField('period', event.target.value)} disabled={!canUpdateProject} />
-                  </label>
-                  <label className="wide">
-                    <span>交付物</span>
-                    <textarea value={editDraft.deliverablesText} onChange={(event) => updateEditField('deliverablesText', event.target.value)} disabled={!canUpdateProject} />
-                  </label>
-                  <button type="button" data-testid="project-detail-save" onClick={saveProject} disabled={!canUpdateProject || !editDraft.name.trim() || busy === `save:${selectedProject.id}`}>
-                    {busy === `save:${selectedProject.id}` ? <Loader2 size={15} className="spin-icon" /> : <Check size={15} />}
-                    保存
-                  </button>
+                    <strong>{editDraft.period || '未填写'}</strong>
+                  </div>
+                  <div className="wide">
+                    <span>项目指令</span>
+                    <strong>{editDraft.instructions || '未填写'}</strong>
+                  </div>
                 </div>
 
                 <div className="project-files-block">
@@ -8717,6 +8713,114 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
                   )}
                 </div>
               </section>
+            </div>
+          </section>
+        </div>
+      )}
+      {createDialogOpen && (
+        <div className="modal-backdrop project-modal-backdrop" role="presentation" onMouseDown={() => setCreateDialogOpen(false)}>
+          <section className="project-editor-modal" role="dialog" aria-modal="true" aria-label="新建项目" onMouseDown={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <span>新项目</span>
+                <h3>创建项目</h3>
+              </div>
+              <button type="button" aria-label="关闭" onClick={() => setCreateDialogOpen(false)}>
+                <X size={18} />
+              </button>
+            </header>
+            <form className="project-edit-form project-modal-form" onSubmit={createProject}>
+              <label className="wide">
+                <span>项目名称</span>
+                <input data-testid="projects-create-name" value={createDraft.name} onChange={(event) => updateCreateField('name', event.target.value)} placeholder="例如：Q2 搜索广告增长计划" disabled={!canCreateProject || busy === 'create'} autoFocus />
+              </label>
+              <label>
+                <span>客户 / 品牌</span>
+                <input value={createDraft.client} onChange={(event) => updateCreateField('client', event.target.value)} disabled={!canCreateProject || busy === 'create'} />
+              </label>
+              <label>
+                <span>目标</span>
+                <input value={createDraft.goal} onChange={(event) => updateCreateField('goal', event.target.value)} disabled={!canCreateProject || busy === 'create'} />
+              </label>
+              <label>
+                <span>预算</span>
+                <input value={createDraft.budget} onChange={(event) => updateCreateField('budget', event.target.value)} disabled={!canCreateProject || busy === 'create'} />
+              </label>
+              <label>
+                <span>周期</span>
+                <input value={createDraft.period} onChange={(event) => updateCreateField('period', event.target.value)} disabled={!canCreateProject || busy === 'create'} />
+              </label>
+              <label className="wide">
+                <span>项目指令</span>
+                <textarea value={createDraft.instructions} onChange={(event) => updateCreateField('instructions', event.target.value)} disabled={!canCreateProject || busy === 'create'} placeholder="例如：默认使用中文；输出面向广告投放负责人；复盘时优先关注 CTR/CVR/CPA。" />
+              </label>
+              <footer className="project-modal-footer">
+                <button type="button" onClick={() => setCreateDialogOpen(false)}>取消</button>
+                <button className="primary" type="submit" data-testid="projects-create-submit" disabled={!canCreateProject || !createDraft.name.trim() || busy === 'create'}>
+                  {busy === 'create' ? <Loader2 size={15} className="spin-icon" /> : <Plus size={15} />}
+                  创建
+                </button>
+              </footer>
+            </form>
+          </section>
+        </div>
+      )}
+      {projectDetailsOpen && selectedProject && (
+        <div className="modal-backdrop project-modal-backdrop" role="presentation" onMouseDown={() => setProjectDetailsOpen(false)}>
+          <section className="project-editor-modal" role="dialog" aria-modal="true" aria-label="编辑项目资料" onMouseDown={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <span>项目资料</span>
+                <h3>编辑项目资料与指令</h3>
+              </div>
+              <button type="button" aria-label="关闭" onClick={() => setProjectDetailsOpen(false)}>
+                <X size={18} />
+              </button>
+            </header>
+            <div className="project-edit-form project-modal-form">
+              <label className="wide">
+                <span>项目名称</span>
+                <input data-testid="project-modal-edit-name" value={editDraft.name} onChange={(event) => updateEditField('name', event.target.value)} disabled={!canUpdateProject} />
+              </label>
+              <label className="wide">
+                <span>项目指令</span>
+                <textarea data-testid="project-edit-instructions" value={editDraft.instructions} onChange={(event) => updateEditField('instructions', event.target.value)} disabled={!canUpdateProject} placeholder="例如：输出面向广告投放负责人；默认使用中文；复盘时优先关注 CTR/CVR/CPA。" />
+              </label>
+              <label>
+                <span>客户 / 品牌</span>
+                <input data-testid="project-edit-client" value={editDraft.client} onChange={(event) => updateEditField('client', event.target.value)} disabled={!canUpdateProject} />
+              </label>
+              <label>
+                <span>目标</span>
+                <input data-testid="project-edit-goal" value={editDraft.goal} onChange={(event) => updateEditField('goal', event.target.value)} disabled={!canUpdateProject} />
+              </label>
+              <label>
+                <span>预算</span>
+                <input data-testid="project-edit-budget" value={editDraft.budget} onChange={(event) => updateEditField('budget', event.target.value)} disabled={!canUpdateProject} />
+              </label>
+              <label>
+                <span>周期</span>
+                <input data-testid="project-edit-period" value={editDraft.period} onChange={(event) => updateEditField('period', event.target.value)} disabled={!canUpdateProject} />
+              </label>
+              <label>
+                <span>行业</span>
+                <input value={editDraft.industry} onChange={(event) => updateEditField('industry', event.target.value)} disabled={!canUpdateProject} />
+              </label>
+              <label>
+                <span>场景</span>
+                <input value={editDraft.scenario} onChange={(event) => updateEditField('scenario', event.target.value)} disabled={!canUpdateProject} />
+              </label>
+              <label className="wide">
+                <span>交付物</span>
+                <textarea data-testid="project-edit-deliverables" value={editDraft.deliverablesText} onChange={(event) => updateEditField('deliverablesText', event.target.value)} disabled={!canUpdateProject} />
+              </label>
+              <footer className="project-modal-footer">
+                <button type="button" onClick={() => setProjectDetailsOpen(false)}>取消</button>
+                <button className="primary" type="button" data-testid="project-detail-modal-save" onClick={saveProject} disabled={!canUpdateProject || !editDraft.name.trim() || busy === `save:${selectedProject.id}`}>
+                  {busy === `save:${selectedProject.id}` ? <Loader2 size={15} className="spin-icon" /> : <Check size={15} />}
+                  保存
+                </button>
+              </footer>
             </div>
           </section>
         </div>
