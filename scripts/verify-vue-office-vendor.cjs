@@ -48,6 +48,15 @@ function assertFile(relativePath) {
   assert(Boolean(stat?.isFile?.() && stat.size > 0), `${rel(filePath)} exists and is non-empty`);
 }
 
+function assertJavaScriptSyntax(relativePath, source) {
+  try {
+    new Function(source);
+    ok(`${relativePath} parses as JavaScript`);
+  } catch (error) {
+    fail(`${relativePath} parses as JavaScript: ${error?.message || error}`);
+  }
+}
+
 function packageJson() {
   return JSON.parse(readText('package.json'));
 }
@@ -74,6 +83,20 @@ function assertNoLegacyTerms() {
       assert(!new RegExp(term, 'i').test(text), `${file} has no legacy preview term ${term}`);
     }
   }
+}
+
+function assertExcelRuntimeHardened(excelRuntime) {
+  const hardenedAnchors = [
+    ['(t.drawings[i]&&t.drawings[i].anchors||[]).forEach', 'missing drawing anchors'],
+    ['(e&&e.anchors||[]).forEach', 'empty drawing models'],
+    ['(t&&t.anchors||[]).forEach', 'empty render models'],
+    ['(r&&r.anchors||[]).forEach', 'missing reconciled drawing models']
+  ];
+  for (const [snippet, label] of hardenedAnchors) {
+    assert(excelRuntime.includes(snippet), `Excel runtime tolerates ${label}`);
+  }
+  assert(!/\([A-Za-z_$][\w$]*\.anchors\|\|\[\]\)\.forEach/.test(excelRuntime), 'Excel runtime has no unguarded anchor array fallbacks');
+  assert(!/\b[A-Za-z_$][\w$]*\.anchors\.forEach/.test(excelRuntime), 'Excel runtime has no direct anchors.forEach calls');
 }
 
 function main() {
@@ -104,8 +127,10 @@ function main() {
   assert(viewerSource.includes('pptx-preview.umd.js'), 'viewer loads the PPTX browser runtime');
   assert(viewerSource.includes('scrollbar-color') && viewerSource.includes('x-spreadsheet-scrollbar'), 'viewer applies EcoreX scrollbar styling inside document previews');
   const excelRuntime = fs.readFileSync(path.join(vendorDir, 'js-preview-lib', 'excel.umd.js'), 'utf8');
-  assert(excelRuntime.includes('(t.drawings[i]&&t.drawings[i].anchors||[]).forEach'), 'Excel runtime tolerates missing drawing anchors');
-  assert(excelRuntime.includes('(e&&e.anchors||[]).forEach'), 'Excel runtime tolerates empty drawing models');
+  for (const relativePath of ['js-preview-lib/docx.umd.js', 'js-preview-lib/excel.umd.js', 'js-preview-lib/pdf.umd.js', 'js-preview-lib/pptx-preview.umd.js']) {
+    assertJavaScriptSyntax(relativePath, fs.readFileSync(path.join(vendorDir, relativePath), 'utf8'));
+  }
+  assertExcelRuntimeHardened(excelRuntime);
 
   assertNoLegacyTerms();
 

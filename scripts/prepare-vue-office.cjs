@@ -87,6 +87,14 @@ function writeText(filePath, text, dryRun) {
   fs.writeFileSync(filePath, text);
 }
 
+function assertJavaScriptSyntax(source, label) {
+  try {
+    new Function(source);
+  } catch (error) {
+    throw new Error(`${label} is not valid JavaScript after hardening: ${error?.message || error}`);
+  }
+}
+
 function hardenExcelRuntime(filePath, dryRun) {
   if (dryRun) return [];
   let source = fs.readFileSync(filePath, 'utf8');
@@ -105,6 +113,11 @@ function hardenExcelRuntime(filePath, dryRun) {
       label: 'render model without anchors',
       from: /t\.anchors\.forEach/g,
       to: '(t&&t.anchors||[]).forEach'
+    },
+    {
+      label: 'drawing reconcile without drawing model',
+      from: /\((\w+)\.anchors\|\|\[\]\)\.forEach/g,
+      to: '($1&&$1.anchors||[]).forEach'
     }
   ];
   const applied = [];
@@ -112,9 +125,10 @@ function hardenExcelRuntime(filePath, dryRun) {
     const matches = source.match(replacement.from);
     if (!matches?.length) continue;
     source = source.replace(replacement.from, replacement.to);
-    applied.push({ label: replacement.label, count: matches.length });
+      applied.push({ label: replacement.label, count: matches.length });
   }
-  fs.writeFileSync(filePath, source);
+  assertJavaScriptSyntax(source, 'Excel preview runtime');
+  fs.writeFileSync(filePath, source, 'utf8');
   return applied;
 }
 

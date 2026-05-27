@@ -299,6 +299,13 @@ const CONVERSATION_STORAGE_KEY = 'ecorex-chat-conversations';
 const MAX_RECENT_CHATS = 20;
 const MAX_STORED_CONVERSATIONS = 30;
 const MAX_STORED_MESSAGES_PER_CONVERSATION = 120;
+const MAX_CONVERSATION_STORAGE_CHARS = 4 * 1024 * 1024;
+const MAX_LIVE_MESSAGES_PER_CONVERSATION = 180;
+const MAX_LIVE_ASSISTANT_TEXT_CHARS = 60000;
+const FRONT_AGENT_EVENT_TEXT_CHARS = 20000;
+const MAX_COMPOSER_PROMPT_CHARS = 80000;
+const MAX_PENDING_FOLLOWUPS = 20;
+const MAX_PENDING_FOLLOWUP_CHARS = 20000;
 const MESSAGE_WINDOW_SIZE = 40;
 const MESSAGE_WINDOW_STEP = 30;
 const ASSISTANT_COLLAPSE_CHARS = 900;
@@ -375,6 +382,46 @@ function displayUserNameFromAuth(status = {}) {
   const value = String(raw || '').trim();
   if (value.includes('@')) return value.split('@')[0] || '张晓明';
   return value || '张晓明';
+}
+
+function authUserFromStatus(status = {}) {
+  return status.user || status.profile || status.account || {};
+}
+
+function displayUserEmailFromAuth(status = {}) {
+  const user = authUserFromStatus(status);
+  return String(user.email || status.email || '').trim();
+}
+
+function roleLabelFromAuthUser(user = {}) {
+  const role = String(user.role || '').trim();
+  if (user.roleLabel) return user.roleLabel;
+  if (role === 'super_admin') return '超级管理员';
+  if (role === 'admin') return '管理员';
+  return '成员';
+}
+
+function avatarInitialsFromUser(user = {}, fallbackName = '') {
+  const explicit = String(user.avatarInitials || '').trim();
+  if (explicit) return explicit.slice(0, 2).toUpperCase();
+  const source = String(user.displayName || user.name || fallbackName || user.email || 'E').trim();
+  if (!source) return 'E';
+  if (/^[A-Za-z]/.test(source)) return source.slice(0, 2).toUpperCase();
+  return source.slice(0, 1);
+}
+
+let activeConversationStorageOwner = '';
+
+function storageOwnerFromAuthStatus(status = {}) {
+  return displayUserEmailFromAuth(status).toLowerCase();
+}
+
+function setConversationStorageOwner(status = {}) {
+  activeConversationStorageOwner = normalizeAuthStatus(status).loggedIn ? storageOwnerFromAuthStatus(status) : '';
+}
+
+function currentConversationStorageOwner() {
+  return activeConversationStorageOwner;
 }
 
 function normalizeAccessMode(value, fallback = 'default') {
@@ -583,6 +630,19 @@ function safeAttachmentPreviewUrl(value = '', { persist = false } = {}) {
   if (!previewUrl || previewUrl.length > ATTACHMENT_PREVIEW_URL_MAX_CHARS) return '';
   if (persist && !previewUrl.startsWith('data:')) return '';
   return previewUrl;
+}
+
+function clampLongText(value = '', maxChars = MAX_LIVE_ASSISTANT_TEXT_CHARS) {
+  const text = String(value || '');
+  if (text.length <= maxChars) return text;
+  const marker = '\n\n[前文已自动压缩，保留首尾内容以保持会话流畅]\n\n';
+  const headChars = Math.min(2400, Math.floor(maxChars * 0.18));
+  const tailChars = Math.max(0, maxChars - headChars - marker.length);
+  return `${text.slice(0, headChars)}${marker}${text.slice(-tailChars)}`;
+}
+
+function clampComposerPromptText(value = '') {
+  return clampLongText(value, MAX_COMPOSER_PROMPT_CHARS);
 }
 
 function serializeAgentAttachment(attachment = {}, index = 0) {
@@ -1198,6 +1258,36 @@ function artifactLocationLabel(artifact = {}, fallback = '') {
   return `${artifact.path || fallback}${linePart}${rangePart}`;
 }
 
+function isImageArtifact(artifact = {}) {
+  return artifactPreviewKind(artifact.ext, artifact.type || artifact.mimeType) === 'image';
+}
+
+function artifactMatchKey(value = '') {
+  return normalizeArtifactPathToken(String(value || ''))
+    .replace(/\\/g, '/')
+    .toLowerCase();
+}
+
+function findRichImageArtifact(url = '', label = '', artifacts = []) {
+  const parsed = parseArtifactPathToken(url);
+  const candidates = [
+    parsed?.path,
+    stripArtifactPathToken(url),
+    label
+  ].filter(Boolean).map(artifactMatchKey);
+  if (!candidates.length) return null;
+  return artifacts.find((artifact) => {
+    if (!isImageArtifact(artifact)) return false;
+    const keys = [
+      artifact.path,
+      artifact.filePath,
+      artifact.raw,
+      artifact.name
+    ].filter(Boolean).map(artifactMatchKey);
+    return keys.some((key) => candidates.includes(key));
+  }) || null;
+}
+
 function normalizeArtifactPreviewResult(result = {}, artifact = {}) {
   const file = result.file && typeof result.file === 'object' ? result.file : {};
   const metadata = result.metadata && typeof result.metadata === 'object' ? result.metadata : {};
@@ -1355,6 +1445,21 @@ async function validateArtifactAvailabilityWithBridge(artifact = {}) {
   if (!artifact.path) return false;
   const bridge = window.ecorex;
   if (!bridge) return true;
+  const hasPreviewLocation = (result = {}) => Boolean(
+    result?.file
+    || result?.path
+    || result?.filePath
+    || result?.content
+    || result?.previewUrl
+    || result?.name
+    || result?.metadata
+  );
+  const isPreviewMetadata = (result = {}) => (
+    result?.ok !== false
+    || result?.unsupported === true
+    || result?.previewable === false
+    || result?.renderMode === 'metadata'
+  );
   const payload = {
     name: artifact.name,
     path: artifact.path,
@@ -1380,12 +1485,12 @@ async function validateArtifactAvailabilityWithBridge(artifact = {}) {
     if (typeof fn !== 'function') continue;
     try {
       const result = await fn(payload);
-      if (result?.ok !== false && (result?.file || result?.path || result?.content || result?.previewUrl)) return true;
+      if (isPreviewMetadata(result) && hasPreviewLocation(result)) return true;
       if (result?.reason === 'not-found') return false;
     } catch (firstError) {
       try {
         const result = await fn(artifact.path, payload);
-        if (result?.ok !== false && (result?.file || result?.path || result?.content || result?.previewUrl)) return true;
+        if (isPreviewMetadata(result) && hasPreviewLocation(result)) return true;
         if (result?.reason === 'not-found') return false;
       } catch {
         // Try the next bridge shape.
@@ -1676,7 +1781,7 @@ function agentRunPolicySection(prompt = '') {
   return [
     '执行策略：',
     '1. 联网搜索、网页读取、MCP 调用、SKILLS 调用、只读信息检索和常规分析工具由 EcoreX 自主判断并直接执行，不要先询问用户是否允许。',
-    '2. 涉及本地文件写入/修改/删除、命令执行、系统目录访问或不可逆变更时，先用一句话说明将执行什么，并等待用户在聊天里确认；用户确认“是/继续/允许一次”后继续。',
+    '2. 涉及本地文件写入/修改/删除、命令执行、系统目录访问或不可逆变更时，触发 EcoreX 桌面端权限确认弹框，让用户点击按钮确认；不要要求用户在聊天里回复“继续”或“确认”。',
     '3. 简单问答只返回答案；复杂任务只展示当前动作、关键计划和必要风险，不输出完整调试日志或冗长状态树。',
     realtimePlatformSearchPolicySection(prompt)
   ].join('\n');
@@ -1696,6 +1801,7 @@ function normalizeRecentChatItem(item, index = 0) {
   if (!title) return null;
   const projectId = String(fromTuple ? '' : item?.projectId || '').trim().slice(0, 120);
   const projectName = String(fromTuple ? '' : item?.projectName || '').trim().slice(0, 120);
+  const ownerEmail = String(fromTuple ? '' : item?.ownerEmail || item?.accountEmail || '').trim().toLowerCase().slice(0, 160);
   return {
     id: String((fromTuple ? '' : item?.id) || `recent-${index}-${title}`).slice(0, 120),
     claudeSessionId: String((fromTuple ? '' : item?.claudeSessionId || item?.sessionId) || item?.id || '').slice(0, 120),
@@ -1703,26 +1809,45 @@ function normalizeRecentChatItem(item, index = 0) {
     time: String((fromTuple ? item[1] : item?.time) || '').trim() || recentChatTimeLabel(),
     updatedAt: Number(fromTuple ? 0 : item?.updatedAt) || Date.now() - index,
     projectId,
-    projectName
+    projectName,
+    ownerEmail
   };
 }
 
-function loadRecentChatItems() {
+function loadRawRecentChatItems() {
   try {
     const stored = localStorage.getItem(RECENT_CHAT_STORAGE_KEY);
     if (stored === null) return [];
     const parsed = JSON.parse(stored || '[]');
-    const items = Array.isArray(parsed) ? parsed.map(normalizeRecentChatItem).filter(Boolean) : [];
-    return items.slice(0, MAX_RECENT_CHATS);
+    return Array.isArray(parsed) ? parsed.map(normalizeRecentChatItem).filter(Boolean) : [];
   } catch {
     // Keep an empty production state instead of restoring design samples.
   }
   return [];
 }
 
+function loadRecentChatItems() {
+  const owner = currentConversationStorageOwner();
+  return loadRawRecentChatItems()
+    .filter((item) => !owner || !item.ownerEmail || item.ownerEmail === owner)
+    .slice(0, MAX_RECENT_CHATS);
+}
+
 function storeRecentChatItems(items = []) {
   try {
-    localStorage.setItem(RECENT_CHAT_STORAGE_KEY, JSON.stringify(items.slice(0, MAX_RECENT_CHATS)));
+    const owner = currentConversationStorageOwner();
+    const retainedOtherOwnerItems = owner
+      ? loadRawRecentChatItems().filter((item) => item.ownerEmail && item.ownerEmail !== owner)
+      : [];
+    const normalized = [...retainedOtherOwnerItems, ...items]
+      .map((item, index) => normalizeRecentChatItem({
+        ...item,
+        ownerEmail: item?.ownerEmail || owner
+      }, index))
+      .filter(Boolean)
+      .sort((left, right) => (Number(right.updatedAt) || 0) - (Number(left.updatedAt) || 0))
+      .slice(0, MAX_RECENT_CHATS);
+    localStorage.setItem(RECENT_CHAT_STORAGE_KEY, JSON.stringify(normalized));
   } catch {
     // Recent chat sync is a UI convenience and should not break the agent.
   }
@@ -1792,10 +1917,24 @@ function upsertRecentChatItem(items = [], item = {}) {
   return [normalized, ...deduped].slice(0, MAX_RECENT_CHATS);
 }
 
-function loadConversationMap() {
+function loadRawConversationMap() {
   try {
     const parsed = JSON.parse(localStorage.getItem(CONVERSATION_STORAGE_KEY) || '{}');
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
+function loadConversationMap() {
+  try {
+    const parsed = loadRawConversationMap();
+    const owner = currentConversationStorageOwner();
+    if (!owner) return parsed;
+    return Object.fromEntries(Object.entries(parsed).filter(([, value]) => (
+      !value?.ownerEmail || String(value.ownerEmail).toLowerCase() === owner
+    )));
   } catch {
     return {};
   }
@@ -1803,10 +1942,24 @@ function loadConversationMap() {
 
 function storeConversationMap(map = {}) {
   try {
-    const entries = Object.entries(map)
+    const owner = currentConversationStorageOwner();
+    const retainedOtherOwnerEntries = owner
+      ? Object.entries(loadRawConversationMap()).filter(([, value]) => (
+          value?.ownerEmail && String(value.ownerEmail).toLowerCase() !== owner
+        ))
+      : [];
+    const entries = [...retainedOtherOwnerEntries, ...Object.entries(map)]
       .filter(([, value]) => value && typeof value === 'object')
       .sort(([, left], [, right]) => (Number(right.updatedAt) || 0) - (Number(left.updatedAt) || 0))
       .slice(0, MAX_STORED_CONVERSATIONS);
+    while (entries.length > 1) {
+      const serialized = JSON.stringify(Object.fromEntries(entries));
+      if (serialized.length <= MAX_CONVERSATION_STORAGE_CHARS) {
+        localStorage.setItem(CONVERSATION_STORAGE_KEY, serialized);
+        return;
+      }
+      entries.pop();
+    }
     localStorage.setItem(CONVERSATION_STORAGE_KEY, JSON.stringify(Object.fromEntries(entries)));
   } catch {
     // Conversation persistence should never block chat interaction.
@@ -1880,6 +2033,23 @@ function sanitizeStoredMessages(messages = []) {
     }));
 }
 
+function sanitizeLiveMessages(messages = []) {
+  return (Array.isArray(messages) ? messages : [])
+    .slice(-MAX_LIVE_MESSAGES_PER_CONVERSATION)
+    .map((message) => {
+      if (!message || typeof message !== 'object') return message;
+      const maxText = message.role === 'assistant'
+        ? MAX_LIVE_ASSISTANT_TEXT_CHARS
+        : MAX_COMPOSER_PROMPT_CHARS;
+      return {
+        ...message,
+        text: clampLongText(message.text || '', maxText),
+        originalPrompt: message.originalPrompt ? clampLongText(message.originalPrompt, MAX_COMPOSER_PROMPT_CHARS) : message.originalPrompt,
+        ledger: Array.isArray(message.ledger) ? message.ledger.slice(-MAX_STORED_LEDGER_ITEMS) : message.ledger
+      };
+    });
+}
+
 function saveConversationState(id, patch = {}) {
   if (!id) return;
   const map = loadConversationMap();
@@ -1891,6 +2061,7 @@ function saveConversationState(id, patch = {}) {
     claudeSessionId: String(patch.claudeSessionId || previous.claudeSessionId || id).slice(0, 120),
     projectId: String(patch.projectId || previous.projectId || '').slice(0, 120),
     projectName: String(patch.projectName || previous.projectName || '').slice(0, 120),
+    ownerEmail: String(patch.ownerEmail || previous.ownerEmail || currentConversationStorageOwner() || '').slice(0, 160),
     contextSummary: sanitizeContextSummary(patch.contextSummary || previous.contextSummary || ''),
     contextCompactedAt: patch.contextCompactedAt || previous.contextCompactedAt || null,
     messages: sanitizeStoredMessages(patch.messages || previous.messages || []),
@@ -1953,6 +2124,14 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const listener = () => {
+      refreshAuthStatus();
+    };
+    window.addEventListener?.('ecorex:auth-updated', listener);
+    return () => window.removeEventListener?.('ecorex:auth-updated', listener);
+  }, []);
+
+  useEffect(() => {
     if (startupReadyRef.current) return;
     startupReadyRef.current = true;
     setStartupState({
@@ -1960,11 +2139,11 @@ function App() {
       label: window.ecorex ? '预加载中' : '预览模式',
       detail: window.ecorex ? '正在预加载本地能力' : '桌面预加载不可用'
     });
-    const startupWork = Promise.allSettled([
-      refreshAuthStatus(),
-      refreshBackend(),
-      preloadStartupState()
-    ]);
+    const startupWork = refreshAuthStatus()
+      .then(() => Promise.allSettled([
+        refreshBackend(),
+        preloadStartupState()
+      ]));
     withStartupTimeout(startupWork).finally(() => {
       window.__ecorexFinishStartup?.();
     })
@@ -1999,6 +2178,7 @@ function App() {
   async function refreshAuthStatus() {
     if (!window.ecorex?.getAuthStatus) {
       const previewStatus = normalizeAuthStatus(null, localStorage.getItem(PREVIEW_SESSION_KEY) === '1');
+      setConversationStorageOwner(previewStatus);
       setAuthStatus(previewStatus);
       setLoggedIn(previewStatus.loggedIn);
       return previewStatus;
@@ -2006,12 +2186,14 @@ function App() {
 
     try {
       const status = normalizeAuthStatus(await window.ecorex.getAuthStatus());
+      setConversationStorageOwner(status);
       setAuthStatus(status);
       setLoggedIn(status.loggedIn);
       if (status.loggedIn) setAuthNotice('');
       return status;
     } catch (error) {
       const status = normalizeAuthStatus({ ok: false, error: error?.message || 'Auth status failed' });
+      setConversationStorageOwner(status);
       setAuthStatus(status);
       setLoggedIn(false);
       setAuthNotice('登录状态校验失败，请重新登录。');
@@ -2034,6 +2216,7 @@ function App() {
       setCapabilities(caps);
       if (!window.ecorex?.getAuthStatus && status?.auth) {
         const nextAuth = normalizeAuthStatus(status.auth);
+        setConversationStorageOwner(nextAuth);
         setAuthStatus(nextAuth);
         setLoggedIn(nextAuth.loggedIn);
       }
@@ -2050,6 +2233,7 @@ function App() {
 
   function handleUnauthorized() {
     localStorage.removeItem(PREVIEW_SESSION_KEY);
+    setConversationStorageOwner({ loggedIn: false });
     setAuthStatus((current) => normalizeAuthStatus({ ...current, loggedIn: false, ok: false, error: 'Unauthorized' }));
     setLoggedIn(false);
     setAuthNotice('登录状态已过期，请重新登录。');
@@ -2060,6 +2244,7 @@ function App() {
     if (!window.ecorex?.authLogin) {
       localStorage.setItem(PREVIEW_SESSION_KEY, '1');
       const previewStatus = normalizeAuthStatus({ loggedIn: true, user: { email: credentials.email || 'preview@ecorex.local' } }, true);
+      setConversationStorageOwner(previewStatus);
       setAuthStatus(previewStatus);
       setLoggedIn(true);
       refreshBackend();
@@ -2070,6 +2255,7 @@ function App() {
       const result = await window.ecorex.authLogin(credentials);
       if (result?.ok === false) throw new Error(result.error || '登录失败');
       const status = normalizeAuthStatus(result?.auth || result?.status || result, true);
+      setConversationStorageOwner(status);
       setAuthStatus(status);
       setLoggedIn(status.loggedIn);
       await refreshBackend();
@@ -2088,7 +2274,9 @@ function App() {
       // Keep the UI logout decisive even if the backend is already signed out.
     }
     localStorage.removeItem(PREVIEW_SESSION_KEY);
-    setAuthStatus(normalizeAuthStatus({ loggedIn: false }));
+    const loggedOutStatus = normalizeAuthStatus({ loggedIn: false });
+    setConversationStorageOwner(loggedOutStatus);
+    setAuthStatus(loggedOutStatus);
     setLoggedIn(false);
     setAuthNotice('');
   }
@@ -2325,6 +2513,7 @@ function LoginPage({ authStatus, authNotice, onLogin, onOpenAuth }) {
 function systemSettingsTabFromPage(page) {
   if (page === 'mcp') return 'mcp';
   if (page === 'skills') return 'skills';
+  if (page === 'users') return 'users';
   if (page === 'evaluations') return 'evaluations';
   if (page === 'diagnostics' || page === 'settings') return 'diagnostics';
   return '';
@@ -2333,6 +2522,7 @@ function systemSettingsTabFromPage(page) {
 function pageFromSystemSettingsTab(tab) {
   if (tab === 'mcp') return 'mcp';
   if (tab === 'skills') return 'skills';
+  if (tab === 'users') return 'users';
   if (tab === 'evaluations') return 'evaluations';
   return 'settings';
 }
@@ -2359,6 +2549,7 @@ function MainShell({
         page={page}
         setPage={setPage}
         logout={logout}
+        authStatus={authStatus}
         collapsed={sidebarCollapsed}
         onToggleCollapsed={() => setSidebarCollapsed((value) => !value)}
       />
@@ -2400,7 +2591,7 @@ function MainShell({
   );
 }
 
-function Sidebar({ page, setPage, logout, collapsed = false, onToggleCollapsed }) {
+function Sidebar({ page, setPage, logout, authStatus, collapsed = false, onToggleCollapsed }) {
   const [profileOpen, setProfileOpen] = useState(false);
   const [modelConfigOpen, setModelConfigOpen] = useState(false);
   const [currentModelLabel, setCurrentModelLabel] = useState('默认模型');
@@ -2411,6 +2602,11 @@ function Sidebar({ page, setPage, logout, collapsed = false, onToggleCollapsed }
   const [quickProjectName, setQuickProjectName] = useState('');
   const [projectBusy, setProjectBusy] = useState('');
   const profileRef = useRef(null);
+  const currentAuthUser = authUserFromStatus(authStatus);
+  const currentDisplayName = displayUserNameFromAuth(authStatus);
+  const currentEmail = displayUserEmailFromAuth(authStatus) || 'local@ecorex.com';
+  const currentRoleLabel = roleLabelFromAuthUser(currentAuthUser);
+  const currentInitials = avatarInitialsFromUser(currentAuthUser, currentDisplayName);
 
   useEffect(() => {
     let cancelled = false;
@@ -2832,29 +3028,29 @@ function Sidebar({ page, setPage, logout, collapsed = false, onToggleCollapsed }
       </div>
       <div className="user-card" ref={profileRef}>
         <button className="profile-trigger" type="button" onClick={() => setProfileOpen((value) => !value)}>
-          <div className="avatar avatar-photo">张</div>
+          <div className="avatar avatar-photo">{currentInitials}</div>
           <div>
-            <strong>张晓明</strong>
-            <span>zhang.xm@ecorex.com</span>
-            <em className="profile-mini-status"><i />模型 · {currentModelLabel}</em>
+            <strong>{currentDisplayName}</strong>
+            <span>{currentEmail}</span>
+            <em className="profile-mini-status"><i />{currentRoleLabel} · {currentModelLabel}</em>
           </div>
           <ChevronDown size={18} />
         </button>
         {profileOpen && (
           <div className="profile-popover">
             <header>
-              <div className="avatar avatar-photo">张</div>
+              <div className="avatar avatar-photo">{currentInitials}</div>
               <div>
-                <strong>张晓明</strong>
-                <span>zhang.xm@ecorex.com</span>
-                <em><i />在线</em>
+                <strong>{currentDisplayName}</strong>
+                <span>{currentEmail}</span>
+                <em><i />{currentRoleLabel}</em>
               </div>
             </header>
             <button className="profile-team" type="button">
               <UsersRound size={24} />
               <span>
-                <strong>智能创新团队 / 研发一部</strong>
-                <em>团队人数 23 人</em>
+                <strong>{currentAuthUser.team || 'EcoreX 本地工作区'}</strong>
+                <em>{currentAuthUser.title || currentRoleLabel}</em>
               </span>
               <ChevronRight size={18} />
             </button>
@@ -2887,6 +3083,251 @@ function Sidebar({ page, setPage, logout, collapsed = false, onToggleCollapsed }
         />
       </div>
     </aside>
+  );
+}
+
+function UserRoleSettingsView({ authStatus, onUnauthorized }) {
+  const currentUser = authUserFromStatus(authStatus);
+  const [state, setState] = useState('loading');
+  const [notice, setNotice] = useState('');
+  const [users, setUsers] = useState([]);
+  const [roles, setRoles] = useState([]);
+  const [canManageUsers, setCanManageUsers] = useState(false);
+  const [canManageEnterprise, setCanManageEnterprise] = useState(false);
+  const [busy, setBusy] = useState('');
+  const [profileDraft, setProfileDraft] = useState({
+    displayName: currentUser.displayName || currentUser.name || '',
+    title: currentUser.title || '',
+    team: currentUser.team || ''
+  });
+  const [createDraft, setCreateDraft] = useState({
+    email: '',
+    displayName: '',
+    role: 'user',
+    password: ''
+  });
+
+  async function loadUsers({ silent = false } = {}) {
+    if (!silent) setState('loading');
+    const result = await callEcorex(['listUsers'], {});
+    if (result?.unauthorized || /unauthorized/i.test(result?.error || '')) {
+      onUnauthorized?.();
+      setState('unauthorized');
+      setNotice('登录状态已过期，请重新登录。');
+      return;
+    }
+    if (result?.ok === false) {
+      setState('error');
+      setNotice(sanitizeDisplayText(result.error, '用户与角色加载失败。'));
+      return;
+    }
+    const nextUsers = Array.isArray(result.users) ? result.users : [];
+    const self = result.currentUser || nextUsers.find((user) => user.email === currentUser.email) || currentUser;
+    setUsers(nextUsers);
+    setRoles(Array.isArray(result.roles) ? result.roles : []);
+    setCanManageUsers(Boolean(result.canManageUsers));
+    setCanManageEnterprise(Boolean(result.canManageEnterprise));
+    setProfileDraft({
+      displayName: self.displayName || self.name || '',
+      title: self.title || '',
+      team: self.team || ''
+    });
+    setState('ready');
+    if (!silent) setNotice('');
+  }
+
+  useEffect(() => {
+    loadUsers();
+  }, []);
+
+  async function saveProfile() {
+    setBusy('profile');
+    const result = await callEcorex(['updateProfile'], profileDraft);
+    setBusy('');
+    if (result?.ok === false) {
+      setNotice(sanitizeDisplayText(result.error, '个人资料保存失败。'));
+      return;
+    }
+    setNotice('个人资料已保存。');
+    await loadUsers({ silent: true });
+  }
+
+  async function createUser() {
+    if (!createDraft.email.trim() || !createDraft.password.trim()) {
+      setNotice('请填写邮箱和初始密码。');
+      return;
+    }
+    setBusy('create');
+    const result = await callEcorex(['createUser'], createDraft);
+    setBusy('');
+    if (result?.ok === false) {
+      setNotice(sanitizeDisplayText(result.error, '账户创建失败。'));
+      return;
+    }
+    setCreateDraft({ email: '', displayName: '', role: 'user', password: '' });
+    setNotice('账户已创建，可使用该账号登录。');
+    await loadUsers({ silent: true });
+  }
+
+  async function updateUser(user, patch) {
+    setBusy(user.id || user.email);
+    const result = await callEcorex(['updateUser'], { id: user.id, email: user.email, ...patch });
+    setBusy('');
+    if (result?.ok === false) {
+      setNotice(sanitizeDisplayText(result.error, '账户更新失败。'));
+      return;
+    }
+    setNotice('账户已更新。');
+    await loadUsers({ silent: true });
+  }
+
+  async function deleteUser(user) {
+    setBusy(`delete:${user.id || user.email}`);
+    const result = await callEcorex(['deleteUser'], { id: user.id, email: user.email });
+    setBusy('');
+    if (result?.ok === false) {
+      setNotice(sanitizeDisplayText(result.error, '账户删除失败。'));
+      return;
+    }
+    setNotice('账户已删除。');
+    await loadUsers({ silent: true });
+  }
+
+  async function runEnterpriseAction(action, summary) {
+    setBusy(action);
+    const result = await callEcorex(['runEnterpriseAction'], { action, summary });
+    setBusy('');
+    if (result?.ok === false) {
+      setNotice(sanitizeDisplayText(result.error, '企业动作执行失败。'));
+      return;
+    }
+    setNotice('企业动作已记录。');
+  }
+
+  const roleOptions = roles.length ? roles : [
+    { value: 'super_admin', label: '超级管理员' },
+    { value: 'admin', label: '管理员' },
+    { value: 'user', label: '成员' }
+  ];
+
+  return (
+    <section className="enterprise-users-page" data-testid="enterprise-users-page">
+      {notice && <ManagementBanner tone={state === 'error' || state === 'unauthorized' ? 'error' : 'warn'} text={notice} />}
+      <div className="enterprise-settings-grid">
+        <article className="enterprise-panel">
+          <header>
+            <div>
+              <h3>个人资料</h3>
+              <p>当前登录账号、团队和职位信息。</p>
+            </div>
+            <span className={`role-pill ${currentUser.role || 'user'}`}>{roleLabelFromAuthUser(currentUser)}</span>
+          </header>
+          <div className="profile-form-grid">
+            <label>
+              <span>显示名称</span>
+              <input value={profileDraft.displayName} onChange={(event) => setProfileDraft((draft) => ({ ...draft, displayName: event.target.value }))} />
+            </label>
+            <label>
+              <span>职位</span>
+              <input value={profileDraft.title} onChange={(event) => setProfileDraft((draft) => ({ ...draft, title: event.target.value }))} />
+            </label>
+            <label>
+              <span>团队</span>
+              <input value={profileDraft.team} onChange={(event) => setProfileDraft((draft) => ({ ...draft, team: event.target.value }))} />
+            </label>
+            <label>
+              <span>邮箱</span>
+              <input value={displayUserEmailFromAuth(authStatus)} disabled />
+            </label>
+          </div>
+          <button className="primary" type="button" onClick={saveProfile} disabled={busy === 'profile'}>
+            {busy === 'profile' ? <Loader2 size={16} className="spin-icon" /> : <Check size={16} />}
+            保存资料
+          </button>
+        </article>
+
+        <article className="enterprise-panel" data-testid="users-admin-panel">
+          <header>
+            <div>
+              <h3>用户与角色</h3>
+              <p>{canManageUsers ? '创建本地账号、调整角色并停用离职账号。' : '当前账号只能查看和更新自己的资料。'}</p>
+            </div>
+            <button type="button" onClick={() => loadUsers()} disabled={state === 'loading'}>
+              {state === 'loading' ? <Loader2 size={16} className="spin-icon" /> : <RotateCcw size={16} />}
+              刷新
+            </button>
+          </header>
+
+          {canManageUsers && (
+            <div className="user-create-row">
+              <input placeholder="邮箱" value={createDraft.email} onChange={(event) => setCreateDraft((draft) => ({ ...draft, email: event.target.value }))} />
+              <input placeholder="显示名称" value={createDraft.displayName} onChange={(event) => setCreateDraft((draft) => ({ ...draft, displayName: event.target.value }))} />
+              <select value={createDraft.role} onChange={(event) => setCreateDraft((draft) => ({ ...draft, role: event.target.value }))}>
+                {roleOptions.map((role) => <option value={role.value} key={role.value}>{role.label}</option>)}
+              </select>
+              <input placeholder="初始密码" type="password" value={createDraft.password} onChange={(event) => setCreateDraft((draft) => ({ ...draft, password: event.target.value }))} />
+              <button type="button" onClick={createUser} disabled={busy === 'create'}>
+                <Plus size={15} />
+                创建
+              </button>
+            </div>
+          )}
+
+          <div className="users-table">
+            {users.map((user) => {
+              const isSelf = user.email === currentUser.email;
+              const rowBusy = busy === (user.id || user.email) || busy === `delete:${user.id || user.email}`;
+              return (
+                <div className={`user-row ${user.active === false ? 'disabled' : ''}`} key={user.id || user.email}>
+                  <div className="user-row-main">
+                    <div className="avatar mini">{avatarInitialsFromUser(user)}</div>
+                    <div>
+                      <strong>{user.displayName || user.name || user.email}</strong>
+                      <em>{user.email}</em>
+                    </div>
+                  </div>
+                  <select value={user.role || 'user'} onChange={(event) => updateUser(user, { role: event.target.value })} disabled={!canManageUsers || rowBusy}>
+                    {roleOptions.map((role) => <option value={role.value} key={role.value}>{role.label}</option>)}
+                  </select>
+                  <button type="button" onClick={() => updateUser(user, { active: user.active === false })} disabled={!canManageUsers || isSelf || rowBusy}>
+                    {user.active === false ? '启用' : '停用'}
+                  </button>
+                  <button className="danger" type="button" title="删除账号" onClick={() => deleteUser(user)} disabled={!canManageUsers || isSelf || rowBusy}>
+                    <X size={15} />
+                  </button>
+                </div>
+              );
+            })}
+            {!users.length && <p className="enterprise-empty">暂无可显示账号。</p>}
+          </div>
+        </article>
+      </div>
+
+      {canManageEnterprise && (
+        <article className="enterprise-panel">
+          <header>
+            <div>
+              <h3>企业动作</h3>
+              <p>记录管理员级同步操作，便于审计本地配置变更。</p>
+            </div>
+          </header>
+          <div className="enterprise-action-row">
+            <button type="button" onClick={() => runEnterpriseAction('syncMcp', '管理员同步 MCP 配置')} disabled={busy === 'syncMcp'}>
+              <Network size={16} />
+              同步 MCP
+            </button>
+            <button type="button" onClick={() => runEnterpriseAction('pushSkill', '管理员同步 SKILLS 配置')} disabled={busy === 'pushSkill'}>
+              <Layers3 size={16} />
+              同步 SKILLS
+            </button>
+            <button type="button" onClick={() => runEnterpriseAction('pushAgentUpdate', '管理员同步 Agent 更新策略')} disabled={busy === 'pushAgentUpdate'}>
+              <Archive size={16} />
+              同步更新
+            </button>
+          </div>
+        </article>
+      )}
+    </section>
   );
 }
 
@@ -3040,6 +3481,7 @@ function SystemSettingsView({
   const tabs = [
     ['mcp', 'MCP', Box, '服务、授权与连接状态'],
     ['skills', 'SKILLS', Layers3, '安装、启用与更新'],
+    ['users', '用户与角色', UsersRound, '本地账号、角色与企业权限'],
     ['diagnostics', '诊断 / 设置', Settings, '健康检查与默认参数']
   ];
   tabs.splice(3, 0, ['evaluations', '评估', ClipboardList, '50 条样本、评分与计时']);
@@ -3091,6 +3533,9 @@ function SystemSettingsView({
         )}
         {activeTab === 'evaluations' && (
           <EvaluationView onUnauthorized={onUnauthorized} />
+        )}
+        {activeTab === 'users' && (
+          <UserRoleSettingsView authStatus={authStatus} onUnauthorized={onUnauthorized} />
         )}
         {activeTab === 'diagnostics' && (
           <DiagnosticsView
@@ -4067,11 +4512,13 @@ function normalizeAgentEventPayload(payload) {
 function normalizeAgentEvent(raw = {}, sequence = 0) {
   const sessionId = raw.sessionId || raw.session_id || raw.session?.id || raw.runId || raw.run_id || raw.id;
   if (!sessionId) return null;
+  const kind = normalizeAgentEventKind(raw.kind || raw.type || raw.event);
+  const rawText = raw.text || raw.content || raw.message || raw.delta || '';
   return {
     ...raw,
     sessionId,
-    kind: normalizeAgentEventKind(raw.kind || raw.type || raw.event),
-    text: raw.text || raw.content || raw.message || raw.delta || '',
+    kind,
+    text: clampLongText(rawText, kind === 'assistant' || kind === 'result' ? MAX_LIVE_ASSISTANT_TEXT_CHARS : FRONT_AGENT_EVENT_TEXT_CHARS),
     __seq: raw.__seq || sequence,
     __queuedAt: raw.__queuedAt || Date.now()
   };
@@ -4110,21 +4557,130 @@ function mergeAssistantText(existing = '', incoming = '') {
   return `${existing}${incoming}`;
 }
 
+function normalizeDuplicateAssistantSegment(value = '') {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[\s`*_~"'“”‘’()[\]{}<>《》【】,，.。!！?？:：;；、-]+/g, '');
+}
+
+function dedupeAdjacentRepeatedSentences(value = '') {
+  const parts = String(value || '').match(/\s+|[^。！？!?\n]+[。！？!?]?/g) || [];
+  const output = [];
+  let lastComparable = '';
+  for (const part of parts) {
+    if (/^\s+$/.test(part)) {
+      output.push(part);
+      continue;
+    }
+    const comparable = normalizeDuplicateAssistantSegment(part);
+    if (comparable && comparable.length >= 16 && comparable === lastComparable) {
+      continue;
+    }
+    output.push(part);
+    if (comparable) lastComparable = comparable;
+  }
+  return output.join('');
+}
+
+function dedupeAdjacentRepeatedLines(value = '') {
+  const lines = String(value || '').split(/\r?\n/);
+  const output = [];
+  let lastComparable = '';
+  for (const line of lines) {
+    const comparable = normalizeDuplicateAssistantSegment(line);
+    if (comparable && comparable.length >= 16 && comparable === lastComparable) {
+      continue;
+    }
+    output.push(line);
+    if (comparable) lastComparable = comparable;
+  }
+  return output.join('\n');
+}
+
+function dedupeAssistantOutputText(value = '') {
+  return dedupeAdjacentRepeatedLines(dedupeAdjacentRepeatedSentences(value));
+}
+
+function isMeaningfulAssistantOverlap(value = '') {
+  const normalized = normalizeDuplicateAssistantSegment(value);
+  if (normalized.length >= 6) return true;
+  const cjkCount = (normalized.match(/[\u4e00-\u9fff]/g) || []).length;
+  return normalized.length >= 4 && cjkCount >= 3;
+}
+
+function assistantTextOverlapLength(existing = '', incoming = '') {
+  const left = String(existing || '');
+  const right = String(incoming || '');
+  const max = Math.min(left.length, right.length, 1600);
+  for (let length = max; length >= 4; length -= 1) {
+    const segment = left.slice(-length);
+    if (right.startsWith(segment) && isMeaningfulAssistantOverlap(segment)) {
+      return length;
+    }
+  }
+  return 0;
+}
+
 function cleanAssistantOutputText(value = '') {
-  return cleanPublicAgentText(String(value || '')
+  return dedupeAssistantOutputText(cleanPublicAgentText(String(value || '')
     .replace(/^\s*\*\s+/gm, '- ')
     .replace(/\*\*([^*\n]+)\*\*/g, '$1')
     .replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '$1')
-    .replace(/\*/g, ''));
+    .replace(/\*/g, '')));
+}
+
+function redactArtifactPathsInResultLine(line = '') {
+  const text = String(line || '').trimEnd();
+  if (!looksLikeNoisyLocalPath(text)) return text;
+  const artifacts = extractArtifactReferences(text);
+  if (!artifacts.length) return '';
+  let next = text;
+  for (const artifact of artifacts) {
+    const replacement = artifact.name || fileNameFromArtifactPath(artifact.path || artifact.raw);
+    if (!replacement) continue;
+    for (const token of [artifact.raw, artifact.path]) {
+      if (token) next = next.split(token).join(replacement);
+    }
+  }
+  return looksLikeNoisyLocalPath(next) ? '' : next;
+}
+
+function cleanResultOutputText(value = '') {
+  const text = String(value || '')
+    .split(/\r?\n/)
+    .map((line) => redactArtifactPathsInResultLine(line))
+    .filter(Boolean)
+    .join('\n');
+  return cleanAssistantOutputText(text);
+}
+
+function isGenericTerminalText(value = '') {
+  const text = cleanAssistantOutputText(value).trim().toLowerCase();
+  return /^(done|complete|completed|success|ok|finished|agent task completed\.?|已完成|完成|任务完成|任务执行完成)$/.test(text);
 }
 
 function mergeAssistantOutputText(existing = '', incoming = '') {
-  return cleanAssistantOutputText(mergeAssistantText(existing, incoming));
-}
-
-function finalizeAssistantOutputText(existing = '', incoming = '') {
   const existingText = cleanAssistantOutputText(existing);
   const incomingText = cleanAssistantOutputText(incoming);
+  const normalizedExisting = normalizeDuplicateAssistantSegment(existingText);
+  const normalizedIncoming = normalizeDuplicateAssistantSegment(incomingText);
+  if (!incomingText) return existingText;
+  if (!existingText) return incomingText;
+  if (normalizedExisting && normalizedIncoming) {
+    if (normalizedIncoming === normalizedExisting) return incomingText.length >= existingText.length ? incomingText : existingText;
+    if (normalizedIncoming.startsWith(normalizedExisting) && normalizedExisting.length >= 16) return incomingText;
+    if (normalizedExisting.endsWith(normalizedIncoming) && normalizedIncoming.length >= 16) return existingText;
+  }
+  const overlap = assistantTextOverlapLength(existingText, incomingText);
+  if (overlap > 0) return cleanAssistantOutputText(`${existingText}${incomingText.slice(overlap)}`);
+  return cleanAssistantOutputText(mergeAssistantText(existingText, incomingText));
+}
+
+function finalizeAssistantOutputText(existing = '', incoming = '', options = {}) {
+  const existingText = cleanAssistantOutputText(existing);
+  const incomingText = options.preserveArtifactLabels
+    ? cleanResultOutputText(incoming)
+    : cleanAssistantOutputText(incoming);
   if (!incomingText) return existingText;
   if (!existingText) return incomingText;
   return mergeAssistantOutputText(existingText, incomingText);
@@ -4605,7 +5161,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
   function updateMessagesForConversation(ownerConversationId, updater) {
     if (!ownerConversationId) return;
     if (String(ownerConversationId) === String(conversationIdRef.current)) {
-      setMessages(updater);
+      setMessages((previousMessages) => {
+        const nextMessages = typeof updater === 'function' ? updater(previousMessages) : updater;
+        return sanitizeLiveMessages(Array.isArray(nextMessages) ? nextMessages : previousMessages);
+      });
       return;
     }
     const stored = loadConversationState(ownerConversationId) || storedEventsByConversation.current.get(ownerConversationId) || {};
@@ -4825,7 +5384,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
             const finalArtifacts = finalArtifactsFromText([nextItem.text, event.text].filter(Boolean).join('\n'));
             nextItem = {
               ...nextItem,
-              text: finalizeAssistantOutputText(nextItem.text, event.text),
+              text: finalizeAssistantOutputText(nextItem.text, event.text, { preserveArtifactLabels: true }),
               finalArtifacts: mergeArtifactReferences([...(nextItem.finalArtifacts || []), ...finalArtifacts]),
               streaming: false,
               status: 'complete',
@@ -4836,12 +5395,13 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
 
           if (event.kind === 'done') {
             const finalArtifacts = finalArtifactsFromText([nextItem.text, event.text].filter(Boolean).join('\n'));
+            const terminalText = isGenericTerminalText(event.text) ? '' : cleanResultOutputText(event.text);
             nextItem = {
               ...nextItem,
               streaming: false,
               status: 'complete',
               error: false,
-              text: cleanAssistantOutputText(nextItem.text || event.text),
+              text: cleanAssistantOutputText(nextItem.text) || terminalText,
               finalArtifacts: finalArtifacts.length
                 ? mergeArtifactReferences([...(nextItem.finalArtifacts || []), ...finalArtifacts])
                 : nextItem.finalArtifacts
@@ -5222,25 +5782,26 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
   function enqueueFollowUpPrompt(cleanPrompt, cleanAttachments = []) {
     const now = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
     const userId = `user-queued-${Date.now()}`;
+    const safePrompt = clampLongText(cleanPrompt, MAX_PENDING_FOLLOWUP_CHARS);
     const cleanReferences = sanitizeComposerReferences(composerReferences);
     const item = {
       id: userId,
       conversationId: conversationIdRef.current,
       claudeSessionId: conversationSessionIdRef.current || conversationIdRef.current,
-      prompt: cleanPrompt,
+      prompt: safePrompt,
       attachments: cleanAttachments,
       references: cleanReferences,
       createdAt: Date.now(),
       time: now
     };
-    pendingFollowUpsRef.current = [...pendingFollowUpsRef.current, item];
-    syncRecentChatFromPrompt(item.conversationId, cleanPrompt || cleanReferences[0]?.name || cleanAttachments[0]?.name || '追加消息');
+    pendingFollowUpsRef.current = [...pendingFollowUpsRef.current, item].slice(-MAX_PENDING_FOLLOWUPS);
+    syncRecentChatFromPrompt(item.conversationId, safePrompt || cleanReferences[0]?.name || cleanAttachments[0]?.name || '追加消息');
     updateMessagesForConversation(item.conversationId, (items) => [
       ...items,
       {
         id: userId,
         role: 'user',
-        text: cleanPrompt || (cleanReferences.length ? '已选中文件片段，请继续修改。' : '已添加附件，请继续分析。'),
+        text: safePrompt || (cleanReferences.length ? '已选中文件片段，请继续修改。' : '已添加附件，请继续分析。'),
         time: now,
         status: 'queued',
         attachments: cleanAttachments,
@@ -5307,7 +5868,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       queuedClaudeSessionId = null,
       queuedReferences = null
     } = options || {};
-    const cleanPrompt = String(text || '').trim();
+    const cleanPrompt = clampComposerPromptText(text).trim();
     const cleanAttachments = serializeAgentAttachments(attachmentList);
     const cleanReferences = sanitizeComposerReferences(Array.isArray(queuedReferences) ? queuedReferences : composerReferences);
     if (!cleanPrompt && !cleanAttachments.length && !cleanReferences.length) return;
@@ -5662,6 +6223,8 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
               ...item,
               streaming: true,
               status: 'thinking',
+              text: '',
+              permissionPromptText: item.permissionPromptText || item.text || '',
               error: false,
               sessionId: requestedSessionId,
               claudeSessionId: conversationSessionIdRef.current || conversationIdRef.current,
@@ -5929,22 +6492,35 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
               显示更多历史（还有 {hiddenMessageCount} 条）
             </button>
           )}
-          {visibleMessages.map((message) => (
-            <ChatMessage
-              key={message.id}
-              message={message}
-              timeline={message.timeline || timeline}
-              sourceMap={backendStatus?.sourceMap}
-              showTrace={message.showTrace === true || message.streaming || message.error || message.status === 'timeout' || message.status === 'cancelled'}
-              onRetry={retryMessage}
-              onPermissionReply={continueFromPermission}
-              onInsertArtifactReference={insertArtifactReference}
-              onOpenArtifact={(artifact) => setFocusArtifact(artifact)}
-              onOpenArtifactLocal={openGeneratedArtifact}
-              onHideArtifact={hideMessageArtifact}
-              onOpenAttachment={openUserAttachment}
-            />
-          ))}
+          {visibleMessages.map((message) => {
+            const hasAnswerPreview = Boolean(
+              cleanAssistantOutputText(message.text || '').trim()
+              || message.finalArtifacts?.length
+              || message.rich
+            );
+            const shouldShowTrace = Boolean(
+              message.error
+              || message.status === 'timeout'
+              || message.status === 'cancelled'
+              || (message.streaming && !hasAnswerPreview)
+            );
+            return (
+              <ChatMessage
+                key={message.id}
+                message={message}
+                timeline={message.timeline || timeline}
+                sourceMap={backendStatus?.sourceMap}
+                showTrace={shouldShowTrace}
+                onRetry={retryMessage}
+                onPermissionReply={continueFromPermission}
+                onInsertArtifactReference={insertArtifactReference}
+                onOpenArtifact={(artifact) => setFocusArtifact(artifact)}
+                onOpenArtifactLocal={openGeneratedArtifact}
+                onHideArtifact={hideMessageArtifact}
+                onOpenAttachment={openUserAttachment}
+              />
+            );
+          })}
           {showJumpLatest && (
             <button className="jump-latest" type="button" onClick={() => scrollMessagesToLatest('smooth')}>
               <ChevronDown size={14} />
@@ -5972,8 +6548,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           setModel={setModel}
           permissionOptions={permissionOptions}
           modelOptions={modelOptions}
-          permissionRequest={pendingPermissionRequest?.request}
-          onPermissionReply={(action) => {
+        />
+        <PermissionConfirmationModal
+          request={pendingPermissionRequest?.request}
+          onReply={(action) => {
             if (pendingPermissionRequest?.message) continueFromPermission(pendingPermissionRequest.message, action);
           }}
         />
@@ -6154,12 +6732,57 @@ function ChatInlineMedia({ url, kind, label }) {
   );
 }
 
-function RichMessageText({ text = '', className = '' }) {
+function ChatInlineArtifactImage({ artifact, label }) {
+  const initialPreviewUrl = safeAttachmentPreviewUrl(artifact.previewUrl || '');
+  const [preview, setPreview] = useState({ status: initialPreviewUrl ? 'ready' : 'loading', url: initialPreviewUrl });
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    const fallbackUrl = safeAttachmentPreviewUrl(artifact.previewUrl || '');
+    setFailed(false);
+    setPreview({ status: fallbackUrl ? 'ready' : 'loading', url: fallbackUrl });
+    previewArtifactWithBridge(artifact).then((result) => {
+      if (cancelled) return;
+      const normalized = normalizeArtifactPreviewResult(result, artifact);
+      setPreview({
+        status: (normalized.previewUrl || fallbackUrl) ? 'ready' : 'unavailable',
+        url: normalized.previewUrl || fallbackUrl,
+        name: normalized.name || artifact.name,
+        path: normalized.path || artifact.path
+      });
+    }).catch(() => {
+      if (!cancelled) setPreview({ status: fallbackUrl ? 'ready' : 'unavailable', url: fallbackUrl });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [artifact.id, artifact.path, artifact.previewUrl]);
+
+  const caption = label || artifact.name || fileNameFromArtifactPath(artifact.path) || '图片';
+  if (preview.status !== 'ready' || !preview.url || failed) {
+    return <span className="chat-rich-artifact-pending">{caption}</span>;
+  }
+  return (
+    <figure className="chat-rich-media image artifact-inline-image" data-testid="chat-inline-artifact-image">
+      <img src={preview.url} alt={caption} loading="lazy" onError={() => setFailed(true)} />
+      <figcaption>
+        <span>{caption}</span>
+      </figcaption>
+    </figure>
+  );
+}
+
+function RichMessageText({ text = '', className = '', imageArtifacts = [] }) {
+  const richImageArtifacts = useMemo(
+    () => (Array.isArray(imageArtifacts) ? imageArtifacts.filter(isImageArtifact) : []),
+    [imageArtifacts]
+  );
   const nodes = useMemo(() => {
     const source = String(text || '');
-    if (!source) return null;
+    if (!source && !richImageArtifacts.length) return null;
     const tokenPattern = /!\[([^\]\n]{0,180})\]\(([^)\n]{1,2000})\)|\[([^\]\n]{1,180})\]\(([^)\n]{1,2000})\)|((?:https?:\/\/|www\.)[^\s<>"'`]+)/gi;
     const output = [];
+    const embeddedImageIds = new Set();
     let cursor = 0;
     let index = 0;
     const pushText = (value) => {
@@ -6176,6 +6799,18 @@ function RichMessageText({ text = '', className = '' }) {
       const cleanUrl = cleanChatUrlToken(match[2] || match[4] || match[5] || '');
       const safeUrl = safeChatExternalUrl(cleanUrl);
       if (!safeUrl) {
+        const imageArtifact = findRichImageArtifact(cleanUrl, label, richImageArtifacts);
+        if (imageArtifact) {
+          embeddedImageIds.add(imageArtifact.id);
+          output.push(
+            <ChatInlineArtifactImage
+              key={`artifact-image-${index += 1}`}
+              artifact={imageArtifact}
+              label={label || imageArtifact.name}
+            />
+          );
+          continue;
+        }
         pushText(full);
         continue;
       }
@@ -6188,8 +6823,19 @@ function RichMessageText({ text = '', className = '' }) {
       }
     }
     pushText(source.slice(cursor));
+    for (const imageArtifact of richImageArtifacts) {
+      if (embeddedImageIds.has(imageArtifact.id)) continue;
+      const autoKey = imageArtifact.id || imageArtifact.path || `auto-${index += 1}`;
+      output.push(
+        <ChatInlineArtifactImage
+          key={`artifact-image-auto-${autoKey}`}
+          artifact={imageArtifact}
+          label={imageArtifact.name}
+        />
+      );
+    }
     return output;
-  }, [text]);
+  }, [text, richImageArtifacts]);
 
   return <div className={`rich-message-text ${className}`}>{nodes}</div>;
 }
@@ -6209,7 +6855,14 @@ function ChatMessage({
 }) {
   const [expanded, setExpanded] = useState(false);
   const [availableArtifactIds, setAvailableArtifactIds] = useState(() => new Set());
-  const rawText = message.role === 'assistant' ? cleanAssistantOutputText(message.text || '') : (message.text || '');
+  const permissionPromptRequest = message.role === 'assistant'
+    ? permissionRequestFromMessage(message, timeline, { includeResolved: true })
+    : null;
+  const rawText = message.role === 'assistant' && permissionPromptRequest
+    ? ''
+    : message.role === 'assistant'
+      ? cleanAssistantOutputText(message.text || '')
+      : (message.text || '');
   const hasVisibleAssistantContent = Boolean(
     rawText.trim()
     || message.error
@@ -6278,6 +6931,7 @@ function ChatMessage({
     );
   }
 
+  if (permissionPromptRequest && !hasVisibleAssistantContent) return null;
   if (message.silentRecovery && !hasVisibleAssistantContent) return null;
 
   const shouldCollapse = message.role === 'assistant' && rawText.length > ASSISTANT_COLLAPSE_CHARS;
@@ -6295,6 +6949,7 @@ function ChatMessage({
         <RichMessageText
           text={displayText}
           className={shouldCollapse && !expanded ? 'assistant-text collapsed' : 'assistant-text'}
+          imageArtifacts={artifactReferences}
         />
         {shouldCollapse && (
           <button className="text-expand" type="button" onClick={() => setExpanded((value) => !value)}>
@@ -6311,9 +6966,9 @@ function ChatMessage({
         <AttachmentIngestionSummary items={message.attachmentIngest || []} />
         <ToolLedgerDisclosure items={message.ledger || []} />
         <RecoveryStateNotice recovery={message.recovery} status={message.status} onRetry={() => onRetry?.(message)} />
-        {showTrace && <InlineAgentTrace timeline={timeline} sourceMap={sourceMap} />}
         {message.rich && <CampaignPerformanceReport />}
-        {message.streaming && <ThinkingIndicator phase={message.status} />}
+        {message.streaming && <ThinkingIndicator phase={message.status} compact={hasVisibleAssistantContent} />}
+        {showTrace && <InlineAgentTrace timeline={timeline} sourceMap={sourceMap} priority="low" />}
         {!message.streaming && message.error && (
           <button className="message-retry-link" type="button" onClick={() => onRetry?.(message)}>
             <Loader2 size={15} />
@@ -6876,13 +7531,13 @@ function MessageStatus({ status = 'complete', time, compact = false }) {
   );
 }
 
-function ThinkingIndicator({ phase = 'thinking' }) {
+function ThinkingIndicator({ phase = 'thinking', compact = false }) {
   const label = phase === 'generating' ? 'AI 正在生成' : 'AI 思考中';
   return (
-    <div className={`thinking-indicator ${phase === 'generating' ? 'generating' : 'thinking'}`}>
+    <div className={`thinking-indicator ${phase === 'generating' ? 'generating' : 'thinking'} ${compact ? 'compact' : ''}`}>
       <span className="thinking-orbit"><i /><i /><i /></span>
       <strong>{label}</strong>
-      <span className="thinking-wave"><i /><i /><i /></span>
+      {!compact && <span className="thinking-wave"><i /><i /><i /></span>}
     </div>
   );
 }
@@ -6976,9 +7631,7 @@ function Composer({
   model,
   setModel,
   permissionOptions,
-  modelOptions,
-  permissionRequest,
-  onPermissionReply
+  modelOptions
 }) {
   const textareaRef = useRef(null);
 
@@ -7000,7 +7653,7 @@ function Composer({
     const textarea = textareaRef.current;
     const currentValue = String(prompt || '');
     if (!textarea) {
-      setPrompt(currentValue ? `${currentValue}\n${nextText}` : nextText);
+      setPrompt(clampComposerPromptText(currentValue ? `${currentValue}\n${nextText}` : nextText));
       return;
     }
     const start = Number.isFinite(textarea.selectionStart) ? textarea.selectionStart : currentValue.length;
@@ -7008,8 +7661,8 @@ function Composer({
     const needsLeadingBreak = start > 0 && currentValue[start - 1] && !/\s/.test(currentValue[start - 1]);
     const needsTrailingBreak = end < currentValue.length && currentValue[end] && !/\s/.test(currentValue[end]);
     const insertion = `${needsLeadingBreak ? '\n' : ''}${nextText}${needsTrailingBreak ? '\n' : ''}`;
-    const updated = `${currentValue.slice(0, start)}${insertion}${currentValue.slice(end)}`;
-    const cursor = start + insertion.length;
+    const updated = clampComposerPromptText(`${currentValue.slice(0, start)}${insertion}${currentValue.slice(end)}`);
+    const cursor = Math.min(start + insertion.length, updated.length);
     setPrompt(updated);
     window.setTimeout(() => {
       textarea.focus();
@@ -7070,12 +7723,11 @@ function Composer({
     >
       <AttachmentPreviewList attachments={attachments} onRemove={onRemoveAttachment} />
       <ComposerReferenceTray references={references} onRemove={onRemoveReference} />
-      <ComposerPermissionPopover request={permissionRequest} onReply={onPermissionReply} />
       <textarea
         data-testid="chat-input"
         ref={textareaRef}
         value={prompt}
-        onChange={(event) => setPrompt(event.target.value)}
+        onChange={(event) => setPrompt(clampComposerPromptText(event.target.value))}
         onKeyDown={(event) => {
           if (event.key === 'Enter' && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.isComposing) {
             event.preventDefault();
@@ -7908,9 +8560,19 @@ function isHighRiskPermissionText(value = '') {
   return localRisk || genericPermission;
 }
 
-function permissionRequestFromMessage(message = {}, timeline = []) {
+function summarizePermissionRequestText(value = '') {
+  const text = cleanAssistantOutputText(value)
+    .replace(/请\s*回复\s*[“"']?(继续|确认|同意|允许一次)[”"']?[^。！？!?\n]*(。|！|!|？|\?)?/gi, '')
+    .replace(/用户确认[“"']?(是|继续|确认|允许一次)[”"']?后继续[。！？!?\s]*/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) return 'EcoreX 请求执行一步本地操作，请确认是否允许。';
+  return text.length > 180 ? `${text.slice(0, 180)}...` : text;
+}
+
+function permissionRequestFromMessage(message = {}, timeline = [], options = {}) {
   if (message.role !== 'assistant') return null;
-  if (message.permissionDecision?.status) return null;
+  if (!options.includeResolved && message.permissionDecision?.status) return null;
   const text = cleanAssistantOutputText(message.text || '');
   const traceText = publicTraceItems(timeline).slice(-5).map((item) => `${item[0]} ${item[1]}`).join(' ');
   const candidate = `${text} ${traceText}`;
@@ -7918,11 +8580,12 @@ function permissionRequestFromMessage(message = {}, timeline = []) {
   if (!/(是否|要不要|请确认|允许|授权|等待确认|确认后|继续执行|可以执行|approve|permission)/i.test(candidate)) return null;
   return {
     title: '需要确认本地操作',
-    description: '这一步可能涉及文件、命令或系统目录访问。确认后我会在当前会话继续执行，不会新开会话。'
+    description: '这一步可能涉及文件、命令或系统目录访问。请选择是否允许，EcoreX 会在当前会话继续执行，不会新开会话。',
+    action: summarizePermissionRequestText(text || traceText)
   };
 }
 
-function InlineAgentTrace({ timeline = [], sourceMap }) {
+function InlineAgentTrace({ timeline = [], sourceMap, priority = 'normal' }) {
   const [expanded, setExpanded] = useState(false);
   const publicItems = useMemo(() => publicTraceItems(timeline), [timeline]);
   const summary = useMemo(() => traceDisclosureSummary(publicItems), [publicItems]);
@@ -7932,7 +8595,7 @@ function InlineAgentTrace({ timeline = [], sourceMap }) {
   if (!summary) return null;
 
   return (
-    <div className={`agent-trace ${expanded ? 'expanded' : 'compact'}`}>
+    <div className={`agent-trace ${expanded ? 'expanded' : 'compact'} ${priority === 'low' ? 'low-priority' : ''}`}>
       <button className="agent-trace-summary" type="button" onClick={() => setExpanded((value) => !value)}>
         <span className={`agent-trace-node ${summary.tone}`} />
         <strong>{summary.label}</strong>
@@ -7980,19 +8643,28 @@ function InlinePermissionRequest({ request, onReply }) {
   );
 }
 
-function ComposerPermissionPopover({ request, onReply }) {
+function PermissionConfirmationModal({ request, onReply }) {
   if (!request) return null;
   return (
-    <div className="composer-permission-popover inline-permission-request">
-      <ShieldCheck size={18} />
-      <div>
-        <strong>{request.title}</strong>
-        <span>{request.description}</span>
-      </div>
-      <div className="inline-permission-actions">
-        <button type="button" onClick={() => onReply?.('允许一次')}>允许一次</button>
-        <button type="button" onClick={() => onReply?.('拒绝')}>拒绝</button>
-        <button type="button" onClick={() => onReply?.('只做计划')}>只做计划</button>
+    <div className="permission-confirmation-backdrop" role="presentation">
+      <div
+        className="permission-confirmation-dialog inline-permission-request"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="permission-confirmation-title"
+        data-testid="permission-confirmation-modal"
+      >
+        <ShieldCheck size={18} />
+        <div>
+          <strong id="permission-confirmation-title">{request.title}</strong>
+          {request.action && <span className="permission-confirmation-action">{request.action}</span>}
+          <span>{request.description}</span>
+        </div>
+        <div className="inline-permission-actions">
+          <button type="button" onClick={() => onReply?.('允许一次')}>允许一次</button>
+          <button type="button" onClick={() => onReply?.('拒绝')}>拒绝</button>
+          <button type="button" onClick={() => onReply?.('只做计划')}>只做计划</button>
+        </div>
       </div>
     </div>
   );

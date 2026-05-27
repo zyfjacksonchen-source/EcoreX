@@ -60,6 +60,16 @@
       color: #111827;
     }
 
+    #viewer.office-docx {
+      padding: 14px;
+      background: #737982;
+    }
+
+    #viewer.office-pptx {
+      padding: 18px;
+      background: #05070b;
+    }
+
     #status {
       position: fixed;
       inset: 0;
@@ -91,13 +101,84 @@
       min-height: 100%;
     }
 
+    #viewer.office-docx .vue-office-docx,
+    #viewer.office-docx .vue-office-docx-main {
+      height: auto;
+      min-height: 100%;
+      overflow: visible;
+      background: #737982 !important;
+    }
+
+    #viewer.office-docx .docx-wrapper {
+      min-height: calc(100vh - 28px);
+      padding: 18px 0 !important;
+      background: #737982 !important;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 18px;
+    }
+
+    #viewer.office-docx .docx-wrapper > section.docx,
+    #viewer.office-docx section.docx {
+      width: min(816px, calc(100vw - 56px)) !important;
+      min-height: 1056px !important;
+      margin: 0 auto 18px !important;
+      padding: 72px !important;
+      background: #fff !important;
+      color: #111827 !important;
+      box-shadow: 0 14px 34px rgba(15, 23, 42, 0.32) !important;
+    }
+
+    @media (max-width: 720px) {
+      #viewer.office-docx .docx-wrapper > section.docx,
+      #viewer.office-docx section.docx {
+        width: calc(100vw - 28px) !important;
+        min-height: calc((100vw - 28px) * 1.294) !important;
+        padding: 32px !important;
+      }
+    }
+
     .pptx-preview-wrapper {
       box-sizing: border-box;
       max-width: 100%;
+      display: grid;
+      justify-items: center;
+      gap: 18px;
     }
 
     .pptx-preview-slide-wrapper {
-      box-shadow: 0 14px 34px rgba(15, 23, 42, 0.18);
+      background: #fff;
+      box-shadow: 0 14px 34px rgba(0, 0, 0, 0.36);
+    }
+
+    .office-fallback {
+      width: min(860px, 100%);
+      min-height: min(520px, calc(100vh - 64px));
+      margin: 0 auto;
+      padding: 28px;
+      border: 1px solid rgba(231, 238, 247, 0.16);
+      border-radius: 8px;
+      background: #fff;
+      color: #111827;
+      box-shadow: 0 14px 34px rgba(0, 0, 0, 0.36);
+      font: 16px/1.65 "Segoe UI", Arial, sans-serif;
+    }
+
+    .office-fallback h1 {
+      margin: 0 0 16px;
+      font-size: 22px;
+      line-height: 1.3;
+    }
+
+    .office-fallback p {
+      margin: 0 0 10px;
+      white-space: pre-wrap;
+    }
+
+    .office-fallback .muted {
+      color: #64748b;
+      font-size: 13px;
     }
 
     .x-spreadsheet-scrollbar {
@@ -183,7 +264,7 @@
             type: 'ecorex-vue-office-preview',
             kind,
             name,
-            detail: detail || ''
+            detail: typeof detail === 'string' ? detail : JSON.stringify(detail || {})
           }, '*');
         } catch {
           // Parent notifications are best-effort only.
@@ -210,9 +291,136 @@
         selectionTimer = window.setTimeout(notifySelection, 160);
       });
 
+      function escapeHtml(value) {
+        return String(value || '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      function decodeXmlText(value) {
+        return String(value || '')
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&quot;/g, '"')
+          .replace(/&apos;/g, "'")
+          .replace(/&amp;/g, '&');
+      }
+
+      async function inflateZipEntry(bytes) {
+        if (!bytes || !bytes.length) return bytes;
+        if (typeof DecompressionStream !== 'function') return null;
+        try {
+          const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+          return new Uint8Array(await new Response(stream).arrayBuffer());
+        } catch {
+          return null;
+        }
+      }
+
+      async function readZipTextEntries(arrayBuffer, matcher) {
+        const bytes = new Uint8Array(arrayBuffer);
+        const view = new DataView(arrayBuffer);
+        const decoder = new TextDecoder('utf-8');
+        const entries = [];
+        let offset = 0;
+        while (offset + 30 <= bytes.length && view.getUint32(offset, true) === 0x04034b50) {
+          const flags = view.getUint16(offset + 6, true);
+          const method = view.getUint16(offset + 8, true);
+          const compressedSize = view.getUint32(offset + 18, true);
+          const nameLength = view.getUint16(offset + 26, true);
+          const extraLength = view.getUint16(offset + 28, true);
+          const nameStart = offset + 30;
+          const dataStart = nameStart + nameLength + extraLength;
+          const name = decoder.decode(bytes.slice(nameStart, nameStart + nameLength));
+          if ((flags & 0x08) || !compressedSize || dataStart + compressedSize > bytes.length) break;
+          const compressed = bytes.slice(dataStart, dataStart + compressedSize);
+          let data = null;
+          if (method === 0) data = compressed;
+          if (method === 8) data = await inflateZipEntry(compressed);
+          if (data && matcher(name)) entries.push({ name, text: decoder.decode(data) });
+          offset = dataStart + compressedSize;
+        }
+        return entries;
+      }
+
+      function extractOfficeXmlText(xml = '') {
+        const matches = [...String(xml || '').matchAll(/<(?:a|w):t\b[^>]*>([\s\S]*?)<\/(?:a|w):t>/g)];
+        return matches
+          .map((match) => decodeXmlText(match[1]).replace(/\s+/g, ' ').trim())
+          .filter(Boolean);
+      }
+
+      async function extractOfficeText(arrayBuffer, documentType) {
+        const matcher = documentType === 'pptx'
+          ? (entryName) => /^ppt\/slides\/slide\d+\.xml$/i.test(entryName)
+          : (entryName) => /^word\/document\.xml$/i.test(entryName);
+        const entries = await readZipTextEntries(arrayBuffer, matcher);
+        return entries.flatMap((entry) => extractOfficeXmlText(entry.text));
+      }
+
+      function hasMeaningfulPptxRender() {
+        const slideCandidates = viewer.querySelectorAll('.pptx-preview-slide-wrapper, [class*="slide"]');
+        const hasSizedSlide = Array.from(slideCandidates).some((element) => {
+          const rect = element.getBoundingClientRect();
+          return rect.width > 160 && rect.height > 90;
+        });
+        const hasVisualContent = Boolean(viewer.querySelector('canvas, svg, img, video'));
+        const hasText = String(viewer.textContent || '').trim().length > 0;
+        return hasSizedSlide && (hasVisualContent || hasText);
+      }
+
+      async function waitForPreviewPaint() {
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        await new Promise((resolve) => window.setTimeout(resolve, 180));
+      }
+
+      async function waitWithTimeout(promise, timeoutMs, timeoutMessage) {
+        let timeoutId = 0;
+        const timeout = new Promise((resolve) => {
+          timeoutId = window.setTimeout(() => resolve({ ok: false, error: timeoutMessage }), timeoutMs);
+        });
+        const result = await Promise.race([
+          Promise.resolve(promise)
+            .then(() => ({ ok: true, error: '' }))
+            .catch((error) => ({ ok: false, error: String(error && error.message || error || 'Preview failed') })),
+          timeout
+        ]);
+        window.clearTimeout(timeoutId);
+        return result;
+      }
+
+      async function renderOfficeFallback(arrayBuffer, documentType, reason) {
+        const textItems = await extractOfficeText(arrayBuffer, documentType).catch(() => []);
+        const uniqueItems = [...new Set(textItems)].slice(0, 80);
+        const paragraphs = uniqueItems.length
+          ? uniqueItems.map((item) => `<p>${escapeHtml(item)}</p>`).join('')
+          : '<p class="muted">未能提取到可展示文本。可以使用“本地打开”查看完整文件。</p>';
+        viewer.innerHTML = [
+          '<article class="office-fallback">',
+          `<h1>${documentType === 'pptx' ? 'PPT 内容预览' : '文档内容预览'}</h1>`,
+          reason ? `<p class="muted">${escapeHtml(reason)}</p>` : '',
+          paragraphs,
+          '</article>'
+        ].join('');
+      }
+
+      function renderDetail(documentType, fallback) {
+        return {
+          documentType,
+          fallback: Boolean(fallback),
+          text: String(viewer.innerText || viewer.textContent || '').slice(0, 800),
+          childCount: viewer.children.length,
+          className: viewer.className
+        };
+      }
+
       async function run() {
         if (!src || !type) throw new Error('Preview URL or document type is missing.');
         const sourceUrl = previewSourceUrl(src);
+        viewer.classList.add(`office-${type}`);
         let previewer = null;
         if (type === 'pdf') {
           previewer = window.jsPreviewPdf.init(viewer, {
@@ -228,24 +436,18 @@
           if (!window.pptxPreview || typeof window.pptxPreview.init !== 'function') {
             throw new Error('PPTX preview engine is unavailable.');
           }
-          const width = Math.max(640, Math.min(1180, viewer.clientWidth || window.innerWidth || 960));
-          previewer = window.pptxPreview.init(viewer, {
-            width,
-            height: Math.round(width * 9 / 16),
-            mode: 'scroll'
-          });
           const response = await fetch(sourceUrl, { cache: 'no-store' });
           if (!response.ok) throw new Error(`Preview source request failed: ${response.status}`);
           const data = await response.arrayBuffer();
-          await previewer.preview(data);
+          await renderOfficeFallback(data, 'pptx', '');
           setStatus('', 'ready');
-          notify('rendered');
+          notify('rendered', renderDetail('pptx', true));
           return;
         }
         if (!previewer || typeof previewer.preview !== 'function') throw new Error('Preview engine is unavailable.');
         await previewer.preview(sourceUrl);
         setStatus('', 'ready');
-        notify('rendered');
+        notify('rendered', renderDetail(type, false));
       }
 
       run().catch((error) => {

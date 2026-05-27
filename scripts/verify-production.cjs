@@ -785,12 +785,11 @@ check('window default, preload and minimum size guardrails', () => {
   const renderer = readText('src/main.jsx');
   const app = readText('src/App.jsx');
   includesAll(renderer, ['window.__ecorexFinishStartup', 'finishStartupLoader', '15000'], 'renderer startup loader completion fallback');
-  includesAll(app, ['startupReadyRef', 'const startupWork = Promise.allSettled', 'refreshAuthStatus()', 'refreshBackend()', 'withStartupTimeout(startupWork)', 'window.__ecorexFinishStartup?.()'], 'renderer startup loader waits for auth/backend preload');
-  const directStartupFinally = /const startupWork = Promise\.allSettled\(\[[\s\S]*?refreshAuthStatus\(\),[\s\S]*?refreshBackend\(\)[\s\S]*?\]\)\.finally\(\(\) => \{[\s\S]*?window\.__ecorexFinishStartup\?\.\(\);/.test(app);
-  const wrappedStartupFinally = /const startupWork = Promise\.allSettled\(\[[\s\S]*?refreshAuthStatus\(\),[\s\S]*?refreshBackend\(\)[\s\S]*?\]\);[\s\S]*?withStartupTimeout\(startupWork\)\.finally\(\(\) => \{[\s\S]*?window\.__ecorexFinishStartup\?\.\(\);/.test(app);
+  includesAll(app, ['startupReadyRef', 'const startupWork = refreshAuthStatus()', '.then(() => Promise.allSettled', 'refreshBackend()', 'preloadStartupState()', 'withStartupTimeout(startupWork)', 'window.__ecorexFinishStartup?.()'], 'renderer startup loader waits for auth/backend preload');
+  const authFirstStartupFinally = /const startupWork = refreshAuthStatus\(\)[\s\S]*?\.then\(\(\) => Promise\.allSettled\(\[[\s\S]*?refreshBackend\(\),[\s\S]*?preloadStartupState\(\)[\s\S]*?\]\)\);[\s\S]*?withStartupTimeout\(startupWork\)\.finally\(\(\) => \{[\s\S]*?window\.__ecorexFinishStartup\?\.\(\);/.test(app);
   assert(
-    directStartupFinally || wrappedStartupFinally,
-    'renderer startup loader must finish after the auth/backend preload promise settles.'
+    authFirstStartupFinally,
+    'renderer startup loader must recover auth before backend/preload and finish after those promises settle.'
   );
   assertMatches(
     main,

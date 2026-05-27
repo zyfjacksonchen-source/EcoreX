@@ -2,11 +2,11 @@
   "schema": "ecorex.vue-office.vendor.v1",
   "sourceDir": "C:\\vue-office-master",
   "sourceLibDir": "C:\\vue-office-master\\demo-cdn\\js-preview-lib",
-  "generatedAt": "2026-05-26T06:22:29.820Z",
+  "generatedAt": "2026-05-27T05:10:32.035Z",
   "assets": [
     {
       "path": "vendor/vue-office/index.html",
-      "bytes": 7840
+      "bytes": 15337
     },
     {
       "path": "vendor/vue-office/js-preview-lib/docx.css",
@@ -22,7 +22,7 @@
     },
     {
       "path": "vendor/vue-office/js-preview-lib/excel.umd.js",
-      "bytes": 1814360
+      "bytes": 1814363
     },
     {
       "path": "vendor/vue-office/js-preview-lib/pdf.umd.js",

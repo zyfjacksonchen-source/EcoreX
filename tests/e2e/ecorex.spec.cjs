@@ -1,10 +1,23 @@
 const base = require('@playwright/test');
+const electronPath = require('electron');
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
-const { closeEcorex, launchEcorex, login } = require('./helpers/electron-app.cjs');
+const { closeEcorex, launchEcorex, login, repoRoot } = require('./helpers/electron-app.cjs');
 
 const { expect } = base;
+const { _electron: electron } = base;
+
+const appUrlPattern = /^http:\/\/127\.0\.0\.1:5188(?:\/|$)/;
+const secretEnvKeys = [
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'OPENAI_API_KEY',
+  'ECOREX_LICENSE_KEY',
+  'ANTHROPIC_BASE_URL',
+  'OPENAI_BASE_URL',
+  'ECOREX_REAL_MODEL_API_KEY'
+];
 
 const test = base.test.extend({
   ecorex: async ({}, use) => {
@@ -16,6 +29,90 @@ const test = base.test.extend({
     }
   }
 });
+
+function relaunchEnv(paths) {
+  const noProxy = [...new Set([
+    ...String(process.env.NO_PROXY || process.env.no_proxy || '').split(',').map((item) => item.trim()).filter(Boolean),
+    '127.0.0.1',
+    'localhost'
+  ])].join(',');
+  const env = {
+    ...process.env,
+    APPDATA: paths.appData,
+    LOCALAPPDATA: paths.localAppData,
+    TEMP: paths.temp,
+    TMP: paths.temp,
+    ECOREX_E2E: '1',
+    ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
+    NO_PROXY: noProxy,
+    no_proxy: noProxy
+  };
+  delete env.ELECTRON_RUN_AS_NODE;
+  for (const key of secretEnvKeys) delete env[key];
+  return env;
+}
+
+async function waitForRelaunchedAppWindow(electronApp, timings = {}) {
+  const deadline = Date.now() + 30 * 1000;
+  let lastUrls = [];
+
+  while (Date.now() < deadline) {
+    const windows = electronApp.windows();
+    lastUrls = windows.map((page) => page.url());
+    for (const page of windows) {
+      if (!appUrlPattern.test(page.url())) continue;
+      await page.waitForLoadState('domcontentloaded');
+      await page.locator('.app-frame').waitFor({ state: 'visible' });
+      page.setDefaultTimeout(10 * 1000);
+      timings.rendererReadyAt = Date.now();
+      if (timings.launchStartedAt) {
+        timings.rendererReadyMs = timings.rendererReadyAt - timings.launchStartedAt;
+      }
+      return page;
+    }
+
+    await Promise.race([
+      electronApp.waitForEvent('window', { timeout: 500 }).catch(() => null),
+      new Promise((resolve) => setTimeout(resolve, 250))
+    ]);
+  }
+
+  throw new Error(`Timed out waiting for relaunched EcoreX renderer window. Seen windows: ${lastUrls.join(', ') || 'none'}`);
+}
+
+async function relaunchEcorexWithPaths(paths) {
+  const timings = { launchStartedAt: Date.now() };
+  const electronApp = await electron.launch({
+    executablePath: electronPath,
+    args: ['--no-sandbox', `--user-data-dir=${paths.userData}`, '.'],
+    cwd: repoRoot,
+    env: relaunchEnv(paths),
+    timeout: 45 * 1000
+  });
+  timings.electronLaunchMs = Date.now() - timings.launchStartedAt;
+  const page = await waitForRelaunchedAppWindow(electronApp, timings);
+  return { electronApp, page, paths, timings };
+}
+
+async function logoutFromProfile(page) {
+  await page.locator('.profile-trigger').click();
+  await page.locator('.profile-logout').click();
+  await expect(page.locator('[data-testid="login-form"], form.login-panel').first()).toBeVisible({ timeout: 10_000 });
+}
+
+async function ensureLoggedIn(page, credentials) {
+  const shell = page.locator('[data-testid="app-shell"], .app-shell').first();
+  const loginForm = page.locator('[data-testid="login-form"], form.login-panel').first();
+  const state = await Promise.race([
+    shell.waitFor({ state: 'visible', timeout: 20_000 }).then(() => 'shell').catch(() => null),
+    loginForm.waitFor({ state: 'visible', timeout: 20_000 }).then(() => 'login').catch(() => null)
+  ]);
+  if (state === 'login') {
+    await login(page, credentials);
+    return;
+  }
+  await expect(shell).toBeVisible({ timeout: 20_000 });
+}
 
 async function openDiagnostics(page) {
   await page.locator('.profile-trigger').click();
@@ -119,6 +216,178 @@ async function startChatMediaServer() {
     server,
     baseUrl: `http://127.0.0.1:${server.address().port}`
   };
+}
+
+const crc32Table = new Uint32Array(256);
+for (let index = 0; index < 256; index += 1) {
+  let value = index;
+  for (let bit = 0; bit < 8; bit += 1) {
+    value = (value & 1) ? (0xedb88320 ^ (value >>> 1)) : (value >>> 1);
+  }
+  crc32Table[index] = value >>> 0;
+}
+
+function crc32(buffer) {
+  let value = 0xffffffff;
+  for (const byte of buffer) value = crc32Table[(value ^ byte) & 0xff] ^ (value >>> 8);
+  return (value ^ 0xffffffff) >>> 0;
+}
+
+function zipStored(entries) {
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+  const dosTime = 0;
+  const dosDate = ((2026 - 1980) << 9) | (1 << 5) | 1;
+
+  for (const entry of entries) {
+    const nameBuffer = Buffer.from(entry.name, 'utf8');
+    const dataBuffer = Buffer.isBuffer(entry.data) ? entry.data : Buffer.from(String(entry.data || ''), 'utf8');
+    const checksum = crc32(dataBuffer);
+
+    const localHeader = Buffer.alloc(30);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(0, 6);
+    localHeader.writeUInt16LE(0, 8);
+    localHeader.writeUInt16LE(dosTime, 10);
+    localHeader.writeUInt16LE(dosDate, 12);
+    localHeader.writeUInt32LE(checksum, 14);
+    localHeader.writeUInt32LE(dataBuffer.length, 18);
+    localHeader.writeUInt32LE(dataBuffer.length, 22);
+    localHeader.writeUInt16LE(nameBuffer.length, 26);
+    localHeader.writeUInt16LE(0, 28);
+    localParts.push(localHeader, nameBuffer, dataBuffer);
+
+    const centralHeader = Buffer.alloc(46);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(20, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt16LE(0, 8);
+    centralHeader.writeUInt16LE(0, 10);
+    centralHeader.writeUInt16LE(dosTime, 12);
+    centralHeader.writeUInt16LE(dosDate, 14);
+    centralHeader.writeUInt32LE(checksum, 16);
+    centralHeader.writeUInt32LE(dataBuffer.length, 20);
+    centralHeader.writeUInt32LE(dataBuffer.length, 24);
+    centralHeader.writeUInt16LE(nameBuffer.length, 28);
+    centralHeader.writeUInt16LE(0, 30);
+    centralHeader.writeUInt16LE(0, 32);
+    centralHeader.writeUInt16LE(0, 34);
+    centralHeader.writeUInt16LE(0, 36);
+    centralHeader.writeUInt32LE(0, 38);
+    centralHeader.writeUInt32LE(offset, 42);
+    centralParts.push(centralHeader, nameBuffer);
+
+    offset += localHeader.length + nameBuffer.length + dataBuffer.length;
+  }
+
+  const centralOffset = offset;
+  const centralSize = centralParts.reduce((total, part) => total + part.length, 0);
+  const endRecord = Buffer.alloc(22);
+  endRecord.writeUInt32LE(0x06054b50, 0);
+  endRecord.writeUInt16LE(0, 4);
+  endRecord.writeUInt16LE(0, 6);
+  endRecord.writeUInt16LE(entries.length, 8);
+  endRecord.writeUInt16LE(entries.length, 10);
+  endRecord.writeUInt32LE(centralSize, 12);
+  endRecord.writeUInt32LE(centralOffset, 16);
+  endRecord.writeUInt16LE(0, 20);
+  return Buffer.concat([...localParts, ...centralParts, endRecord]);
+}
+
+function createDocxFixture() {
+  return zipStored([
+    {
+      name: '[Content_Types].xml',
+      data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'
+    },
+    {
+      name: '_rels/.rels',
+      data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'
+    },
+    {
+      name: 'word/document.xml',
+      data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>EcoreX docx preview fixture</w:t></w:r></w:p><w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>'
+    }
+  ]);
+}
+
+function createXlsxFixture() {
+  return zipStored([
+    {
+      name: '[Content_Types].xml',
+      data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>'
+    },
+    {
+      name: '_rels/.rels',
+      data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'
+    },
+    {
+      name: 'xl/workbook.xml',
+      data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Forecast" sheetId="1" r:id="rId1"/></sheets></workbook>'
+    },
+    {
+      name: 'xl/_rels/workbook.xml.rels',
+      data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'
+    },
+    {
+      name: 'xl/styles.xml',
+      data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>'
+    },
+    {
+      name: 'xl/worksheets/sheet1.xml',
+      data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:C3"/><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Channel</t></is></c><c r="B1" t="inlineStr"><is><t>Revenue</t></is></c><c r="C1" t="inlineStr"><is><t>Confidence</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>Search</t></is></c><c r="B2"><v>128000</v></c><c r="C2"><v>0.91</v></c></row><row r="3"><c r="A3" t="inlineStr"><is><t>Social</t></is></c><c r="B3"><v>96000</v></c><c r="C3"><v>0.86</v></c></row></sheetData></worksheet>'
+    }
+  ]);
+}
+
+function createPptxFixture() {
+  return zipStored([
+    {
+      name: '[Content_Types].xml',
+      data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/><Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/></Types>'
+    },
+    {
+      name: '_rels/.rels',
+      data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/></Relationships>'
+    },
+    {
+      name: 'ppt/presentation.xml',
+      data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst><p:sldSz cx="9144000" cy="5143500"/></p:presentation>'
+    },
+    {
+      name: 'ppt/_rels/presentation.xml.rels',
+      data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/></Relationships>'
+    },
+    {
+      name: 'ppt/slides/slide1.xml',
+      data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/><p:sp><p:nvSpPr/><p:spPr/><p:txBody><a:bodyPr/><a:p><a:r><a:t>EcoreX pptx preview fixture</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>'
+    }
+  ]);
+}
+
+function writeSupportedPreviewFixtures(root) {
+  fs.mkdirSync(root, { recursive: true });
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lS5nWQAAAABJRU5ErkJggg==', 'base64');
+  const files = [
+    ['sample.txt', 'EcoreX text preview fixture\n'],
+    ['sample.md', '# EcoreX markdown preview fixture\n'],
+    ['sample.html', '<main><h1>EcoreX html preview fixture</h1></main>'],
+    ['sample.json', JSON.stringify({ fixture: 'EcoreX json preview fixture', ok: true }, null, 2)],
+    ['sample.csv', 'channel,revenue\nsearch,128000\nsocial,96000\n'],
+    ['sample.png', png],
+    ['sample.svg', '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12"><rect width="12" height="12" fill="#ff5a00"/></svg>'],
+    ['sample.pdf', '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Count 0/Kids[]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n'],
+    ['sample.docx', createDocxFixture()],
+    ['sample.xlsx', createXlsxFixture()],
+    ['sample.pptx', createPptxFixture()]
+  ];
+  return files.map(([name, data]) => {
+    const target = path.join(root, name);
+    fs.writeFileSync(target, data);
+    return { name, path: target.replace(/\\/g, '/') };
+  });
 }
 
 function samePath(left, right) {
@@ -372,6 +641,115 @@ test.describe('EcoreX Agent Electron E2E', () => {
     expect(memberResult.ownProfile.ok).toBe(true);
     expect(memberResult.forbiddenUser.forbidden || memberResult.forbiddenUser.ok === false).toBeTruthy();
     expect(memberResult.forbiddenEnterprise.forbidden || memberResult.forbiddenEnterprise.ok === false).toBeTruthy();
+  });
+
+  test('allows a created local account to reopen persisted chats and artifacts after relaunch', async ({ ecorex }) => {
+    let { electronApp, page, paths } = ecorex;
+    await login(page);
+
+    const credentials = {
+      email: `e2e.persist.${Date.now()}@ecorex.local`,
+      password: 'EcoreX123!'
+    };
+    const created = await page.evaluate(async ({ email, password }) => window.ecorex.createUser({
+      email,
+      displayName: 'E2E Persisted Member',
+      role: 'user',
+      password
+    }), credentials);
+    expect(created.ok).toBe(true);
+    expect(created.user.email).toBe(credentials.email);
+
+    await logoutFromProfile(page);
+    await login(page, credentials);
+    const memberStatus = await page.evaluate(async () => window.ecorex.getAuthStatus());
+    expect(memberStatus.loggedIn).toBe(true);
+    expect(memberStatus.email || memberStatus.user?.email).toBe(credentials.email);
+    expect(memberStatus.role || memberStatus.user?.role).toBe('user');
+
+    const userData = await appUserDataPath(electronApp);
+    const artifactName = 'persisted-report.md';
+    const artifactPath = path.join(userData, 'workspace', 'persistent-artifacts', artifactName);
+    fs.mkdirSync(path.dirname(artifactPath), { recursive: true });
+    fs.writeFileSync(artifactPath, '# Persistent artifact\nsaved after relaunch\n', 'utf8');
+    const normalizedArtifactPath = artifactPath.replace(/\\/g, '/');
+    const prompt = 'persist artifact relaunch';
+    const assistantText = 'Persistent artifact result';
+
+    await electronApp.evaluate(({ ipcMain, BrowserWindow }, payload) => {
+      ipcMain.removeHandler('agent:run');
+      ipcMain.handle('agent:run', (event, runPayload) => {
+        const win = BrowserWindow.fromWebContents(event.sender);
+        setTimeout(() => {
+          if (!win || win.isDestroyed()) return;
+          win.webContents.send('agent:events', {
+            sessionId: runPayload.sessionId,
+            events: [
+              {
+                sessionId: runPayload.sessionId,
+                kind: 'result',
+                status: 'completed',
+                text: `${payload.assistantText}\n- [${payload.artifactName}](${payload.artifactPath})`
+              },
+              { sessionId: runPayload.sessionId, kind: 'done', status: 'completed', text: 'done' }
+            ]
+          });
+        }, 40);
+        return {
+          ok: true,
+          sessionId: runPayload.sessionId,
+          initialEvent: { sessionId: runPayload.sessionId, kind: 'status', status: 'started', text: 'started' }
+        };
+      });
+    }, { artifactName, artifactPath: normalizedArtifactPath, assistantText });
+
+    await page.locator('[data-testid="chat-input"]').fill(prompt);
+    await page.locator('[data-testid="chat-input"]').press('Enter');
+    await expect(page.locator('.user-bubble').filter({ hasText: prompt }).first()).toBeVisible();
+    await expect(page.locator('.assistant-card').filter({ hasText: assistantText }).first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-testid="artifact-file-card"], .artifact-thumb-card').filter({ hasText: artifactName }).first()).toBeVisible({ timeout: 15_000 });
+
+    await expect.poll(async () => page.evaluate(({ prompt, assistantText, artifactName }) => {
+      const recent = JSON.parse(localStorage.getItem('ecorex-recent-chats') || '[]');
+      const conversations = JSON.parse(localStorage.getItem('ecorex-chat-conversations') || '{}');
+      const row = recent.find((item) => String(item.title || '').includes(prompt));
+      const state = row ? conversations[row.id] : null;
+      return Boolean(
+        row
+        && state
+        && (state.messages || []).some((message) => message.role === 'user' && String(message.text || '').includes(prompt))
+        && (state.messages || []).some((message) =>
+          message.role === 'assistant'
+          && String(message.text || '').includes(assistantText)
+          && (message.finalArtifacts || []).some((artifact) => String(artifact.name || '').includes(artifactName))
+        )
+      );
+    }, { prompt, assistantText, artifactName }), { timeout: 10_000 }).toBe(true);
+
+    await ecorex.electronApp.close();
+    const relaunched = await relaunchEcorexWithPaths(paths);
+    ecorex.electronApp = relaunched.electronApp;
+    ecorex.page = relaunched.page;
+    electronApp = relaunched.electronApp;
+    page = relaunched.page;
+
+    await ensureLoggedIn(page, credentials);
+    const restartedStatus = await page.evaluate(async () => window.ecorex.getAuthStatus());
+    expect(restartedStatus.loggedIn).toBe(true);
+    expect(restartedStatus.email || restartedStatus.user?.email).toBe(credentials.email);
+
+    const recentRow = page.locator('.recent-row').filter({ hasText: prompt }).first();
+    await expect(recentRow).toBeVisible({ timeout: 15_000 });
+    await recentRow.locator('.recent-open').click();
+    await expect(page.locator('.user-bubble').filter({ hasText: prompt }).first()).toBeVisible();
+    await expect(page.locator('.assistant-card').filter({ hasText: assistantText }).first()).toBeVisible();
+
+    const restoredArtifact = page.locator('[data-testid="artifact-file-card"], .artifact-thumb-card').filter({ hasText: artifactName }).first();
+    await expect(restoredArtifact).toBeVisible({ timeout: 15_000 });
+    await restoredArtifact.locator('[data-testid="artifact-file-open"], .artifact-thumb-open').first().click();
+    await expect(page.locator('.chat-layout')).toHaveClass(/preview-focus/);
+    await expect(page.locator('.artifact-focus-panel')).toContainText(artifactName);
+    await expect(page.locator('.artifact-focus-panel .artifact-text-preview')).toContainText('saved after relaunch');
   });
 
   test('installs and toggles managed SKILLS through super administrator push', async ({ ecorex }) => {
@@ -932,7 +1310,44 @@ test.describe('EcoreX Agent Electron E2E', () => {
     await expect(assistant).toBeVisible({ timeout: 15_000 });
     await expect(assistant).toContainText('这是已经生成好的笔记正文');
     await expect(assistant).toContainText('当前会话没有可用的文生图模型接口');
+    await expect(page.locator('body')).not.toContainText('Agent task completed.');
     await expect(page.locator('.running-session-strip')).toBeHidden({ timeout: 15_000 });
+  });
+
+  test('deduplicates repeated assistant safety fallback sentences', async ({ ecorex }) => {
+    const { electronApp, page } = ecorex;
+    await login(page);
+
+    await electronApp.evaluate(({ ipcMain, BrowserWindow }) => {
+      ipcMain.removeHandler('agent:run');
+      ipcMain.handle('agent:run', (event, payload) => {
+        const win = BrowserWindow.fromWebContents(event.sender);
+        const prefix = '刚才执行被安全策略拦截，原因是命令里包含不必要的 ExecutionPolicy Bypass；我将改用不绕过执行策略的方式';
+        const suffix = '不绕过执行策略的方式创建同样的 4 个测试文件。';
+        setTimeout(() => {
+          if (!win || win.isDestroyed()) return;
+          win.webContents.send('agent:events', {
+            sessionId: payload.sessionId,
+            events: [
+              { sessionId: payload.sessionId, kind: 'assistant', status: 'streaming', text: prefix },
+              { sessionId: payload.sessionId, kind: 'result', status: 'completed', text: `${suffix}${suffix}` },
+              { sessionId: payload.sessionId, kind: 'done', status: 'completed', text: 'Agent task completed.' }
+            ]
+          });
+        }, 30);
+        return { ok: true, sessionId: payload.sessionId, status: 'running' };
+      });
+    });
+
+    await page.locator('[data-testid="chat-input"]').fill('创建测试文件');
+    await page.locator('[data-testid="chat-input"]').press('Enter');
+
+    const assistant = page.locator('.assistant-card').filter({ hasText: 'ExecutionPolicy Bypass' }).first();
+    await expect(assistant).toBeVisible({ timeout: 10_000 });
+    const text = await assistant.textContent();
+    expect((text.match(/刚才执行被安全策略拦截/g) || []).length).toBe(1);
+    expect((text.match(/不绕过执行策略的方式/g) || []).length).toBe(1);
+    await expect(page.locator('body')).not.toContainText('Agent task completed.');
   });
 
   test('shows recent empty state after deleting the last conversation and starts the next chat as a new session', async ({ ecorex }) => {
@@ -1010,6 +1425,127 @@ test.describe('EcoreX Agent Electron E2E', () => {
     expect(runPayloads[1].claudeSessionId).toBe(runPayloads[1].conversationId);
   });
 
+  test('keeps parallel agent runs isolated across conversations', async ({ ecorex }) => {
+    const { electronApp, page } = ecorex;
+    await login(page);
+
+    await electronApp.evaluate(({ ipcMain, BrowserWindow }) => {
+      global.__ecorexParallelRuns = [];
+      ipcMain.removeHandler('agent:run');
+      ipcMain.handle('agent:run', (event, payload) => {
+        const win = BrowserWindow.fromWebContents(event.sender);
+        const sessionId = payload.sessionId || `parallel-session-${global.__ecorexParallelRuns.length + 1}`;
+        global.__ecorexParallelRuns.push({
+          rawPrompt: payload.rawPrompt || payload.userPrompt || '',
+          sessionId,
+          conversationId: payload.conversationId,
+          claudeSessionId: payload.claudeSessionId,
+          windowId: win?.id || 0,
+          completed: false
+        });
+        return {
+          ok: true,
+          sessionId,
+          initialEvent: { sessionId, kind: 'status', status: 'started', text: `started ${payload.rawPrompt || payload.userPrompt || ''}` }
+        };
+      });
+    });
+
+    const alphaPrompt = 'parallel alpha prompt';
+    const betaPrompt = 'parallel beta prompt';
+    const alphaResult = 'alpha result isolated';
+    const betaResult = 'beta result isolated';
+
+    await page.locator('[data-testid="chat-input"]').fill(alphaPrompt);
+    await page.locator('[data-testid="chat-input"]').press('Enter');
+    await expect(page.locator('.user-bubble').filter({ hasText: alphaPrompt }).first()).toBeVisible();
+    await expect.poll(async () => electronApp.evaluate(() => (global.__ecorexParallelRuns || []).length), { timeout: 10_000 }).toBe(1);
+
+    await page.locator('.new-chat').click();
+    await expect(page.locator('[data-testid="chat-input"]')).toHaveValue('');
+    await page.locator('[data-testid="chat-input"]').fill(betaPrompt);
+    await page.locator('[data-testid="chat-input"]').press('Enter');
+    await expect(page.locator('.user-bubble').filter({ hasText: betaPrompt }).first()).toBeVisible();
+
+    await expect.poll(async () => electronApp.evaluate(() => (global.__ecorexParallelRuns || []).length), { timeout: 10_000 }).toBe(2);
+    const runPayloads = await electronApp.evaluate(() => global.__ecorexParallelRuns || []);
+    expect(runPayloads[0].sessionId).not.toBe(runPayloads[1].sessionId);
+    expect(runPayloads[0].conversationId).not.toBe(runPayloads[1].conversationId);
+    expect(runPayloads[0].claudeSessionId).toBe(runPayloads[0].conversationId);
+    expect(runPayloads[1].claudeSessionId).toBe(runPayloads[1].conversationId);
+
+    async function completeParallelRun(runKey, text) {
+      return electronApp.evaluate(({ BrowserWindow }, payload) => {
+        const key = String(payload.runKey || '');
+        const run = (global.__ecorexParallelRuns || []).find((item) => (
+          !item.completed
+          && [item.sessionId, item.conversationId, item.claudeSessionId, item.rawPrompt].map((value) => String(value || '')).includes(key)
+        ));
+        if (!run) return null;
+        run.completed = true;
+        const win = BrowserWindow.fromId(run.windowId);
+        if (!win || win.isDestroyed()) return { ...run, sent: false };
+        win.webContents.send('agent:events', {
+          sessionId: run.sessionId,
+          events: [
+            { sessionId: run.sessionId, kind: 'result', status: 'completed', text: payload.text },
+            { sessionId: run.sessionId, kind: 'done', status: 'completed', text: 'done' }
+          ]
+        });
+        return { ...run, sent: true };
+      }, { runKey, text });
+    }
+
+    const completedBeta = await completeParallelRun(runPayloads[1].sessionId, betaResult);
+    expect(completedBeta?.sent).toBe(true);
+    await expect(page.locator('.assistant-card').filter({ hasText: betaResult }).first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('.assistant-card').filter({ hasText: alphaResult })).toHaveCount(0);
+
+    const alphaRow = page.locator('.recent-row').filter({ hasText: alphaPrompt }).first();
+    await expect(alphaRow).toBeVisible();
+    await alphaRow.locator('.recent-open').click();
+    await expect(page.locator('.user-bubble').filter({ hasText: alphaPrompt }).first()).toBeVisible();
+    await expect(page.locator('.assistant-card').filter({ hasText: betaResult })).toHaveCount(0);
+
+    const completedAlpha = await completeParallelRun(runPayloads[0].sessionId, alphaResult);
+    expect(completedAlpha?.sent).toBe(true);
+    await expect(page.locator('.assistant-card').filter({ hasText: alphaResult }).first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('.assistant-card').filter({ hasText: betaResult })).toHaveCount(0);
+
+    const betaRow = page.locator('.recent-row').filter({ hasText: betaPrompt }).first();
+    await expect(betaRow).toBeVisible();
+    await betaRow.locator('.recent-open').click();
+    await expect(page.locator('.user-bubble').filter({ hasText: betaPrompt }).first()).toBeVisible();
+    await expect(page.locator('.assistant-card').filter({ hasText: betaResult }).first()).toBeVisible();
+    await expect(page.locator('.assistant-card').filter({ hasText: alphaResult })).toHaveCount(0);
+    await expect.poll(async () => electronApp.evaluate(() => (global.__ecorexParallelRuns || []).every((item) => item.completed)), { timeout: 10_000 }).toBe(true);
+
+    await expect.poll(async () => page.evaluate(({ alphaPrompt, betaPrompt, alphaResult, betaResult }) => {
+      const conversations = Object.values(JSON.parse(localStorage.getItem('ecorex-chat-conversations') || '{}'));
+      const findByPrompt = (prompt) => conversations.find((conversation) => (
+        conversation
+        && Array.isArray(conversation.messages)
+        && conversation.messages.some((message) => message.role === 'user' && String(message.text || '').includes(prompt))
+      ));
+      const alpha = findByPrompt(alphaPrompt);
+      const beta = findByPrompt(betaPrompt);
+      const textFor = (conversation) => (conversation?.messages || []).map((message) => String(message.text || '')).join('\n');
+      const alphaText = textFor(alpha);
+      const betaText = textFor(beta);
+      return {
+        alphaHasAlpha: alphaText.includes(alphaResult),
+        alphaHasBeta: alphaText.includes(betaResult),
+        betaHasBeta: betaText.includes(betaResult),
+        betaHasAlpha: betaText.includes(alphaResult)
+      };
+    }, { alphaPrompt, betaPrompt, alphaResult, betaResult }), { timeout: 10_000 }).toEqual({
+      alphaHasAlpha: true,
+      alphaHasBeta: false,
+      betaHasBeta: true,
+      betaHasAlpha: false
+    });
+  });
+
   test('continues permission confirmations as a hidden rerun without adding a user prompt', async ({ ecorex }) => {
     const { electronApp, page } = ecorex;
     await login(page);
@@ -1044,10 +1580,11 @@ test.describe('EcoreX Agent Electron E2E', () => {
     await page.locator('[data-testid="chat-input"]').press('Enter');
     await expect(page.locator('.user-bubble')).toHaveCount(1);
     await expect(page.locator('.user-bubble').filter({ hasText: '查看本机磁盘剩余空间' })).toHaveCount(1);
-    await expect(page.locator('.inline-permission-request')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('permission-confirmation-modal')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('.assistant-card').filter({ hasText: '请确认是否允许' })).toHaveCount(0);
     await expect(page.locator('.inline-permission-actions button').filter({ hasText: '允许一次' })).toBeVisible();
     await page.locator('.inline-permission-actions button').filter({ hasText: '允许一次' }).click();
-    await expect(page.locator('.inline-permission-request')).toHaveCount(0);
+    await expect(page.getByTestId('permission-confirmation-modal')).toHaveCount(0);
     await expect(page.locator('.user-bubble')).toHaveCount(1);
     await expect(page.locator('.user-bubble').filter({ hasText: '允许一次' })).toHaveCount(0);
     await expect(page.locator('.user-bubble').filter({ hasText: '权限确认回执' })).toHaveCount(0);
@@ -1933,6 +2470,147 @@ test.describe('EcoreX Agent Electron E2E', () => {
       'strategy-deck.pptx'
     ]);
     expect(externalOpenCalls).toEqual([]);
+  });
+
+  test('previews locally generated supported file formats through the real preview bridge', async ({ ecorex }) => {
+    const { electronApp, page } = ecorex;
+    await login(page);
+
+    const userData = await appUserDataPath(electronApp);
+    const fixtures = writeSupportedPreviewFixtures(path.join(userData, 'sessions', 'preview-fixtures'));
+    const results = await page.evaluate(async (items) => {
+      const previews = {};
+      for (const item of items) {
+        previews[item.name] = await window.ecorex.previewFile({
+          path: item.path,
+          source: 'assistant-artifact'
+        });
+      }
+      return previews;
+    }, fixtures);
+
+    for (const fixture of fixtures) {
+      expect.soft(results[fixture.name]?.ok, `${fixture.name} preview ok`).toBe(true);
+      expect.soft(results[fixture.name]?.previewable, `${fixture.name} previewable`).toBe(true);
+    }
+
+    expect(results['sample.txt'].content).toContain('EcoreX text preview fixture');
+    expect(results['sample.md'].renderMode).toBe('markdown');
+    expect(results['sample.html'].renderMode).toBe('sandbox-srcdoc');
+    expect(results['sample.json'].renderMode).toBe('json');
+    expect(results['sample.csv'].renderMode).toBe('csv');
+    expect(results['sample.png'].dataUrl).toMatch(/^data:image\/png;base64,/);
+    expect(results['sample.svg'].dataUrl).toMatch(/^data:image\/svg\+xml;base64,/);
+
+    for (const name of ['sample.pdf', 'sample.docx', 'sample.xlsx', 'sample.pptx']) {
+      expect.soft(results[name].renderMode, `${name} render mode`).toBe('vue-office');
+      expect.soft(results[name].previewUrl, `${name} preview url`).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/index\.html/);
+    }
+    expect(results['sample.xlsx'].previewUrl).toContain('type=excel');
+
+    const officeEvents = await page.evaluate((previewItems) => Promise.all(previewItems.map((item) => new Promise((resolve) => {
+      const iframe = document.createElement('iframe');
+      iframe.id = `${item.name}-vue-office-smoke`;
+      iframe.src = item.previewUrl;
+      iframe.style.cssText = 'position:fixed;left:-10000px;top:0;width:960px;height:620px;border:0;opacity:0.01;pointer-events:none;';
+      const cleanup = () => {
+        window.clearTimeout(timeout);
+        window.removeEventListener('message', onMessage);
+        iframe.remove();
+      };
+      const timeout = window.setTimeout(() => {
+        cleanup();
+        resolve({ kind: 'timeout', detail: '', name: item.name });
+      }, 15000);
+      const onMessage = (event) => {
+        const data = event.data || {};
+        if (data.type !== 'ecorex-vue-office-preview' || data.name !== item.name) return;
+        cleanup();
+        resolve({ kind: data.kind, detail: data.detail || '', name: data.name });
+      };
+      window.addEventListener('message', onMessage);
+      document.body.appendChild(iframe);
+    }))), [
+      { name: 'sample.docx', previewUrl: results['sample.docx'].previewUrl },
+      { name: 'sample.xlsx', previewUrl: results['sample.xlsx'].previewUrl },
+      { name: 'sample.pptx', previewUrl: results['sample.pptx'].previewUrl }
+    ]);
+
+    const eventByName = Object.fromEntries(officeEvents.map((event) => [event.name, event]));
+    for (const name of ['sample.docx', 'sample.xlsx', 'sample.pptx']) {
+      expect(eventByName[name].detail || '').not.toContain('anchors');
+      expect(eventByName[name].kind, JSON.stringify(eventByName[name])).toBe('rendered');
+    }
+    expect(JSON.parse(eventByName['sample.docx'].detail || '{}').text).toContain('EcoreX docx preview fixture');
+    expect(JSON.parse(eventByName['sample.pptx'].detail || '{}').text).toContain('EcoreX pptx preview fixture');
+  });
+
+  test('renders generated image artifacts inline inside assistant rich text', async ({ ecorex }) => {
+    const { electronApp, page, paths } = ecorex;
+    await login(page);
+
+    const artifactRoot = path.join(paths.root, 'inline-image-artifacts');
+    fs.mkdirSync(artifactRoot, { recursive: true });
+    const imagePath = path.join(artifactRoot, 'inline-creative.png').replace(/\\/g, '/');
+    const imageDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+
+    await electronApp.evaluate(({ ipcMain, BrowserWindow }, payload) => {
+      ipcMain.removeHandler('file:preview');
+      ipcMain.handle('file:preview', (_event, previewPayload = {}) => {
+        const targetPath = String(previewPayload.path || previewPayload.filePath || '').replace(/\\/g, '/');
+        if (targetPath === payload.imagePath) {
+          return {
+            ok: true,
+            previewable: true,
+            kind: 'image',
+            path: targetPath,
+            name: 'inline-creative.png',
+            mimeType: 'image/png',
+            previewUrl: payload.imageDataUrl,
+            sizeBytes: 68,
+            metadata: { width: 1, height: 1 }
+          };
+        }
+        return { ok: false, reason: 'not-found' };
+      });
+
+      ipcMain.removeHandler('agent:run');
+      ipcMain.handle('agent:run', (event, runPayload) => {
+        const win = BrowserWindow.fromWebContents(event.sender);
+        setTimeout(() => {
+          if (!win || win.isDestroyed()) return;
+          win.webContents.send('agent:events', {
+            sessionId: runPayload.sessionId,
+            events: [
+              {
+                sessionId: runPayload.sessionId,
+                kind: 'result',
+                status: 'completed',
+                text: [
+                  'Inline generated image:',
+                  `- [inline-creative.png](${payload.imagePath})`
+                ].join('\n')
+              },
+              { sessionId: runPayload.sessionId, kind: 'done', status: 'completed', text: 'done' }
+            ]
+          });
+        }, 40);
+        return {
+          ok: true,
+          sessionId: runPayload.sessionId,
+          initialEvent: { sessionId: runPayload.sessionId, kind: 'status', status: 'started', text: 'started' }
+        };
+      });
+    }, { imagePath, imageDataUrl });
+
+    await page.locator('[data-testid="chat-input"]').fill('show inline generated image');
+    await page.locator('[data-testid="chat-input"]').press('Enter');
+
+    const assistantCard = page.locator('.assistant-card').filter({ hasText: 'Inline generated image' }).first();
+    await expect(assistantCard).toBeVisible({ timeout: 10_000 });
+    await expect(assistantCard.locator('[data-testid="chat-inline-artifact-image"] img')).toBeVisible({ timeout: 10_000 });
+    await expect(assistantCard.locator('[data-testid="chat-inline-artifact-image"] img')).toHaveAttribute('src', /^data:image\/png;base64,/);
+    await expect(assistantCard.locator('.artifact-thumb-card').filter({ hasText: 'inline-creative.png' })).toBeVisible();
   });
 
   test('allows same-session AI artifacts outside the workspace without previewing arbitrary local files', async ({ ecorex }) => {

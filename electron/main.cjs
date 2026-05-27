@@ -106,6 +106,7 @@ const MAX_AGENT_EVENT_BATCH = 40;
 const AGENT_EVENT_FLUSH_MS = 75;
 const AGENT_EVENT_PAUSE_HIGH_WATER = 180;
 const AGENT_EVENT_RESUME_LOW_WATER = 80;
+const MAX_TOOL_LEDGER_ACTIVE_ENTRIES = 200;
 const MAX_MANAGED_ITEMS = 500;
 const MAX_SKILLS_PER_PLUGIN = 200;
 const MAX_SKILL_PACK_COPY_BYTES = 80 * 1024 * 1024;
@@ -174,8 +175,8 @@ const CLAUDE_AUTO_ALLOWED_TOOL_SET = 'WebFetch,WebSearch,Task,TodoRead,TodoWrite
 const PUBLIC_PERMISSION_MODES = ['default', FULL_ACCESS_PERMISSION_MODE];
 const WINDOW_CONTROL_ACTIONS = new Set(['minimize', 'maximize', 'close']);
 const USER_ROLE_PERMISSIONS = Object.freeze({
-  super_admin: ['profile:update', 'users:manage', 'enterprise:manage', 'settings:manage', 'agent:operate'],
-  admin: ['profile:update', 'enterprise:manage', 'settings:manage', 'agent:operate'],
+  super_admin: ['profile:update', 'users:manage', 'enterprise:manage', 'settings:manage', 'secrets:manage', 'models:manage', 'mcp:manage', 'skills:manage', 'agent:operate'],
+  admin: ['profile:update', 'enterprise:manage', 'settings:manage', 'secrets:manage', 'models:manage', 'mcp:manage', 'skills:manage', 'agent:operate'],
   user: ['profile:update', 'agent:operate']
 });
 const USER_ROLES = new Set(Object.keys(USER_ROLE_PERMISSIONS));
@@ -1834,6 +1835,27 @@ function writeAuthUsers(users = []) {
   return envelope.users;
 }
 
+function authUsersUnavailableError(error) {
+  const wrapped = new Error('Local auth users could not be read.');
+  wrapped.code = 'E_AUTH_USERS_UNREADABLE';
+  if (error) wrapped.cause = error;
+  return wrapped;
+}
+
+function publicAuthUsersUnavailableSession(options = {}) {
+  const summary = {
+    ok: true,
+    loggedIn: false,
+    setupRequired: false,
+    authMode: 'local-owner',
+    authUnavailable: true,
+    authLocked: true,
+    error: 'Local auth users could not be read.'
+  };
+  if (options.includeToken) summary.token = '';
+  return summary;
+}
+
 function legacyOwnerAsUser(identity = readAuthIdentity()) {
   if (!identity?.email) return null;
   return normalizeAuthUser({
@@ -1857,22 +1879,27 @@ function readAuthUsers(options = {}) {
   try {
     const file = authUsersPath();
     if (!fs.existsSync(file)) {
+      const legacyIdentityExists = fs.existsSync(authIdentityPath());
       const legacyUser = legacyOwnerAsUser();
       if (legacyUser && options.migrate !== false) return writeAuthUsers([legacyUser]);
+      if (legacyIdentityExists) throw new Error('Legacy auth identity could not be read.');
       return [];
     }
     const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
     const envelope = raw?.encoding === 'safeStorage/v1' ? decryptLocalPayload(raw.data) : raw;
-    const users = (Array.isArray(envelope?.users) ? envelope.users : Array.isArray(envelope) ? envelope : [])
+    const rawUsers = Array.isArray(envelope?.users) ? envelope.users : Array.isArray(envelope) ? envelope : null;
+    if (!rawUsers) throw new Error('Invalid auth users file.');
+    const users = rawUsers
       .map((user, index) => normalizeAuthUser(user, index))
       .filter(Boolean);
+    if (!users.length) throw new Error('Auth users file contains no valid users.');
     if (users.length && raw?.encoding !== 'safeStorage/v1' && options.migrate !== false) {
       return writeAuthUsers(users);
     }
     return users;
   } catch (error) {
-    writeLog('warn', 'Failed to read auth users', { error: error?.message });
-    return [];
+    writeLog('error', 'Failed to read auth users; local sign-in locked', { error: error?.message });
+    throw authUsersUnavailableError(error);
   }
 }
 
@@ -1934,7 +1961,12 @@ function forbiddenResponse(permission = '') {
 }
 
 function publicAuthSession(session, options = {}) {
-  const users = readAuthUsers({ migrate: true });
+  let users = [];
+  try {
+    users = readAuthUsers({ migrate: true });
+  } catch {
+    return publicAuthUsersUnavailableSession(options);
+  }
   const setupRequired = !users.length;
   if (!session?.token) {
     return {
@@ -5382,6 +5414,14 @@ function toolLedgerMapForSession(sessionId) {
   return map;
 }
 
+function pruneToolLedgerMap(map) {
+  while (map.size > MAX_TOOL_LEDGER_ACTIVE_ENTRIES) {
+    const oldestKey = map.keys().next().value;
+    if (!oldestKey) break;
+    map.delete(oldestKey);
+  }
+}
+
 function toolLedgerStartEvent(sessionId, tool = {}) {
   const toolUseId = String(tool.id || crypto.randomUUID());
   const toolName = String(tool.name || 'tool').trim() || 'tool';
@@ -5393,7 +5433,9 @@ function toolLedgerStartEvent(sessionId, tool = {}) {
     inputSummary: summarizeToolInput(tool.input || {}),
     startedAt: now
   };
-  toolLedgerMapForSession(sessionId).set(toolUseId, entry);
+  const sessionMap = toolLedgerMapForSession(sessionId);
+  sessionMap.set(toolUseId, entry);
+  pruneToolLedgerMap(sessionMap);
   return {
     type: 'tool',
     phase: 'start',
@@ -5409,6 +5451,8 @@ function toolLedgerFinishEvent(sessionId, toolUseId, result = {}) {
   const sessionMap = toolLedgerMapForSession(sessionId);
   const rawToolUseId = String(toolUseId || '').trim();
   const started = sessionMap.get(rawToolUseId);
+  if (rawToolUseId) sessionMap.delete(rawToolUseId);
+  if (!sessionMap.size) agentToolLedger.delete(String(sessionId || 'global'));
   const now = Date.now();
   const toolName = result.toolName || started?.toolName || 'tool';
   const failed = Boolean(result.failed || result.isError || result.error);
@@ -5927,12 +5971,12 @@ function agentFinalKind(status) {
 }
 
 function agentFinalText(status, details = {}) {
-  if (status === 'completed') return 'Agent task completed.';
-  if (status === 'cancelled') return 'Agent task cancelled.';
-  if (status === 'timeout') return `Agent task timed out${details.reason === 'idle-timeout' ? ' while idle' : ''}.`;
+  if (status === 'completed') return 'done';
+  if (status === 'cancelled') return '任务已取消。';
+  if (status === 'timeout') return details.reason === 'idle-timeout' ? '任务空闲超时。' : '任务已超时。';
   if (details.code !== undefined && details.code !== null) return '本地执行进程异常退出。请检查任务状态后重试。';
-  if (details.reason) return `Agent task stopped: ${details.reason}.`;
-  return 'Agent task failed.';
+  if (details.reason) return `任务已停止：${details.reason}。`;
+  return '任务执行失败。';
 }
 
 function finalizeAgentSession(sessionId, entry, details = {}) {
@@ -10212,7 +10256,7 @@ function assertAuthorizedIpc(event, channel, args = []) {
 handleSafe('backend:status', collectBackendStatus);
 handleSafe('backend:capabilities', collectCapabilities);
 handleSafe('auth:login', (_event, payload) => loginAuth(payload));
-handleSafe('auth:logout', logoutAuth);
+handleSafe('auth:logout', logoutAuth, { authRequired: true });
 handleSafe('auth:status', (_event, payload = {}) =>
   publicAuthSession(readAuthSession({ refresh: Boolean(payload?.refresh) }), {
     includeToken: Boolean(payload?.includeToken)
@@ -10229,17 +10273,17 @@ handleSafe('secrets:status', (_event, payload) => {
   return secretsStatus();
 }, { authRequired: true });
 handleSafe('secrets:list', (_event, payload) => listSecrets(payload), { authRequired: true });
-handleSafe('secrets:set', (_event, payload) => setSecret(payload), { authRequired: true });
-handleSafe('secrets:delete', (_event, payload) => deleteSecret(payload), { authRequired: true });
+handleSafe('secrets:set', (_event, payload) => setSecret(payload), { authRequired: true, requiredPermission: 'secrets:manage' });
+handleSafe('secrets:delete', (_event, payload) => deleteSecret(payload), { authRequired: true, requiredPermission: 'secrets:manage' });
 handleSafe('listModelProfiles', (_event, payload) => listModelProfiles(payload), { authRequired: true });
-handleSafe('saveModelProfile', (_event, payload) => saveModelProfile(payload), { authRequired: true });
-handleSafe('deleteModelProfile', (_event, payload) => deleteModelProfile(payload), { authRequired: true });
-handleSafe('activateModelProfile', (_event, payload) => activateModelProfile(payload), { authRequired: true });
+handleSafe('saveModelProfile', (_event, payload) => saveModelProfile(payload), { authRequired: true, requiredPermission: 'models:manage' });
+handleSafe('deleteModelProfile', (_event, payload) => deleteModelProfile(payload), { authRequired: true, requiredPermission: 'models:manage' });
+handleSafe('activateModelProfile', (_event, payload) => activateModelProfile(payload), { authRequired: true, requiredPermission: 'models:manage' });
 handleSafe('testModelProfile', (_event, payload) => testModelProfile(payload), { authRequired: true });
 handleSafe('modelAdapter:testProfile', (_event, payload) => testModelProfile(payload), { authRequired: true });
 handleSafe('modelAdapter:generateImage', (_event, payload) => generateModelProfileImage(payload), { authRequired: true });
 handleSafe('settings:get', () => ({ ok: true, settings: writeSettings(readSettings()) }), { authRequired: true });
-handleSafe('settings:update', (_event, payload) => ({ ok: true, settings: updateSettings(payload) }), { authRequired: true });
+handleSafe('settings:update', (_event, payload) => ({ ok: true, settings: updateSettings(payload) }), { authRequired: true, requiredPermission: 'settings:manage' });
 handleSafe('evaluation:list', () => listEvaluationStatus(), { authRequired: true });
 handleSafe('evaluation:run', (_event, payload) => runEvaluationStatus(payload), { authRequired: true, requiredPermission: 'enterprise:manage' });
 handleSafe('startup:health', collectStartupHealth, { authRequired: true });
@@ -10266,21 +10310,21 @@ handleSafe('project:archive', (_event, payload) => archiveProject(payload), { au
 handleSafe('project:delete', (_event, payload) => deleteProject(payload), { authRequired: true });
 handleSafe('project:status', (_event, payload) => projectStatus(payload), { authRequired: true });
 handleSafe('project:open-folder', (_event, payload) => openProjectFolder(payload), { authRequired: true });
-handleSafe('mcp:list', (_event, payload) => collectMcpStatus(payload));
-handleSafe('mcp:status', (_event, payload) => collectMcpStatus(payload));
-handleSafe('mcp:refresh', (_event, payload) => collectMcpStatus(payload));
+handleSafe('mcp:list', (_event, payload) => collectMcpStatus(payload), { authRequired: true });
+handleSafe('mcp:status', (_event, payload) => collectMcpStatus(payload), { authRequired: true });
+handleSafe('mcp:refresh', (_event, payload) => collectMcpStatus(payload), { authRequired: true });
 handleSafe('mcp:get', (_event, payload) => getMcpServer(payload), { authRequired: true });
-handleSafe('mcp:update', (_event, payload) => updateMcpConfig(payload), { authRequired: true });
-handleSafe('mcp:update-config', (_event, payload) => updateMcpConfig(payload), { authRequired: true });
-handleSafe('mcp:enable', () => unsupportedMcpToggle('enable'), { authRequired: true });
-handleSafe('mcp:disable', () => unsupportedMcpToggle('disable'), { authRequired: true });
-handleSafe('skill:list', (_event, payload) => collectSkillStatus(payload));
-handleSafe('skill:status', (_event, payload) => collectSkillStatus(payload));
-handleSafe('skill:refresh', (_event, payload) => collectSkillStatus(payload));
-handleSafe('skill:install', (_event, payload, authContext) => installManagedSkillPack(payload, authContext), { authRequired: true });
-handleSafe('skill:enable', (_event, payload) => updateManagedSkillEnabled(payload, true), { authRequired: true });
-handleSafe('skill:disable', (_event, payload) => updateManagedSkillEnabled(payload, false), { authRequired: true });
-handleSafe('skill:update', (_event, payload, authContext) => updateManagedSkillPack(payload, authContext), { authRequired: true });
+handleSafe('mcp:update', (_event, payload) => updateMcpConfig(payload), { authRequired: true, requiredPermission: 'mcp:manage' });
+handleSafe('mcp:update-config', (_event, payload) => updateMcpConfig(payload), { authRequired: true, requiredPermission: 'mcp:manage' });
+handleSafe('mcp:enable', () => unsupportedMcpToggle('enable'), { authRequired: true, requiredPermission: 'mcp:manage' });
+handleSafe('mcp:disable', () => unsupportedMcpToggle('disable'), { authRequired: true, requiredPermission: 'mcp:manage' });
+handleSafe('skill:list', (_event, payload) => collectSkillStatus(payload), { authRequired: true });
+handleSafe('skill:status', (_event, payload) => collectSkillStatus(payload), { authRequired: true });
+handleSafe('skill:refresh', (_event, payload) => collectSkillStatus(payload), { authRequired: true });
+handleSafe('skill:install', (_event, payload, authContext) => installManagedSkillPack(payload, authContext), { authRequired: true, requiredPermission: 'skills:manage' });
+handleSafe('skill:enable', (_event, payload) => updateManagedSkillEnabled(payload, true), { authRequired: true, requiredPermission: 'skills:manage' });
+handleSafe('skill:disable', (_event, payload) => updateManagedSkillEnabled(payload, false), { authRequired: true, requiredPermission: 'skills:manage' });
+handleSafe('skill:update', (_event, payload, authContext) => updateManagedSkillPack(payload, authContext), { authRequired: true, requiredPermission: 'skills:manage' });
 handleSafe('agent:run', (event, payload) => runAgent(payload, { ownerId: event.sender.id }), { authRequired: true });
 handleSafe('agent:stop', (_event, payload) => {
   const sessionId = typeof payload === 'object' && payload ? payload.sessionId : payload;
