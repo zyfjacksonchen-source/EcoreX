@@ -1556,7 +1556,7 @@ select,
 }
 
 .sidebar-project-row.editing {
-  grid-template-columns: minmax(0, 1fr) 24px;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .sidebar-project-session-row {
@@ -1646,7 +1646,8 @@ select,
   background: rgba(255, 68, 68, 0.16);
 }
 
-.sidebar-project-session-rename-form {
+.sidebar-project-session-rename-form,
+.sidebar-project-rename-form {
   grid-column: 1 / -1;
   min-width: 0;
   display: grid;
@@ -1655,7 +1656,8 @@ select,
   align-items: center;
 }
 
-.sidebar-project-session-rename-form input {
+.sidebar-project-session-rename-form input,
+.sidebar-project-rename-form input {
   min-width: 0;
   height: 30px;
   border: 1px solid rgba(255, 90, 0, 0.35);
@@ -1666,7 +1668,8 @@ select,
   outline: 0;
 }
 
-.sidebar-project-session-rename-form button {
+.sidebar-project-session-rename-form button,
+.sidebar-project-rename-form button {
   width: 28px;
   height: 28px;
   border: 1px solid var(--line);
@@ -1677,7 +1680,8 @@ select,
   place-items: center;
 }
 
-.sidebar-project-session-rename-form button:hover {
+.sidebar-project-session-rename-form button:hover,
+.sidebar-project-rename-form button:hover {
   border-color: rgba(255, 90, 0, 0.42);
   color: var(--orange);
 }
@@ -4742,6 +4746,88 @@ select,
   top: -6px;
 }
 
+.project-file-mention-menu {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 58px;
+  z-index: 260;
+  max-height: 260px;
+  border: 1px solid rgba(231, 238, 247, 0.14);
+  border-radius: 10px;
+  background: #101822;
+  box-shadow: var(--shadow-high);
+  overflow: auto;
+  padding: 6px;
+}
+
+.project-file-mention-menu header {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 6px 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.project-file-mention-menu header em {
+  color: var(--subtle);
+  font-style: normal;
+}
+
+.project-file-mention-menu > button {
+  width: 100%;
+  min-height: 44px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  text-align: left;
+}
+
+.project-file-mention-menu > button:hover,
+.project-file-mention-menu > button.active {
+  background: rgba(255, 90, 0, 0.12);
+  color: var(--orange);
+}
+
+.project-file-mention-menu > button span,
+.project-file-mention-menu > button strong,
+.project-file-mention-menu > button em {
+  min-width: 0;
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.project-file-mention-menu > button strong {
+  color: inherit;
+  font-size: 12px;
+}
+
+.project-file-mention-menu > button em {
+  margin-top: 2px;
+  color: var(--subtle);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.project-file-mention-empty {
+  min-height: 38px;
+  display: grid;
+  place-items: center;
+  color: var(--subtle);
+  font-size: 12px;
+}
+
 .composer-bottom {
   display: flex;
   align-items: center;
@@ -7052,14 +7138,19 @@ select,
 }
 
 .project-chat-composer {
+  position: relative;
   min-height: 142px;
   border: 1px solid var(--line);
   border-radius: 16px;
   background: #0c131c;
   box-shadow: var(--shadow-low);
   display: grid;
-  grid-template-rows: minmax(70px, 1fr) auto;
-  overflow: hidden;
+  grid-template-rows: auto minmax(70px, 1fr) auto;
+  overflow: visible;
+}
+
+.project-chat-composer .attachment-tray.compact {
+  margin: 10px 18px 0;
 }
 
 .project-chat-composer textarea {
@@ -7076,16 +7167,16 @@ select,
   line-height: 1.42;
 }
 
-.project-chat-composer > div {
+.project-chat-actions {
   min-height: 52px;
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr) 42px;
+  grid-template-columns: 42px 42px minmax(0, 1fr) 42px;
   align-items: center;
   gap: 10px;
   padding: 0 14px 12px;
 }
 
-.project-chat-composer > div > span {
+.project-chat-actions > span {
   min-width: 0;
   color: var(--muted);
   font-size: 12px;
@@ -7094,7 +7185,7 @@ select,
   text-overflow: ellipsis;
 }
 
-.project-chat-composer button {
+.project-chat-actions > button {
   width: 38px;
   height: 38px;
   border-radius: 10px;
@@ -7102,6 +7193,12 @@ select,
   color: var(--muted);
   display: grid;
   place-items: center;
+}
+
+.project-chat-composer .project-file-mention-menu {
+  left: 18px;
+  right: 18px;
+  bottom: 58px;
 }
 
 .project-send-button {
@@ -7399,20 +7496,42 @@ select,
   gap: 4px;
 }
 
+.project-file-tree-folder[data-depth="0"] > .project-file-tree-children {
+  margin-left: 0;
+}
+
+.project-file-tree-folder-label {
+  min-width: 0;
+  height: 30px;
+  color: var(--muted);
+  display: grid;
+  grid-template-columns: 16px 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+}
+
+.project-file-tree-folder-label span {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .project-reference-file {
-  grid-template-columns: 30px minmax(0, 1fr) 30px;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
   border-radius: 8px;
-  padding: 5px 2px;
+  padding: 5px 6px 5px 2px;
 }
 
 .project-reference-file:hover {
   background: rgba(231, 238, 247, 0.035);
 }
 
-.project-reference-file.sheet > svg { color: var(--green); }
-.project-reference-file.slide > svg { color: var(--amber); }
-.project-reference-file.code > svg { color: var(--blue); }
-.project-reference-file.image > svg { color: var(--purple); }
+.project-reference-file.sheet .attachment-thumb { background: rgba(34, 197, 94, 0.14); color: var(--green); }
+.project-reference-file.slide .attachment-thumb { background: rgba(255, 176, 0, 0.14); color: var(--amber); }
+.project-reference-file.code .attachment-thumb { background: rgba(56, 130, 246, 0.14); color: var(--blue); }
+.project-reference-file.image .attachment-thumb { background: rgba(168, 85, 247, 0.14); color: var(--purple); }
 
 .project-reference-file > button:first-of-type {
   width: auto;
@@ -7427,15 +7546,28 @@ select,
   justify-content: flex-start;
 }
 
-.project-reference-file > button:last-child {
+.project-file-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.project-file-actions button {
   width: 28px;
   height: 28px;
   border-radius: 8px;
   color: var(--subtle);
   background: transparent;
+  display: grid;
+  place-items: center;
 }
 
-.project-reference-file > button:last-child:hover {
+.project-file-actions button:hover {
+  color: var(--orange);
+  background: rgba(255, 90, 0, 0.12);
+}
+
+.project-file-actions button:last-child:hover {
   color: var(--danger);
   background: rgba(255, 68, 68, 0.12);
 }

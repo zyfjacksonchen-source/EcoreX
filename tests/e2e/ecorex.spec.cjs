@@ -1972,6 +1972,107 @@ test.describe('EcoreX Agent Electron E2E', () => {
     expect(fs.existsSync(renamedDir)).toBe(false);
   });
 
+  test('quick-renames sidebar projects and references uploaded project files from project chat', async ({ ecorex }) => {
+    const { electronApp, page, paths } = ecorex;
+    const projectWorkspace = path.join(paths.root, 'Project Quick Rename Files');
+    fs.mkdirSync(projectWorkspace, { recursive: true });
+    await login(page);
+
+    const settings = await page.evaluate(async ({ projectWorkspace }) => window.ecorex.updateSettings({
+      workspaceRoot: projectWorkspace,
+      confirmCustomWorkspaceRoot: true
+    }), { projectWorkspace });
+    expect(settings.ok).toBe(true);
+
+    await electronApp.evaluate(({ ipcMain, BrowserWindow }) => {
+      global.__ecorexRunPayloads = [];
+      ipcMain.removeHandler('agent:run');
+      ipcMain.handle('agent:run', (event, payload) => {
+        global.__ecorexRunPayloads.push(payload);
+        const win = BrowserWindow.fromWebContents(event.sender);
+        setTimeout(() => {
+          if (!win || win.isDestroyed()) return;
+          win.webContents.send('agent:events', {
+            sessionId: payload.sessionId,
+            events: [
+              { sessionId: payload.sessionId, kind: 'result', status: 'completed', text: 'project file reference received' },
+              { sessionId: payload.sessionId, kind: 'done', status: 'completed', text: 'done' }
+            ]
+          });
+        }, 40);
+        return {
+          ok: true,
+          sessionId: payload.sessionId,
+          projectId: payload.projectId,
+          initialEvent: { sessionId: payload.sessionId, kind: 'status', status: 'started', text: 'started' }
+        };
+      });
+    });
+
+    const suffix = Date.now();
+    const originalName = `Sidebar Project ${suffix}`;
+    const quickName = `Sidebar Project Renamed ${suffix}`;
+    const project = await page.evaluate(async (name) => {
+      const result = await window.ecorex.createProject({ name, client: 'E2E Brand', goal: 'Project file mentions' });
+      window.dispatchEvent(new CustomEvent('ecorex:projects-changed'));
+      return result.project;
+    }, originalName);
+    expect(project).toBeTruthy();
+
+    await page.locator('[data-testid="sidebar-projects-nav"]').click();
+    await expect(page.locator('[data-testid="projects-list-entry"]').filter({ hasText: originalName }).first()).toBeVisible({ timeout: 15_000 });
+    const sidebarProject = page.locator('.sidebar-project').filter({ hasText: originalName }).first();
+    await expect(sidebarProject).toBeVisible({ timeout: 15_000 });
+    await sidebarProject.locator('[data-testid="sidebar-project-rename"]').click();
+    await page.locator('[data-testid="sidebar-project-rename-input"]').fill(quickName);
+    await page.locator('[data-testid="sidebar-project-rename-save"]').click();
+    await expect(page.locator('.sidebar-project').filter({ hasText: quickName }).first()).toBeVisible({ timeout: 15_000 });
+    const renamed = await page.evaluate(async (name) => {
+      const listed = await window.ecorex.listProjects();
+      return listed.projects.find((item) => item.name === name);
+    }, quickName);
+    expect(renamed?.id).toBe(project.id);
+
+    const textPath = path.join(projectWorkspace, `project-brief-${suffix}.md`);
+    const imagePath = path.join(projectWorkspace, `project-thumb-${suffix}.png`);
+    fs.writeFileSync(textPath, '# Project Brief\nAudience: project file mention smoke.\n', 'utf8');
+    fs.writeFileSync(imagePath, Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
+      'base64'
+    ));
+    const addFileResult = await page.evaluate(async ({ projectId, textPath, imagePath }) => (
+      window.ecorex.addProjectFiles({ id: projectId, projectId, files: [textPath, imagePath] })
+    ), { projectId: project.id, textPath, imagePath });
+    expect(addFileResult.ok).toBe(true);
+    expect(addFileResult.files).toHaveLength(2);
+
+    await page.locator('[data-testid="projects-list-entry"]').filter({ hasText: quickName }).first().click();
+    await expect(page.locator('[data-testid="project-file-tree"]')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-testid="project-file-entry"]').filter({ hasText: path.basename(textPath) }).first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-testid="project-file-entry"].image img').first()).toBeVisible({ timeout: 15_000 });
+
+    await page.locator('[data-testid="project-prompt-input"]').fill('@project-brief');
+    await expect(page.locator('[data-testid="project-file-mention-menu"]')).toBeVisible({ timeout: 10_000 });
+    await page.locator('[data-testid="project-file-mention-option"]').filter({ hasText: path.basename(textPath) }).first().click();
+    await expect(page.locator('.project-chat-composer .attachment-chip').filter({ hasText: path.basename(textPath) })).toBeVisible({ timeout: 10_000 });
+    await page.locator('.project-send-button').click();
+    await expect(page.locator('[data-testid="chat-input"]')).toHaveValue(new RegExp(path.basename(textPath).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), { timeout: 10_000 });
+    await expect(page.locator('.composer .attachment-chip').filter({ hasText: path.basename(textPath) })).toBeVisible({ timeout: 10_000 });
+    await page.locator('[data-testid="chat-send-button"]').click();
+    await expect(page.locator('.assistant-card').filter({ hasText: 'project file reference received' }).first()).toBeVisible({ timeout: 10_000 });
+
+    const payload = await electronApp.evaluate(() => global.__ecorexRunPayloads?.[0]);
+    expect(payload).toBeTruthy();
+    expect(payload.projectId).toBe(project.id);
+    expect(payload.attachments).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: path.basename(textPath),
+        source: 'project'
+      })
+    ]));
+    expect(payload.attachments[0].path).toContain(path.basename(textPath));
+  });
+
   test('queues follow-up input during a running agent task and resumes in the same conversation', async ({ ecorex }) => {
     const { electronApp, page } = ecorex;
     await login(page);

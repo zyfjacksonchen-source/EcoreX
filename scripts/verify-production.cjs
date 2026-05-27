@@ -1046,11 +1046,13 @@ check('workspace root changes require confirmation and reject protected roots', 
 
 check('model adapter defaults and smoke tests are offline-safe', () => {
   const adapter = readText('electron/model-adapter.cjs');
+  const main = readText('electron/main.cjs');
   const smoke = readText('scripts/test-model-adapter.cjs');
   includesAll(
     adapter,
     [
-      "const DEFAULT_IMAGE_MODEL = 'image-2'",
+      "const DEFAULT_IMAGE_MODEL = 'gpt-image-2'",
+      'const MAX_TIMEOUT_MS = 2 * 60 * 1000',
       'model: normalizeImageModelName(body.model || profile.imageModel || profile.imageModelName || DEFAULT_IMAGE_MODEL)',
       'DEFAULT_IMAGE_MODEL',
       'function normalizeImageModelName',
@@ -1061,6 +1063,14 @@ check('model adapter defaults and smoke tests are offline-safe', () => {
       'stream: Boolean(normalized.stream)'
     ],
     'model adapter defaults and OpenAI-compatible text/stream transform'
+  );
+  includesAll(
+    main,
+    [
+      'const IMAGE_GENERATION_TIMEOUT_MS = 2 * 60 * 1000',
+      'IMAGE_GENERATION_TIMEOUT_MS'
+    ],
+    'image generation timeout guard'
   );
   assertMatches(adapter, /const responseOk = Boolean\(response\.ok && !normalized\.errorMessage\)/, 'model adapter must treat OpenAI stream error chunks as failed responses.');
   assertMatches(adapter, /parseServerSentEventData[\s\S]*trimmed === '\[DONE\]'[\s\S]*extractOpenAIStreamText/, 'model adapter must parse OpenAI-compatible SSE stream text.');

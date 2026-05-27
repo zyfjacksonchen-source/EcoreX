@@ -292,9 +292,9 @@ const messageStates = {
 
 const PREVIEW_SESSION_KEY = 'ecorex-session';
 const PREVIEW_MODEL_PROFILES_KEY = 'ecorex-preview-model-profiles';
-const DEFAULT_IMAGE_MODEL_NAME = 'image-2';
+const DEFAULT_IMAGE_MODEL_NAME = 'gpt-image-2';
 const LEGACY_IMAGE_MODEL_ALIASES = new Map([
-  ['gpt-image-2', DEFAULT_IMAGE_MODEL_NAME]
+  ['image-2', DEFAULT_IMAGE_MODEL_NAME]
 ]);
 
 function defaultImageModelName(value = '') {
@@ -624,7 +624,9 @@ function chatMediaKind(url = '') {
 function attachmentPromptSection(attachments = []) {
   if (!attachments.length) return '';
   const lines = attachments.map((attachment, index) => {
-    const location = attachment.path ? `，本地路径：${attachment.path}` : '，来源：剪贴板或浏览器上传';
+    const location = attachment.source === 'project'
+      ? `，项目文件：${attachment.relativePath || attachment.pathLabel || attachment.name || '项目资料'}`
+      : attachment.path ? `，本地路径：${attachment.path}` : '，来源：剪贴板或浏览器上传';
     return `${index + 1}. ${attachment.name || `附件 ${index + 1}`}（${attachment.type || 'unknown'}，${formatFileSize(attachment.sizeBytes)}${location}）`;
   });
   return `已附加文件：\n${lines.join('\n')}`;
@@ -672,6 +674,10 @@ function serializeAgentAttachment(attachment = {}, index = 0) {
     mimeType: String(attachment.mimeType || attachment.type || '').slice(0, 120),
     sizeBytes: Number(attachment.sizeBytes || attachment.size) || 0,
     source: String(attachment.source || 'upload').slice(0, 40),
+    pathLabel: String(attachment.pathLabel || '').slice(0, 600),
+    relativePath: String(attachment.relativePath || '').slice(0, 600),
+    projectId: String(attachment.projectId || '').slice(0, 120),
+    projectName: String(attachment.projectName || '').slice(0, 120),
     previewUrl,
     previewDataUrl: previewUrl.startsWith('data:') ? previewUrl : '',
     status: String(attachment.status || 'ready').slice(0, 40),
@@ -1201,6 +1207,143 @@ function attachmentKindFromName(name = '', type = '') {
   if (['doc', 'docx', 'md', 'txt', 'pdf'].includes(ext)) return 'document';
   if (['js', 'jsx', 'ts', 'tsx', 'json', 'css', 'html', 'htm', 'py', 'java', 'sql'].includes(ext)) return 'code';
   return 'file';
+}
+
+function projectFileRelativeLabel(file = {}) {
+  const direct = String(file.relativePath || file.projectRelativePath || file.workspaceRelativePath || '').replace(/\\/g, '/').trim();
+  if (direct) return direct;
+  const label = String(file.pathLabel || '').replace(/\\/g, '/').trim();
+  const markerIndex = label.toLowerCase().lastIndexOf('/files/');
+  if (markerIndex >= 0) return label.slice(markerIndex + 7) || file.name || 'project-file';
+  return sanitizeDisplayText(file.name || file.path || file.filePath || 'project-file', 'project-file');
+}
+
+function normalizeProjectFileItem(file = {}, index = 0) {
+  const name = sanitizeDisplayText(file.name || file.fileName || fileNameFromArtifactPath(file.path || file.filePath || file.pathLabel || '') || `项目文件 ${index + 1}`, `项目文件 ${index + 1}`);
+  const pathValue = String(file.path || file.filePath || file.pathLabel || '').trim();
+  const type = String(file.type || file.mimeType || '').trim();
+  const relativePath = projectFileRelativeLabel({ ...file, name });
+  const kind = String(file.kind || attachmentKindFromName(name || relativePath, type)).trim() || 'file';
+  const previewUrl = safeAttachmentPreviewUrl(file.previewUrl || file.previewDataUrl || file.thumbnail || '');
+  return {
+    ...file,
+    id: String(file.id || `${relativePath}:${name}:${index}`).slice(0, 220),
+    name,
+    path: pathValue,
+    filePath: pathValue,
+    type,
+    mimeType: String(file.mimeType || file.type || '').trim(),
+    relativePath,
+    kind,
+    previewUrl,
+    previewDataUrl: previewUrl,
+    thumbnail: previewUrl,
+    sizeBytes: Number(file.sizeBytes || file.size) || 0,
+    modifiedAt: file.modifiedAt || file.updatedAt || null
+  };
+}
+
+function normalizeProjectFileItems(files = []) {
+  return (Array.isArray(files) ? files : []).map((file, index) => normalizeProjectFileItem(file, index));
+}
+
+function projectFileToAttachment(file = {}, project = {}) {
+  const normalized = normalizeProjectFileItem(file);
+  return {
+    id: `project-file:${normalized.id}`,
+    name: normalized.name,
+    path: normalized.path,
+    filePath: normalized.filePath || normalized.path,
+    type: normalized.type,
+    mimeType: normalized.mimeType || normalized.type,
+    sizeBytes: normalized.sizeBytes,
+    source: 'project',
+    projectId: project?.id || '',
+    projectName: project?.name || '',
+    pathLabel: normalized.pathLabel || normalized.relativePath,
+    relativePath: normalized.relativePath,
+    previewUrl: normalized.previewUrl,
+    previewDataUrl: normalized.previewDataUrl,
+    status: 'ready',
+    progress: 100,
+    lastModified: normalized.modifiedAt
+  };
+}
+
+function projectFileToArtifact(file = {}) {
+  const normalized = normalizeProjectFileItem(file);
+  return {
+    id: `project-file-preview:${normalized.id}`,
+    name: normalized.name,
+    path: normalized.path || normalized.pathLabel || normalized.relativePath,
+    filePath: normalized.filePath || normalized.path,
+    ext: artifactExtension(normalized.name || normalized.path || normalized.pathLabel),
+    type: normalized.type,
+    mimeType: normalized.mimeType || normalized.type,
+    sizeBytes: normalized.sizeBytes,
+    source: 'project-file',
+    previewUrl: normalized.previewUrl
+  };
+}
+
+function filterProjectFileCandidates(files = [], query = '', limit = 8) {
+  const normalizedQuery = String(query || '').trim().toLowerCase();
+  return normalizeProjectFileItems(files)
+    .filter((file) => {
+      if (!normalizedQuery) return true;
+      return [file.name, file.relativePath, file.pathLabel, file.type]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+        .includes(normalizedQuery);
+    })
+    .slice(0, limit);
+}
+
+function findProjectFileMention(value = '', cursor = 0) {
+  const text = String(value || '');
+  const safeCursor = Math.max(0, Math.min(Number(cursor) || 0, text.length));
+  const before = text.slice(0, safeCursor);
+  const match = before.match(/(^|[\s([{（【])@([^\s@]{0,80})$/u);
+  if (!match) return null;
+  const query = match[2] || '';
+  const start = before.length - query.length - 1;
+  return { start, end: safeCursor, query };
+}
+
+function buildProjectFileTree(files = []) {
+  const root = { id: 'root', name: 'files', type: 'folder', children: [] };
+  const ensureChild = (parent, segment, pathKey) => {
+    let child = parent.children.find((item) => item.type === 'folder' && item.name === segment);
+    if (!child) {
+      child = { id: `folder:${pathKey}`, name: segment, type: 'folder', children: [] };
+      parent.children.push(child);
+    }
+    return child;
+  };
+  normalizeProjectFileItems(files).forEach((file, index) => {
+    const parts = projectFileRelativeLabel(file).split(/[\\/]+/).map((part) => part.trim()).filter(Boolean);
+    const pathParts = parts.length ? parts : [file.name || `项目文件 ${index + 1}`];
+    let cursor = root;
+    pathParts.slice(0, -1).forEach((part, partIndex) => {
+      cursor = ensureChild(cursor, part, pathParts.slice(0, partIndex + 1).join('/'));
+    });
+    cursor.children.push({
+      id: `file:${file.id || pathParts.join('/')}:${index}`,
+      name: pathParts.at(-1) || file.name,
+      type: 'file',
+      file
+    });
+  });
+  const sortNode = (node) => {
+    node.children.sort((left, right) => {
+      if (left.type !== right.type) return left.type === 'folder' ? -1 : 1;
+      return String(left.name).localeCompare(String(right.name), 'zh-CN');
+    });
+    node.children.filter((child) => child.type === 'folder').forEach(sortNode);
+    return node;
+  };
+  return sortNode(root);
 }
 
 function artifactsFromAttachments(attachments = []) {
@@ -2634,6 +2777,8 @@ function Sidebar({ page, setPage, logout, authStatus, collapsed = false, onToggl
   const [projectState, setProjectState] = useState({ apiReady: false, loading: false, projects: [], currentProject: null, status: '项目服务未就绪', notice: '' });
   const [quickProjectName, setQuickProjectName] = useState('');
   const [projectBusy, setProjectBusy] = useState('');
+  const [renamingProjectId, setRenamingProjectId] = useState('');
+  const [renamingProjectName, setRenamingProjectName] = useState('');
   const [renamingProjectSessionId, setRenamingProjectSessionId] = useState('');
   const [renamingProjectSessionTitle, setRenamingProjectSessionTitle] = useState('');
   const profileRef = useRef(null);
@@ -2790,6 +2935,49 @@ function Sidebar({ page, setPage, logout, authStatus, collapsed = false, onToggl
     }
   }
 
+  function startProjectRename(project = {}) {
+    if (!project?.id || project.id === 'empty') return;
+    setRenamingProjectId(project.id);
+    setRenamingProjectName(project.name || '');
+  }
+
+  function cancelProjectRename() {
+    setRenamingProjectId('');
+    setRenamingProjectName('');
+  }
+
+  async function saveProjectRename(project = {}) {
+    if (!project?.id || project.id === 'empty' || !hasEcorexFunction(['updateProject', 'projects.update'])) return;
+    const cleanName = sanitizeDisplayText(renamingProjectName, '').trim();
+    const currentName = sanitizeDisplayText(project.name, '').trim();
+    if (!cleanName) return;
+    if (cleanName === currentName) {
+      cancelProjectRename();
+      return;
+    }
+    setProjectBusy(`rename:${project.id}`);
+    const result = await updateManagedProject(project.id, { name: cleanName });
+    setProjectBusy('');
+    if (result?.ok === false || result?.unauthorized) {
+      setProjectState((current) => ({
+        ...current,
+        notice: result?.unauthorized
+          ? '请重新登录后重命名项目。'
+          : `项目重命名失败：${sanitizeDisplayText(result?.error, '请稍后重试')}`
+      }));
+      return;
+    }
+    const updatedProject = normalizeProjectItem(result.project || { ...project, name: cleanName }, 0, project.id);
+    updateStoredProjectChatReferences(project.id, updatedProject.name);
+    cancelProjectRename();
+    setProjectState((current) => ({ ...current, notice: `项目已重命名为「${updatedProject.name}」。` }));
+    await refreshSidebarProjects({ silent: true });
+    window.dispatchEvent?.(new CustomEvent('ecorex:projects-changed'));
+    if (project.current) {
+      window.dispatchEvent?.(new CustomEvent('ecorex:project-context', { detail: { project: updatedProject } }));
+    }
+  }
+
   function openBlankChatAfterDelete() {
     const id = createLocalId('conversation');
     setActiveConversationId(id);
@@ -2912,6 +3100,7 @@ function Sidebar({ page, setPage, logout, authStatus, collapsed = false, onToggl
   }, [projectState.projects, projectState.apiReady, projectState.status, projectConversationMap, sidebarSearchQuery]);
   const visibleHistoryItems = useMemo(() => historyItems.filter((item) => matchesSidebarSearch(item)), [historyItems, sidebarSearchQuery]);
   const canQuickCreateProject = hasEcorexFunction(['createProject', 'projects.create']);
+  const canQuickRenameProject = projectState.apiReady && hasEcorexFunction(['updateProject', 'projects.update']);
 
   return (
     <aside className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
@@ -2975,18 +3164,51 @@ function Sidebar({ page, setPage, logout, authStatus, collapsed = false, onToggl
             <div className="sidebar-empty">没有匹配的项目或对话</div>
           )}
           {visibleProjectEntries.slice(0, sidebarSearchQuery ? 20 : 8).map(({ project, sessions }) => {
+            const isProjectRenaming = renamingProjectId === project.id;
+            const projectRenameBusy = projectBusy === `rename:${project.id}`;
             return (
               <div className={`sidebar-project ${project.current ? 'active' : ''}`} key={project.id}>
-                <div className="sidebar-project-row">
-                  <button type="button" data-testid="sidebar-project-open" title={project.name} onClick={() => openProject(project)} disabled={project.id === 'empty' || projectBusy === project.id}>
-                    <FolderOpen size={15} />
-                    <span>{project.name}</span>
-                    <em>{sessions.length || project.sessionCount || 0}</em>
-                  </button>
-                  {project.id !== 'empty' && (
-                    <button type="button" data-testid="sidebar-project-open-folder" title="在资源管理器中打开" onClick={() => revealProjectFolder(project)} disabled={projectBusy === `open:${project.id}`}>
-                      <FolderOpen size={13} />
-                    </button>
+                <div className={`sidebar-project-row ${isProjectRenaming ? 'editing' : ''}`}>
+                  {isProjectRenaming ? (
+                    <form className="sidebar-project-rename-form" onSubmit={(event) => {
+                      event.preventDefault();
+                      saveProjectRename(project);
+                    }}>
+                      <input
+                        data-testid="sidebar-project-rename-input"
+                        value={renamingProjectName}
+                        onChange={(event) => setRenamingProjectName(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Escape') cancelProjectRename();
+                        }}
+                        disabled={projectRenameBusy}
+                        autoFocus
+                      />
+                      <button type="submit" data-testid="sidebar-project-rename-save" title="保存项目名称" disabled={!renamingProjectName.trim() || projectRenameBusy}>
+                        {projectRenameBusy ? <Loader2 size={12} className="spin-icon" /> : <Check size={12} />}
+                      </button>
+                      <button type="button" title="取消" onClick={cancelProjectRename} disabled={projectRenameBusy}>
+                        <X size={12} />
+                      </button>
+                    </form>
+                  ) : (
+                    <>
+                      <button type="button" data-testid="sidebar-project-open" title={project.name} onClick={() => openProject(project)} disabled={project.id === 'empty' || projectBusy === project.id}>
+                        <FolderOpen size={15} />
+                        <span>{project.name}</span>
+                        <em>{sessions.length || project.sessionCount || 0}</em>
+                      </button>
+                      {project.id !== 'empty' && (
+                        <div className="sidebar-project-actions">
+                          <button type="button" data-testid="sidebar-project-rename" title="快速改名" aria-label={`快速改名 ${project.name}`} onClick={() => startProjectRename(project)} disabled={!canQuickRenameProject || projectRenameBusy}>
+                            <Pencil size={12} />
+                          </button>
+                          <button type="button" data-testid="sidebar-project-open-folder" title="在资源管理器中打开" onClick={() => revealProjectFolder(project)} disabled={projectBusy === `open:${project.id}`}>
+                            <FolderOpen size={13} />
+                          </button>
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
                 {sessions.slice(0, sidebarSearchQuery ? 8 : 4).map((session) => (
@@ -3281,7 +3503,7 @@ function UserRoleSettingsView({ authStatus, onUnauthorized }) {
       <div className="enterprise-settings-grid">
         <article className="enterprise-panel">
           <header>
-            <div>
+            <div className="project-chat-actions">
               <h3>个人资料</h3>
               <p>当前登录账号、团队和职位信息。</p>
             </div>
@@ -4335,7 +4557,7 @@ function ModelConfigModal({ open, initialModelName, onClose, onCurrentChange }) 
               </label>
               <label>
                 <span>图像模型名称</span>
-                <input value={draft.imageModelName} onChange={(event) => updateDraft('imageModelName', event.target.value)} placeholder="image-2" />
+                <input value={draft.imageModelName} onChange={(event) => updateDraft('imageModelName', event.target.value)} placeholder="gpt-image-2" />
               </label>
             </div>
 
@@ -4869,6 +5091,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
   const [composerReferences, setComposerReferences] = useState([]);
   const [focusArtifact, setFocusArtifact] = useState(null);
   const [chatProject, setChatProject] = useState(null);
+  const [projectFiles, setProjectFiles] = useState([]);
   const [conversationId, setConversationId] = useState(() => createLocalId('conversation'));
   const [showJumpLatest, setShowJumpLatest] = useState(false);
   const fileInputRef = useRef(null);
@@ -4900,6 +5123,35 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
   const sessionOwnersRef = useRef(new Map());
   const storedEventsByConversation = useRef(new Map());
   const activeProject = chatProject || conversationProjectRef.current || null;
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!activeProject?.id || !hasEcorexFunction(['listProjectFiles', 'projects.listFiles'])) {
+      setProjectFiles([]);
+      return () => {
+        cancelled = true;
+      };
+    }
+    const loadFiles = () => listManagedProjectFiles(activeProject.id).then((result) => {
+      if (cancelled) return;
+      if (result?.ok === false || result?.unauthorized) {
+        setProjectFiles([]);
+        return;
+      }
+      setProjectFiles(normalizeProjectFileItems(result?.files || []));
+    }).catch(() => {
+      if (!cancelled) setProjectFiles([]);
+    });
+    const onFilesChanged = (event) => {
+      if (!event?.detail?.projectId || event.detail.projectId === activeProject.id) loadFiles();
+    };
+    loadFiles();
+    window.addEventListener?.('ecorex:project-files-changed', onFilesChanged);
+    return () => {
+      cancelled = true;
+      window.removeEventListener?.('ecorex:project-files-changed', onFilesChanged);
+    };
+  }, [activeProject?.id]);
 
   const selectedPlugins = useMemo(() => {
     const managedPlugins = Array.isArray(capabilities?.capabilityPacks)
@@ -5040,6 +5292,11 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     });
   }
 
+  function addProjectFileAttachment(file = {}) {
+    if (!activeProject?.id) return;
+    appendAttachments([projectFileToAttachment(file, activeProject)]);
+  }
+
   function clearAttachments({ revoke = true } = {}) {
     setAttachments((items) => {
       if (revoke) {
@@ -5123,6 +5380,8 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     clearAttachments();
     attachmentObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     attachmentObjectUrlsRef.current.clear();
+    const initialAttachments = serializeAgentAttachments(item?.initialAttachments || item?.attachments || []);
+    if (initialAttachments.length) appendAttachments(initialAttachments);
     setPrompt(item?.initialPrompt || '');
     setComposerReferences([]);
     setFocusArtifact(null);
@@ -6666,6 +6925,9 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           onRemoveAttachment={removeAttachment}
           references={composerReferences}
           onRemoveReference={removeComposerReference}
+          activeProject={activeProject}
+          projectFiles={projectFiles}
+          onSelectProjectFile={addProjectFileAttachment}
           running={running}
           currentSessionId={currentSessionId}
           sendPrompt={sendPrompt}
@@ -7676,6 +7938,93 @@ function AttachmentThumb({ attachment, compact = false }) {
   );
 }
 
+function ProjectFileThumb({ file, compact = false }) {
+  return <AttachmentThumb attachment={projectFileToAttachment(file)} compact={compact} />;
+}
+
+function ProjectFileMentionMenu({ open, files = [], query = '', selectedIndex = 0, onPick }) {
+  const candidates = filterProjectFileCandidates(files, query, 8);
+  if (!open) return null;
+  return (
+    <div className="project-file-mention-menu" data-testid="project-file-mention-menu">
+      <header>
+        <span>@ 项目文件</span>
+        <em>{candidates.length ? `${candidates.length} 个匹配` : '无匹配'}</em>
+      </header>
+      {candidates.length ? candidates.map((file, index) => (
+        <button
+          className={index === selectedIndex ? 'active' : ''}
+          data-testid="project-file-mention-option"
+          key={file.id || file.relativePath || file.name}
+          type="button"
+          onMouseDown={(event) => {
+            event.preventDefault();
+            onPick?.(file);
+          }}
+        >
+          <ProjectFileThumb file={file} compact />
+          <span>
+            <strong>{file.name}</strong>
+            <em>{file.relativePath || file.pathLabel || formatFileSize(file.sizeBytes)}</em>
+          </span>
+        </button>
+      )) : (
+        <div className="project-file-mention-empty">当前项目没有匹配文件</div>
+      )}
+    </div>
+  );
+}
+
+function ProjectFileTreeNode({ node, depth = 0, onOpen, onReference, onRemove, fileBusy = '' }) {
+  if (!node) return null;
+  if (node.type === 'folder') {
+    return (
+      <div className="project-file-tree-folder" data-depth={depth}>
+        {depth > 0 && (
+          <div className="project-file-tree-folder-label">
+            <ChevronRight size={14} />
+            <FolderOpen size={15} />
+            <span>{node.name}</span>
+          </div>
+        )}
+        <div className="project-file-tree-children">
+          {(node.children || []).map((child) => (
+            <ProjectFileTreeNode
+              key={child.id}
+              node={child}
+              depth={depth + 1}
+              onOpen={onOpen}
+              onReference={onReference}
+              onRemove={onRemove}
+              fileBusy={fileBusy}
+            />
+          ))}
+        </div>
+      </div>
+    );
+  }
+  const file = node.file || {};
+  const kind = file.kind || attachmentKindFromName(file.name || file.relativePath || '', file.type || file.mimeType);
+  const busyKey = file.id || file.pathLabel || file.relativePath;
+  return (
+    <div className={`project-reference-file ${kind}`} data-testid="project-file-entry">
+      <ProjectFileThumb file={file} compact />
+      <button type="button" data-testid="project-file-open" onClick={() => onOpen?.(file)}>
+        <strong>{file.name}</strong>
+        <span>{[file.relativePath, formatFileSize(file.sizeBytes), file.modifiedAt ? formatDateTime(file.modifiedAt) : '项目文件'].filter(Boolean).join(' · ')}</span>
+      </button>
+      <div className="project-file-actions">
+        <button type="button" title="@到项目对话" data-testid="project-file-reference" onClick={() => onReference?.(file)}>
+          <FileText size={14} />
+        </button>
+        <button type="button" title="移除" onClick={() => onRemove?.(file)} disabled={fileBusy === busyKey}>
+          <X size={14} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function MessageStatus({ status = 'complete', time, compact = false }) {
   const state = messageStates[status] || messageStates.complete;
   const Icon = state.icon;
@@ -7779,6 +8128,9 @@ function Composer({
   onRemoveAttachment,
   references = [],
   onRemoveReference,
+  activeProject = null,
+  projectFiles = [],
+  onSelectProjectFile,
   running,
   currentSessionId,
   sendPrompt,
@@ -7791,6 +8143,12 @@ function Composer({
   modelOptions
 }) {
   const textareaRef = useRef(null);
+  const [fileMention, setFileMention] = useState(null);
+  const [fileMentionIndex, setFileMentionIndex] = useState(0);
+  const projectFileCandidates = useMemo(
+    () => filterProjectFileCandidates(projectFiles, fileMention?.query || '', 8),
+    [projectFiles, fileMention?.query]
+  );
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -7824,6 +8182,50 @@ function Composer({
     window.setTimeout(() => {
       textarea.focus();
       textarea.setSelectionRange(cursor, cursor);
+    }, 0);
+  }
+
+  function updateProjectFileMention(value = prompt, cursor = textareaRef.current?.selectionStart ?? String(value || '').length) {
+    if (!activeProject?.id || !projectFiles.length) {
+      setFileMention(null);
+      return;
+    }
+    const mention = findProjectFileMention(value, cursor);
+    setFileMention(mention);
+    setFileMentionIndex(0);
+  }
+
+  function pickProjectFileMention(file = projectFileCandidates[fileMentionIndex]) {
+    if (!file || !fileMention) return;
+    const currentValue = String(prompt || '');
+    const replacement = `@${file.name} `;
+    const nextValue = clampComposerPromptText(`${currentValue.slice(0, fileMention.start)}${replacement}${currentValue.slice(fileMention.end)}`);
+    const cursor = Math.min(fileMention.start + replacement.length, nextValue.length);
+    setPrompt(nextValue);
+    setFileMention(null);
+    setFileMentionIndex(0);
+    onSelectProjectFile?.(file);
+    window.setTimeout(() => {
+      const textarea = textareaRef.current;
+      textarea?.focus?.();
+      textarea?.setSelectionRange?.(cursor, cursor);
+    }, 0);
+  }
+
+  function openProjectFileMentionPicker() {
+    if (!activeProject?.id || !projectFiles.length) return;
+    const textarea = textareaRef.current;
+    const currentValue = String(prompt || '');
+    const cursor = Number.isFinite(textarea?.selectionStart) ? textarea.selectionStart : currentValue.length;
+    const prefix = cursor > 0 && currentValue[cursor - 1] && !/\s/.test(currentValue[cursor - 1]) ? ' @' : '@';
+    const nextValue = clampComposerPromptText(`${currentValue.slice(0, cursor)}${prefix}${currentValue.slice(cursor)}`);
+    const nextCursor = cursor + prefix.length;
+    setPrompt(nextValue);
+    setFileMention({ start: nextCursor - 1, end: nextCursor, query: '' });
+    setFileMentionIndex(0);
+    window.setTimeout(() => {
+      textarea?.focus?.();
+      textarea?.setSelectionRange?.(nextCursor, nextCursor);
     }, 0);
   }
 
@@ -7884,8 +8286,40 @@ function Composer({
         data-testid="chat-input"
         ref={textareaRef}
         value={prompt}
-        onChange={(event) => setPrompt(clampComposerPromptText(event.target.value))}
+        onChange={(event) => {
+          const nextValue = clampComposerPromptText(event.target.value);
+          setPrompt(nextValue);
+          updateProjectFileMention(nextValue, event.target.selectionStart);
+        }}
+        onClick={(event) => updateProjectFileMention(prompt, event.currentTarget.selectionStart)}
+        onKeyUp={(event) => {
+          if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+            updateProjectFileMention(prompt, event.currentTarget.selectionStart);
+          }
+        }}
         onKeyDown={(event) => {
+          if (fileMention) {
+            if (event.key === 'ArrowDown') {
+              event.preventDefault();
+              setFileMentionIndex((index) => Math.min(Math.max(0, projectFileCandidates.length - 1), index + 1));
+              return;
+            }
+            if (event.key === 'ArrowUp') {
+              event.preventDefault();
+              setFileMentionIndex((index) => Math.max(0, index - 1));
+              return;
+            }
+            if ((event.key === 'Enter' || event.key === 'Tab') && projectFileCandidates.length) {
+              event.preventDefault();
+              pickProjectFileMention(projectFileCandidates[fileMentionIndex] || projectFileCandidates[0]);
+              return;
+            }
+            if (event.key === 'Escape') {
+              event.preventDefault();
+              setFileMention(null);
+              return;
+            }
+          }
           if (event.key === 'Enter' && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.isComposing) {
             event.preventDefault();
             sendPrompt(prompt, attachments);
@@ -7900,12 +8334,25 @@ function Composer({
         }}
         placeholder="你可以问我任何问题"
       />
+      <ProjectFileMentionMenu
+        open={Boolean(fileMention)}
+        files={projectFiles}
+        query={fileMention?.query || ''}
+        selectedIndex={fileMentionIndex}
+        onPick={pickProjectFileMention}
+      />
       <div className="composer-bottom">
         <div className="tool-row">
           <button className="composer-file-button" type="button" onClick={onSelectFiles} title="添加文件">
             <Plus size={18} />
             <span>添加文件</span>
           </button>
+          {activeProject?.id && (
+            <button className="composer-file-button" type="button" onClick={openProjectFileMentionPicker} title="引用项目文件" disabled={!projectFiles.length}>
+              <FileText size={17} />
+              <span>@ 项目文件</span>
+            </button>
+          )}
         </div>
         <div className="composer-controls">
           <PermissionSelect
@@ -8113,6 +8560,12 @@ function ProjectCard({ backendStatus, expanded = true, onToggle, onUnauthorized,
     refreshProjects({ silent: true });
   }, [backendStatus?.ok]);
 
+  useEffect(() => {
+    const reload = () => refreshProjects({ silent: true });
+    window.addEventListener?.('ecorex:projects-changed', reload);
+    return () => window.removeEventListener?.('ecorex:projects-changed', reload);
+  }, []);
+
   const currentProject = projectState.currentProject;
   if (!expanded) {
     return (
@@ -8202,6 +8655,9 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
   const [projectFiles, setProjectFiles] = useState([]);
   const [projectFilesExpanded, setProjectFilesExpanded] = useState(false);
   const [projectPrompt, setProjectPrompt] = useState('');
+  const [projectPromptAttachments, setProjectPromptAttachments] = useState([]);
+  const [projectPromptMention, setProjectPromptMention] = useState(null);
+  const [projectPromptMentionIndex, setProjectPromptMentionIndex] = useState(0);
   const [busy, setBusy] = useState('');
   const [fileBusy, setFileBusy] = useState('');
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -8244,6 +8700,12 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
   }, [backendStatus?.ok]);
 
   useEffect(() => {
+    const reload = () => refreshProjects({ silent: true });
+    window.addEventListener?.('ecorex:projects-changed', reload);
+    return () => window.removeEventListener?.('ecorex:projects-changed', reload);
+  }, []);
+
+  useEffect(() => {
     const reload = () => setRecentItems(loadRecentChatItems());
     window.addEventListener?.('ecorex:recent-chats-changed', reload);
     window.addEventListener?.('ecorex:recent-chat-upsert', reload);
@@ -8260,6 +8722,8 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
   useEffect(() => {
     setEditDraft(projectDraftFromProject(selectedProject || {}));
     setProjectDetailsOpen(false);
+    setProjectPromptAttachments([]);
+    setProjectPromptMention(null);
   }, [selectedProject?.id, selectedProject?.updatedAt]);
 
   async function refreshProjectFiles(project = selectedProject) {
@@ -8276,7 +8740,7 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
       setProjectFiles([]);
       return;
     }
-    setProjectFiles(Array.isArray(result?.files) ? result.files : []);
+    setProjectFiles(normalizeProjectFileItems(result?.files || []));
   }
 
   useEffect(() => {
@@ -8284,7 +8748,7 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
   }, [selectedProject?.id, selectedProject?.updatedAt]);
 
   useEffect(() => {
-    if (!projectFiles.length) setProjectFilesExpanded(false);
+    setProjectFilesExpanded(projectFiles.length > 0);
   }, [projectFiles.length]);
 
   function updateCreateField(field, value) {
@@ -8456,6 +8920,7 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
       await refreshProjectFiles(selectedProject);
       setProjectFilesExpanded(true);
       await refreshProjects({ silent: true, preferId: selectedProject.id });
+      window.dispatchEvent?.(new CustomEvent('ecorex:project-files-changed', { detail: { projectId: selectedProject.id } }));
     }
     setFileBusy('');
   }
@@ -8482,8 +8947,67 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
     else {
       await refreshProjectFiles(selectedProject);
       await refreshProjects({ silent: true, preferId: selectedProject.id });
+      window.dispatchEvent?.(new CustomEvent('ecorex:project-files-changed', { detail: { projectId: selectedProject.id } }));
     }
     setFileBusy('');
+  }
+
+  const projectPromptFileCandidates = useMemo(
+    () => filterProjectFileCandidates(projectFiles, projectPromptMention?.query || '', 8),
+    [projectFiles, projectPromptMention?.query]
+  );
+
+  function updateProjectPromptMention(value = projectPrompt, cursor = String(value || '').length) {
+    if (!selectedProject?.id || !projectFiles.length) {
+      setProjectPromptMention(null);
+      return;
+    }
+    const mention = findProjectFileMention(value, cursor);
+    setProjectPromptMention(mention);
+    setProjectPromptMentionIndex(0);
+  }
+
+  function pickProjectPromptFile(file = projectPromptFileCandidates[projectPromptMentionIndex]) {
+    if (!file || !projectPromptMention || !selectedProject?.id) return;
+    const replacement = `@${file.name} `;
+    const nextValue = clampComposerPromptText(`${projectPrompt.slice(0, projectPromptMention.start)}${replacement}${projectPrompt.slice(projectPromptMention.end)}`);
+    setProjectPrompt(nextValue);
+    setProjectPromptMention(null);
+    setProjectPromptMentionIndex(0);
+    addProjectPromptAttachmentFromFile(file);
+  }
+
+  function addProjectPromptAttachmentFromFile(file = {}) {
+    if (!selectedProject?.id) return;
+    setProjectPromptAttachments((items) => {
+      const next = projectFileToAttachment(file, selectedProject);
+      const byId = new Map(items.map((item) => [item.id || item.path || item.name, item]));
+      byId.set(next.id || next.path || next.name, next);
+      return [...byId.values()].slice(0, MAX_COMPOSER_ATTACHMENTS);
+    });
+  }
+
+  function referenceProjectFileInPrompt(file = {}) {
+    if (!file?.name) return;
+    addProjectPromptAttachmentFromFile(file);
+    setProjectPrompt((current) => {
+      const token = `@${file.name}`;
+      if (String(current || '').includes(token)) return current;
+      const separator = current && !/\s$/.test(current) ? ' ' : '';
+      return clampComposerPromptText(`${current || ''}${separator}${token} `);
+    });
+  }
+
+  function openProjectPromptMentionPicker() {
+    if (!selectedProject?.id || !projectFiles.length) return;
+    const nextValue = projectPrompt && !/\s$/.test(projectPrompt) ? `${projectPrompt} @` : `${projectPrompt}@`;
+    setProjectPrompt(clampComposerPromptText(nextValue));
+    setProjectPromptMention({ start: nextValue.length - 1, end: nextValue.length, query: '' });
+    setProjectPromptMentionIndex(0);
+  }
+
+  function removeProjectPromptAttachment(id) {
+    setProjectPromptAttachments((items) => items.filter((item) => item.id !== id));
   }
 
   function routeProjectSession(session = {}) {
@@ -8509,10 +9033,12 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
     const nextItems = upsertRecentChatItem(loadRecentChatItems(), item);
     storeRecentChatItems(nextItems);
     setRecentItems(nextItems);
-    window.dispatchEvent?.(new CustomEvent('ecorex:new-chat', { detail: { ...item, initialPrompt: cleanPrompt } }));
+    window.dispatchEvent?.(new CustomEvent('ecorex:new-chat', { detail: { ...item, initialPrompt: cleanPrompt, initialAttachments: projectPromptAttachments } }));
     window.dispatchEvent?.(new CustomEvent('ecorex:project-context', { detail: { project: selectedProject } }));
     window.dispatchEvent?.(new CustomEvent('ecorex:recent-chats-changed'));
     setProjectPrompt('');
+    setProjectPromptAttachments([]);
+    setProjectPromptMention(null);
     setPage?.('chat');
   }
 
@@ -8658,10 +9184,54 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
           <input className="project-title-input" data-testid="project-edit-name" value={editDraft.name} onChange={(event) => updateEditField('name', event.target.value)} disabled={!canUpdateProject} />
 
           <div className="project-chat-composer">
-            <textarea data-testid="project-prompt-input" value={projectPrompt} onChange={(event) => setProjectPrompt(event.target.value)} placeholder="今天想推进什么项目任务？" />
+            <AttachmentPreviewList attachments={projectPromptAttachments} onRemove={removeProjectPromptAttachment} compact />
+            <textarea
+              data-testid="project-prompt-input"
+              value={projectPrompt}
+              onChange={(event) => {
+                const nextValue = clampComposerPromptText(event.target.value);
+                setProjectPrompt(nextValue);
+                updateProjectPromptMention(nextValue, event.target.selectionStart);
+              }}
+              onClick={(event) => updateProjectPromptMention(projectPrompt, event.currentTarget.selectionStart)}
+              onKeyDown={(event) => {
+                if (projectPromptMention) {
+                  if (event.key === 'ArrowDown') {
+                    event.preventDefault();
+                    setProjectPromptMentionIndex((index) => Math.min(Math.max(0, projectPromptFileCandidates.length - 1), index + 1));
+                    return;
+                  }
+                  if (event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    setProjectPromptMentionIndex((index) => Math.max(0, index - 1));
+                    return;
+                  }
+                  if ((event.key === 'Enter' || event.key === 'Tab') && projectPromptFileCandidates.length) {
+                    event.preventDefault();
+                    pickProjectPromptFile(projectPromptFileCandidates[projectPromptMentionIndex] || projectPromptFileCandidates[0]);
+                    return;
+                  }
+                  if (event.key === 'Escape') {
+                    event.preventDefault();
+                    setProjectPromptMention(null);
+                  }
+                }
+              }}
+              placeholder="今天想推进什么项目任务？"
+            />
+            <ProjectFileMentionMenu
+              open={Boolean(projectPromptMention)}
+              files={projectFiles}
+              query={projectPromptMention?.query || ''}
+              selectedIndex={projectPromptMentionIndex}
+              onPick={pickProjectPromptFile}
+            />
             <div>
               <button type="button" title="添加项目文件" onClick={addFilesToProject} disabled={fileBusy === 'add'}>
                 {fileBusy === 'add' ? <Loader2 size={18} className="spin-icon" /> : <Plus size={20} />}
+              </button>
+              <button type="button" title="引用项目文件" onClick={openProjectPromptMentionPicker} disabled={!projectFiles.length}>
+                <FileText size={18} />
               </button>
               <span>{selectedProject.statusLabel} · {selectedProject.pathLabel || 'workspace:/'} · {projectFiles.length} 个文件</span>
               <button className="project-send-button" type="button" title="进入项目会话" onClick={routeProjectPrompt} disabled={!projectPrompt.trim()}>
@@ -8749,30 +9319,13 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
                         </span>
                       </button>
                       {projectFilesExpanded && (
-                        <div className="project-file-tree-children">
-                          {projectFiles.map((file) => {
-                            const kind = attachmentKindFromName(file.name || file.pathLabel || '', file.type || file.mimeType);
-                            const Icon = kind === 'sheet'
-                              ? BarChart3
-                              : kind === 'slide'
-                                ? LayoutDashboard
-                                : kind === 'code'
-                                  ? Code2
-                                  : FileText;
-                            return (
-                              <div className={`project-reference-file ${kind}`} key={file.id || file.pathLabel || file.name}>
-                                <Icon size={17} />
-                                <button type="button" onClick={() => openProjectFile(file)}>
-                                  <strong>{file.name}</strong>
-                                  <span>{formatFileSize(file.sizeBytes)} · {file.modifiedAt ? formatDateTime(file.modifiedAt) : '项目文件'}</span>
-                                </button>
-                                <button type="button" title="移除" onClick={() => removeProjectFile(file)} disabled={fileBusy === (file.id || file.pathLabel)}>
-                                  <X size={15} />
-                                </button>
-                              </div>
-                            );
-                          })}
-                        </div>
+                        <ProjectFileTreeNode
+                          node={buildProjectFileTree(projectFiles)}
+                          onOpen={openProjectFile}
+                          onReference={referenceProjectFileInPrompt}
+                          onRemove={removeProjectFile}
+                          fileBusy={fileBusy}
+                        />
                       )}
                     </div>
                   ) : (

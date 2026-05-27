@@ -216,8 +216,11 @@ async function main() {
       await page.locator('.project-back-button').click();
       await page.locator('[data-testid="projects-list-entry"]').filter({ hasText: originalName }).first().click();
       await page.locator('[data-testid="project-file-tree"]').waitFor({ state: 'visible', timeout: 20_000 });
-      await page.locator('.project-file-tree-root').click();
-      await page.locator('.project-file-tree-children').filter({ hasText: path.basename(uploadPath) }).waitFor({ state: 'visible', timeout: 20_000 });
+      const uploadedFileEntry = page.locator('[data-testid="project-file-entry"]').filter({ hasText: path.basename(uploadPath) }).first();
+      if (!(await uploadedFileEntry.isVisible().catch(() => false))) {
+        await page.locator('.project-file-tree-root').click();
+      }
+      await uploadedFileEntry.waitFor({ state: 'visible', timeout: 20_000 });
 
       await page.locator('[data-testid="project-edit-name"]').fill(renamedName);
       await page.locator('[data-testid="project-detail-save"]').click();

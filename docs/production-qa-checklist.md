@@ -27,7 +27,7 @@ Use a disposable model key and a non-sensitive workspace.
 $env:ECOREX_REAL_MODEL_BASE_URL="https://model.example.com/"
 $env:ECOREX_REAL_MODEL_API_KEY="<redacted>"
 $env:ECOREX_REAL_MODEL_NAME="gpt-5.5"
-$env:ECOREX_REAL_IMAGE_MODEL="image-2"
+$env:ECOREX_REAL_IMAGE_MODEL="gpt-image-2"
 $env:ECOREX_REAL_AGENT_CONCURRENCY="2"
 npm run test:real-agent
 ```

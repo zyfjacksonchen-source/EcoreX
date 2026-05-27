@@ -1,13 +1,13 @@
 const DEFAULT_CHAT_ENDPOINT = '/chat/completions';
 const DEFAULT_RESPONSES_ENDPOINT = '/responses';
 const DEFAULT_IMAGE_ENDPOINT = '/images/generations';
-const DEFAULT_IMAGE_MODEL = 'image-2';
+const DEFAULT_IMAGE_MODEL = 'gpt-image-2';
 const LEGACY_IMAGE_MODEL_ALIASES = new Map([
-  ['gpt-image-2', DEFAULT_IMAGE_MODEL]
+  ['image-2', DEFAULT_IMAGE_MODEL]
 ]);
 const DEFAULT_TIMEOUT_MS = 15 * 1000;
 const MIN_TIMEOUT_MS = 1000;
-const MAX_TIMEOUT_MS = 60 * 1000;
+const MAX_TIMEOUT_MS = 2 * 60 * 1000;
 const DEFAULT_RETRIES = 1;
 const MAX_RETRIES = 3;
 const DEFAULT_MAX_RESPONSE_BYTES = 256 * 1024;

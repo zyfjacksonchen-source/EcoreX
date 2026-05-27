@@ -4,6 +4,7 @@ const {
   createModelAdapter,
   endpointUrl,
   inferModelCapabilities,
+  normalizeImageModelName,
   normalizeOpenAIResponse,
   parseOpenAIStream,
   retryDelayMs,
@@ -11,7 +12,10 @@ const {
 } = require('../electron/model-adapter.cjs');
 
 async function main() {
-  assert.equal(DEFAULT_IMAGE_MODEL, 'image-2');
+  assert.equal(DEFAULT_IMAGE_MODEL, 'gpt-image-2');
+  assert.equal(normalizeImageModelName(''), 'gpt-image-2');
+  assert.equal(normalizeImageModelName('gpt-image-2'), 'gpt-image-2');
+  assert.equal(normalizeImageModelName('image-2'), 'gpt-image-2');
 
   assert.equal(
     endpointUrl('https://api.example.test/v1/chat/completions', '/responses'),
@@ -130,7 +134,7 @@ async function main() {
   assert.equal(imageResult.imageArtifacts.length, 1);
 
   await imageAdapter.generateImage(
-    { baseUrl: 'https://api.example.test/v1', apiKey: secret, imageModel: 'gpt-image-2' },
+    { baseUrl: 'https://api.example.test/v1', apiKey: secret, imageModel: 'image-2' },
     { prompt: 'legacy default image model' }
   );
   assert.equal(imageCalls[1].model, DEFAULT_IMAGE_MODEL);

@@ -115,6 +115,7 @@ const MAX_SECRET_VALUE_CHARS = 20_000;
 const MAX_MODEL_PROFILES = 20;
 const MAX_MODEL_PROFILE_TEXT_CHARS = 2048;
 const MODEL_PROFILE_TEST_TIMEOUT_MS = 20 * 1000;
+const IMAGE_GENERATION_TIMEOUT_MS = 2 * 60 * 1000;
 const ATTACHMENT_PREVIEW_MAX_BYTES = 2 * 1024 * 1024;
 const ECOREX_AGENT_CONFIG_DIR_NAME = 'agent-runtime-config';
 const BLOCKED_LOCAL_SKILL_NAMES = new Set(['superpowers', 'huashu-design', 'huashu_design', 'huashu design']);
@@ -3365,7 +3366,7 @@ function imageBodyFromPayload(payload = {}, profile = {}) {
 async function generateModelProfileImage(payload = {}) {
   const profile = modelProfileFromTestPayload(payload);
   if (!profile.baseUrl) throw new Error('Invalid baseUrl.');
-  const timeoutMs = Math.min(Math.max(Number(payload?.timeoutMs) || 30000, 1000), 60000);
+  const timeoutMs = Math.min(Math.max(Number(payload?.timeoutMs) || 30000, 1000), IMAGE_GENERATION_TIMEOUT_MS);
   const adapter = createModelAdapter({
     timeoutMs,
     retries: Math.min(Math.max(Number(payload?.retries ?? payload?.retryCount) || 0, 0), 3),
@@ -4303,22 +4304,89 @@ function projectFilesDir(projectPath) {
   return dir;
 }
 
+function projectFileRelativePath(projectPath, filePath) {
+  const filesRoot = path.join(projectPath, PROJECT_FILES_DIR_NAME);
+  const relative = path.relative(filesRoot, path.resolve(filePath)).replace(/\\/g, '/');
+  return sanitizeWorkspaceRelativePath(relative || path.basename(filePath));
+}
+
+function projectFileKindFromMime(extension = '', mimeType = '') {
+  const ext = String(extension || '').toLowerCase();
+  const mime = String(mimeType || '').toLowerCase();
+  if (isImageAttachmentMime(mime)) return 'image';
+  if (mime.startsWith('video/') || ['.mp4', '.webm', '.ogg', '.ogv', '.mov', '.m4v'].includes(ext)) return 'video';
+  if (['.xls', '.xlsx', '.xlsm', '.csv'].includes(ext)) return 'sheet';
+  if (['.ppt', '.pptx', '.pptm'].includes(ext)) return 'slide';
+  if (['.doc', '.docx', '.md', '.txt', '.pdf'].includes(ext)) return 'document';
+  if (FILE_PREVIEW_TEXT_EXTENSIONS.has(ext) || ['.html', '.htm'].includes(ext)) return 'code';
+  return 'file';
+}
+
+function projectFilePreviewDataUrl(target, mimeType = '', stat = null) {
+  if (!stat?.isFile?.() || stat.size > FILE_PREVIEW_IMAGE_MAX_BYTES || !isImageAttachmentMime(mimeType)) return '';
+  try {
+    return `data:${mimeType};base64,${fs.readFileSync(target).toString('base64')}`;
+  } catch {
+    return '';
+  }
+}
+
 function projectFileEntryFromPath(workspaceRoot, projectPath, filePath) {
   const target = path.resolve(filePath);
   if (!isPathInside(projectPath, target)) throw new Error('Project file path escapes project.');
   const stat = fs.statSync(target);
   if (!stat.isFile()) return null;
   const name = path.basename(target);
+  const extension = path.extname(target).toLowerCase();
+  const mimeType = attachmentMimeFromPath(target) || filePreviewMimeFromExtension(extension);
+  const relativePath = projectFileRelativePath(projectPath, target);
+  const previewDataUrl = projectFilePreviewDataUrl(target, mimeType, stat);
   return {
     id: crypto.createHash('sha256').update(`${target}:${stat.size}:${stat.mtimeMs}`).digest('hex').slice(0, 16),
     name: redactSensitiveText(name).slice(0, 240),
     path: target,
+    filePath: target,
     pathLabel: publicWorkspacePathLabel(workspaceRoot, target),
-    type: attachmentMimeFromPath(target) || filePreviewMimeFromExtension(path.extname(target).toLowerCase()),
+    relativePath,
+    type: mimeType,
+    mimeType,
+    extension,
+    kind: projectFileKindFromMime(extension, mimeType),
+    previewDataUrl,
+    previewUrl: previewDataUrl,
+    thumbnail: previewDataUrl,
     sizeBytes: stat.size,
     sizeMb: Number((stat.size / 1024 / 1024).toFixed(2)),
     modifiedAt: stat.mtime.toISOString()
   };
+}
+
+function collectProjectFileEntries(workspaceRoot, projectPath, dir, depth = 0, entries = []) {
+  if (depth > 8 || entries.length >= 200) return entries;
+  let rows = [];
+  try {
+    rows = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return entries;
+  }
+  for (const row of rows) {
+    if (entries.length >= 200) break;
+    if (row.isSymbolicLink()) continue;
+    const target = path.join(dir, row.name);
+    if (!isPathInside(projectPath, target)) continue;
+    if (row.isDirectory()) {
+      collectProjectFileEntries(workspaceRoot, projectPath, target, depth + 1, entries);
+      continue;
+    }
+    if (!row.isFile()) continue;
+    try {
+      const entry = projectFileEntryFromPath(workspaceRoot, projectPath, target);
+      if (entry) entries.push(entry);
+    } catch {
+      // Skip unreadable files rather than failing the project overview.
+    }
+  }
+  return entries;
 }
 
 function resolveProjectFileTarget(workspaceRoot, project, payload = {}) {
@@ -4338,16 +4406,7 @@ function listProjectFiles(payload = {}) {
   const dir = projectFilesDir(project.projectPath);
   let entries = [];
   try {
-    entries = fs.readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && !entry.isSymbolicLink())
-      .map((entry) => {
-        try {
-          return projectFileEntryFromPath(workspaceRoot, project.projectPath, path.join(dir, entry.name));
-        } catch {
-          return null;
-        }
-      })
-      .filter(Boolean)
+    entries = collectProjectFileEntries(workspaceRoot, project.projectPath, dir)
       .sort((left, right) => new Date(right.modifiedAt).getTime() - new Date(left.modifiedAt).getTime())
       .slice(0, 200);
   } catch {
