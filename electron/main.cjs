@@ -7271,6 +7271,9 @@ function writeSessionTranscript(sessionId, entry, result = {}) {
   const file = path.join(sessionTranscriptDir(), fileName);
   const payload = {
     sessionId,
+    conversationId: entry.conversationId || '',
+    claudeSessionId: entry.claudeSessionId || '',
+    messageId: entry.messageId || '',
     status: result.status || 'ended',
     reason: result.reason,
     exitCode: result.code,
@@ -7434,6 +7437,9 @@ function sessionTranscriptSummaryFromFile(file, options = {}) {
     const summary = {
       id: sessionId,
       sessionId,
+      conversationId: raw.conversationId || '',
+      claudeSessionId: raw.claudeSessionId || '',
+      messageId: raw.messageId || '',
       status: raw.status || lastEvent.status || 'history',
       state: raw.state || lastEvent.state || raw.status || 'history',
       reason: raw.reason,
@@ -7493,6 +7499,26 @@ function sessionTranscriptSummaries(limit = MAX_RECENT_SESSION_FILES) {
 
 function recentSessionFiles(limit = MAX_RECENT_SESSION_FILES) {
   return sessionTranscriptSummaries(limit);
+}
+
+function recentRecoverableSessionSummaries(limit = 6) {
+  const cutoffMs = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  return sessionTranscriptSummaries(Math.max(limit * 4, 20))
+    .filter((session) => {
+      const endedAt = Date.parse(session.endedAt || session.modifiedAt || '');
+      if (Number.isFinite(endedAt) && endedAt < cutoffMs) return false;
+      const status = String(session.status || '').toLowerCase();
+      const reason = String(session.reason || '').toLowerCase();
+      return ['stopped', 'cancelled', 'canceled', 'failed', 'timeout'].includes(status)
+        && /(app-quit|window-closed|renderer|crash|unresponsive|gone|quit|closed|timeout)/i.test(reason || status);
+    })
+    .slice(0, Math.min(Math.max(Number(limit) || 1, 1), 12))
+    .map((session) => ({
+      ...session,
+      recoverable: true,
+      recoveryStatus: session.status || 'stopped',
+      recoveryHint: '上次关闭或重启时任务被中断，可在原会话继续或重试；已生成的产物会继续留在原项目/会话内。'
+    }));
 }
 
 function getSessionHistorySummary(payload = {}) {
@@ -10603,7 +10629,10 @@ handleSafe('agent:stop', (_event, payload) => {
   return stopAgent(sessionId, 'cancelled');
 }, { authRequired: true });
 handleSafe('agent:sessions', () => {
-  return { ok: true, sessions: getRunningSessionSummaries(), unfinishedRuns: recentUnfinishedRunJournals() };
+  const running = getRunningSessionSummaries();
+  const runningIds = new Set(running.map((session) => session.sessionId));
+  const recoverable = recentRecoverableSessionSummaries().filter((session) => !runningIds.has(session.sessionId));
+  return { ok: true, sessions: [...running, ...recoverable], unfinishedRuns: recentUnfinishedRunJournals() };
 }, { authRequired: true });
 handleSafe('agent:session-history', (_event, payload = {}) => getSessionHistorySummary(payload), { authRequired: true });
 handleSafe('backend:open-auth', async () => {

@@ -694,6 +694,16 @@ function serializeAgentAttachments(attachments = []) {
     .map((attachment, index) => serializeAgentAttachment(attachment, index));
 }
 
+function filterAttachmentsForProjectScope(attachments = [], projectId = '') {
+  const safeProjectId = String(projectId || '').trim();
+  return (Array.isArray(attachments) ? attachments : []).filter((attachment) => {
+    const attachmentProjectId = String(attachment?.projectId || '').trim();
+    const projectScoped = attachment?.source === 'project' || Boolean(attachmentProjectId);
+    if (!projectScoped) return true;
+    return Boolean(safeProjectId && attachmentProjectId && attachmentProjectId === safeProjectId);
+  });
+}
+
 function sanitizeStoredAttachment(attachment = {}, index = 0) {
   const serialized = serializeAgentAttachment(attachment, index);
   return {
@@ -2038,8 +2048,18 @@ function loadRawRecentChatItems() {
 
 function loadRecentChatItems() {
   const owner = currentConversationStorageOwner();
+  const conversations = loadRawConversationMap();
   return loadRawRecentChatItems()
     .filter((item) => !owner || !item.ownerEmail || item.ownerEmail === owner)
+    .map((item) => {
+      const conversation = conversations[item.id];
+      if (!conversation || typeof conversation !== 'object') return item;
+      if (owner && conversation.ownerEmail && String(conversation.ownerEmail).toLowerCase() !== owner) return item;
+      const projectId = String(item.projectId || conversation.projectId || '').trim().slice(0, 120);
+      const projectName = String(item.projectName || conversation.projectName || '').trim().slice(0, 120);
+      return normalizeRecentChatItem({ ...item, projectId, projectName });
+    })
+    .filter(Boolean)
     .slice(0, MAX_RECENT_CHATS);
 }
 
@@ -2183,64 +2203,85 @@ function sanitizeStoredTimeline(timeline = []) {
     .map((item) => item.slice(0, 5).map((value) => String(value || '').slice(0, 240)));
 }
 
-function sanitizeStoredMessages(messages = []) {
+function sanitizeStoredMessages(messages = [], scope = {}) {
+  const conversationProjectId = String(scope.projectId || '').trim();
+  const conversationProjectName = String(scope.projectName || '').trim().slice(0, 120);
   return (Array.isArray(messages) ? messages : [])
     .slice(-MAX_STORED_MESSAGES_PER_CONVERSATION)
-    .map((message) => ({
-      id: String(message.id || createLocalId('message')).slice(0, 120),
-      role: message.role === 'user' ? 'user' : 'assistant',
-      text: String(message.text || '').slice(0, 12000),
-      time: String(message.time || '').slice(0, 16),
-      status: message.streaming ? 'complete' : String(message.status || '').slice(0, 40),
-      error: Boolean(message.error),
-      streaming: false,
-      sessionId: message.sessionId ? String(message.sessionId).slice(0, 120) : undefined,
-      originalPrompt: message.originalPrompt ? String(message.originalPrompt).slice(0, 12000) : undefined,
-      permissionDecision: message.permissionDecision && typeof message.permissionDecision === 'object'
-        ? {
-            action: String(message.permissionDecision.action || '').slice(0, 40),
-            label: String(message.permissionDecision.label || '').slice(0, 80),
-            status: String(message.permissionDecision.status || '').slice(0, 40),
-            at: Number(message.permissionDecision.at) || null
-          }
-        : undefined,
-      timeline: sanitizeStoredTimeline(message.timeline || []),
-      ledger: Array.isArray(message.ledger)
-        ? message.ledger.slice(-MAX_STORED_LEDGER_ITEMS).map((item, index) => normalizeToolLedgerItem(item, {}, index))
-        : [],
-    attachmentIngest: Array.isArray(message.attachmentIngest)
-      ? message.attachmentIngest.slice(-MAX_STORED_INGEST_ITEMS).map((item, index) => sanitizeAttachmentIngestItem(item, index))
-      : [],
-    finalArtifacts: Array.isArray(message.finalArtifacts)
-      ? mergeArtifactReferences(message.finalArtifacts).map((artifact) => ({
-          ...artifact,
-          id: String(artifact.id || artifact.path || artifact.name || '').slice(0, 220),
-          path: String(artifact.path || '').slice(0, 1000),
-          name: String(artifact.name || fileNameFromArtifactPath(artifact.path || '') || 'artifact').slice(0, 240),
-          ext: String(artifact.ext || artifactExtension(artifact.path || artifact.name || '')).slice(0, 20),
-          source: String(artifact.source || 'assistant-final').slice(0, 40)
-        }))
-      : [],
-    recovery: message.recovery && typeof message.recovery === 'object'
-      ? {
-            state: String(message.recovery.state || '').slice(0, 40),
-            label: String(message.recovery.label || '').slice(0, 80),
-            tone: String(message.recovery.tone || '').slice(0, 40),
-            sessionId: String(message.recovery.sessionId || '').slice(0, 120),
-            prompt: String(message.recovery.prompt || '').slice(0, 240),
-            detail: String(message.recovery.detail || '').slice(0, 360)
-          }
-        : undefined,
-      attachments: Array.isArray(message.attachments)
-        ? message.attachments.slice(0, MAX_COMPOSER_ATTACHMENTS).map((attachment, index) => sanitizeStoredAttachment(attachment, index))
-        : [],
-      references: Array.isArray(message.references)
-        ? sanitizeComposerReferences(message.references)
-        : [],
-      hiddenArtifactIds: Array.isArray(message.hiddenArtifactIds)
-        ? message.hiddenArtifactIds.map((id) => String(id).slice(0, 220)).slice(0, ARTIFACT_PREVIEW_MAX_ITEMS)
-        : []
-    }));
+    .map((message) => {
+      const messageProjectId = String(message.projectId || conversationProjectId || '').slice(0, 120);
+      const messageProjectName = String(message.projectName || conversationProjectName || '').slice(0, 120);
+      const scopedAttachments = filterAttachmentsForProjectScope(message.attachments || [], conversationProjectId);
+      const wasStreaming = Boolean(message.streaming);
+      return {
+        id: String(message.id || createLocalId('message')).slice(0, 120),
+        role: message.role === 'user' ? 'user' : 'assistant',
+        text: String(message.text || '').slice(0, 12000),
+        time: String(message.time || '').slice(0, 16),
+        status: wasStreaming ? 'interrupted' : String(message.status || '').slice(0, 40),
+        error: Boolean(message.error),
+        streaming: false,
+        sessionId: message.sessionId ? String(message.sessionId).slice(0, 120) : undefined,
+        claudeSessionId: message.claudeSessionId ? String(message.claudeSessionId).slice(0, 120) : undefined,
+        projectId: messageProjectId || undefined,
+        projectName: messageProjectName || undefined,
+        originalPrompt: message.originalPrompt ? String(message.originalPrompt).slice(0, 12000) : undefined,
+        permissionDecision: message.permissionDecision && typeof message.permissionDecision === 'object'
+          ? {
+              action: String(message.permissionDecision.action || '').slice(0, 40),
+              label: String(message.permissionDecision.label || '').slice(0, 80),
+              status: String(message.permissionDecision.status || '').slice(0, 40),
+              at: Number(message.permissionDecision.at) || null
+            }
+          : undefined,
+        timeline: sanitizeStoredTimeline(message.timeline || []),
+        ledger: Array.isArray(message.ledger)
+          ? message.ledger.slice(-MAX_STORED_LEDGER_ITEMS).map((item, index) => normalizeToolLedgerItem(item, {}, index))
+          : [],
+        attachmentIngest: Array.isArray(message.attachmentIngest)
+          ? message.attachmentIngest.slice(-MAX_STORED_INGEST_ITEMS).map((item, index) => sanitizeAttachmentIngestItem(item, index))
+          : [],
+        finalArtifacts: Array.isArray(message.finalArtifacts)
+          ? mergeArtifactReferences(message.finalArtifacts).map((artifact) => ({
+              ...artifact,
+              id: String(artifact.id || artifact.path || artifact.name || '').slice(0, 220),
+              path: String(artifact.path || '').slice(0, 1000),
+              name: String(artifact.name || fileNameFromArtifactPath(artifact.path || '') || 'artifact').slice(0, 240),
+              ext: String(artifact.ext || artifactExtension(artifact.path || artifact.name || '')).slice(0, 20),
+              source: String(artifact.source || 'assistant-final').slice(0, 40),
+              projectId: artifact.projectId ? String(artifact.projectId).slice(0, 120) : undefined
+            }))
+          : [],
+        recovery: message.recovery && typeof message.recovery === 'object'
+          ? {
+              state: String(message.recovery.state || '').slice(0, 40),
+              label: String(message.recovery.label || '').slice(0, 80),
+              tone: String(message.recovery.tone || '').slice(0, 40),
+              sessionId: String(message.recovery.sessionId || '').slice(0, 120),
+              prompt: String(message.recovery.prompt || '').slice(0, 240),
+              detail: String(message.recovery.detail || '').slice(0, 360)
+            }
+          : wasStreaming
+            ? {
+                state: 'recoverable',
+                label: '可恢复',
+                tone: 'running',
+                sessionId: message.sessionId ? String(message.sessionId).slice(0, 120) : '',
+                prompt: String(message.originalPrompt || '').slice(0, 240),
+                detail: '上次关闭或重启时任务被中断，可在原会话继续或重试；已生成的产物会保留在原项目/会话内。'
+              }
+          : undefined,
+        attachments: scopedAttachments.length
+          ? scopedAttachments.slice(0, MAX_COMPOSER_ATTACHMENTS).map((attachment, index) => sanitizeStoredAttachment(attachment, index))
+          : [],
+        references: Array.isArray(message.references)
+          ? sanitizeComposerReferences(message.references)
+          : [],
+        hiddenArtifactIds: Array.isArray(message.hiddenArtifactIds)
+          ? message.hiddenArtifactIds.map((id) => String(id).slice(0, 220)).slice(0, ARTIFACT_PREVIEW_MAX_ITEMS)
+          : []
+      };
+    });
 }
 
 function sanitizeLiveMessages(messages = []) {
@@ -2264,17 +2305,19 @@ function saveConversationState(id, patch = {}) {
   if (!id) return;
   const map = loadConversationMap();
   const previous = map[id] || {};
+  const projectId = String(Object.prototype.hasOwnProperty.call(patch, 'projectId') ? patch.projectId || '' : previous.projectId || '').slice(0, 120);
+  const projectName = String(Object.prototype.hasOwnProperty.call(patch, 'projectName') ? patch.projectName || '' : previous.projectName || '').slice(0, 120);
   map[id] = {
     ...previous,
     ...patch,
     id,
     claudeSessionId: String(patch.claudeSessionId || previous.claudeSessionId || id).slice(0, 120),
-    projectId: String(patch.projectId || previous.projectId || '').slice(0, 120),
-    projectName: String(patch.projectName || previous.projectName || '').slice(0, 120),
+    projectId,
+    projectName,
     ownerEmail: String(patch.ownerEmail || previous.ownerEmail || currentConversationStorageOwner() || '').slice(0, 160),
     contextSummary: sanitizeContextSummary(patch.contextSummary || previous.contextSummary || ''),
     contextCompactedAt: patch.contextCompactedAt || previous.contextCompactedAt || null,
-    messages: sanitizeStoredMessages(patch.messages || previous.messages || []),
+    messages: sanitizeStoredMessages(patch.messages || previous.messages || [], { projectId, projectName }),
     timeline: sanitizeStoredTimeline(patch.timeline || previous.timeline || []),
     updatedAt: patch.updatedAt || Date.now()
   };
@@ -2285,7 +2328,7 @@ function loadConversationState(id) {
   if (!id) return null;
   const item = loadConversationMap()[id];
   if (!item || typeof item !== 'object') return null;
-  const messages = sanitizeStoredMessages(item.messages || []);
+  const messages = sanitizeStoredMessages(item.messages || [], { projectId: item.projectId || '', projectName: item.projectName || '' });
   return {
     ...item,
     contextSummary: sanitizeContextSummary(item.contextSummary || ''),
@@ -5197,10 +5240,14 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
   }, [activeProject?.id]);
 
   useEffect(() => {
-    if (!activeProject?.id) return;
+    if (!activeProject?.id) {
+      setAttachments((items) => items.filter((item) => item.source !== 'project' && !item.projectId));
+      return;
+    }
     const available = projectFileIdentitySet(projectFiles);
     setAttachments((items) => items.filter((item) => {
-      if (item.source !== 'project' || item.projectId !== activeProject.id) return true;
+      if (item.source !== 'project' && !item.projectId) return true;
+      if (item.projectId !== activeProject.id) return false;
       const key = projectFileIdentity(item);
       return key && available.has(key);
     }));
@@ -5450,7 +5497,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     clearAttachments();
     attachmentObjectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     attachmentObjectUrlsRef.current.clear();
-    const initialAttachments = serializeAgentAttachments(item?.initialAttachments || item?.attachments || []);
+    const initialAttachments = filterAttachmentsForProjectScope(
+      serializeAgentAttachments(item?.initialAttachments || item?.attachments || []),
+      nextProject?.id || ''
+    );
     if (initialAttachments.length) appendAttachments(initialAttachments);
     setPrompt(item?.initialPrompt || '');
     setComposerReferences([]);
@@ -5588,9 +5638,11 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     const stored = loadConversationState(ownerConversationId) || storedEventsByConversation.current.get(ownerConversationId) || {};
     const previousMessages = Array.isArray(stored.messages) ? stored.messages : [];
     const nextMessages = typeof updater === 'function' ? updater(previousMessages) : updater;
+    const projectId = String(stored.projectId || '').trim();
+    const projectName = String(stored.projectName || '').trim();
     const nextState = {
       ...stored,
-      messages: sanitizeStoredMessages(Array.isArray(nextMessages) ? nextMessages : previousMessages),
+      messages: sanitizeStoredMessages(Array.isArray(nextMessages) ? nextMessages : previousMessages, { projectId, projectName }),
       timeline: sanitizeStoredTimeline(stored.timeline || []),
       updatedAt: Date.now()
     };
@@ -5607,9 +5659,11 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     const stored = loadConversationState(ownerConversationId) || storedEventsByConversation.current.get(ownerConversationId) || {};
     const previousTimeline = Array.isArray(stored.timeline) ? stored.timeline : [];
     const nextTimeline = typeof updater === 'function' ? updater(previousTimeline) : updater;
+    const projectId = String(stored.projectId || '').trim();
+    const projectName = String(stored.projectName || '').trim();
     const nextState = {
       ...stored,
-      messages: sanitizeStoredMessages(stored.messages || []),
+      messages: sanitizeStoredMessages(stored.messages || [], { projectId, projectName }),
       timeline: sanitizeStoredTimeline(Array.isArray(nextTimeline) ? nextTimeline : previousTimeline),
       updatedAt: Date.now()
     };
@@ -5949,6 +6003,67 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     scheduleAgentFlush();
   }
 
+  function findStoredSessionOwner(row = {}) {
+    const sessionId = String(row.sessionId || row.id || '').trim();
+    const claudeSessionId = String(row.claudeSessionId || '').trim();
+    const conversationIdHint = String(row.conversationId || '').trim();
+    const messageIdHint = String(row.messageId || '').trim();
+    const matchesMessage = (message = {}) => (
+      Boolean(messageIdHint && message.id === messageIdHint)
+      || Boolean(sessionId && message.sessionId === sessionId)
+      || Boolean(claudeSessionId && message.claudeSessionId === claudeSessionId)
+    );
+    const currentMessage = messagesRef.current.find(matchesMessage);
+    if (currentMessage) {
+      return {
+        conversationId: conversationIdRef.current,
+        messageId: currentMessage.id,
+        projectId: conversationProjectRef.current?.id || currentMessage.projectId || row.projectId || '',
+        projectName: conversationProjectRef.current?.name || currentMessage.projectName || row.projectName || ''
+      };
+    }
+
+    const conversations = loadConversationMap();
+    const orderedIds = conversationIdHint
+      ? [conversationIdHint, ...Object.keys(conversations).filter((id) => id !== conversationIdHint)]
+      : Object.keys(conversations);
+    for (const id of orderedIds) {
+      const conversation = conversations[id];
+      if (!conversation || typeof conversation !== 'object') continue;
+      const message = (conversation.messages || []).find(matchesMessage);
+      if (!message && id !== conversationIdHint) continue;
+      return {
+        conversationId: id,
+        messageId: message?.id || messageIdHint,
+        projectId: conversation.projectId || message?.projectId || row.projectId || '',
+        projectName: conversation.projectName || message?.projectName || row.projectName || ''
+      };
+    }
+    return null;
+  }
+
+  function appendRecoveredSessionMessage(ownerConversationId, message = {}, owner = {}) {
+    if (!ownerConversationId || !message?.id) return;
+    const projectId = String(owner.projectId || '').trim();
+    const projectName = String(owner.projectName || '').trim();
+    if (String(ownerConversationId) === String(conversationIdRef.current)) {
+      setMessages((items) => {
+        if (items.some((item) => item.id === message.id)) return items;
+        return sanitizeLiveMessages([...items, message]);
+      });
+      return;
+    }
+    const stored = loadConversationState(ownerConversationId) || {};
+    saveConversationState(ownerConversationId, {
+      ...stored,
+      projectId: projectId || stored.projectId || '',
+      projectName: projectName || stored.projectName || ''
+    });
+    updateMessagesForConversation(ownerConversationId, (items) => (
+      items.some((item) => item.id === message.id) ? items : [...items, message]
+    ));
+  }
+
   async function refreshAgentSessions() {
     if (!window.ecorex?.getAgentSessions) return;
     const cached = window.__ecorexStartupCache?.agentSessions;
@@ -5961,16 +6076,23 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     if (result?.ok === false && result.missing) return;
     if (result?.ok === false) return;
 
-    const recoveredMessages = [];
     const backendRows = extractAgentSessionRows(result).map((row, index) => {
       const sessionId = row.sessionId || row.id;
-      let messageId = row.messageId || sessionMap.current.get(sessionId);
-      if (sessionId && !messageId) {
+      const storedOwner = findStoredSessionOwner(row);
+      const ownerConversationId = row.conversationId || storedOwner?.conversationId || conversationIdRef.current;
+      const ownerProjectId = row.projectId || storedOwner?.projectId || '';
+      const ownerProjectName = row.projectName || storedOwner?.projectName || '';
+      let messageId = row.messageId || storedOwner?.messageId || sessionMap.current.get(sessionId);
+      const ownerMessages = String(ownerConversationId) === String(conversationIdRef.current)
+        ? messagesRef.current
+        : (loadConversationState(ownerConversationId)?.messages || []);
+      const ownerHasMessage = Boolean(messageId && ownerMessages.some((message) => message.id === messageId));
+      if (sessionId && (!messageId || !ownerHasMessage)) {
         const active = isRunningSessionActive(row);
         const recovery = recoveryStateFromSession(row);
-        messageId = `assistant-resumed-${sessionId}`;
+        messageId = messageId || `assistant-resumed-${sessionId}`;
         sessionMap.current.set(sessionId, messageId);
-        recoveredMessages.push({
+        appendRecoveredSessionMessage(ownerConversationId, {
           id: messageId,
           role: 'assistant',
           text: '',
@@ -5978,6 +6100,9 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           streaming: active,
           status: active ? (row.status === 'error' ? 'error' : 'thinking') : (recovery.state === 'retryable' ? 'error' : 'cancelled'),
           sessionId,
+          claudeSessionId: row.claudeSessionId || '',
+          projectId: ownerProjectId || '',
+          projectName: ownerProjectName || '',
           silentRecovery: true,
           originalPrompt: row.prompt || row.promptPreview || '',
           recovery,
@@ -5987,23 +6112,43 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
             formatAgentEventTime(row),
             recovery.tone || (row.status === 'error' ? 'danger' : 'running')
           ]]
-        });
+        }, { projectId: ownerProjectId, projectName: ownerProjectName });
       } else if (sessionId && messageId) {
         sessionMap.current.set(sessionId, messageId);
+      }
+      if (sessionId) {
+        sessionOwnersRef.current.set(sessionId, {
+          sessionId,
+          messageId: messageId || '',
+          conversationId: ownerConversationId,
+          claudeSessionId: row.claudeSessionId || '',
+          projectId: ownerProjectId || '',
+          projectName: ownerProjectName || ''
+        });
+      }
+      if (sessionId && messageId && ownerHasMessage && !isRunningSessionActive(row) && row.recoverable) {
+        const recovery = recoveryStateFromSession(row);
+        updateMessagesForConversation(ownerConversationId, (items) => items.map((message) => (
+          message.id === messageId
+            ? {
+                ...message,
+                streaming: false,
+                status: message.status === 'complete' ? 'interrupted' : (message.status || 'interrupted'),
+                recovery: message.recovery || recovery,
+                originalPrompt: message.originalPrompt || row.prompt || row.promptPreview || ''
+              }
+            : message
+        )));
       }
       return {
         ...row,
         source: 'api',
-        messageId
+        conversationId: ownerConversationId,
+        messageId,
+        projectId: ownerProjectId,
+        projectName: ownerProjectName
       };
     });
-    if (recoveredMessages.length) {
-      setMessages((items) => {
-        const existing = new Set(items.map((item) => item.id));
-        const nextRecovered = recoveredMessages.filter((item) => !existing.has(item.id));
-        return nextRecovered.length ? [...items, ...nextRecovered] : items;
-      });
-    }
     const nextRows = commitRunningSessionRows((rows) => mergeRunningSessionRows(rows, backendRows, { replaceSources: ['api'] }));
     if (!currentSessionIdRef.current && nextRows.length) {
       currentSessionIdRef.current = nextRows[0].sessionId;
@@ -6322,12 +6467,12 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       queuedClaudeSessionId = null,
       queuedReferences = null
     } = options || {};
-    const cleanPrompt = clampComposerPromptText(text).trim();
-    const cleanAttachments = serializeAgentAttachments(attachmentList);
-    const cleanReferences = sanitizeComposerReferences(Array.isArray(queuedReferences) ? queuedReferences : composerReferences);
-    if (!cleanPrompt && !cleanAttachments.length && !cleanReferences.length) return;
     const activeConversationId = conversationIdRef.current;
     const activeProject = conversationProjectRef.current;
+    const cleanPrompt = clampComposerPromptText(text).trim();
+    const cleanAttachments = filterAttachmentsForProjectScope(serializeAgentAttachments(attachmentList), activeProject?.id || '');
+    const cleanReferences = sanitizeComposerReferences(Array.isArray(queuedReferences) ? queuedReferences : composerReferences);
+    if (!cleanPrompt && !cleanAttachments.length && !cleanReferences.length) return;
     if (hasRunningSessionForConversation(activeConversationId) && !forceRun) {
       enqueueFollowUpPrompt(cleanPrompt, cleanAttachments);
       return;
@@ -6452,6 +6597,8 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         sessionId: requestedSessionId,
         conversationId: activeConversationId,
         claudeSessionId: nextClaudeSessionId,
+        messageId: assistantId,
+        assistantMessageId: assistantId,
         prompt: promptForAgent,
         rawPrompt: cleanPrompt,
         userPrompt: cleanPrompt,
@@ -6459,6 +6606,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         attachmentMetadata: cleanAttachments,
         selectedReferences: cleanReferences,
         projectId: activeProject?.id || null,
+        projectName: activeProject?.name || '',
         disableProjectContext: !activeProject?.id,
         accessMode,
         permissionMode: requestedPermissionMode,
@@ -6738,11 +6886,14 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         sessionId: requestedSessionId,
         conversationId: conversationIdRef.current,
         claudeSessionId: conversationSessionIdRef.current || conversationIdRef.current,
+        messageId: message.id,
+        assistantMessageId: message.id,
         prompt: continuationPrompt,
         accessMode,
         permissionMode: requestedPermissionMode,
         defaultPermissionMode: requestedPermissionMode,
         projectId: conversationProjectRef.current?.id || null,
+        projectName: conversationProjectRef.current?.name || '',
         disableProjectContext: !conversationProjectRef.current?.id,
         ...fullAccessConfirmationFields(accessMode),
         model,
@@ -7544,7 +7695,7 @@ function RecoveryStateNotice({ recovery, status, onRetry }) {
   if (!recovery?.state) return null;
   const completed = ['complete', 'completed'].includes(String(status || '').toLowerCase());
   if (completed && recovery.state === 'recoverable') return null;
-  const canRetry = recovery.state === 'retryable' || ['error', 'timeout'].includes(String(status || '').toLowerCase());
+  const canRetry = ['recoverable', 'retryable'].includes(recovery.state) || ['error', 'timeout', 'interrupted'].includes(String(status || '').toLowerCase());
   return (
     <div className={`message-recovery-state ${recovery.tone || 'running'}`}>
       <Clock3 size={15} />
@@ -8940,10 +9091,14 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage, 
   }, [selectedProject?.id]);
 
   useEffect(() => {
-    if (!selectedProject?.id) return;
+    if (!selectedProject?.id) {
+      setProjectPromptAttachments((items) => items.filter((item) => item.source !== 'project' && !item.projectId));
+      return;
+    }
     const available = projectFileIdentitySet(projectFiles);
     setProjectPromptAttachments((items) => items.filter((item) => {
-      if (item.source !== 'project' || item.projectId !== selectedProject.id) return true;
+      if (item.source !== 'project' && !item.projectId) return true;
+      if (item.projectId !== selectedProject.id) return false;
       const key = projectFileIdentity(item);
       return key && available.has(key);
     }));
@@ -10291,7 +10446,7 @@ function sessionStatusTone(status) {
 
 function isRunningSessionActive(session = {}) {
   const normalized = String(session.status || session.state || '').toLowerCase();
-  return !['complete', 'completed', 'done', 'idle', 'cancelled', 'canceled', 'error', 'failed', 'timeout'].includes(normalized);
+  return !['complete', 'completed', 'done', 'idle', 'cancelled', 'canceled', 'stopped', 'interrupted', 'error', 'failed', 'timeout'].includes(normalized);
 }
 
 function sessionTimestamp(value) {
@@ -10307,14 +10462,23 @@ function normalizeRunningSession(raw = {}, index = 0, source = 'api') {
   const prompt = sanitizeDisplayText(raw.promptPreview || raw.prompt || raw.title || raw.summary, '正在执行任务');
   const accessMode = normalizeAccessMode(raw.accessMode || raw.permissionMode || raw.defaultPermissionMode);
   const updatedAt = sessionTimestamp(raw.updatedAt || raw.lastActivityAt || raw.lastActivity || raw.startedAt || raw.startedAtIso);
+  const conversationId = String(raw.conversationId || raw.conversation_id || raw.chatId || raw.chat_id || '').trim();
+  const claudeSessionId = String(raw.claudeSessionId || raw.claude_session_id || raw.nativeSessionId || raw.native_session_id || '').trim();
+  const projectId = String(raw.projectId || raw.project_id || '').trim();
+  const projectName = sanitizeDisplayText(raw.projectName || raw.project_name || raw.project?.name || '', '');
   return {
     id: sessionId,
     sessionId,
+    conversationId,
+    claudeSessionId,
     status,
     state: raw.state || status,
     title: sanitizeDisplayText(raw.title || raw.name || `会话 ${index + 1}`, `会话 ${index + 1}`),
     prompt,
     messageId: raw.messageId || raw.message_id || '',
+    projectId,
+    projectName,
+    projectPath: raw.projectPath || raw.project_path || '',
     accessMode,
     permissionMode: permissionModeFromAccessMode(accessMode),
     accessLabel: permissionOptionByValue(accessMode).label,
@@ -10342,6 +10506,10 @@ function mergeRunningSessionRows(current = [], incoming = [], options = {}) {
       title: row.title || existing.title,
       prompt: row.prompt || existing.prompt || '正在执行任务',
       messageId: row.messageId || existing.messageId || '',
+      conversationId: row.conversationId || existing.conversationId || '',
+      claudeSessionId: row.claudeSessionId || existing.claudeSessionId || '',
+      projectId: row.projectId || existing.projectId || '',
+      projectName: row.projectName || existing.projectName || '',
       accessMode: row.accessMode || existing.accessMode || 'default',
       accessLabel: row.accessLabel || existing.accessLabel || permissionOptionByValue(row.accessMode || existing.accessMode).label,
       source: row.source || existing.source || 'local',

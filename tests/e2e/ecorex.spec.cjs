@@ -2076,6 +2076,165 @@ test.describe('EcoreX Agent Electron E2E', () => {
     expect(payload.attachments[0].path).toContain(path.basename(textPath));
   });
 
+  test('keeps resumed project runs and dirty project history out of public chat', async ({ ecorex }) => {
+    const { electronApp, page, paths } = ecorex;
+    await login(page);
+
+    const projectWorkspace = path.join(paths.root, 'Project Isolation Recovery');
+    fs.mkdirSync(projectWorkspace, { recursive: true });
+    const settings = await page.evaluate(async ({ projectWorkspace }) => window.ecorex.updateSettings({
+      workspaceRoot: projectWorkspace,
+      confirmCustomWorkspaceRoot: true
+    }), { projectWorkspace });
+    expect(settings.ok).toBe(true);
+
+    await electronApp.evaluate(({ ipcMain }) => {
+      global.__ecorexResumeRun = null;
+      ipcMain.removeHandler('agent:run');
+      ipcMain.handle('agent:run', (_event, payload) => {
+        global.__ecorexResumeRun = { ...payload };
+        return {
+          ok: true,
+          sessionId: payload.sessionId,
+          conversationId: payload.conversationId,
+          claudeSessionId: payload.claudeSessionId,
+          messageId: payload.messageId,
+          projectId: payload.projectId,
+          projectName: payload.projectName,
+          initialEvent: { sessionId: payload.sessionId, kind: 'status', status: 'started', text: 'started' }
+        };
+      });
+      ipcMain.removeHandler('agent:sessions');
+      ipcMain.handle('agent:sessions', () => {
+        const run = global.__ecorexResumeRun;
+        return {
+          ok: true,
+          sessions: run ? [{
+            sessionId: run.sessionId,
+            conversationId: run.conversationId,
+            claudeSessionId: run.claudeSessionId,
+            messageId: run.messageId,
+            projectId: run.projectId,
+            projectName: run.projectName,
+            status: 'running',
+            state: 'running',
+            promptPreview: run.rawPrompt || run.userPrompt || ''
+          }] : []
+        };
+      });
+    });
+
+    const suffix = Date.now();
+    const project = await page.evaluate(async (name) => {
+      const result = await window.ecorex.createProject({ name, client: '隔离品牌', goal: '恢复路由验证' });
+      window.dispatchEvent(new CustomEvent('ecorex:projects-changed'));
+      const conversationId = `project-recovery-${Date.now()}`;
+      window.dispatchEvent(new CustomEvent('ecorex:new-chat', {
+        detail: {
+          id: conversationId,
+          claudeSessionId: conversationId,
+          title: '项目恢复会话',
+          projectId: result.project.id,
+          projectName: result.project.name
+        }
+      }));
+      window.dispatchEvent(new CustomEvent('ecorex:project-context', { detail: { project: result.project } }));
+      return result.project;
+    }, `Isolation Project ${suffix}`);
+    expect(project?.id).toBeTruthy();
+
+    const dirtyTitle = `Dirty Project History ${suffix}`;
+    await page.evaluate(({ dirtyTitle, project }) => {
+      const recent = JSON.parse(localStorage.getItem('ecorex-recent-chats') || '[]');
+      const conversations = JSON.parse(localStorage.getItem('ecorex-chat-conversations') || '{}');
+      const dirtyId = `dirty-project-${Date.now()}`;
+      localStorage.setItem('ecorex-recent-chats', JSON.stringify([
+        {
+          id: dirtyId,
+          claudeSessionId: dirtyId,
+          title: dirtyTitle,
+          time: '16:20',
+          updatedAt: Date.now(),
+          projectId: '',
+          projectName: ''
+        },
+        ...recent
+      ]));
+      conversations[dirtyId] = {
+        id: dirtyId,
+        claudeSessionId: dirtyId,
+        projectId: project.id,
+        projectName: project.name,
+        updatedAt: Date.now(),
+        messages: [
+          {
+            id: `user-${dirtyId}`,
+            role: 'user',
+            text: dirtyTitle,
+            attachments: [{
+              id: 'project-file:dirty',
+              name: 'test-project-only.txt',
+              source: 'project',
+              projectId: project.id,
+              projectName: project.name,
+              relativePath: 'test-project-only.txt',
+              path: 'workspace:/project/files/test-project-only.txt'
+            }]
+          }
+        ]
+      };
+      localStorage.setItem('ecorex-chat-conversations', JSON.stringify(conversations));
+      window.dispatchEvent(new CustomEvent('ecorex:recent-chats-changed'));
+    }, { dirtyTitle, project });
+    await expect(page.locator('.recent-row').filter({ hasText: dirtyTitle })).toHaveCount(0);
+    await expect(page.locator('.sidebar-project-session-row').filter({ hasText: dirtyTitle }).first()).toBeVisible({ timeout: 15_000 });
+
+    const prompt = `project resumed artifact ${suffix}`;
+    const resultText = `project resumed result ${suffix}`;
+    const artifactName = `project-resumed-${suffix}.md`;
+    const projectDir = path.join(projectWorkspace, project.pathLabel.replace(/^workspace:\//, '').replace(/\//g, path.sep));
+    const artifactPath = path.join(projectDir, 'files', artifactName);
+    fs.mkdirSync(path.dirname(artifactPath), { recursive: true });
+    fs.writeFileSync(artifactPath, '# Project recovered artifact\nrestored output\n', 'utf8');
+
+    await page.locator('[data-testid="chat-input"]').fill(prompt);
+    await page.locator('[data-testid="chat-input"]').press('Enter');
+    await expect.poll(async () => electronApp.evaluate(() => Boolean(global.__ecorexResumeRun?.messageId)), { timeout: 10_000 }).toBe(true);
+
+    await page.locator('.new-chat').click();
+    await expect(page.locator('[data-testid="chat-input"]')).toHaveValue('');
+    await page.reload();
+    await ensureLoggedIn(page);
+    await expect.poll(async () => electronApp.evaluate(() => Boolean(global.__ecorexResumeRun?.sessionId)), { timeout: 10_000 }).toBe(true);
+
+    await electronApp.evaluate(({ BrowserWindow }, payload) => {
+      const run = global.__ecorexResumeRun;
+      const win = BrowserWindow.getAllWindows()[0];
+      if (!run || !win || win.isDestroyed()) return false;
+      win.webContents.send('agent:events', {
+        sessionId: run.sessionId,
+        events: [
+          {
+            sessionId: run.sessionId,
+            kind: 'result',
+            status: 'completed',
+            text: `${payload.resultText}\n- [${payload.artifactName}](${payload.artifactPath})`
+          },
+          { sessionId: run.sessionId, kind: 'done', status: 'completed', text: 'done' }
+        ]
+      });
+      return true;
+    }, { resultText, artifactName, artifactPath: artifactPath.replace(/\\/g, '/') });
+
+    await expect(page.locator('.assistant-card').filter({ hasText: resultText })).toHaveCount(0);
+    await expect(page.locator('.recent-row').filter({ hasText: prompt })).toHaveCount(0);
+    const projectSession = page.locator('.sidebar-project-session-row').filter({ hasText: prompt.slice(0, 28) }).first();
+    await expect(projectSession).toBeVisible({ timeout: 15_000 });
+    await projectSession.locator('.sidebar-project-session').click();
+    await expect(page.locator('.assistant-card').filter({ hasText: resultText }).first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('.artifact-thumb-card').filter({ hasText: artifactName }).first()).toBeVisible({ timeout: 15_000 });
+  });
+
   test('queues follow-up input during a running agent task and resumes in the same conversation', async ({ ecorex }) => {
     const { electronApp, page } = ecorex;
     await login(page);
