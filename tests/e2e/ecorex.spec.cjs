@@ -1431,6 +1431,7 @@ test.describe('EcoreX Agent Electron E2E', () => {
 
     await electronApp.evaluate(({ ipcMain, BrowserWindow }) => {
       global.__ecorexParallelRuns = [];
+      global.__ecorexParallelStops = [];
       ipcMain.removeHandler('agent:run');
       ipcMain.handle('agent:run', (event, payload) => {
         const win = BrowserWindow.fromWebContents(event.sender);
@@ -1449,6 +1450,11 @@ test.describe('EcoreX Agent Electron E2E', () => {
           initialEvent: { sessionId, kind: 'status', status: 'started', text: `started ${payload.rawPrompt || payload.userPrompt || ''}` }
         };
       });
+      ipcMain.removeHandler('agent:stop');
+      ipcMain.handle('agent:stop', (_event, payload) => {
+        global.__ecorexParallelStops.push(payload);
+        return { ok: true, sessionId: payload.sessionId, status: 'cancelled' };
+      });
     });
 
     const alphaPrompt = 'parallel alpha prompt';
@@ -1463,6 +1469,7 @@ test.describe('EcoreX Agent Electron E2E', () => {
 
     await page.locator('.new-chat').click();
     await expect(page.locator('[data-testid="chat-input"]')).toHaveValue('');
+    await expect(page.locator('[data-testid="chat-stop-button"]')).toHaveCount(0);
     await page.locator('[data-testid="chat-input"]').fill(betaPrompt);
     await page.locator('[data-testid="chat-input"]').press('Enter');
     await expect(page.locator('.user-bubble').filter({ hasText: betaPrompt }).first()).toBeVisible();
@@ -1473,6 +1480,7 @@ test.describe('EcoreX Agent Electron E2E', () => {
     expect(runPayloads[0].conversationId).not.toBe(runPayloads[1].conversationId);
     expect(runPayloads[0].claudeSessionId).toBe(runPayloads[0].conversationId);
     expect(runPayloads[1].claudeSessionId).toBe(runPayloads[1].conversationId);
+    await expect.poll(async () => electronApp.evaluate(() => (global.__ecorexParallelStops || []).length)).toBe(0);
 
     async function completeParallelRun(runKey, text) {
       return electronApp.evaluate(({ BrowserWindow }, payload) => {
@@ -2076,6 +2084,80 @@ test.describe('EcoreX Agent Electron E2E', () => {
     expect(payload.attachments[0].path).toContain(path.basename(textPath));
   });
 
+  test('keeps general chats outside active project files and memory', async ({ ecorex }) => {
+    const { electronApp, page, paths } = ecorex;
+    await login(page);
+
+    const projectWorkspace = path.join(paths.root, 'General Chat Project Isolation');
+    fs.mkdirSync(projectWorkspace, { recursive: true });
+    const settings = await page.evaluate(async ({ projectWorkspace }) => window.ecorex.updateSettings({
+      workspaceRoot: projectWorkspace,
+      confirmCustomWorkspaceRoot: true
+    }), { projectWorkspace });
+    expect(settings.ok).toBe(true);
+
+    await electronApp.evaluate(({ ipcMain, BrowserWindow }) => {
+      global.__ecorexGeneralIsolationPayloads = [];
+      ipcMain.removeHandler('agent:run');
+      ipcMain.handle('agent:run', (event, payload) => {
+        global.__ecorexGeneralIsolationPayloads.push(payload);
+        const win = BrowserWindow.fromWebContents(event.sender);
+        setTimeout(() => {
+          if (!win || win.isDestroyed()) return;
+          win.webContents.send('agent:events', {
+            sessionId: payload.sessionId,
+            events: [
+              { sessionId: payload.sessionId, kind: 'result', status: 'completed', text: 'general isolation result' },
+              { sessionId: payload.sessionId, kind: 'done', status: 'completed', text: 'done' }
+            ]
+          });
+        }, 40);
+        return {
+          ok: true,
+          sessionId: payload.sessionId,
+          projectId: payload.projectId,
+          initialEvent: { sessionId: payload.sessionId, kind: 'status', status: 'started', text: 'started' }
+        };
+      });
+    });
+
+    const suffix = Date.now();
+    const projectOnlyFile = `project-only-${suffix}.txt`;
+    const project = await page.evaluate(async ({ name, projectOnlyFile }) => {
+      const result = await window.ecorex.createProject({ name, client: 'Hidden Brand', goal: 'General isolation check' });
+      window.dispatchEvent(new CustomEvent('ecorex:project-context', { detail: { project: result.project } }));
+      window.dispatchEvent(new CustomEvent('ecorex:projects-changed'));
+      return { ...result.project, projectOnlyFile };
+    }, { name: `General Isolation ${suffix}`, projectOnlyFile });
+    expect(project?.id).toBeTruthy();
+
+    const projectDir = path.join(projectWorkspace, project.pathLabel.replace(/^workspace:\//, '').replace(/\//g, path.sep));
+    const filePath = path.join(projectDir, 'files', projectOnlyFile);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, 'project-only material must not appear in general chat\n', 'utf8');
+
+    await page.evaluate(() => {
+      const conversationId = `general-chat-${Date.now()}`;
+      window.dispatchEvent(new CustomEvent('ecorex:new-chat', {
+        detail: { id: conversationId, claudeSessionId: conversationId, title: 'General chat' }
+      }));
+    });
+
+    const prompt = `general chat should not inspect project files ${suffix}`;
+    await page.locator('[data-testid="chat-input"]').fill(prompt);
+    await page.locator('[data-testid="chat-input"]').press('Enter');
+    await expect(page.locator('.assistant-card').filter({ hasText: 'general isolation result' }).first()).toBeVisible({ timeout: 10_000 });
+
+    const payload = await electronApp.evaluate(() => global.__ecorexGeneralIsolationPayloads?.[0]);
+    expect(payload).toBeTruthy();
+    expect(payload.projectId).toBe(null);
+    expect(payload.disableProjectContext).toBe(true);
+    expect(payload.projectName || '').toBe('');
+    expect(payload.attachments || []).toHaveLength(0);
+    expect(payload.prompt).not.toContain(projectOnlyFile);
+    expect(payload.prompt).not.toContain('project-memory.md');
+  });
+
   test('keeps resumed project runs and dirty project history out of public chat', async ({ ecorex }) => {
     const { electronApp, page, paths } = ecorex;
     await login(page);
@@ -2316,6 +2398,72 @@ test.describe('EcoreX Agent Electron E2E', () => {
     expect(runPayloads[1].conversationId).toBe(runPayloads[0].conversationId);
     expect(runPayloads[1].claudeSessionId).toBe(runPayloads[0].claudeSessionId);
     expect(runPayloads[1].prompt).toContain(followUpPrompt);
+  });
+
+  test('hides stale recovery prompts immediately after retry starts', async ({ ecorex }) => {
+    const { electronApp, page } = ecorex;
+    await login(page);
+
+    await electronApp.evaluate(({ ipcMain }) => {
+      global.__ecorexRecoveryRetryPayloads = [];
+      ipcMain.removeHandler('agent:run');
+      ipcMain.handle('agent:run', (_event, payload) => {
+        global.__ecorexRecoveryRetryPayloads.push(payload);
+        return {
+          ok: true,
+          sessionId: payload.sessionId,
+          initialEvent: { sessionId: payload.sessionId, kind: 'status', status: 'started', text: 'started' }
+        };
+      });
+    });
+
+    const retryPrompt = `retry stale recovery ${Date.now()}`;
+    await page.evaluate(({ retryPrompt }) => {
+      const conversationId = `recovery-retry-${Date.now()}`;
+      const conversations = JSON.parse(localStorage.getItem('ecorex-chat-conversations') || '{}');
+      conversations[conversationId] = {
+        id: conversationId,
+        claudeSessionId: conversationId,
+        projectId: '',
+        projectName: '',
+        updatedAt: Date.now(),
+        messages: [
+          {
+            id: 'assistant-recoverable',
+            role: 'assistant',
+            text: '',
+            time: '17:00',
+            status: 'interrupted',
+            originalPrompt: retryPrompt,
+            recovery: {
+              state: 'recoverable',
+              label: '可恢复',
+              tone: 'running',
+              detail: '上次任务被中断，可重试。'
+            }
+          }
+        ],
+        timeline: []
+      };
+      localStorage.setItem('ecorex-chat-conversations', JSON.stringify(conversations));
+      localStorage.setItem('ecorex-recent-chats', JSON.stringify([{
+        id: conversationId,
+        claudeSessionId: conversationId,
+        title: retryPrompt,
+        time: '17:00',
+        updatedAt: Date.now(),
+        projectId: '',
+        projectName: ''
+      }]));
+      window.dispatchEvent(new CustomEvent('ecorex:open-chat', { detail: { id: conversationId } }));
+    }, { retryPrompt });
+
+    await expect(page.locator('.message-recovery-state')).toBeVisible({ timeout: 10_000 });
+    await page.locator('.message-recovery-state button').click();
+    await expect(page.locator('.message-recovery-state')).toHaveCount(0);
+    await expect.poll(async () => electronApp.evaluate(() => global.__ecorexRecoveryRetryPayloads?.length || 0)).toBe(1);
+    const payload = await electronApp.evaluate(() => global.__ecorexRecoveryRetryPayloads?.[0]);
+    expect(payload.prompt).toContain(retryPrompt);
   });
 
   test('passes selected attachments as structured agent payloads instead of prompt-only filenames', async ({ ecorex }) => {

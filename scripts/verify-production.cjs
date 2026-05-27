@@ -513,16 +513,23 @@ check('renderer routes agent events by owning conversation', () => {
     [
       'function sessionOwnerForSession',
       'function hasRunningSessionForConversation',
+      'function runningSessionIdForConversation',
+      'function syncCurrentSessionForVisibleConversation',
       'storedEventsByConversation',
       'loadConversationState(ownerConversationId)',
       'saveConversationState(ownerConversationId',
       'flushQueuedFollowUps(owner.conversationId)',
-      'hasRunningSessionForConversation(activeConversationId)'
+      'hasRunningSessionForConversation(activeConversationId)',
+      'queuedConversationId',
+      'activeConversationRunning'
     ],
     'owner-aware renderer session routing'
   );
   assertMatches(app, /updateTimelineForConversation\(activeConversationId[\s\S]*appendTimelineItems\(items, initialDisclosureTimeline\)/, 'new run disclosure timeline must target the owning conversation.');
   assertMatches(app, /updateMessagesForConversation\(activeConversationId[\s\S]*item\.id === assistantId[\s\S]*streaming:\s*false/, 'run failure updates must target the owning conversation.');
+  assertMatches(app, /running=\{activeConversationRunning\}/, 'composer stop controls must be scoped to the visible conversation.');
+  assertMatches(app, /syncCurrentSessionForVisibleConversation\(conversationIdRef\.current\)/, 'switching conversations must not keep a hidden session as the current stop target.');
+  assertMatches(app, /function clearMessageRecoveryState[\s\S]*recovery:\s*null/, 'retrying a recoverable task must hide the stale recovery prompt.');
 });
 
 check('auth token exposure and session lifecycle are bounded', () => {
@@ -852,6 +859,11 @@ check('agent runtime production guardrails', () => {
       'claudeSessionId',
       'contextManagement',
       'const CLAUDE_AUTO_ALLOWED_TOOL_SET',
+      'const ECOREX_BUILTIN_PLUGIN_ALLOWLIST',
+      'const ECOREX_GENERAL_WORKSPACE_DIR_NAME',
+      'ECOREX_GENERAL_CHAT_ISOLATION_PROMPT',
+      'function generalAgentWorkspaceDir',
+      'function allowedRuntimePluginNames',
       "'--tools'",
       "'--allowedTools'",
       'CLAUDE_AUTO_ALLOWED_TOOL_SET'
@@ -865,6 +877,10 @@ check('agent runtime production guardrails', () => {
   assertMatches(main, /process\.platform === 'win32' \? \{ CLAUDE_CODE_USE_POWERSHELL_TOOL:\s*'1' \}/, 'Windows agent runs must enable the PowerShell tool surface.');
   assertNotMatches(main, /CLAUDE_CODE_SIMPLE:\s*'1'/, 'agent runtime must not force simple mode because it hides WebSearch, Skill, Todo and PowerShell tools.');
   assertMatches(main, /function isolatedAgentRuntimeEnv\(\)[\s\S]*HOME:\s*configDir[\s\S]*USERPROFILE:\s*configDir[\s\S]*APPDATA:\s*appDataDir[\s\S]*LOCALAPPDATA:\s*localAppDataDir/, 'agent runtime must isolate home/appdata so local Claude skills and MCP state are not inherited.');
+  assertMatches(main, /const projectContextDisabled = payload\.disableProjectContext === true \|\| !payload\.projectId/, 'general chat runs must not inherit the last active project.');
+  assertNotMatches(main, /projectContextDisabled \? null : activeProjectContext\(\)/, 'agent runs must not fall back to the active project when no project id is provided.');
+  assertMatches(main, /const defaultRunRoot = projectContext\?\.projectPath \|\| generalAgentWorkspaceDir\(\)/, 'general chat runs must use the isolated general workspace.');
+  assertMatches(main, /function agentSystemPromptForProject[\s\S]*ECOREX_GENERAL_CHAT_ISOLATION_PROMPT/, 'general chat prompt must explicitly forbid project memory/file inspection.');
   assertMatches(main, /function claudeProjectsRoot\(\) \{[\s\S]*agentRuntimeConfigDir\(\)[\s\S]*'projects'/, 'Claude transcript discovery must only use the EcoreX runtime project root.');
   assertNotMatches(main, /function claudeProjectsRoot\(\) \{[\s\S]*process\.env\.USERPROFILE[\s\S]*\.claude[\s\S]*projects/, 'Claude transcript discovery must not scan the user global ~/.claude project history.');
   assertNotMatches(main, /function claudeSessionTranscriptExists[\s\S]*claudeSessionWasLaunched/, 'Claude resume must require a real transcript, not only a previous launch marker.');
@@ -872,6 +888,9 @@ check('agent runtime production guardrails', () => {
   assertMatches(main, /function runClaudeCommand[\s\S]*env:\s*\{[\s\S]*isolatedAgentRuntimeEnv\(\)/, 'auxiliary backend CLI commands must also use the EcoreX isolated config.');
   assertMatches(main, /const plugins = Array\.isArray\(payload\.plugins\)[\s\S]*isBlockedLocalSkillName\(plugin\)/, 'payload plugin names must reject local user skill packs.');
   assertMatches(main, /parsePluginInventory[\s\S]*isBlockedLocalSkillName\(pluginName\)[\s\S]*isBlockedLocalSkillName\(source\)/, 'backend plugin inventory must exclude blocked local skill pack names.');
+  assertMatches(main, /const selectedPlugins = allowedRuntimePluginNames\(safePayload\.plugins \|\| \[\]\)/, 'runtime plugins must be intersected with the EcoreX builtin and managed allowlist.');
+  assertMatches(main, /function runtimePluginPathAllowed[\s\S]*ECOREX_BUILTIN_PLUGIN_ALLOWLIST\.has\(name\)[\s\S]*isPathInside\(backendRoot,\s*resolved\)/, 'backend plugin directories must be allowlisted by plugin name.');
+  assertMatches(main, /runtimePluginPathAllowed\(pluginPath,\s*safeRepoRoot,\s*pluginName\)/, 'plugin path validation must include the selected plugin name.');
   assertMatches(main, /stdio:\s*\['pipe',\s*'pipe',\s*'pipe'\]/, 'agent child process must keep stdin piped.');
   assertMatches(main, /child\.stdin\.end\(`\$\{prompt\}\\n`\)/, 'agent prompt must be written to stdin.');
   assertNotMatches(main, /args\.push\(\s*prompt\s*\)|spawn\([^)]*prompt/s, 'agent prompt must not be passed through process argv.');
@@ -1331,10 +1350,12 @@ check('project workspaces isolate advertising context and memory', () => {
       'function ensureProjectMemory',
       'function agentSystemPromptForProject',
       'function projectEnvForAgent',
+      'function generalAgentWorkspaceDir',
       "handleSafe('project:update'",
       "handleSafe('project:archive'",
       "handleSafe('project:delete'",
-      'Run cwd must stay inside the current project.'
+      'Run cwd must stay inside the current project.',
+      'Run cwd must stay inside the general workspace.'
     ],
     'project workspace backend'
   );

@@ -4804,7 +4804,7 @@ function agentDisclosureLabel(event = {}) {
   if (/^TodoWrite$/i.test(firstTool)) return '更新任务清单';
   if (/^TodoRead$/i.test(firstTool)) return '读取任务清单';
   if (/^Task$/i.test(firstTool)) return '调度子 Agent';
-  if (/^Read$|^Grep$|^Glob$|^LS$|^NotebookRead$/i.test(firstTool)) return '查看项目文件';
+  if (/^Read$|^Grep$|^Glob$|^LS$|^NotebookRead$/i.test(firstTool)) return '查看文件';
   if (/^Write$|^Edit$|^MultiEdit$|^NotebookEdit$/i.test(firstTool)) return '准备修改文件';
   if (/^Bash$/i.test(firstTool)) return '执行本地命令';
   if (/^mcp__|^MCP$/i.test(firstTool)) return '调用 MCP';
@@ -5273,6 +5273,13 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
   }, [model, modelProfiles]);
 
   const visibleMessages = useMemo(() => messages.slice(-visibleMessageCount), [messages, visibleMessageCount]);
+  const activeConversationRunning = useMemo(() => (
+    runningSessions.some((row) => {
+      if (!isRunningSessionActive(row)) return false;
+      const owner = sessionOwnersRef.current.get(row.sessionId || row.id);
+      return String(row.conversationId || owner?.conversationId || '') === String(conversationId);
+    })
+  ), [runningSessions, conversationId]);
   const hiddenMessageCount = Math.max(messages.length - visibleMessages.length, 0);
 
   function isMessageListNearBottom(node = messageListRef.current) {
@@ -5513,10 +5520,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     setContextCompactedAt(null);
     setMessages(createInitialMessages(authDisplayName));
     setTimeline(initialTimeline);
-    if (!runningRef.current) {
-      currentSessionIdRef.current = null;
-      setCurrentSessionId(null);
-    }
+    syncCurrentSessionForVisibleConversation(conversationIdRef.current);
   }
 
   function openStoredConversation(item = {}) {
@@ -5553,15 +5557,17 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       setMessages(createInitialMessages(authDisplayName));
       setTimeline(initialTimeline);
     }
-    if (!runningRef.current) {
-      currentSessionIdRef.current = null;
-      setCurrentSessionId(null);
-    }
+    syncCurrentSessionForVisibleConversation(conversationIdRef.current);
   }
 
-  function syncRecentChatFromPrompt(conversationId, text) {
+  function syncRecentChatFromPrompt(conversationId, text, projectOverride = null) {
     const title = sanitizeDisplayText(text, '新会话').replace(/\s+/g, ' ').slice(0, 34);
-    const activeProject = conversationProjectRef.current;
+    const stored = String(conversationId || '') && String(conversationId || '') !== String(conversationIdRef.current || '')
+      ? loadConversationState(conversationId)
+      : null;
+    const activeProject = projectOverride
+      || (stored?.projectId ? { id: stored.projectId, name: stored.projectName || '' } : null)
+      || conversationProjectRef.current;
     window.dispatchEvent?.(new CustomEvent('ecorex:recent-chat-upsert', {
       detail: {
         id: conversationId || conversationIdRef.current || createLocalId('conversation'),
@@ -5582,6 +5588,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     runningSessionRowsRef.current = activeRows;
     setRunningSessions(activeRows);
     syncRunningSessions(activeRows);
+    syncCurrentSessionForVisibleConversation(conversationIdRef.current, activeRows);
     return activeRows;
   }
 
@@ -5624,6 +5631,29 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       const owner = sessionOwnerForSession(sessionId);
       return String(owner?.conversationId || '') === targetId;
     });
+  }
+
+  function runningSessionIdForConversation(activeConversationId, rows = runningSessionRowsRef.current) {
+    const targetId = String(activeConversationId || '');
+    if (!targetId) return null;
+    const row = (Array.isArray(rows) ? rows : []).find((item) => {
+      if (!isRunningSessionActive(item)) return false;
+      const owner = sessionOwnerForSession(item.sessionId || item.id, item);
+      return String(owner?.conversationId || '') === targetId;
+    });
+    if (row?.sessionId || row?.id) return row.sessionId || row.id;
+    for (const sessionId of Array.from(runningSessionsRef.current)) {
+      const owner = sessionOwnersRef.current.get(sessionId);
+      if (String(owner?.conversationId || '') === targetId) return sessionId;
+    }
+    return null;
+  }
+
+  function syncCurrentSessionForVisibleConversation(activeConversationId = conversationIdRef.current, rows = runningSessionRowsRef.current) {
+    const nextSessionId = runningSessionIdForConversation(activeConversationId, rows);
+    currentSessionIdRef.current = nextSessionId;
+    setCurrentSessionId(nextSessionId);
+    return nextSessionId;
   }
 
   function updateMessagesForConversation(ownerConversationId, updater) {
@@ -5683,8 +5713,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     };
     sessionOwnersRef.current.set(sessionId, owner);
     runningSessionsRef.current.add(sessionId);
-    currentSessionIdRef.current = sessionId;
-    setCurrentSessionId(sessionId);
+    if (String(owner.conversationId || '') === String(conversationIdRef.current || '')) {
+      currentSessionIdRef.current = sessionId;
+      setCurrentSessionId(sessionId);
+    }
     commitRunningSessionRows((rows) => mergeRunningSessionRows(rows, [
       normalizeRunningSession({
         sessionId,
@@ -5720,8 +5752,13 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       sessionMap.current.delete(previousSessionId);
       sessionMap.current.set(nextSessionId, messageId);
     }
-    currentSessionIdRef.current = nextSessionId;
-    setCurrentSessionId(nextSessionId);
+    if (
+      currentSessionIdRef.current === previousSessionId
+      || String(previousOwner?.conversationId || '') === String(conversationIdRef.current || '')
+    ) {
+      currentSessionIdRef.current = nextSessionId;
+      setCurrentSessionId(nextSessionId);
+    }
     commitRunningSessionRows((rows) => rows.map((row) => (
       row.sessionId === previousSessionId
         ? {
@@ -5744,9 +5781,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     sessionOwnersRef.current.delete(sessionId);
     const nextRows = commitRunningSessionRows((rows) => rows.filter((row) => row.sessionId !== sessionId));
     if (currentSessionIdRef.current === sessionId) {
-      const nextSessionId = Array.from(runningSessionsRef.current).at(-1) || nextRows[0]?.sessionId || null;
-      currentSessionIdRef.current = nextSessionId;
-      setCurrentSessionId(nextSessionId);
+      syncCurrentSessionForVisibleConversation(conversationIdRef.current, nextRows);
     }
     if (owner?.conversationId && !hasRunningSessionForConversation(owner.conversationId) && pendingFollowUpsRef.current.some((item) => item.conversationId === owner.conversationId)) {
       scheduleStatusTimer(() => flushQueuedFollowUps(owner.conversationId), 80);
@@ -5838,12 +5873,18 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         const ledgerItems = messageEvents.flatMap((event) => normalizeToolLedgerItemsFromEvent(event));
         const attachmentIngestItems = messageEvents.flatMap((event) => normalizeAttachmentIngestItemsFromEvent(event));
         const recoveryEvent = [...messageEvents].reverse().map(recoveryStateFromAgentEvent).find(Boolean);
+        const hasNormalProgressEvent = messageEvents.some((event) => (
+          ['status', 'tool', 'ledger', 'attachment', 'assistant', 'result', 'done'].includes(event.kind)
+          && !event.recovery
+          && !event.recoveryStatus
+        ));
         let nextItem = {
           ...item,
           timeline: appendTimelineItems(item.timeline || [], timelineItems),
           ledger: appendToolLedgerItems(item.ledger || [], ledgerItems),
           attachmentIngest: mergeAttachmentIngestItems(item.attachmentIngest || [], attachmentIngestItems),
-          recovery: recoveryEvent || item.recovery
+          recovery: recoveryEvent || (hasNormalProgressEvent ? null : item.recovery),
+          silentRecovery: hasNormalProgressEvent ? false : item.silentRecovery
         };
 
         for (const event of messageEvents) {
@@ -5874,7 +5915,9 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
               finalArtifacts: mergeArtifactReferences([...(nextItem.finalArtifacts || []), ...finalArtifacts]),
               streaming: false,
               status: 'complete',
-              meta: ''
+              meta: '',
+              recovery: null,
+              silentRecovery: false
             };
             continue;
           }
@@ -5890,7 +5933,9 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
               text: cleanAssistantOutputText(nextItem.text) || terminalText,
               finalArtifacts: finalArtifacts.length
                 ? mergeArtifactReferences([...(nextItem.finalArtifacts || []), ...finalArtifacts])
-                : nextItem.finalArtifacts
+                : nextItem.finalArtifacts,
+              recovery: null,
+              silentRecovery: false
             };
             continue;
           }
@@ -5944,7 +5989,9 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
                 : nextItem.finalArtifacts,
               streaming: false,
               status: terminalEvent.kind === 'error' ? 'error' : 'complete',
-              error: terminalEvent.kind === 'error'
+              error: terminalEvent.kind === 'error',
+              recovery: terminalEvent.kind === 'error' ? nextItem.recovery : null,
+              silentRecovery: terminalEvent.kind === 'error' ? nextItem.silentRecovery : false
             };
           }
         }
@@ -6150,10 +6197,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       };
     });
     const nextRows = commitRunningSessionRows((rows) => mergeRunningSessionRows(rows, backendRows, { replaceSources: ['api'] }));
-    if (!currentSessionIdRef.current && nextRows.length) {
-      currentSessionIdRef.current = nextRows[0].sessionId;
-      setCurrentSessionId(nextRows[0].sessionId);
-    }
+    syncCurrentSessionForVisibleConversation(conversationIdRef.current, nextRows);
   }
 
   useEffect(() => {
@@ -6331,9 +6375,9 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     return () => window.removeEventListener?.('ecorex:project-context', listener);
   }, []);
 
-  function scheduleMessageStatus(id, status, delay) {
+  function scheduleMessageStatus(id, status, delay, ownerConversationId = conversationIdRef.current) {
     scheduleStatusTimer(() => {
-      setMessages((items) =>
+      updateMessagesForConversation(ownerConversationId, (items) =>
         items.map((item) => (item.id === id ? { ...item, status } : item))
       );
     }, delay);
@@ -6465,10 +6509,16 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       fromQueue = false,
       queuedMessageIds = [],
       queuedClaudeSessionId = null,
+      queuedConversationId = null,
       queuedReferences = null
     } = options || {};
-    const activeConversationId = conversationIdRef.current;
-    const activeProject = conversationProjectRef.current;
+    const activeConversationId = String(fromQueue && queuedConversationId ? queuedConversationId : conversationIdRef.current);
+    const storedConversationForRun = activeConversationId !== String(conversationIdRef.current)
+      ? (loadConversationState(activeConversationId) || storedEventsByConversation.current.get(activeConversationId) || {})
+      : null;
+    const activeProject = storedConversationForRun?.projectId
+      ? { id: storedConversationForRun.projectId, name: storedConversationForRun.projectName || '' }
+      : conversationProjectRef.current;
     const cleanPrompt = clampComposerPromptText(text).trim();
     const cleanAttachments = filterAttachmentsForProjectScope(serializeAgentAttachments(attachmentList), activeProject?.id || '');
     const cleanReferences = sanitizeComposerReferences(Array.isArray(queuedReferences) ? queuedReferences : composerReferences);
@@ -6482,7 +6532,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     const nativeDesktop = Boolean(window.ecorex);
     const queuedMessageIdSet = new Set(queuedMessageIds);
     const useQueuedMessages = queuedMessageIdSet.size > 0;
-    let nextClaudeSessionId = queuedClaudeSessionId || conversationSessionIdRef.current || conversationIdRef.current;
+    let nextClaudeSessionId = queuedClaudeSessionId
+      || storedConversationForRun?.claudeSessionId
+      || (activeConversationId === String(conversationIdRef.current) ? conversationSessionIdRef.current : activeConversationId)
+      || activeConversationId;
     let contextSection = '';
     let compactedForNativeSession = false;
     if (nativeDesktop && !fromQueue && shouldRotateNativeClaudeSession(messagesRef.current, nativeSessionRotatedMessageCountRef.current)) {
@@ -6497,7 +6550,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       compactedForNativeSession = true;
       setContextSummary(compactSummary);
       setContextCompactedAt(Date.now());
-    } else if (queuedClaudeSessionId) {
+    } else if (queuedClaudeSessionId && activeConversationId === String(conversationIdRef.current)) {
       conversationSessionIdRef.current = queuedClaudeSessionId;
     } else if (!nativeDesktop) {
       contextSection = conversationContextSection(messagesRef.current, cleanPrompt, contextSummaryRef.current);
@@ -6517,7 +6570,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     autoScrollPinnedRef.current = true;
     setShowJumpLatest(false);
     sessionMap.current.set(requestedSessionId, assistantId);
-    syncRecentChatFromPrompt(activeConversationId, cleanPrompt || cleanReferences[0]?.name || cleanAttachments[0]?.name || '新会话');
+    syncRecentChatFromPrompt(activeConversationId, cleanPrompt || cleanReferences[0]?.name || cleanAttachments[0]?.name || '新会话', activeProject);
     trackSession(requestedSessionId, {
       messageId: assistantId,
       conversationId: activeConversationId,
@@ -6567,12 +6620,12 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     scheduleAssistantProgressDisclosure(assistantId, cleanPrompt, cleanAttachments);
     const statusMessageIds = useQueuedMessages ? queuedMessageIds : [userId];
     statusMessageIds.forEach((id) => {
-      scheduleMessageStatus(id, 'sent', 280);
-      scheduleMessageStatus(id, 'read', 760);
+      scheduleMessageStatus(id, 'sent', 280, activeConversationId);
+      scheduleMessageStatus(id, 'read', 760, activeConversationId);
     });
 
     if (!window.ecorex) {
-      scheduleMessageStatus(assistantId, 'generating', 420);
+      scheduleMessageStatus(assistantId, 'generating', 420, activeConversationId);
       scheduleStatusTimer(() => {
         updateMessagesForConversation(activeConversationId, (items) =>
           items.map((item) =>
@@ -6646,8 +6699,12 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       if (sessionId !== requestedSessionId) {
         transferSession(requestedSessionId, sessionId);
       }
-      currentSessionIdRef.current = sessionId;
-      setCurrentSessionId(sessionId);
+      if (activeConversationId === String(conversationIdRef.current || '')) {
+        currentSessionIdRef.current = sessionId;
+        setCurrentSessionId(sessionId);
+      } else {
+        syncCurrentSessionForVisibleConversation(conversationIdRef.current);
+      }
       updateMessagesForConversation(activeConversationId, (items) =>
         items.map((item) => (item.id === assistantId ? {
           ...item,
@@ -6700,8 +6757,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
   async function cancelPrompt(sessionId = currentSessionIdRef.current) {
     if (!sessionId) return;
     pendingCancelsRef.current.add(sessionId);
+    const owner = sessionOwnerForSession(sessionId);
+    const ownerConversationId = owner?.conversationId || conversationIdRef.current;
     const messageId = sessionMap.current.get(sessionId) || runningSessionRowsRef.current.find((row) => row.sessionId === sessionId)?.messageId;
-    setMessages((items) =>
+    updateMessagesForConversation(ownerConversationId, (items) =>
       items.map((item) =>
         item.id === messageId
           ? {
@@ -6714,7 +6773,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           : item
       )
     );
-    setTimeline((items) => appendTimeline(items, ['用户取消当前任务', '已取消', formatAgentEventTime(), 'pending']));
+    updateTimelineForConversation(ownerConversationId, (items) => appendTimeline(items, ['用户取消当前任务', '已取消', formatAgentEventTime(), 'pending']));
     if (window.ecorex?.stopPrompt) {
       try {
         const result = await window.ecorex.stopPrompt(sessionId);
@@ -6737,9 +6796,29 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     }
   }
 
+  function clearMessageRecoveryState(message = {}) {
+    if (!message?.id) return;
+    const ownerConversationId = message.conversationId || conversationIdRef.current;
+    updateMessagesForConversation(ownerConversationId, (items) => items.map((item) => (
+      item.id === message.id
+        ? {
+            ...item,
+            recovery: null,
+            silentRecovery: false,
+            status: ['interrupted', 'cancelled', 'timeout', 'error'].includes(String(item.status || '').toLowerCase())
+              ? 'sending'
+              : item.status
+          }
+        : item
+    )));
+  }
+
   function retryMessage(message) {
     const retryPrompt = retryPromptFromMessage(message);
-    if (retryPrompt) sendPrompt(retryPrompt);
+    if (retryPrompt) {
+      clearMessageRecoveryState(message);
+      sendPrompt(retryPrompt);
+    }
   }
 
   function isDuplicateAgentStartResult(result = {}) {
@@ -6766,8 +6845,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     sessionMap.current.set(sessionId, message.id);
     sessionOwnersRef.current.set(sessionId, owner);
     runningSessionsRef.current.add(sessionId);
-    currentSessionIdRef.current = sessionId;
-    setCurrentSessionId(sessionId);
+    if (String(owner.conversationId || '') === String(conversationIdRef.current || '')) {
+      currentSessionIdRef.current = sessionId;
+      setCurrentSessionId(sessionId);
+    }
     commitRunningSessionRows((rows) => mergeRunningSessionRows(
       rows.filter((row) => row.sessionId !== requestedSessionId),
       [normalizeRunningSession({
@@ -6933,8 +7014,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
 
       const sessionId = result.sessionId || requestedSessionId;
       if (sessionId !== requestedSessionId) transferSession(requestedSessionId, sessionId);
-      currentSessionIdRef.current = sessionId;
-      setCurrentSessionId(sessionId);
+      if (String(conversationIdRef.current || '') === String(sessionOwnerForSession(sessionId)?.conversationId || conversationIdRef.current || '')) {
+        currentSessionIdRef.current = sessionId;
+        setCurrentSessionId(sessionId);
+      }
       setMessages((items) =>
         items.map((item) => (item.id === message.id ? {
           ...item,
@@ -7150,7 +7233,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           projectFiles={projectFiles}
           onSelectProjectFile={addProjectFileAttachment}
           onRemoveProjectFile={removeProjectFileFromChat}
-          running={running}
+          running={activeConversationRunning}
           currentSessionId={currentSessionId}
           sendPrompt={sendPrompt}
           cancelPrompt={cancelPrompt}
@@ -7694,7 +7777,9 @@ function ToolLedgerDisclosure({ items = [] }) {
 function RecoveryStateNotice({ recovery, status, onRetry }) {
   if (!recovery?.state) return null;
   const completed = ['complete', 'completed'].includes(String(status || '').toLowerCase());
+  const active = ['thinking', 'generating', 'sending'].includes(String(status || '').toLowerCase());
   if (completed && recovery.state === 'recoverable') return null;
+  if (active && recovery.state === 'recoverable') return null;
   const canRetry = ['recoverable', 'retryable'].includes(recovery.state) || ['error', 'timeout', 'interrupted'].includes(String(status || '').toLowerCase());
   return (
     <div className={`message-recovery-state ${recovery.tone || 'running'}`}>

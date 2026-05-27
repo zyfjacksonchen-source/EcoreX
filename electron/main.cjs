@@ -119,6 +119,8 @@ const IMAGE_GENERATION_TIMEOUT_MS = 2 * 60 * 1000;
 const ATTACHMENT_PREVIEW_MAX_BYTES = 2 * 1024 * 1024;
 const ECOREX_AGENT_CONFIG_DIR_NAME = 'agent-runtime-config';
 const BLOCKED_LOCAL_SKILL_NAMES = new Set(['superpowers', 'huashu-design', 'huashu_design', 'huashu design']);
+const ECOREX_BUILTIN_PLUGIN_ALLOWLIST = new Set(['feature-dev', 'code-review', 'security-guidance', 'plugin-dev']);
+const ECOREX_GENERAL_WORKSPACE_DIR_NAME = 'general-workspace';
 const ATTACHMENT_TEXT_MAX_BYTES = 512 * 1024;
 const ATTACHMENT_IMAGE_MAX_BYTES = 768 * 1024;
 const ATTACHMENT_DATA_URL_MAX_CHARS = 2 * 1024 * 1024;
@@ -334,6 +336,13 @@ const ECOREX_MANAGED_CAPABILITY_PRIORITY_PROMPT = [
   '3. Fall back to direct local file generation only when the matching managed capability is unavailable or unsuitable, and explain the fallback briefly.'
 ].join('\n');
 
+const ECOREX_GENERAL_CHAT_ISOLATION_PROMPT = [
+  'General chat isolation:',
+  '1. This session is not bound to an EcoreX project. Do not inspect project folders, project-memory.md, .ecorex-memory, or project file libraries unless the user explicitly attaches or references those files in this chat.',
+  '2. Use only the current general workspace, the user message, and explicit attachments/references for local file operations.',
+  '3. Use only EcoreX native tools and managed capabilities surfaced by EcoreX; do not use personal or local developer plugins that are not visible in EcoreX capability management.'
+].join('\n');
+
 function devPath(...segments) {
   return path.join(ROOT_DIR, ...segments);
 }
@@ -367,11 +376,30 @@ function rendererEntryUrl() {
   return pathToFileURL(rendererEntryPath()).href;
 }
 
+function devRendererUrl() {
+  return 'http://127.0.0.1:5188';
+}
+
+function probeDevRenderer(url = devRendererUrl(), timeoutMs = 1200) {
+  return new Promise((resolve) => {
+    const request = http.get(url, { timeout: timeoutMs }, (response) => {
+      response.resume();
+      resolve(response.statusCode >= 200 && response.statusCode < 500);
+    });
+    request.on('timeout', () => {
+      request.destroy();
+      resolve(false);
+    });
+    request.on('error', () => resolve(false));
+  });
+}
+
 function isAllowedRendererUrl(url = '') {
   const value = String(url || '');
   if (startupSplashUrl && value === startupSplashUrl) return true;
   if (app.isPackaged) return value === rendererEntryUrl();
-  return value === 'http://127.0.0.1:5188/' || value.startsWith('http://127.0.0.1:5188/');
+  if (value === rendererEntryUrl()) return true;
+  return value === `${devRendererUrl()}/` || value.startsWith(`${devRendererUrl()}/`);
 }
 
 function knownSecretRedactionValues() {
@@ -1096,6 +1124,12 @@ function managedSkillPacksDir() {
   return dir;
 }
 
+function generalAgentWorkspaceDir() {
+  const dir = path.join(agentRuntimeConfigDir(), ECOREX_GENERAL_WORKSPACE_DIR_NAME);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
 function isolatedAgentRuntimeEnv() {
   const configDir = agentRuntimeConfigDir();
   const appDataDir = path.join(configDir, 'appdata');
@@ -1611,6 +1645,20 @@ function enabledManagedSkillPackNames() {
   return runtimeManagedSkillPlugins().map((plugin) => plugin.name);
 }
 
+function allowedRuntimePluginNames(requested = []) {
+  const managedNames = enabledManagedSkillPackNames()
+    .filter((plugin) => /^[a-zA-Z0-9_.-]{1,80}$/.test(String(plugin || '')))
+    .filter((plugin) => !isBlockedLocalSkillName(plugin));
+  const allowedNames = new Set([...ECOREX_BUILTIN_PLUGIN_ALLOWLIST, ...managedNames]);
+  const requestedNames = Array.isArray(requested) ? requested : [];
+  return [...new Set([...requestedNames, ...managedNames]
+    .map((plugin) => String(plugin || '').trim())
+    .filter((plugin) => /^[a-zA-Z0-9_.-]{1,80}$/.test(plugin))
+    .filter((plugin) => allowedNames.has(plugin))
+    .filter((plugin) => !isBlockedLocalSkillName(plugin)))]
+    .slice(0, 12);
+}
+
 function enabledManagedMcpServers() {
   const servers = {};
   for (const row of collectManagedSkillInventory({ includeDisabled: false }).rows) {
@@ -1630,9 +1678,16 @@ function prepareManagedMcpConfigFile() {
   return file;
 }
 
-function runtimePluginPathAllowed(pluginPath, backendRoot) {
+function runtimePluginPathAllowed(pluginPath, backendRoot, pluginName = '') {
+  const name = String(pluginName || '').trim();
+  if (!name || isBlockedLocalSkillName(name) || isBlockedLocalSkillName(pluginPath)) return false;
   const resolved = path.resolve(pluginPath);
-  return isPathInside(backendRoot, resolved) || isPathInside(managedSkillPacksDir(), resolved);
+  const managedNames = new Set(enabledManagedSkillPackNames());
+  if (managedNames.has(name)) {
+    return isPathInside(managedSkillPacksDir(), resolved);
+  }
+  if (!ECOREX_BUILTIN_PLUGIN_ALLOWLIST.has(name)) return false;
+  return isPathInside(backendRoot, resolved);
 }
 
 function workspacePathKey(value) {
@@ -3530,7 +3585,7 @@ function writeSettings(nextSettings) {
 }
 
 function defaultAgentCwd() {
-  const workspace = readSettings().workspaceRoot;
+  const workspace = generalAgentWorkspaceDir();
   fs.mkdirSync(workspace, { recursive: true });
   return workspace;
 }
@@ -4853,22 +4908,25 @@ function sanitizePayload(payload = {}) {
   const model = resolveAgentModelName(payload.model, settings);
   const workspaceRoot = settings.workspaceRoot;
   fs.mkdirSync(workspaceRoot, { recursive: true });
-  const projectContextDisabled = payload.disableProjectContext === true;
+  const projectContextDisabled = payload.disableProjectContext === true || !payload.projectId;
   const requestedProjectId = !projectContextDisabled && payload.projectId ? sanitizeProjectId(payload.projectId) : null;
-  let projectContext = requestedProjectId
+  const projectContext = requestedProjectId
     ? projectContextFromProject(workspaceRoot, resolveProject({ id: requestedProjectId }, { allowArchived: false }).project)
-    : projectContextDisabled ? null : activeProjectContext();
-  let cwd = projectContext?.projectPath || workspaceRoot;
+    : null;
+  const defaultRunRoot = projectContext?.projectPath || generalAgentWorkspaceDir();
+  let cwd = defaultRunRoot;
   if (payload.cwd || payload.pathLabel) {
     const requested = String(payload.cwd || payload.pathLabel || '').trim();
     const requestedCwd = requested.startsWith('workspace:/')
       ? path.resolve(workspaceRoot, sanitizeWorkspaceRelativePath(requested.replace(/^workspace:\//, '')))
       : path.resolve(requested);
-    const cwdRoot = projectContext?.projectPath || workspaceRoot;
+    const cwdRoot = defaultRunRoot;
     if (fs.existsSync(requestedCwd) && fs.statSync(requestedCwd).isDirectory() && isPathInside(cwdRoot, requestedCwd)) {
       cwd = requestedCwd;
     } else if (projectContext) {
       throw new Error('Run cwd must stay inside the current project.');
+    } else {
+      throw new Error('Run cwd must stay inside the general workspace.');
     }
   }
   const plugins = Array.isArray(payload.plugins)
@@ -5088,7 +5146,11 @@ function readProjectMemoryPreview(projectContext) {
 
 function agentSystemPromptForProject(projectContext) {
   if (!projectContext) {
-    return [ECOREX_AGENT_SYSTEM_PROMPT, ECOREX_MANAGED_CAPABILITY_PRIORITY_PROMPT].filter(Boolean).join('\n\n');
+    return [
+      ECOREX_AGENT_SYSTEM_PROMPT,
+      ECOREX_MANAGED_CAPABILITY_PRIORITY_PROMPT,
+      ECOREX_GENERAL_CHAT_ISOLATION_PROMPT
+    ].filter(Boolean).join('\n\n');
   }
   const fields = [
     `项目：${projectContext.name}`,
@@ -5435,7 +5497,7 @@ function createWindow() {
 
   writeLog('info', 'Main window created', windowDiagnosticSnapshot(mainWindow));
 
-  function loadRendererEntry() {
+  async function loadRendererEntry() {
     startupSplashUrl = '';
     if (app.isPackaged) {
       const target = rendererEntryPath();
@@ -5449,7 +5511,22 @@ function createWindow() {
       return;
     }
 
-    const target = 'http://127.0.0.1:5188';
+    const target = devRendererUrl();
+    const devRendererReady = await probeDevRenderer(target);
+    if (!devRendererReady && fs.existsSync(rendererEntryPath())) {
+      writeLog('warn', 'Dev renderer server unavailable; falling back to built renderer', {
+        target,
+        fallback: rendererEntryPath()
+      });
+      mainWindow.loadFile(rendererEntryPath()).catch((error) => {
+        writeLog('error', 'mainWindow.loadFile fallback failed', {
+          ...windowDiagnosticSnapshot(mainWindow),
+          target: rendererEntryPath(),
+          error: error instanceof Error ? error.message : String(error)
+        });
+      });
+      return;
+    }
     mainWindow.loadURL(target).catch((error) => {
       writeLog('error', 'mainWindow.loadURL failed', {
         ...windowDiagnosticSnapshot(mainWindow),
@@ -5586,7 +5663,7 @@ function publicAgentToolLabel(tool = '') {
   if (/^TodoWrite$/i.test(name)) return '更新任务清单';
   if (/^TodoRead$/i.test(name)) return '读取任务清单';
   if (/^Task$|^TaskCreate$|^SendMessage$/i.test(name)) return '调度子 Agent';
-  if (/^Read$|^Grep$|^Glob$|^LS$|^NotebookRead$/i.test(name)) return '查看项目文件';
+  if (/^Read$|^Grep$|^Glob$|^LS$|^NotebookRead$/i.test(name)) return '查看文件';
   if (/^Write$|^Edit$|^MultiEdit$|^NotebookEdit$/i.test(name)) return '准备修改文件';
   if (/^Bash$|^PowerShell$|^Cmd$/i.test(name)) return '执行本地命令';
   if (/^mcp__/i.test(name)) return '调用 MCP';
@@ -10153,8 +10230,7 @@ function runAgent(payload = {}, options = {}) {
           reason: invalidResume.reason || 'invalid-resume'
         });
       }
-    const selectedPlugins = [...new Set([...(safePayload.plugins || []), ...enabledManagedSkillPackNames()])]
-      .filter((plugin) => !isBlockedLocalSkillName(plugin));
+    const selectedPlugins = allowedRuntimePluginNames(safePayload.plugins || []);
     safePayload = { ...safePayload, plugins: selectedPlugins };
     const managedMcpConfigFile = prepareManagedMcpConfigFile();
     const repoRoot = backendPath('claude-code-main');
@@ -10204,7 +10280,7 @@ function runAgent(payload = {}, options = {}) {
       const pluginPath = pluginPathByName.get(pluginName);
       if (
         pluginPath &&
-        runtimePluginPathAllowed(pluginPath, safeRepoRoot) &&
+        runtimePluginPathAllowed(pluginPath, safeRepoRoot, pluginName) &&
         fs.existsSync(pluginPath)
       ) {
         args.push('--plugin-dir', pluginPath);
