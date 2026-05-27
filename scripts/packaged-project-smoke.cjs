@@ -207,6 +207,17 @@ async function main() {
       if (!created) throw new Error('Packaged project was not created.');
       const createdDir = path.join(paths.workspace, created.pathLabel.replace(/^workspace:\//, '').replace(/\//g, path.sep));
       if (!fs.existsSync(createdDir)) throw new Error(`Created project directory missing: ${createdDir}`);
+      const uploadPath = path.join(paths.workspace, `packaged-upload-${suffix}.txt`);
+      fs.writeFileSync(uploadPath, 'packaged project file tree smoke', 'utf8');
+      const addFileResult = await page.evaluate(async ({ projectId, uploadPath }) => (
+        window.ecorex.addProjectFiles({ id: projectId, projectId, files: [uploadPath] })
+      ), { projectId: created.id, uploadPath });
+      if (!addFileResult?.ok) throw new Error(`Packaged project file add failed: ${JSON.stringify(addFileResult)}`);
+      await page.locator('.project-back-button').click();
+      await page.locator('[data-testid="projects-list-entry"]').filter({ hasText: originalName }).first().click();
+      await page.locator('[data-testid="project-file-tree"]').waitFor({ state: 'visible', timeout: 20_000 });
+      await page.locator('.project-file-tree-root').click();
+      await page.locator('.project-file-tree-children').filter({ hasText: path.basename(uploadPath) }).waitFor({ state: 'visible', timeout: 20_000 });
 
       await page.locator('[data-testid="project-edit-name"]').fill(renamedName);
       await page.locator('[data-testid="project-detail-save"]').click();

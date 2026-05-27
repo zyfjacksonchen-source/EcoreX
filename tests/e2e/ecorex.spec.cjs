@@ -1874,6 +1874,17 @@ test.describe('EcoreX Agent Electron E2E', () => {
     expect(createdProject).toBeTruthy();
     const createdDir = path.join(projectWorkspace, createdProject.pathLabel.replace(/^workspace:\//, '').replace(/\//g, path.sep));
     expect(fs.existsSync(createdDir)).toBe(true);
+    const projectUploadPath = path.join(projectWorkspace, `uploaded-project-file-${suffix}.txt`);
+    fs.writeFileSync(projectUploadPath, 'project file tree smoke', 'utf8');
+    const addFileResult = await page.evaluate(async ({ projectId, projectUploadPath }) => (
+      window.ecorex.addProjectFiles({ id: projectId, projectId, files: [projectUploadPath] })
+    ), { projectId: createdProject.id, projectUploadPath });
+    expect(addFileResult.ok).toBe(true);
+    await page.locator('.project-back-button').click();
+    await page.locator('[data-testid="projects-list-entry"]').filter({ hasText: originalName }).first().click();
+    await expect(page.locator('[data-testid="project-file-tree"]')).toBeVisible({ timeout: 15_000 });
+    await page.locator('.project-file-tree-root').click();
+    await expect(page.locator('.project-file-tree-children')).toContainText(path.basename(projectUploadPath));
 
     await page.locator('[data-testid="project-edit-name"]').fill(renamedName);
     await expect(page.locator('[data-testid="project-detail-save"]')).toBeEnabled();
@@ -2994,10 +3005,17 @@ test.describe('EcoreX Agent Electron E2E', () => {
             path: targetPath,
             file: { path: targetPath, name: 'saved-output.html' },
             mimeType: 'text/html',
+            renderMode: 'sandbox-srcdoc',
             content: '<h1>saved local output</h1>'
           };
         }
-        return { ok: false, reason: 'not-found', error: 'not found' };
+        return {
+          ok: false,
+          previewable: false,
+          reason: 'not-found',
+          file: { path: targetPath, name: String(targetPath || 'missing.html').split(/[\\/]/).pop() || 'missing.html' },
+          error: 'File was not found.'
+        };
       });
       ipcMain.removeHandler('agent:run');
       ipcMain.handle('agent:run', (event, payload) => {
@@ -3031,5 +3049,9 @@ test.describe('EcoreX Agent Electron E2E', () => {
     await expect(page.locator('.artifact-thumb-card')).toHaveCount(1);
     await expect(page.locator('.artifact-thumb-card').filter({ hasText: 'saved-output.html' })).toBeVisible();
     await expect(page.locator('.artifact-thumb-card').filter({ hasText: '202605.html' })).toHaveCount(0);
+    await expect(page.locator('.artifact-thumb-card').filter({ hasText: 'shanghai.html' })).toHaveCount(0);
+    await page.locator('.artifact-thumb-card').filter({ hasText: 'saved-output.html' }).locator('.artifact-thumb-open').click();
+    await expect(page.locator('.artifact-focus-panel .artifact-html-frame')).toBeVisible();
+    await expect(page.frameLocator('.artifact-html-frame').locator('h1')).toHaveText('saved local output');
   });
 });

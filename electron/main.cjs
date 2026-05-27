@@ -7587,6 +7587,14 @@ function cleanPreviewArtifactPath(raw = '') {
     .trim();
 }
 
+function looksLikeRemotePreviewPathSubstring(token = '', source = '', start = 0) {
+  const raw = String(token || '').trim();
+  if (!raw || /^(?:file:|workspace:|[A-Za-z]:[\\/]|\\\\|\.{1,2}[\\/]|~[\\/]|\/)/.test(raw)) return false;
+  const prefix = String(source || '').slice(Math.max(0, Number(start) - 24), Number(start)).toLowerCase();
+  if (/(?:https?:\/\/|www\.)[^ \r\n<>"'`]*$/.test(prefix)) return true;
+  return /^(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:[\\/]|$)/i.test(raw);
+}
+
 function extractPreviewArtifactTargets(text = '', workspaceRoot = readSettings().workspaceRoot) {
   const source = String(text || '');
   if (!source) return [];
@@ -7619,7 +7627,9 @@ function extractPreviewArtifactTargets(text = '', workspaceRoot = readSettings()
 
   for (const pattern of pathPatterns) {
     for (const match of source.matchAll(pattern)) {
-      addTarget(match[1] || match[0]);
+      const token = match[1] || match[0];
+      if (looksLikeRemotePreviewPathSubstring(token, source, match.index || 0)) continue;
+      addTarget(token);
       if (targets.length >= 24) return targets.slice(0, 24);
     }
   }

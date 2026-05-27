@@ -1123,6 +1123,14 @@ function parseArtifactPathToken(rawValue = '') {
   };
 }
 
+function looksLikeRemoteArtifactPathSubstring(token = '', source = '', start = 0) {
+  const raw = String(token || '').trim();
+  if (!raw || /^(?:file:|workspace:|[A-Za-z]:[\\/]|\\\\|\.{1,2}[\\/]|~[\\/]|\/)/.test(raw)) return false;
+  const prefix = String(source || '').slice(Math.max(0, Number(start) - 24), Number(start)).toLowerCase();
+  if (/(?:https?:\/\/|www\.)[^ \r\n<>"'`]*$/.test(prefix)) return true;
+  return /^(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:[\\/]|$)/i.test(raw);
+}
+
 function extractArtifactReferences(text = '') {
   const source = String(text || '');
   if (!source) return [];
@@ -1149,7 +1157,10 @@ function extractArtifactReferences(text = '') {
     )
   ];
   for (const pattern of pathPatterns) {
-    for (const match of source.matchAll(pattern)) add(match[0]);
+    for (const match of source.matchAll(pattern)) {
+      if (looksLikeRemoteArtifactPathSubstring(match[0], source, match.index || 0)) continue;
+      add(match[0]);
+    }
   }
 
   return [...found.values()].slice(0, ARTIFACT_PREVIEW_MAX_ITEMS);
@@ -1460,6 +1471,11 @@ async function validateArtifactAvailabilityWithBridge(artifact = {}) {
   if (!artifact.path) return false;
   const bridge = window.ecorex;
   if (!bridge) return true;
+  const isNotFoundPreview = (result = {}) => (
+    result?.reason === 'not-found'
+    || result?.status === 'not-found'
+    || /not[- ]found|file was not found|outside allowed roots/i.test(String(result?.error || result?.message || ''))
+  );
   const hasPreviewLocation = (result = {}) => Boolean(
     result?.file
     || result?.path
@@ -1470,10 +1486,12 @@ async function validateArtifactAvailabilityWithBridge(artifact = {}) {
     || result?.metadata
   );
   const isPreviewMetadata = (result = {}) => (
-    result?.ok !== false
-    || result?.unsupported === true
-    || result?.previewable === false
-    || result?.renderMode === 'metadata'
+    result?.ok !== false && (
+      result?.unsupported === true
+      || result?.previewable === false
+      || result?.renderMode === 'metadata'
+      || hasPreviewLocation(result)
+    )
   );
   const payload = {
     name: artifact.name,
@@ -1500,13 +1518,13 @@ async function validateArtifactAvailabilityWithBridge(artifact = {}) {
     if (typeof fn !== 'function') continue;
     try {
       const result = await fn(payload);
+      if (isNotFoundPreview(result)) return false;
       if (isPreviewMetadata(result) && hasPreviewLocation(result)) return true;
-      if (result?.reason === 'not-found') return false;
     } catch (firstError) {
       try {
         const result = await fn(artifact.path, payload);
+        if (isNotFoundPreview(result)) return false;
         if (isPreviewMetadata(result) && hasPreviewLocation(result)) return true;
-        if (result?.reason === 'not-found') return false;
       } catch {
         // Try the next bridge shape.
       }
@@ -8158,6 +8176,7 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
   });
   const [recentItems, setRecentItems] = useState(loadRecentChatItems);
   const [projectFiles, setProjectFiles] = useState([]);
+  const [projectFilesExpanded, setProjectFilesExpanded] = useState(false);
   const [projectPrompt, setProjectPrompt] = useState('');
   const [busy, setBusy] = useState('');
   const [fileBusy, setFileBusy] = useState('');
@@ -8239,6 +8258,10 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
   useEffect(() => {
     refreshProjectFiles(selectedProject);
   }, [selectedProject?.id, selectedProject?.updatedAt]);
+
+  useEffect(() => {
+    if (!projectFiles.length) setProjectFilesExpanded(false);
+  }, [projectFiles.length]);
 
   function updateCreateField(field, value) {
     setCreateDraft((current) => ({ ...current, [field]: value }));
@@ -8407,6 +8430,7 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
     } else if (!result?.canceled) {
       setProjectState((current) => ({ ...current, notice: `已加入 ${result.files?.length || 0} 个项目文件。` }));
       await refreshProjectFiles(selectedProject);
+      setProjectFilesExpanded(true);
       await refreshProjects({ silent: true, preferId: selectedProject.id });
     }
     setFileBusy('');
@@ -8691,19 +8715,41 @@ function ProjectsView({ backendStatus, refreshBackend, onUnauthorized, setPage }
                     </button>
                   </header>
                   {projectFiles.length ? (
-                    <div className="project-reference-list">
-                      {projectFiles.map((file) => (
-                        <div className="project-reference-file" key={file.id || file.pathLabel || file.name}>
-                          <FileText size={17} />
-                          <button type="button" onClick={() => openProjectFile(file)}>
-                            <strong>{file.name}</strong>
-                            <span>{formatFileSize(file.sizeBytes)} · {file.modifiedAt ? formatDateTime(file.modifiedAt) : '项目文件'}</span>
-                          </button>
-                          <button type="button" title="移除" onClick={() => removeProjectFile(file)} disabled={fileBusy === (file.id || file.pathLabel)}>
-                            <X size={15} />
-                          </button>
+                    <div className={`project-file-tree ${projectFilesExpanded ? 'expanded' : ''}`} data-testid="project-file-tree">
+                      <button className="project-file-tree-root" type="button" onClick={() => setProjectFilesExpanded((value) => !value)}>
+                        {projectFilesExpanded ? <ChevronDown size={17} /> : <ChevronRight size={17} />}
+                        <FolderOpen size={18} />
+                        <span>
+                          <strong>files</strong>
+                          <em>{projectFiles.length} 个文件 · {projectFilesExpanded ? '点击收起' : '点击展开文件树'}</em>
+                        </span>
+                      </button>
+                      {projectFilesExpanded && (
+                        <div className="project-file-tree-children">
+                          {projectFiles.map((file) => {
+                            const kind = attachmentKindFromName(file.name || file.pathLabel || '', file.type || file.mimeType);
+                            const Icon = kind === 'sheet'
+                              ? BarChart3
+                              : kind === 'slide'
+                                ? LayoutDashboard
+                                : kind === 'code'
+                                  ? Code2
+                                  : FileText;
+                            return (
+                              <div className={`project-reference-file ${kind}`} key={file.id || file.pathLabel || file.name}>
+                                <Icon size={17} />
+                                <button type="button" onClick={() => openProjectFile(file)}>
+                                  <strong>{file.name}</strong>
+                                  <span>{formatFileSize(file.sizeBytes)} · {file.modifiedAt ? formatDateTime(file.modifiedAt) : '项目文件'}</span>
+                                </button>
+                                <button type="button" title="移除" onClick={() => removeProjectFile(file)} disabled={fileBusy === (file.id || file.pathLabel)}>
+                                  <X size={15} />
+                                </button>
+                              </div>
+                            );
+                          })}
                         </div>
-                      ))}
+                      )}
                     </div>
                   ) : (
                     <button className="project-file-drop" type="button" onClick={addFilesToProject}>

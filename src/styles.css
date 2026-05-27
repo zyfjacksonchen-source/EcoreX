@@ -7336,13 +7336,83 @@ select,
   background: rgba(255, 90, 0, 0.08);
 }
 
-.project-reference-list {
+.project-reference-list,
+.project-file-tree {
   padding: 0 16px 16px;
+}
+
+.project-file-tree {
+  min-height: 0;
+  overflow: auto;
+}
+
+.project-file-tree-root {
+  width: 100%;
+  min-height: 52px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(8, 13, 22, 0.5);
+  color: var(--text);
+  display: grid;
+  grid-template-columns: 18px 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  padding: 0 12px;
+  text-align: left;
+}
+
+.project-file-tree-root:hover {
+  border-color: rgba(255, 90, 0, 0.38);
+  background: rgba(255, 90, 0, 0.08);
+}
+
+.project-file-tree-root svg {
+  color: var(--orange);
+}
+
+.project-file-tree-root span,
+.project-file-tree-root strong,
+.project-file-tree-root em {
+  min-width: 0;
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.project-file-tree-root strong {
+  font-size: 14px;
+}
+
+.project-file-tree-root em {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.project-file-tree-children {
+  margin: 7px 0 0 20px;
+  padding-left: 12px;
+  border-left: 1px dashed var(--line-strong);
+  display: grid;
+  gap: 4px;
 }
 
 .project-reference-file {
   grid-template-columns: 30px minmax(0, 1fr) 30px;
+  border-radius: 8px;
+  padding: 5px 2px;
 }
+
+.project-reference-file:hover {
+  background: rgba(231, 238, 247, 0.035);
+}
+
+.project-reference-file.sheet > svg { color: var(--green); }
+.project-reference-file.slide > svg { color: var(--amber); }
+.project-reference-file.code > svg { color: var(--blue); }
+.project-reference-file.image > svg { color: var(--purple); }
 
 .project-reference-file > button:first-of-type {
   width: auto;
