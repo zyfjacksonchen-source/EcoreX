@@ -2179,11 +2179,46 @@ test.describe('EcoreX Agent Electron E2E', () => {
     const trace = page.locator('.agent-trace').first();
     await expect(trace).toBeVisible();
     await expect(trace).toHaveClass(/compact/);
+    await expect(trace.locator('.agent-trace-summary')).toContainText('已完成');
     await expect(page.locator('.agent-trace-list')).toHaveCount(0);
 
     await trace.locator('.agent-trace-summary').click();
     await expect(trace).toHaveClass(/expanded/);
     await expect(trace.locator('.agent-trace-row')).toHaveCount(6);
+  });
+
+  test('marks task update trace complete when the run finishes', async ({ ecorex }) => {
+    const { electronApp, page } = ecorex;
+    await login(page);
+
+    await electronApp.evaluate(({ ipcMain, BrowserWindow }) => {
+      ipcMain.removeHandler('agent:run');
+      ipcMain.handle('agent:run', (event, payload) => {
+        const win = BrowserWindow.fromWebContents(event.sender);
+        setTimeout(() => {
+          if (!win || win.isDestroyed()) return;
+          win.webContents.send('agent:events', {
+            sessionId: payload.sessionId,
+            events: [
+              { sessionId: payload.sessionId, kind: 'tool', status: 'running', toolName: 'TaskUpdate', text: 'TaskUpdate' },
+              { sessionId: payload.sessionId, kind: 'tool', status: 'running', toolName: 'TaskUpdate', text: 'TaskUpdate' },
+              { sessionId: payload.sessionId, kind: 'result', status: 'completed', text: 'trace completion result' },
+              { sessionId: payload.sessionId, kind: 'done', status: 'completed', text: 'done' }
+            ]
+          });
+        }, 60);
+        return { ok: true, sessionId: payload.sessionId, status: 'running' };
+      });
+    });
+
+    await page.locator('[data-testid="chat-input"]').fill('finish a task update trace');
+    await page.locator('[data-testid="chat-input"]').press('Enter');
+    await expect(page.locator('.assistant-card').filter({ hasText: 'trace completion result' }).first()).toBeVisible({ timeout: 10_000 });
+    const trace = page.locator('.agent-trace').first();
+    await expect(trace.locator('.agent-trace-summary')).toContainText('已完成');
+    await expect(trace.locator('.agent-trace-summary')).not.toContainText('进行中');
+    await trace.locator('.agent-trace-summary').click();
+    await expect(trace.locator('.agent-trace-row').filter({ hasText: 'TaskUpdate' }).first()).toContainText('已完成');
   });
 
   test('places readable tool return values into the assistant message', async ({ ecorex }) => {

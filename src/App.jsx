@@ -4511,12 +4511,36 @@ function agentDisclosureLabel(event = {}) {
 }
 
 function appendTimeline(timeline = [], item, limit = 80) {
-  return [...timeline, item].slice(-limit);
+  return appendTimelineItems(timeline, [item], limit);
+}
+
+function isSuccessfulTerminalTimelineItem(item = []) {
+  const tone = String(item?.[3] || '');
+  const kind = String(item?.[4] || '');
+  return tone === 'success' && (kind === 'result' || kind === 'done');
+}
+
+function isTerminalTimelineItem(item = []) {
+  const tone = String(item?.[3] || '');
+  const kind = String(item?.[4] || '');
+  return ['result', 'done', 'cancelled', 'timeout', 'error'].includes(kind) || tone === 'danger';
+}
+
+function closeOpenTimelineItemsBeforeTerminal(items = []) {
+  const terminalIndex = items.reduce((latest, item, index) => (
+    isSuccessfulTerminalTimelineItem(item) ? index : latest
+  ), -1);
+  if (terminalIndex < 0) return items;
+  return items.map((item, index) => {
+    if (!Array.isArray(item) || index >= terminalIndex) return item;
+    if (!['running', 'pending'].includes(item[3])) return item;
+    return [item[0], '已完成', item[2], 'success', item[4] || 'status'];
+  });
 }
 
 function appendTimelineItems(timeline = [], items = [], limit = 80) {
   if (!items.length) return timeline;
-  return [...timeline, ...items].slice(-limit);
+  return closeOpenTimelineItemsBeforeTerminal([...timeline, ...items]).slice(-limit);
 }
 
 function normalizeAgentEventKind(kind) {
@@ -8987,8 +9011,18 @@ function isPublicTraceItem(item = []) {
 }
 
 function traceDisclosureSummary(items = []) {
-  const active = [...items].reverse().find((item) => ['running', 'pending', 'warn'].includes(item[3]));
   const doneCount = items.filter((item) => item[3] === 'success').length;
+  const latestActiveIndex = items.reduce((latest, item, index) => (
+    ['running', 'pending', 'warn'].includes(item[3]) ? index : latest
+  ), -1);
+  const latestTerminalIndex = items.reduce((latest, item, index) => (
+    isTerminalTimelineItem(item) ? index : latest
+  ), -1);
+  if (latestTerminalIndex >= 0 && latestTerminalIndex >= latestActiveIndex) {
+    const terminal = items[latestTerminalIndex];
+    return { label: terminal[0], status: terminal[1], tone: terminal[3], doneCount };
+  }
+  const active = [...items].reverse().find((item) => ['running', 'pending', 'warn'].includes(item[3]));
   if (active) return { label: active[0], status: active[1], tone: active[3], doneCount };
   const last = items[items.length - 1];
   return last ? { label: last[0], status: last[1], tone: last[3], doneCount } : null;
