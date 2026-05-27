@@ -1883,7 +1883,10 @@ test.describe('EcoreX Agent Electron E2E', () => {
     await page.locator('.project-back-button').click();
     await page.locator('[data-testid="projects-list-entry"]').filter({ hasText: originalName }).first().click();
     await expect(page.locator('[data-testid="project-file-tree"]')).toBeVisible({ timeout: 15_000 });
-    await page.locator('.project-file-tree-root').click();
+    const uploadedFileEntry = page.locator('[data-testid="project-file-entry"]').filter({ hasText: path.basename(projectUploadPath) }).first();
+    if (!(await uploadedFileEntry.isVisible().catch(() => false))) {
+      await page.locator('.project-file-tree-root').click();
+    }
     await expect(page.locator('.project-file-tree-children')).toContainText(path.basename(projectUploadPath));
 
     await page.locator('[data-testid="project-edit-name"]').fill(renamedName);
