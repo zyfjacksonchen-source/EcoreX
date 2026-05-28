@@ -38,6 +38,9 @@ const REQUIRED_LOCAL_STATE_EXCLUSIONS = [
   '!**/.claude/**/*',
   '!**/.codex/**/*',
   '!**/.agents/**/*',
+  '!**/.lark/**/*',
+  '!**/.feishu/**/*',
+  '!**/.larksuite/**/*',
   '!**/superpowers/**/*',
   '!**/huashu-design/**/*',
   '!**/huashu_design/**/*'
@@ -194,13 +197,16 @@ function assertNoSecretOrModelStoragePaths(files, label) {
     'secrets.json',
     'auth-session.json',
     'auth-identity.json',
+    'auth-users.json',
+    'enterprise-admin-journal.jsonl',
+    'session-bindings.json',
     'settings.json',
     '.ecorex-projects.json',
     '.ecorex-project.json',
     '.ecorex-memory',
     'ecorex-agent.log'
   ];
-  const forbiddenSegments = ['.claude', '.codex', '.agents', '.mcp', 'superpowers', 'huashu-design', 'huashu_design'];
+  const forbiddenSegments = ['.claude', '.codex', '.agents', '.mcp', '.lark', '.feishu', '.larksuite', 'superpowers', 'huashu-design', 'huashu_design'];
   for (const file of files) {
     const normalized = toPosix(file).replace(/\/+$/, '').toLowerCase();
     if (!normalized || normalized.startsWith('!')) continue;
@@ -1351,7 +1357,7 @@ check('chat state tree and critical front-end affordances', () => {
   assertNotMatches(app, /<RunningSessionStrip\b/, 'running session strip must stay hidden from the main chat UI.');
   assertMatches(app, /if \(event\.kind === 'result'\)[\s\S]*streaming:\s*true[\s\S]*status:\s*'generating'/, 'stream-json result content must not release the running session before the lifecycle final event.');
   assertMatches(app, /relevantEvents[\s\S]*\.filter\(\(event\) => isAgentSessionFinalEvent\(event\)\)/, 'front-end running sessions must finish only on lifecycle final events.');
-  assertMatches(app, /const pendingStatus = pendingUserActionStatus\(event,\s*combinedText\)/, 'authorization or browser handoff prompts must not be shown as completed.');
+  assertMatches(app, /terminalPendingUserActionStatus\(event,\s*combinedText\)/, 'authorization or browser handoff prompts must not be shown as completed.');
   assertMatches(app, /recoverDuplicateRunAsQueuedFollowUp\(result[\s\S]*existingMessage:\s*true/, 'duplicate running-session races must be converted back into queued follow-up input.');
   assertMatches(app, /function cleanAgentDisplayLine[\s\S]*numberTokens\.length >= 3[\s\S]*open\\\.feishu\\\.cn[\s\S]*execution_bridge\?/, 'chat renderer must strip execution bridge line-number noise while preserving Feishu links.');
   assertMatches(app, /function isInternalAgentOutputLine[\s\S]*Updated\|Created\|Deleted[\s\S]*task\\s\+#\?\\d\+/, 'chat renderer must suppress raw task-list mutation noise.');
@@ -1664,6 +1670,9 @@ check('package build config excludes local model/secrets storage', () => {
     installerNsh,
     [
       '!macro customPageAfterChangeDir',
+      '安装选项',
+      '创建桌面快捷方式',
+      '开机自动启动 EcoreX Agent',
       'EcoreXDesktopShortcutCheckbox',
       'EcoreXStartupShortcutCheckbox',
       'CreateShortCut "$DESKTOP\\${SHORTCUT_NAME}.lnk"',
@@ -1674,6 +1683,21 @@ check('package build config excludes local model/secrets storage', () => {
       '!macro customUnInstall'
     ],
     'custom uninstall shortcut script'
+  );
+  const feishuPrepareScript = readText('scripts/prepare-managed-feishu-skill.cjs');
+  includesAll(
+    feishuPrepareScript,
+    [
+      '.lark',
+      '.feishu',
+      '.larksuite',
+      'auth-identity\\.json',
+      'auth-users\\.json',
+      'enterprise-admin-journal\\.jsonl',
+      'session-bindings\\.json',
+      'model-profiles\\.json'
+    ],
+    'managed Feishu skill preparation denylist'
   );
 
   const extraResources = Array.isArray(build.extraResources) ? build.extraResources : [];
@@ -1689,11 +1713,11 @@ check('package build config excludes local model/secrets storage', () => {
   const managedSkillResource = extraResources.find((item) => String(item.to || '').replace(/\\/g, '/') === 'managed-skill-packs');
   assert(managedSkillResource, 'bundled managed skill-packs resource must be configured.');
   assert(managedSkillResource.from === 'build/managed-skill-packs', 'bundled managed skill-packs must come from build/managed-skill-packs.');
-  assertIncludesPatterns(managedSkillResource.filter, ['agent-skill-creator/**/*', 'lark-cli/**/*', 'ppt-master/**/*', 'excel-mcp-server/**/*', '!**/.env', '!**/.env.*', '!**/*.log'], 'managed skill-packs extraResources.filter');
+  assertIncludesPatterns(managedSkillResource.filter, ['agent-skill-creator/**/*', 'lark-cli/**/*', 'ppt-master/**/*', 'excel-mcp-server/**/*', '!**/.env', '!**/.env.*', '!**/*.log', '!**/auth-session.json', '!**/auth-identity.json', '!**/auth-users.json', '!**/enterprise-admin-journal.jsonl', '!**/session-bindings.json', '!**/model-profiles.json', '!**/.lark/**/*', '!**/.feishu/**/*', '!**/.larksuite/**/*'], 'managed skill-packs extraResources.filter');
   const managedToolResource = extraResources.find((item) => String(item.to || '').replace(/\\/g, '/') === 'managed-tools');
   assert(managedToolResource, 'bundled managed tools resource must be configured.');
   assert(managedToolResource.from === 'build/managed-tools', 'bundled managed tools must come from build/managed-tools.');
-  assertIncludesPatterns(managedToolResource.filter, ['lark-cli/**/*', '!**/.env', '!**/.env.*', '!**/*.log'], 'managed tools extraResources.filter');
+  assertIncludesPatterns(managedToolResource.filter, ['lark-cli/**/*', '!**/.env', '!**/.env.*', '!**/*.log', '!**/auth-session.json', '!**/auth-identity.json', '!**/auth-users.json', '!**/enterprise-admin-journal.jsonl', '!**/session-bindings.json', '!**/model-profiles.json', '!**/.lark/**/*', '!**/.feishu/**/*', '!**/.larksuite/**/*'], 'managed tools extraResources.filter');
   const playwrightBinResource = extraResources.find((item) => String(item.to || '').replace(/\\/g, '/') === 'app.asar.unpacked/node_modules/.bin');
   assert(playwrightBinResource, 'Playwright CLI wrappers must be copied into unpacked node_modules .bin.');
   assert(playwrightBinResource.from === 'node_modules/.bin', 'Playwright CLI wrappers must come from node_modules/.bin.');

@@ -50,7 +50,9 @@ function parseSkillFrontmatter(file) {
 function shouldSkip(relativePath) {
   const normalized = String(relativePath || '').replace(/\\/g, '/');
   return /(^|\/)(\.git|node_modules|__pycache__|\.venv|venv|dist|build|release|test-results)(\/|$)/i.test(normalized)
-    || /(^|\/)(\.env|\.env\..*|secrets\.json|auth-session\.json|auth-users\.json|settings\.json)$/i.test(normalized);
+    || /(^|\/)(\.lark|\.feishu|\.larksuite)(\/|$)/i.test(normalized)
+    || /(^|\/)(\.env|\.env\..*|secrets\.json|auth-session\.json|auth-identity\.json|auth-users\.json|enterprise-admin-journal\.jsonl|session-bindings\.json|model-profiles\.json|settings\.json)$/i.test(normalized)
+    || /(^|\/).*\.log$/i.test(normalized);
 }
 
 function copyDirectory(sourceDir, targetDir, label, state = { bytes: 0, files: 0 }) {

@@ -1,6 +1,6 @@
 {
   "name": "ecorex-agent",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "author": "EcoreX",
   "description": "EcoreX desktop AI agent for advertising workflows.",
@@ -104,6 +104,9 @@
       "!**/.claude/**/*",
       "!**/.codex/**/*",
       "!**/.agents/**/*",
+      "!**/.lark/**/*",
+      "!**/.feishu/**/*",
+      "!**/.larksuite/**/*",
       "!**/superpowers/**/*",
       "!**/huashu-design/**/*",
       "!**/huashu_design/**/*"
@@ -143,7 +146,14 @@
           "!**/settings.json",
           "!**/secrets.json",
           "!**/auth-session.json",
-          "!**/auth-users.json"
+          "!**/auth-identity.json",
+          "!**/auth-users.json",
+          "!**/enterprise-admin-journal.jsonl",
+          "!**/session-bindings.json",
+          "!**/model-profiles.json",
+          "!**/.lark/**/*",
+          "!**/.feishu/**/*",
+          "!**/.larksuite/**/*"
         ]
       },
       {
@@ -157,7 +167,14 @@
           "!**/settings.json",
           "!**/secrets.json",
           "!**/auth-session.json",
-          "!**/auth-users.json"
+          "!**/auth-identity.json",
+          "!**/auth-users.json",
+          "!**/enterprise-admin-journal.jsonl",
+          "!**/session-bindings.json",
+          "!**/model-profiles.json",
+          "!**/.lark/**/*",
+          "!**/.feishu/**/*",
+          "!**/.larksuite/**/*"
         ]
       },
       {

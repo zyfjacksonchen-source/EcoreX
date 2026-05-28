@@ -61,7 +61,13 @@ settings.json
 secrets.json
 auth-session.json
 auth-identity.json
+auth-users.json
+enterprise-admin-journal.jsonl
+session-bindings.json
 model-profiles.json
+.lark/
+.feishu/
+.larksuite/
 .ecorex-project.json
 .ecorex-projects.json
 

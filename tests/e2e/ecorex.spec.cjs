@@ -1746,7 +1746,7 @@ test.describe('EcoreX Agent Electron E2E', () => {
               { sessionId: payload.sessionId, kind: 'done', status: 'completed', text: 'Agent task completed.' }
             ]
           });
-        }, 50);
+        }, payload.permissionContinuation ? 450 : 50);
         return {
           ok: true,
           sessionId: payload.sessionId,
@@ -1782,6 +1782,128 @@ test.describe('EcoreX Agent Electron E2E', () => {
     expect(runPayloads[1].conversationId).toBe(runPayloads[0].conversationId);
     expect(runPayloads[1].claudeSessionId).toBe(runPayloads[0].claudeSessionId);
     await expect(page.locator('.user-bubble').filter({ hasText: '允许一次' })).toHaveCount(0);
+  });
+
+  test('shows permission confirmation immediately from tool events', async ({ ecorex }) => {
+    const { electronApp, page } = ecorex;
+    await login(page);
+
+    await electronApp.evaluate(({ ipcMain, BrowserWindow }) => {
+      global.__ecorexImmediatePermissionRuns = [];
+      ipcMain.removeHandler('agent:run');
+      ipcMain.handle('agent:run', (event, payload) => {
+        global.__ecorexImmediatePermissionRuns.push(payload);
+        const win = BrowserWindow.fromWebContents(event.sender);
+        setTimeout(() => {
+          if (!win || win.isDestroyed()) return;
+          win.webContents.send('agent:events', {
+            sessionId: payload.sessionId,
+            events: payload.permissionContinuation
+              ? [
+                  { sessionId: payload.sessionId, kind: 'result', status: 'completed', text: 'permission tool continuation completed' },
+                  { sessionId: payload.sessionId, kind: 'done', status: 'completed', text: 'done' }
+                ]
+              : [
+                  {
+                    sessionId: payload.sessionId,
+                    kind: 'tool',
+                    status: 'requires-permission',
+                    toolName: 'mcp__codegraph__codegraph_search',
+                    text: 'Do you want to proceed with mcp__codegraph__codegraph_search?'
+                  }
+                ]
+          });
+        }, payload.permissionContinuation ? 450 : 50);
+        return {
+          ok: true,
+          sessionId: payload.sessionId,
+          initialEvent: { sessionId: payload.sessionId, kind: 'status', status: 'started', text: 'started' }
+        };
+      });
+    });
+
+    await page.locator('[data-testid="chat-input"]').fill('run codegraph permission smoke');
+    await page.locator('[data-testid="chat-input"]').press('Enter');
+    const permissionCard = page.getByTestId('permission-confirmation-card');
+    await expect(permissionCard).toBeVisible({ timeout: 10_000 });
+    await expect(permissionCard).toContainText('mcp__codegraph__codegraph_search');
+    await expect(page.locator('.permission-confirmation-backdrop')).toHaveCount(0);
+
+    await page.locator('.inline-permission-actions button').filter({ hasText: '允许一次' }).click();
+    await expect(permissionCard).toHaveCount(0);
+    await expect(page.locator('.assistant-card').filter({ hasText: /接力中|接力执行中/ }).first()).toBeVisible({ timeout: 3_000 });
+    await expect(page.locator('.assistant-card').filter({ hasText: 'permission tool continuation completed' }).first()).toBeVisible({ timeout: 10_000 });
+
+    const runPayloads = await electronApp.evaluate(() => global.__ecorexImmediatePermissionRuns || []);
+    expect(runPayloads).toHaveLength(2);
+    expect(runPayloads[1].permissionContinuation).toBe(true);
+    expect(runPayloads[1].prompt).toContain('权限确认回执');
+  });
+
+  test('continues Feishu authorization when the user says scan is completed instead of queueing it', async ({ ecorex }) => {
+    const { electronApp, page } = ecorex;
+    await login(page);
+
+    await electronApp.evaluate(({ ipcMain, BrowserWindow }) => {
+      global.__ecorexFeishuResumeRuns = [];
+      ipcMain.removeHandler('agent:run');
+      ipcMain.handle('agent:run', (event, payload) => {
+        global.__ecorexFeishuResumeRuns.push(payload);
+        const win = BrowserWindow.fromWebContents(event.sender);
+        const runIndex = global.__ecorexFeishuResumeRuns.length;
+        setTimeout(() => {
+          if (!win || win.isDestroyed()) return;
+          win.webContents.send('agent:events', {
+            sessionId: payload.sessionId,
+            events: payload.permissionContinuation
+              ? [
+                  { sessionId: payload.sessionId, kind: 'result', status: 'completed', text: '飞书授权已接上，继续创建多维表格日志完成。' },
+                  { sessionId: payload.sessionId, kind: 'done', status: 'completed', text: 'done' }
+                ]
+              : [
+                  {
+                    sessionId: payload.sessionId,
+                    kind: 'result',
+                    status: 'completed',
+                    text: '请扫码完成飞书授权，完成后回到这里告诉我已完成：https://open.feishu.cn/page/execution_bridge?user_code=TEST&from=execution_bridge'
+                  }
+              ]
+          });
+        }, payload.permissionContinuation ? 1_600 : 60);
+        if (runIndex === 1) {
+          setTimeout(() => {
+            if (!win || win.isDestroyed()) return;
+            win.webContents.send('agent:events', {
+              sessionId: payload.sessionId,
+              events: [{ sessionId: payload.sessionId, kind: 'done', status: 'completed', text: 'done' }]
+            });
+          }, 1_200);
+        }
+        return {
+          ok: true,
+          sessionId: payload.sessionId,
+          initialEvent: { sessionId: payload.sessionId, kind: 'status', status: 'started', text: 'started' }
+        };
+      });
+    });
+
+    await page.locator('[data-testid="chat-input"]').fill('授权飞书并创建多维表格日志');
+    await page.locator('[data-testid="chat-input"]').press('Enter');
+    await expect(page.getByTestId('permission-confirmation-card')).toBeVisible({ timeout: 10_000 });
+
+    await page.locator('[data-testid="chat-input"]').fill('扫码完成');
+    await page.locator('[data-testid="chat-input"]').press('Enter');
+
+    await expect(page.locator('.user-bubble')).toHaveCount(1);
+    await expect(page.locator('.user-bubble').filter({ hasText: '扫码完成' })).toHaveCount(0);
+    await expect(page.locator('.assistant-card').filter({ hasText: '飞书授权已接上' }).first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.assistant-card').filter({ hasText: '飞书授权已接上' }).locator('.message-status.complete').first()).toBeVisible();
+    await expect(page.locator('.assistant-card').filter({ hasText: '飞书授权已接上' }).locator('.message-status.queued')).toHaveCount(0);
+
+    const runPayloads = await electronApp.evaluate(() => global.__ecorexFeishuResumeRuns || []);
+    expect(runPayloads).toHaveLength(2);
+    expect(runPayloads[1].permissionContinuation).toBe(true);
+    expect(runPayloads[1].prompt).toContain('用户已完成上一轮等待的外部授权');
   });
 
   test('routes permission continuation results back to the owning conversation after switching away', async ({ ecorex }) => {
@@ -3943,6 +4065,130 @@ test.describe('EcoreX Agent Electron E2E', () => {
     await expect(page.locator('.artifact-thumb-card').filter({ hasText: 'hello.docx' })).toHaveCount(1);
     await expect(page.locator('.artifact-thumb-card').filter({ hasText: 'hello.pptx' })).toHaveCount(1);
     await expect(page.locator('.artifact-thumb-card').filter({ hasText: 'hello.xlsx' })).toHaveCount(1);
+  });
+
+  test('turns generated file manifests into artifact cards and clears stale authorization status', async ({ ecorex }) => {
+    const { electronApp, page } = ecorex;
+    await login(page);
+
+    const artifactNames = [
+      '上海最近3天天气报告.pptx',
+      '上海最近3天天气报告.xlsx',
+      '上海最近3天天气报告.docx',
+      '上海最近3天天气报告.pdf',
+      '上海最近3天天气报告.html'
+    ];
+
+    await electronApp.evaluate(({ ipcMain, BrowserWindow }, payload) => {
+      ipcMain.removeHandler('file:preview');
+      ipcMain.handle('file:preview', (_event, previewPayload = {}) => {
+        const targetPath = String(previewPayload.path || previewPayload.filePath || '');
+        const name = targetPath.split(/[\\/]/).pop();
+        if (payload.artifactNames.includes(name)) {
+          return {
+            ok: true,
+            path: targetPath,
+            file: { path: targetPath, name },
+            mimeType: name.endsWith('.html') ? 'text/html' : 'application/octet-stream',
+            content: `preview ${name}`,
+            metadata: { name }
+          };
+        }
+        return { ok: false, reason: 'not-found', error: 'not found' };
+      });
+      ipcMain.removeHandler('agent:run');
+      ipcMain.handle('agent:run', (event, runPayload) => {
+        const win = BrowserWindow.fromWebContents(event.sender);
+        const manifest = [
+          '[AI 亦芯助手] 此命令最长阻塞约 10 分钟，等待用户在浏览器内完成授权。请确保 runner 的 timeout >= 600s。若你的 harness 只会把最终回复发给用户，请改用 lark-execution bridge auth login -',
+          '{"ok":true,"identity":"user","data":{"base":{"base_token":"SECRET_BASE_TOKEN","folder_token":"SECRET_FOLDER_TOKEN"}}}',
+          'Users\\user\\AppData\\Roaming\\ecorex-agent\\agent-runtime-config\\general-workspace\\上海最近3天天气报告_2026-05-26_2026-05-28文件清单:',
+          '一、`上海最近3天天气报告.pptx` 35,522 bytes',
+          '二、`上海最近3天天气报告.xlsx` 11,592 bytes',
+          '三、`上海最近3天天气报告.docx` 2,519 bytes',
+          '四、`上海最近3天天气报告.pdf` 6,691 bytes',
+          '五、`上海最近3天天气报告.html` 3,947 bytes',
+          '已生成并验证 5 种格式报告，文件均存在且非空。'
+        ].join('\n');
+        setTimeout(() => {
+          if (!win || win.isDestroyed()) return;
+          win.webContents.send('agent:events', {
+            sessionId: runPayload.sessionId,
+            events: [
+              {
+                sessionId: runPayload.sessionId,
+                kind: 'result',
+                status: 'completed',
+                text: '请扫码完成飞书授权，完成后回到这里告诉我已完成：https://open.feishu.cn/page/execution_bridge?user_code=TEST&from=execution_bridge'
+              },
+              {
+                sessionId: runPayload.sessionId,
+                kind: 'result',
+                status: 'completed',
+                text: manifest
+              },
+              { sessionId: runPayload.sessionId, kind: 'done', status: 'completed', text: 'done' }
+            ]
+          });
+        }, 50);
+        return { ok: true, sessionId: runPayload.sessionId, status: 'running' };
+      });
+    }, { artifactNames });
+
+    await page.locator('[data-testid="chat-input"]').fill('生成上海最近3天天气多格式报告');
+    await page.locator('[data-testid="chat-input"]').press('Enter');
+
+    const assistant = page.locator('.assistant-card').filter({ hasText: '已生成并验证 5 种格式报告' }).first();
+    await expect(assistant).toBeVisible({ timeout: 10_000 });
+    await expect(assistant.locator('.message-status.complete')).toBeVisible();
+    await expect(assistant.locator('.message-status.queued')).toHaveCount(0);
+    await expect(assistant).not.toContainText('runner');
+    await expect(assistant).not.toContainText('harness');
+    await expect(assistant).not.toContainText('base_token');
+    await expect(assistant).not.toContainText('SECRET_BASE_TOKEN');
+    for (const name of artifactNames) {
+      await expect(page.locator('.artifact-thumb-card').filter({ hasText: name })).toHaveCount(1);
+    }
+  });
+
+  test('splits streamed progress into readable assistant blocks and hides raw tool json', async ({ ecorex }) => {
+    const { electronApp, page } = ecorex;
+    await login(page);
+
+    await electronApp.evaluate(({ ipcMain, BrowserWindow }) => {
+      ipcMain.removeHandler('agent:run');
+      ipcMain.handle('agent:run', (event, runPayload) => {
+        const win = BrowserWindow.fromWebContents(event.sender);
+        setTimeout(() => {
+          if (!win || win.isDestroyed()) return;
+          win.webContents.send('agent:events', {
+            sessionId: runPayload.sessionId,
+            events: [
+              {
+                sessionId: runPayload.sessionId,
+                kind: 'result',
+                status: 'completed',
+                text: [
+                  '授权已成功，我会继续创建数据表并验证字段结构。字段参数在本地命令中被转义成了无效 JSON，我会用原始 JSON 字符串重新提交并检测到表已存在。接下来我会按标准 JSON 参数逐字段验证后继续批量创建表，把字段定义落成工作区内的临时 JSON 文件，再用文件引用方式避免命令行转义问题。',
+                  '{"ok":true,"identity":"user","data":{"fields":[{"id":"fld8BWz9EO","name":"ID","style":"text"}],"records":[]}}'
+                ].join('\n')
+              },
+              { sessionId: runPayload.sessionId, kind: 'done', status: 'completed', text: 'done' }
+            ]
+          });
+        }, 40);
+        return { ok: true, sessionId: runPayload.sessionId, status: 'running' };
+      });
+    });
+
+    await page.locator('[data-testid="chat-input"]').fill('show readable progress blocks');
+    await page.locator('[data-testid="chat-input"]').press('Enter');
+
+    const assistant = page.locator('.assistant-card').filter({ hasText: '授权已成功' }).first();
+    await expect(assistant).toBeVisible({ timeout: 10_000 });
+    await expect(assistant).not.toContainText('"ok":true');
+    await expect(assistant).not.toContainText('"fields"');
+    await expect.poll(async () => assistant.locator('.rich-message-block').count()).toBeGreaterThan(1);
   });
 
   test('does not render remote urls or bare filenames as AI artifact cards', async ({ ecorex }) => {

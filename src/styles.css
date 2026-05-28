@@ -2862,6 +2862,17 @@ select,
 
 .rich-message-text {
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  white-space: normal;
+}
+
+.rich-message-block {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .assistant-text.collapsed {
