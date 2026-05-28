@@ -1518,6 +1518,9 @@ test.describe('EcoreX Agent Electron E2E', () => {
     await expect(alphaRow).toBeVisible();
     await alphaRow.locator('.recent-open').click();
     await expect(page.locator('.user-bubble').filter({ hasText: alphaPrompt }).first()).toBeVisible();
+    await expect(page.locator('[data-testid="chat-stop-button"]')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.message-recovery-state')).toHaveCount(0);
+    await expect(page.locator('.assistant-card .thinking-indicator').first()).toBeVisible({ timeout: 10_000 });
     await expect(page.locator('.assistant-card').filter({ hasText: betaResult })).toHaveCount(0);
 
     const completedAlpha = await completeParallelRun(runPayloads[0].sessionId, alphaResult);
@@ -1557,6 +1560,86 @@ test.describe('EcoreX Agent Electron E2E', () => {
       betaHasBeta: true,
       betaHasAlpha: false
     });
+  });
+
+  test('stops only the visible conversation while parallel runs continue', async ({ ecorex }) => {
+    const { electronApp, page } = ecorex;
+    await login(page);
+
+    await electronApp.evaluate(({ ipcMain, BrowserWindow }) => {
+      global.__ecorexVisibleStopRuns = [];
+      global.__ecorexVisibleStopPayloads = [];
+      ipcMain.removeHandler('agent:run');
+      ipcMain.handle('agent:run', (event, payload) => {
+        const win = BrowserWindow.fromWebContents(event.sender);
+        const sessionId = payload.sessionId || `visible-stop-session-${global.__ecorexVisibleStopRuns.length + 1}`;
+        global.__ecorexVisibleStopRuns.push({
+          rawPrompt: payload.rawPrompt || payload.userPrompt || '',
+          sessionId,
+          conversationId: payload.conversationId,
+          claudeSessionId: payload.claudeSessionId,
+          windowId: win?.id || 0,
+          completed: false
+        });
+        return {
+          ok: true,
+          sessionId,
+          initialEvent: { sessionId, kind: 'status', status: 'started', text: 'visible stop started' }
+        };
+      });
+      ipcMain.removeHandler('agent:stop');
+      ipcMain.handle('agent:stop', (_event, payload) => {
+        global.__ecorexVisibleStopPayloads.push(payload);
+        return { ok: true, sessionId: payload.sessionId, status: 'cancelled' };
+      });
+    });
+
+    const alphaPrompt = 'visible stop alpha task';
+    const betaPrompt = 'visible stop beta task';
+    const alphaResult = 'visible stop alpha result';
+
+    await page.locator('[data-testid="chat-input"]').fill(alphaPrompt);
+    await page.locator('[data-testid="chat-input"]').press('Enter');
+    await expect.poll(() => electronApp.evaluate(() => global.__ecorexVisibleStopRuns?.length || 0)).toBe(1);
+
+    await page.locator('.new-chat').click();
+    await page.locator('[data-testid="chat-input"]').fill(betaPrompt);
+    await page.locator('[data-testid="chat-input"]').press('Enter');
+    await expect.poll(() => electronApp.evaluate(() => global.__ecorexVisibleStopRuns?.length || 0)).toBe(2);
+    await expect(page.locator('.user-bubble').filter({ hasText: betaPrompt }).first()).toBeVisible();
+    await expect(page.locator('[data-testid="chat-stop-button"]')).toBeVisible({ timeout: 10_000 });
+
+    await page.locator('[data-testid="chat-stop-button"]').click();
+    await expect.poll(async () => electronApp.evaluate(() => global.__ecorexVisibleStopPayloads || []), { timeout: 10_000 }).toHaveLength(1);
+    const { runs, stops } = await electronApp.evaluate(() => ({
+      runs: global.__ecorexVisibleStopRuns || [],
+      stops: global.__ecorexVisibleStopPayloads || []
+    }));
+    expect(stops[0].sessionId).toBe(runs[1].sessionId);
+    expect(stops[0].sessionId).not.toBe(runs[0].sessionId);
+
+    const alphaRow = page.locator('.recent-row').filter({ hasText: alphaPrompt }).first();
+    await expect(alphaRow).toBeVisible();
+    await alphaRow.locator('.recent-open').click();
+    await expect(page.locator('.user-bubble').filter({ hasText: alphaPrompt }).first()).toBeVisible();
+    await expect(page.locator('[data-testid="chat-stop-button"]')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.assistant-card .thinking-indicator').first()).toBeVisible({ timeout: 10_000 });
+
+    await electronApp.evaluate(({ BrowserWindow }, payload) => {
+      const run = (global.__ecorexVisibleStopRuns || []).find((item) => item.sessionId === payload.sessionId);
+      const win = BrowserWindow.fromId(run?.windowId || 0);
+      if (!run || !win || win.isDestroyed()) return false;
+      run.completed = true;
+      win.webContents.send('agent:events', {
+        sessionId: run.sessionId,
+        events: [
+          { sessionId: run.sessionId, kind: 'result', status: 'completed', text: payload.text },
+          { sessionId: run.sessionId, kind: 'done', status: 'completed', text: 'done' }
+        ]
+      });
+      return true;
+    }, { sessionId: runs[0].sessionId, text: alphaResult });
+    await expect(page.locator('.assistant-card').filter({ hasText: alphaResult }).first()).toBeVisible({ timeout: 15_000 });
   });
 
   test('keeps recovered running-session previews hidden from the main chat UI', async ({ ecorex }) => {
@@ -1699,6 +1782,90 @@ test.describe('EcoreX Agent Electron E2E', () => {
     expect(runPayloads[1].conversationId).toBe(runPayloads[0].conversationId);
     expect(runPayloads[1].claudeSessionId).toBe(runPayloads[0].claudeSessionId);
     await expect(page.locator('.user-bubble').filter({ hasText: '允许一次' })).toHaveCount(0);
+  });
+
+  test('routes permission continuation results back to the owning conversation after switching away', async ({ ecorex }) => {
+    const { electronApp, page } = ecorex;
+    await login(page);
+
+    await electronApp.evaluate(({ ipcMain, BrowserWindow }) => {
+      global.__ecorexPermissionOwnerRuns = [];
+      ipcMain.removeHandler('agent:run');
+      ipcMain.handle('agent:run', (event, payload) => {
+        global.__ecorexPermissionOwnerRuns.push(payload);
+        const win = BrowserWindow.fromWebContents(event.sender);
+        const rawPrompt = payload.rawPrompt || payload.userPrompt || '';
+        const text = payload.permissionContinuation
+          ? 'owner continuation completed only in alpha'
+          : rawPrompt.includes('owner beta')
+            ? 'owner beta completed'
+            : '我需要打开一个本地授权链接完成飞书授权，完成后会继续执行。请确认是否允许我打开链接？';
+        setTimeout(() => {
+          if (!win || win.isDestroyed()) return;
+          win.webContents.send('agent:events', {
+            sessionId: payload.sessionId,
+            events: [
+              { sessionId: payload.sessionId, kind: 'result', status: 'completed', text },
+              { sessionId: payload.sessionId, kind: 'done', status: 'completed', text: 'done' }
+            ]
+          });
+        }, payload.permissionContinuation ? 350 : 40);
+        return {
+          ok: true,
+          sessionId: payload.sessionId,
+          initialEvent: { sessionId: payload.sessionId, kind: 'status', status: 'started', text: 'owner route started' }
+        };
+      });
+    });
+
+    const alphaPrompt = 'owner alpha needs permission';
+    const betaPrompt = 'owner beta normal run';
+    const continuationResult = 'owner continuation completed only in alpha';
+    const betaResult = 'owner beta completed';
+
+    await page.locator('[data-testid="chat-input"]').fill(alphaPrompt);
+    await page.locator('[data-testid="chat-input"]').press('Enter');
+    await expect(page.getByTestId('permission-confirmation-card')).toBeVisible({ timeout: 15_000 });
+    await page.locator('.inline-permission-actions button').filter({ hasText: '允许一次' }).click();
+    await expect(page.getByTestId('permission-confirmation-card')).toHaveCount(0);
+
+    await page.locator('.new-chat').click();
+    await page.locator('[data-testid="chat-input"]').fill(betaPrompt);
+    await page.locator('[data-testid="chat-input"]').press('Enter');
+    await expect(page.locator('.assistant-card').filter({ hasText: betaResult }).first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('.assistant-card').filter({ hasText: continuationResult })).toHaveCount(0);
+
+    const alphaRow = page.locator('.recent-row').filter({ hasText: alphaPrompt }).first();
+    await expect(alphaRow).toBeVisible();
+    await alphaRow.locator('.recent-open').click();
+    await expect(page.locator('.assistant-card').filter({ hasText: continuationResult }).first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('.assistant-card').filter({ hasText: betaResult })).toHaveCount(0);
+
+    const storedRouting = await page.evaluate(({ alphaPrompt, betaPrompt, continuationResult, betaResult }) => {
+      const conversations = Object.values(JSON.parse(localStorage.getItem('ecorex-chat-conversations') || '{}'));
+      const findByPrompt = (prompt) => conversations.find((conversation) => (
+        conversation
+        && Array.isArray(conversation.messages)
+        && conversation.messages.some((message) => message.role === 'user' && String(message.text || '').includes(prompt))
+      ));
+      const alpha = findByPrompt(alphaPrompt);
+      const beta = findByPrompt(betaPrompt);
+      const textFor = (conversation) => (conversation?.messages || []).map((message) => String(message.text || '')).join('\n');
+      return {
+        alphaText: textFor(alpha),
+        betaText: textFor(beta)
+      };
+    }, { alphaPrompt, betaPrompt, continuationResult, betaResult });
+    expect(storedRouting.alphaText).toContain(continuationResult);
+    expect(storedRouting.alphaText).not.toContain(betaResult);
+    expect(storedRouting.betaText).toContain(betaResult);
+    expect(storedRouting.betaText).not.toContain(continuationResult);
+
+    const runPayloads = await electronApp.evaluate(() => global.__ecorexPermissionOwnerRuns || []);
+    expect(runPayloads).toHaveLength(3);
+    expect(runPayloads[1].permissionContinuation).toBe(true);
+    expect(runPayloads[1].conversationId).toBe(runPayloads[0].conversationId);
+    expect(runPayloads[2].conversationId).not.toBe(runPayloads[0].conversationId);
   });
 
   test('applies default and full access permission switches to the next run immediately', async ({ ecorex }) => {
@@ -2586,6 +2753,55 @@ test.describe('EcoreX Agent Electron E2E', () => {
     expect(runPayloads[1].prompt).toContain(followUpPrompt);
   });
 
+  test('keeps queued follow-up pending when a queued run is rejected', async ({ ecorex }) => {
+    const { electronApp, page } = ecorex;
+    await login(page);
+
+    await electronApp.evaluate(({ ipcMain, BrowserWindow }) => {
+      global.__ecorexRejectedQueueRuns = [];
+      ipcMain.removeHandler('agent:run');
+      ipcMain.handle('agent:run', (event, payload) => {
+        global.__ecorexRejectedQueueRuns.push(payload);
+        const win = BrowserWindow.fromWebContents(event.sender);
+        const runIndex = global.__ecorexRejectedQueueRuns.length;
+        if (runIndex > 1) {
+          return { ok: false, code: 'too-many-sessions', status: 'failed', error: 'session limit reached' };
+        }
+        setTimeout(() => {
+          if (!win || win.isDestroyed()) return;
+          win.webContents.send('agent:events', {
+            sessionId: payload.sessionId,
+            events: [
+              { sessionId: payload.sessionId, kind: 'result', status: 'completed', text: 'first queue rejection run completed' },
+              { sessionId: payload.sessionId, kind: 'done', status: 'completed', text: 'done' }
+            ]
+          });
+        }, 250);
+        return {
+          ok: true,
+          sessionId: payload.sessionId,
+          initialEvent: { sessionId: payload.sessionId, kind: 'status', status: 'started', text: 'first run started' }
+        };
+      });
+    });
+
+    const firstPrompt = 'start rejection queue first run';
+    const followUpPrompt = 'keep this queued when backend rejects';
+    await page.locator('[data-testid="chat-input"]').fill(firstPrompt);
+    await page.locator('[data-testid="chat-input"]').press('Enter');
+    await expect.poll(() => electronApp.evaluate(() => global.__ecorexRejectedQueueRuns?.length || 0)).toBe(1);
+
+    await page.locator('[data-testid="chat-input"]').fill(followUpPrompt);
+    await page.locator('[data-testid="chat-input"]').press('Enter');
+    const followUpBubble = page.locator('.user-bubble').filter({ hasText: followUpPrompt }).first();
+    await expect(followUpBubble).toContainText(/排队|queued/i);
+    await expect.poll(() => electronApp.evaluate(() => global.__ecorexRejectedQueueRuns?.length || 0), { timeout: 15_000 }).toBe(2);
+    await expect(followUpBubble).toContainText(/排队|queued/i, { timeout: 5_000 });
+    await page.waitForTimeout(900);
+    await expect(followUpBubble).toContainText(/排队|queued/i);
+    await expect.poll(() => electronApp.evaluate(() => global.__ecorexRejectedQueueRuns?.length || 0)).toBe(2);
+  });
+
   test('keeps handoff result running until lifecycle final and queues the next user input', async ({ ecorex }) => {
     const { electronApp, page } = ecorex;
     await login(page);
@@ -2634,15 +2850,19 @@ test.describe('EcoreX Agent Electron E2E', () => {
     const followUpPrompt = 'give me a clickable configuration link';
     await page.locator('[data-testid="chat-input"]').fill(firstPrompt);
     await page.locator('[data-testid="chat-input"]').press('Enter');
-    const firstAssistant = page.locator('.assistant-card').filter({ hasText: 'Feishu authorization link' }).first();
-    await expect(firstAssistant).toBeVisible({ timeout: 10_000 });
-    await expect(firstAssistant.locator('.message-status.complete')).toHaveCount(0);
+    const permissionCard = page.getByTestId('permission-confirmation-card');
+    await expect(permissionCard).toBeVisible({ timeout: 10_000 });
+    await expect(permissionCard).toContainText('Feishu authorization link');
+    await expect(page.locator('.assistant-card').filter({ hasText: 'Feishu authorization link' }).locator('.message-status.complete')).toHaveCount(0);
 
     await page.locator('[data-testid="chat-input"]').fill(followUpPrompt);
     await page.locator('[data-testid="chat-input"]').press('Enter');
     await expect(page.locator('.user-bubble').filter({ hasText: followUpPrompt }).first()).toContainText(/排队|鎺掗槦|queued/i);
     await expect(page.locator('.assistant-card').filter({ hasText: 'This conversation already has a task running' })).toHaveCount(0);
     await expect.poll(() => electronApp.evaluate(() => global.__ecorexRunPayloads?.length || 0), { timeout: 15_000 }).toBe(2);
+    await expect(page.locator('.assistant-card').filter({ hasText: 'Feishu authorization link' }).locator('.message-status.complete')).toHaveCount(0);
+    await expect(permissionCard).toBeVisible({ timeout: 10_000 });
+    await expect(permissionCard).toContainText('Open this Feishu authorization link');
     await expect(page.locator('.assistant-card').filter({ hasText: 'queued handoff completed' }).first()).toBeVisible({ timeout: 10_000 });
   });
 
@@ -2958,13 +3178,13 @@ test.describe('EcoreX Agent Electron E2E', () => {
 
     await page.locator('[data-testid="chat-input"]').fill('return a Feishu authorization link');
     await page.locator('[data-testid="chat-input"]').press('Enter');
-    const assistant = page.locator('.assistant-card').filter({ hasText: 'open.feishu.cn' }).first();
-    await expect(assistant).toBeVisible({ timeout: 10_000 });
-    await expect(assistant).toContainText('https://open.feishu.cn/page/execution_bridge?user_code=TEST&from=execution_bridge');
-    await expect(assistant).not.toContainText('24 25');
-    await expect(assistant).not.toContainText('26 27');
-    await expect(assistant).not.toContainText('Updated task #1');
-    await expect(assistant).not.toContainText('TaskUpdate');
+    const permissionCard = page.getByTestId('permission-confirmation-card');
+    await expect(permissionCard).toBeVisible({ timeout: 10_000 });
+    await expect(permissionCard).toContainText('https://open.feishu.cn/page/execution_bridge?user_code=TEST&from=execution_bridge');
+    await expect(permissionCard).not.toContainText('24 25');
+    await expect(permissionCard).not.toContainText('26 27');
+    await expect(permissionCard).not.toContainText('Updated task #1');
+    await expect(permissionCard).not.toContainText('TaskUpdate');
   });
 
   test('keeps composer responsive after large assistant output and folded ledger @responsive', async ({ ecorex }) => {

@@ -1074,6 +1074,21 @@ function permissionContinuationPrompt(decision = {}) {
   ].join('\n');
 }
 
+function permissionContinuationContextFromMessage(message = {}) {
+  const originalPrompt = retryPromptFromMessage(message);
+  const blockedOutput = cleanAssistantOutputText(
+    message.permissionPromptText
+    || message.text
+    || message.recovery?.detail
+    || ''
+  );
+  return [
+    originalPrompt ? `上一轮用户需求：${clampLongText(originalPrompt, 1600)}` : '',
+    blockedOutput ? `上一轮待确认操作与输出：${clampLongText(blockedOutput, 2400)}` : '',
+    '续跑要求：沿用上一轮会话上下文继续被拦截的同一步操作；如果上一轮已经给出待执行命令、脚本路径、文件路径或授权链接，直接继续该动作并验证结果，不要重新询问。'
+  ].filter(Boolean).join('\n');
+}
+
 function readableMessageText(message = {}) {
   const text = String(message.text || '').replace(/\s+/g, ' ').trim();
   if (text) return text;
@@ -1758,12 +1773,10 @@ async function validateArtifactAvailabilityWithBridge(artifact = {}) {
     || result?.metadata
   );
   const isPreviewMetadata = (result = {}) => (
-    result?.ok !== false && (
-      result?.unsupported === true
-      || result?.previewable === false
-      || result?.renderMode === 'metadata'
-      || hasPreviewLocation(result)
-    )
+    result?.unsupported === true
+    || result?.previewable === false
+    || result?.renderMode === 'metadata'
+    || (result?.ok !== false && hasPreviewLocation(result))
   );
   const payload = {
     name: artifact.name,
@@ -2089,6 +2102,8 @@ function agentRunPolicySection(prompt = '') {
     '2. 涉及本地文件写入/修改/删除、命令执行、系统目录访问或不可逆变更时，触发 EcoreX 聊天框内权限确认卡，让用户点击按钮确认；不要要求用户在聊天里回复“继续”或“确认”。',
     '3. 简单问答只返回答案；复杂任务只展示当前动作、关键计划和必要风险，不输出完整调试日志或冗长状态树。',
     '4. 有限任务不要启动长期后台命令；如果命令被转入后台，必须立即读取输出、完成验证或停止后台任务，并给出最终结论或明确待继续原因。',
+    '5. 用户提到本地文档、对接文档、飞书文档、创建多维表格或日志时，先检索当前工作区、项目文件、EcoreX 托管 Skill 文档和已配置 CLI/MCP；不要在本地资料检索前要求用户提供链接、token 或字段。',
+    '6. 需要生成 PPT/Excel/DOCX/PDF/HTML 等文件时，必须执行到真实文件落地并验证文件存在；如果脚本或命令被权限策略拦截，只输出需要 EcoreX 权限确认卡继续执行的简短说明，不要把脚本路径当作最终交付。',
     realtimePlatformSearchPolicySection(prompt)
   ].join('\n');
 }
@@ -4798,6 +4813,12 @@ function formatAgentEventStatus(value, fallback = '进行中') {
     queued: '排队中',
     starting: '启动中',
     started: '已启动',
+    'authorization-incomplete': '等待授权',
+    'auth-incomplete': '等待授权',
+    'user-action-required': '等待用户继续',
+    'waiting-input': '等待用户继续',
+    'needs-user': '等待用户继续',
+    'blocked-user-action': '等待用户继续',
     completed: '已完成',
     complete: '已完成',
     done: '已完成',
@@ -4847,11 +4868,16 @@ function timelineItemFromAgentEvent(event) {
     timeout: '已超时',
     error: '失败'
   };
-  const terminalFailed = agentEventIndicatesFailure(event) || (event.kind === 'result' && agentEventLooksIncompleteTerminal(event));
-  const terminalTone = terminalFailed ? 'danger' : 'success';
+  const pendingStatus = pendingUserActionStatus(event, event.text || '');
+  const pendingLabelMap = {
+    'authorization-incomplete': '等待授权完成',
+    'user-action-required': '等待用户继续'
+  };
+  const terminalFailed = !pendingStatus && (agentEventIndicatesFailure(event) || (event.kind === 'result' && agentEventLooksIncompleteTerminal(event)));
+  const terminalTone = pendingStatus ? 'pending' : (terminalFailed ? 'danger' : 'success');
   const displayStatus = terminalFailed && ['result', 'done'].includes(event.kind)
     ? '未完成'
-    : (statusMap[event.kind] || formatAgentEventStatus(event.status || event.state, '进行中'));
+    : (pendingStatus ? formatAgentEventStatus(pendingStatus, '等待继续') : (statusMap[event.kind] || formatAgentEventStatus(event.status || event.state, '进行中')));
   const toneMap = {
     status: 'running',
     tool: 'running',
@@ -4869,7 +4895,7 @@ function timelineItemFromAgentEvent(event) {
   };
 
   return [
-    sanitizeDisplayText(labelMap[event.kind] || taskLabel || '执行步骤', '执行步骤').slice(0, 120),
+    sanitizeDisplayText(pendingLabelMap[pendingStatus] || labelMap[event.kind] || taskLabel || '执行步骤', '执行步骤').slice(0, 120),
     sanitizeDisplayText(displayStatus, '进行中').slice(0, 40),
     formatAgentEventTime(event),
     toneMap[event.kind] || 'running',
@@ -5167,6 +5193,7 @@ function agentEventOutcomeText(event = {}) {
 
 function agentEventIndicatesFailure(event = {}) {
   if (!event) return false;
+  if (isPendingUserActionEvent(event)) return false;
   if (event.ok === false || event.error === true) return true;
   if (['error', 'timeout'].includes(String(event.kind || '').toLowerCase())) return true;
   return /(fail|failed|failure|error|timeout|denied|rejected|exception|incomplete|authorization-incomplete|auth.*incomplete|未完成|失败|错误|异常|超时|拒绝)/i.test(agentEventOutcomeText(event));
@@ -5206,10 +5233,40 @@ function isAgentSessionFinalEvent(event = {}) {
   return AGENT_SESSION_FINAL_KINDS.has(event.kind);
 }
 
+function pendingUserActionStatusFromEvent(event = {}) {
+  const text = [
+    event.status,
+    event.state,
+    event.reason,
+    event.code,
+    event.recoveryStatus
+  ].filter(Boolean).join(' ').toLowerCase();
+  if (/authorization-incomplete|auth.*incomplete/.test(text)) return 'authorization-incomplete';
+  if (/user-action-required|waiting-input|needs-user|blocked-user-action/.test(text)) return 'user-action-required';
+  return '';
+}
+
+function isPendingUserActionEvent(event = {}) {
+  return Boolean(pendingUserActionStatusFromEvent(event));
+}
+
 function textLooksPendingUserAction(value = '') {
   const text = cleanAssistantOutputText(value).toLowerCase();
   if (!text) return false;
   return /(open\.feishu\.cn|execution[_ -]?bridge|user_code=|device[_ -]?code|verification[_ -]?(url|uri)|二维码|扫码|授权|登录|认证|打开.*链接|完成后.*继续|告诉我.*完成|tell me.*done|waiting for.*auth|waiting for.*user|please.{0,40}(upload|provide|tell|share)|unable|cannot|can't|not able|no input file|missing input|无法|不能|暂时无法|请.{0,40}(上传|提供|告诉|补充|路径|文件)|需要.{0,40}(上传|提供|告诉|补充|路径|文件))/i.test(text);
+}
+
+function pendingUserActionStatusFromText(value = '') {
+  const text = cleanAssistantOutputText(value).toLowerCase();
+  if (!textLooksPendingUserAction(text)) return '';
+  if (/(open\.feishu\.cn|execution[_ -]?bridge|user_code=|device[_ -]?code|verification[_ -]?(url|uri)|oauth|auth|authorization|login|lark|feishu|授权|登录|认证|飞书)/i.test(text)) {
+    return 'authorization-incomplete';
+  }
+  return 'user-action-required';
+}
+
+function pendingUserActionStatus(event = {}, text = '') {
+  return pendingUserActionStatusFromEvent(event) || pendingUserActionStatusFromText(text);
 }
 
 function messageHasSubstantiveTerminalOutput(message = {}, event = {}) {
@@ -5360,7 +5417,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
   const eventQueueRef = useRef([]);
   const eventSeqRef = useRef(0);
   const pendingFollowUpsRef = useRef([]);
-  const followUpFlushInFlightRef = useRef(false);
+  const followUpFlushInFlightByConversationRef = useRef(new Set());
   const messagesRef = useRef(messages);
   const contextSummaryRef = useRef('');
   const contextCompactedMessageCountRef = useRef(0);
@@ -5697,6 +5754,137 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     syncCurrentSessionForVisibleConversation(conversationIdRef.current);
   }
 
+  function reattachActiveSessionMessages(ownerConversationId, sourceMessages = [], projectOverride = null) {
+    const targetConversationId = String(ownerConversationId || '');
+    if (!targetConversationId) return Array.isArray(sourceMessages) ? sourceMessages : [];
+    const baseMessages = Array.isArray(sourceMessages) ? sourceMessages : [];
+    const activeRowsById = new Map();
+    const rememberActiveRow = (row) => {
+      const sessionId = String(row?.sessionId || row?.id || '').trim();
+      if (!sessionId || !isRunningSessionActive(row)) return;
+      activeRowsById.set(sessionId, normalizeRunningSession({
+        ...row,
+        sessionId,
+        id: sessionId,
+        conversationId: targetConversationId,
+        status: row.status || 'running',
+        state: row.state || row.status || 'running'
+      }, activeRowsById.size, row.source || 'local'));
+    };
+
+    runningSessionRowsRef.current.forEach((row) => {
+      if (!isRunningSessionActive(row)) return false;
+      const owner = sessionOwnerForSession(row.sessionId || row.id, row);
+      if (String(owner?.conversationId || row.conversationId || '') === targetConversationId) rememberActiveRow(row);
+    });
+    Array.from(runningSessionsRef.current).forEach((sessionId) => {
+      const owner = sessionOwnerForSession(sessionId);
+      if (String(owner?.conversationId || '') !== targetConversationId) return;
+      const message = baseMessages.find((item) => item?.id === owner?.messageId || String(item?.sessionId || '') === String(sessionId));
+      rememberActiveRow({
+        sessionId,
+        id: sessionId,
+        conversationId: targetConversationId,
+        claudeSessionId: owner?.claudeSessionId || message?.claudeSessionId || targetConversationId,
+        messageId: owner?.messageId || message?.id || '',
+        projectId: owner?.projectId || message?.projectId || projectOverride?.id || '',
+        projectName: owner?.projectName || message?.projectName || projectOverride?.name || '',
+        status: 'running',
+        state: 'running',
+        prompt: message?.originalPrompt || message?.text || '',
+        updatedAt: Date.now(),
+        source: 'local'
+      });
+    });
+    baseMessages.forEach((message) => {
+      const sessionId = String(message?.sessionId || '').trim();
+      if (!sessionId || !message?.streaming) return;
+      rememberActiveRow({
+        sessionId,
+        id: sessionId,
+        conversationId: targetConversationId,
+        claudeSessionId: message.claudeSessionId || targetConversationId,
+        messageId: message.id,
+        projectId: message.projectId || projectOverride?.id || '',
+        projectName: message.projectName || projectOverride?.name || '',
+        status: 'running',
+        state: 'running',
+        prompt: message.originalPrompt || message.text || '',
+        updatedAt: Date.now(),
+        source: 'local'
+      });
+    });
+    const activeRows = Array.from(activeRowsById.values());
+    if (!activeRows.length) return Array.isArray(sourceMessages) ? sourceMessages : [];
+    commitRunningSessionRows((rows) => mergeRunningSessionRows(rows, activeRows));
+
+    let nextMessages = [...baseMessages];
+    for (const row of activeRows) {
+      const sessionId = String(row.sessionId || row.id || '').trim();
+      if (!sessionId) continue;
+      const owner = sessionOwnerForSession(sessionId, row);
+      const messageId = owner?.messageId || row.messageId || sessionMap.current.get(sessionId) || `assistant-resumed-${sessionId}`;
+      const projectId = owner?.projectId || row.projectId || projectOverride?.id || '';
+      const projectName = owner?.projectName || row.projectName || projectOverride?.name || '';
+      sessionMap.current.set(sessionId, messageId);
+      sessionOwnersRef.current.set(sessionId, {
+        sessionId,
+        messageId,
+        conversationId: targetConversationId,
+        claudeSessionId: owner?.claudeSessionId || row.claudeSessionId || targetConversationId,
+        projectId,
+        projectName
+      });
+      const reconnectTimeline = ['运行任务已重新连接', '运行中', formatAgentEventTime(row), 'running', 'status'];
+      const messageIndex = nextMessages.findIndex((message) => (
+        message?.id === messageId
+        || (message?.sessionId && String(message.sessionId) === sessionId)
+      ));
+      if (messageIndex >= 0) {
+        const message = nextMessages[messageIndex];
+        const hasReconnectTimeline = Array.isArray(message.timeline)
+          && message.timeline.some((item) => Array.isArray(item) && item[0] === reconnectTimeline[0] && item[4] === 'status');
+        nextMessages[messageIndex] = {
+          ...message,
+          streaming: true,
+          error: false,
+          status: cleanAssistantOutputText(message.text || '').trim() ? 'generating' : 'thinking',
+          sessionId,
+          claudeSessionId: owner?.claudeSessionId || row.claudeSessionId || message.claudeSessionId || targetConversationId,
+          projectId: projectId || message.projectId || '',
+          projectName: projectName || message.projectName || '',
+          recovery: null,
+          silentRecovery: false,
+          showTrace: true,
+          timeline: hasReconnectTimeline ? (message.timeline || []) : appendTimeline(message.timeline || [], reconnectTimeline)
+        };
+        continue;
+      }
+      nextMessages = [
+        ...nextMessages,
+        {
+          id: messageId,
+          role: 'assistant',
+          text: '',
+          time: formatAgentEventTime(row),
+          streaming: true,
+          status: 'thinking',
+          error: false,
+          sessionId,
+          claudeSessionId: owner?.claudeSessionId || row.claudeSessionId || targetConversationId,
+          projectId,
+          projectName,
+          silentRecovery: false,
+          showTrace: true,
+          originalPrompt: row.prompt || row.promptPreview || '',
+          recovery: null,
+          timeline: [reconnectTimeline]
+        }
+      ];
+    }
+    return sanitizeLiveMessages(nextMessages);
+  }
+
   function openStoredConversation(item = {}) {
     const nextId = item?.id || item?.conversationId;
     if (!nextId) return;
@@ -5723,12 +5911,14 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     setContextCompactedAt(stored?.contextCompactedAt || null);
     nativeSessionRotatedMessageCountRef.current = 0;
     if (stored?.messages?.length) {
-      contextCompactedMessageCountRef.current = usefulMessageCount(stored.messages);
-      setMessages(stored.messages);
+      const nextMessages = reattachActiveSessionMessages(nextId, stored.messages, nextProject);
+      contextCompactedMessageCountRef.current = usefulMessageCount(nextMessages);
+      setMessages(nextMessages);
       setTimeline(stored.timeline?.length ? stored.timeline : initialTimeline);
     } else {
+      const nextMessages = reattachActiveSessionMessages(nextId, createInitialMessages(authDisplayName), nextProject);
       contextCompactedMessageCountRef.current = 0;
-      setMessages(createInitialMessages(authDisplayName));
+      setMessages(nextMessages);
       setTimeline(initialTimeline);
     }
     syncCurrentSessionForVisibleConversation(conversationIdRef.current);
@@ -5966,9 +6156,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     if (owner?.conversationId && !hasRunningSessionForConversation(owner.conversationId) && pendingFollowUpsRef.current.some((item) => item.conversationId === owner.conversationId)) {
       scheduleStatusTimer(() => flushQueuedFollowUps(owner.conversationId), 80);
     }
-    if (!runningSessionsRef.current.size && !nextRows.length && pendingFollowUpsRef.current.length) {
-      scheduleStatusTimer(() => flushQueuedFollowUps(), 80);
-    }
+    [...new Set(pendingFollowUpsRef.current.map((item) => item.conversationId).filter(Boolean))]
+      .filter((pendingConversationId) => pendingConversationId !== owner?.conversationId)
+      .filter((pendingConversationId) => !hasRunningSessionForConversation(pendingConversationId))
+      .forEach((pendingConversationId) => scheduleStatusTimer(() => flushQueuedFollowUps(pendingConversationId), 80));
   }
 
   function applyAgentEvents(events) {
@@ -6088,11 +6279,16 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           }
 
           if (event.kind === 'result') {
-            const finalArtifacts = finalArtifactsFromText([nextItem.text, event.text].filter(Boolean).join('\n'));
-            const terminalFailed = agentEventIndicatesFailure(event) || !messageHasSubstantiveTerminalOutput({
+            const combinedText = [nextItem.text, event.text].filter(Boolean).join('\n');
+            const finalArtifacts = finalArtifactsFromText(combinedText);
+            const pendingStatus = pendingUserActionStatus(event, combinedText);
+            const permissionContinuationTextFallback = nextItem.permissionDecision?.status
+              ? String(event.text || '').trim()
+              : '';
+            const terminalFailed = !pendingStatus && (agentEventIndicatesFailure(event) || !messageHasSubstantiveTerminalOutput({
               ...nextItem,
               finalArtifacts: mergeArtifactReferences([...(nextItem.finalArtifacts || []), ...finalArtifacts])
-            }, event);
+            }, event));
             if (terminalFailed) {
               nextItem = {
                 ...nextItem,
@@ -6109,9 +6305,26 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
               };
               continue;
             }
+            if (pendingStatus) {
+              nextItem = {
+                ...nextItem,
+                text: cleanAssistantOutputText(nextItem.text) || cleanResultOutputText(event.text) || permissionContinuationTextFallback,
+                finalArtifacts: finalArtifacts.length
+                  ? mergeArtifactReferences([...(nextItem.finalArtifacts || []), ...finalArtifacts])
+                  : nextItem.finalArtifacts,
+                streaming: false,
+                status: pendingStatus,
+                error: false,
+                meta: '',
+                recovery: null,
+                silentRecovery: false
+              };
+              continue;
+            }
+            const finalizedResultText = finalizeAssistantOutputText(nextItem.text, event.text, { preserveArtifactLabels: true }) || permissionContinuationTextFallback;
             nextItem = {
               ...nextItem,
-              text: finalizeAssistantOutputText(nextItem.text, event.text, { preserveArtifactLabels: true }),
+              text: finalizedResultText,
               finalArtifacts: mergeArtifactReferences([...(nextItem.finalArtifacts || []), ...finalArtifacts]),
               streaming: true,
               status: 'generating',
@@ -6123,16 +6336,18 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           }
 
           if (event.kind === 'done') {
-            const finalArtifacts = finalArtifactsFromText([nextItem.text, event.text].filter(Boolean).join('\n'));
             const terminalText = isGenericTerminalText(event.text) ? '' : cleanResultOutputText(event.text);
+            const combinedText = [nextItem.text, terminalText].filter(Boolean).join('\n');
+            const finalArtifacts = finalArtifactsFromText(combinedText);
             const mergedArtifacts = finalArtifacts.length
               ? mergeArtifactReferences([...(nextItem.finalArtifacts || []), ...finalArtifacts])
               : nextItem.finalArtifacts;
-            const terminalFailed = agentEventIndicatesFailure(event) || !messageHasSubstantiveTerminalOutput({
+            const pendingStatus = pendingUserActionStatus(event, combinedText);
+            const terminalFailed = !pendingStatus && (agentEventIndicatesFailure(event) || !messageHasSubstantiveTerminalOutput({
               ...nextItem,
               text: cleanAssistantOutputText(nextItem.text) || terminalText,
               finalArtifacts: mergedArtifacts
-            }, event) || textLooksPendingUserAction([nextItem.text, terminalText].filter(Boolean).join('\n'));
+            }, event) || textLooksPendingUserAction(combinedText));
             if (terminalFailed) {
               nextItem = {
                 ...nextItem,
@@ -6142,6 +6357,19 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
                 text: cleanAssistantOutputText(nextItem.text) || incompleteTerminalResultText(event),
                 finalArtifacts: mergedArtifacts,
                 recovery: agentRecoveryText(event),
+                silentRecovery: false
+              };
+              continue;
+            }
+            if (pendingStatus) {
+              nextItem = {
+                ...nextItem,
+                streaming: false,
+                status: pendingStatus,
+                error: false,
+                text: cleanAssistantOutputText(nextItem.text) || terminalText || cleanResultOutputText(event.text),
+                finalArtifacts: mergedArtifacts,
+                recovery: null,
                 silentRecovery: false
               };
               continue;
@@ -6182,12 +6410,15 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           }
 
           if (event.kind === 'error') {
+            const pendingStatus = pendingUserActionStatus(event, [nextItem.text, event.text].filter(Boolean).join('\n'));
             nextItem = {
               ...nextItem,
               streaming: false,
-              status: 'error',
-              error: true,
-              text: cleanAssistantOutputText(nextItem.text || event.text || agentRecoveryText(event))
+              status: pendingStatus || 'error',
+              error: !pendingStatus,
+              text: cleanAssistantOutputText(nextItem.text || event.text || agentRecoveryText(event)),
+              recovery: pendingStatus ? null : nextItem.recovery,
+              silentRecovery: false
             };
           }
         }
@@ -6200,6 +6431,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
               : cleanResultOutputText(terminalEvent.text);
           if (terminalText.trim()) {
             const finalArtifacts = finalArtifactsFromText(terminalText);
+            const pendingStatus = pendingUserActionStatus(terminalEvent, terminalText);
             nextItem = {
               ...nextItem,
               text: terminalText,
@@ -6207,10 +6439,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
                 ? mergeArtifactReferences([...(nextItem.finalArtifacts || []), ...finalArtifacts])
                 : nextItem.finalArtifacts,
               streaming: false,
-              status: terminalEvent.kind === 'error' ? 'error' : 'complete',
-              error: terminalEvent.kind === 'error',
-              recovery: terminalEvent.kind === 'error' ? nextItem.recovery : null,
-              silentRecovery: terminalEvent.kind === 'error' ? nextItem.silentRecovery : false
+              status: pendingStatus || (terminalEvent.kind === 'error' ? 'error' : 'complete'),
+              error: !pendingStatus && terminalEvent.kind === 'error',
+              recovery: pendingStatus ? null : (terminalEvent.kind === 'error' ? nextItem.recovery : null),
+              silentRecovery: pendingStatus ? false : (terminalEvent.kind === 'error' ? nextItem.silentRecovery : false)
             };
           }
         }
@@ -6221,7 +6453,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
             ...nextItem,
             permissionDecision: {
               ...nextItem.permissionDecision,
-              status: ['done', 'result'].includes(terminalEvent.kind) ? 'complete' : terminalEvent.kind,
+              status: pendingUserActionStatus(terminalEvent, nextItem.text) || (terminalEvent.kind === 'done' ? 'complete' : terminalEvent.kind),
               at: Date.now()
             }
           };
@@ -6369,9 +6601,9 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           claudeSessionId: row.claudeSessionId || '',
           projectId: ownerProjectId || '',
           projectName: ownerProjectName || '',
-          silentRecovery: true,
+          silentRecovery: !active,
           originalPrompt: row.prompt || row.promptPreview || '',
-          recovery,
+          recovery: active ? null : recovery,
           timeline: [[
             `恢复运行会话 ${index + 1}`,
             formatSessionStatus(row.status || row.state || 'running'),
@@ -6391,6 +6623,31 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           projectId: ownerProjectId || '',
           projectName: ownerProjectName || ''
         });
+      }
+      if (sessionId && messageId && ownerHasMessage && isRunningSessionActive(row)) {
+        updateMessagesForConversation(ownerConversationId, (items) => items.map((message) => (
+          message.id === messageId
+            ? (() => {
+                const reconnectTimeline = ['运行任务已重新连接', '运行中', formatAgentEventTime(row), 'running', 'status'];
+                const timeline = Array.isArray(message.timeline) && message.timeline.some((item) => Array.isArray(item) && item[0] === reconnectTimeline[0] && item[4] === 'status')
+                  ? message.timeline
+                  : appendTimeline(message.timeline || [], reconnectTimeline);
+                return {
+                  ...message,
+                  streaming: true,
+                  status: cleanAssistantOutputText(message.text || '').trim() ? 'generating' : 'thinking',
+                  error: false,
+                  recovery: null,
+                  silentRecovery: false,
+                  sessionId,
+                  claudeSessionId: row.claudeSessionId || message.claudeSessionId || '',
+                  projectId: ownerProjectId || message.projectId || '',
+                  projectName: ownerProjectName || message.projectName || '',
+                  timeline
+                };
+              })()
+            : message
+        )));
       }
       if (sessionId && messageId && ownerHasMessage && !isRunningSessionActive(row) && row.recoverable) {
         const recovery = recoveryStateFromSession(row);
@@ -6738,22 +6995,44 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     ].join('\n');
   }
 
+  function restoreQueuedFollowUps(conversationId, items = []) {
+    const targetConversationId = String(conversationId || '');
+    const safeItems = (Array.isArray(items) ? items : []).filter((item) => item?.id && item.conversationId === targetConversationId);
+    if (!targetConversationId || !safeItems.length) return;
+    const existingIds = new Set(pendingFollowUpsRef.current.map((item) => item.id));
+    pendingFollowUpsRef.current = [
+      ...pendingFollowUpsRef.current,
+      ...safeItems.filter((item) => !existingIds.has(item.id))
+    ].slice(-MAX_PENDING_FOLLOWUPS);
+    const restoredIds = new Set(safeItems.map((item) => item.id));
+    updateMessagesForConversation(targetConversationId, (messages) => messages.map((message) => (
+      restoredIds.has(message.id)
+        ? { ...message, status: 'queued' }
+        : message
+    )));
+  }
+
   async function flushQueuedFollowUps(targetConversationId = conversationIdRef.current) {
-    if (followUpFlushInFlightRef.current) return;
     const activeConversationId = targetConversationId || conversationIdRef.current;
+    const currentConversationId = String(activeConversationId || conversationIdRef.current || '');
+    if (!currentConversationId) return;
+    if (followUpFlushInFlightByConversationRef.current.has(currentConversationId)) return;
     if (hasRunningSessionForConversation(activeConversationId)) return;
-    const currentConversationId = activeConversationId;
     const readyItems = pendingFollowUpsRef.current.filter((item) => item.conversationId === currentConversationId);
     if (!readyItems.length) return;
-    pendingFollowUpsRef.current = pendingFollowUpsRef.current.filter((item) => item.conversationId !== currentConversationId);
-    followUpFlushInFlightRef.current = true;
+    const readyIds = new Set(readyItems.map((item) => item.id));
+    pendingFollowUpsRef.current = pendingFollowUpsRef.current.filter((item) => (
+      item.conversationId !== currentConversationId || !readyIds.has(item.id)
+    ));
+    followUpFlushInFlightByConversationRef.current.add(currentConversationId);
     const queuedMessageIds = readyItems.map((item) => item.id);
     const queuedClaudeSessionId = readyItems[0]?.claudeSessionId || conversationSessionIdRef.current || currentConversationId;
     const mergedPrompt = buildQueuedFollowUpPrompt(readyItems);
     const mergedAttachments = readyItems.flatMap((item) => item.attachments || []);
     const mergedReferences = readyItems.flatMap((item) => item.references || []);
+    let startedRun = false;
     try {
-      await sendPrompt(mergedPrompt, mergedAttachments, {
+      const result = await sendPrompt(mergedPrompt, mergedAttachments, {
         forceRun: true,
         fromQueue: true,
         queuedMessageIds,
@@ -6761,11 +7040,16 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         queuedClaudeSessionId,
         queuedReferences: mergedReferences
       });
+      startedRun = Boolean(result?.ok);
+      if (!startedRun) restoreQueuedFollowUps(currentConversationId, readyItems);
+    } catch {
+      restoreQueuedFollowUps(currentConversationId, readyItems);
     } finally {
-      followUpFlushInFlightRef.current = false;
-      if (!runningRef.current && pendingFollowUpsRef.current.some((item) => item.conversationId === conversationIdRef.current)) {
-        scheduleStatusTimer(() => flushQueuedFollowUps(), 80);
-      }
+      followUpFlushInFlightByConversationRef.current.delete(currentConversationId);
+      [...new Set(pendingFollowUpsRef.current.map((item) => item.conversationId).filter(Boolean))]
+        .filter((pendingConversationId) => startedRun || pendingConversationId !== currentConversationId)
+        .filter((pendingConversationId) => !hasRunningSessionForConversation(pendingConversationId))
+        .forEach((pendingConversationId) => scheduleStatusTimer(() => flushQueuedFollowUps(pendingConversationId), 80));
     }
   }
 
@@ -6788,10 +7072,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     const cleanPrompt = clampComposerPromptText(text).trim();
     const cleanAttachments = filterAttachmentsForProjectScope(serializeAgentAttachments(attachmentList), activeProject?.id || '');
     const cleanReferences = sanitizeComposerReferences(Array.isArray(queuedReferences) ? queuedReferences : composerReferences);
-    if (!cleanPrompt && !cleanAttachments.length && !cleanReferences.length) return;
+    if (!cleanPrompt && !cleanAttachments.length && !cleanReferences.length) return { ok: false, reason: 'empty' };
     if (hasRunningSessionForConversation(activeConversationId) && !forceRun) {
       enqueueFollowUpPrompt(cleanPrompt, cleanAttachments);
-      return;
+      return { ok: false, reason: 'queued' };
     }
     const attachmentSection = attachmentPromptSection(cleanAttachments);
     const referenceSection = buildComposerReferenceSection(cleanReferences);
@@ -6885,10 +7169,11 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     updateTimelineForConversation(activeConversationId, (items) => appendTimelineItems(items, initialDisclosureTimeline));
     scheduleAssistantProgressDisclosure(assistantId, cleanPrompt, cleanAttachments);
     const statusMessageIds = useQueuedMessages ? queuedMessageIds : [userId];
-    statusMessageIds.forEach((id) => {
+    const scheduleDeliveryStatusUpdates = () => statusMessageIds.forEach((id) => {
       scheduleMessageStatus(id, 'sent', 280, activeConversationId);
       scheduleMessageStatus(id, 'read', 760, activeConversationId);
     });
+    if (!fromQueue) scheduleDeliveryStatusUpdates();
 
     if (!window.ecorex) {
       scheduleMessageStatus(assistantId, 'generating', 420, activeConversationId);
@@ -6908,7 +7193,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         );
         finishSession(requestedSessionId);
       }, 800);
-      return;
+      return { ok: false, reason: 'desktop-unavailable', sessionId: requestedSessionId, assistantId };
     }
 
     try {
@@ -6939,6 +7224,15 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         const unauthorized = Boolean(result.unauthorized);
         if (unauthorized) onUnauthorized?.();
         if (!unauthorized && ['duplicate-session', 'duplicate-start'].includes(String(result.code || ''))) {
+          if (fromQueue) {
+            finishSession(requestedSessionId);
+            updateMessagesForConversation(activeConversationId, (items) =>
+              items
+                .filter((item) => item.id !== assistantId)
+                .map((item) => (queuedMessageIdSet.has(item.id) ? { ...item, status: 'queued' } : item))
+            );
+            return { ok: false, reason: 'duplicate', code: result.code, assistantId };
+          }
           recoverDuplicateRunAsQueuedFollowUp(result, {
             userId: useQueuedMessages ? queuedMessageIds[0] : userId,
             assistantId,
@@ -6954,7 +7248,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
             accessMode,
             time: now
           });
-          return;
+          return { ok: false, reason: 'duplicate-recovered', code: result.code, assistantId };
         }
         finishSession(requestedSessionId);
         updateMessagesForConversation(activeConversationId, (items) =>
@@ -6976,7 +7270,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
               : item
           )
         );
-        return;
+        return { ok: false, reason: result.code || result.status || 'run-failed', code: result.code, status: result.status, assistantId };
       }
 
       const sessionId = result.sessionId || requestedSessionId;
@@ -7002,9 +7296,11 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         pendingCancelsRef.current.delete(requestedSessionId);
         pendingCancelsRef.current.delete(sessionId);
         await window.ecorex.stopPrompt(sessionId);
-        return;
+        return { ok: true, sessionId, assistantId, cancelled: true };
       }
+      if (fromQueue) scheduleDeliveryStatusUpdates();
       if (result.initialEvent) queueAgentEvents(result.initialEvent);
+      return { ok: true, sessionId, assistantId };
     } catch (error) {
       const unauthorized = isUnauthorizedError(error);
       if (unauthorized) {
@@ -7013,7 +7309,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       if (pendingCancelsRef.current.has(requestedSessionId)) {
         pendingCancelsRef.current.delete(requestedSessionId);
         finishSession(requestedSessionId);
-        return;
+        return { ok: false, reason: 'cancelled-before-start', assistantId };
       }
       finishSession(requestedSessionId);
       updateMessagesForConversation(activeConversationId, (items) =>
@@ -7035,6 +7331,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
             : item
         )
       );
+      return { ok: false, reason: unauthorized ? 'unauthorized' : 'exception', assistantId, error: error?.message };
     }
   }
 
@@ -7110,7 +7407,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     return code === 'duplicate-session' || code === 'duplicate-start';
   }
 
-  function attachPermissionContinuationToRunningSession(message, result = {}, requestedSessionId = '') {
+  function attachPermissionContinuationToRunningSession(message, result = {}, requestedSessionId = '', ownerContext = {}) {
     const sessionId = String(result.sessionId || result.duplicateOf || requestedSessionId || '').trim();
     if (!message?.id || !sessionId) return false;
     if (requestedSessionId && requestedSessionId !== sessionId) {
@@ -7118,13 +7415,17 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       sessionMap.current.delete(requestedSessionId);
       sessionOwnersRef.current.delete(requestedSessionId);
     }
+    const ownerConversationId = String(result.conversationId || ownerContext.conversationId || message.conversationId || conversationIdRef.current || '');
+    const ownerClaudeSessionId = String(result.claudeSessionId || ownerContext.claudeSessionId || message.claudeSessionId || conversationSessionIdRef.current || ownerConversationId);
+    const ownerProjectId = String(result.projectId || ownerContext.projectId || message.projectId || conversationProjectRef.current?.id || '');
+    const ownerProjectName = String(result.projectName || ownerContext.projectName || message.projectName || conversationProjectRef.current?.name || '');
     const owner = {
       sessionId,
       messageId: message.id,
-      conversationId: String(result.conversationId || conversationIdRef.current || ''),
-      claudeSessionId: String(result.claudeSessionId || conversationSessionIdRef.current || conversationIdRef.current || ''),
-      projectId: String(result.projectId || conversationProjectRef.current?.id || ''),
-      projectName: String(result.projectName || conversationProjectRef.current?.name || '')
+      conversationId: ownerConversationId,
+      claudeSessionId: ownerClaudeSessionId,
+      projectId: ownerProjectId,
+      projectName: ownerProjectName
     };
     sessionMap.current.set(sessionId, message.id);
     sessionOwnersRef.current.set(sessionId, owner);
@@ -7149,7 +7450,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         updatedAt: Date.now()
       }, rows.length, 'local')]
     ));
-    setMessages((items) =>
+    updateMessagesForConversation(owner.conversationId, (items) =>
       items.map((item) => (item.id === message.id ? {
         ...item,
         streaming: true,
@@ -7170,40 +7471,50 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     permissionContinuationLocksRef.current.add(message.id);
     const decision = permissionActionFromValue(actionValue);
     const requestedSessionId = createLocalId('session');
-    const continuationPrompt = permissionContinuationPrompt(decision);
+    const continuationContext = permissionContinuationContextFromMessage(message);
+    const continuationPrompt = [
+      permissionContinuationPrompt(decision),
+      continuationContext
+    ].filter(Boolean).join('\n\n');
     const now = formatAgentEventTime();
     const accessMode = decision.accessMode || normalizeAccessMode(permissionMode);
     const requestedPermissionMode = permissionModeFromAccessMode(accessMode);
+    const continuationMessageId = createLocalId('assistant-permission');
+    const ownerConversationId = String(message.conversationId || conversationIdRef.current || '');
+    const ownerClaudeSessionId = message.claudeSessionId || conversationSessionIdRef.current || ownerConversationId;
+    const ownerProjectId = conversationProjectRef.current?.id || message.projectId || '';
+    const ownerProjectName = conversationProjectRef.current?.name || message.projectName || '';
 
-    sessionMap.current.set(requestedSessionId, message.id);
+    sessionMap.current.set(requestedSessionId, continuationMessageId);
     trackSession(requestedSessionId, {
-      messageId: message.id,
+      messageId: continuationMessageId,
+      conversationId: ownerConversationId,
+      claudeSessionId: ownerClaudeSessionId,
+      projectId: ownerProjectId,
+      projectName: ownerProjectName,
       prompt: continuationPrompt,
       accessMode,
       source: 'local'
     });
 
-    setMessages((items) =>
+    updateMessagesForConversation(ownerConversationId, (items) =>
       items.map((item) =>
         item.id === message.id
           ? {
               ...item,
-              streaming: true,
-              status: 'thinking',
+              streaming: false,
+              status: 'user-action-required',
               text: '',
               permissionPromptText: item.permissionPromptText || item.text || '',
               error: false,
-              sessionId: requestedSessionId,
-              claudeSessionId: conversationSessionIdRef.current || conversationIdRef.current,
-              projectId: conversationProjectRef.current?.id || item.projectId || '',
-              projectName: conversationProjectRef.current?.name || item.projectName || '',
               permissionDecision: {
                 action: decision.action,
                 label: decision.label,
                 status: 'running',
                 at: Date.now()
               },
-              showTrace: true,
+              silentRecovery: true,
+              showTrace: false,
               timeline: appendTimeline(item.timeline || [], [
                 decision.action === 'allow' ? '权限已确认，继续执行' : decision.action === 'plan' ? '权限选择为只做计划' : '权限已拒绝',
                 decision.label,
@@ -7215,7 +7526,42 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           : item
       )
     );
-    setTimeline((items) => appendTimeline(items, [
+    updateMessagesForConversation(ownerConversationId, (items) => (
+      items.some((item) => item.id === continuationMessageId)
+        ? items
+        : [
+            ...items,
+            {
+              id: continuationMessageId,
+              role: 'assistant',
+              text: '',
+              time: now,
+              streaming: true,
+              status: 'thinking',
+              error: false,
+              sessionId: requestedSessionId,
+              claudeSessionId: ownerClaudeSessionId,
+              projectId: ownerProjectId,
+              projectName: ownerProjectName,
+              originalPrompt: message.originalPrompt || retryPromptFromMessage(message),
+              permissionDecision: {
+                action: decision.action,
+                label: decision.label,
+                status: 'running',
+                at: Date.now()
+              },
+              showTrace: true,
+              timeline: [[
+                '权限已确认，继续执行',
+                decision.label,
+                now,
+                decision.tone || 'pending',
+                'status'
+              ]]
+            }
+          ]
+    ));
+    updateTimelineForConversation(ownerConversationId, (items) => appendTimeline(items, [
       decision.action === 'allow' ? '权限已确认，继续执行' : decision.action === 'plan' ? '权限选择为只做计划' : '权限已拒绝',
       decision.label,
       now,
@@ -7226,9 +7572,9 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     if (!window.ecorex?.runPrompt) {
       finishSession(requestedSessionId);
       permissionContinuationLocksRef.current.delete(message.id);
-      setMessages((items) =>
+      updateMessagesForConversation(ownerConversationId, (items) =>
         items.map((item) =>
-          item.id === message.id
+          item.id === continuationMessageId
             ? {
                 ...item,
                 streaming: false,
@@ -7249,17 +7595,17 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     try {
       const result = await window.ecorex.runPrompt({
         sessionId: requestedSessionId,
-        conversationId: conversationIdRef.current,
-        claudeSessionId: conversationSessionIdRef.current || conversationIdRef.current,
-        messageId: message.id,
-        assistantMessageId: message.id,
+        conversationId: ownerConversationId,
+        claudeSessionId: ownerClaudeSessionId,
+        messageId: continuationMessageId,
+        assistantMessageId: continuationMessageId,
         prompt: continuationPrompt,
         accessMode,
         permissionMode: requestedPermissionMode,
         defaultPermissionMode: requestedPermissionMode,
-        projectId: conversationProjectRef.current?.id || null,
-        projectName: conversationProjectRef.current?.name || '',
-        disableProjectContext: !conversationProjectRef.current?.id,
+        projectId: ownerProjectId || null,
+        projectName: ownerProjectName,
+        disableProjectContext: !ownerProjectId,
         ...fullAccessConfirmationFields(accessMode),
         model,
         plugins: selectedPlugins,
@@ -7267,16 +7613,25 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       });
 
       if (!result.ok) {
-        if (isDuplicateAgentStartResult(result) && attachPermissionContinuationToRunningSession(message, result, requestedSessionId)) {
+        if (isDuplicateAgentStartResult(result) && attachPermissionContinuationToRunningSession({
+          ...message,
+          id: continuationMessageId,
+          originalPrompt: message.originalPrompt || retryPromptFromMessage(message)
+        }, result, requestedSessionId, {
+          conversationId: ownerConversationId,
+          claudeSessionId: ownerClaudeSessionId,
+          projectId: ownerProjectId,
+          projectName: ownerProjectName
+        })) {
           permissionContinuationLocksRef.current.delete(message.id);
           return;
         }
         finishSession(requestedSessionId);
         permissionContinuationLocksRef.current.delete(message.id);
         if (result.unauthorized) onUnauthorized?.();
-        setMessages((items) =>
+        updateMessagesForConversation(ownerConversationId, (items) =>
           items.map((item) =>
-            item.id === message.id
+            item.id === continuationMessageId
               ? {
                   ...item,
                   streaming: false,
@@ -7302,13 +7657,13 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         currentSessionIdRef.current = sessionId;
         setCurrentSessionId(sessionId);
       }
-      setMessages((items) =>
-        items.map((item) => (item.id === message.id ? {
+      updateMessagesForConversation(ownerConversationId, (items) =>
+        items.map((item) => (item.id === continuationMessageId ? {
           ...item,
           sessionId,
-          claudeSessionId: result.claudeSessionId || conversationSessionIdRef.current || conversationIdRef.current || item.claudeSessionId,
-          projectId: result.projectId || conversationProjectRef.current?.id || item.projectId || '',
-          projectName: result.projectName || conversationProjectRef.current?.name || item.projectName || ''
+          claudeSessionId: result.claudeSessionId || ownerClaudeSessionId || item.claudeSessionId,
+          projectId: result.projectId || ownerProjectId || item.projectId || '',
+          projectName: result.projectName || ownerProjectName || item.projectName || ''
         } : item))
       );
       if (result.initialEvent) queueAgentEvents(result.initialEvent);
@@ -7316,9 +7671,9 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       finishSession(requestedSessionId);
       permissionContinuationLocksRef.current.delete(message.id);
       if (isUnauthorizedError(error)) onUnauthorized?.();
-      setMessages((items) =>
+      updateMessagesForConversation(ownerConversationId, (items) =>
         items.map((item) =>
-          item.id === message.id
+            item.id === continuationMessageId
             ? {
                 ...item,
                 streaming: false,
@@ -9111,12 +9466,12 @@ function Composer({
           </button>
           {running && currentSessionId && (
             <button
-              className="stop-current"
-              data-testid="chat-stop-button"
-              title="停止当前任务"
-              type="button"
-              onClick={() => cancelPrompt()}
-            >
+            className="stop-current"
+            data-testid="chat-stop-button"
+            title="停止当前任务"
+            type="button"
+              onClick={() => cancelPrompt(currentSessionId)}
+          >
               <Pause size={20} />
             </button>
           )}
@@ -10401,7 +10756,7 @@ function publicTraceItems(timeline = []) {
 function isHighRiskPermissionText(value = '') {
   const text = String(value || '').toLowerCase();
   if (!text) return false;
-  const localRisk = /(文件|写入|修改|删除|覆盖|移动|重命名|命令|终端|powershell|bash|shell|系统目录|本地目录|工作区|磁盘)/i.test(text);
+  const localRisk = /(文件|写入|修改|删除|覆盖|移动|重命名|命令|脚本|执行|终端|python|node|npm|pnpm|powershell|cmd|bash|shell|mcp[_\s-]|mcp__|\.py\b|\.ps1\b|系统目录|本地目录|工作区|磁盘)/i.test(text);
   const genericPermission = /(权限|授权|确认|允许|继续执行)/i.test(text) && localRisk;
   return localRisk || genericPermission;
 }
@@ -10420,10 +10775,16 @@ function permissionRequestFromMessage(message = {}, timeline = [], options = {})
   if (message.role !== 'assistant') return null;
   if (!options.includeResolved && message.permissionDecision?.status) return null;
   const text = cleanAssistantOutputText(message.text || '');
+  if (options.includeResolved && message.permissionDecision?.status && text.trim()) return null;
   const traceText = publicTraceItems(timeline).slice(-5).map((item) => `${item[0]} ${item[1]}`).join(' ');
   const candidate = `${text} ${traceText}`;
-  if (!isHighRiskPermissionText(candidate)) return null;
-  if (!/(是否|要不要|请确认|允许|授权|等待确认|确认后|继续执行|可以执行|approve|permission)/i.test(candidate)) return null;
+  const messageStatus = String(message.status || message.backendStatus || '').toLowerCase();
+  const isPendingUserActionMessage = messageStatus === 'authorization-incomplete' || messageStatus === 'user-action-required';
+  const looksLikeExternalHandoff = /(open\.feishu\.cn|execution[_\s-]?bridge|authorization|authorize|授权|登录|扫码|浏览器|browser|完成后|告诉我|tell me done|return here)/i.test(candidate);
+  const hasPermissionPrompt = /(是否|要不要|请确认|允许|授权|等待确认|确认后|继续执行|可以执行|approve|allow|confirm|do you want to proceed|proceed with|permission\s+(required|denied|policy|approval)|requires?\s+permission|need(?:s|ed)?\s+permission|blocked\s+by\s+.*permission)/i.test(candidate);
+  const shouldShowUserActionCard = isPendingUserActionMessage && looksLikeExternalHandoff;
+  if (!shouldShowUserActionCard && !isHighRiskPermissionText(candidate)) return null;
+  if (!shouldShowUserActionCard && !hasPermissionPrompt) return null;
   return {
     title: '需要确认本地操作',
     description: '这一步可能涉及文件、命令或系统目录访问。请选择是否允许，EcoreX 会在当前会话继续执行，不会新开会话。',

@@ -1,6 +1,6 @@
 {
   "name": "ecorex-agent",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "author": "EcoreX",
   "description": "EcoreX desktop AI agent for advertising workflows.",

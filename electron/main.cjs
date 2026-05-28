@@ -5779,7 +5779,6 @@ function createWindow() {
   });
 
   mainWindow.on('closed', () => {
-    stopAllAgents('window-closed');
     clearRendererUnresponsiveRecovery();
     mainWindow = null;
   });
@@ -5816,7 +5815,6 @@ function createWindow() {
       ...windowDiagnosticSnapshot(mainWindow),
       details
     });
-    stopAllAgents('renderer-gone');
     recoverRendererAfterCrash(details);
   });
   mainWindow.webContents.on('unresponsive', () => {
@@ -6417,6 +6415,9 @@ function agentRecoveryHint(codeOrStatus = '', details = {}) {
   if (code === 'authorization-incomplete' || detailReason === 'authorization-incomplete') {
     return 'Authorization is still waiting for user action. Complete the browser/device-code step, then resume or retry the task.';
   }
+  if (code === 'user-action-required' || detailReason === 'user-action-required') {
+    return 'The task is waiting for user action. Confirm the requested step or provide the missing input, then continue in this conversation.';
+  }
   if (code === 'too-many-sessions') {
     return `Close or cancel one running session, then retry. Up to ${details.maxRunning || MAX_RUNNING_AGENTS} sessions can run at once.`;
   }
@@ -6719,6 +6720,7 @@ function agentFinalStatus(reason = 'stopped') {
 
 function agentFinalKind(status) {
   if (status === 'completed') return 'done';
+  if (status === 'authorization-incomplete' || status === 'user-action-required') return 'done';
   if (status === 'cancelled') return 'cancelled';
   if (status === 'timeout') return 'timeout';
   if (status === 'stopped') return 'status';
@@ -10412,8 +10414,9 @@ function normalizeClaudeEvent(sessionId, json) {
       return {
         ...base,
         kind: 'status',
-        status: 'completed',
-        text: '回复生成完成',
+        status: 'running',
+        detailStatus: 'message-stop',
+        text: '正在同步输出',
         contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined
       };
     }
@@ -10978,7 +10981,13 @@ function runAgent(payload = {}, options = {}) {
       const incompleteResult = finalStatus === 'completed' && !agentSessionHasSubstantiveResult(entry);
       const authorizationIncomplete = finalStatus === 'completed' && agentSessionHasUnresolvedAuthorization(entry);
       const unresolvedUserBlocker = finalStatus === 'completed' && agentSessionHasUnresolvedUserBlocker(entry);
-      if (incompleteResult || authorizationIncomplete || unresolvedUserBlocker) finalStatus = 'failed';
+      if (authorizationIncomplete) {
+        finalStatus = 'authorization-incomplete';
+      } else if (unresolvedUserBlocker) {
+        finalStatus = 'user-action-required';
+      } else if (incompleteResult) {
+        finalStatus = 'failed';
+      }
       const sessionReuseConflict = finalStatus === 'failed' && /session id .*already in use/i.test(entry.lastStderr || '');
       const missingResumeTarget = finalStatus === 'failed' && /no conversation found with session id/i.test(entry.lastStderr || '');
       if (finalStatus === 'completed') markClaudeSessionLaunched(entry.claudeSessionId);
@@ -11004,7 +11013,12 @@ function runAgent(payload = {}, options = {}) {
       if (!sessionReuseConflict && !missingResumeTarget) {
         refreshClaudeSessionTranscriptSeen(entry.claudeSessionId);
       }
-      writeLog(finalStatus === 'completed' ? 'info' : 'error', 'Agent session closed', {
+      const finalLogLevel = finalStatus === 'completed'
+        ? 'info'
+        : ['authorization-incomplete', 'user-action-required'].includes(finalStatus)
+          ? 'warn'
+          : 'error';
+      writeLog(finalLogLevel, 'Agent session closed', {
         sessionId,
         code,
         signal,
