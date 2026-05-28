@@ -95,6 +95,8 @@ a {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .nav-link {
@@ -282,7 +284,8 @@ h2 {
 }
 
 .tech-page {
-  overflow: hidden;
+  overflow-y: auto;
+  scroll-snap-type: y mandatory;
   background:
     radial-gradient(circle at 84% 0%, rgba(255, 90, 0, .13), transparent 30%),
     radial-gradient(circle at 12% 18%, rgba(121, 216, 255, .08), transparent 28%),
@@ -302,9 +305,8 @@ h2 {
 }
 
 .tech-deck {
-  height: 100svh;
-  overflow-y: auto;
-  scroll-snap-type: y mandatory;
+  min-height: 100svh;
+  overflow: visible;
   scroll-behavior: smooth;
 }
 
@@ -320,6 +322,12 @@ h2 {
   border-bottom: 1px solid rgba(255, 255, 255, .08);
 }
 
+.tech-slide.single-column {
+  grid-template-columns: minmax(0, 1fr);
+  align-content: center;
+  gap: 26px;
+}
+
 .tech-slide::before {
   content: attr(data-slide);
   position: absolute;
@@ -332,6 +340,23 @@ h2 {
 
 .slide-copy {
   max-width: 560px;
+}
+
+.wide-copy {
+  max-width: 900px;
+}
+
+.deck-label {
+  display: inline-flex;
+  width: fit-content;
+  margin: 0 0 10px;
+  padding: 5px 8px;
+  border: 1px solid rgba(255, 90, 0, .36);
+  border-radius: 999px;
+  background: rgba(255, 90, 0, .11);
+  color: var(--orange-soft);
+  font-size: 8.5px;
+  font-weight: 900;
 }
 
 .slide-copy h1 {
@@ -359,6 +384,153 @@ h2 {
   color: rgba(244, 247, 251, .76);
   background: rgba(13, 21, 29, .62);
   font-size: 8.5px;
+}
+
+.ecosystem-map {
+  position: relative;
+  min-height: 390px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: 1fr 1.25fr 1fr;
+  gap: 14px;
+  isolation: isolate;
+}
+
+.ecosystem-map::before,
+.ecosystem-map::after {
+  content: "";
+  position: absolute;
+  inset: 20% 12%;
+  z-index: -1;
+  border: 1px solid rgba(255, 90, 0, .18);
+  border-radius: 999px;
+  transform: rotate(-7deg);
+}
+
+.ecosystem-map::after {
+  inset: 28% 17%;
+  border-color: rgba(121, 216, 255, .16);
+  transform: rotate(9deg);
+}
+
+.eco-node,
+.eco-center {
+  min-width: 0;
+  min-height: 96px;
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(13, 21, 29, .76);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 7px;
+  box-shadow: 0 20px 46px rgba(0, 0, 0, .22);
+}
+
+.eco-node {
+  color: var(--text);
+  font-size: 11.6px;
+  font-weight: 850;
+}
+
+.eco-node span,
+.eco-center span {
+  color: var(--muted);
+  font-size: 9.6px;
+  line-height: 1.45;
+  font-weight: 500;
+}
+
+.eco-node.external {
+  border-color: rgba(121, 216, 255, .22);
+}
+
+.eco-node.internal {
+  border-color: rgba(88, 214, 141, .22);
+}
+
+.eco-center {
+  grid-column: 2;
+  grid-row: 2;
+  min-height: 150px;
+  text-align: center;
+  border-color: rgba(255, 90, 0, .56);
+  background:
+    linear-gradient(180deg, rgba(255, 90, 0, .2), rgba(13, 21, 29, .9)),
+    rgba(13, 21, 29, .9);
+}
+
+.eco-center strong {
+  font-size: 16px;
+}
+
+.value-grid,
+.composition-grid,
+.skill-layers {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.value-grid article,
+.composition-grid article,
+.skill-layers article {
+  min-height: 150px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(13, 21, 29, .72);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 9px;
+}
+
+.value-grid strong,
+.composition-grid strong,
+.skill-layers strong {
+  font-size: 12.3px;
+}
+
+.value-grid p,
+.skill-layers p,
+.composition-grid span,
+.composition-grid em {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+  font-size: 10px;
+  font-style: normal;
+}
+
+.meter {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .08);
+  overflow: hidden;
+}
+
+.meter i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--orange), var(--cyan));
+}
+
+.harness-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.harness-list span {
+  padding: 7px 9px;
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 999px;
+  color: rgba(244, 247, 251, .72);
+  background: rgba(13, 21, 29, .58);
+  font-size: 9.2px;
 }
 
 .slide-visual {
@@ -446,6 +618,46 @@ h2 {
   list-style: none;
   display: grid;
   gap: 10px;
+}
+
+.mcp-flow {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.mcp-flow li {
+  position: relative;
+  min-height: 210px;
+  padding: 18px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(13, 21, 29, .72);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.mcp-flow li::before {
+  content: "";
+  width: 26px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--orange);
+}
+
+.mcp-flow strong {
+  font-size: 12.3px;
+}
+
+.mcp-flow span {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.55;
 }
 
 .loop-track li {
@@ -596,8 +808,21 @@ h2 {
   }
 
   .three-panel,
-  .guardrail-grid {
+  .guardrail-grid,
+  .mcp-flow {
     grid-template-columns: 1fr;
+  }
+
+  .ecosystem-map,
+  .value-grid,
+  .composition-grid,
+  .skill-layers {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .eco-center {
+    grid-column: auto;
+    grid-row: auto;
   }
 }
 
@@ -660,6 +885,10 @@ h2 {
     gap: 14px;
   }
 
+  .tech-slide.single-column {
+    gap: 10px;
+  }
+
   .slide-copy h1 {
     font-size: 24.6px;
   }
@@ -715,6 +944,50 @@ h2 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .ecosystem-map,
+  .value-grid,
+  .composition-grid,
+  .skill-layers {
+    grid-template-columns: 1fr;
+  }
+
+  .ecosystem-map {
+    min-height: auto;
+    gap: 8px;
+  }
+
+  .eco-node,
+  .eco-center,
+  .value-grid article,
+  .composition-grid article,
+  .skill-layers article {
+    min-height: auto;
+    padding: 12px;
+    border-radius: 10px;
+  }
+
+  .eco-center strong {
+    font-size: 13.1px;
+  }
+
+  .composition-grid {
+    gap: 7px;
+  }
+
+  .composition-grid article {
+    padding: 10px;
+    gap: 5px;
+  }
+
+  .harness-list {
+    gap: 5px;
+  }
+
+  .harness-list span {
+    padding: 5px 7px;
+    font-size: 8.5px;
+  }
+
   .guardrail-grid div {
     min-height: auto;
     padding: 12px;
@@ -743,5 +1016,15 @@ h2 {
 
   .loop-track li:nth-child(5)::before {
     box-shadow: 0 0 0 5px rgba(88, 214, 141, .12);
+  }
+
+  .mcp-flow {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .mcp-flow li {
+    min-height: auto;
+    padding: 12px;
   }
 }
