@@ -27,6 +27,7 @@
     <a href="#slide-ecosystem" aria-label="内外部生态链接"></a>
     <a href="#slide-dev-value" aria-label="开发价值"></a>
     <a href="#slide-tech-stack" aria-label="技术栈与代码构成"></a>
+    <a href="#slide-harness" aria-label="Harness 工程"></a>
     <a href="#slide-shell" aria-label="桌面技术壳"></a>
     <a href="#slide-agent" aria-label="Agent 选型"></a>
     <a href="#slide-loop" aria-label="运行逻辑"></a>
@@ -82,20 +83,39 @@
         <p class="eyebrow">内外部生态链接</p>
         <h2>大厂正在围绕自己的生态构建工作型 Agent，代理商也需要自己的中枢。</h2>
         <p class="lead">
-          腾讯有 WorkBuddy、QClaw、妙文等，小红书有 MIO、绘光 AICG 创意工具、PTN AI 自研生态与龙虾，阿里有悟空等。EcoreX 的定位，是对接外部 Agent、Skill、MCP 和 CLI，同时把内部客户数据、项目流程和管理动作留在亦芯自己的工作台内。
+          腾讯有 WorkBuddy、QClaw、妙问等，小红书有 MIO、绘光 AICG 创意工具、PTN AI 自研生态与龙虾，阿里有悟空等。EcoreX 的定位，是向外对接外部 Agent、Skill、MCP 和 CLI，向内把企业数据库、本地工作台、客户项目、投放 SOP 和自动化流程沉淀为亦芯自己的企业能力。
         </p>
       </div>
-      <div class="ecosystem-map" aria-label="内外部生态链接图">
-        <div class="eco-node external">腾讯生态<br><span>WorkBuddy / QClaw / 妙文</span></div>
-        <div class="eco-node external">小红书生态<br><span>MIO / 绘光 / PTN / 龙虾</span></div>
-        <div class="eco-node external">阿里生态<br><span>悟空等工作型 Agent</span></div>
-        <div class="eco-center">
+      <div class="ecosystem-showcase" aria-label="内外部生态链接图">
+        <img class="ecosystem-art" src="./assets/ecorex-ecosystem-hub.png?v=20260528-hub" alt="" />
+        <div class="ecosystem-label ecosystem-label--center">
           <strong>EcoreX Agent 中枢</strong>
           <span>Agent / Skill / MCP / CLI</span>
         </div>
-        <div class="eco-node internal">飞书协作<br><span>审批、表格、文档、消息</span></div>
-        <div class="eco-node internal">企业数据<br><span>客户、项目、投放、SOP</span></div>
-        <div class="eco-node internal">本地工作台<br><span>权限、产物、记忆、自动化</span></div>
+        <div class="ecosystem-label ecosystem-label--external ecosystem-label--tencent">
+          <strong>腾讯生态</strong>
+          <span>WorkBuddy / QClaw / 妙问</span>
+        </div>
+        <div class="ecosystem-label ecosystem-label--external ecosystem-label--redbook">
+          <strong>小红书生态</strong>
+          <span>MIO / 绘光 / PTN / 龙虾</span>
+        </div>
+        <div class="ecosystem-label ecosystem-label--external ecosystem-label--ali">
+          <strong>阿里生态</strong>
+          <span>悟空等工作型 Agent</span>
+        </div>
+        <div class="ecosystem-label ecosystem-label--internal ecosystem-label--feishu">
+          <strong>飞书协作</strong>
+          <span>审批、表格、文档、消息</span>
+        </div>
+        <div class="ecosystem-label ecosystem-label--internal ecosystem-label--data">
+          <strong>EcoreX 企业数据库</strong>
+          <span>客户、项目、投放、SOP</span>
+        </div>
+        <div class="ecosystem-label ecosystem-label--internal ecosystem-label--workbench">
+          <strong>EcoreX 本地工作台</strong>
+          <span>权限、产物、记忆、自动化</span>
+        </div>
       </div>
     </section>
 
@@ -120,39 +140,58 @@
       <div class="slide-copy wide-copy">
         <p class="deck-label">技术说明</p>
         <p class="eyebrow">前后端技术栈与代码构成</p>
-        <h2>当前工程约 45,725 行可发布代码与工程脚本，其中 78.0% 是产品技术实现，21.1% 是 Harness 工程。</h2>
+        <h2>完整前后端与本地执行引擎按几十万行口径理解：核心 Agent 参考实现约 51.5 万行，其中约 98.4% 是 Harness / 约束工程。</h2>
         <p class="lead">
-          统计口径不含 dist、release、node_modules 和 lockfile。EcoreX 的实现分成 React 前端交互层、Electron/本地 Agent 运行时、以及围绕打包发布和真实安装版验证的 Harness 工程。
+          这不是“聊天框 + 调模型”的规模。参考本地《源码解读》材料，工业级 Agent 的模型交互核心只占很小一部分，更多代码投入在上下文压缩、记忆注入、权限、安全、工具编排、并发、恢复、缓存、发布与真实安装版验证。EcoreX 在其上叠加 React 工作台、Electron 桌面壳、企业权限、Skill/MCP/CLI 托管和发布校验。
         </p>
       </div>
       <div class="composition-grid">
         <article>
-          <strong>前端交互层</strong>
-          <span>React / CSS / 下载站</span>
-          <div class="meter"><i style="width:52.2%"></i></div>
-          <em>约 23,869 行 · 52.2%</em>
+          <strong>模型核心循环</strong>
+          <span>Reasoning + Action 的最小闭环</span>
+          <div class="meter"><i style="width:1.6%"></i></div>
+          <em>约 8,000 行 · 1.6%</em>
         </article>
         <article>
-          <strong>桌面与 Agent 运行时</strong>
-          <span>Electron 主进程、预加载、模型适配、本地执行</span>
-          <div class="meter"><i style="width:25.8%"></i></div>
-          <em>约 11,788 行 · 25.8%</em>
+          <strong>Harness / 约束工程</strong>
+          <span>上下文、记忆、安全、权限、缓存、并发、恢复</span>
+          <div class="meter"><i style="width:98.4%"></i></div>
+          <em>约 50.6 万行 · 98.4%</em>
         </article>
         <article>
-          <strong>Harness 工程</strong>
-          <span>E2E、生产静态校验、安装版 smoke、release clean</span>
-          <div class="meter"><i style="width:21.1%"></i></div>
-          <em>约 9,660 行 · 21.1%</em>
+          <strong>EcoreX 桌面工作台</strong>
+          <span>React 前端、Electron 主进程、项目与权限 UI</span>
+          <div class="meter"><i style="width:31.3%"></i></div>
+          <em>当前发行层约 3.9 万行</em>
         </article>
         <article>
-          <strong>配置与说明</strong>
-          <span>包配置、发布元数据、供应商预览资源说明</span>
-          <div class="meter"><i style="width:0.9%"></i></div>
-          <em>约 408 行 · 0.9%</em>
+          <strong>EcoreX 发布验证</strong>
+          <span>生产规则、E2E、安装包、文件预览、联网搜索 smoke</span>
+          <div class="meter"><i style="width:12.8%"></i></div>
+          <em>当前发行层约 1.1 万行</em>
         </article>
       </div>
+    </section>
+
+    <section class="tech-slide single-column" id="slide-harness" data-slide="技术 02">
+      <div class="slide-copy wide-copy">
+        <p class="deck-label">技术说明</p>
+        <p class="eyebrow">Harness 工程展开</p>
+        <h2>Harness 是让 Agent 从“能跑一次”变成“可控、可恢复、可交付”的工程主体。</h2>
+        <p class="lead">
+          51.5 万行工业级 Agent 参考实现的启发是：真正难的不是一次工具调用，而是让每轮行动都被约束、被记录、可回滚、可接力、可校验。EcoreX 把这套思路落到桌面端发布链路，覆盖任务状态树、权限确认、项目隔离、Skill 白名单、MCP 托管、产物持久化、真实安装版 smoke 和线上下载一致性。
+        </p>
+      </div>
+      <div class="harness-detail-grid">
+        <article><strong>上下文与记忆约束</strong><p>通用对话不主动读取项目文件；项目记忆、账号配置、会话恢复点和产物索引分层管理，避免上下文污染。</p></article>
+        <article><strong>行动前后校验</strong><p>工具调用前检查权限、路径、Skill 白名单、MCP 连接和 CLI 授权；工具返回后必须有结论、产物或明确失败原因。</p></article>
+        <article><strong>并发与接力</strong><p>会话切换不应中断后台任务；用户在授权、扫码、确认之后的补充输入会接回当前 Loop，而不是变成排队噪音。</p></article>
+        <article><strong>发布与安装 smoke</strong><p>打包前后校验生产规则、真实安装版输入、Skill/MCP 预装、文件预览、联网搜索、模型适配和源代码/本机授权排除。</p></article>
+        <article><strong>渐进式披露</strong><p>用户只看到任务阶段、必要确认、结果和失败原因；底层桥接日志、参数拼接、原始 JSON 和内部重试不进入聊天主视图。</p></article>
+        <article><strong>企业边界</strong><p>企业数据库、本地工作台、权限、客户资料和自动化工作流留在 EcoreX 内部，由管理员治理能力开放范围。</p></article>
+      </div>
       <div class="harness-list">
-        <span>Harness 包括：生产规则静态校验</span>
+        <span>生产规则静态校验</span>
         <span>Agent runtime smoke</span>
         <span>Electron E2E</span>
         <span>安装包输入与真实运行 smoke</span>
@@ -162,7 +201,7 @@
       </div>
     </section>
 
-    <section class="tech-slide" id="slide-shell" data-slide="技术 02">
+    <section class="tech-slide" id="slide-shell" data-slide="技术 03">
       <div class="slide-copy">
         <p class="deck-label">技术说明</p>
         <p class="eyebrow">桌面技术壳</p>
@@ -176,7 +215,7 @@
       </div>
     </section>
 
-    <section class="tech-slide" id="slide-agent" data-slide="技术 03">
+    <section class="tech-slide" id="slide-agent" data-slide="技术 04">
       <div class="slide-copy">
         <p class="deck-label">技术说明</p>
         <p class="eyebrow">Agent 选型</p>
@@ -192,7 +231,7 @@
       </div>
     </section>
 
-    <section class="tech-slide" id="slide-loop" data-slide="技术 04">
+    <section class="tech-slide" id="slide-loop" data-slide="技术 05">
       <div class="slide-copy">
         <p class="deck-label">技术说明</p>
         <p class="eyebrow">运行逻辑</p>
@@ -207,7 +246,7 @@
       </ol>
     </section>
 
-    <section class="tech-slide" id="slide-memory" data-slide="技术 05">
+    <section class="tech-slide" id="slide-memory" data-slide="技术 06">
       <div class="slide-copy">
         <p class="deck-label">技术说明</p>
         <p class="eyebrow">记忆如何管理</p>
@@ -220,7 +259,7 @@
       </div>
     </section>
 
-    <section class="tech-slide" id="slide-hooks" data-slide="技术 06">
+    <section class="tech-slide" id="slide-hooks" data-slide="技术 07">
       <div class="slide-copy">
         <p class="deck-label">技术说明</p>
         <p class="eyebrow">Hooks 与能力底座</p>
@@ -234,7 +273,7 @@
       </div>
     </section>
 
-    <section class="tech-slide" id="slide-skills" data-slide="技术 07">
+    <section class="tech-slide" id="slide-skills" data-slide="技术 08">
       <div class="slide-copy">
         <p class="deck-label">技术说明</p>
         <p class="eyebrow">Skill 管理与渐进式披露</p>
@@ -251,7 +290,7 @@
       </div>
     </section>
 
-    <section class="tech-slide" id="slide-mcp" data-slide="技术 08">
+    <section class="tech-slide" id="slide-mcp" data-slide="技术 09">
       <div class="slide-copy">
         <p class="deck-label">技术说明</p>
         <p class="eyebrow">MCP 运行逻辑</p>
@@ -269,7 +308,7 @@
       </ol>
     </section>
 
-    <section class="tech-slide final-slide" id="slide-guardrail" data-slide="技术 09">
+    <section class="tech-slide final-slide" id="slide-guardrail" data-slide="技术 10">
       <div class="slide-copy">
         <p class="deck-label">技术说明</p>
         <p class="eyebrow">安全护栏</p>

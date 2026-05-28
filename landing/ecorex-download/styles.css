@@ -293,15 +293,28 @@ h2 {
 }
 
 .floating-nav {
-  position: fixed;
-  top: 22px;
+  position: absolute;
+  top: 16px;
   left: clamp(18px, 5vw, 72px);
   right: clamp(18px, 5vw, 72px);
-  padding: 8px 10px;
-  border: 1px solid rgba(255, 255, 255, .08);
+  padding: 7px 9px;
+  border: 1px solid rgba(255, 255, 255, .06);
   border-radius: 12px;
-  background: rgba(7, 12, 18, .58);
-  backdrop-filter: blur(18px);
+  background: rgba(7, 12, 18, .22);
+  backdrop-filter: blur(12px);
+  box-shadow: none;
+}
+
+.floating-nav .nav-link {
+  border-color: rgba(255, 255, 255, .08);
+  background: rgba(13, 21, 29, .28);
+}
+
+.floating-nav .nav-link:hover,
+.floating-nav .nav-link.active {
+  color: rgba(244, 247, 251, .95);
+  border-color: rgba(255, 90, 0, .32);
+  background: rgba(255, 255, 255, .04);
 }
 
 .tech-deck {
@@ -465,9 +478,122 @@ h2 {
   font-size: 16px;
 }
 
+.ecosystem-showcase {
+  position: relative;
+  min-height: 520px;
+  border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: 16px;
+  overflow: hidden;
+  background: #080f16;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, .34);
+  isolation: isolate;
+}
+
+.ecosystem-showcase::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background:
+    linear-gradient(90deg, rgba(7, 12, 18, .38), transparent 28%, transparent 72%, rgba(7, 12, 18, .44)),
+    linear-gradient(180deg, rgba(7, 12, 18, .1), rgba(7, 12, 18, .62));
+  pointer-events: none;
+}
+
+.ecosystem-art {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: .82;
+}
+
+.ecosystem-label {
+  position: absolute;
+  z-index: 1;
+  max-width: 220px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 10px;
+  background: rgba(6, 11, 16, .54);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 18px 38px rgba(0, 0, 0, .26);
+}
+
+.ecosystem-label strong {
+  display: block;
+  color: rgba(244, 247, 251, .96);
+  font-size: 10.8px;
+  line-height: 1.25;
+}
+
+.ecosystem-label span {
+  display: block;
+  margin-top: 5px;
+  color: rgba(196, 213, 231, .78);
+  font-size: 8.8px;
+  line-height: 1.4;
+}
+
+.ecosystem-label--center {
+  left: 50%;
+  top: 47%;
+  transform: translate(-50%, -50%);
+  max-width: 250px;
+  text-align: center;
+  border-color: rgba(255, 90, 0, .4);
+  background: rgba(36, 18, 10, .48);
+}
+
+.ecosystem-label--center strong {
+  font-size: 14.6px;
+}
+
+.ecosystem-label--external {
+  border-color: rgba(121, 216, 255, .26);
+}
+
+.ecosystem-label--internal {
+  border-color: rgba(255, 90, 0, .3);
+  background: rgba(31, 18, 10, .5);
+}
+
+.ecosystem-label--tencent {
+  left: 5%;
+  top: 16%;
+}
+
+.ecosystem-label--redbook {
+  left: 41%;
+  top: 8%;
+}
+
+.ecosystem-label--ali {
+  right: 5%;
+  top: 16%;
+}
+
+.ecosystem-label--feishu {
+  left: 7%;
+  bottom: 12%;
+}
+
+.ecosystem-label--data {
+  left: 50%;
+  bottom: 7%;
+  transform: translateX(-50%);
+}
+
+.ecosystem-label--workbench {
+  right: 7%;
+  bottom: 12%;
+}
+
 .value-grid,
 .composition-grid,
-.skill-layers {
+.skill-layers,
+.harness-detail-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
@@ -475,7 +601,8 @@ h2 {
 
 .value-grid article,
 .composition-grid article,
-.skill-layers article {
+.skill-layers article,
+.harness-detail-grid article {
   min-height: 150px;
   padding: 18px;
   border: 1px solid var(--line);
@@ -489,12 +616,14 @@ h2 {
 
 .value-grid strong,
 .composition-grid strong,
-.skill-layers strong {
+.skill-layers strong,
+.harness-detail-grid strong {
   font-size: 12.3px;
 }
 
 .value-grid p,
 .skill-layers p,
+.harness-detail-grid p,
 .composition-grid span,
 .composition-grid em {
   margin: 0;
@@ -814,9 +943,11 @@ h2 {
   }
 
   .ecosystem-map,
+  .ecosystem-showcase,
   .value-grid,
   .composition-grid,
-  .skill-layers {
+  .skill-layers,
+  .harness-detail-grid {
     grid-template-columns: 1fr 1fr;
   }
 
@@ -945,22 +1076,61 @@ h2 {
   }
 
   .ecosystem-map,
+  .ecosystem-showcase,
   .value-grid,
   .composition-grid,
-  .skill-layers {
+  .skill-layers,
+  .harness-detail-grid {
     grid-template-columns: 1fr;
   }
 
-  .ecosystem-map {
-    min-height: auto;
+  .ecosystem-map,
+  .ecosystem-showcase {
     gap: 8px;
+  }
+
+  .ecosystem-showcase {
+    display: grid;
+    min-height: auto;
+    padding: 220px 10px 10px;
+  }
+
+  .ecosystem-art {
+    height: 230px;
+    bottom: auto;
+    object-position: center top;
+  }
+
+  .ecosystem-showcase::after {
+    height: 230px;
+    bottom: auto;
+  }
+
+  .ecosystem-label,
+  .ecosystem-label--center,
+  .ecosystem-label--tencent,
+  .ecosystem-label--redbook,
+  .ecosystem-label--ali,
+  .ecosystem-label--feishu,
+  .ecosystem-label--data,
+  .ecosystem-label--workbench {
+    position: relative;
+    inset: auto;
+    left: auto;
+    right: auto;
+    top: auto;
+    bottom: auto;
+    transform: none;
+    max-width: none;
+    text-align: left;
   }
 
   .eco-node,
   .eco-center,
   .value-grid article,
   .composition-grid article,
-  .skill-layers article {
+  .skill-layers article,
+  .harness-detail-grid article {
     min-height: auto;
     padding: 12px;
     border-radius: 10px;
