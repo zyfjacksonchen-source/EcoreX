@@ -1,6 +1,6 @@
 {
   "name": "ecorex-agent",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "author": "EcoreX",
   "description": "EcoreX desktop AI agent for advertising workflows.",
@@ -19,6 +19,7 @@
     "verify:install-matrix": "node scripts/verify-install-matrix.cjs",
     "verify:mac": "node scripts/verify-macos-release-env.cjs",
     "test:packaged-input": "node scripts/packaged-input-smoke.cjs",
+    "test:packaged-runtime": "node scripts/packaged-runtime-smoke.cjs",
     "test:packaged-project": "node scripts/packaged-project-smoke.cjs",
     "assets:mac-icon": "node scripts/create-mac-icon.cjs",
     "release:clean": "node scripts/clean-release-artifacts.cjs",

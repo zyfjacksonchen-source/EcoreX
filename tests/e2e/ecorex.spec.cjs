@@ -1470,9 +1470,8 @@ test.describe('EcoreX Agent Electron E2E', () => {
     await page.locator('.new-chat').click();
     await expect(page.locator('[data-testid="chat-input"]')).toHaveValue('');
     await expect(page.locator('[data-testid="chat-stop-button"]')).toHaveCount(0);
-    await expect(page.getByTestId('running-session-strip')).toBeVisible({ timeout: 10_000 });
-    await expect(page.locator('.chat-main [data-testid="running-session-strip"]')).toHaveCount(0);
-    await expect(page.getByTestId('running-session-pill').filter({ hasText: alphaPrompt })).toBeVisible();
+    await expect(page.getByTestId('running-session-strip')).toHaveCount(0);
+    await expect(page.getByTestId('running-session-pill').filter({ hasText: alphaPrompt })).toHaveCount(0);
     await page.locator('[data-testid="chat-input"]').fill(betaPrompt);
     await page.locator('[data-testid="chat-input"]').press('Enter');
     await expect(page.locator('.user-bubble').filter({ hasText: betaPrompt }).first()).toBeVisible();
@@ -1484,11 +1483,8 @@ test.describe('EcoreX Agent Electron E2E', () => {
     expect(runPayloads[0].claudeSessionId).toBe(runPayloads[0].conversationId);
     expect(runPayloads[1].claudeSessionId).toBe(runPayloads[1].conversationId);
     await expect.poll(async () => electronApp.evaluate(() => (global.__ecorexParallelStops || []).length)).toBe(0);
-    await expect(page.getByTestId('running-session-pill')).toHaveCount(2);
-    await page.getByTestId('running-session-pill').filter({ hasText: alphaPrompt }).getByTestId('running-session-open').click();
-    await expect(page.locator('.user-bubble').filter({ hasText: alphaPrompt }).first()).toBeVisible();
-    await expect(page.locator('[data-testid="chat-stop-button"]')).toBeVisible();
-    await page.getByTestId('running-session-pill').filter({ hasText: betaPrompt }).getByTestId('running-session-open').click();
+    await expect(page.getByTestId('running-session-strip')).toHaveCount(0);
+    await expect(page.getByTestId('running-session-pill')).toHaveCount(0);
     await expect(page.locator('.user-bubble').filter({ hasText: betaPrompt }).first()).toBeVisible();
 
     async function completeParallelRun(runKey, text) {
@@ -1561,6 +1557,33 @@ test.describe('EcoreX Agent Electron E2E', () => {
       betaHasBeta: true,
       betaHasAlpha: false
     });
+  });
+
+  test('keeps recovered running-session previews hidden from the main chat UI', async ({ ecorex }) => {
+    const { electronApp, page } = ecorex;
+    await electronApp.evaluate(({ ipcMain }) => {
+      ipcMain.removeHandler('agent:sessions');
+      ipcMain.handle('agent:sessions', () => ({
+        ok: true,
+        sessions: [{
+          sessionId: 'corrupt-running-session',
+          conversationId: 'corrupt-running-conversation',
+          claudeSessionId: 'corrupt-running-conversation',
+          messageId: 'assistant-corrupt-running-session',
+          status: 'running',
+          state: 'running',
+          title: '姝ｅ湪鎵ц浠诲姟',
+          promptPreview: '???????????????????? 1. ??????? 2. ???????',
+          updatedAt: Date.now()
+        }]
+      }));
+    });
+
+    await login(page);
+    await expect(page.getByTestId('running-session-strip')).toHaveCount(0);
+    await expect(page.locator('.running-session-pill')).toHaveCount(0);
+    await expect(page.locator('body')).not.toContainText('????????');
+    await expect(page.locator('body')).not.toContainText('姝ｅ湪');
   });
 
   test('marks incomplete agent terminal results as failed instead of complete', async ({ ecorex }) => {
@@ -1653,11 +1676,12 @@ test.describe('EcoreX Agent Electron E2E', () => {
     await page.locator('[data-testid="chat-input"]').press('Enter');
     await expect(page.locator('.user-bubble')).toHaveCount(1);
     await expect(page.locator('.user-bubble').filter({ hasText: '查看本机磁盘剩余空间' })).toHaveCount(1);
-    await expect(page.getByTestId('permission-confirmation-modal')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('permission-confirmation-card')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('.permission-confirmation-backdrop')).toHaveCount(0);
     await expect(page.locator('.assistant-card').filter({ hasText: '请确认是否允许' })).toHaveCount(0);
     await expect(page.locator('.inline-permission-actions button').filter({ hasText: '允许一次' })).toBeVisible();
     await page.locator('.inline-permission-actions button').filter({ hasText: '允许一次' }).click();
-    await expect(page.getByTestId('permission-confirmation-modal')).toHaveCount(0);
+    await expect(page.getByTestId('permission-confirmation-card')).toHaveCount(0);
     await expect(page.locator('.user-bubble')).toHaveCount(1);
     await expect(page.locator('.user-bubble').filter({ hasText: '允许一次' })).toHaveCount(0);
     await expect(page.locator('.user-bubble').filter({ hasText: '权限确认回执' })).toHaveCount(0);
@@ -1675,6 +1699,103 @@ test.describe('EcoreX Agent Electron E2E', () => {
     expect(runPayloads[1].conversationId).toBe(runPayloads[0].conversationId);
     expect(runPayloads[1].claudeSessionId).toBe(runPayloads[0].claudeSessionId);
     await expect(page.locator('.user-bubble').filter({ hasText: '允许一次' })).toHaveCount(0);
+  });
+
+  test('applies default and full access permission switches to the next run immediately', async ({ ecorex }) => {
+    const { electronApp, page } = ecorex;
+    await login(page);
+
+    await electronApp.evaluate(({ ipcMain, BrowserWindow }) => {
+      global.__ecorexPermissionRunPayloads = [];
+      ipcMain.removeHandler('agent:run');
+      ipcMain.handle('agent:run', (event, payload) => {
+        global.__ecorexPermissionRunPayloads.push({
+          rawPrompt: payload.rawPrompt,
+          accessMode: payload.accessMode,
+          permissionMode: payload.permissionMode,
+          defaultPermissionMode: payload.defaultPermissionMode,
+          fullAccessConfirmed: payload.fullAccessConfirmed,
+          fullAccessConfirmation: payload.fullAccessConfirmation
+        });
+        const win = BrowserWindow.fromWebContents(event.sender);
+        setTimeout(() => {
+          win.webContents.send('agent:events', {
+            sessionId: payload.sessionId,
+            events: [
+              { sessionId: payload.sessionId, kind: 'result', status: 'completed', text: `permission-smoke-result ${global.__ecorexPermissionRunPayloads.length}` },
+              { sessionId: payload.sessionId, kind: 'done', status: 'completed', text: 'Agent task completed.' }
+            ]
+          });
+        }, 30);
+        return {
+          ok: true,
+          sessionId: payload.sessionId,
+          initialEvent: {
+            sessionId: payload.sessionId,
+            kind: 'status',
+            status: 'started',
+            text: 'permission mode smoke started'
+          }
+        };
+      });
+    });
+
+    const sendAndWait = async (text, expectedCount) => {
+      await page.locator('[data-testid="chat-input"]').fill(text);
+      await page.locator('[data-testid="chat-input"]').press('Enter');
+      await expect.poll(() => electronApp.evaluate(() => global.__ecorexPermissionRunPayloads?.length || 0)).toBe(expectedCount);
+      await expect(page.locator('[data-testid="chat-stop-button"]')).toHaveCount(0, { timeout: 10_000 });
+    };
+
+    const permissionSelect = page.locator('.permission-select').first();
+    await expect(permissionSelect).toBeVisible();
+    if (!(await permissionSelect.evaluate((node) => node.classList.contains('default')))) {
+      await permissionSelect.locator('> button').click();
+      await page.locator('.permission-select-menu [role="menuitemradio"]').first().click();
+      await expect(permissionSelect).toHaveClass(/default/);
+    }
+
+    await sendAndWait('permission default smoke 1', 1);
+    let payloads = await electronApp.evaluate(() => global.__ecorexPermissionRunPayloads || []);
+    expect(payloads[0]).toMatchObject({
+      rawPrompt: 'permission default smoke 1',
+      accessMode: 'default',
+      permissionMode: 'default',
+      defaultPermissionMode: 'default'
+    });
+    expect(payloads[0].fullAccessConfirmed).not.toBe(true);
+
+    await permissionSelect.locator('> button').click();
+    page.once('dialog', async (dialog) => {
+      await dialog.accept();
+    });
+    await page.locator('.permission-select-menu [role="menuitemradio"]').nth(1).click();
+    await expect(permissionSelect).toHaveClass(/full/);
+
+    await sendAndWait('permission full access smoke 2', 2);
+    payloads = await electronApp.evaluate(() => global.__ecorexPermissionRunPayloads || []);
+    expect(payloads[1]).toMatchObject({
+      rawPrompt: 'permission full access smoke 2',
+      accessMode: 'fullAccess',
+      permissionMode: 'fullAccess',
+      defaultPermissionMode: 'fullAccess',
+      fullAccessConfirmed: true,
+      fullAccessConfirmation: 'fullAccess'
+    });
+
+    await permissionSelect.locator('> button').click();
+    await page.locator('.permission-select-menu [role="menuitemradio"]').first().click();
+    await expect(permissionSelect).toHaveClass(/default/);
+
+    await sendAndWait('permission default smoke 3', 3);
+    payloads = await electronApp.evaluate(() => global.__ecorexPermissionRunPayloads || []);
+    expect(payloads[2]).toMatchObject({
+      rawPrompt: 'permission default smoke 3',
+      accessMode: 'default',
+      permissionMode: 'default',
+      defaultPermissionMode: 'default'
+    });
+    expect(payloads[2].fullAccessConfirmed).not.toBe(true);
   });
 
   test('creates and switches projects from diagnostics workspace @responsive', async ({ ecorex }) => {
@@ -2465,6 +2586,66 @@ test.describe('EcoreX Agent Electron E2E', () => {
     expect(runPayloads[1].prompt).toContain(followUpPrompt);
   });
 
+  test('keeps handoff result running until lifecycle final and queues the next user input', async ({ ecorex }) => {
+    const { electronApp, page } = ecorex;
+    await login(page);
+
+    await electronApp.evaluate(({ ipcMain, BrowserWindow }) => {
+      global.__ecorexRunPayloads = [];
+      ipcMain.removeHandler('agent:run');
+      ipcMain.handle('agent:run', (event, payload) => {
+        global.__ecorexRunPayloads.push(payload);
+        const win = BrowserWindow.fromWebContents(event.sender);
+        const runIndex = global.__ecorexRunPayloads.length;
+        setTimeout(() => {
+          if (!win || win.isDestroyed()) return;
+          win.webContents.send('agent:events', {
+            sessionId: payload.sessionId,
+            events: [
+              {
+                sessionId: payload.sessionId,
+                kind: 'result',
+                status: 'completed',
+                text: runIndex === 1
+                  ? 'Open this Feishu authorization link, finish the browser step, then tell me done: https://open.feishu.cn/page/execution_bridge?user_code=TEST'
+                  : 'queued handoff completed'
+              }
+            ]
+          });
+        }, 80);
+        setTimeout(() => {
+          if (!win || win.isDestroyed()) return;
+          win.webContents.send('agent:events', {
+            sessionId: payload.sessionId,
+            events: [
+              { sessionId: payload.sessionId, kind: 'done', status: 'completed', text: 'done' }
+            ]
+          });
+        }, runIndex === 1 ? 900 : 120);
+        return {
+          ok: true,
+          sessionId: payload.sessionId,
+          initialEvent: { sessionId: payload.sessionId, kind: 'status', status: 'started', text: 'started' }
+        };
+      });
+    });
+
+    const firstPrompt = 'start Feishu authorization handoff';
+    const followUpPrompt = 'give me a clickable configuration link';
+    await page.locator('[data-testid="chat-input"]').fill(firstPrompt);
+    await page.locator('[data-testid="chat-input"]').press('Enter');
+    const firstAssistant = page.locator('.assistant-card').filter({ hasText: 'Feishu authorization link' }).first();
+    await expect(firstAssistant).toBeVisible({ timeout: 10_000 });
+    await expect(firstAssistant.locator('.message-status.complete')).toHaveCount(0);
+
+    await page.locator('[data-testid="chat-input"]').fill(followUpPrompt);
+    await page.locator('[data-testid="chat-input"]').press('Enter');
+    await expect(page.locator('.user-bubble').filter({ hasText: followUpPrompt }).first()).toContainText(/排队|鎺掗槦|queued/i);
+    await expect(page.locator('.assistant-card').filter({ hasText: 'This conversation already has a task running' })).toHaveCount(0);
+    await expect.poll(() => electronApp.evaluate(() => global.__ecorexRunPayloads?.length || 0), { timeout: 15_000 }).toBe(2);
+    await expect(page.locator('.assistant-card').filter({ hasText: 'queued handoff completed' }).first()).toBeVisible({ timeout: 10_000 });
+  });
+
   test('hides stale recovery prompts immediately after retry starts', async ({ ecorex }) => {
     const { electronApp, page } = ecorex;
     await login(page);
@@ -2524,6 +2705,7 @@ test.describe('EcoreX Agent Electron E2E', () => {
     }, { retryPrompt });
 
     await expect(page.locator('.message-recovery-state')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.assistant-card').filter({ hasText: '未完成 / 可继续' }).first()).toBeVisible();
     await page.locator('.message-recovery-state button').click();
     await expect(page.locator('.message-recovery-state')).toHaveCount(0);
     await expect.poll(async () => electronApp.evaluate(() => global.__ecorexRecoveryRetryPayloads?.length || 0)).toBe(1);
@@ -2694,7 +2876,7 @@ test.describe('EcoreX Agent Electron E2E', () => {
     await expect(trace.locator('.agent-trace-summary')).toContainText('已完成');
     await expect(trace.locator('.agent-trace-summary')).not.toContainText('进行中');
     await trace.locator('.agent-trace-summary').click();
-    await expect(trace.locator('.agent-trace-row').filter({ hasText: 'TaskUpdate' }).first()).toContainText('已完成');
+    await expect(trace.locator('.agent-trace-row').filter({ hasText: '更新任务清单' }).first()).toContainText('已完成');
   });
 
   test('places readable tool return values into the assistant message', async ({ ecorex }) => {
@@ -2737,6 +2919,52 @@ test.describe('EcoreX Agent Electron E2E', () => {
     await expect(assistant).toBeVisible({ timeout: 10_000 });
     await expect(assistant.locator('[data-testid="tool-result-inline"]')).toContainText('humidity 94%');
     await expect(assistant.locator('.artifact-thumb-card')).toHaveCount(0);
+  });
+
+  test('suppresses task update noise and execution bridge line numbers', async ({ ecorex }) => {
+    const { electronApp, page } = ecorex;
+    await login(page);
+
+    await electronApp.evaluate(({ ipcMain, BrowserWindow }) => {
+      ipcMain.removeHandler('agent:run');
+      ipcMain.handle('agent:run', (event, payload) => {
+        const win = BrowserWindow.fromWebContents(event.sender);
+        setTimeout(() => {
+          if (!win || win.isDestroyed()) return;
+          win.webContents.send('agent:events', {
+            sessionId: payload.sessionId,
+            events: [
+              {
+                sessionId: payload.sessionId,
+                kind: 'result',
+                status: 'completed',
+                text: [
+                  '24 25 Open this link: 26 27 https://open.feishu.cn/page/execution bridgeuser_code=TEST&from=execution bridge 28 29',
+                  'Updated task #1 description, status',
+                  'Finish authorization in the browser, then return here.'
+                ].join('\n')
+              },
+              { sessionId: payload.sessionId, kind: 'done', status: 'completed', text: 'done' }
+            ]
+          });
+        }, 50);
+        return {
+          ok: true,
+          sessionId: payload.sessionId,
+          initialEvent: { sessionId: payload.sessionId, kind: 'status', status: 'started', text: 'started' }
+        };
+      });
+    });
+
+    await page.locator('[data-testid="chat-input"]').fill('return a Feishu authorization link');
+    await page.locator('[data-testid="chat-input"]').press('Enter');
+    const assistant = page.locator('.assistant-card').filter({ hasText: 'open.feishu.cn' }).first();
+    await expect(assistant).toBeVisible({ timeout: 10_000 });
+    await expect(assistant).toContainText('https://open.feishu.cn/page/execution_bridge?user_code=TEST&from=execution_bridge');
+    await expect(assistant).not.toContainText('24 25');
+    await expect(assistant).not.toContainText('26 27');
+    await expect(assistant).not.toContainText('Updated task #1');
+    await expect(assistant).not.toContainText('TaskUpdate');
   });
 
   test('keeps composer responsive after large assistant output and folded ledger @responsive', async ({ ecorex }) => {

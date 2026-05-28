@@ -4017,49 +4017,50 @@ select,
   border-radius: 7px;
 }
 
-.permission-confirmation-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 70;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background: rgba(4, 10, 18, 0.62);
-  backdrop-filter: blur(10px);
+.chat-permission-overlay {
+  flex: 0 0 auto;
+  position: relative;
+  z-index: 210;
+  margin: -2px 0 7px;
+  padding: 0 4px;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
 }
 
-.permission-confirmation-dialog {
-  width: min(520px, calc(100vw - 32px));
+.chat-permission-card {
+  width: min(720px, 100%);
   margin: 0;
-  padding: 16px;
-  border-radius: 8px;
-  grid-template-columns: 28px minmax(0, 1fr);
-  box-shadow: 0 22px 54px rgba(0, 0, 0, 0.38);
+  padding: 10px 11px;
+  border-radius: 10px;
+  grid-template-columns: 26px minmax(0, 1fr);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.32);
+  pointer-events: auto;
 }
 
-.permission-confirmation-dialog > svg {
-  width: 22px;
-  height: 22px;
+.chat-permission-card > svg {
+  width: 21px;
+  height: 21px;
 }
 
-.permission-confirmation-dialog strong {
-  font-size: 15px;
+.chat-permission-card strong {
+  font-size: 14px;
 }
 
-.permission-confirmation-dialog .permission-confirmation-action {
-  margin-top: 8px;
+.permission-confirmation-action {
+  margin-top: 6px;
   color: var(--text);
-  font-size: 13px;
+  font-size: 12px;
 }
 
-.permission-confirmation-dialog .inline-permission-actions {
+.chat-permission-card .inline-permission-actions {
   grid-column: 1 / -1;
   justify-content: flex-end;
-  margin-top: 12px;
+  margin-top: 9px;
 }
 
-.permission-confirmation-dialog .inline-permission-actions button {
-  min-width: 78px;
+.chat-permission-card .inline-permission-actions button {
+  min-width: 74px;
 }
 
 .agent-trace-sources {

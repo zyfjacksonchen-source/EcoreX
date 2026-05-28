@@ -287,6 +287,12 @@ const messageStates = {
   complete: { label: '已完成', icon: Check, tone: 'complete' },
   cancelled: { label: '已取消', icon: Pause, tone: 'cancelled' },
   timeout: { label: '已超时', icon: Clock3, tone: 'error' },
+  failed: { label: '未完成 / 重试', icon: AlertTriangle, tone: 'error' },
+  incomplete: { label: '未完成 / 重试', icon: AlertTriangle, tone: 'error' },
+  interrupted: { label: '未完成 / 可继续', icon: AlertTriangle, tone: 'error' },
+  'incomplete-result': { label: '未完成 / 重试', icon: AlertTriangle, tone: 'error' },
+  'authorization-incomplete': { label: '待授权 / 可继续', icon: Clock3, tone: 'queued' },
+  'user-action-required': { label: '待继续', icon: Clock3, tone: 'queued' },
   error: { label: '错误 / 重试', icon: AlertTriangle, tone: 'error' }
 };
 
@@ -354,6 +360,7 @@ const AGENT_EVENT_PENDING_DELAY_MS = 140;
 const PENDING_AGENT_EVENT_TTL_MS = 7000;
 const AGENT_TIMELINE_BATCH_LIMIT = 24;
 const AGENT_EVENT_TERMINAL_KINDS = new Set(['result', 'done', 'error', 'cancelled', 'timeout']);
+const AGENT_SESSION_FINAL_KINDS = new Set(['done', 'error', 'cancelled', 'timeout']);
 const AGENT_DISCLOSURE_DELAYS_MS = [1800, 6500, 14000, 28000];
 const CONVERSATION_SAVE_DEBOUNCE_MS = 220;
 const MANAGED_SECRET_DEFINITIONS = [
@@ -753,15 +760,41 @@ function isInternalAgentOutputLine(value = '') {
   if (!text) return false;
   if (/^Launching skill:/i.test(text)) return true;
   if (/\bbridge:[a-z0-9_.:-]+\b/i.test(text) && /^Launching/i.test(text)) return true;
+  if (/^(?:TaskUpdate|正在整理工具参数|开始生成回复|回复生成完成)[。.]?$/i.test(text)) return true;
+  if (/^(?:Updated|Created|Deleted)\s+task\s+#?\d+\b/i.test(text)) return true;
+  if (/^Task\s+#?\d+\s+(?:updated|created|deleted)\b/i.test(text)) return true;
   if (/^[\d\s|:._=\-#\u2580-\u259f\u25a0-\u25a1\u25aa-\u25ab]+$/u.test(text) && text.length >= 16) return true;
   if (/^(?:\d+\s*)?[\u2580-\u259f\u25a0-\u25a1\u25aa-\u25ab#=_-]{8,}/u.test(text)) return true;
   return false;
 }
 
+function textLooksCorrupted(value = '') {
+  const text = String(value || '').trim();
+  if (!text) return true;
+  const questionCount = (text.match(/\?/g) || []).length;
+  const replacementCount = (text.match(/\uFFFD/g) || []).length;
+  const mojibakeHits = (text.match(/(?:锟|Ã|Â|â€|姝|鏁|鍥|鎺|閰|杩|浠|璇|鐢|绛|棣|麓|茂|�)/g) || []).length;
+  return replacementCount > 0
+    || (questionCount >= 8 && questionCount / Math.max(text.length, 1) > 0.25)
+    || mojibakeHits >= 2;
+}
+
+function cleanAgentDisplayLine(value = '') {
+  let text = String(value || '').trimEnd();
+  const numberTokens = text.match(/(?:^|\s)\d{1,3}(?=\s|$)/g) || [];
+  if (numberTokens.length >= 3 && /(https?:\/\/|open\.feishu\.cn|execution[_\s-]?bridge|授权|配置|链接|打开)/i.test(text)) {
+    text = text.replace(/(^|\s)\d{1,3}(?=\s|$)/g, '$1').replace(/\s{2,}/g, ' ').trim();
+  }
+  return text
+    .replace(/execution\s+bridge(?=user_code=)/gi, 'execution_bridge?')
+    .replace(/execution\s+bridge(?=\?user_code=)/gi, 'execution_bridge')
+    .replace(/from=execution\s+bridge\b/gi, 'from=execution_bridge');
+}
+
 function cleanPublicAgentText(value = '', { dropPathLines = true } = {}) {
   return String(value || '')
     .split(/\r?\n/)
-    .map((line) => line.trimEnd())
+    .map((line) => cleanAgentDisplayLine(line))
     .filter((line) => !(dropPathLines && looksLikeNoisyLocalPath(line)))
     .filter((line) => !isInternalAgentOutputLine(line))
     .join('\n')
@@ -776,6 +809,19 @@ function cleanPublicAgentText(value = '', { dropPathLines = true } = {}) {
     .trim();
 }
 
+function publicRunningSessionPrompt(value = '', fallback = '正在执行任务') {
+  const clean = cleanPublicAgentText(value, { dropPathLines: true }).replace(/\s+/g, ' ').trim();
+  if (!clean || textLooksCorrupted(clean)) return fallback;
+  if (/^用户当前输入[:：]/.test(clean)) return fallback;
+  return sanitizeDisplayText(clean, fallback).slice(0, 72);
+}
+
+function publicRunningSessionTitle(value = '', fallback = '会话') {
+  const clean = cleanPublicAgentText(value, { dropPathLines: true }).replace(/\s+/g, ' ').trim();
+  if (!clean || textLooksCorrupted(clean)) return fallback;
+  return sanitizeDisplayText(clean, fallback).slice(0, 28);
+}
+
 function toolToneFromStatus(status = '') {
   const normalized = String(status || '').toLowerCase();
   if (/error|fail|failed|timeout|denied|rejected|exception|异常|失败|错误|超时|拒绝/.test(normalized)) return 'danger';
@@ -786,6 +832,12 @@ function toolToneFromStatus(status = '') {
 
 function readableToolStatus(status = '', fallback = '进行中') {
   return formatAgentEventStatus(status || fallback, fallback);
+}
+
+function readableToolName(name = '') {
+  const raw = String(name || '').trim();
+  if (/^TaskUpdate$/i.test(raw)) return '更新任务清单';
+  return raw;
 }
 
 function normalizeToolLedgerItem(raw = {}, event = {}, index = 0) {
@@ -816,7 +868,7 @@ function normalizeToolLedgerItem(raw = {}, event = {}, index = 0) {
   const id = String(source.id || source.callId || source.toolUseId || event.id || event.__seq || `${toolName}-${index}-${Date.now()}`);
   return {
     id,
-    toolName: sanitizeDisplayText(toolName, '工具调用').slice(0, 80),
+    toolName: sanitizeDisplayText(readableToolName(toolName), '工具调用').slice(0, 80),
     action: sanitizeDisplayText(cleanAction, '执行工具').slice(0, 140),
     path: String(source.path || source.filePath || source.cwd || '').slice(0, 600),
     output: compactEventDetail(cleanPublicAgentText(source.output || source.stdout || source.stderr || '', { dropPathLines: true }), 800),
@@ -962,7 +1014,7 @@ function recoveryStateFromSession(row = {}) {
   return {
     ...base,
     sessionId: row.sessionId || row.id || '',
-    prompt: sanitizeDisplayText(row.promptPreview || row.prompt || row.title || '', ''),
+    prompt: publicRunningSessionPrompt(row.promptPreview || row.prompt || row.title || '', ''),
     detail: sanitizeDisplayText(row.recoveryHint || row.detail || row.message, '窗口恢复后可继续查看这轮任务的输出。')
   };
 }
@@ -974,7 +1026,7 @@ function recoveryStateFromAgentEvent(event = {}) {
   return {
     ...base,
     sessionId: raw.sessionId || event.sessionId || '',
-    prompt: sanitizeDisplayText(raw.promptPreview || raw.prompt || event.promptPreview || event.prompt, ''),
+    prompt: publicRunningSessionPrompt(raw.promptPreview || raw.prompt || event.promptPreview || event.prompt, ''),
     detail: sanitizeDisplayText(raw.detail || raw.message || event.text || event.message, '任务状态已从本地运行记录恢复。')
   };
 }
@@ -2034,8 +2086,9 @@ function agentRunPolicySection(prompt = '') {
   return [
     '执行策略：',
     '1. 联网搜索、网页读取、MCP 调用、SKILLS 调用、只读信息检索和常规分析工具由 EcoreX 自主判断并直接执行，不要先询问用户是否允许。',
-    '2. 涉及本地文件写入/修改/删除、命令执行、系统目录访问或不可逆变更时，触发 EcoreX 桌面端权限确认弹框，让用户点击按钮确认；不要要求用户在聊天里回复“继续”或“确认”。',
+    '2. 涉及本地文件写入/修改/删除、命令执行、系统目录访问或不可逆变更时，触发 EcoreX 聊天框内权限确认卡，让用户点击按钮确认；不要要求用户在聊天里回复“继续”或“确认”。',
     '3. 简单问答只返回答案；复杂任务只展示当前动作、关键计划和必要风险，不输出完整调试日志或冗长状态树。',
+    '4. 有限任务不要启动长期后台命令；如果命令被转入后台，必须立即读取输出、完成验证或停止后台任务，并给出最终结论或明确待继续原因。',
     realtimePlatformSearchPolicySection(prompt)
   ].join('\n');
 }
@@ -4794,6 +4847,11 @@ function timelineItemFromAgentEvent(event) {
     timeout: '已超时',
     error: '失败'
   };
+  const terminalFailed = agentEventIndicatesFailure(event) || (event.kind === 'result' && agentEventLooksIncompleteTerminal(event));
+  const terminalTone = terminalFailed ? 'danger' : 'success';
+  const displayStatus = terminalFailed && ['result', 'done'].includes(event.kind)
+    ? '未完成'
+    : (statusMap[event.kind] || formatAgentEventStatus(event.status || event.state, '进行中'));
   const toneMap = {
     status: 'running',
     tool: 'running',
@@ -4803,8 +4861,8 @@ function timelineItemFromAgentEvent(event) {
     stderr: 'warn',
     debug: 'pending',
     assistant: 'running',
-    result: 'success',
-    done: 'success',
+    result: terminalTone,
+    done: terminalTone,
     cancelled: 'pending',
     timeout: 'danger',
     error: 'danger'
@@ -4812,7 +4870,7 @@ function timelineItemFromAgentEvent(event) {
 
   return [
     sanitizeDisplayText(labelMap[event.kind] || taskLabel || '执行步骤', '执行步骤').slice(0, 120),
-    sanitizeDisplayText(statusMap[event.kind] || formatAgentEventStatus(event.status || event.state, '进行中'), '进行中').slice(0, 40),
+    sanitizeDisplayText(displayStatus, '进行中').slice(0, 40),
     formatAgentEventTime(event),
     toneMap[event.kind] || 'running',
     event.kind || 'status'
@@ -4837,6 +4895,7 @@ function agentDisclosureLabel(event = {}) {
   if (/^WebFetch$/i.test(firstTool)) return '读取网页';
   if (/^TodoWrite$/i.test(firstTool)) return '更新任务清单';
   if (/^TodoRead$/i.test(firstTool)) return '读取任务清单';
+  if (/^TaskUpdate$/i.test(firstTool)) return '更新任务清单';
   if (/^Task$/i.test(firstTool)) return '调度子 Agent';
   if (/^Read$|^Grep$|^Glob$|^LS$|^NotebookRead$/i.test(firstTool)) return '查看文件';
   if (/^Write$|^Edit$|^MultiEdit$|^NotebookEdit$/i.test(firstTool)) return '准备修改文件';
@@ -4967,7 +5026,13 @@ function compactTimelineEvents(events = []) {
   for (const event of nonAssistant) keep.set(event.__seq || `${event.kind}-${keep.size}`, event);
   const lastAssistant = [...events].reverse().find((event) => event.kind === 'assistant');
   if (lastAssistant) keep.set(lastAssistant.__seq || 'assistant', lastAssistant);
+  const hasSubstantiveResult = events.some((event) => (
+    event.kind === 'result'
+    && !agentEventIndicatesFailure(event)
+    && agentEventHasOwnSubstantiveTerminalOutput(event)
+  ));
   for (const event of events) {
+    if (event.kind === 'done' && hasSubstantiveResult && isGenericTerminalText(event.text)) continue;
     if (event.kind === 'result' || AGENT_EVENT_TERMINAL_KINDS.has(event.kind)) {
       keep.set(event.__seq || `${event.kind}-${keep.size}`, event);
     }
@@ -5083,6 +5148,81 @@ function cleanResultOutputText(value = '') {
 function isGenericTerminalText(value = '') {
   const text = cleanAssistantOutputText(value).trim().toLowerCase();
   return /^(done|complete|completed|success|ok|finished|agent task completed\.?|已完成|完成|任务完成|任务执行完成)$/.test(text);
+}
+
+function agentEventOutcomeText(event = {}) {
+  return [
+    event.kind,
+    event.status,
+    event.state,
+    event.reason,
+    event.code,
+    event.claudeResultStatus,
+    event.subtype,
+    event.result?.subtype,
+    event.terminalValidity,
+    event.terminalVerdict
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
+function agentEventIndicatesFailure(event = {}) {
+  if (!event) return false;
+  if (event.ok === false || event.error === true) return true;
+  if (['error', 'timeout'].includes(String(event.kind || '').toLowerCase())) return true;
+  return /(fail|failed|failure|error|timeout|denied|rejected|exception|incomplete|authorization-incomplete|auth.*incomplete|未完成|失败|错误|异常|超时|拒绝)/i.test(agentEventOutcomeText(event));
+}
+
+function agentEventHasExplicitTerminalSuccess(event = {}) {
+  return event.ok === true
+    || event.final === true
+    || event.complete === true
+    || event.completed === true
+    || event.hasSubstantiveResult === true
+    || ['complete', 'completed', 'success', 'succeeded'].includes(String(event.terminalValidity || event.terminalVerdict || '').toLowerCase());
+}
+
+function substantiveTerminalTextFromEvent(event = {}) {
+  if (event.kind === 'result') {
+    return finalizeAssistantOutputText('', event.text, { preserveArtifactLabels: true }).trim();
+  }
+  if (isGenericTerminalText(event.text)) return '';
+  return cleanResultOutputText(event.text).trim();
+}
+
+function agentEventHasOwnSubstantiveTerminalOutput(event = {}) {
+  if (!event || !['result', 'done'].includes(event.kind)) return false;
+  if (substantiveTerminalTextFromEvent(event)) return true;
+  if (finalArtifactsFromText(String(event.text || '')).length) return true;
+  return agentEventHasExplicitTerminalSuccess(event);
+}
+
+function agentEventLooksIncompleteTerminal(event = {}) {
+  return ['result', 'done'].includes(event.kind)
+    && !agentEventIndicatesFailure(event)
+    && !agentEventHasOwnSubstantiveTerminalOutput(event);
+}
+
+function isAgentSessionFinalEvent(event = {}) {
+  return AGENT_SESSION_FINAL_KINDS.has(event.kind);
+}
+
+function textLooksPendingUserAction(value = '') {
+  const text = cleanAssistantOutputText(value).toLowerCase();
+  if (!text) return false;
+  return /(open\.feishu\.cn|execution[_ -]?bridge|user_code=|device[_ -]?code|verification[_ -]?(url|uri)|二维码|扫码|授权|登录|认证|打开.*链接|完成后.*继续|告诉我.*完成|tell me.*done|waiting for.*auth|waiting for.*user|please.{0,40}(upload|provide|tell|share)|unable|cannot|can't|not able|no input file|missing input|无法|不能|暂时无法|请.{0,40}(上传|提供|告诉|补充|路径|文件)|需要.{0,40}(上传|提供|告诉|补充|路径|文件))/i.test(text);
+}
+
+function messageHasSubstantiveTerminalOutput(message = {}, event = {}) {
+  if (agentEventIndicatesFailure(event)) return false;
+  if (cleanAssistantOutputText(message.text || '').trim()) return true;
+  if (Array.isArray(message.finalArtifacts) && message.finalArtifacts.length) return true;
+  if (agentEventHasOwnSubstantiveTerminalOutput(event)) return true;
+  return false;
+}
+
+function incompleteTerminalResultText(event = {}) {
+  const text = substantiveTerminalTextFromEvent(event);
+  return text || '任务未返回可用最终结果，请重试。';
 }
 
 function mergeAssistantOutputText(existing = '', incoming = '') {
@@ -5949,12 +6089,32 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
 
           if (event.kind === 'result') {
             const finalArtifacts = finalArtifactsFromText([nextItem.text, event.text].filter(Boolean).join('\n'));
+            const terminalFailed = agentEventIndicatesFailure(event) || !messageHasSubstantiveTerminalOutput({
+              ...nextItem,
+              finalArtifacts: mergeArtifactReferences([...(nextItem.finalArtifacts || []), ...finalArtifacts])
+            }, event);
+            if (terminalFailed) {
+              nextItem = {
+                ...nextItem,
+                text: cleanAssistantOutputText(nextItem.text) || incompleteTerminalResultText(event),
+                finalArtifacts: finalArtifacts.length
+                  ? mergeArtifactReferences([...(nextItem.finalArtifacts || []), ...finalArtifacts])
+                  : nextItem.finalArtifacts,
+                streaming: false,
+                status: 'error',
+                error: true,
+                meta: '',
+                recovery: agentRecoveryText(event),
+                silentRecovery: false
+              };
+              continue;
+            }
             nextItem = {
               ...nextItem,
               text: finalizeAssistantOutputText(nextItem.text, event.text, { preserveArtifactLabels: true }),
               finalArtifacts: mergeArtifactReferences([...(nextItem.finalArtifacts || []), ...finalArtifacts]),
-              streaming: false,
-              status: 'complete',
+              streaming: true,
+              status: 'generating',
               meta: '',
               recovery: null,
               silentRecovery: false
@@ -5965,15 +6125,34 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           if (event.kind === 'done') {
             const finalArtifacts = finalArtifactsFromText([nextItem.text, event.text].filter(Boolean).join('\n'));
             const terminalText = isGenericTerminalText(event.text) ? '' : cleanResultOutputText(event.text);
+            const mergedArtifacts = finalArtifacts.length
+              ? mergeArtifactReferences([...(nextItem.finalArtifacts || []), ...finalArtifacts])
+              : nextItem.finalArtifacts;
+            const terminalFailed = agentEventIndicatesFailure(event) || !messageHasSubstantiveTerminalOutput({
+              ...nextItem,
+              text: cleanAssistantOutputText(nextItem.text) || terminalText,
+              finalArtifacts: mergedArtifacts
+            }, event) || textLooksPendingUserAction([nextItem.text, terminalText].filter(Boolean).join('\n'));
+            if (terminalFailed) {
+              nextItem = {
+                ...nextItem,
+                streaming: false,
+                status: 'error',
+                error: true,
+                text: cleanAssistantOutputText(nextItem.text) || incompleteTerminalResultText(event),
+                finalArtifacts: mergedArtifacts,
+                recovery: agentRecoveryText(event),
+                silentRecovery: false
+              };
+              continue;
+            }
             nextItem = {
               ...nextItem,
               streaming: false,
               status: 'complete',
               error: false,
               text: cleanAssistantOutputText(nextItem.text) || terminalText,
-              finalArtifacts: finalArtifacts.length
-                ? mergeArtifactReferences([...(nextItem.finalArtifacts || []), ...finalArtifacts])
-                : nextItem.finalArtifacts,
+              finalArtifacts: mergedArtifacts,
               recovery: null,
               silentRecovery: false
             };
@@ -6036,7 +6215,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           }
         }
 
-        if (nextItem.permissionDecision?.status === 'running' && terminalEvent) {
+        if (nextItem.permissionDecision?.status === 'running' && terminalEvent && isAgentSessionFinalEvent(terminalEvent)) {
           permissionContinuationLocksRef.current.delete(item.id);
           nextItem = {
             ...nextItem,
@@ -6059,7 +6238,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     }
 
     relevantEvents
-      .filter((event) => AGENT_EVENT_TERMINAL_KINDS.has(event.kind))
+      .filter((event) => isAgentSessionFinalEvent(event))
       .filter((event) => !deferredEvents.some((deferred) => deferred.__seq === event.__seq))
       .forEach((event) => finishSession(event.sessionId));
 
@@ -6462,15 +6641,16 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     });
   }
 
-  function enqueueFollowUpPrompt(cleanPrompt, cleanAttachments = []) {
-    const now = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-    const userId = `user-queued-${Date.now()}`;
+  function enqueueFollowUpPrompt(cleanPrompt, cleanAttachments = [], options = {}) {
+    const now = options.time || new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    const conversationId = String(options.conversationId || conversationIdRef.current);
+    const userId = options.userId || `user-queued-${Date.now()}`;
     const safePrompt = clampLongText(cleanPrompt, MAX_PENDING_FOLLOWUP_CHARS);
-    const cleanReferences = sanitizeComposerReferences(composerReferences);
+    const cleanReferences = sanitizeComposerReferences(Array.isArray(options.references) ? options.references : composerReferences);
     const item = {
       id: userId,
-      conversationId: conversationIdRef.current,
-      claudeSessionId: conversationSessionIdRef.current || conversationIdRef.current,
+      conversationId,
+      claudeSessionId: options.claudeSessionId || conversationSessionIdRef.current || conversationId,
       prompt: safePrompt,
       attachments: cleanAttachments,
       references: cleanReferences,
@@ -6479,7 +6659,15 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     };
     pendingFollowUpsRef.current = [...pendingFollowUpsRef.current, item].slice(-MAX_PENDING_FOLLOWUPS);
     syncRecentChatFromPrompt(item.conversationId, safePrompt || cleanReferences[0]?.name || cleanAttachments[0]?.name || '追加消息');
-    updateMessagesForConversation(item.conversationId, (items) => [
+    updateMessagesForConversation(item.conversationId, (items) => {
+      if (options.existingMessage) {
+        return items.map((message) => (
+          message.id === userId
+            ? { ...message, status: 'queued', attachments: cleanAttachments, references: cleanReferences }
+            : message
+        ));
+      }
+      return [
       ...items,
       {
         id: userId,
@@ -6490,11 +6678,49 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         attachments: cleanAttachments,
         references: cleanReferences
       }
-    ]);
+      ];
+    });
     setTimeline((items) => appendTimeline(items, ['已追加用户消息', '当前任务结束后继续处理', formatAgentEventTime(), 'pending']));
     setPrompt('');
     setComposerReferences([]);
     clearAttachments({ revoke: false });
+  }
+
+  function recoverDuplicateRunAsQueuedFollowUp(result = {}, context = {}) {
+    const duplicateSessionId = String(result.duplicateOf || result.sessionId || '').trim();
+    const duplicateMessageId = String(result.messageId || '').trim();
+    const ownerConversationId = String(result.conversationId || context.conversationId || conversationIdRef.current || '');
+    if (duplicateSessionId && duplicateMessageId) {
+      sessionMap.current.set(duplicateSessionId, duplicateMessageId);
+      trackSession(duplicateSessionId, {
+        messageId: duplicateMessageId,
+        conversationId: ownerConversationId,
+        claudeSessionId: result.claudeSessionId || context.claudeSessionId || ownerConversationId,
+        projectId: result.projectId || context.projectId || '',
+        projectName: result.projectName || context.projectName || '',
+        prompt: context.cleanPrompt || result.prompt || '',
+        accessMode: context.accessMode || permissionMode,
+        source: 'duplicate-recovery'
+      });
+      updateMessagesForConversation(ownerConversationId, (items) => items.map((message) => (
+        message.id === duplicateMessageId && message.status === 'complete'
+          ? { ...message, streaming: true, status: 'generating' }
+          : message
+      )));
+    }
+    if (context.requestedSessionId) finishSession(context.requestedSessionId);
+    if (context.assistantId) {
+      updateMessagesForConversation(context.conversationId, (items) => items.filter((message) => message.id !== context.assistantId));
+    }
+    enqueueFollowUpPrompt(context.cleanPrompt || '', context.cleanAttachments || [], {
+      userId: context.userId,
+      existingMessage: true,
+      conversationId: context.conversationId,
+      claudeSessionId: result.claudeSessionId || context.claudeSessionId,
+      references: context.cleanReferences || [],
+      time: context.time
+    });
+    return true;
   }
 
   function buildQueuedFollowUpPrompt(items = []) {
@@ -6617,7 +6843,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       claudeSessionId: nextClaudeSessionId,
       projectId: activeProject?.id || '',
       projectName: activeProject?.name || '',
-      prompt: promptForAgent,
+      prompt: cleanPrompt || '正在执行任务',
       accessMode,
       source: 'local',
       compactedForNativeSession
@@ -6712,6 +6938,24 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       if (!result.ok) {
         const unauthorized = Boolean(result.unauthorized);
         if (unauthorized) onUnauthorized?.();
+        if (!unauthorized && ['duplicate-session', 'duplicate-start'].includes(String(result.code || ''))) {
+          recoverDuplicateRunAsQueuedFollowUp(result, {
+            userId: useQueuedMessages ? queuedMessageIds[0] : userId,
+            assistantId,
+            requestedSessionId,
+            conversationId: activeConversationId,
+            claudeSessionId: nextClaudeSessionId,
+            projectId: activeProject?.id || '',
+            projectName: activeProject?.name || '',
+            prompt: promptForAgent,
+            cleanPrompt,
+            cleanAttachments,
+            cleanReferences,
+            accessMode,
+            time: now
+          });
+          return;
+        }
         finishSession(requestedSessionId);
         updateMessagesForConversation(activeConversationId, (items) =>
           items.map((item) =>
@@ -7205,13 +7449,6 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
 
   return (
     <div className={`chat-layout ${focusArtifact ? 'preview-focus' : 'chat-only'}`}>
-      <RunningSessionStrip
-        sessions={runningSessions}
-        currentSessionId={currentSessionId}
-        onSelect={selectRunningSession}
-        onStop={cancelPrompt}
-        onOpenSessions={() => setPage?.('settings')}
-      />
       <section className="chat-main panel">
         <HeaderBar
           title="EcoreX"
@@ -7292,6 +7529,12 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           )}
         </div>
 
+        <ChatPermissionOverlay
+          request={pendingPermissionRequest?.request}
+          onReply={(action) => {
+            if (pendingPermissionRequest?.message) continueFromPermission(pendingPermissionRequest.message, action);
+          }}
+        />
         <Composer
           prompt={prompt}
           setPrompt={setPrompt}
@@ -7315,12 +7558,6 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           setModel={setModel}
           permissionOptions={permissionOptions}
           modelOptions={modelOptions}
-        />
-        <PermissionConfirmationModal
-          request={pendingPermissionRequest?.request}
-          onReply={(action) => {
-            if (pendingPermissionRequest?.message) continueFromPermission(pendingPermissionRequest.message, action);
-          }}
         />
         <input
           ref={fileInputRef}
@@ -7388,8 +7625,8 @@ function RunningSessionStrip({ sessions = [], currentSessionId, onSelect, onStop
             <div className={`running-session-pill ${active ? 'active' : ''}`} data-testid="running-session-pill" key={session.sessionId}>
               <button type="button" data-testid="running-session-open" onClick={() => onSelect?.(session.sessionId)} title="切换查看">
                 <span className={`dot ${session.tone === 'danger' ? 'warn' : session.tone === 'running' ? 'running-dot' : 'ok'}`} />
-                <strong>{session.title || `会话 ${index + 1}`}</strong>
-                <em>{session.prompt || '正在执行任务'}</em>
+                <strong>{publicRunningSessionTitle(session.title, `会话 ${index + 1}`)}</strong>
+                <em>{publicRunningSessionPrompt(session.prompt, '正在执行任务')}</em>
               </button>
               <button
                 className="session-stop"
@@ -8484,7 +8721,15 @@ function ProjectFileTreeNode({ node, depth = 0, onOpen, onReference, onRemove, f
 }
 
 function MessageStatus({ status = 'complete', time, compact = false }) {
-  const state = messageStates[status] || messageStates.complete;
+  const normalized = String(status || 'complete').toLowerCase();
+  const state = messageStates[normalized]
+    || (/complete|completed|done|success|ok|finished|已完成/.test(normalized)
+      ? messageStates.complete
+      : /cancel|取消/.test(normalized)
+        ? messageStates.cancelled
+        : /timeout|超时/.test(normalized)
+          ? messageStates.timeout
+          : messageStates.error);
   const Icon = state.icon;
   return (
     <span className={`message-status ${state.tone} ${compact ? 'compact' : ''}`}>
@@ -10219,7 +10464,7 @@ function InlineAgentTrace({ timeline = [], sourceMap, priority = 'normal' }) {
   );
 }
 
-function InlinePermissionRequest({ request, onReply }) {
+function InlinePermissionRequest({ request, onReply, className = '' }) {
   if (!request) return null;
   const options = [
     ['允许一次', '允许一次，继续执行上一轮请求的本地操作。'],
@@ -10227,10 +10472,11 @@ function InlinePermissionRequest({ request, onReply }) {
     ['只做计划', '先不要执行本地操作，请改为输出只读计划和风险说明。']
   ];
   return (
-    <div className="inline-permission-request">
+    <div className={`inline-permission-request ${className}`.trim()}>
       <ShieldCheck size={18} />
       <div>
         <strong>{request.title}</strong>
+        {request.action && <span className="permission-confirmation-action">{request.action}</span>}
         <span>{request.description}</span>
       </div>
       <div className="inline-permission-actions">
@@ -10244,29 +10490,16 @@ function InlinePermissionRequest({ request, onReply }) {
   );
 }
 
-function PermissionConfirmationModal({ request, onReply }) {
+function ChatPermissionOverlay({ request, onReply }) {
   if (!request) return null;
   return (
-    <div className="permission-confirmation-backdrop" role="presentation">
-      <div
-        className="permission-confirmation-dialog inline-permission-request"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="permission-confirmation-title"
-        data-testid="permission-confirmation-modal"
-      >
-        <ShieldCheck size={18} />
-        <div>
-          <strong id="permission-confirmation-title">{request.title}</strong>
-          {request.action && <span className="permission-confirmation-action">{request.action}</span>}
-          <span>{request.description}</span>
-        </div>
-        <div className="inline-permission-actions">
-          <button type="button" onClick={() => onReply?.('允许一次')}>允许一次</button>
-          <button type="button" onClick={() => onReply?.('拒绝')}>拒绝</button>
-          <button type="button" onClick={() => onReply?.('只做计划')}>只做计划</button>
-        </div>
-      </div>
+    <div
+      className="chat-permission-overlay"
+      data-testid="permission-confirmation-card"
+      role="group"
+      aria-label="Permission confirmation"
+    >
+      <InlinePermissionRequest request={request} onReply={onReply} className="chat-permission-card" />
     </div>
   );
 }
@@ -10621,7 +10854,7 @@ function sessionTimestamp(value) {
 function normalizeRunningSession(raw = {}, index = 0, source = 'api') {
   const sessionId = raw.sessionId || raw.session_id || raw.id || raw.runId || raw.run_id || `session-${index + 1}`;
   const status = raw.status || raw.state || 'running';
-  const prompt = sanitizeDisplayText(raw.promptPreview || raw.prompt || raw.title || raw.summary, '正在执行任务');
+  const prompt = publicRunningSessionPrompt(raw.promptPreview || raw.prompt || raw.title || raw.summary, '正在执行任务');
   const accessMode = normalizeAccessMode(raw.accessMode || raw.permissionMode || raw.defaultPermissionMode);
   const updatedAt = sessionTimestamp(raw.updatedAt || raw.lastActivityAt || raw.lastActivity || raw.startedAt || raw.startedAtIso);
   const conversationId = String(raw.conversationId || raw.conversation_id || raw.chatId || raw.chat_id || '').trim();
@@ -10635,7 +10868,7 @@ function normalizeRunningSession(raw = {}, index = 0, source = 'api') {
     claudeSessionId,
     status,
     state: raw.state || status,
-    title: sanitizeDisplayText(raw.title || raw.name || `会话 ${index + 1}`, `会话 ${index + 1}`),
+    title: publicRunningSessionTitle(raw.title || raw.name || '', `会话 ${index + 1}`),
     prompt,
     messageId: raw.messageId || raw.message_id || '',
     projectId,

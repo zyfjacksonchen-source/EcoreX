@@ -5,7 +5,7 @@ const { _electron: electron, expect } = require('@playwright/test');
 const electronPath = require('electron');
 
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
-const appUrlPattern = /^http:\/\/127\.0\.0\.1:5188(?:\/|$)/;
+const appUrlPattern = /^(?:http:\/\/127\.0\.0\.1:5188(?:\/|$)|file:\/\/\/.*\/dist\/index\.html(?:$|[?#]))/;
 const secretEnvKeys = [
   'ANTHROPIC_API_KEY',
   'ANTHROPIC_AUTH_TOKEN',

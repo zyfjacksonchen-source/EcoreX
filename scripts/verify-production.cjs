@@ -892,6 +892,7 @@ check('agent runtime production guardrails', () => {
   assertNotMatches(main, /projectContextDisabled \? null : activeProjectContext\(\)/, 'agent runs must not fall back to the active project when no project id is provided.');
   assertMatches(main, /const defaultRunRoot = projectContext\?\.projectPath \|\| generalAgentWorkspaceDir\(\)/, 'general chat runs must use the isolated general workspace.');
   assertMatches(main, /function agentSystemPromptForProject[\s\S]*ECOREX_GENERAL_CHAT_ISOLATION_PROMPT/, 'general chat prompt must explicitly forbid project memory/file inspection.');
+  includesAll(main, ['有限任务不要启动长期后台命令', '任务才算完成'], 'agent system prompt must prevent finite tasks from hanging on background commands or missing final conclusions.');
   assertMatches(main, /function claudeProjectsRoot\(\) \{[\s\S]*agentRuntimeConfigDir\(\)[\s\S]*'projects'/, 'Claude transcript discovery must only use the EcoreX runtime project root.');
   assertNotMatches(main, /function claudeProjectsRoot\(\) \{[\s\S]*process\.env\.USERPROFILE[\s\S]*\.claude[\s\S]*projects/, 'Claude transcript discovery must not scan the user global ~/.claude project history.');
   assertNotMatches(main, /function claudeSessionTranscriptExists[\s\S]*claudeSessionWasLaunched/, 'Claude resume must require a real transcript, not only a previous launch marker.');
@@ -900,6 +901,8 @@ check('agent runtime production guardrails', () => {
   assertMatches(main, /const plugins = Array\.isArray\(payload\.plugins\)[\s\S]*isBlockedLocalSkillName\(plugin\)/, 'payload plugin names must reject local user skill packs.');
   assertMatches(main, /parsePluginInventory[\s\S]*isBlockedLocalSkillName\(pluginName\)[\s\S]*isBlockedLocalSkillName\(source\)/, 'backend plugin inventory must exclude blocked local skill pack names.');
   assertMatches(main, /const selectedPlugins = allowedRuntimePluginNames\(safePayload\.plugins \|\| \[\]\)/, 'runtime plugins must be intersected with the EcoreX builtin and managed allowlist.');
+  assertMatches(main, /function runtimePluginPathAllowed[\s\S]*isPathInside\(managedSkillPacksDir\(\),\s*resolved\)[\s\S]*isPathInside\(bundledManagedSkillPacksRoot\(\),\s*resolved\)/, 'managed runtime plugins must be loaded only from EcoreX managed or bundled skill pack roots.');
+  assertMatches(main, /installPath:\s*source[\s\S]*sourceKind:\s*mcpConfig \? 'mcp-wrapper' : 'bundled-skill-collection'/, 'bundled skill packs must mount from packaged resources without copying large trees on startup.');
   assertMatches(main, /function runtimePluginPathAllowed[\s\S]*ECOREX_BUILTIN_PLUGIN_ALLOWLIST\.has\(name\)[\s\S]*isPathInside\(backendRoot,\s*resolved\)/, 'backend plugin directories must be allowlisted by plugin name.');
   assertMatches(main, /runtimePluginPathAllowed\(pluginPath,\s*safeRepoRoot,\s*pluginName\)/, 'plugin path validation must include the selected plugin name.');
   assertMatches(main, /stdio:\s*\['pipe',\s*'pipe',\s*'pipe'\]/, 'agent child process must keep stdin piped.');
@@ -913,8 +916,9 @@ check('agent runtime production guardrails', () => {
   assertMatches(main, /if \(claudeResumeExistingSession\) \{\s*args\.push\('--resume', claudeSessionId\);\s*\} else \{\s*args\.push\('--session-id', claudeSessionId\);/s, 'Claude CLI must resume existing sessions and only create new sessions with --session-id.');
   assertMatches(main, /entry\.claudeSessionId === requestedClaudeSessionId/, 'parallel starts for the same Claude session must be blocked before spawning.');
   assertMatches(main, /function refreshClaudeSessionTranscriptSeen[\s\S]*findClaudeSessionTranscript\(sessionId\)[\s\S]*claudeTranscriptExistenceCache\.delete\(sessionId\)/, 'Claude resume cache must verify transcript files and clear stale resume state.');
-  assertMatches(main, /let finalStatus = code === 0 && !entry\.claudeResultFailed \? 'completed' : 'failed'[\s\S]*const incompleteResult = finalStatus === 'completed' && !agentSessionHasSubstantiveResult\(entry\)[\s\S]*const authorizationIncomplete = finalStatus === 'completed' && agentSessionHasUnresolvedAuthorization\(entry\)[\s\S]*if \(incompleteResult \|\| authorizationIncomplete\) finalStatus = 'failed'/, 'Claude sessions must not report completed when no substantive result or pending authorization remains.');
-  assertMatches(main, /function substantiveAgentResultText[\s\S]*function agentSessionHasSubstantiveResult[\s\S]*function agentSessionHasUnresolvedAuthorization[\s\S]*function incompleteAgentResultText/, 'agent completion must distinguish process exit from usable final output and unfinished authorization.');
+  assertMatches(main, /let finalStatus = code === 0 && !entry\.claudeResultFailed \? 'completed' : 'failed'[\s\S]*const incompleteResult = finalStatus === 'completed' && !agentSessionHasSubstantiveResult\(entry\)[\s\S]*const authorizationIncomplete = finalStatus === 'completed' && agentSessionHasUnresolvedAuthorization\(entry\)[\s\S]*const unresolvedUserBlocker = finalStatus === 'completed' && agentSessionHasUnresolvedUserBlocker\(entry\)[\s\S]*if \(incompleteResult \|\| authorizationIncomplete \|\| unresolvedUserBlocker\) finalStatus = 'failed'/, 'Claude sessions must not report completed when no substantive result, pending authorization, or unresolved user blocker remains.');
+  assertMatches(main, /reason:\s*authorizationIncomplete \? 'authorization-incomplete' : unresolvedUserBlocker \? 'user-action-required' : incompleteResult \? 'incomplete-result'/, 'unfinished user-action blockers must be reported as resumable failures instead of completed tasks.');
+  assertMatches(main, /function substantiveAgentResultText[\s\S]*function agentSessionHasSubstantiveResult[\s\S]*function agentSessionHasUnresolvedAuthorization[\s\S]*function agentSessionHasUnresolvedUserBlocker[\s\S]*function incompleteAgentResultText/, 'agent completion must distinguish process exit from usable final output, unfinished authorization, and unresolved user blockers.');
   assertMatches(main, /recordSessionEvent[\s\S]*normalized\.kind === 'result'[\s\S]*entry\.hasSubstantiveResult = true/, 'result events must mark whether the task produced a substantive final answer.');
   assertNotMatches(main, /child\.on\('close'[\s\S]{0,600}markClaudeSessionTranscriptSeen\(entry\.claudeSessionId\)/, 'agent close must not blindly mark failed or missing Claude transcripts as resumable.');
   assertMatches(main, /streamType === 'error'[\s\S]*claudeResultStatus:\s*'failed'/, 'stream-json error events must be surfaced as failed agent events.');
@@ -1189,6 +1193,7 @@ check('MCP plugin and CLI exposure is sanitized', () => {
 check('diagnostics health check UI is complete and static-safe', () => {
   const app = readText('src/App.jsx');
   const css = readText('src/styles.css');
+  const main = readText('electron/main.cjs');
   includesAll(
     app,
     [
@@ -1297,6 +1302,7 @@ check('enterprise evaluation framework is wired and memory-safe', () => {
 check('chat state tree and critical front-end affordances', () => {
   const app = readText('src/App.jsx');
   const css = readText('src/styles.css');
+  const main = readText('electron/main.cjs');
   includesAll(
     app,
     [
@@ -1304,6 +1310,12 @@ check('chat state tree and critical front-end affordances', () => {
       "cancelled: { label: '已取消'",
       "timeout: { label: '已超时'",
       "const AGENT_EVENT_TERMINAL_KINDS = new Set(['result', 'done', 'error', 'cancelled', 'timeout'])",
+      "const AGENT_SESSION_FINAL_KINDS = new Set(['done', 'error', 'cancelled', 'timeout'])",
+      'function isAgentSessionFinalEvent',
+      'function textLooksPendingUserAction',
+      'function recoverDuplicateRunAsQueuedFollowUp',
+      'function agentRunPolicySection',
+      '有限任务不要启动长期后台命令',
       "status: 'cancelled'",
       "status: 'timeout'",
       'function agentRecoveryText',
@@ -1317,19 +1329,43 @@ check('chat state tree and critical front-end affordances', () => {
       'function ChatExternalLink',
       'function ChatInlineMedia',
       'function isInternalAgentOutputLine',
+      'function cleanAgentDisplayLine',
+      'function publicRunningSessionPrompt',
+      'function publicRunningSessionTitle',
+      'TaskUpdate|正在整理工具参数|开始生成回复|回复生成完成',
+      'Updated|Created|Deleted',
+      'execution\\s+bridge(?=user_code=)',
       'chatMediaKind(safeUrl)',
       'openExternalUrlWithBridge(safeUrl)',
       'function stageTransferredInput',
       'function transferText',
       'function filesFromDataTransfer',
+      'function ChatPermissionOverlay',
+      'data-testid="permission-confirmation-card"',
+      'EcoreX 聊天框内权限确认卡',
       'onDrop={(event) => stageTransferredInput(event, event.dataTransfer)}'
     ],
     'chat state tree and artifact focus layout'
   );
   includesAll(app, ["replace(/\\bClaude\\s*Code\\s*CLI\\b/gi, 'EcoreX')", "replace(/\\bClaude\\b/gi, 'EcoreX')"], 'assistant-visible product naming sanitizer');
-  assertMatches(app, /<RunningSessionStrip[\s\S]*<section className="chat-main panel">/, 'running session strip must render outside the chat message panel.');
-  assertNotMatches(app, /<section className="chat-main panel">[\s\S]{0,900}<RunningSessionStrip/, 'running session strip must not appear inside the chat panel.');
+  assertNotMatches(app, /<RunningSessionStrip\b/, 'running session strip must stay hidden from the main chat UI.');
+  assertMatches(app, /if \(event\.kind === 'result'\)[\s\S]*streaming:\s*true[\s\S]*status:\s*'generating'/, 'stream-json result content must not release the running session before the lifecycle final event.');
+  assertMatches(app, /relevantEvents[\s\S]*\.filter\(\(event\) => isAgentSessionFinalEvent\(event\)\)/, 'front-end running sessions must finish only on lifecycle final events.');
+  assertMatches(app, /textLooksPendingUserAction\(\[nextItem\.text,\s*terminalText\]/, 'authorization or browser handoff prompts must not be shown as completed.');
+  assertMatches(app, /recoverDuplicateRunAsQueuedFollowUp\(result[\s\S]*existingMessage:\s*true/, 'duplicate running-session races must be converted back into queued follow-up input.');
+  assertMatches(app, /function cleanAgentDisplayLine[\s\S]*numberTokens\.length >= 3[\s\S]*open\\\.feishu\\\.cn[\s\S]*execution_bridge\?/, 'chat renderer must strip execution bridge line-number noise while preserving Feishu links.');
+  assertMatches(app, /function isInternalAgentOutputLine[\s\S]*Updated\|Created\|Deleted[\s\S]*task\\s\+#\?\\d\+/, 'chat renderer must suppress raw task-list mutation noise.');
+  assertMatches(app, /function publicRunningSessionPrompt[\s\S]*textLooksCorrupted\(clean\)[\s\S]*return fallback/, 'running session strip must hide corrupted or raw internal prompt previews.');
+  assertMatches(app, /function publicRunningSessionTitle[\s\S]*textLooksCorrupted\(clean\)[\s\S]*return fallback/, 'running session strip must hide corrupted recovered titles.');
+  assertMatches(app, /const messageStates = \{[\s\S]*interrupted:[\s\S]*authorization-incomplete[\s\S]*user-action-required/, 'message status badges must not render recoverable failures as completed.');
+  assertMatches(app, /trackSession\(requestedSessionId[\s\S]*prompt:\s*cleanPrompt \|\| '正在执行任务'/, 'running session strip must use the user task summary instead of the full internal agent prompt.');
+  assertMatches(main, /function cleanAgentDisplayLine[\s\S]*numberTokens\.length >= 3[\s\S]*open\\\.feishu\\\.cn[\s\S]*execution_bridge\?/, 'backend event sanitizer must strip execution bridge line-number noise while preserving Feishu links.');
+  assertMatches(main, /function isInternalAgentOutputLine[\s\S]*Updated\|Created\|Deleted[\s\S]*task\\s\+#\?\\d\+/, 'backend event sanitizer must suppress raw task-list mutation noise.');
+  assertMatches(main, /input_json_delta'\) return null/, 'backend stream parser must not emit raw tool argument delta events into public chat.');
   assertMatches(app, /function cleanPublicAgentText[\s\S]*isInternalAgentOutputLine/, 'chat renderer must suppress internal launch/progress noise from assistant text.');
+  assertNotMatches(app, /PermissionConfirmationModal|permission-confirmation-modal|permission-confirmation-backdrop/, 'permission confirmation must render as an inline chat card, not a full-screen modal.');
+  includesAll(css, ['.chat-permission-overlay', '.chat-permission-card'], 'inline permission confirmation card styles');
+  assertNotMatches(css, /\.permission-confirmation-backdrop/, 'permission confirmation CSS must not include the removed full-screen backdrop.');
   assert(!app.includes('setRailExpanded((next) => !next)'), 'chat main must not keep the removed quick project right rail toggle.');
   assert(!app.includes('<aside className={`right-rail'), 'chat main must not render the removed quick project right rail.');
   includesAll(app, ['function finalArtifactsFromText', "source: 'assistant-final'", 'finalArtifacts: mergeArtifactReferences', 'message.finalArtifacts || []', 'function isExplicitLocalArtifactPathToken'], 'final deliverable artifact extraction');
@@ -1371,6 +1407,7 @@ check('project workspaces isolate advertising context and memory', () => {
       'function agentSystemPromptForProject',
       'function projectEnvForAgent',
       'function generalAgentWorkspaceDir',
+      '有限任务不要启动长期后台命令',
       "handleSafe('project:update'",
       "handleSafe('project:archive'",
       "handleSafe('project:delete'",
@@ -1704,6 +1741,13 @@ check('renderer build output exists', () => {
   const assets = fs.readdirSync(assetsDir);
   assert(assets.some((name) => /\.js$/i.test(name)), 'dist/assets has no JS bundle.');
   assert(assets.some((name) => /\.css$/i.test(name)), 'dist/assets has no CSS bundle.');
+});
+
+check('download page points at current installer version', () => {
+  const pkg = packageJson();
+  const index = readText('landing/ecorex-download/index.html');
+  const expected = `EcoreX-Agent-Setup-${pkg.version}.exe`;
+  assert(index.includes(expected), `download page must link to current installer ${expected}.`);
 });
 
 check('release artifacts are coherent when present', () => {

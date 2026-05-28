@@ -320,7 +320,9 @@ const AGENT_SYSTEM_PROMPT = [
   '输出不要使用星号作为 Markdown 标记，不要使用 *、** 或星号项目符号；列表请使用中文序号或短句换行。',
   '需要事实核验、外部资料、网页信息或时效性内容时，应主动使用联网检索与网页读取能力；需要本地资料时，应主动使用文件读取、写入、编辑、检索、命令执行和 MCP 工具。',
   '联网搜索、网页读取和常规非文件工具不需要先询问用户，直接执行并在结果中说明来源；涉及读取、写入、编辑用户文件、运行命令或访问系统目录时，遵循权限确认。',
-  '需要浏览器自动化、网页交互或截图校验时，优先使用 Playwright；Windows 安装版优先调用系统 Edge channel msedge。'
+  '需要浏览器自动化、网页交互或截图校验时，优先使用 Playwright；Windows 安装版优先调用系统 Edge channel msedge。',
+  '有限任务不要启动长期后台命令，除非用户明确要求后台运行；如命令被转入后台，必须立即查看输出、完成验证或停止该后台任务，不能把会话悬挂在等待状态。',
+  '只有在已经给出明确最终结论、交付物路径或阻塞原因后，任务才算完成；如果授权、文件、路径或外部系统仍未完成，应明确说明待继续状态。'
 ].join('\n');
 
 const ECOREX_AGENT_SYSTEM_PROMPT = [
@@ -585,14 +587,30 @@ function isInternalAgentOutputLine(value = '') {
   if (!text) return false;
   if (/^Launching skill:/i.test(text)) return true;
   if (/\bbridge:[a-z0-9_.:-]+\b/i.test(text) && /^Launching/i.test(text)) return true;
+  if (/^(?:TaskUpdate|正在整理工具参数|开始生成回复|回复生成完成)[。.]?$/i.test(text)) return true;
+  if (/^(?:Updated|Created|Deleted)\s+task\s+#?\d+\b/i.test(text)) return true;
+  if (/^Task\s+#?\d+\s+(?:updated|created|deleted)\b/i.test(text)) return true;
   if (/^[\d\s|:._=\-#\u2580-\u259f\u25a0-\u25a1\u25aa-\u25ab]+$/u.test(text) && text.length >= 16) return true;
   if (/^(?:\d+\s*)?[\u2580-\u259f\u25a0-\u25a1\u25aa-\u25ab#=_-]{8,}/u.test(text)) return true;
   return false;
 }
 
+function cleanAgentDisplayLine(value = '') {
+  let text = String(value || '').trimEnd();
+  const numberTokens = text.match(/(?:^|\s)\d{1,3}(?=\s|$)/g) || [];
+  if (numberTokens.length >= 3 && /(https?:\/\/|open\.feishu\.cn|execution[_\s-]?bridge|授权|配置|链接|打开)/i.test(text)) {
+    text = text.replace(/(^|\s)\d{1,3}(?=\s|$)/g, '$1').replace(/\s{2,}/g, ' ').trim();
+  }
+  return text
+    .replace(/execution\s+bridge(?=user_code=)/gi, 'execution_bridge?')
+    .replace(/execution\s+bridge(?=\?user_code=)/gi, 'execution_bridge')
+    .replace(/from=execution\s+bridge\b/gi, 'from=execution_bridge');
+}
+
 function stripInternalAgentOutput(value = '') {
   return String(value || '')
     .split(/\r?\n/)
+    .map((line) => cleanAgentDisplayLine(line))
     .filter((line) => !isInternalAgentOutputLine(line))
     .join('\n')
     .trim();
@@ -1666,11 +1684,7 @@ function seedBundledManagedSkillPacks() {
       const manifest = skillPluginManifest(source) || {};
       const name = sanitizeSkillPackName(manifest.name || path.basename(source));
       const mcpConfig = bundledSkillPackMcpConfig(source, name);
-      const destination = installDestinationForSkillPack(name);
       const previous = previousRows.find((row) => row.name === name || row.id === publicStableId('skillpack', name));
-      fs.rmSync(destination, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-      fs.mkdirSync(destination, { recursive: true });
-      copyDirectoryBounded(source, destination, { bytes: 0 });
       const record = normalizeManagedSkillPackRecord({
         id: publicStableId('skillpack', name),
         name,
@@ -1680,7 +1694,7 @@ function seedBundledManagedSkillPacks() {
         category: previous?.category || 'EcoreX',
         enabled: previous ? previous.enabled !== false : true,
         installed: true,
-        installPath: destination,
+        installPath: source,
         sourcePath: source,
         sourceKind: mcpConfig ? 'mcp-wrapper' : 'bundled-skill-collection',
         generatedWrapper: false,
@@ -1942,7 +1956,8 @@ function runtimePluginPathAllowed(pluginPath, backendRoot, pluginName = '') {
   const resolved = path.resolve(pluginPath);
   const managedNames = new Set(enabledManagedSkillPackNames());
   if (managedNames.has(name)) {
-    return isPathInside(managedSkillPacksDir(), resolved);
+    return isPathInside(managedSkillPacksDir(), resolved)
+      || isPathInside(bundledManagedSkillPacksRoot(), resolved);
   }
   if (!ECOREX_BUILTIN_PLUGIN_ALLOWLIST.has(name)) return false;
   return isPathInside(backendRoot, resolved);
@@ -5859,7 +5874,7 @@ function createWindow() {
     }
 
     const target = devRendererUrl();
-    const devRendererReady = await probeDevRenderer(target);
+    const devRendererReady = await probeDevRenderer(target, process.env.ECOREX_E2E === '1' ? 5000 : 1200);
     if (!devRendererReady && fs.existsSync(rendererEntryPath())) {
       writeLog('warn', 'Dev renderer server unavailable; falling back to built renderer', {
         target,
@@ -5991,6 +6006,7 @@ function publicAgentToolName(tool = '') {
   const rawName = typeof tool === 'string' ? tool : tool?.name;
   const name = publicProductText(String(rawName || '').trim());
   if (!name) return 'EcoreX 原生能力';
+  if (/^TaskUpdate$/i.test(name)) return '任务清单';
   if (/^mcp__/i.test(name)) return 'MCP';
   if (/^Skill$/i.test(name)) return 'SKILLS';
   if (/^ToolSearch$/i.test(name)) return 'ToolSearch';
@@ -6009,6 +6025,7 @@ function publicAgentToolLabel(tool = '') {
   if (/^WebFetch$/i.test(name)) return '读取网页';
   if (/^TodoWrite$/i.test(name)) return '更新任务清单';
   if (/^TodoRead$/i.test(name)) return '读取任务清单';
+  if (/^TaskUpdate$/i.test(name)) return '更新任务清单';
   if (/^Task$|^TaskCreate$|^SendMessage$/i.test(name)) return '调度子 Agent';
   if (/^Read$|^Grep$|^Glob$|^LS$|^NotebookRead$/i.test(name)) return '查看文件';
   if (/^Write$|^Edit$|^MultiEdit$|^NotebookEdit$/i.test(name)) return '准备修改文件';
@@ -6460,6 +6477,16 @@ function agentSessionHasUnresolvedAuthorization(entry = {}) {
   if (!startedOrWaiting) return false;
   const completed = /(授权成功|已授权|认证成功|登录成功|配置完成|login success|authenticated|authorization complete|token saved|current user|auth status.*ok|\"ok\"\s*:\s*true)/i.test(text);
   return !completed;
+}
+
+function agentSessionHasUnresolvedUserBlocker(entry = {}) {
+  const text = agentSessionPublicText(entry);
+  if (!text) return false;
+  return /(?:unable|cannot|can't|not able|blocked|waiting for user|need user|no input file|missing input|cannot determine|please.{0,40}(?:upload|provide|tell|share))|(?:\u65e0\u6cd5|\u4e0d\u80fd|\u6682\u65f6\u65e0\u6cd5).{0,80}(?:\u5b8c\u6210|\u751f\u6210|\u7ee7\u7eed|\u5224\u65ad)|(?:\u8bf7|\u9700\u8981).{0,40}(?:\u4e0a\u4f20|\u63d0\u4f9b|\u544a\u8bc9|\u8865\u5145|\u8def\u5f84|\u6587\u4ef6)/i.test(text);
+}
+
+function userBlockerAgentResultText() {
+  return '任务仍在等待用户补充文件、路径或授权信息，没有产生可用最终结果。EcoreX 已将本次任务标记为待继续。';
 }
 
 function incompleteAgentResultText() {
@@ -10371,16 +10398,7 @@ function normalizeClaudeEvent(sessionId, json) {
         };
       }
     }
-    if (streamType === 'content_block_delta' && delta.type === 'input_json_delta') {
-      return {
-        ...base,
-        kind: 'tool',
-        status: 'running',
-        toolName: '整理工具参数',
-        text: '正在整理工具参数',
-        contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined
-      };
-    }
+    if (streamType === 'content_block_delta' && delta.type === 'input_json_delta') return null;
     if (streamType === 'message_start') {
       return {
         ...base,
@@ -10959,7 +10977,8 @@ function runAgent(payload = {}, options = {}) {
       let finalStatus = code === 0 && !entry.claudeResultFailed ? 'completed' : 'failed';
       const incompleteResult = finalStatus === 'completed' && !agentSessionHasSubstantiveResult(entry);
       const authorizationIncomplete = finalStatus === 'completed' && agentSessionHasUnresolvedAuthorization(entry);
-      if (incompleteResult || authorizationIncomplete) finalStatus = 'failed';
+      const unresolvedUserBlocker = finalStatus === 'completed' && agentSessionHasUnresolvedUserBlocker(entry);
+      if (incompleteResult || authorizationIncomplete || unresolvedUserBlocker) finalStatus = 'failed';
       const sessionReuseConflict = finalStatus === 'failed' && /session id .*already in use/i.test(entry.lastStderr || '');
       const missingResumeTarget = finalStatus === 'failed' && /no conversation found with session id/i.test(entry.lastStderr || '');
       if (finalStatus === 'completed') markClaudeSessionLaunched(entry.claudeSessionId);
@@ -10968,12 +10987,14 @@ function runAgent(payload = {}, options = {}) {
       }
       const finalText = authorizationIncomplete
         ? authorizationIncompleteAgentResultText()
-        : incompleteResult
-          ? incompleteAgentResultText()
-          : undefined;
+        : unresolvedUserBlocker
+          ? userBlockerAgentResultText()
+          : incompleteResult
+            ? incompleteAgentResultText()
+            : undefined;
       finalizeAgentSession(sessionId, entry, {
         status: finalStatus,
-        reason: authorizationIncomplete ? 'authorization-incomplete' : incompleteResult ? 'incomplete-result' : undefined,
+        reason: authorizationIncomplete ? 'authorization-incomplete' : unresolvedUserBlocker ? 'user-action-required' : incompleteResult ? 'incomplete-result' : undefined,
         code,
         signal,
         text: finalText || (sessionReuseConflict
@@ -10990,6 +11011,7 @@ function runAgent(payload = {}, options = {}) {
         status: finalStatus,
         incompleteResult,
         authorizationIncomplete,
+        unresolvedUserBlocker,
         resultEventCount: Number(entry.resultEventCount) || 0,
         emptyResultEventCount: Number(entry.emptyResultEventCount) || 0,
         durationMs: Date.now() - entry.startedAt

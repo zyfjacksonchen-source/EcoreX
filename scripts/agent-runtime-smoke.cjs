@@ -206,10 +206,12 @@ check('transport stop and cleanup path', () => {
       'function substantiveAgentResultText',
       'function agentSessionHasSubstantiveResult',
       'function agentSessionHasUnresolvedAuthorization',
+      'function agentSessionHasUnresolvedUserBlocker',
       'function incompleteAgentResultText',
       'const incompleteResult = finalStatus ===',
       'const authorizationIncomplete = finalStatus ===',
-      "reason: authorizationIncomplete ? 'authorization-incomplete' : incompleteResult ? 'incomplete-result' : undefined",
+      'const unresolvedUserBlocker = finalStatus ===',
+      "reason: authorizationIncomplete ? 'authorization-incomplete' : unresolvedUserBlocker ? 'user-action-required' : incompleteResult ? 'incomplete-result' : undefined",
       'entry.hasSubstantiveResult = true'
     ],
     'agent incomplete result guard'
