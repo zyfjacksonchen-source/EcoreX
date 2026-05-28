@@ -9,130 +9,149 @@
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body class="tech-page">
-  <main>
-    <section class="tech-hero" aria-label="EcoreX Agent 技术说明">
-      <nav class="topbar" aria-label="页面导航">
-        <a class="brand" href="./index.html" aria-label="EcoreX Agent">
-          <img src="./assets/icon.png" alt="" />
-          <span>EcoreX</span>
-        </a>
-        <div class="nav-links">
-          <a class="nav-link" href="./index.html#download">下载</a>
-          <a class="nav-link active" href="./tech.html">技术说明</a>
-        </div>
-      </nav>
+  <header class="topbar floating-nav" aria-label="页面导航">
+    <a class="brand" href="./index.html" aria-label="EcoreX Agent">
+      <img src="./assets/icon.png" alt="" />
+      <span>EcoreX</span>
+    </a>
+    <div class="nav-links">
+      <a class="nav-link" href="./index.html#download">下载</a>
+      <a class="nav-link active" href="./tech.html">技术说明</a>
+    </div>
+  </header>
 
-      <div class="tech-hero-copy">
+  <nav class="slide-dots" aria-label="技术说明章节">
+    <a href="#slide-overview" aria-label="概览"></a>
+    <a href="#slide-stack" aria-label="系统分层"></a>
+    <a href="#slide-loop" aria-label="Agent LOOP"></a>
+    <a href="#slide-capability" aria-label="能力扩展"></a>
+    <a href="#slide-guardrail" aria-label="安全护栏"></a>
+    <a href="#slide-context" aria-label="项目隔离"></a>
+    <a href="#slide-release" aria-label="交付验证"></a>
+  </nav>
+
+  <main class="tech-deck" aria-label="EcoreX Agent 技术说明">
+    <section class="tech-slide cover-slide" id="slide-overview" data-slide="01">
+      <div class="slide-copy">
         <p class="eyebrow">技术说明</p>
         <h1>EcoreX Agent<br />技术架构</h1>
         <p class="lead">
-          EcoreX 是面向广告业务的 Electron + React 桌面 Agent。它把对话、项目文件、联网检索、
-          MCP、Skill、本地执行和安全确认组织成一个可恢复、可隔离、可审计的工作流。
+          面向广告业务的桌面 Agent，把对话、项目文件、联网检索、MCP、Skill、本地执行与安全确认组织成可恢复、可隔离、可审计的工作流。
         </p>
+        <div class="slide-tags">
+          <span>Electron</span>
+          <span>React</span>
+          <span>Agent LOOP</span>
+          <span>MCP / Skill</span>
+        </div>
+      </div>
+      <div class="slide-visual workspace-visual" aria-hidden="true">
+        <img src="./assets/ecorex-app-preview.png?v=20260528-deck" alt="" />
       </div>
     </section>
 
-    <section class="tech-section">
-      <div class="tech-heading">
-        <p class="section-kicker">系统分层</p>
+    <section class="tech-slide" id="slide-stack" data-slide="02">
+      <div class="slide-copy">
+        <p class="eyebrow">系统分层</p>
         <h2>前端负责体验，主进程负责边界，本地执行层负责闭环。</h2>
       </div>
-      <div class="tech-grid">
-        <article class="tech-card">
-          <span>01</span>
-          <h3>React 交互层</h3>
-          <p>使用 React 构建桌面对话、项目管理、文件引用、富文本产物、权限弹窗、设置页和预览面板。页面状态围绕会话、项目、任务树和产物卡片组织，支持多会话并行运行时的前台切换。</p>
-        </article>
-        <article class="tech-card">
-          <span>02</span>
-          <h3>Electron 主进程</h3>
-          <p>主进程承接窗口、IPC、文件系统、系统打开、会话恢复、账号权限、模型配置、MCP/Skill 管理和安全策略。渲染层只通过受控 API 请求能力，避免直接越权访问本机资源。</p>
-        </article>
-        <article class="tech-card">
-          <span>03</span>
-          <h3>本地执行引擎</h3>
-          <p>执行层按任务目标调度搜索、文件读写、终端命令、文档生成、图片生成和外部能力调用。它负责把模型输出转成可执行步骤，并把中间状态同步回会话时间线。</p>
-        </article>
-        <article class="tech-card">
-          <span>04</span>
-          <h3>数据与产物层</h3>
-          <p>项目资料、会话历史、任务状态和生成产物按作用域持久化。项目会话只检索当前项目文件，通用会话不混入项目私有资料，关闭或重启后仍可继续查看历史和已生成文件。</p>
-        </article>
+      <div class="stack-grid">
+        <article><span>01</span><strong>React 交互层</strong><p>承载对话、项目管理、文件引用、富文本产物、权限弹窗、设置页和预览面板。</p></article>
+        <article><span>02</span><strong>Electron 主进程</strong><p>管理窗口、IPC、文件系统、系统打开、账号角色、模型配置、MCP 与 Skill 状态。</p></article>
+        <article><span>03</span><strong>本地执行引擎</strong><p>把模型计划转成文件、终端、联网、文档、图片和外部能力调用。</p></article>
+        <article><span>04</span><strong>数据与产物层</strong><p>按作用域保存项目资料、会话历史、任务状态和可再次打开的生成产物。</p></article>
       </div>
     </section>
 
-    <section class="tech-section split">
-      <div class="tech-heading">
-        <p class="section-kicker">Agent LOOP</p>
-        <h2>每个任务都按观察、规划、执行、校验、沉淀循环推进。</h2>
+    <section class="tech-slide" id="slide-loop" data-slide="03">
+      <div class="slide-copy">
+        <p class="eyebrow">Agent LOOP</p>
+        <h2>每个任务沿着观察、规划、执行、校验、沉淀循环推进。</h2>
       </div>
-      <ol class="loop-list">
+      <ol class="loop-track">
         <li><strong>Observe</strong><span>读取用户目标、项目上下文、可用文件、权限模式和已配置能力。</span></li>
-        <li><strong>Plan</strong><span>拆解任务树，决定是否需要联网检索、MCP、Skill、终端或文档工具。</span></li>
-        <li><strong>Act</strong><span>串行或并发调用工具，生成中间结果，并把关键进度回写到会话。</span></li>
-        <li><strong>Verify</strong><span>检查文件是否存在、格式是否可打开、预览是否可读、任务状态是否完成。</span></li>
-        <li><strong>Persist</strong><span>保存会话、产物、项目索引和可恢复状态，支持切换会话或重启后续跑。</span></li>
+        <li><strong>Plan</strong><span>拆解任务树，选择联网检索、MCP、Skill、终端或文档工具。</span></li>
+        <li><strong>Act</strong><span>串行或并发执行工具，把关键进度持续回写到会话。</span></li>
+        <li><strong>Verify</strong><span>检查文件、格式、预览、任务状态和用户可见结果。</span></li>
+        <li><strong>Persist</strong><span>保存会话、产物、项目索引和恢复点，支持切换会话后续跑。</span></li>
       </ol>
     </section>
 
-    <section class="tech-section">
-      <div class="tech-heading">
-        <p class="section-kicker">能力扩展</p>
+    <section class="tech-slide" id="slide-capability" data-slide="04">
+      <div class="slide-copy">
+        <p class="eyebrow">能力扩展</p>
         <h2>MCP 与 Skill 只从 EcoreX 托管范围内启用。</h2>
       </div>
-      <div class="tech-columns">
-        <article>
-          <h3>MCP 接入</h3>
-          <p>系统设置页展示真实 MCP 状态、启用状态、错误和连接信息。任务运行时按能力匹配优先调用，例如表格类任务优先走 Excel MCP，避免只生成普通文件而不调用专业工具。</p>
-        </article>
-        <article>
-          <h3>Skill 路由</h3>
-          <p>Skill 用于封装高阶业务流程，例如 PPT 生成、广告复盘、项目资料整理等。EcoreX 会屏蔽本机个人编程插件类能力，只加载内置能力和在 Skill 管理中明确出现的托管能力。</p>
-        </article>
-        <article>
-          <h3>模型与多模态</h3>
-          <p>模型配置与执行适配在主进程集中管理。文本、联网、文档和图片生成使用不同能力路径，图片生成默认走图像模型能力，并将生成图片直接回填到聊天富文本和产物区。</p>
-        </article>
+      <div class="three-panel">
+        <article><strong>MCP 接入</strong><p>设置页展示真实连接、启用、授权与错误状态。表格类任务优先走 Excel MCP，避免只生成普通文件。</p></article>
+        <article><strong>Skill 路由</strong><p>封装 PPT、广告复盘、资料整理等高阶流程，并屏蔽本机个人编程插件类能力。</p></article>
+        <article><strong>多模态模型</strong><p>文本、联网、文档和图片生成分别走适配后的能力路径，图片直接进入聊天富文本与产物区。</p></article>
       </div>
     </section>
 
-    <section class="tech-section">
-      <div class="tech-heading">
-        <p class="section-kicker">安全护栏</p>
-        <h2>所有本地能力都围绕最小权限、可见确认和路径边界设计。</h2>
+    <section class="tech-slide" id="slide-guardrail" data-slide="05">
+      <div class="slide-copy">
+        <p class="eyebrow">安全护栏</p>
+        <h2>本地能力围绕最小权限、可见确认和路径边界设计。</h2>
       </div>
       <div class="guardrail-grid">
-        <div><strong>权限模式</strong><span>默认权限、完全访问等模式由用户显式选择，高风险动作通过弹窗确认。</span></div>
-        <div><strong>路径边界</strong><span>项目文件、产物、中间文件和系统目录按作用域校验，避免跨项目污染。</span></div>
-        <div><strong>命令治理</strong><span>命令执行会过滤无关或危险参数，并把用户无关的底层噪声从对话中清理。</span></div>
-        <div><strong>账号角色</strong><span>本地账号、管理员角色、设置权限和能力管理权限分离，降低误操作风险。</span></div>
-        <div><strong>会话恢复</strong><span>任务中断、关闭应用或切换会话后，已生成产物保留，任务可在原会话恢复。</span></div>
-        <div><strong>发布清理</strong><span>打包时排除日志、密钥、测试会话、个人能力包和本地脏文件，保证安装包干净。</span></div>
+        <div><strong>权限模式</strong><span>默认权限、完全访问等模式由用户显式选择，高风险动作弹窗确认。</span></div>
+        <div><strong>路径边界</strong><span>项目文件、产物、中间文件和系统目录按作用域校验。</span></div>
+        <div><strong>命令治理</strong><span>过滤无关或危险参数，清理用户无关的底层噪声。</span></div>
+        <div><strong>账号角色</strong><span>本地账号、管理员角色、设置权限和能力管理权限分离。</span></div>
+        <div><strong>会话恢复</strong><span>任务中断或重启后，已生成产物保留并可在原会话恢复。</span></div>
+        <div><strong>发布清理</strong><span>排除日志、密钥、测试会话、个人能力包和本地脏文件。</span></div>
       </div>
     </section>
 
-    <section class="tech-section split">
-      <div class="tech-heading">
-        <p class="section-kicker">文件与项目</p>
+    <section class="tech-slide" id="slide-context" data-slide="06">
+      <div class="slide-copy">
+        <p class="eyebrow">文件与项目</p>
         <h2>项目是记忆、文件、会话和产物的隔离边界。</h2>
       </div>
-      <div class="tech-note">
-        <p>项目管理支持上传项目资料、维护长期记忆、查看资源树，并在项目对话中通过 @ 引用文件。文档、表格、演示文稿、PDF、HTML、文本和图片会生成产物卡片，优先在 EcoreX 内预览，必要时调用系统方式打开。</p>
-        <p>通用对话不主动查询项目文件；项目对话只检索当前项目的主动上传文件和已生成产物。中间产物、记忆文件和运行缓存不会作为用户可选项目资料展示。</p>
+      <div class="context-layout">
+        <article><strong>项目资料</strong><p>上传资料、长期记忆和生成产物进入项目资源树，并可在项目对话中通过 @ 引用。</p></article>
+        <article><strong>通用对话</strong><p>通用会话不主动查询项目私有文件，避免测试项目资料混入公共历史。</p></article>
+        <article><strong>产物预览</strong><p>文档、表格、演示文稿、PDF、HTML、文本和图片生成产物卡片，优先在 EcoreX 内预览。</p></article>
       </div>
     </section>
 
-    <section class="tech-section release">
-      <div>
-        <p class="section-kicker">交付验证</p>
+    <section class="tech-slide final-slide" id="slide-release" data-slide="07">
+      <div class="slide-copy">
+        <p class="eyebrow">交付验证</p>
         <h2>上线前覆盖构建、生产校验、打包输入和发布洁净度。</h2>
-        <p>Windows 与 macOS 使用 Electron Builder 产出安装包；发布流程会执行构建、生产检查、原生依赖检查、文档预览依赖检查和安装包洁净度检查，确保用户开箱即用。</p>
+        <p class="lead">
+          Windows 与 macOS 使用 Electron Builder 产出安装包；发布流程执行构建、生产检查、原生依赖检查、文档预览依赖检查和安装包洁净度检查。
+        </p>
+        <a class="download compact" href="./index.html#download">
+          <span>返回下载</span>
+          <small>获取当前版本</small>
+        </a>
       </div>
-      <a class="download compact" href="./index.html#download">
-        <span>返回下载</span>
-        <small>获取当前版本</small>
-      </a>
     </section>
   </main>
+
+  <script>
+    const slides = [...document.querySelectorAll('.tech-slide')];
+    const dots = [...document.querySelectorAll('.slide-dots a')];
+    const setActive = (id) => {
+      dots.forEach((dot) => dot.classList.toggle('active', dot.getAttribute('href') === `#${id}`));
+    };
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries.filter((entry) => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+      if (visible) setActive(visible.target.id);
+    }, { threshold: [0.5, 0.7] });
+    slides.forEach((slide) => observer.observe(slide));
+    setActive(slides[0].id);
+    window.addEventListener('keydown', (event) => {
+      if (!['ArrowDown', 'ArrowRight', 'PageDown', 'ArrowUp', 'ArrowLeft', 'PageUp'].includes(event.key)) return;
+      const current = slides.findIndex((slide) => `#${slide.id}` === location.hash) >= 0
+        ? slides.findIndex((slide) => `#${slide.id}` === location.hash)
+        : dots.findIndex((dot) => dot.classList.contains('active'));
+      const delta = ['ArrowDown', 'ArrowRight', 'PageDown'].includes(event.key) ? 1 : -1;
+      const next = Math.max(0, Math.min(slides.length - 1, current + delta));
+      slides[next].scrollIntoView({ behavior: 'smooth' });
+    });
+  </script>
 </body>
 </html>
