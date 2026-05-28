@@ -748,11 +748,22 @@ function looksLikeNoisyLocalPath(value = '') {
   return false;
 }
 
+function isInternalAgentOutputLine(value = '') {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  if (/^Launching skill:/i.test(text)) return true;
+  if (/\bbridge:[a-z0-9_.:-]+\b/i.test(text) && /^Launching/i.test(text)) return true;
+  if (/^[\d\s|:._=\-#\u2580-\u259f\u25a0-\u25a1\u25aa-\u25ab]+$/u.test(text) && text.length >= 16) return true;
+  if (/^(?:\d+\s*)?[\u2580-\u259f\u25a0-\u25a1\u25aa-\u25ab#=_-]{8,}/u.test(text)) return true;
+  return false;
+}
+
 function cleanPublicAgentText(value = '', { dropPathLines = true } = {}) {
   return String(value || '')
     .split(/\r?\n/)
     .map((line) => line.trimEnd())
     .filter((line) => !(dropPathLines && looksLikeNoisyLocalPath(line)))
+    .filter((line) => !isInternalAgentOutputLine(line))
     .join('\n')
     .replace(/\[EcoreX capability running\]/gi, 'EcoreX 正在调用原生能力')
     .replace(/\bClaude\s*Code\s*CLI\b/gi, 'EcoreX')
@@ -817,6 +828,12 @@ function normalizeToolLedgerItem(raw = {}, event = {}, index = 0) {
   };
 }
 
+function isNoisyToolLedgerItem(item = {}) {
+  const body = cleanPublicAgentText([item.action, item.output, item.detail].filter(Boolean).join('\n'), { dropPathLines: true }).trim();
+  if (!body && /^(?:工具返回结果|工具调用)$/i.test(String(item.toolName || '').trim())) return true;
+  return [item.action, item.output, item.detail].some(isInternalAgentOutputLine);
+}
+
 function normalizeToolLedgerItemsFromEvent(event = {}) {
   const sources = [];
   if (Array.isArray(event.ledger)) sources.push(...event.ledger);
@@ -838,6 +855,7 @@ function normalizeToolLedgerItemsFromEvent(event = {}) {
   return sources
     .filter(Boolean)
     .map((source, index) => normalizeToolLedgerItem(source, event, index))
+    .filter((item) => !isNoisyToolLedgerItem(item))
     .filter((item) => {
       const key = `${item.id}:${item.toolName}:${item.action}:${item.status}`;
       if (seen.has(key)) return false;
@@ -7187,6 +7205,13 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
 
   return (
     <div className={`chat-layout ${focusArtifact ? 'preview-focus' : 'chat-only'}`}>
+      <RunningSessionStrip
+        sessions={runningSessions}
+        currentSessionId={currentSessionId}
+        onSelect={selectRunningSession}
+        onStop={cancelPrompt}
+        onOpenSessions={() => setPage?.('settings')}
+      />
       <section className="chat-main panel">
         <HeaderBar
           title="EcoreX"
@@ -7194,13 +7219,6 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           subtitle="面向广告投放、素材创意、预算优化、归因分析与客户项目协同的自主思考型助手"
           backendStatus={backendStatus}
           onRefresh={refreshBackend}
-        />
-        <RunningSessionStrip
-          sessions={runningSessions}
-          currentSessionId={currentSessionId}
-          onSelect={selectRunningSession}
-          onStop={cancelPrompt}
-          onOpenSessions={() => setPage?.('settings')}
         />
 
         <div className="messages" ref={messageListRef}>
@@ -7765,6 +7783,7 @@ function inlineToolResultText(item = {}) {
   const raw = item.output || item.detail || item.action || '';
   const text = compactEventDetail(cleanPublicAgentText(raw, { dropPathLines: true }), 520);
   if (!text || text.length < 18) return '';
+  if (isInternalAgentOutputLine(text)) return '';
   if (/^(?:WebSearch|WebFetch|Read|Bash|PowerShell|TodoWrite|TodoRead|Grep|Glob|LS)\s+(?:completed|running|done)$/i.test(text)) return '';
   if (/^large ledger tool \d+/i.test(text)) return '';
   if (looksLikeNoisyLocalPath(text)) return '';
@@ -7790,7 +7809,10 @@ function ToolResultInline({ items = [] }) {
 function ToolLedgerDisclosure({ items = [] }) {
   const [expanded, setExpanded] = useState(false);
   const ledgerItems = useMemo(() => (
-    (Array.isArray(items) ? items : []).filter(Boolean).slice(-MAX_STORED_LEDGER_ITEMS)
+    (Array.isArray(items) ? items : [])
+      .filter(Boolean)
+      .filter((item) => !isNoisyToolLedgerItem(item))
+      .slice(-MAX_STORED_LEDGER_ITEMS)
   ), [items]);
   const latest = ledgerItems.at(-1);
   const visibleItems = useMemo(() => (expanded ? ledgerItems.slice(-10) : []), [expanded, ledgerItems]);

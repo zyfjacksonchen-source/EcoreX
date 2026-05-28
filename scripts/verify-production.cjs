@@ -859,7 +859,6 @@ check('agent runtime production guardrails', () => {
       "'--resume'",
       'claudeSessionId',
       'contextManagement',
-      'const CLAUDE_AUTO_ALLOWED_TOOL_SET',
       'const ECOREX_BUILTIN_PLUGIN_ALLOWLIST',
       'const ECOREX_GENERAL_WORKSPACE_DIR_NAME',
       'const BUNDLED_MANAGED_SKILL_PACKS_DIR_NAME',
@@ -868,12 +867,13 @@ check('agent runtime production guardrails', () => {
       'ECOREX_GENERAL_CHAT_ISOLATION_PROMPT',
       'function generalAgentWorkspaceDir',
       'function seedBundledManagedSkillPacks',
+      'function packagedNodeModulesDir',
+      'function nodeToolPathEntries',
       'function managedToolPathEntries',
       'function larkCliConfigDir',
       'function allowedRuntimePluginNames',
       "'--tools'",
-      "'--allowedTools'",
-      'CLAUDE_AUTO_ALLOWED_TOOL_SET'
+      'nativeToolMode'
     ],
     'agent runtime guardrails'
   );
@@ -885,6 +885,7 @@ check('agent runtime production guardrails', () => {
   assertNotMatches(main, /CLAUDE_CODE_SIMPLE:\s*'1'/, 'agent runtime must not force simple mode because it hides WebSearch, Skill, Todo and PowerShell tools.');
   assertMatches(main, /function isolatedAgentRuntimeEnv\(authContext = null\)[\s\S]*HOME:\s*configDir[\s\S]*USERPROFILE:\s*configDir[\s\S]*APPDATA:\s*appDataDir[\s\S]*LOCALAPPDATA:\s*localAppDataDir[\s\S]*LARKSUITE_CLI_CONFIG_DIR:\s*larkConfigDir/, 'agent runtime must isolate home/appdata and Feishu auth config so local skills and MCP state are not inherited.');
   assertMatches(main, /PATH:\s*managedToolPath[\s\S]*Path:\s*managedToolPath/, 'agent runtime PATH must include EcoreX managed tools.');
+  assertMatches(main, /if \(nodeModulesDir\) \{[\s\S]*env\.NODE_PATH = nodeModulesDir[\s\S]*env\.ECOREX_NODE_MODULES_DIR = nodeModulesDir/, 'agent runtime must expose packaged Node modules for Playwright and local JS tools.');
   assertMatches(main, /handleSafe\('agent:run',\s*\(event,\s*payload,\s*authContext\) => runAgent\(payload,\s*\{ ownerId:\s*event\.sender\.id,\s*authContext \}\)/, 'agent runs must receive auth context for per-user managed tool auth.');
   assertMatches(main, /function collectManagedSkillInventory[\s\S]*seedBundledManagedSkillPacks\(\)/, 'managed skill inventory must seed bundled EcoreX skill packs.');
   assertMatches(main, /const projectContextDisabled = payload\.disableProjectContext === true \|\| !payload\.projectId/, 'general chat runs must not inherit the last active project.');
@@ -905,19 +906,15 @@ check('agent runtime production guardrails', () => {
   assertMatches(main, /child\.stdin\.end\(`\$\{prompt\}\\n`\)/, 'agent prompt must be written to stdin.');
   assertNotMatches(main, /args\.push\(\s*prompt\s*\)|spawn\([^)]*prompt/s, 'agent prompt must not be passed through process argv.');
   assert(/const profile = store\.profiles\.find\(\(item\) => item\.model === normalizedModel\) \|\| null/.test(main), 'model profile env must only match the selected model exactly.');
-  assertMatches(main, /default:\s*\{[\s\S]*?permissionMode:\s*'auto'[\s\S]*?cliMode:\s*'auto'/, 'default permission mode must use Claude auto mode for low-risk tool calls.');
-  assertMatches(main, /const CLAUDE_AUTO_ALLOWED_TOOL_SET = 'WebFetch,WebSearch,Task,TodoRead,TodoWrite,mcp__\*'/, 'auto allowed tools must be limited to web and low-risk tools.');
-  const autoAllowedTools = (main.match(/const CLAUDE_AUTO_ALLOWED_TOOL_SET = '([^']*)'/)?.[1] || '').split(',').map((tool) => tool.trim()).filter(Boolean);
-  for (const forbiddenTool of ['Bash', 'Read', 'Write', 'Edit', 'MultiEdit', 'NotebookRead', 'NotebookEdit', 'Glob', 'Grep', 'LS']) {
-    assert(!autoAllowedTools.includes(forbiddenTool), `file and command tool ${forbiddenTool} must not be auto-allowed.`);
-  }
+  assertMatches(main, /default:\s*\{[\s\S]*?permissionMode:\s*'auto'[\s\S]*?cliMode:\s*'auto'/, 'default permission mode must use auto mode while preserving the full native tool surface.');
+  assertNotMatches(main, /CLAUDE_AUTO_ALLOWED_TOOL_SET|'--allowedTools'|"--allowedTools"/, 'agent runtime must not narrow the native tool surface with an allowedTools whitelist.');
   assertMatches(main, /sanitizeClaudeSessionId\(payload\.claudeSessionId \|\| payload\.conversationId,\s*payload\.sessionId\)/, 'Claude session id must be stable for frontend conversations with session fallback.');
   assertMatches(main, /const claudeResumeExistingSession = claudeSessionTranscriptExists\(claudeSessionId\)/, 'Claude session reuse must detect existing CLI transcripts.');
   assertMatches(main, /if \(claudeResumeExistingSession\) \{\s*args\.push\('--resume', claudeSessionId\);\s*\} else \{\s*args\.push\('--session-id', claudeSessionId\);/s, 'Claude CLI must resume existing sessions and only create new sessions with --session-id.');
   assertMatches(main, /entry\.claudeSessionId === requestedClaudeSessionId/, 'parallel starts for the same Claude session must be blocked before spawning.');
   assertMatches(main, /function refreshClaudeSessionTranscriptSeen[\s\S]*findClaudeSessionTranscript\(sessionId\)[\s\S]*claudeTranscriptExistenceCache\.delete\(sessionId\)/, 'Claude resume cache must verify transcript files and clear stale resume state.');
-  assertMatches(main, /let finalStatus = code === 0 && !entry\.claudeResultFailed \? 'completed' : 'failed'[\s\S]*const incompleteResult = finalStatus === 'completed' && !agentSessionHasSubstantiveResult\(entry\)[\s\S]*if \(incompleteResult\) finalStatus = 'failed'/, 'Claude sessions must not report completed when no substantive result was returned.');
-  assertMatches(main, /function substantiveAgentResultText[\s\S]*function agentSessionHasSubstantiveResult[\s\S]*function incompleteAgentResultText/, 'agent completion must distinguish process exit from usable final output.');
+  assertMatches(main, /let finalStatus = code === 0 && !entry\.claudeResultFailed \? 'completed' : 'failed'[\s\S]*const incompleteResult = finalStatus === 'completed' && !agentSessionHasSubstantiveResult\(entry\)[\s\S]*const authorizationIncomplete = finalStatus === 'completed' && agentSessionHasUnresolvedAuthorization\(entry\)[\s\S]*if \(incompleteResult \|\| authorizationIncomplete\) finalStatus = 'failed'/, 'Claude sessions must not report completed when no substantive result or pending authorization remains.');
+  assertMatches(main, /function substantiveAgentResultText[\s\S]*function agentSessionHasSubstantiveResult[\s\S]*function agentSessionHasUnresolvedAuthorization[\s\S]*function incompleteAgentResultText/, 'agent completion must distinguish process exit from usable final output and unfinished authorization.');
   assertMatches(main, /recordSessionEvent[\s\S]*normalized\.kind === 'result'[\s\S]*entry\.hasSubstantiveResult = true/, 'result events must mark whether the task produced a substantive final answer.');
   assertNotMatches(main, /child\.on\('close'[\s\S]{0,600}markClaudeSessionTranscriptSeen\(entry\.claudeSessionId\)/, 'agent close must not blindly mark failed or missing Claude transcripts as resumable.');
   assertMatches(main, /streamType === 'error'[\s\S]*claudeResultStatus:\s*'failed'/, 'stream-json error events must be surfaced as failed agent events.');
@@ -1319,6 +1316,7 @@ check('chat state tree and critical front-end affordances', () => {
       'function RichMessageText',
       'function ChatExternalLink',
       'function ChatInlineMedia',
+      'function isInternalAgentOutputLine',
       'chatMediaKind(safeUrl)',
       'openExternalUrlWithBridge(safeUrl)',
       'function stageTransferredInput',
@@ -1329,6 +1327,9 @@ check('chat state tree and critical front-end affordances', () => {
     'chat state tree and artifact focus layout'
   );
   includesAll(app, ["replace(/\\bClaude\\s*Code\\s*CLI\\b/gi, 'EcoreX')", "replace(/\\bClaude\\b/gi, 'EcoreX')"], 'assistant-visible product naming sanitizer');
+  assertMatches(app, /<RunningSessionStrip[\s\S]*<section className="chat-main panel">/, 'running session strip must render outside the chat message panel.');
+  assertNotMatches(app, /<section className="chat-main panel">[\s\S]{0,900}<RunningSessionStrip/, 'running session strip must not appear inside the chat panel.');
+  assertMatches(app, /function cleanPublicAgentText[\s\S]*isInternalAgentOutputLine/, 'chat renderer must suppress internal launch/progress noise from assistant text.');
   assert(!app.includes('setRailExpanded((next) => !next)'), 'chat main must not keep the removed quick project right rail toggle.');
   assert(!app.includes('<aside className={`right-rail'), 'chat main must not render the removed quick project right rail.');
   includesAll(app, ['function finalArtifactsFromText', "source: 'assistant-final'", 'finalArtifacts: mergeArtifactReferences', 'message.finalArtifacts || []', 'function isExplicitLocalArtifactPathToken'], 'final deliverable artifact extraction');
@@ -1608,11 +1609,13 @@ check('package build config excludes local model/secrets storage', () => {
   assert(build.files.includes('dist/**/*'), 'build.files must include dist.');
   assert(build.files.includes('electron/**/*'), 'build.files must include electron.');
   assert(build.files.includes('node_modules/@anthropic-ai/claude-code/**/*'), 'build.files must include the packaged agent runtime.');
+  assertIncludesPatterns(build.files, ['node_modules/@playwright/test/**/*', 'node_modules/playwright/**/*', 'node_modules/playwright-core/**/*'], 'build.files Playwright runtime');
   assert(build.win?.icon === 'build/icon.ico', 'Windows app icon must use the EcoreX brand icon.');
   assertExistingFile(rel('build/icon.ico'), 'Windows EcoreX icon');
   assertIncludesPatterns(build.files, REQUIRED_LOCAL_STATE_EXCLUSIONS, 'build.files');
   assert(Array.isArray(build.asarUnpack), 'build.asarUnpack must be an array.');
   assert(build.asarUnpack.includes('node_modules/@anthropic-ai/claude-code/bin/**/*'), 'build.asarUnpack must unpack the agent runtime executable.');
+  assertIncludesPatterns(build.asarUnpack, ['node_modules/@playwright/test/**/*', 'node_modules/playwright/**/*', 'node_modules/playwright-core/**/*'], 'build.asarUnpack Playwright runtime');
   assertNoSecretOrModelStoragePaths([...(build.files || []), ...(build.extraResources || []).map((item) => item.from || item.to || '')], 'build config');
   assert(build.nsis?.oneClick === false, 'NSIS installer must be assisted so users can choose install options.');
   assert(build.nsis?.include === 'build/installer.nsh', 'NSIS installer must include custom uninstall shortcut script.');
@@ -1649,15 +1652,23 @@ check('package build config excludes local model/secrets storage', () => {
   const managedSkillResource = extraResources.find((item) => String(item.to || '').replace(/\\/g, '/') === 'managed-skill-packs');
   assert(managedSkillResource, 'bundled managed skill-packs resource must be configured.');
   assert(managedSkillResource.from === 'build/managed-skill-packs', 'bundled managed skill-packs must come from build/managed-skill-packs.');
-  assertIncludesPatterns(managedSkillResource.filter, ['agent-skill-creator/**/*', 'lark-cli/**/*', '!**/.env', '!**/.env.*', '!**/*.log'], 'managed skill-packs extraResources.filter');
+  assertIncludesPatterns(managedSkillResource.filter, ['agent-skill-creator/**/*', 'lark-cli/**/*', 'ppt-master/**/*', 'excel-mcp-server/**/*', '!**/.env', '!**/.env.*', '!**/*.log'], 'managed skill-packs extraResources.filter');
   const managedToolResource = extraResources.find((item) => String(item.to || '').replace(/\\/g, '/') === 'managed-tools');
   assert(managedToolResource, 'bundled managed tools resource must be configured.');
   assert(managedToolResource.from === 'build/managed-tools', 'bundled managed tools must come from build/managed-tools.');
   assertIncludesPatterns(managedToolResource.filter, ['lark-cli/**/*', '!**/.env', '!**/.env.*', '!**/*.log'], 'managed tools extraResources.filter');
+  const playwrightBinResource = extraResources.find((item) => String(item.to || '').replace(/\\/g, '/') === 'app.asar.unpacked/node_modules/.bin');
+  assert(playwrightBinResource, 'Playwright CLI wrappers must be copied into unpacked node_modules .bin.');
+  assert(playwrightBinResource.from === 'node_modules/.bin', 'Playwright CLI wrappers must come from node_modules/.bin.');
+  assertIncludesPatterns(playwrightBinResource.filter, ['playwright*', '!**/.env', '!**/.env.*', '!**/*.log'], 'Playwright CLI wrapper extraResources.filter');
   assertExistingFile(rel('build/managed-skill-packs/lark-cli/.claude-plugin/plugin.json'), 'prepared Feishu skill manifest');
   assertExistingFile(rel('build/managed-skill-packs/lark-cli/skills/lark-shared/SKILL.md'), 'prepared Feishu shared skill');
   assertExistingFile(rel('build/managed-skill-packs/agent-skill-creator/.claude-plugin/plugin.json'), 'prepared Agent Skill Creator manifest');
   assertExistingFile(rel('build/managed-skill-packs/agent-skill-creator/skills/agent-skill-creator/SKILL.md'), 'prepared Agent Skill Creator skill');
+  assertExistingFile(rel('build/managed-skill-packs/ppt-master/.claude-plugin/plugin.json'), 'prepared PPT Master manifest');
+  assertExistingFile(rel('build/managed-skill-packs/ppt-master/ppt-master/SKILL.md'), 'prepared PPT Master skill');
+  assertExistingFile(rel('build/managed-skill-packs/excel-mcp-server/.claude-plugin/plugin.json'), 'prepared Excel MCP manifest');
+  assertExistingFile(rel('build/managed-skill-packs/excel-mcp-server/skills/excel-mcp-server/mcp-config.json'), 'prepared Excel MCP config');
   assertExistingFile(rel('build/managed-tools/lark-cli/lark-cli.exe'), 'prepared Feishu CLI executable', 1024 * 1024);
 });
 
@@ -1772,9 +1783,37 @@ check('release artifacts are coherent when present', () => {
       'release bundled Agent Skill Creator skill'
     );
     assertExistingFile(
+      path.join(resourcesDir, 'managed-skill-packs', 'ppt-master', '.claude-plugin', 'plugin.json'),
+      'release bundled PPT Master manifest'
+    );
+    assertExistingFile(
+      path.join(resourcesDir, 'managed-skill-packs', 'ppt-master', 'ppt-master', 'SKILL.md'),
+      'release bundled PPT Master skill'
+    );
+    assertExistingFile(
+      path.join(resourcesDir, 'managed-skill-packs', 'excel-mcp-server', '.claude-plugin', 'plugin.json'),
+      'release bundled Excel MCP manifest'
+    );
+    assertExistingFile(
+      path.join(resourcesDir, 'managed-skill-packs', 'excel-mcp-server', 'skills', 'excel-mcp-server', 'mcp-config.json'),
+      'release bundled Excel MCP config'
+    );
+    assertExistingFile(
       path.join(resourcesDir, 'managed-tools', 'lark-cli', 'lark-cli.exe'),
       'release bundled Feishu CLI executable',
       1024 * 1024
+    );
+    assertExistingFile(
+      path.join(resourcesDir, 'app.asar.unpacked', 'node_modules', 'playwright', 'package.json'),
+      'release unpacked Playwright runtime'
+    );
+    assertExistingFile(
+      path.join(resourcesDir, 'app.asar.unpacked', 'node_modules', 'playwright', 'node_modules', 'playwright-core', 'package.json'),
+      'release unpacked Playwright core runtime'
+    );
+    assertExistingFile(
+      path.join(resourcesDir, 'app.asar.unpacked', 'node_modules', '.bin', process.platform === 'win32' ? 'playwright.cmd' : 'playwright'),
+      'release unpacked Playwright CLI wrapper'
     );
     const unpackedClaudeWrapper = path.join(
       resourcesDir,

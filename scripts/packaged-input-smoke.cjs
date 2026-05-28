@@ -63,7 +63,7 @@ function getJson(url) {
 }
 
 async function waitForDebugPort(port) {
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + 90_000;
   let lastError = null;
   while (Date.now() < deadline) {
     try {
@@ -77,7 +77,7 @@ async function waitForDebugPort(port) {
 }
 
 async function findAppPage(browser) {
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + 90_000;
   while (Date.now() < deadline) {
     const pages = browser.contexts().flatMap((context) => context.pages());
     for (const page of pages) {
@@ -180,11 +180,54 @@ async function main() {
           larkInstalled: installedNames.includes('lark-cli'),
           larkSharedLoaded: childNames.includes('lark-shared'),
           skillCreatorInstalled: installedNames.includes('agent-skill-creator'),
-          skillCreatorLoaded: childNames.includes('agent-skill-creator')
+          skillCreatorLoaded: childNames.includes('agent-skill-creator'),
+          pptMasterInstalled: installedNames.includes('ppt-master'),
+          pptMasterLoaded: childNames.includes('ppt-master'),
+          excelMcpInstalled: installedNames.includes('excel-mcp-server'),
+          excelMcpLoaded: childNames.includes('excel-mcp-server')
         };
       });
-      if (!skillValues.ok || !skillValues.larkInstalled || !skillValues.larkSharedLoaded || !skillValues.skillCreatorInstalled || !skillValues.skillCreatorLoaded) {
+      if (!skillValues.ok || !skillValues.larkInstalled || !skillValues.larkSharedLoaded || !skillValues.skillCreatorInstalled || !skillValues.skillCreatorLoaded || !skillValues.pptMasterInstalled || !skillValues.pptMasterLoaded || !skillValues.excelMcpInstalled || !skillValues.excelMcpLoaded) {
         throw new Error(`Packaged bundled skills did not seed correctly: ${JSON.stringify(skillValues)}`);
+      }
+
+      const mcpValues = await page.evaluate(async () => {
+        const result = await window.ecorex?.listMcpServers?.({ refresh: true });
+        const services = result?.services || result?.servers || [];
+        return {
+          ok: result?.ok === true,
+          names: services.map((item) => item?.packageName || item?.name).filter(Boolean),
+          excelConfigured: services.some((item) => item?.packageName === 'excel-mcp-server' || item?.name === 'Excel MCP Server')
+        };
+      });
+      if (!mcpValues.ok || !mcpValues.excelConfigured) {
+        throw new Error(`Packaged bundled MCP services did not seed correctly: ${JSON.stringify(mcpValues)}`);
+      }
+
+      const previewValues = await page.evaluate(async () => {
+        const status = await window.ecorex?.getBackendStatus?.({ refresh: true });
+        const preview = status?.previewEngine || {};
+        return {
+          ok: status?.ok === true,
+          available: preview.available === true,
+          assets: preview.assets || {}
+        };
+      });
+      if (!previewValues.ok || !previewValues.available || !previewValues.assets.docx || !previewValues.assets.excel || !previewValues.assets.pdf || !previewValues.assets.pptx) {
+        throw new Error(`Packaged preview engine is incomplete: ${JSON.stringify(previewValues)}`);
+      }
+
+      const modelValues = await page.evaluate(async () => {
+        const result = await window.ecorex?.listModelProfiles?.({});
+        const active = result?.activeProfile || (result?.profiles || []).find((item) => item?.isActive) || (result?.profiles || [])[0] || {};
+        return {
+          ok: result?.ok === true,
+          model: active.model || '',
+          imageModel: active.imageModel || active.imageModelName || ''
+        };
+      });
+      if (!modelValues.ok || modelValues.model !== 'gpt-5.5' || modelValues.imageModel !== 'gpt-image-2') {
+        throw new Error(`Packaged default model profile is not ready out of the box: ${JSON.stringify(modelValues)}`);
       }
 
       const resetValues = await page.evaluate(async () => {
@@ -203,10 +246,14 @@ async function main() {
           larkInstalled: installedNames.includes('lark-cli'),
           larkSharedLoaded: childNames.includes('lark-shared'),
           skillCreatorInstalled: installedNames.includes('agent-skill-creator'),
-          skillCreatorLoaded: childNames.includes('agent-skill-creator')
+          skillCreatorLoaded: childNames.includes('agent-skill-creator'),
+          pptMasterInstalled: installedNames.includes('ppt-master'),
+          pptMasterLoaded: childNames.includes('ppt-master'),
+          excelMcpInstalled: installedNames.includes('excel-mcp-server'),
+          excelMcpLoaded: childNames.includes('excel-mcp-server')
         };
       });
-      if (!resetValues.ok || !resetValues.larkInstalled || !resetValues.larkSharedLoaded || !resetValues.skillCreatorInstalled || !resetValues.skillCreatorLoaded) {
+      if (!resetValues.ok || !resetValues.larkInstalled || !resetValues.larkSharedLoaded || !resetValues.skillCreatorInstalled || !resetValues.skillCreatorLoaded || !resetValues.pptMasterInstalled || !resetValues.pptMasterLoaded || !resetValues.excelMcpInstalled || !resetValues.excelMcpLoaded) {
         throw new Error(`Packaged skill reset did not restore bundled skills: ${JSON.stringify(resetValues)}`);
       }
 
@@ -235,6 +282,9 @@ async function main() {
         packagedExe,
         login: loginValues,
         skills: skillValues,
+        mcp: mcpValues,
+        preview: previewValues,
+        models: modelValues,
         reset: resetValues,
         chat: chatValues
       }, null, 2));
@@ -243,7 +293,13 @@ async function main() {
     }
   } finally {
     child.kill();
-    setTimeout(() => fs.rmSync(paths.root, { recursive: true, force: true }), 500);
+    setTimeout(() => {
+      try {
+        fs.rmSync(paths.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 300 });
+      } catch {
+        // Windows may keep packaged resources locked briefly after process exit.
+      }
+    }, 1000);
     const meaningfulStderr = stderr
       .split(/\r?\n/)
       .filter((line) => line.trim() && !line.includes('DevTools listening on'))

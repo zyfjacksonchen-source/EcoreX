@@ -182,7 +182,6 @@ const MAX_PROJECT_FILE_SELECTION = 20;
 const MAX_PROJECT_FILE_BYTES = 100 * 1024 * 1024;
 const FULL_ACCESS_PERMISSION_MODE = 'fullAccess';
 const FULL_ACCESS_CLAUDE_FLAG = '--dangerously-skip-permissions';
-const CLAUDE_AUTO_ALLOWED_TOOL_SET = 'WebFetch,WebSearch,Task,TodoRead,TodoWrite,mcp__*';
 const PUBLIC_PERMISSION_MODES = ['default', FULL_ACCESS_PERMISSION_MODE];
 const WINDOW_CONTROL_ACTIONS = new Set(['minimize', 'maximize', 'close']);
 const USER_ROLE_PERMISSIONS = Object.freeze({
@@ -320,7 +319,8 @@ const AGENT_SYSTEM_PROMPT = [
   '默认使用专业、可靠、面向业务结果的中文表达，输出要便于广告运营、市场、创意、数据分析与项目管理团队直接落地。',
   '输出不要使用星号作为 Markdown 标记，不要使用 *、** 或星号项目符号；列表请使用中文序号或短句换行。',
   '需要事实核验、外部资料、网页信息或时效性内容时，应主动使用联网检索与网页读取能力；需要本地资料时，应主动使用文件读取、写入、编辑、检索、命令执行和 MCP 工具。',
-  '联网搜索、网页读取和常规非文件工具不需要先询问用户，直接执行并在结果中说明来源；涉及读取、写入、编辑用户文件、运行命令或访问系统目录时，遵循权限确认。'
+  '联网搜索、网页读取和常规非文件工具不需要先询问用户，直接执行并在结果中说明来源；涉及读取、写入、编辑用户文件、运行命令或访问系统目录时，遵循权限确认。',
+  '需要浏览器自动化、网页交互或截图校验时，优先使用 Playwright；Windows 安装版优先调用系统 Edge channel msedge。'
 ].join('\n');
 
 const ECOREX_AGENT_SYSTEM_PROMPT = [
@@ -331,7 +331,8 @@ const ECOREX_AGENT_SYSTEM_PROMPT = [
   '默认使用专业、可靠、面向业务结果的中文表达，输出要便于广告运营、市场、创意、数据分析与项目管理团队直接落地。',
   '输出不要使用星号作为 Markdown 标记，不要使用 *、** 或星号项目符号；列表请使用中文序号或短句换行。',
   '需要事实核验、外部资料、网页信息或时效性内容时，应主动使用联网检索与网页读取能力；需要本地资料时，应主动使用文件读取、写入、编辑、检索、命令执行和 MCP 工具。',
-  '联网搜索、网页读取和常规非文件工具不需要先询问用户，直接执行并在结果中说明来源；涉及读取、写入、编辑用户文件、运行命令或访问系统目录时，遵循权限确认。'
+  '联网搜索、网页读取和常规非文件工具不需要先询问用户，直接执行并在结果中说明来源；涉及读取、写入、编辑用户文件、运行命令或访问系统目录时，遵循权限确认。',
+  '需要浏览器自动化、网页交互或截图校验时，优先使用 Playwright；Windows 安装版优先调用系统 Edge channel msedge。'
 ].join('\n');
 
 const ECOREX_MANAGED_CAPABILITY_PRIORITY_PROMPT = [
@@ -405,9 +406,33 @@ function bundledManagedToolsRoot() {
   return bundledResourceDir(BUNDLED_MANAGED_TOOLS_DIR_NAME);
 }
 
+function packagedNodeModulesDir() {
+  const candidates = [];
+  if (app.isPackaged && process.resourcesPath) {
+    candidates.push(path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules'));
+    candidates.push(path.join(process.resourcesPath, 'app.asar', 'node_modules'));
+  }
+  candidates.push(path.join(ROOT_DIR, 'node_modules'));
+  return candidates.find((candidate) => {
+    try {
+      return candidate && fs.existsSync(candidate) && fs.statSync(candidate).isDirectory();
+    } catch {
+      return false;
+    }
+  }) || '';
+}
+
+function nodeToolPathEntries() {
+  const nodeModules = packagedNodeModulesDir();
+  if (!nodeModules) return [];
+  const bin = path.join(nodeModules, '.bin');
+  return fs.existsSync(bin) ? [bin] : [];
+}
+
 function managedToolPathEntries() {
   const root = bundledManagedToolsRoot();
   const entries = [];
+  entries.push(...nodeToolPathEntries());
   const larkDir = path.join(root, LARK_CLI_SKILL_PACK_NAME);
   const larkExe = path.join(larkDir, isWindows ? 'lark-cli.exe' : 'lark-cli');
   if (fs.existsSync(larkExe)) entries.push(larkDir);
@@ -553,6 +578,28 @@ function publicProductText(value = '') {
     .replace(/\bplugin marketplace\b/gi, 'SKILLS library')
     .replace(/\bplugins?\b/gi, 'SKILLS')
     .replace(/\bCLI\b/gi, 'execution bridge');
+}
+
+function isInternalAgentOutputLine(value = '') {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  if (/^Launching skill:/i.test(text)) return true;
+  if (/\bbridge:[a-z0-9_.:-]+\b/i.test(text) && /^Launching/i.test(text)) return true;
+  if (/^[\d\s|:._=\-#\u2580-\u259f\u25a0-\u25a1\u25aa-\u25ab]+$/u.test(text) && text.length >= 16) return true;
+  if (/^(?:\d+\s*)?[\u2580-\u259f\u25a0-\u25a1\u25aa-\u25ab#=_-]{8,}/u.test(text)) return true;
+  return false;
+}
+
+function stripInternalAgentOutput(value = '') {
+  return String(value || '')
+    .split(/\r?\n/)
+    .filter((line) => !isInternalAgentOutputLine(line))
+    .join('\n')
+    .trim();
+}
+
+function hasPublicAgentOutput(value = '') {
+  return Boolean(stripInternalAgentOutput(value));
 }
 
 function redactForLog(value) {
@@ -732,7 +779,7 @@ function publicBridgeError(result = {}, fallback = 'EcoreX operation failed.') {
 }
 
 function publicAgentText(value = '', limit = MAX_AGENT_EVENT_TEXT_CHARS) {
-  return publicProductText(safeOutputText(value, limit));
+  return stripInternalAgentOutput(publicProductText(safeOutputText(value, limit)));
 }
 
 function parseJsonOutput(text = '') {
@@ -1221,10 +1268,11 @@ function isolatedAgentRuntimeEnv(authContext = null) {
   const appDataDir = path.join(configDir, 'appdata');
   const localAppDataDir = path.join(configDir, 'local-appdata');
   const larkConfigDir = larkCliConfigDir(authContext);
+  const nodeModulesDir = packagedNodeModulesDir();
   fs.mkdirSync(appDataDir, { recursive: true });
   fs.mkdirSync(localAppDataDir, { recursive: true });
   const managedToolPath = prependPathEntries(process.env.PATH || process.env.Path || '', managedToolPathEntries());
-  return {
+  const env = {
     HOME: configDir,
     USERPROFILE: configDir,
     APPDATA: appDataDir,
@@ -1239,6 +1287,11 @@ function isolatedAgentRuntimeEnv(authContext = null) {
     CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
     ECOREX_SKILL_SCOPE: 'bundled-only'
   };
+  if (nodeModulesDir) {
+    env.NODE_PATH = nodeModulesDir;
+    env.ECOREX_NODE_MODULES_DIR = nodeModulesDir;
+  }
+  return env;
 }
 
 function isBlockedLocalSkillName(value = '') {
@@ -1571,6 +1624,20 @@ function writeSkillCollectionPlugin(destination, info = {}) {
   copyDirectoryBounded(info.pluginRoot, skillsRoot);
 }
 
+function bundledSkillPackMcpConfig(pluginRoot = '', name = '') {
+  const safeName = sanitizeSkillPackName(name || path.basename(pluginRoot || 'skill-pack'));
+  const candidates = [
+    path.join(pluginRoot, 'mcp-config.json'),
+    path.join(pluginRoot, 'skills', safeName, 'mcp-config.json'),
+    path.join(pluginRoot, safeName, 'mcp-config.json')
+  ];
+  for (const candidate of candidates) {
+    const config = readJsonFileSafe(candidate, null);
+    if (config && typeof config === 'object' && !Array.isArray(config)) return safeJsonValue(config, 8000);
+  }
+  return null;
+}
+
 function bundledManagedSkillPackSources() {
   const root = bundledManagedSkillPacksRoot();
   try {
@@ -1598,6 +1665,7 @@ function seedBundledManagedSkillPacks() {
     try {
       const manifest = skillPluginManifest(source) || {};
       const name = sanitizeSkillPackName(manifest.name || path.basename(source));
+      const mcpConfig = bundledSkillPackMcpConfig(source, name);
       const destination = installDestinationForSkillPack(name);
       const previous = previousRows.find((row) => row.name === name || row.id === publicStableId('skillpack', name));
       fs.rmSync(destination, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
@@ -1614,9 +1682,9 @@ function seedBundledManagedSkillPacks() {
         installed: true,
         installPath: destination,
         sourcePath: source,
-        sourceKind: 'bundled-skill-collection',
+        sourceKind: mcpConfig ? 'mcp-wrapper' : 'bundled-skill-collection',
         generatedWrapper: false,
-        mcpConfig: previous?.mcpConfig || null,
+        mcpConfig: mcpConfig || previous?.mcpConfig || null,
         installedAt: previous?.installedAt || now,
         lastUpdated: now
       });
@@ -5960,9 +6028,9 @@ function publicAgentToolInput(toolName, input) {
 }
 
 function safeLedgerText(value = '', limit = MAX_TOOL_LEDGER_SUMMARY_CHARS) {
-  return safeOutputText(value, limit)
+  return stripInternalAgentOutput(safeOutputText(value, limit)
     .replace(/\b[A-Za-z]:\\(?:[^\\\s"'<>|]+\\)*[^\\\s"'<>|]+/g, '[local-path]')
-    .replace(/\/(?:Users|home|var|tmp|etc|Volumes)\/[^\s"'<>]+/g, '[local-path]');
+    .replace(/\/(?:Users|home|var|tmp|etc|Volumes)\/[^\s"'<>]+/g, '[local-path]'));
 }
 
 function summarizeToolInput(input = {}) {
@@ -6329,6 +6397,9 @@ function agentRecoveryHint(codeOrStatus = '', details = {}) {
   if (code === 'incomplete-result' || detailReason === 'incomplete-result') {
     return 'The task ended without a usable final answer. Retry with a narrower request, or ask the agent to return a clear conclusion and deliverable path.';
   }
+  if (code === 'authorization-incomplete' || detailReason === 'authorization-incomplete') {
+    return 'Authorization is still waiting for user action. Complete the browser/device-code step, then resume or retry the task.';
+  }
   if (code === 'too-many-sessions') {
     return `Close or cancel one running session, then retry. Up to ${details.maxRunning || MAX_RUNNING_AGENTS} sessions can run at once.`;
   }
@@ -6369,8 +6440,34 @@ function agentSessionHasSubstantiveResult(entry = {}) {
   ));
 }
 
+function agentSessionPublicText(entry = {}) {
+  return [
+    entry.promptPreview,
+    entry.finalResultPreview,
+    ...(Array.isArray(entry.transcript) ? entry.transcript.map((event) => event?.textPreview || '') : [])
+  ]
+    .map((value) => safeTranscriptText(value))
+    .filter(Boolean)
+    .join('\n');
+}
+
+function agentSessionHasUnresolvedAuthorization(entry = {}) {
+  const text = agentSessionPublicText(entry);
+  if (!text) return false;
+  const targetsAuth = /(飞书|feishu|lark|larksuite|授权|认证|登录|auth|oauth|device[_ -]?code|verification[_ -]?url|verification[_ -]?uri)/i.test(text);
+  if (!targetsAuth) return false;
+  const startedOrWaiting = /(授权飞书|飞书.*授权|lark-cli\s+(?:config\s+init|auth\s+login)|auth\s+login|device[_ -]?code|verification[_ -]?(?:url|uri)|二维码|打开.*链接|等待.*授权|not configured|run `?lark-cli config init|需要.*授权|请.*授权|请.*登录)/i.test(text);
+  if (!startedOrWaiting) return false;
+  const completed = /(授权成功|已授权|认证成功|登录成功|配置完成|login success|authenticated|authorization complete|token saved|current user|auth status.*ok|\"ok\"\s*:\s*true)/i.test(text);
+  return !completed;
+}
+
 function incompleteAgentResultText() {
   return '任务进程已经结束，但没有返回可用的最终结论或交付物。EcoreX 已将本次任务标记为未完成，请重试或把任务拆成更小步骤，并要求返回明确结论。';
+}
+
+function authorizationIncompleteAgentResultText() {
+  return '飞书授权流程还没有完成。EcoreX 已将本次任务标记为待完成，请先在浏览器或设备授权页完成授权，再回到会话继续。';
 }
 
 function duplicateAgentSessionResponse(sessionId, requestedSessionId, owner = {}) {
@@ -10224,21 +10321,25 @@ function normalizeClaudeEvent(sessionId, json) {
     const block = streamEvent.content_block || streamEvent.contentBlock || {};
     const delta = streamEvent.delta || {};
     if (streamType === 'content_block_delta' && delta.type === 'text_delta' && delta.text) {
+      const text = publicAgentText(delta.text);
+      if (!text) return null;
       return {
         ...base,
         kind: 'assistant',
         status: 'running',
-        text: publicAgentText(delta.text),
+        text,
         contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined
       };
     }
     if (streamType === 'content_block_start') {
       if (block.type === 'text' && block.text) {
+        const text = publicAgentText(block.text);
+        if (!text) return null;
         return {
           ...base,
           kind: 'assistant',
           status: 'running',
-          text: publicAgentText(block.text),
+          text,
           contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined
         };
       }
@@ -10364,7 +10465,9 @@ function normalizeClaudeEvent(sessionId, json) {
         contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined
       };
     }
-    return { ...base, kind: 'assistant', tools, text: publicAgentText(text), contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined };
+    const publicText = publicAgentText(text);
+    if (!publicText && !tools.length) return null;
+    return { ...base, kind: 'assistant', tools, text: publicText, contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined };
   }
 
   if (json.type === 'user') {
@@ -10573,8 +10676,6 @@ function runAgent(payload = {}, options = {}) {
       '--include-hook-events',
       '--tools',
       'default',
-      '--allowedTools',
-      CLAUDE_AUTO_ALLOWED_TOOL_SET,
       '--model',
       model,
       '--append-system-prompt',
@@ -10651,7 +10752,8 @@ function runAgent(payload = {}, options = {}) {
       projectName: projectContext?.name || '',
       projectMemoryLabel: projectContext?.memoryLabel || '',
       modelProfile: modelProfileEnv.ECOREX_MODEL_PROFILE || null,
-      capabilityPacks: selectedPlugins.map((name) => publicStableId('capability-pack', name))
+      capabilityPacks: selectedPlugins.map((name) => publicStableId('capability-pack', name)),
+      nativeToolMode: 'default-full-surface'
     });
     if (permissionPolicy?.fullAccess) {
       writeLog('warn', 'Agent session started with full access permission', {
@@ -10736,7 +10838,8 @@ function runAgent(payload = {}, options = {}) {
           emitAgentEvent(event);
         }
       } catch {
-        const event = { sessionId, kind: 'assistant', text: buffered };
+        if (!hasPublicAgentOutput(buffered)) return;
+        const event = { sessionId, kind: 'assistant', text: publicAgentText(buffered) };
         recordSessionEvent(entry, event);
         emitAgentEvent(event);
       }
@@ -10806,7 +10909,8 @@ function runAgent(payload = {}, options = {}) {
             emitAgentEvent(event);
           }
         } catch {
-          const event = { sessionId, kind: 'assistant', text: trimmed };
+          if (!hasPublicAgentOutput(trimmed)) continue;
+          const event = { sessionId, kind: 'assistant', text: publicAgentText(trimmed) };
           recordSessionEvent(runningAgents.get(sessionId), event);
           emitAgentEvent(event);
         }
@@ -10854,17 +10958,22 @@ function runAgent(payload = {}, options = {}) {
       entry.flushBufferedOutput?.();
       let finalStatus = code === 0 && !entry.claudeResultFailed ? 'completed' : 'failed';
       const incompleteResult = finalStatus === 'completed' && !agentSessionHasSubstantiveResult(entry);
-      if (incompleteResult) finalStatus = 'failed';
+      const authorizationIncomplete = finalStatus === 'completed' && agentSessionHasUnresolvedAuthorization(entry);
+      if (incompleteResult || authorizationIncomplete) finalStatus = 'failed';
       const sessionReuseConflict = finalStatus === 'failed' && /session id .*already in use/i.test(entry.lastStderr || '');
       const missingResumeTarget = finalStatus === 'failed' && /no conversation found with session id/i.test(entry.lastStderr || '');
       if (finalStatus === 'completed') markClaudeSessionLaunched(entry.claudeSessionId);
       if (sessionReuseConflict || missingResumeTarget) {
         markClaudeSessionResumeInvalid(entry.claudeSessionId, missingResumeTarget ? 'missing-resume-target' : 'session-reuse-conflict');
       }
-      const finalText = incompleteResult ? incompleteAgentResultText() : undefined;
+      const finalText = authorizationIncomplete
+        ? authorizationIncompleteAgentResultText()
+        : incompleteResult
+          ? incompleteAgentResultText()
+          : undefined;
       finalizeAgentSession(sessionId, entry, {
         status: finalStatus,
-        reason: incompleteResult ? 'incomplete-result' : undefined,
+        reason: authorizationIncomplete ? 'authorization-incomplete' : incompleteResult ? 'incomplete-result' : undefined,
         code,
         signal,
         text: finalText || (sessionReuseConflict
@@ -10880,6 +10989,7 @@ function runAgent(payload = {}, options = {}) {
         signal,
         status: finalStatus,
         incompleteResult,
+        authorizationIncomplete,
         resultEventCount: Number(entry.resultEventCount) || 0,
         emptyResultEventCount: Number(entry.emptyResultEventCount) || 0,
         durationMs: Date.now() - entry.startedAt

@@ -183,5 +183,90 @@ function prepareAgentSkillCreator() {
   console.log(`  skill: ${copied.files} files, ${copied.bytes} bytes`);
 }
 
+function preparePptMaster() {
+  const defaultSource = process.platform === 'win32' ? 'C:\\ppt-master-main' : '';
+  const sourceRoot = path.resolve(process.env.ECOREX_PPT_MASTER_SOURCE || defaultSource || '');
+  if (!sourceRoot || !fs.existsSync(sourceRoot)) {
+    fail(`PPT Master source directory is missing. Set ECOREX_PPT_MASTER_SOURCE or create ${defaultSource}.`);
+  }
+  const pluginRoot = path.join(sourceRoot, 'skills');
+  if (!fs.existsSync(path.join(pluginRoot, '.claude-plugin', 'plugin.json'))) {
+    fail(`PPT Master plugin manifest is missing under ${pluginRoot}.`);
+  }
+  if (!fs.existsSync(path.join(pluginRoot, 'ppt-master', 'SKILL.md'))) {
+    fail(`PPT Master SKILL.md is missing under ${pluginRoot}.`);
+  }
+
+  const manifest = readJson(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), {});
+  const skillTarget = path.join(managedSkillRoot, 'ppt-master');
+  cleanGeneratedDir(skillTarget);
+  const copied = copyDirectory(pluginRoot, skillTarget, 'PPT Master');
+  console.log(`Prepared managed PPT Master ${manifest.version || '1.0.0'} from ${sourceRoot}`);
+  console.log(`  skill: ${copied.files} files, ${copied.bytes} bytes`);
+}
+
+function prepareExcelMcpServer() {
+  const defaultSource = process.platform === 'win32' ? 'C:\\excel-mcp-server-main' : '';
+  const sourceRoot = path.resolve(process.env.ECOREX_EXCEL_MCP_SOURCE || defaultSource || '');
+  if (!sourceRoot || !fs.existsSync(sourceRoot)) {
+    fail(`Excel MCP source directory is missing. Set ECOREX_EXCEL_MCP_SOURCE or create ${defaultSource}.`);
+  }
+  const manifest = readJson(path.join(sourceRoot, 'manifest.json'), null);
+  if (!manifest?.server?.mcp_config) fail(`Excel MCP manifest.json is missing server.mcp_config under ${sourceRoot}.`);
+
+  const name = 'excel-mcp-server';
+  const skillTarget = path.join(managedSkillRoot, name);
+  const skillDir = path.join(skillTarget, 'skills', name);
+  const tools = Array.isArray(manifest.tools) ? manifest.tools : [];
+  const mcpConfig = manifest.server.mcp_config;
+
+  cleanGeneratedDir(skillTarget);
+  writeManifest(skillTarget, {
+    name,
+    displayName: 'Excel MCP Server',
+    description: manifest.description || 'Excel workbook creation, reading, editing, formatting, formulas, charts, tables, and pivots for EcoreX Agent.',
+    version: manifest.version || '1.0.0',
+    skills: './skills'
+  });
+  fs.mkdirSync(skillDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(skillDir, 'SKILL.md'),
+    [
+      '---',
+      `name: ${name}`,
+      'description: Use for Excel workbook creation, reading, editing, formatting, formulas, charts, pivot tables, tables, or spreadsheet data extraction.',
+      '---',
+      '',
+      '# Excel MCP Server',
+      '',
+      'Use this EcoreX-managed MCP-backed skill for Excel files before falling back to manual spreadsheet generation.',
+      '',
+      'When the user asks to create, read, update, format, chart, validate, or analyze an Excel workbook, call the excel-mcp-server MCP tools.',
+      '',
+      tools.length ? 'Known tools:' : '',
+      ...tools.slice(0, 40).map((tool) => `- ${tool.name}: ${tool.description || 'Excel operation'}`),
+      '',
+      'Suggested MCP config:',
+      '',
+      '```json',
+      JSON.stringify(mcpConfig, null, 2),
+      '```',
+      ''
+    ].filter((line) => line !== '').join('\n'),
+    'utf8'
+  );
+  fs.writeFileSync(path.join(skillDir, 'mcp-config.json'), `${JSON.stringify(mcpConfig, null, 2)}\n`, 'utf8');
+  for (const fileName of ['manifest.json', 'README.md', 'TOOLS.md', 'LICENSE', 'icon.png']) {
+    const source = path.join(sourceRoot, fileName);
+    if (fs.existsSync(source) && fs.statSync(source).isFile()) {
+      fs.copyFileSync(source, path.join(skillDir, fileName));
+    }
+  }
+  console.log(`Prepared managed Excel MCP Server ${manifest.version || '1.0.0'} from ${sourceRoot}`);
+  console.log(`  mcp: ${mcpConfig.command} ${(mcpConfig.args || []).join(' ')}`.trim());
+}
+
 prepareFeishuSkill();
 prepareAgentSkillCreator();
+preparePptMaster();
+prepareExcelMcpServer();

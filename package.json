@@ -45,12 +45,12 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-code": "2.1.143",
+    "@playwright/test": "^1.60.0",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
-    "@playwright/test": "^1.60.0",
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.1.0",
     "electron": "^33.3.1",
@@ -79,6 +79,10 @@
       "node_modules/@anthropic-ai/claude-code-darwin-arm64/**/*",
       "node_modules/@anthropic-ai/claude-code-darwin-x64/**/*",
       "node_modules/@anthropic-ai/claude-code-win32-x64/**/*",
+      "node_modules/.bin/playwright*",
+      "node_modules/@playwright/test/**/*",
+      "node_modules/playwright/**/*",
+      "node_modules/playwright-core/**/*",
       "!**/.env",
       "!**/.env.*",
       "!**/*.log",
@@ -107,7 +111,11 @@
       "node_modules/@anthropic-ai/claude-code/bin/**/*",
       "node_modules/@anthropic-ai/claude-code-darwin-arm64/**/*",
       "node_modules/@anthropic-ai/claude-code-darwin-x64/**/*",
-      "node_modules/@anthropic-ai/claude-code-win32-x64/**/*"
+      "node_modules/@anthropic-ai/claude-code-win32-x64/**/*",
+      "node_modules/.bin/playwright*",
+      "node_modules/@playwright/test/**/*",
+      "node_modules/playwright/**/*",
+      "node_modules/playwright-core/**/*"
     ],
     "extraResources": [
       {
@@ -126,6 +134,8 @@
         "filter": [
           "agent-skill-creator/**/*",
           "lark-cli/**/*",
+          "ppt-master/**/*",
+          "excel-mcp-server/**/*",
           "!**/.env",
           "!**/.env.*",
           "!**/*.log",
@@ -147,6 +157,16 @@
           "!**/secrets.json",
           "!**/auth-session.json",
           "!**/auth-users.json"
+        ]
+      },
+      {
+        "from": "node_modules/.bin",
+        "to": "app.asar.unpacked/node_modules/.bin",
+        "filter": [
+          "playwright*",
+          "!**/.env",
+          "!**/.env.*",
+          "!**/*.log"
         ]
       },
       {

@@ -1471,6 +1471,7 @@ test.describe('EcoreX Agent Electron E2E', () => {
     await expect(page.locator('[data-testid="chat-input"]')).toHaveValue('');
     await expect(page.locator('[data-testid="chat-stop-button"]')).toHaveCount(0);
     await expect(page.getByTestId('running-session-strip')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.chat-main [data-testid="running-session-strip"]')).toHaveCount(0);
     await expect(page.getByTestId('running-session-pill').filter({ hasText: alphaPrompt })).toBeVisible();
     await page.locator('[data-testid="chat-input"]').fill(betaPrompt);
     await page.locator('[data-testid="chat-input"]').press('Enter');
