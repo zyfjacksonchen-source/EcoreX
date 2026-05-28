@@ -455,12 +455,15 @@ check('local desktop auth is first-run bound and encrypted', () => {
     [
       "const AUTH_IDENTITY_FILE_NAME = 'auth-identity.json'",
       "const AUTH_USERS_FILE_NAME = 'auth-users.json'",
+      "const PROVISIONING_FILE_NAME = 'ecorex-provisioning.json'",
       'const LOCAL_AUTH_HASH_ITERATIONS =',
       'function authIdentityPath',
       'function authUsersPath',
+      'function readProvisioningFile',
       'function readAuthIdentity',
       'function readAuthUsers',
       'function writeAuthUsers',
+      'function provisionAuthUsersIfNeeded',
       'function writeAuthIdentity',
       'function createAuthIdentity',
       'function createUserRecord',
@@ -473,6 +476,7 @@ check('local desktop auth is first-run bound and encrypted', () => {
     ],
     'local auth binding'
   );
+  assertMatches(main, /if \(!fs\.existsSync\(file\)\) \{[\s\S]*?const provisionedUsers = provisionAuthUsersIfNeeded\(\);[\s\S]*?if \(provisionedUsers\.length\) return provisionedUsers;/, 'managed installer auth provisioning must run before first-login owner binding.');
   assertMatches(main, /if \(!users\.length\) \{[\s\S]*?role:\s*'super_admin'[\s\S]*?users = writeAuthUsers\(\[user\]\);[\s\S]*?createdIdentity = true;/, 'first login must bind a local super administrator.');
   assertMatches(main, /else if \(!user \|\| user\.active === false \|\| !verifyLocalPassword\(user, password\)\)/, 'subsequent login must verify bound user, active state, and password.');
   assertMatches(main, /if \(loginType === 'code' \|\| payload\.code\)/, 'local mode must not accept arbitrary verification codes.');
@@ -501,9 +505,6 @@ check('agent session bindings are persisted and project isolated', () => {
   assertMatches(main, /rememberClaudeSessionBinding[\s\S]*persistClaudeSessionBindings\(\)/, 'session bindings must be persisted after a runtime starts.');
   assertMatches(main, /claimAgentStart[\s\S]*claudeSessionBindingConflict\(payload\)[\s\S]*session-context-conflict/, 'agent start must reject cross-context session reuse.');
   assertIncludesPatterns(pkg.build?.files || [], ['!**/session-bindings.json'], 'build.files');
-  const backendResource = (pkg.build?.extraResources || []).find((item) => String(item.to || '').replace(/\\/g, '/') === 'backend/claude-code-main');
-  assert(backendResource, 'backend extraResources must exist.');
-  assertIncludesPatterns(backendResource.filter || [], ['!**/session-bindings.json'], 'backend extraResources.filter');
 });
 
 check('renderer routes agent events by owning conversation', () => {
@@ -861,8 +862,14 @@ check('agent runtime production guardrails', () => {
       'const CLAUDE_AUTO_ALLOWED_TOOL_SET',
       'const ECOREX_BUILTIN_PLUGIN_ALLOWLIST',
       'const ECOREX_GENERAL_WORKSPACE_DIR_NAME',
+      'const BUNDLED_MANAGED_SKILL_PACKS_DIR_NAME',
+      'const BUNDLED_MANAGED_TOOLS_DIR_NAME',
+      'const LARK_CLI_SKILL_PACK_NAME',
       'ECOREX_GENERAL_CHAT_ISOLATION_PROMPT',
       'function generalAgentWorkspaceDir',
+      'function seedBundledManagedSkillPacks',
+      'function managedToolPathEntries',
+      'function larkCliConfigDir',
       'function allowedRuntimePluginNames',
       "'--tools'",
       "'--allowedTools'",
@@ -873,10 +880,13 @@ check('agent runtime production guardrails', () => {
   assertMatches(main, /'--output-format',\s*'stream-json',\s*'--verbose'/, 'stream-json output must always be paired with --verbose.');
   assertMatches(main, /'--print'[\s\S]*'--output-format'[\s\S]*'stream-json'[\s\S]*'--plugin-dir'/, 'agent runtime must stream through the full isolated CLI tool surface while explicitly loading bundled plugins.');
   assertNotMatches(main, /'--bare'/, 'agent runtime must not pass --bare because it can hide MCP, Skill, WebSearch, Todo and PowerShell tools.');
-  assertMatches(main, /const runtimeEnv = \{[\s\S]*isolatedAgentRuntimeEnv\(\)[\s\S]*CLAUDE_CODE_NO_FLICKER:\s*'1'/, 'agent runtime must isolate config while preserving the full default tool surface.');
+  assertMatches(main, /const runtimeEnv = \{[\s\S]*isolatedAgentRuntimeEnv\(options\.authContext \|\| null\)[\s\S]*CLAUDE_CODE_NO_FLICKER:\s*'1'/, 'agent runtime must isolate config while preserving the full default tool surface.');
   assertMatches(main, /process\.platform === 'win32' \? \{ CLAUDE_CODE_USE_POWERSHELL_TOOL:\s*'1' \}/, 'Windows agent runs must enable the PowerShell tool surface.');
   assertNotMatches(main, /CLAUDE_CODE_SIMPLE:\s*'1'/, 'agent runtime must not force simple mode because it hides WebSearch, Skill, Todo and PowerShell tools.');
-  assertMatches(main, /function isolatedAgentRuntimeEnv\(\)[\s\S]*HOME:\s*configDir[\s\S]*USERPROFILE:\s*configDir[\s\S]*APPDATA:\s*appDataDir[\s\S]*LOCALAPPDATA:\s*localAppDataDir/, 'agent runtime must isolate home/appdata so local Claude skills and MCP state are not inherited.');
+  assertMatches(main, /function isolatedAgentRuntimeEnv\(authContext = null\)[\s\S]*HOME:\s*configDir[\s\S]*USERPROFILE:\s*configDir[\s\S]*APPDATA:\s*appDataDir[\s\S]*LOCALAPPDATA:\s*localAppDataDir[\s\S]*LARKSUITE_CLI_CONFIG_DIR:\s*larkConfigDir/, 'agent runtime must isolate home/appdata and Feishu auth config so local skills and MCP state are not inherited.');
+  assertMatches(main, /PATH:\s*managedToolPath[\s\S]*Path:\s*managedToolPath/, 'agent runtime PATH must include EcoreX managed tools.');
+  assertMatches(main, /handleSafe\('agent:run',\s*\(event,\s*payload,\s*authContext\) => runAgent\(payload,\s*\{ ownerId:\s*event\.sender\.id,\s*authContext \}\)/, 'agent runs must receive auth context for per-user managed tool auth.');
+  assertMatches(main, /function collectManagedSkillInventory[\s\S]*seedBundledManagedSkillPacks\(\)/, 'managed skill inventory must seed bundled EcoreX skill packs.');
   assertMatches(main, /const projectContextDisabled = payload\.disableProjectContext === true \|\| !payload\.projectId/, 'general chat runs must not inherit the last active project.');
   assertNotMatches(main, /projectContextDisabled \? null : activeProjectContext\(\)/, 'agent runs must not fall back to the active project when no project id is provided.');
   assertMatches(main, /const defaultRunRoot = projectContext\?\.projectPath \|\| generalAgentWorkspaceDir\(\)/, 'general chat runs must use the isolated general workspace.');
@@ -906,7 +916,9 @@ check('agent runtime production guardrails', () => {
   assertMatches(main, /if \(claudeResumeExistingSession\) \{\s*args\.push\('--resume', claudeSessionId\);\s*\} else \{\s*args\.push\('--session-id', claudeSessionId\);/s, 'Claude CLI must resume existing sessions and only create new sessions with --session-id.');
   assertMatches(main, /entry\.claudeSessionId === requestedClaudeSessionId/, 'parallel starts for the same Claude session must be blocked before spawning.');
   assertMatches(main, /function refreshClaudeSessionTranscriptSeen[\s\S]*findClaudeSessionTranscript\(sessionId\)[\s\S]*claudeTranscriptExistenceCache\.delete\(sessionId\)/, 'Claude resume cache must verify transcript files and clear stale resume state.');
-  assertMatches(main, /const finalStatus = code === 0 && !entry\.claudeResultFailed \? 'completed' : 'failed'/, 'Claude result error events must keep the final session status failed even when the process exits cleanly.');
+  assertMatches(main, /let finalStatus = code === 0 && !entry\.claudeResultFailed \? 'completed' : 'failed'[\s\S]*const incompleteResult = finalStatus === 'completed' && !agentSessionHasSubstantiveResult\(entry\)[\s\S]*if \(incompleteResult\) finalStatus = 'failed'/, 'Claude sessions must not report completed when no substantive result was returned.');
+  assertMatches(main, /function substantiveAgentResultText[\s\S]*function agentSessionHasSubstantiveResult[\s\S]*function incompleteAgentResultText/, 'agent completion must distinguish process exit from usable final output.');
+  assertMatches(main, /recordSessionEvent[\s\S]*normalized\.kind === 'result'[\s\S]*entry\.hasSubstantiveResult = true/, 'result events must mark whether the task produced a substantive final answer.');
   assertNotMatches(main, /child\.on\('close'[\s\S]{0,600}markClaudeSessionTranscriptSeen\(entry\.claudeSessionId\)/, 'agent close must not blindly mark failed or missing Claude transcripts as resumable.');
   assertMatches(main, /streamType === 'error'[\s\S]*claudeResultStatus:\s*'failed'/, 'stream-json error events must be surfaced as failed agent events.');
   assertMatches(main, /json\.type === 'result'[\s\S]*const resultFailed = Boolean[\s\S]*claudeResultStatus: resultFailed \? 'failed' : 'completed'/, 'Claude result subtypes must drive success or failure status.');
@@ -993,6 +1005,8 @@ check('model profile storage is local, encrypted, and public-safe', () => {
       'apiKeyConfigured',
       'apiKeyMasked',
       'pathLabel: `userData:/${MODEL_PROFILES_FILE_NAME}`',
+      'function provisionModelProfilesIfNeeded',
+      "return provisionModelProfilesIfNeeded() || fallback",
       'env.ANTHROPIC_BASE_URL = profile.baseUrl',
       'env.OPENAI_BASE_URL = profile.baseUrl',
       'env.ANTHROPIC_API_KEY = apiKey',
@@ -1128,6 +1142,7 @@ check('MCP plugin and CLI exposure is sanitized', () => {
       'services,',
       'function installManagedSkillPack',
       'function updateManagedSkillEnabled',
+      'function resetManagedSkillPacks',
       'function runtimeManagedSkillPlugins',
       'const pluginInventory = [...parsePluginInventory(), ...runtimeManagedSkillPlugins()]',
       "args.push('--plugin-dir', pluginPath)"
@@ -1150,6 +1165,9 @@ check('MCP plugin and CLI exposure is sanitized', () => {
     app,
     [
       'capabilities?.capabilityPacks',
+      'function canManageSkillsFromAuth',
+      'data-testid="skill-source-path-input"',
+      'data-testid="skill-reset-button"',
       "'feature-dev', 'code-review', 'security-guidance', 'plugin-dev', ...managedPlugins",
       'plugins: selectedPlugins',
       'setSkills([])',
@@ -1159,15 +1177,16 @@ check('MCP plugin and CLI exposure is sanitized', () => {
   );
   const extraResources = Array.isArray(pkg.build?.extraResources) ? pkg.build.extraResources : [];
   const backendResource = extraResources.find((item) => String(item.to || '').replace(/\\/g, '/') === 'backend/claude-code-main');
-  assert(backendResource, 'backend claude-code-main resource must be configured.');
-  const backendFilter = Array.isArray(backendResource.filter) ? backendResource.filter : [];
-  for (const required of ['.claude-plugin/marketplace.json', 'plugins/**/*', ...REQUIRED_BACKEND_FILTER_EXCLUSIONS]) {
-    assert(backendFilter.includes(required), `backend plugin packaging filter must include ${required}`);
-  }
-  assert(!backendFilter.includes('examples/**/*'), 'backend examples must not be packaged.');
+  const backendMapResource = extraResources.find((item) => String(item.to || '').replace(/\\/g, '/') === 'backend/cli.js.map');
+  assert(!backendResource, 'build config must not package the terminal source tree.');
+  assert(!backendMapResource, 'build config must not package terminal source maps.');
   assert(!JSON.stringify(pkg.build).includes('%USERPROFILE%') && !JSON.stringify(pkg.build).includes('${HOME}'), 'build config must not package user home MCP/Skill state.');
+  assert(!JSON.stringify(pkg.build).includes('终端源代码'), 'build config must not reference the local terminal source directory.');
   assertMatches(main, /attachDeveloperDiagnostics\([\s\S]*?if \(payload\?\.includeDiagnostics\)/, 'developer diagnostics must only be attached on explicit request.');
   assertMatches(main, /raw:\s*safeOutputText\(/, 'raw bridge output must be sanitized before diagnostics.');
+  assertMatches(main, /handleSafe\('skill:reset'[\s\S]*requiredPermission:\s*'skills:manage'/, 'skill reset must require managed skill permissions.');
+  assertMatches(main, /handleSafe\('skill:install'[\s\S]*requiredPermission:\s*'skills:manage'/, 'skill install must require managed skill permissions.');
+  assertMatches(app, /const canManageSkills = canManageSkillsFromAuth\(authStatus\)[\s\S]*const actionDisabled = !canManageSkills/, 'renderer skill controls must be gated to admins with skill permissions.');
 });
 
 check('diagnostics health check UI is complete and static-safe', () => {
@@ -1522,6 +1541,10 @@ check('package build config excludes local model/secrets storage', () => {
     'release:fix-metadata must run the release metadata repair script.'
   );
   assert(
+    pkg.scripts['prepare:managed-feishu'] === 'node scripts/prepare-managed-feishu-skill.cjs',
+    'prepare:managed-feishu must build the bundled managed skill/runtime resources.'
+  );
+  assert(
     pkg.scripts['release:clean'] === 'node scripts/clean-release-artifacts.cjs',
     'release:clean must run the release cleanup script.'
   );
@@ -1542,9 +1565,14 @@ check('package build config excludes local model/secrets storage', () => {
     const builderIndex = script.indexOf('electron-builder');
     const fixIndex = script.indexOf('npm run release:fix-metadata');
     const cleanIndex = script.indexOf('npm run release:clean');
+    const feishuPrepareIndex = script.indexOf('npm run prepare:managed-feishu');
     const forbiddenReleaseActions = /\bgit\s+(?:push|tag|commit|add)|\bgh\s+release|\bnpm\s+publish|\belectron-builder\s+.*\s--publish\b/i;
     assert(!forbiddenReleaseActions.test(script), `${scriptName} must not upload, publish, tag, or commit artifacts.`);
     assert(cleanIndex > -1 && cleanIndex < builderIndex, `${scriptName} must clean old release/local artifacts before electron-builder.`);
+    assert(
+      feishuPrepareIndex > cleanIndex && feishuPrepareIndex < builderIndex,
+      `${scriptName} must prepare bundled Feishu resources before electron-builder.`
+    );
     assert(
       builderIndex > -1 && script.indexOf('npm run verify:production') > -1 && script.indexOf('npm run verify:production') < builderIndex,
       `${scriptName} must run verify:production before electron-builder.`
@@ -1580,35 +1608,57 @@ check('package build config excludes local model/secrets storage', () => {
   assert(build.files.includes('dist/**/*'), 'build.files must include dist.');
   assert(build.files.includes('electron/**/*'), 'build.files must include electron.');
   assert(build.files.includes('node_modules/@anthropic-ai/claude-code/**/*'), 'build.files must include the packaged agent runtime.');
+  assert(build.win?.icon === 'build/icon.ico', 'Windows app icon must use the EcoreX brand icon.');
+  assertExistingFile(rel('build/icon.ico'), 'Windows EcoreX icon');
   assertIncludesPatterns(build.files, REQUIRED_LOCAL_STATE_EXCLUSIONS, 'build.files');
   assert(Array.isArray(build.asarUnpack), 'build.asarUnpack must be an array.');
   assert(build.asarUnpack.includes('node_modules/@anthropic-ai/claude-code/bin/**/*'), 'build.asarUnpack must unpack the agent runtime executable.');
   assertNoSecretOrModelStoragePaths([...(build.files || []), ...(build.extraResources || []).map((item) => item.from || item.to || '')], 'build config');
+  assert(build.nsis?.oneClick === false, 'NSIS installer must be assisted so users can choose install options.');
+  assert(build.nsis?.include === 'build/installer.nsh', 'NSIS installer must include custom uninstall shortcut script.');
+  assert(build.nsis?.uninstallDisplayName === 'EcoreX Agent', 'NSIS installer must set a stable uninstall display name.');
+  assert(build.nsis?.allowToChangeInstallationDirectory === true, 'NSIS installer must expose the install-directory/options flow.');
+  assert(build.nsis?.createDesktopShortcut === false, 'Desktop shortcut creation must be controlled by the custom installer checkbox.');
+  const installerNsh = readText('build/installer.nsh');
+  includesAll(
+    installerNsh,
+    [
+      '!macro customPageAfterChangeDir',
+      'EcoreXDesktopShortcutCheckbox',
+      'EcoreXStartupShortcutCheckbox',
+      'CreateShortCut "$DESKTOP\\${SHORTCUT_NAME}.lnk"',
+      'CreateShortCut "$SMSTARTUP\\${SHORTCUT_NAME}.lnk"',
+      '!macro customInstall',
+      'Uninstall ${SHORTCUT_NAME}.lnk',
+      '${UNINSTALL_FILENAME}',
+      '!macro customUnInstall'
+    ],
+    'custom uninstall shortcut script'
+  );
 
   const extraResources = Array.isArray(build.extraResources) ? build.extraResources : [];
   const mapResource = extraResources.find((item) => String(item.to || '').replace(/\\/g, '/') === 'backend/cli.js.map');
-  assert(mapResource, 'backend cli.js.map resource must be configured.');
-  assertRepoRelativePath(mapResource.from, 'backend cli.js.map source');
-  assertExistingFile(rel(mapResource.from), 'backend cli.js.map source', 1024 * 1024);
-
   const backendResource = extraResources.find((item) => String(item.to || '').replace(/\\/g, '/') === 'backend/claude-code-main');
-  assert(backendResource, 'backend claude-code-main resource must be configured.');
-  assertRepoRelativePath(backendResource.from, 'backend claude-code-main source');
-  const backendSource = rel(backendResource.from);
-  assertExistingDirectory(backendSource, 'backend claude-code-main source');
-  assertIncludesPatterns(backendResource.filter, REQUIRED_BACKEND_FILTER_EXCLUSIONS, 'backend extraResources.filter');
-  const marketplacePath = path.join(backendSource, '.claude-plugin', 'marketplace.json');
-  assertExistingFile(marketplacePath, 'backend marketplace source');
-  const marketplace = parseMarketplace(marketplacePath);
-  const pluginByName = new Map(marketplace.plugins.map((plugin) => [plugin.name, plugin]));
-  for (const pluginName of REQUIRED_BACKEND_RUNTIME_PLUGINS) {
-    const plugin = pluginByName.get(pluginName);
-    assert(plugin, `backend marketplace must include ${pluginName}.`);
-    const pluginSource = toPosix(plugin.source || `plugins/${pluginName}`).replace(/^\.\//, '');
-    const pluginDir = path.resolve(backendSource, pluginSource);
-    assert(isPathInside(backendSource, pluginDir), `backend plugin ${pluginName} source must stay inside claude-code-main.`);
-    assertExistingDirectory(pluginDir, `backend plugin ${pluginName} source`);
-  }
+  assert(!mapResource, 'build config must not package terminal source maps.');
+  assert(!backendResource, 'build config must not package the terminal source tree.');
+  assert(!JSON.stringify(extraResources).includes('终端源代码'), 'extraResources must not reference the local terminal source directory.');
+  const provisioningResource = extraResources.find((item) => String(item.to || '').replace(/\\/g, '/') === 'provisioning');
+  assert(provisioningResource, 'managed installer provisioning resource must be configured.');
+  assert(provisioningResource.from === 'build/provisioning', 'managed installer provisioning must come from build/provisioning.');
+  assertIncludesPatterns(provisioningResource.filter, ['ecorex-provisioning.json', '!**/.env', '!**/.env.*', '!**/*.log'], 'provisioning extraResources.filter');
+  const managedSkillResource = extraResources.find((item) => String(item.to || '').replace(/\\/g, '/') === 'managed-skill-packs');
+  assert(managedSkillResource, 'bundled managed skill-packs resource must be configured.');
+  assert(managedSkillResource.from === 'build/managed-skill-packs', 'bundled managed skill-packs must come from build/managed-skill-packs.');
+  assertIncludesPatterns(managedSkillResource.filter, ['agent-skill-creator/**/*', 'lark-cli/**/*', '!**/.env', '!**/.env.*', '!**/*.log'], 'managed skill-packs extraResources.filter');
+  const managedToolResource = extraResources.find((item) => String(item.to || '').replace(/\\/g, '/') === 'managed-tools');
+  assert(managedToolResource, 'bundled managed tools resource must be configured.');
+  assert(managedToolResource.from === 'build/managed-tools', 'bundled managed tools must come from build/managed-tools.');
+  assertIncludesPatterns(managedToolResource.filter, ['lark-cli/**/*', '!**/.env', '!**/.env.*', '!**/*.log'], 'managed tools extraResources.filter');
+  assertExistingFile(rel('build/managed-skill-packs/lark-cli/.claude-plugin/plugin.json'), 'prepared Feishu skill manifest');
+  assertExistingFile(rel('build/managed-skill-packs/lark-cli/skills/lark-shared/SKILL.md'), 'prepared Feishu shared skill');
+  assertExistingFile(rel('build/managed-skill-packs/agent-skill-creator/.claude-plugin/plugin.json'), 'prepared Agent Skill Creator manifest');
+  assertExistingFile(rel('build/managed-skill-packs/agent-skill-creator/skills/agent-skill-creator/SKILL.md'), 'prepared Agent Skill Creator skill');
+  assertExistingFile(rel('build/managed-tools/lark-cli/lark-cli.exe'), 'prepared Feishu CLI executable', 1024 * 1024);
 });
 
 check('first-party source has no hardcoded model secrets/base URLs', () => {
@@ -1703,26 +1753,29 @@ check('release artifacts are coherent when present', () => {
     assert(fs.existsSync(unpackedExe), 'release/win-unpacked/EcoreX Agent.exe is missing.');
     assert(fs.existsSync(unpackedAsar), 'release/win-unpacked/resources/app.asar is missing.');
     const resourcesDir = rel('release', 'win-unpacked', 'resources');
-    const backendMap = path.join(resourcesDir, 'backend', 'cli.js.map');
-    const backendRoot = path.join(resourcesDir, 'backend', 'claude-code-main');
-    const backendMarketplace = path.join(backendRoot, '.claude-plugin', 'marketplace.json');
-    assertExistingFile(backendMap, 'release backend cli.js.map', 1024 * 1024);
-    assertExistingDirectory(backendRoot, 'release backend claude-code-main');
-    assertExistingFile(backendMarketplace, 'release backend marketplace');
-    const marketplace = parseMarketplace(backendMarketplace);
-    const packedPluginByName = new Map(marketplace.plugins.map((plugin) => [plugin.name, plugin]));
-    for (const pluginName of REQUIRED_BACKEND_RUNTIME_PLUGINS) {
-      const plugin = packedPluginByName.get(pluginName);
-      assert(plugin, `release backend marketplace must include ${pluginName}.`);
-      const pluginSource = toPosix(plugin.source || `plugins/${pluginName}`).replace(/^\.\//, '');
-      const pluginDir = path.resolve(backendRoot, pluginSource);
-      assert(isPathInside(backendRoot, pluginDir), `release backend plugin ${pluginName} source must stay inside backend resource.`);
-      assertExistingDirectory(pluginDir, `release backend plugin ${pluginName}`);
-    }
-    const backendTree = listPackageTree(backendRoot);
-    assertNoSecretOrModelStoragePaths(backendTree, 'release backend resource');
-    assert(!backendTree.some((entry) => /(^|\/)node_modules\//i.test(entry)), 'release backend resource must not include plugin node_modules.');
-    assert(!backendTree.some((entry) => /(^|\/)\.git\//i.test(entry)), 'release backend resource must not include .git directories.');
+    const backendRoot = path.join(resourcesDir, 'backend');
+    assert(!fs.existsSync(backendRoot), 'release resources must not include terminal source backend files.');
+    assertExistingFile(
+      path.join(resourcesDir, 'managed-skill-packs', 'lark-cli', '.claude-plugin', 'plugin.json'),
+      'release bundled Feishu skill manifest'
+    );
+    assertExistingFile(
+      path.join(resourcesDir, 'managed-skill-packs', 'lark-cli', 'skills', 'lark-shared', 'SKILL.md'),
+      'release bundled Feishu shared skill'
+    );
+    assertExistingFile(
+      path.join(resourcesDir, 'managed-skill-packs', 'agent-skill-creator', '.claude-plugin', 'plugin.json'),
+      'release bundled Agent Skill Creator manifest'
+    );
+    assertExistingFile(
+      path.join(resourcesDir, 'managed-skill-packs', 'agent-skill-creator', 'skills', 'agent-skill-creator', 'SKILL.md'),
+      'release bundled Agent Skill Creator skill'
+    );
+    assertExistingFile(
+      path.join(resourcesDir, 'managed-tools', 'lark-cli', 'lark-cli.exe'),
+      'release bundled Feishu CLI executable',
+      1024 * 1024
+    );
     const unpackedClaudeWrapper = path.join(
       resourcesDir,
       'app.asar.unpacked',

@@ -118,6 +118,7 @@ contextBridge.exposeInMainWorld('ecorex', {
   enableSkill: (payload) => safeInvoke('skill:enable', withAuth(payload)),
   disableSkill: (payload) => safeInvoke('skill:disable', withAuth(payload)),
   updateSkill: (payload) => safeInvoke('skill:update', withAuth(payload)),
+  resetSkills: (payload) => safeInvoke('skill:reset', withAuth(payload)),
   openAuth: () => safeInvoke('backend:open-auth', { authToken }),
   runPrompt: (payload) => safeInvoke('agent:run', withAuth(payload)),
   stopPrompt: (payload) => safeInvoke('agent:stop', withAuth(typeof payload === 'string' ? { sessionId: payload } : payload)),

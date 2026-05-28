@@ -24,6 +24,8 @@
     "release:clean": "node scripts/clean-release-artifacts.cjs",
     "release:policy": "node scripts/prepare-release-policy.cjs",
     "release:fix-metadata": "node scripts/fix-release-metadata.cjs",
+    "provisioning:export": "node scripts/run-electron-script.cjs scripts/create-provisioning-from-local-state.cjs",
+    "prepare:managed-feishu": "node scripts/prepare-managed-feishu-skill.cjs",
     "prepare:vue-office": "node scripts/prepare-vue-office.cjs",
     "verify:vue-office": "node scripts/verify-vue-office-vendor.cjs",
     "verify:release-clean": "node scripts/verify-release-clean.cjs",
@@ -36,10 +38,10 @@
     "test:responsive": "node scripts/responsiveness-smoke.cjs",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1 --port 5188 --strictPort",
-    "pack": "npm run release:clean && npm run build && npm run verify:production && npm run verify:native && npm run verify:vue-office && electron-builder --dir && npm run release:fix-metadata && npm run verify:production",
-    "dist": "npm run release:clean && npm run build && npm run verify:production && npm run verify:native && npm run verify:vue-office && electron-builder --win --x64 && npm run release:fix-metadata && npm run verify:production",
+    "pack": "npm run release:clean && npm run prepare:managed-feishu && npm run build && npm run verify:production && npm run verify:native && npm run verify:vue-office && electron-builder --dir && npm run release:fix-metadata && npm run verify:production",
+    "dist": "npm run release:clean && npm run prepare:managed-feishu && npm run build && npm run verify:production && npm run verify:native && npm run verify:vue-office && electron-builder --win --x64 && npm run release:fix-metadata && npm run verify:production",
     "dist:mac": "npm run release:clean && npm run assets:mac-icon && npm run build && npm run verify:production:strict && npm run verify:native && npm run verify:vue-office && electron-builder --mac --x64 --arm64 && npm run release:policy && npm run verify:mac && npm run verify:release-clean",
-    "dist:release": "npm run release:clean && npm run build && npm run verify:production:strict && npm run verify:native && npm run verify:vue-office && electron-builder --win --x64 && npm run release:fix-metadata && npm run verify:production:release"
+    "dist:release": "npm run release:clean && npm run prepare:managed-feishu && npm run build && npm run verify:production:strict && npm run verify:native && npm run verify:vue-office && electron-builder --win --x64 && npm run release:fix-metadata && npm run verify:production:release"
   },
   "dependencies": {
     "@anthropic-ai/claude-code": "2.1.143",
@@ -109,51 +111,42 @@
     ],
     "extraResources": [
       {
-        "from": "终端源代码/cli.js.map",
-        "to": "backend/cli.js.map"
+        "from": "build/provisioning",
+        "to": "provisioning",
+        "filter": [
+          "ecorex-provisioning.json",
+          "!**/.env",
+          "!**/.env.*",
+          "!**/*.log"
+        ]
       },
       {
-        "from": "终端源代码/claude-code-main",
-        "to": "backend/claude-code-main",
+        "from": "build/managed-skill-packs",
+        "to": "managed-skill-packs",
         "filter": [
-          "README.md",
-          "CHANGELOG.md",
-          ".claude-plugin/marketplace.json",
-          "plugins/**/*",
-          "!plugins/**/examples/**/*",
-          "!plugins/**/skills/**/examples/**/*",
-          "!plugins/**/skills/**/tests/**/*",
-          "!plugins/**/skills/**/scripts/test-*",
-          "!plugins/**/tests/**/*",
-          "!plugins/**/*.local.md",
+          "agent-skill-creator/**/*",
+          "lark-cli/**/*",
           "!**/.env",
           "!**/.env.*",
           "!**/*.log",
           "!**/settings.json",
           "!**/secrets.json",
           "!**/auth-session.json",
-          "!**/auth-identity.json",
-          "!**/auth-users.json",
-          "!**/enterprise-admin-journal.jsonl",
-          "!**/session-bindings.json",
-          "!**/skill-packs.json",
-          "!**/skill-packs/**/*",
-          "!**/model-profiles.json",
-          "!**/.ecorex-project.json",
-          "!**/.ecorex-projects.json",
-          "!**/.ecorex-memory/**/*",
-          "!**/.mcp.json",
-          "!**/.claude/**/*",
-          "!**/.codex/**/*",
-          "!**/.agents/**/*",
-          "!**/superpowers/**/*",
-          "!**/huashu-design/**/*",
-          "!**/huashu_design/**/*",
-          "!plugins/**/node_modules/**/*",
-          "!plugins/**/.git/**/*",
-          "!plugins/**/superpowers/**/*",
-          "!plugins/**/huashu-design/**/*",
-          "!plugins/**/huashu_design/**/*"
+          "!**/auth-users.json"
+        ]
+      },
+      {
+        "from": "build/managed-tools",
+        "to": "managed-tools",
+        "filter": [
+          "lark-cli/**/*",
+          "!**/.env",
+          "!**/.env.*",
+          "!**/*.log",
+          "!**/settings.json",
+          "!**/secrets.json",
+          "!**/auth-session.json",
+          "!**/auth-users.json"
         ]
       },
       {
@@ -223,10 +216,13 @@
       ]
     },
     "nsis": {
-      "oneClick": true,
+      "oneClick": false,
       "perMachine": false,
       "allowElevation": false,
-      "createDesktopShortcut": true,
+      "allowToChangeInstallationDirectory": true,
+      "include": "build/installer.nsh",
+      "uninstallDisplayName": "EcoreX Agent",
+      "createDesktopShortcut": false,
       "createStartMenuShortcut": true,
       "shortcutName": "EcoreX Agent"
     }

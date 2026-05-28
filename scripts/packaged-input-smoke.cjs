@@ -141,10 +141,16 @@ async function main() {
       const page = await findAppPage(browser);
       await page.bringToFront();
       await page.locator('[data-testid="login-email-input"]').waitFor({ state: 'visible' });
-      await page.locator('[data-testid="login-email-input"]').click();
-      await page.keyboard.type('e2e.owner@ecorex.local');
-      await page.locator('[data-testid="login-secret-input"]').click();
-      await page.keyboard.type('EcoreX123!');
+      await page.locator('[data-testid="login-email-input"]').fill('first.run.owner@example.local');
+      await page.locator('[data-testid="login-secret-input"]').fill('NotTheProvisionedUser123!');
+      await page.locator('[data-testid="login-submit-button"]').click();
+      await page.waitForTimeout(700);
+      if (await page.locator('[data-testid="app-shell"]').isVisible().catch(() => false)) {
+        throw new Error('Packaged managed auth accepted an arbitrary first-run owner.');
+      }
+
+      await page.locator('[data-testid="login-email-input"]').fill('e2e.owner@ecorex.local');
+      await page.locator('[data-testid="login-secret-input"]').fill('EcoreX123!');
 
       const loginValues = await page.evaluate(() => ({
         email: document.querySelector('[data-testid="login-email-input"]')?.value || '',
@@ -158,6 +164,52 @@ async function main() {
 
       await page.locator('[data-testid="login-submit-button"]').click();
       await page.locator('[data-testid="app-shell"]').waitFor({ state: 'visible', timeout: 20_000 });
+
+      const skillValues = await page.evaluate(async () => {
+        const result = await window.ecorex?.listSkills?.({ refresh: true });
+        const installedNames = (result?.installedSkillPacks || result?.skills || [])
+          .map((item) => item?.name)
+          .filter(Boolean);
+        const childNames = (result?.childSkills || [])
+          .map((item) => item?.name)
+          .filter(Boolean);
+        return {
+          ok: result?.ok === true,
+          installedNames,
+          childNames,
+          larkInstalled: installedNames.includes('lark-cli'),
+          larkSharedLoaded: childNames.includes('lark-shared'),
+          skillCreatorInstalled: installedNames.includes('agent-skill-creator'),
+          skillCreatorLoaded: childNames.includes('agent-skill-creator')
+        };
+      });
+      if (!skillValues.ok || !skillValues.larkInstalled || !skillValues.larkSharedLoaded || !skillValues.skillCreatorInstalled || !skillValues.skillCreatorLoaded) {
+        throw new Error(`Packaged bundled skills did not seed correctly: ${JSON.stringify(skillValues)}`);
+      }
+
+      const resetValues = await page.evaluate(async () => {
+        const reset = await window.ecorex?.resetSkills?.({ confirmReset: true });
+        const result = await window.ecorex?.listSkills?.({ refresh: true });
+        const installedNames = (result?.installedSkillPacks || result?.skills || [])
+          .map((item) => item?.name)
+          .filter(Boolean);
+        const childNames = (result?.childSkills || [])
+          .map((item) => item?.name)
+          .filter(Boolean);
+        return {
+          ok: reset?.ok === true && result?.ok === true,
+          installedNames,
+          childNames,
+          larkInstalled: installedNames.includes('lark-cli'),
+          larkSharedLoaded: childNames.includes('lark-shared'),
+          skillCreatorInstalled: installedNames.includes('agent-skill-creator'),
+          skillCreatorLoaded: childNames.includes('agent-skill-creator')
+        };
+      });
+      if (!resetValues.ok || !resetValues.larkInstalled || !resetValues.larkSharedLoaded || !resetValues.skillCreatorInstalled || !resetValues.skillCreatorLoaded) {
+        throw new Error(`Packaged skill reset did not restore bundled skills: ${JSON.stringify(resetValues)}`);
+      }
+
       await page.locator('[data-testid="chat-input"]').click();
       await page.keyboard.type('packaged input smoke abc');
 
@@ -182,6 +234,8 @@ async function main() {
         ok: true,
         packagedExe,
         login: loginValues,
+        skills: skillValues,
+        reset: resetValues,
         chat: chatValues
       }, null, 2));
     } finally {

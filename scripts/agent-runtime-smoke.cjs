@@ -200,6 +200,18 @@ check('transport stop and cleanup path', () => {
     ],
     'agent finalization cleanup'
   );
+  includesAll(
+    main,
+    [
+      'function substantiveAgentResultText',
+      'function agentSessionHasSubstantiveResult',
+      'function incompleteAgentResultText',
+      'const incompleteResult = finalStatus ===',
+      "reason: incompleteResult ? 'incomplete-result' : undefined",
+      'entry.hasSubstantiveResult = true'
+    ],
+    'agent incomplete result guard'
+  );
 });
 
 check('runtime status and diagnostics surface', () => {

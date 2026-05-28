@@ -1470,6 +1470,8 @@ test.describe('EcoreX Agent Electron E2E', () => {
     await page.locator('.new-chat').click();
     await expect(page.locator('[data-testid="chat-input"]')).toHaveValue('');
     await expect(page.locator('[data-testid="chat-stop-button"]')).toHaveCount(0);
+    await expect(page.getByTestId('running-session-strip')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId('running-session-pill').filter({ hasText: alphaPrompt })).toBeVisible();
     await page.locator('[data-testid="chat-input"]').fill(betaPrompt);
     await page.locator('[data-testid="chat-input"]').press('Enter');
     await expect(page.locator('.user-bubble').filter({ hasText: betaPrompt }).first()).toBeVisible();
@@ -1481,6 +1483,12 @@ test.describe('EcoreX Agent Electron E2E', () => {
     expect(runPayloads[0].claudeSessionId).toBe(runPayloads[0].conversationId);
     expect(runPayloads[1].claudeSessionId).toBe(runPayloads[1].conversationId);
     await expect.poll(async () => electronApp.evaluate(() => (global.__ecorexParallelStops || []).length)).toBe(0);
+    await expect(page.getByTestId('running-session-pill')).toHaveCount(2);
+    await page.getByTestId('running-session-pill').filter({ hasText: alphaPrompt }).getByTestId('running-session-open').click();
+    await expect(page.locator('.user-bubble').filter({ hasText: alphaPrompt }).first()).toBeVisible();
+    await expect(page.locator('[data-testid="chat-stop-button"]')).toBeVisible();
+    await page.getByTestId('running-session-pill').filter({ hasText: betaPrompt }).getByTestId('running-session-open').click();
+    await expect(page.locator('.user-bubble').filter({ hasText: betaPrompt }).first()).toBeVisible();
 
     async function completeParallelRun(runKey, text) {
       return electronApp.evaluate(({ BrowserWindow }, payload) => {
@@ -1552,6 +1560,62 @@ test.describe('EcoreX Agent Electron E2E', () => {
       betaHasBeta: true,
       betaHasAlpha: false
     });
+  });
+
+  test('marks incomplete agent terminal results as failed instead of complete', async ({ ecorex }) => {
+    const { electronApp, page } = ecorex;
+    await login(page);
+
+    const incompleteText = 'Task stopped before a usable final result was returned.';
+    await electronApp.evaluate(({ ipcMain, BrowserWindow }, text) => {
+      ipcMain.removeHandler('agent:run');
+      ipcMain.handle('agent:run', (event, payload) => {
+        const win = BrowserWindow.fromWebContents(event.sender);
+        setTimeout(() => {
+          if (!win || win.isDestroyed()) return;
+          win.webContents.send('agent:events', {
+            sessionId: payload.sessionId,
+            events: [
+              {
+                sessionId: payload.sessionId,
+                kind: 'status',
+                status: 'running',
+                text: 'Configuring Feishu CLI'
+              },
+              {
+                sessionId: payload.sessionId,
+                kind: 'error',
+                status: 'failed',
+                reason: 'incomplete-result',
+                text,
+                recoveryHint: 'Retry with a smaller task and ask for a concrete final result.'
+              }
+            ]
+          });
+        }, 60);
+        return {
+          ok: true,
+          sessionId: payload.sessionId,
+          initialEvent: {
+            sessionId: payload.sessionId,
+            kind: 'status',
+            status: 'started',
+            text: 'started'
+          }
+        };
+      });
+    }, incompleteText);
+
+    await page.locator('[data-testid="chat-input"]').fill('configure Feishu CLI for this local project and report every final verification result');
+    await page.locator('[data-testid="chat-input"]').press('Enter');
+
+    const assistant = page.locator('.assistant-card').filter({ hasText: incompleteText }).first();
+    await expect(assistant).toBeVisible({ timeout: 10_000 });
+    await expect(assistant.locator('.message-status.error')).toBeVisible();
+    await expect(assistant.locator('.message-status.complete')).toHaveCount(0);
+    await expect(assistant.locator('.message-retry-link')).toBeVisible();
+    await expect(assistant.locator('.agent-trace-node.danger')).toBeVisible();
+    await expect(page.locator('[data-testid="chat-stop-button"]')).toHaveCount(0);
   });
 
   test('continues permission confirmations as a hidden rerun without adding a user prompt', async ({ ecorex }) => {

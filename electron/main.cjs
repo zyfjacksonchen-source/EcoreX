@@ -46,6 +46,7 @@ let cachedCapabilities = null;
 let cachedCapabilitiesKey = '';
 let cachedBackendStatus = null;
 let backendStatusInflight = null;
+let bundledManagedSkillPacksSeeded = false;
 const AGENT_TIMEOUT_MS = 30 * 60 * 1000;
 const AGENT_IDLE_TIMEOUT_MS = 12 * 60 * 1000;
 const AGENT_MIN_TIMEOUT_MS = 30 * 1000;
@@ -71,10 +72,14 @@ const AUTH_USERS_FILE_NAME = 'auth-users.json';
 const ENTERPRISE_ADMIN_JOURNAL_FILE_NAME = 'enterprise-admin-journal.jsonl';
 const SECRETS_FILE_NAME = 'secrets.json';
 const MODEL_PROFILES_FILE_NAME = 'model-profiles.json';
+const PROVISIONING_FILE_NAME = 'ecorex-provisioning.json';
 const SESSION_TRANSCRIPT_DIR_NAME = 'sessions';
 const CLAUDE_SESSION_BINDINGS_FILE_NAME = 'session-bindings.json';
 const MANAGED_SKILL_PACKS_FILE_NAME = 'skill-packs.json';
 const MANAGED_SKILL_PACKS_DIR_NAME = 'skill-packs';
+const BUNDLED_MANAGED_SKILL_PACKS_DIR_NAME = 'managed-skill-packs';
+const BUNDLED_MANAGED_TOOLS_DIR_NAME = 'managed-tools';
+const LARK_CLI_SKILL_PACK_NAME = 'lark-cli';
 const RUN_JOURNAL_FILE_NAME = 'agent-run-journal.jsonl';
 const CRASH_SUMMARY_FILE_NAME = 'crash-summary.json';
 const TELEMETRY_QUEUE_FILE_NAME = 'telemetry-queue.json';
@@ -354,6 +359,87 @@ function backendPath(...segments) {
   const sourceDir = path.join(ROOT_DIR, '终端源代码');
   if (fs.existsSync(sourceDir)) return path.join(sourceDir, ...segments);
   return path.join(ROOT_DIR, '终端源代码', ...segments);
+}
+
+function provisioningCandidatePaths() {
+  const candidates = [];
+  const envPath = String(process.env.ECOREX_PROVISIONING_FILE || '').trim();
+  if (envPath) candidates.push(envPath);
+  if (app.isPackaged && process.resourcesPath) {
+    candidates.push(path.join(process.resourcesPath, 'provisioning', PROVISIONING_FILE_NAME));
+  } else {
+    candidates.push(path.join(ROOT_DIR, 'build', 'provisioning', PROVISIONING_FILE_NAME));
+  }
+  return [...new Set(candidates)];
+}
+
+function readProvisioningFile() {
+  for (const file of provisioningCandidatePaths()) {
+    try {
+      if (!file || !fs.existsSync(file)) continue;
+      const stat = fs.statSync(file);
+      if (!stat.isFile() || stat.size <= 0 || stat.size > 1024 * 1024) continue;
+      const payload = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) continue;
+      return { ...payload, __sourcePath: file };
+    } catch (error) {
+      writeLog('warn', 'Managed provisioning file could not be read', { error: error?.message });
+    }
+  }
+  return null;
+}
+
+function bundledResourceDir(name = '') {
+  if (!name) return '';
+  if (app.isPackaged && process.resourcesPath) {
+    return path.join(process.resourcesPath, name);
+  }
+  return path.join(ROOT_DIR, 'build', name);
+}
+
+function bundledManagedSkillPacksRoot() {
+  return bundledResourceDir(BUNDLED_MANAGED_SKILL_PACKS_DIR_NAME);
+}
+
+function bundledManagedToolsRoot() {
+  return bundledResourceDir(BUNDLED_MANAGED_TOOLS_DIR_NAME);
+}
+
+function managedToolPathEntries() {
+  const root = bundledManagedToolsRoot();
+  const entries = [];
+  const larkDir = path.join(root, LARK_CLI_SKILL_PACK_NAME);
+  const larkExe = path.join(larkDir, isWindows ? 'lark-cli.exe' : 'lark-cli');
+  if (fs.existsSync(larkExe)) entries.push(larkDir);
+  return entries;
+}
+
+function prependPathEntries(basePath = '', entries = []) {
+  const delimiter = isWindows ? ';' : ':';
+  const seen = new Set();
+  const parts = [];
+  for (const entry of [...entries, ...String(basePath || '').split(delimiter)]) {
+    const value = String(entry || '').trim();
+    if (!value) continue;
+    const key = isWindows ? value.toLowerCase() : value;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    parts.push(value);
+  }
+  return parts.join(delimiter);
+}
+
+function authScopedRuntimeId(authContext = null) {
+  const email = authContext?.user?.email || authContext?.publicUser?.email || '';
+  const id = authContext?.user?.id || authContext?.publicUser?.id || '';
+  const raw = id || (email ? stableUserId(email) : 'default');
+  return sanitizeSkillPackName(raw, 'default').slice(0, 80) || 'default';
+}
+
+function larkCliConfigDir(authContext = null) {
+  const dir = path.join(agentRuntimeConfigDir(), 'lark-cli', authScopedRuntimeId(authContext));
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
 }
 
 function logPath() {
@@ -1130,20 +1216,26 @@ function generalAgentWorkspaceDir() {
   return dir;
 }
 
-function isolatedAgentRuntimeEnv() {
+function isolatedAgentRuntimeEnv(authContext = null) {
   const configDir = agentRuntimeConfigDir();
   const appDataDir = path.join(configDir, 'appdata');
   const localAppDataDir = path.join(configDir, 'local-appdata');
+  const larkConfigDir = larkCliConfigDir(authContext);
   fs.mkdirSync(appDataDir, { recursive: true });
   fs.mkdirSync(localAppDataDir, { recursive: true });
+  const managedToolPath = prependPathEntries(process.env.PATH || process.env.Path || '', managedToolPathEntries());
   return {
     HOME: configDir,
     USERPROFILE: configDir,
     APPDATA: appDataDir,
     LOCALAPPDATA: localAppDataDir,
+    PATH: managedToolPath,
+    Path: managedToolPath,
     XDG_CONFIG_HOME: configDir,
     CLAUDE_CONFIG_DIR: configDir,
     ECOREX_AGENT_CONFIG_DIR: configDir,
+    LARKSUITE_CLI_CONFIG_DIR: larkConfigDir,
+    ECOREX_LARK_CLI_CONFIG_DIR: larkConfigDir,
     CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
     ECOREX_SKILL_SCOPE: 'bundled-only'
   };
@@ -1479,6 +1571,70 @@ function writeSkillCollectionPlugin(destination, info = {}) {
   copyDirectoryBounded(info.pluginRoot, skillsRoot);
 }
 
+function bundledManagedSkillPackSources() {
+  const root = bundledManagedSkillPacksRoot();
+  try {
+    if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) return [];
+    return fs.readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(root, entry.name))
+      .filter((candidate) => fs.existsSync(path.join(candidate, '.claude-plugin', 'plugin.json')));
+  } catch {
+    return [];
+  }
+}
+
+function seedBundledManagedSkillPacks() {
+  if (bundledManagedSkillPacksSeeded) return;
+  bundledManagedSkillPacksSeeded = true;
+  const sources = bundledManagedSkillPackSources();
+  if (!sources.length) return;
+
+  const now = new Date().toISOString();
+  const previousRows = readManagedSkillPackState();
+  let nextRows = [...previousRows];
+
+  for (const source of sources) {
+    try {
+      const manifest = skillPluginManifest(source) || {};
+      const name = sanitizeSkillPackName(manifest.name || path.basename(source));
+      const destination = installDestinationForSkillPack(name);
+      const previous = previousRows.find((row) => row.name === name || row.id === publicStableId('skillpack', name));
+      fs.rmSync(destination, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      fs.mkdirSync(destination, { recursive: true });
+      copyDirectoryBounded(source, destination, { bytes: 0 });
+      const record = normalizeManagedSkillPackRecord({
+        id: publicStableId('skillpack', name),
+        name,
+        title: manifest.displayName || manifest.title || name,
+        version: manifest.version || previous?.version || null,
+        description: manifest.description || previous?.description || '',
+        category: previous?.category || 'EcoreX',
+        enabled: previous ? previous.enabled !== false : true,
+        installed: true,
+        installPath: destination,
+        sourcePath: source,
+        sourceKind: 'bundled-skill-collection',
+        generatedWrapper: false,
+        mcpConfig: previous?.mcpConfig || null,
+        installedAt: previous?.installedAt || now,
+        lastUpdated: now
+      });
+      nextRows = [
+        ...nextRows.filter((row) => row.name !== name && row.id !== publicStableId('skillpack', name)),
+        record
+      ];
+      writeLog('info', 'Bundled managed skill pack seeded', { name, version: manifest.version || null });
+    } catch (error) {
+      writeLog('warn', 'Bundled managed skill pack could not be seeded', {
+        source: publicWorkspacePath(source),
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+  writeManagedSkillPackState(nextRows);
+}
+
 function installManagedSkillPack(payload = {}, authContext = null) {
   optionalObjectPayload(payload, 'skill install payload');
   const sourcePath = String(payload.sourcePath || payload.path || payload.localPath || '').trim();
@@ -1582,7 +1738,41 @@ function updateManagedSkillPack(payload = {}, authContext = null) {
   return installManagedSkillPack({ sourcePath: record.sourcePath, name: record.name, enabled: record.enabled }, authContext);
 }
 
+function resetManagedSkillPacks(payload = {}, authContext = null) {
+  optionalObjectPayload(payload, 'skill reset payload');
+  if (payload.confirmReset !== true) throw new Error('Skill reset requires confirmation.');
+  const configRoot = agentRuntimeConfigDir();
+  const packsDir = managedSkillPacksDir();
+  const stateFile = managedSkillPacksStatePath();
+  if (!isPathInside(configRoot, packsDir) || !isPathInside(configRoot, stateFile)) {
+    throw new Error('Invalid managed skill reset target.');
+  }
+  fs.rmSync(packsDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  fs.rmSync(stateFile, { force: true, maxRetries: 3, retryDelay: 100 });
+  if (payload.includeToolAuth === true) {
+    const larkAuthDir = path.join(configRoot, LARK_CLI_SKILL_PACK_NAME);
+    if (isPathInside(configRoot, larkAuthDir)) {
+      fs.rmSync(larkAuthDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  }
+  bundledManagedSkillPacksSeeded = false;
+  const status = collectSkillStatus({ refresh: true });
+  writeLog('warn', 'Managed skill packs reset to bundled state', {
+    actor: authContext?.user?.email || null,
+    includeToolAuth: payload.includeToolAuth === true,
+    skillPacks: status.installedSkillPacks?.map((pack) => pack.name) || []
+  });
+  return {
+    ok: true,
+    reset: true,
+    status,
+    installedSkillPacks: status.installedSkillPacks || [],
+    childSkills: status.childSkills || []
+  };
+}
+
 function collectManagedSkillInventory(options = {}) {
+  seedBundledManagedSkillPacks();
   const includeDisabled = options.includeDisabled !== false;
   const rows = readManagedSkillPackState()
     .filter((row) => row.installed && row.installPath && fs.existsSync(row.installPath))
@@ -1894,6 +2084,35 @@ function writeAuthUsers(users = []) {
   return envelope.users;
 }
 
+function provisioningHasAuthUsers(payload = readProvisioningFile()) {
+  return Array.isArray(payload?.auth?.users);
+}
+
+function normalizeProvisionedAuthUsers(payload = readProvisioningFile()) {
+  const rawUsers = Array.isArray(payload?.auth?.users) ? payload.auth.users : [];
+  return rawUsers
+    .map((user, index) => normalizeAuthUser({
+      ...user,
+      role: user?.role || 'user'
+    }, index))
+    .filter(Boolean);
+}
+
+function provisionAuthUsersIfNeeded() {
+  const payload = readProvisioningFile();
+  if (!provisioningHasAuthUsers(payload)) return [];
+  const users = normalizeProvisionedAuthUsers(payload);
+  const hasOwner = users.some((user) => user.active !== false && normalizeUserRole(user.role) === 'super_admin');
+  if (!users.length || !hasOwner) {
+    throw new Error('Managed auth provisioning is invalid.');
+  }
+  writeLog('info', 'Managed auth users provisioned', {
+    count: users.length,
+    ownerEmail: users.find((user) => normalizeUserRole(user.role) === 'super_admin')?.email || null
+  });
+  return writeAuthUsers(users);
+}
+
 function authUsersUnavailableError(error) {
   const wrapped = new Error('Local auth users could not be read.');
   wrapped.code = 'E_AUTH_USERS_UNREADABLE';
@@ -1938,6 +2157,8 @@ function readAuthUsers(options = {}) {
   try {
     const file = authUsersPath();
     if (!fs.existsSync(file)) {
+      const provisionedUsers = provisionAuthUsersIfNeeded();
+      if (provisionedUsers.length) return provisionedUsers;
       const legacyIdentityExists = fs.existsSync(authIdentityPath());
       const legacyUser = legacyOwnerAsUser();
       if (legacyUser && options.migrate !== false) return writeAuthUsers([legacyUser]);
@@ -2955,11 +3176,68 @@ function normalizeModelBaseUrlForUse(value, input = {}, options = {}) {
   return baseUrl;
 }
 
+function provisioningModelProfilePayload(payload = readProvisioningFile()) {
+  if (!payload || typeof payload !== 'object') return null;
+  const profile = payload.modelProfile || payload.defaultModelProfile || null;
+  if (profile && typeof profile === 'object' && !Array.isArray(profile)) return profile;
+  if (Array.isArray(payload.modelProfiles)) {
+    return payload.modelProfiles.find((item) => item && typeof item === 'object' && !Array.isArray(item)) || null;
+  }
+  return null;
+}
+
+function normalizeProvisionedModelProfile(payload = readProvisioningFile()) {
+  const rawProfile = provisioningModelProfilePayload(payload);
+  if (!rawProfile) return null;
+  const now = new Date().toISOString();
+  const apiKeyEnv = String(rawProfile.apiKeyEnv || '').trim();
+  const apiKey = String(rawProfile.apiKey || (apiKeyEnv ? process.env[apiKeyEnv] : '') || '').trim();
+  const name = sanitizeModelProfileName(rawProfile.name || rawProfile.id || rawProfile.label || rawProfile.model || 'EcoreX Default');
+  const model = normalizeModelProfileText(rawProfile.model || rawProfile.modelName || 'gpt-5.5', 'model', { maxLength: 160 });
+  const imageModel = normalizeImageModelName(normalizeModelProfileText(rawProfile.imageModel || rawProfile.imageModelName || DEFAULT_IMAGE_MODEL, 'imageModel', {
+    required: false,
+    maxLength: 160
+  }));
+  const baseUrl = normalizeModelBaseUrlForUse(rawProfile.baseUrl, { ...rawProfile, allowPrivateBaseUrl: true }, { allowStoredPrivateBaseUrl: true });
+  return {
+    name,
+    label: normalizeModelProfileText(rawProfile.label || name, 'label', { maxLength: 120 }),
+    baseUrl,
+    apiKey: apiKey ? {
+      ...encryptSecretValue(normalizeSecretValue(apiKey)),
+      masked: maskSecret(apiKey),
+      createdAt: now,
+      updatedAt: now
+    } : null,
+    model,
+    imageModel,
+    isActive: true,
+    createdAt: rawProfile.createdAt || now,
+    updatedAt: now
+  };
+}
+
+function provisionModelProfilesIfNeeded() {
+  const profile = normalizeProvisionedModelProfile();
+  if (!profile) return null;
+  writeLog('info', 'Managed model profile provisioned', {
+    name: profile.name,
+    model: profile.model,
+    imageModel: profile.imageModel,
+    apiKeyConfigured: Boolean(profile.apiKey)
+  });
+  return writeModelProfilesFile({
+    version: 1,
+    profiles: [profile],
+    activeProfileName: profile.name
+  });
+}
+
 function readModelProfilesFile() {
   const fallback = { version: 1, profiles: [], activeProfileName: null, exists: false };
   try {
     const file = modelProfilesPath();
-    if (!fs.existsSync(file)) return fallback;
+    if (!fs.existsSync(file)) return provisionModelProfilesIfNeeded() || fallback;
     const stat = fs.statSync(file);
     if (!stat.isFile() || stat.size > 1024 * 1024) return fallback;
     const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -3014,6 +3292,7 @@ function readModelProfilesFile() {
       profiles.find((profile) => profile.name === raw?.activeProfileName)?.name ||
       profiles.find((profile) => profile.isActive)?.name ||
       null;
+    if (!profiles.length) return provisionModelProfilesIfNeeded() || fallback;
     return { version: 1, profiles, activeProfileName, exists: true };
   } catch {
     return fallback;
@@ -6046,6 +6325,10 @@ function publicPromptPreview(prompt = '') {
 
 function agentRecoveryHint(codeOrStatus = '', details = {}) {
   const code = String(codeOrStatus || details.code || details.status || details.reason || '').toLowerCase();
+  const detailReason = String(details.reason || details.code || '').toLowerCase();
+  if (code === 'incomplete-result' || detailReason === 'incomplete-result') {
+    return 'The task ended without a usable final answer. Retry with a narrower request, or ask the agent to return a clear conclusion and deliverable path.';
+  }
   if (code === 'too-many-sessions') {
     return `Close or cancel one running session, then retry. Up to ${details.maxRunning || MAX_RUNNING_AGENTS} sessions can run at once.`;
   }
@@ -6062,6 +6345,32 @@ function agentRecoveryHint(codeOrStatus = '', details = {}) {
     return 'The session is no longer running. Refresh session status before retrying.';
   }
   return 'The task did not finish. Check the runtime status and retry with a smaller prompt if needed.';
+}
+
+function substantiveAgentResultText(value = '') {
+  const text = safeTranscriptText(value);
+  if (!text) return '';
+  const normalized = text
+    .toLowerCase()
+    .replace(/[\s"'`*_~.,;:!?()[\]{}<>-]+/g, '');
+  if (/^(done|ok|okay|success|successful|completed|complete|finished|agenttaskcompleted|taskcompleted|已完成|完成|好了|可以了|成功)$/.test(normalized)) {
+    return '';
+  }
+  if (text.length < 8 && /^(ok|done|yes|no|完成|已完成|成功)$/i.test(text)) return '';
+  return text;
+}
+
+function agentSessionHasSubstantiveResult(entry = {}) {
+  if (entry.hasSubstantiveResult) return true;
+  return Array.isArray(entry.transcript) && entry.transcript.some((event) => (
+    event?.kind === 'result'
+    && !['failed', 'error'].includes(String(event.status || '').toLowerCase())
+    && Boolean(substantiveAgentResultText(event.textPreview || event.text || ''))
+  ));
+}
+
+function incompleteAgentResultText() {
+  return '任务进程已经结束，但没有返回可用的最终结论或交付物。EcoreX 已将本次任务标记为未完成，请重试或把任务拆成更小步骤，并要求返回明确结论。';
 }
 
 function duplicateAgentSessionResponse(sessionId, requestedSessionId, owner = {}) {
@@ -7320,6 +7629,16 @@ function recordSessionEvent(entry, event) {
   }
   if (normalized.claudeResultStatus === 'failed') {
     entry.claudeResultFailed = true;
+  }
+  if (normalized.kind === 'result') {
+    entry.resultEventCount = (Number(entry.resultEventCount) || 0) + 1;
+    const resultText = substantiveAgentResultText(normalized.text);
+    if (resultText) {
+      entry.hasSubstantiveResult = true;
+      entry.finalResultPreview = safeTranscriptTextPreview(resultText);
+    } else if (normalized.claudeResultStatus !== 'failed') {
+      entry.emptyResultEventCount = (Number(entry.emptyResultEventCount) || 0) + 1;
+    }
   }
   if (normalized.ledger) {
     entry.ledgerEventCount = (Number(entry.ledgerEventCount) || 0) + 1;
@@ -10289,7 +10608,7 @@ function runAgent(payload = {}, options = {}) {
 
     const modelProfileEnv = modelProfileEnvForModel(model);
     const runtimeEnv = {
-      ...isolatedAgentRuntimeEnv(),
+      ...isolatedAgentRuntimeEnv(options.authContext || null),
       ...modelProfileEnv,
       ...projectEnvForAgent(projectContext),
       CLAUDE_CODE_NO_FLICKER: '1',
@@ -10533,20 +10852,24 @@ function runAgent(payload = {}, options = {}) {
       const entry = runningAgents.get(sessionId);
       if (!entry) return;
       entry.flushBufferedOutput?.();
-      const finalStatus = code === 0 && !entry.claudeResultFailed ? 'completed' : 'failed';
+      let finalStatus = code === 0 && !entry.claudeResultFailed ? 'completed' : 'failed';
+      const incompleteResult = finalStatus === 'completed' && !agentSessionHasSubstantiveResult(entry);
+      if (incompleteResult) finalStatus = 'failed';
       const sessionReuseConflict = finalStatus === 'failed' && /session id .*already in use/i.test(entry.lastStderr || '');
       const missingResumeTarget = finalStatus === 'failed' && /no conversation found with session id/i.test(entry.lastStderr || '');
       if (finalStatus === 'completed') markClaudeSessionLaunched(entry.claudeSessionId);
       if (sessionReuseConflict || missingResumeTarget) {
         markClaudeSessionResumeInvalid(entry.claudeSessionId, missingResumeTarget ? 'missing-resume-target' : 'session-reuse-conflict');
       }
+      const finalText = incompleteResult ? incompleteAgentResultText() : undefined;
       finalizeAgentSession(sessionId, entry, {
         status: finalStatus,
+        reason: incompleteResult ? 'incomplete-result' : undefined,
         code,
         signal,
-        text: sessionReuseConflict
+        text: finalText || (sessionReuseConflict
           ? '本地会话仍在释放或已存在。EcoreX 已切换为可恢复会话，请直接重试。'
-          : undefined
+          : undefined)
       });
       if (!sessionReuseConflict && !missingResumeTarget) {
         refreshClaudeSessionTranscriptSeen(entry.claudeSessionId);
@@ -10556,6 +10879,9 @@ function runAgent(payload = {}, options = {}) {
         code,
         signal,
         status: finalStatus,
+        incompleteResult,
+        resultEventCount: Number(entry.resultEventCount) || 0,
+        emptyResultEventCount: Number(entry.emptyResultEventCount) || 0,
         durationMs: Date.now() - entry.startedAt
       });
     });
@@ -10699,7 +11025,8 @@ handleSafe('skill:install', (_event, payload, authContext) => installManagedSkil
 handleSafe('skill:enable', (_event, payload) => updateManagedSkillEnabled(payload, true), { authRequired: true, requiredPermission: 'skills:manage' });
 handleSafe('skill:disable', (_event, payload) => updateManagedSkillEnabled(payload, false), { authRequired: true, requiredPermission: 'skills:manage' });
 handleSafe('skill:update', (_event, payload, authContext) => updateManagedSkillPack(payload, authContext), { authRequired: true, requiredPermission: 'skills:manage' });
-handleSafe('agent:run', (event, payload) => runAgent(payload, { ownerId: event.sender.id }), { authRequired: true });
+handleSafe('skill:reset', (_event, payload, authContext) => resetManagedSkillPacks(payload, authContext), { authRequired: true, requiredPermission: 'skills:manage' });
+handleSafe('agent:run', (event, payload, authContext) => runAgent(payload, { ownerId: event.sender.id, authContext }), { authRequired: true });
 handleSafe('agent:stop', (_event, payload) => {
   const sessionId = typeof payload === 'object' && payload ? payload.sessionId : payload;
   return stopAgent(sessionId, 'cancelled');

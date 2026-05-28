@@ -6097,6 +6097,63 @@ select,
   outline: 0;
 }
 
+.skill-admin-panel {
+  min-height: 38px;
+  margin: 0 0 8px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(16, 24, 34, 0.78);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.skill-admin-panel label {
+  flex: 1 1 280px;
+  min-width: min(280px, 100%);
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  color: var(--muted);
+}
+
+.skill-admin-panel input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+}
+
+.skill-admin-panel button {
+  height: 30px;
+  min-height: 30px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  white-space: nowrap;
+  font-weight: 800;
+}
+
+.skill-admin-panel button.primary {
+  border-color: rgba(255, 90, 0, 0.46);
+  background: rgba(255, 90, 0, 0.14);
+  color: #ffd9c4;
+}
+
 .mcp-toolbar .primary {
   height: 30px;
   min-height: 30px;

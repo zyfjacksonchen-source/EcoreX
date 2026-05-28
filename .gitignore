@@ -1,4 +1,5 @@
 node_modules/
+终端源代码/
 
 # Playwright artifacts.
 test-results/
@@ -21,6 +22,12 @@ release/real-agent-stress-*.json
 # are deployed separately.
 landing/*-deploy-*.tar
 landing/*/downloads/*.zip
+landing/*/downloads/*.exe
+landing/*/downloads/*.exe.blockmap
+build/provisioning/ecorex-provisioning.json
+build/managed-skill-packs/agent-skill-creator/
+build/managed-skill-packs/lark-cli/
+build/managed-tools/lark-cli/
 
 # Local QA reports generated during release readiness checks.
 reports/qa/

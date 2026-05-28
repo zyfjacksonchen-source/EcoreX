@@ -412,6 +412,21 @@ function roleLabelFromAuthUser(user = {}) {
   return '成员';
 }
 
+function authHasPermission(status = {}, permission = '') {
+  const user = authUserFromStatus(status);
+  const permissions = Array.isArray(user.permissions)
+    ? user.permissions
+    : Array.isArray(status.permissions)
+      ? status.permissions
+      : [];
+  return permissions.includes(permission);
+}
+
+function canManageSkillsFromAuth(status = {}) {
+  const role = String(authUserFromStatus(status).role || status.role || '').trim();
+  return role === 'super_admin' || role === 'admin' || authHasPermission(status, 'skills:manage');
+}
+
 function avatarInitialsFromUser(user = {}, fallbackName = '') {
   const explicit = String(user.avatarInitials || '').trim();
   if (explicit) return explicit.slice(0, 2).toUpperCase();
@@ -3893,6 +3908,7 @@ function SystemSettingsView({
         {activeTab === 'skills' && (
           <SkillsView
             embedded
+            authStatus={authStatus}
             backendStatus={backendStatus}
             capabilities={capabilities}
             refreshBackend={refreshBackend}
@@ -5560,18 +5576,24 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     syncCurrentSessionForVisibleConversation(conversationIdRef.current);
   }
 
-  function syncRecentChatFromPrompt(conversationId, text, projectOverride = null) {
+  function syncRecentChatFromPrompt(conversationId, text, projectOverride = null, claudeSessionIdOverride = '') {
+    const targetConversationId = String(conversationId || conversationIdRef.current || createLocalId('conversation'));
     const title = sanitizeDisplayText(text, '新会话').replace(/\s+/g, ' ').slice(0, 34);
-    const stored = String(conversationId || '') && String(conversationId || '') !== String(conversationIdRef.current || '')
-      ? loadConversationState(conversationId)
+    const isCurrentConversation = targetConversationId === String(conversationIdRef.current || '');
+    const stored = targetConversationId && !isCurrentConversation
+      ? loadConversationState(targetConversationId)
       : null;
     const activeProject = projectOverride
       || (stored?.projectId ? { id: stored.projectId, name: stored.projectName || '' } : null)
       || conversationProjectRef.current;
+    const targetClaudeSessionId = String(claudeSessionIdOverride || '').trim()
+      || stored?.claudeSessionId
+      || (isCurrentConversation ? conversationSessionIdRef.current : '')
+      || targetConversationId;
     window.dispatchEvent?.(new CustomEvent('ecorex:recent-chat-upsert', {
       detail: {
-        id: conversationId || conversationIdRef.current || createLocalId('conversation'),
-        claudeSessionId: conversationSessionIdRef.current || conversationId || conversationIdRef.current,
+        id: targetConversationId,
+        claudeSessionId: targetClaudeSessionId,
         title: title || '新会话',
         time: recentChatTimeLabel(),
         updatedAt: Date.now(),
@@ -6570,7 +6592,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     autoScrollPinnedRef.current = true;
     setShowJumpLatest(false);
     sessionMap.current.set(requestedSessionId, assistantId);
-    syncRecentChatFromPrompt(activeConversationId, cleanPrompt || cleanReferences[0]?.name || cleanAttachments[0]?.name || '新会话', activeProject);
+    syncRecentChatFromPrompt(activeConversationId, cleanPrompt || cleanReferences[0]?.name || cleanAttachments[0]?.name || '新会话', activeProject, nextClaudeSessionId);
     trackSession(requestedSessionId, {
       messageId: assistantId,
       conversationId: activeConversationId,
@@ -7064,11 +7086,36 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
   }
 
   function selectRunningSession(sessionId) {
-    if (!sessionId) return;
-    currentSessionIdRef.current = sessionId;
-    setCurrentSessionId(sessionId);
-    const row = runningSessionRowsRef.current.find((item) => item.sessionId === sessionId);
-    const messageId = row?.messageId || sessionMap.current.get(sessionId);
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId) return;
+    currentSessionIdRef.current = safeSessionId;
+    setCurrentSessionId(safeSessionId);
+    const row = runningSessionRowsRef.current.find((item) => item.sessionId === safeSessionId || item.id === safeSessionId);
+    const owner = sessionOwnerForSession(safeSessionId, row || {});
+    const ownerConversationId = String(owner?.conversationId || row?.conversationId || '').trim();
+    const messageId = row?.messageId || sessionMap.current.get(safeSessionId) || owner?.messageId;
+    if (ownerConversationId && ownerConversationId !== String(conversationIdRef.current || '')) {
+      const recent = loadRecentChatItems().find((item) => item.id === ownerConversationId) || {};
+      const detail = {
+        ...recent,
+        id: ownerConversationId,
+        claudeSessionId: owner?.claudeSessionId || row?.claudeSessionId || recent.claudeSessionId || ownerConversationId,
+        sessionId: safeSessionId,
+        title: recent.title || row?.prompt || row?.title || '运行会话',
+        projectId: owner?.projectId || row?.projectId || recent.projectId || '',
+        projectName: owner?.projectName || row?.projectName || recent.projectName || '',
+        updatedAt: recent.updatedAt || row?.updatedAt || Date.now(),
+        time: recent.time || recentChatTimeLabel()
+      };
+      openStoredConversation(detail);
+      window.dispatchEvent?.(new CustomEvent('ecorex:recent-chat-upsert', { detail }));
+      if (messageId) {
+        window.setTimeout(() => {
+          document.getElementById(`message-${messageId}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }, 180);
+      }
+      return;
+    }
     if (!messageId) return;
     const messageIndex = messages.findIndex((message) => message.id === messageId);
     if (messageIndex >= 0) {
@@ -7147,6 +7194,13 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           subtitle="面向广告投放、素材创意、预算优化、归因分析与客户项目协同的自主思考型助手"
           backendStatus={backendStatus}
           onRefresh={refreshBackend}
+        />
+        <RunningSessionStrip
+          sessions={runningSessions}
+          currentSessionId={currentSessionId}
+          onSelect={selectRunningSession}
+          onStop={cancelPrompt}
+          onOpenSessions={() => setPage?.('settings')}
         />
 
         <div className="messages" ref={messageListRef}>
@@ -7300,7 +7354,7 @@ function RunningSessionStrip({ sessions = [], currentSessionId, onSelect, onStop
   if (!activeSessions.length) return null;
 
   return (
-    <div className="running-session-strip">
+    <div className="running-session-strip" data-testid="running-session-strip">
       <div className="running-session-head">
         <span>
           <Clock3 size={15} />
@@ -7313,14 +7367,15 @@ function RunningSessionStrip({ sessions = [], currentSessionId, onSelect, onStop
         {activeSessions.map((session, index) => {
           const active = session.sessionId === currentSessionId;
           return (
-            <div className={`running-session-pill ${active ? 'active' : ''}`} key={session.sessionId}>
-              <button type="button" onClick={() => onSelect?.(session.sessionId)} title="切换查看">
+            <div className={`running-session-pill ${active ? 'active' : ''}`} data-testid="running-session-pill" key={session.sessionId}>
+              <button type="button" data-testid="running-session-open" onClick={() => onSelect?.(session.sessionId)} title="切换查看">
                 <span className={`dot ${session.tone === 'danger' ? 'warn' : session.tone === 'running' ? 'running-dot' : 'ok'}`} />
                 <strong>{session.title || `会话 ${index + 1}`}</strong>
                 <em>{session.prompt || '正在执行任务'}</em>
               </button>
               <button
                 className="session-stop"
+                data-testid="running-session-stop"
                 type="button"
                 title={active ? '停止当前会话' : '停止此会话'}
                 onClick={() => onStop?.(session.sessionId)}
@@ -12498,11 +12553,12 @@ async function loadCapabilitySkills(currentCapabilities = null) {
   return skillItemsFromCapabilities(result?.capabilities || result || {});
 }
 
-function SkillsView({ backendStatus, capabilities, refreshBackend, onUnauthorized, embedded = false }) {
+function SkillsView({ backendStatus, capabilities, refreshBackend, onUnauthorized, authStatus, embedded = false }) {
   const [skills, setSkills] = useState([]);
   const [view, setView] = useState('all');
   const [category, setCategory] = useState('all');
   const [query, setQuery] = useState('');
+  const [installSourcePath, setInstallSourcePath] = useState('');
   const [state, setState] = useState(window.ecorex ? 'loading' : 'offline');
   const [notice, setNotice] = useState('');
   const [actionKey, setActionKey] = useState('');
@@ -12641,6 +12697,59 @@ function SkillsView({ backendStatus, capabilities, refreshBackend, onUnauthorize
     await loadSkills({ silent: true });
   }
 
+  async function installSkillFromSource() {
+    const sourcePath = installSourcePath.trim();
+    if (!sourcePath) return;
+    setActionKey('__source-install__:install');
+    setNotice('');
+    const result = await callEcorexAction([
+      'installSkill',
+      'skills.install',
+      'skill.install'
+    ], { sourcePath });
+    setActionKey('');
+
+    if (result?.unauthorized) {
+      onUnauthorized?.();
+      setState('unauthorized');
+      setNotice('登录状态已过期，请重新登录后继续操作。');
+      return;
+    }
+    if (result?.ok === false) {
+      setNotice(`Skill 安装失败：${sanitizeDisplayText(result.error, '请检查路径后重试')}`);
+      return;
+    }
+    setInstallSourcePath('');
+    setNotice('Skill 已安装并加入 EcoreX 托管白名单。');
+    refreshBackend?.();
+    await loadSkills({ silent: true });
+  }
+
+  async function resetSkillState() {
+    setActionKey('__skill-reset__:reset');
+    setNotice('');
+    const result = await callEcorexAction([
+      'resetSkills',
+      'skills.reset',
+      'skill.reset'
+    ], { confirmReset: true });
+    setActionKey('');
+
+    if (result?.unauthorized) {
+      onUnauthorized?.();
+      setState('unauthorized');
+      setNotice('登录状态已过期，请重新登录后继续操作。');
+      return;
+    }
+    if (result?.ok === false) {
+      setNotice(`Skill 重置失败：${sanitizeDisplayText(result.error, '请稍后重试')}`);
+      return;
+    }
+    setNotice('Skill 已恢复为内置初始状态。');
+    refreshBackend?.();
+    await loadSkills({ silent: true });
+  }
+
   const categories = useMemo(() => {
     const values = [...new Set(skills.map((skill) => skill.category).filter(Boolean))];
     return ['all', ...values];
@@ -12668,7 +12777,8 @@ function SkillsView({ backendStatus, capabilities, refreshBackend, onUnauthorize
     errors: skills.filter((skill) => skill.error).length
   }), [skills]);
 
-  const actionDisabled = state === 'offline' || state === 'unsupported' || state === 'unauthorized';
+  const canManageSkills = canManageSkillsFromAuth(authStatus);
+  const actionDisabled = !canManageSkills || state === 'offline' || state === 'unsupported' || state === 'unauthorized';
 
   return (
     <section className={`management ${embedded ? 'embedded-management' : 'panel'}`} data-testid="skills-page">
@@ -12717,6 +12827,39 @@ function SkillsView({ backendStatus, capabilities, refreshBackend, onUnauthorize
           </button>
         </div>
       </div>
+
+      {canManageSkills && (
+        <div className="skill-admin-panel">
+          <label>
+            <Code2 size={15} />
+            <input
+              value={installSourcePath}
+              onChange={(event) => setInstallSourcePath(event.target.value)}
+              placeholder="C:\\path\\to\\skill"
+              data-testid="skill-source-path-input"
+            />
+          </label>
+          <button
+            type="button"
+            className="primary"
+            onClick={installSkillFromSource}
+            disabled={!installSourcePath.trim() || actionKey === '__source-install__:install'}
+            data-testid="skill-source-install-button"
+          >
+            {actionKey === '__source-install__:install' ? <Loader2 size={14} className="spin-icon" /> : <Upload size={14} />}
+            安装 Skill
+          </button>
+          <button
+            type="button"
+            onClick={resetSkillState}
+            disabled={actionKey === '__skill-reset__:reset'}
+            data-testid="skill-reset-button"
+          >
+            {actionKey === '__skill-reset__:reset' ? <Loader2 size={14} className="spin-icon" /> : <RotateCcw size={14} />}
+            重置初始状态
+          </button>
+        </div>
+      )}
 
       <div className="stats-row compact">
         {[
