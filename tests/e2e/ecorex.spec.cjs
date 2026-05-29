@@ -910,20 +910,18 @@ test.describe('EcoreX Agent Electron E2E', () => {
 
     await writeManagedSkillStateWithBom(electronApp, [
       {
-        name: 'ppt-master',
-        title: 'ppt-master',
-        sourceKind: 'plugin',
+        name: 'officecli',
+        title: 'OfficeCLI',
+        sourceKind: 'skill-collection',
         category: 'productivity',
-        description: 'Generate natively editable PPTX from PDF, DOCX, URL, or Markdown.'
+        description: 'Create, inspect, validate, and modify Office documents.'
       },
       {
-        name: 'excel-mcp-server',
-        title: 'excel-mcp-server',
-        sourceKind: 'mcp-wrapper',
-        category: 'MCP',
-        description: 'A Model Context Protocol server for Excel file manipulation',
-        generatedWrapper: true,
-        mcpConfig: { command: 'uvx', args: ['excel-mcp-server', 'stdio'] }
+        name: 'opencli',
+        title: 'OpenCLI',
+        sourceKind: 'skill-collection',
+        category: 'browser',
+        description: 'Drive Chrome and website adapters through OpenCLI.'
       },
       {
         name: 'lark-cli',
@@ -940,20 +938,20 @@ test.describe('EcoreX Agent Electron E2E', () => {
       return { skills, mcp };
     });
     expect(direct.skills.ok).toBe(true);
-    expect(direct.skills.skills.map((item) => item.name).sort()).toEqual(['excel-mcp-server', 'lark-cli', 'ppt-master']);
+    expect(direct.skills.skills.map((item) => item.name).sort()).toEqual(['lark-cli', 'officecli', 'opencli']);
     expect(direct.skills.counts.totalSkills).toBe(3);
     expect(direct.mcp.ok).toBe(true);
-    expect(direct.mcp.services.map((item) => item.packageName)).toContain('excel-mcp-server');
+    expect(direct.mcp.services.map((item) => item.packageName)).not.toContain('excel-mcp-server');
 
     await page.locator('.profile-trigger').click();
     await page.locator('.profile-menu-grid').getByRole('button', { name: /系统设置|settings/i }).click();
     await expect(page.locator('[data-testid="system-settings-page"]')).toBeVisible();
     await page.locator('[data-testid="system-settings-tab-skills"]').click();
-    await expect(page.locator('[data-testid="skills-page"]')).toContainText('ppt-master');
-    await expect(page.locator('[data-testid="skills-page"]')).toContainText(/excel[-\s]?MCP[-\s]?server/i);
+    await expect(page.locator('[data-testid="skills-page"]')).toContainText(/OfficeCLI|officecli/i);
+    await expect(page.locator('[data-testid="skills-page"]')).toContainText(/OpenCLI|opencli/i);
     await expect(page.locator('[data-testid="skills-page"]')).toContainText(/lark|飞书|execution bridge/i);
     await page.locator('[data-testid="system-settings-tab-mcp"]').click();
-    await expect(page.locator('[data-testid="mcp-page"]')).toContainText(/excel[-\s]?mcp[-\s]?server/i);
+    await expect(page.locator('[data-testid="mcp-page"]')).not.toContainText(/excel[-\s]?mcp[-\s]?server/i);
   });
 
   test('keeps model test validation local when required fields are missing', async ({ ecorex }) => {
@@ -2513,6 +2511,10 @@ test.describe('EcoreX Agent Electron E2E', () => {
     await page.locator('[data-testid="sidebar-project-rename-input"]').fill(quickName);
     await page.locator('[data-testid="sidebar-project-rename-save"]').click();
     await expect(page.locator('.sidebar-project').filter({ hasText: quickName }).first()).toBeVisible({ timeout: 15_000 });
+    await page.locator('.sidebar-project').filter({ hasText: quickName }).first().locator('[data-testid="sidebar-project-new-chat"]').click();
+    await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.sidebar-project').filter({ hasText: quickName }).first().locator('.sidebar-project-session').filter({ hasText: '新会话' }).first()).toBeVisible({ timeout: 10_000 });
+    await page.locator('[data-testid="sidebar-projects-nav"]').click();
     const renamed = await page.evaluate(async (name) => {
       const listed = await window.ecorex.listProjects();
       return listed.projects.find((item) => item.name === name);
@@ -2857,8 +2859,12 @@ test.describe('EcoreX Agent Electron E2E', () => {
 
     await page.locator('[data-testid="chat-input"]').fill(followUpPrompt);
     await page.locator('[data-testid="chat-input"]').press('Enter');
-    await expect(page.locator('.user-bubble').filter({ hasText: followUpPrompt }).first()).toBeVisible();
-    await expect(page.locator('.user-bubble').filter({ hasText: followUpPrompt }).first()).toContainText(/排队|queued/i);
+    const queuedBubble = page.locator('.user-bubble').filter({ hasText: followUpPrompt }).first();
+    await expect(queuedBubble).toBeVisible();
+    await expect(queuedBubble).toContainText(/排队|queued/i);
+    await expect(queuedBubble.locator('.queued-message-action')).toBeVisible();
+    await queuedBubble.locator('.queued-message-action').click();
+    await expect(queuedBubble).toContainText('已标记接力');
 
     await expect.poll(() => electronApp.evaluate(() => global.__ecorexRunPayloads?.length || 0), { timeout: 15_000 }).toBe(2);
     await expect(page.locator('.assistant-card').filter({ hasText: 'queued-run-2-completed' }).first()).toBeVisible({ timeout: 10_000 });

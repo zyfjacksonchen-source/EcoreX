@@ -80,6 +80,8 @@ const MANAGED_SKILL_PACKS_DIR_NAME = 'skill-packs';
 const BUNDLED_MANAGED_SKILL_PACKS_DIR_NAME = 'managed-skill-packs';
 const BUNDLED_MANAGED_TOOLS_DIR_NAME = 'managed-tools';
 const LARK_CLI_SKILL_PACK_NAME = 'lark-cli';
+const OFFICE_CLI_SKILL_PACK_NAME = 'officecli';
+const OPENCLI_SKILL_PACK_NAME = 'opencli';
 const RUN_JOURNAL_FILE_NAME = 'agent-run-journal.jsonl';
 const CRASH_SUMMARY_FILE_NAME = 'crash-summary.json';
 const TELEMETRY_QUEUE_FILE_NAME = 'telemetry-queue.json';
@@ -124,6 +126,7 @@ const IMAGE_GENERATION_TIMEOUT_MS = 2 * 60 * 1000;
 const ATTACHMENT_PREVIEW_MAX_BYTES = 2 * 1024 * 1024;
 const ECOREX_AGENT_CONFIG_DIR_NAME = 'agent-runtime-config';
 const BLOCKED_LOCAL_SKILL_NAMES = new Set(['superpowers', 'huashu-design', 'huashu_design', 'huashu design']);
+const RETIRED_MANAGED_SKILL_PACK_NAMES = new Set(['ppt-master', 'excel-mcp-server']);
 const ECOREX_BUILTIN_PLUGIN_ALLOWLIST = new Set(['feature-dev', 'code-review', 'security-guidance', 'plugin-dev']);
 const ECOREX_GENERAL_WORKSPACE_DIR_NAME = 'general-workspace';
 const ATTACHMENT_TEXT_MAX_BYTES = 512 * 1024;
@@ -222,7 +225,7 @@ const PERMISSION_POLICIES = Object.freeze({
     cliMode: 'auto',
     cliFlags: [],
     label: '自动权限',
-    description: '由 Claude Code 自动判断权限请求。',
+    description: '由 EcoreX 本地执行引擎自动判断权限请求。',
     fullAccess: false
   },
   plan: {
@@ -244,7 +247,7 @@ const PERMISSION_POLICIES = Object.freeze({
     cliMode: null,
     cliFlags: [FULL_ACCESS_CLAUDE_FLAG],
     label: '完全访问权限',
-    description: '使用 Claude Code --dangerously-skip-permissions 跳过权限检查。',
+    description: '使用完全访问模式跳过权限检查。',
     fullAccess: true,
     requiresConfirmation: true
   }
@@ -334,14 +337,16 @@ const ECOREX_AGENT_SYSTEM_PROMPT = [
   '输出不要使用星号作为 Markdown 标记，不要使用 *、** 或星号项目符号；列表请使用中文序号或短句换行。',
   '需要事实核验、外部资料、网页信息或时效性内容时，应主动使用联网检索与网页读取能力；需要本地资料时，应主动使用文件读取、写入、编辑、检索、命令执行和 MCP 工具。',
   '联网搜索、网页读取和常规非文件工具不需要先询问用户，直接执行并在结果中说明来源；涉及读取、写入、编辑用户文件、运行命令或访问系统目录时，遵循权限确认。',
-  '需要浏览器自动化、网页交互或截图校验时，优先使用 Playwright；Windows 安装版优先调用系统 Edge channel msedge。'
+  '需要浏览器自动化、网页交互或截图校验时，优先使用 Playwright；Windows 安装版优先调用系统 Edge channel msedge。',
+  '涉及飞书、浏览器 OAuth、扫码或外部授权时，必须把链接/二维码交给用户后标记为待授权或待继续；用户回复完成后先验证授权状态，再继续原任务，不能把“已发起授权”当作最终完成。'
 ].join('\n');
 
 const ECOREX_MANAGED_CAPABILITY_PRIORITY_PROMPT = [
   'Managed capability priority:',
-  '1. For Excel workbook creation, editing, formatting, formulas, charts, tables, pivot tables, or data reads/writes, prefer the excel-mcp-server MCP tools first.',
-  '2. For PPT, presentation, slide deck, or PowerPoint generation/editing, prefer the ppt-master skill first.',
-  '3. Fall back to direct local file generation only when the matching managed capability is unavailable or unsuitable, and explain the fallback briefly.'
+  '1. For DOCX, XLSX, PPTX, report, spreadsheet, slide deck, Office document creation, inspection, validation, or modification, prefer the officecli skill and OfficeCLI runtime first.',
+  '2. For browser automation, website workflows, logged-in web pages, or adapter-style website commands, prefer the opencli skill and OpenCLI runtime when available.',
+  '3. For Feishu/Lark setup or user authorization, prefer lark-cli split-flow/no-wait guidance when available; expose only the user-facing authorization link/QR, then wait for the user completion signal before continuing.',
+  '4. Fall back to direct local file generation only when the matching managed capability is unavailable or unsuitable, and explain the fallback briefly.'
 ].join('\n');
 
 const ECOREX_GENERAL_CHAT_ISOLATION_PROMPT = [
@@ -438,6 +443,12 @@ function managedToolPathEntries() {
   const larkDir = path.join(root, LARK_CLI_SKILL_PACK_NAME);
   const larkExe = path.join(larkDir, isWindows ? 'lark-cli.exe' : 'lark-cli');
   if (fs.existsSync(larkExe)) entries.push(larkDir);
+  const officeDir = path.join(root, OFFICE_CLI_SKILL_PACK_NAME);
+  const officeExe = path.join(officeDir, isWindows ? 'officecli.exe' : 'officecli');
+  if (fs.existsSync(officeExe)) entries.push(officeDir);
+  const openCliBinDir = path.join(root, OPENCLI_SKILL_PACK_NAME, 'bin');
+  const openCliCommand = path.join(openCliBinDir, isWindows ? 'opencli.cmd' : 'opencli');
+  if (fs.existsSync(openCliCommand)) entries.push(openCliBinDir);
   return entries;
 }
 
@@ -585,9 +596,25 @@ function publicProductText(value = '') {
 function isInternalAgentOutputLine(value = '') {
   const text = String(value || '').trim();
   if (!text) return false;
+  if (/\[UNDICI-EHPA\]\s+Warning/i.test(text)) return true;
+  if (/Use `?node --trace-warnings`?/i.test(text)) return true;
+  if (/^\s*(?:at\s+)?[A-Za-z]:[\\/].*(?:opencli|node|npm).*(?:char:\d+|CategoryInfo|FullyQualifiedErrorId)/i.test(text)) return true;
   if (/^Launching skill:/i.test(text)) return true;
+  if (/^\d+\s+---\s*\d+\s+name:\s*[-\w.]+\s+\d+\s+version:/i.test(text)) return true;
+  if (/^\d+\s+description:\s*["']?Use when first setting up/i.test(text)) return true;
+  if (/\bname:\s*lark-shared\b/i.test(text) && /\bdescription:\s*["']?Use when/i.test(text)) return true;
   if (/\bbridge:[a-z0-9_.:-]+\b/i.test(text) && /^Launching/i.test(text)) return true;
-  if (/^(?:TaskUpdate|正在整理工具参数|开始生成回复|回复生成完成)[。.]?$/i.test(text)) return true;
+  if (/^\[AI\s*亦芯助手\]/i.test(text) && /\b(?:runner|harness|timeout|lark-execution|最终回复)\b/i.test(text)) return true;
+  if (/^REMINDER:\s*You MUST include the sources above/i.test(text)) return true;
+  if (/\blark-execution\s+bridge\s+auth\s+login\b/i.test(text)) return true;
+  if (/\b(?:runner|harness)\b/i.test(text) && /\b(?:timeout|final reply|最终回复|tool result|工具返回)\b/i.test(text)) return true;
+  if (/^\{/.test(text) && /"ok"\s*:\s*true/i.test(text) && /"(?:identity|data|fields|base)"\s*:/i.test(text)) return true;
+  if (/^\{/.test(text) && /"ok"\s*:\s*false/i.test(text) && /"error"\s*:/i.test(text)) return true;
+  if (/^\{/.test(text) && /"(?:fields|records|base|table|token|tenant_access_token|app_access_token)"\s*:/i.test(text) && text.length > 80) return true;
+  if (/^\{[\s\S]{0,80}"(?:ok|identity|data)"[\s\S]*"(?:base_token|folder_token|access_token|refresh_token)"/i.test(text)) return true;
+  if (/"(?:base_token|folder_token|access_token|refresh_token)"\s*:/i.test(text)) return true;
+  if (/"_notice"\s*:\s*\{[\s\S]*"update"\s*:/i.test(text)) return true;
+  if (/^(?:TaskUpdate|正在整理工具参数|开始生成回复|正在同步输出|回复生成完成)[。.]?$/i.test(text)) return true;
   if (/^(?:Updated|Created|Deleted)\s+task\s+#?\d+\b/i.test(text)) return true;
   if (/^Task\s+#?\d+\s+(?:updated|created|deleted)\b/i.test(text)) return true;
   if (/^[\d\s|:._=\-#\u2580-\u259f\u25a0-\u25a1\u25aa-\u25ab]+$/u.test(text) && text.length >= 16) return true;
@@ -602,6 +629,8 @@ function cleanAgentDisplayLine(value = '') {
     text = text.replace(/(^|\s)\d{1,3}(?=\s|$)/g, '$1').replace(/\s{2,}/g, ' ').trim();
   }
   return text
+    .replace(/("(?:base_token|folder_token|access_token|refresh_token)"\s*:\s*")[^"]+(")/gi, '$1***$2')
+    .replace(/\b(base_token|folder_token|access_token|refresh_token)=([^\s,;]+)/gi, '$1=***')
     .replace(/execution\s+bridge(?=user_code=)/gi, 'execution_bridge?')
     .replace(/execution\s+bridge(?=\?user_code=)/gi, 'execution_bridge')
     .replace(/from=execution\s+bridge\b/gi, 'from=execution_bridge');
@@ -1322,6 +1351,29 @@ function isBlockedLocalSkillName(value = '') {
   return [...BLOCKED_LOCAL_SKILL_NAMES].some((name) => compact === name || compact.includes(`/${name}/`) || compact.endsWith(`/${name}`));
 }
 
+function isRetiredManagedSkillPackName(value = '') {
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter(Boolean)
+    .pop()
+    ?.replace(/[_\s]+/g, '-') || '';
+  return RETIRED_MANAGED_SKILL_PACK_NAMES.has(normalized);
+}
+
+function removeRetiredManagedSkillPacksFromDisk() {
+  const configRoot = agentRuntimeConfigDir();
+  const packsRoot = managedSkillPacksDir();
+  for (const name of RETIRED_MANAGED_SKILL_PACK_NAMES) {
+    const target = path.join(packsRoot, name);
+    if (isPathInside(configRoot, target)) {
+      fs.rmSync(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  }
+}
+
 function sanitizeSkillPackName(value = '', fallback = 'skill-pack') {
   const cleaned = String(value || '')
     .trim()
@@ -1387,6 +1439,7 @@ function readManagedSkillPackState() {
   const rows = Array.isArray(raw) ? raw : Array.isArray(raw?.skillPacks) ? raw.skillPacks : [];
   return rows
     .filter((row) => row && typeof row === 'object')
+    .filter((row) => !isRetiredManagedSkillPackName(row.name || row.id || row.installPath || row.sourcePath))
     .map((row, index) => normalizeManagedSkillPackRecord(row, index))
     .filter(Boolean)
     .slice(0, MAX_MANAGED_ITEMS);
@@ -1395,6 +1448,7 @@ function readManagedSkillPackState() {
 function writeManagedSkillPackState(rows = []) {
   const nextRows = (Array.isArray(rows) ? rows : [])
     .filter((row) => row && typeof row === 'object')
+    .filter((row) => !isRetiredManagedSkillPackName(row.name || row.id || row.installPath || row.sourcePath))
     .map((row, index) => normalizeManagedSkillPackRecord(row, index))
     .filter(Boolean)
     .slice(0, MAX_MANAGED_ITEMS);
@@ -1672,8 +1726,12 @@ function bundledManagedSkillPackSources() {
 function seedBundledManagedSkillPacks() {
   if (bundledManagedSkillPacksSeeded) return;
   bundledManagedSkillPacksSeeded = true;
+  removeRetiredManagedSkillPacksFromDisk();
   const sources = bundledManagedSkillPackSources();
-  if (!sources.length) return;
+  if (!sources.length) {
+    writeManagedSkillPackState(readManagedSkillPackState());
+    return;
+  }
 
   const now = new Date().toISOString();
   const previousRows = readManagedSkillPackState();
@@ -1723,6 +1781,7 @@ function installManagedSkillPack(payload = {}, authContext = null) {
   if (!sourcePath) throw new Error('Skill install requires sourcePath.');
   const info = detectSkillSource(sourcePath);
   const name = sanitizeSkillPackName(payload.name || info.name);
+  if (isRetiredManagedSkillPackName(name)) throw new Error('This managed skill pack has been retired by EcoreX.');
   const destination = installDestinationForSkillPack(name);
   const libraryRoot = managedSkillPacksDir();
   const resolvedDestination = path.resolve(destination);
@@ -6469,7 +6528,23 @@ function agentSessionPublicText(entry = {}) {
     .join('\n');
 }
 
+function agentOutputLooksCompletedAuthorization(value = '') {
+  const text = String(value || '');
+  if (!text) return false;
+  return /(授权成功|已授权|认证成功|登录成功|配置完成|login success|authenticated|authorization complete|token saved|current user|auth status.*ok|user identity:\s*ready|bot identity:\s*ready|\"ok\"\s*:\s*true[\s\S]{0,240}\"identity\"\s*:\s*\"user\")/i.test(text);
+}
+
+function agentOutputLooksUnresolvedAuthorization(value = '') {
+  const text = String(value || '');
+  if (!text || agentOutputLooksCompletedAuthorization(text)) return false;
+  const targetsAuth = /(飞书|feishu|lark|larksuite|授权|认证|登录|auth|oauth|device[_ -]?code|verification[_ -]?url|verification[_ -]?uri|open\.feishu\.cn)/i.test(text);
+  if (!targetsAuth) return false;
+  return /(授权飞书|飞书.*授权|lark-cli\s+(?:config\s+init|auth\s+login)|auth\s+login|config\s+init\s+--new|device[_ -]?code|verification[_ -]?(?:url|uri)|open\.feishu\.cn|user_code=|二维码|扫码|打开.*链接|等待.*(?:授权|配置)|not configured|run `?lark-cli (?:config init|auth login)|需要.*授权|请.*授权|请.*登录)/i.test(text);
+}
+
 function agentSessionHasUnresolvedAuthorization(entry = {}) {
+  if (entry.authorizationCompleted) return false;
+  if (entry.authorizationHandoffStarted) return true;
   const text = agentSessionPublicText(entry);
   if (!text) return false;
   const targetsAuth = /(飞书|feishu|lark|larksuite|授权|认证|登录|auth|oauth|device[_ -]?code|verification[_ -]?url|verification[_ -]?uri)/i.test(text);
@@ -6796,14 +6871,27 @@ function stopAgent(sessionId, reason = 'cancelled') {
   } else {
     killProcessTree(entry.child);
   }
-  const status = agentFinalStatus(reason);
-  finalizeAgentSession(sessionId, entry, { status, reason });
+  let status = agentFinalStatus(reason);
+  let finalReason = reason;
+  let finalText;
+  if (status === 'stopped' && agentSessionHasUnresolvedAuthorization(entry)) {
+    status = 'authorization-incomplete';
+    finalReason = 'authorization-incomplete';
+    finalText = authorizationIncompleteAgentResultText();
+  } else if (status === 'stopped' && agentSessionHasUnresolvedUserBlocker(entry)) {
+    status = 'user-action-required';
+    finalReason = 'user-action-required';
+    finalText = userBlockerAgentResultText();
+  }
+  finalizeAgentSession(sessionId, entry, { status, reason: finalReason, text: finalText });
   writeLog(reason === 'cancelled' ? 'info' : 'warn', 'Agent session stopped', {
     sessionId,
     reason,
+    finalStatus: status,
+    finalReason,
     durationMs: Date.now() - entry.startedAt
   });
-  return { ok: true, reason, status, recoveryHint: agentRecoveryHint(status, { reason }) };
+  return { ok: true, reason: finalReason, status, recoveryHint: agentRecoveryHint(status, { reason: finalReason }) };
 }
 
 function stopAllAgents(reason = 'app-quit') {
@@ -7704,7 +7792,7 @@ function getRunningSessionSummaries() {
 }
 
 function safeTranscriptText(value = '') {
-  return redactSensitiveText(value).replace(/\s+/g, ' ').trim();
+  return stripInternalAgentOutput(redactSensitiveText(value)).replace(/\s+/g, ' ').trim();
 }
 
 function safeTranscriptTextPreview(value = '') {
@@ -7755,6 +7843,11 @@ function recordSessionEvent(entry, event) {
   }
   if (normalized.claudeResultStatus === 'failed') {
     entry.claudeResultFailed = true;
+  }
+  if (agentOutputLooksCompletedAuthorization(normalized.text)) {
+    entry.authorizationCompleted = true;
+  } else if (agentOutputLooksUnresolvedAuthorization(normalized.text)) {
+    entry.authorizationHandoffStarted = true;
   }
   if (normalized.kind === 'result') {
     entry.resultEventCount = (Number(entry.resultEventCount) || 0) + 1;

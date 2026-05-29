@@ -138,8 +138,8 @@
         "filter": [
           "agent-skill-creator/**/*",
           "lark-cli/**/*",
-          "ppt-master/**/*",
-          "excel-mcp-server/**/*",
+          "officecli/**/*",
+          "opencli/**/*",
           "!**/.env",
           "!**/.env.*",
           "!**/*.log",
@@ -161,6 +161,8 @@
         "to": "managed-tools",
         "filter": [
           "lark-cli/**/*",
+          "officecli/**/*",
+          "opencli/**/*",
           "!**/.env",
           "!**/.env.*",
           "!**/*.log",

@@ -181,6 +181,9 @@ check('transport stop and cleanup path', () => {
       'pendingAgentStarts.delete(sessionId)',
       'entry.transport.stop(reason)',
       'entry.actor.stop(reason)',
+      'agentSessionHasUnresolvedAuthorization(entry)',
+      'authorizationIncompleteAgentResultText()',
+      'agentSessionHasUnresolvedUserBlocker(entry)',
       'finalizeAgentSession(sessionId, entry',
       'Agent session stopped'
     ],
@@ -205,9 +208,13 @@ check('transport stop and cleanup path', () => {
     [
       'function substantiveAgentResultText',
       'function agentSessionHasSubstantiveResult',
+      'function agentOutputLooksCompletedAuthorization',
+      'function agentOutputLooksUnresolvedAuthorization',
       'function agentSessionHasUnresolvedAuthorization',
       'function agentSessionHasUnresolvedUserBlocker',
       'function incompleteAgentResultText',
+      'entry.authorizationHandoffStarted = true',
+      'entry.authorizationCompleted = true',
       'const incompleteResult = finalStatus ===',
       'const authorizationIncomplete = finalStatus ===',
       'const unresolvedUserBlocker = finalStatus ===',

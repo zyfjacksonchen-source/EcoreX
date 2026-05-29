@@ -181,27 +181,35 @@ async function main() {
           larkSharedLoaded: childNames.includes('lark-shared'),
           skillCreatorInstalled: installedNames.includes('agent-skill-creator'),
           skillCreatorLoaded: childNames.includes('agent-skill-creator'),
-          pptMasterInstalled: installedNames.includes('ppt-master'),
-          pptMasterLoaded: childNames.includes('ppt-master'),
-          excelMcpInstalled: installedNames.includes('excel-mcp-server'),
-          excelMcpLoaded: childNames.includes('excel-mcp-server')
+          officeCliInstalled: installedNames.includes('officecli'),
+          officeCliLoaded: childNames.includes('officecli'),
+          openCliInstalled: installedNames.includes('opencli'),
+          openCliLoaded: childNames.includes('opencli-browser')
         };
       });
-      if (!skillValues.ok || !skillValues.larkInstalled || !skillValues.larkSharedLoaded || !skillValues.skillCreatorInstalled || !skillValues.skillCreatorLoaded || !skillValues.pptMasterInstalled || !skillValues.pptMasterLoaded || !skillValues.excelMcpInstalled || !skillValues.excelMcpLoaded) {
+      if (!skillValues.ok || !skillValues.larkInstalled || !skillValues.larkSharedLoaded || !skillValues.skillCreatorInstalled || !skillValues.skillCreatorLoaded || !skillValues.officeCliInstalled || !skillValues.officeCliLoaded || !skillValues.openCliInstalled || !skillValues.openCliLoaded) {
         throw new Error(`Packaged bundled skills did not seed correctly: ${JSON.stringify(skillValues)}`);
       }
 
       const mcpValues = await page.evaluate(async () => {
         const result = await window.ecorex?.listMcpServers?.({ refresh: true });
-        const services = result?.services || result?.servers || [];
+        const services = [
+          ...(Array.isArray(result?.services) ? result.services : []),
+          ...(Array.isArray(result?.servers) ? result.servers : []),
+          ...(Array.isArray(result?.mcp?.services) ? result.mcp.services : []),
+          ...(Array.isArray(result?.mcp?.servers) ? result.mcp.servers : [])
+        ];
+        const names = services
+          .map((item) => item?.packageName || item?.name || item?.id)
+          .filter(Boolean);
         return {
           ok: result?.ok === true,
-          names: services.map((item) => item?.packageName || item?.name).filter(Boolean),
-          excelConfigured: services.some((item) => item?.packageName === 'excel-mcp-server' || item?.name === 'Excel MCP Server')
+          names,
+          retiredMissing: !names.includes('excel-mcp-server') && !names.includes('ppt-master')
         };
       });
-      if (!mcpValues.ok || !mcpValues.excelConfigured) {
-        throw new Error(`Packaged bundled MCP services did not seed correctly: ${JSON.stringify(mcpValues)}`);
+      if (!mcpValues.ok || !mcpValues.retiredMissing) {
+        throw new Error(`Packaged MCP inventory still exposes retired services: ${JSON.stringify(mcpValues)}`);
       }
 
       const previewValues = await page.evaluate(async () => {
@@ -247,13 +255,13 @@ async function main() {
           larkSharedLoaded: childNames.includes('lark-shared'),
           skillCreatorInstalled: installedNames.includes('agent-skill-creator'),
           skillCreatorLoaded: childNames.includes('agent-skill-creator'),
-          pptMasterInstalled: installedNames.includes('ppt-master'),
-          pptMasterLoaded: childNames.includes('ppt-master'),
-          excelMcpInstalled: installedNames.includes('excel-mcp-server'),
-          excelMcpLoaded: childNames.includes('excel-mcp-server')
+          officeCliInstalled: installedNames.includes('officecli'),
+          officeCliLoaded: childNames.includes('officecli'),
+          openCliInstalled: installedNames.includes('opencli'),
+          openCliLoaded: childNames.includes('opencli-browser')
         };
       });
-      if (!resetValues.ok || !resetValues.larkInstalled || !resetValues.larkSharedLoaded || !resetValues.skillCreatorInstalled || !resetValues.skillCreatorLoaded || !resetValues.pptMasterInstalled || !resetValues.pptMasterLoaded || !resetValues.excelMcpInstalled || !resetValues.excelMcpLoaded) {
+      if (!resetValues.ok || !resetValues.larkInstalled || !resetValues.larkSharedLoaded || !resetValues.skillCreatorInstalled || !resetValues.skillCreatorLoaded || !resetValues.officeCliInstalled || !resetValues.officeCliLoaded || !resetValues.openCliInstalled || !resetValues.openCliLoaded) {
         throw new Error(`Packaged skill reset did not restore bundled skills: ${JSON.stringify(resetValues)}`);
       }
 

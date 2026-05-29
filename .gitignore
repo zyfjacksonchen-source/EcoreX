@@ -27,9 +27,11 @@ landing/*/downloads/*.exe.blockmap
 build/provisioning/ecorex-provisioning.json
 build/managed-skill-packs/agent-skill-creator/
 build/managed-skill-packs/lark-cli/
-build/managed-skill-packs/ppt-master/
-build/managed-skill-packs/excel-mcp-server/
+build/managed-skill-packs/officecli/
+build/managed-skill-packs/opencli/
 build/managed-tools/lark-cli/
+build/managed-tools/officecli/
+build/managed-tools/opencli/
 
 # Local QA reports generated during release readiness checks.
 reports/qa/

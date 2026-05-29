@@ -19,6 +19,7 @@ import {
   CircleDashed,
   Clock3,
   Code2,
+  CornerDownRight,
   ClipboardList,
   Copy,
   Database,
@@ -759,16 +760,25 @@ function looksLikeNoisyLocalPath(value = '') {
 function isInternalAgentOutputLine(value = '') {
   const text = String(value || '').trim();
   if (!text) return false;
+  if (/\[UNDICI-EHPA\]\s+Warning/i.test(text)) return true;
+  if (/Use `?node --trace-warnings`?/i.test(text)) return true;
+  if (/^\s*(?:at\s+)?[A-Za-z]:[\\/].*(?:opencli|node|npm).*(?:char:\d+|CategoryInfo|FullyQualifiedErrorId)/i.test(text)) return true;
   if (/^Launching skill:/i.test(text)) return true;
+  if (/^\d+\s+---\s*\d+\s+name:\s*[-\w.]+\s+\d+\s+version:/i.test(text)) return true;
+  if (/^\d+\s+description:\s*["']?Use when first setting up/i.test(text)) return true;
+  if (/\bname:\s*lark-shared\b/i.test(text) && /\bdescription:\s*["']?Use when/i.test(text)) return true;
   if (/\bbridge:[a-z0-9_.:-]+\b/i.test(text) && /^Launching/i.test(text)) return true;
   if (/^\[AI\s*亦芯助手\]/i.test(text) && /\b(?:runner|harness|timeout|lark-execution|最终回复)\b/i.test(text)) return true;
+  if (/^REMINDER:\s*You MUST include the sources above/i.test(text)) return true;
   if (/\blark-execution\s+bridge\s+auth\s+login\b/i.test(text)) return true;
   if (/\b(?:runner|harness)\b/i.test(text) && /\b(?:timeout|final reply|最终回复|tool result|工具返回)\b/i.test(text)) return true;
   if (/^\{/.test(text) && /"ok"\s*:\s*true/i.test(text) && /"(?:identity|data|fields|base)"\s*:/i.test(text)) return true;
+  if (/^\{/.test(text) && /"ok"\s*:\s*false/i.test(text) && /"error"\s*:/i.test(text)) return true;
   if (/^\{/.test(text) && /"(?:fields|records|base|table|token|tenant_access_token|app_access_token)"\s*:/i.test(text) && text.length > 80) return true;
   if (/^\{[\s\S]{0,80}"(?:ok|identity|data)"[\s\S]*"(?:base_token|folder_token|access_token|refresh_token)"/i.test(text)) return true;
   if (/"(?:base_token|folder_token|access_token|refresh_token)"\s*:/i.test(text)) return true;
-  if (/^(?:TaskUpdate|正在整理工具参数|开始生成回复|回复生成完成)[。.]?$/i.test(text)) return true;
+  if (/"_notice"\s*:\s*\{[\s\S]*"update"\s*:/i.test(text)) return true;
+  if (/^(?:TaskUpdate|正在整理工具参数|开始生成回复|正在同步输出|回复生成完成)[。.]?$/i.test(text)) return true;
   if (/^(?:Updated|Created|Deleted)\s+task\s+#?\d+\b/i.test(text)) return true;
   if (/^Task\s+#?\d+\s+(?:updated|created|deleted)\b/i.test(text)) return true;
   if (/^[\d\s|:._=\-#\u2580-\u259f\u25a0-\u25a1\u25aa-\u25ab]+$/u.test(text) && text.length >= 16) return true;
@@ -2148,8 +2158,9 @@ function agentRunPolicySection(prompt = '') {
     '2. 涉及本地文件写入/修改/删除、命令执行、系统目录访问或不可逆变更时，触发 EcoreX 聊天框内权限确认卡，让用户点击按钮确认；不要要求用户在聊天里回复“继续”或“确认”。',
     '3. 简单问答只返回答案；复杂任务只展示当前动作、关键计划和必要风险，不输出完整调试日志或冗长状态树。',
     '4. 有限任务不要启动长期后台命令；如果命令被转入后台，必须立即读取输出、完成验证或停止后台任务，并给出最终结论或明确待继续原因。',
-    '5. 用户提到本地文档、对接文档、飞书文档、创建多维表格或日志时，先检索当前工作区、项目文件、EcoreX 托管 Skill 文档和已配置 CLI/MCP；不要在本地资料检索前要求用户提供链接、token 或字段。',
-    '6. 需要生成 PPT/Excel/DOCX/PDF/HTML 等文件时，必须执行到真实文件落地并验证文件存在；如果脚本或命令被权限策略拦截，只输出需要 EcoreX 权限确认卡继续执行的简短说明，不要把脚本路径当作最终交付。',
+    '5. 飞书、浏览器 OAuth、扫码或外部授权属于待继续交接：发起后只展示用户可操作的链接/二维码，状态写成待授权；用户回复完成后先验证授权状态，再继续原任务，不能把“已发起授权”当最终完成。',
+    '6. 用户提到本地文档、对接文档、飞书文档、创建多维表格或日志时，先检索当前工作区、项目文件、EcoreX 托管 Skill 文档和已配置 CLI/MCP；不要在本地资料检索前要求用户提供链接、token 或字段。',
+    '7. 需要生成 PPT/Excel/DOCX/PDF/HTML 等文件时，必须执行到真实文件落地并验证文件存在；如果脚本或命令被权限策略拦截，只输出需要 EcoreX 权限确认卡继续执行的简短说明，不要把脚本路径当作最终交付。',
     realtimePlatformSearchPolicySection(prompt)
   ].join('\n');
 }
@@ -3128,6 +3139,13 @@ function Sidebar({ page, setPage, logout, authStatus, collapsed = false, onToggl
     }
   }
 
+  async function startProjectConversation(project = {}) {
+    if (!project?.id || project.id === 'empty') return;
+    const ok = await switchProjectForChat(project);
+    if (!ok) return;
+    startNewChat(project);
+  }
+
   async function createQuickProject(event) {
     event?.preventDefault?.();
     const name = quickProjectName.trim() || `新项目 ${new Date().toLocaleString('zh-CN', {
@@ -3426,6 +3444,9 @@ function Sidebar({ page, setPage, logout, authStatus, collapsed = false, onToggl
                       </button>
                       {project.id !== 'empty' && (
                         <div className="sidebar-project-actions">
+                          <button type="button" data-testid="sidebar-project-new-chat" title="基于此项目新建会话" aria-label={`基于 ${project.name} 新建会话`} onClick={() => startProjectConversation(project)} disabled={projectBusy === project.id}>
+                            <Plus size={12} />
+                          </button>
                           <button type="button" data-testid="sidebar-project-rename" title="快速改名" aria-label={`快速改名 ${project.name}`} onClick={() => startProjectRename(project)} disabled={!canQuickRenameProject || projectRenameBusy}>
                             <Pencil size={12} />
                           </button>
@@ -7266,6 +7287,43 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     }
   }
 
+  async function activateQueuedMessage(message = {}) {
+    if (!message?.id) return;
+    const ownerConversationId = String(message.conversationId || conversationIdRef.current || '');
+    const cleanPrompt = clampComposerPromptText(message.text || '').trim();
+    const pendingMessage = latestPendingUserActionMessage(ownerConversationId);
+    if (
+      pendingMessage
+      && isContinuationPrompt(cleanPrompt)
+      && !(message.attachments || []).length
+      && !(message.references || []).length
+    ) {
+      pendingFollowUpsRef.current = pendingFollowUpsRef.current.filter((item) => item.id !== message.id);
+      updateMessagesForConversation(ownerConversationId, (items) => items.map((item) => (
+        item.id === message.id ? { ...item, status: 'read', queuedNudgeAt: Date.now() } : item
+      )));
+      await continueFromPermission(pendingMessage, {
+        action: 'resume',
+        label: /扫码|扫完/i.test(cleanPrompt) ? '扫码已完成' : /登录/i.test(cleanPrompt) ? '登录已完成' : /授权/i.test(cleanPrompt) ? '授权已完成' : '继续处理'
+      });
+      return;
+    }
+    if (!hasRunningSessionForConversation(ownerConversationId)) {
+      await flushQueuedFollowUps(ownerConversationId);
+      return;
+    }
+    updateMessagesForConversation(ownerConversationId, (items) => items.map((item) => (
+      item.id === message.id ? { ...item, queuedNudgeAt: Date.now() } : item
+    )));
+    updateTimelineForConversation(ownerConversationId, (items) => appendTimeline(items, [
+      '已标记追加消息',
+      '当前任务结束后优先接力',
+      formatAgentEventTime(),
+      'pending',
+      'status'
+    ]));
+  }
+
   async function sendPrompt(text = prompt, attachmentList = attachments, options = {}) {
     const {
       forceRun = false,
@@ -8104,6 +8162,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
                 showTrace={shouldShowTrace}
                 onRetry={retryMessage}
                 onPermissionReply={continueFromPermission}
+                onActivateQueued={activateQueuedMessage}
                 onInsertArtifactReference={insertArtifactReference}
                 onOpenArtifact={(artifact) => setFocusArtifact(artifact)}
                 onOpenArtifactLocal={openGeneratedArtifact}
@@ -8461,6 +8520,7 @@ function ChatMessage({
   showTrace = false,
   onRetry,
   onPermissionReply,
+  onActivateQueued,
   onInsertArtifactReference,
   onOpenArtifact,
   onOpenArtifactLocal,
@@ -8529,6 +8589,7 @@ function ChatMessage({
       : []
   ), [message.attachments]);
   if (message.role === 'user') {
+    const queued = String(message.status || '').toLowerCase() === 'queued';
     return (
       <div className="user-row" id={`message-${message.id}`}>
         <div className="user-bubble">
@@ -8538,6 +8599,12 @@ function ChatMessage({
           )}
           <MessageReferenceList references={message.references || []} compact />
           <AttachmentIngestionSummary items={userAttachmentIngest} compact />
+          {queued && (
+            <button className="queued-message-action" type="button" onClick={() => onActivateQueued?.(message)}>
+              <CornerDownRight size={13} />
+              {message.queuedNudgeAt ? '已标记接力' : '接力这条'}
+            </button>
+          )}
           <MessageStatus status={message.status || 'read'} time={message.time} compact />
         </div>
         <div className="avatar user-avatar">张</div>

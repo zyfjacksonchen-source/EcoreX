@@ -244,6 +244,13 @@ function assertIncludesPatterns(patterns, required, label) {
   }
 }
 
+function assertNotIncludesPatterns(patterns, forbidden, label) {
+  assert(Array.isArray(patterns), `${label} must be an array.`);
+  for (const pattern of forbidden) {
+    assert(!patterns.includes(pattern), `${label} must not include ${pattern}`);
+  }
+}
+
 function assertRepoRelativePath(value, label) {
   const normalized = toPosix(value);
   assert(normalized, `${label} is empty.`);
@@ -870,6 +877,9 @@ check('agent runtime production guardrails', () => {
       'const BUNDLED_MANAGED_SKILL_PACKS_DIR_NAME',
       'const BUNDLED_MANAGED_TOOLS_DIR_NAME',
       'const LARK_CLI_SKILL_PACK_NAME',
+      'const OFFICE_CLI_SKILL_PACK_NAME',
+      'const OPENCLI_SKILL_PACK_NAME',
+      'const RETIRED_MANAGED_SKILL_PACK_NAMES',
       'ECOREX_GENERAL_CHAT_ISOLATION_PROMPT',
       'function generalAgentWorkspaceDir',
       'function seedBundledManagedSkillPacks',
@@ -898,7 +908,7 @@ check('agent runtime production guardrails', () => {
   assertNotMatches(main, /projectContextDisabled \? null : activeProjectContext\(\)/, 'agent runs must not fall back to the active project when no project id is provided.');
   assertMatches(main, /const defaultRunRoot = projectContext\?\.projectPath \|\| generalAgentWorkspaceDir\(\)/, 'general chat runs must use the isolated general workspace.');
   assertMatches(main, /function agentSystemPromptForProject[\s\S]*ECOREX_GENERAL_CHAT_ISOLATION_PROMPT/, 'general chat prompt must explicitly forbid project memory/file inspection.');
-  includesAll(main, ['有限任务不要启动长期后台命令', '任务才算完成'], 'agent system prompt must prevent finite tasks from hanging on background commands or missing final conclusions.');
+  includesAll(main, ['待授权或待继续', 'For Feishu/Lark setup', '任务才算完成'], 'agent system prompt must prevent finite tasks from hanging on background commands or missing final conclusions.');
   assertMatches(main, /function claudeProjectsRoot\(\) \{[\s\S]*agentRuntimeConfigDir\(\)[\s\S]*'projects'/, 'Claude transcript discovery must only use the EcoreX runtime project root.');
   assertNotMatches(main, /function claudeProjectsRoot\(\) \{[\s\S]*process\.env\.USERPROFILE[\s\S]*\.claude[\s\S]*projects/, 'Claude transcript discovery must not scan the user global ~/.claude project history.');
   assertNotMatches(main, /function claudeSessionTranscriptExists[\s\S]*claudeSessionWasLaunched/, 'Claude resume must require a real transcript, not only a previous launch marker.');
@@ -1338,7 +1348,8 @@ check('chat state tree and critical front-end affordances', () => {
       'function cleanAgentDisplayLine',
       'function publicRunningSessionPrompt',
       'function publicRunningSessionTitle',
-      'TaskUpdate|正在整理工具参数|开始生成回复|回复生成完成',
+      'TaskUpdate|正在整理工具参数|开始生成回复|正在同步输出|回复生成完成',
+      'REMINDER:',
       'Updated|Created|Deleted',
       'execution\\s+bridge(?=user_code=)',
       'chatMediaKind(safeUrl)',
@@ -1361,12 +1372,22 @@ check('chat state tree and critical front-end affordances', () => {
   assertMatches(app, /recoverDuplicateRunAsQueuedFollowUp\(result[\s\S]*existingMessage:\s*true/, 'duplicate running-session races must be converted back into queued follow-up input.');
   assertMatches(app, /function cleanAgentDisplayLine[\s\S]*numberTokens\.length >= 3[\s\S]*open\\\.feishu\\\.cn[\s\S]*execution_bridge\?/, 'chat renderer must strip execution bridge line-number noise while preserving Feishu links.');
   assertMatches(app, /function isInternalAgentOutputLine[\s\S]*Updated\|Created\|Deleted[\s\S]*task\\s\+#\?\\d\+/, 'chat renderer must suppress raw task-list mutation noise.');
+  assertMatches(app, /function isInternalAgentOutputLine[\s\S]*UNDICI-EHPA[\s\S]*name:\\s\*lark-shared/, 'chat renderer must suppress OpenCLI warnings and skill metadata noise.');
+  assertMatches(app, /function isInternalAgentOutputLine[\s\S]*lark-execution\\s\+bridge\\s\+auth\\s\+login[\s\S]*base_token/, 'chat renderer must suppress Feishu authorization harness and raw token JSON noise.');
+  assertMatches(app, /function isInternalAgentOutputLine[\s\S]*REMINDER:\\s\*You MUST include the sources above/, 'chat renderer must suppress internal web-search citation reminders.');
   assertMatches(app, /function publicRunningSessionPrompt[\s\S]*textLooksCorrupted\(clean\)[\s\S]*return fallback/, 'running session strip must hide corrupted or raw internal prompt previews.');
   assertMatches(app, /function publicRunningSessionTitle[\s\S]*textLooksCorrupted\(clean\)[\s\S]*return fallback/, 'running session strip must hide corrupted recovered titles.');
   assertMatches(app, /const messageStates = \{[\s\S]*interrupted:[\s\S]*authorization-incomplete[\s\S]*user-action-required/, 'message status badges must not render recoverable failures as completed.');
   assertMatches(app, /trackSession\(requestedSessionId[\s\S]*prompt:\s*cleanPrompt \|\| '正在执行任务'/, 'running session strip must use the user task summary instead of the full internal agent prompt.');
   assertMatches(main, /function cleanAgentDisplayLine[\s\S]*numberTokens\.length >= 3[\s\S]*open\\\.feishu\\\.cn[\s\S]*execution_bridge\?/, 'backend event sanitizer must strip execution bridge line-number noise while preserving Feishu links.');
   assertMatches(main, /function isInternalAgentOutputLine[\s\S]*Updated\|Created\|Deleted[\s\S]*task\\s\+#\?\\d\+/, 'backend event sanitizer must suppress raw task-list mutation noise.');
+  assertMatches(main, /function isInternalAgentOutputLine[\s\S]*UNDICI-EHPA[\s\S]*name:\\s\*lark-shared/, 'backend event sanitizer must suppress OpenCLI warnings and skill metadata noise.');
+  assertMatches(main, /function isInternalAgentOutputLine[\s\S]*lark-execution\\s\+bridge\\s\+auth\\s\+login[\s\S]*base_token/, 'backend event sanitizer must suppress Feishu authorization harness and raw token JSON noise.');
+  assertMatches(main, /function isInternalAgentOutputLine[\s\S]*REMINDER:\\s\*You MUST include the sources above/, 'backend event sanitizer must suppress internal web-search citation reminders.');
+  assertMatches(main, /function agentOutputLooksUnresolvedAuthorization[\s\S]*open\\\.feishu\\\.cn[\s\S]*not configured/, 'backend must keep an internal auth-wait signal before hiding raw Feishu JSON noise.');
+  assertMatches(main, /entry\.authorizationCompleted = true[\s\S]*entry\.authorizationHandoffStarted = true/, 'agent transcripts must track Feishu authorization handoff state before public filtering.');
+  assertMatches(main, /function stopAgent[\s\S]*agentSessionHasUnresolvedAuthorization\(entry\)[\s\S]*authorizationIncompleteAgentResultText\(\)[\s\S]*agentSessionHasUnresolvedUserBlocker\(entry\)/, 'stopping during external authorization must preserve a waiting-auth status instead of a completed or generic stopped state.');
+  assertMatches(main, /function safeTranscriptText[\s\S]*stripInternalAgentOutput\(redactSensitiveText\(value\)\)/, 'session transcript previews must use the same internal noise filter as live chat output.');
   assertMatches(main, /input_json_delta'\) return null/, 'backend stream parser must not emit raw tool argument delta events into public chat.');
   assertMatches(app, /function cleanPublicAgentText[\s\S]*isInternalAgentOutputLine/, 'chat renderer must suppress internal launch/progress noise from assistant text.');
   assertNotMatches(app, /PermissionConfirmationModal|permission-confirmation-modal|permission-confirmation-backdrop/, 'permission confirmation must render as an inline chat card, not a full-screen modal.');
@@ -1695,7 +1716,9 @@ check('package build config excludes local model/secrets storage', () => {
       'auth-users\\.json',
       'enterprise-admin-journal\\.jsonl',
       'session-bindings\\.json',
-      'model-profiles\\.json'
+      'model-profiles\\.json',
+      'patchFeishuSharedSkill',
+      'ecorex-auth-handoff-v1'
     ],
     'managed Feishu skill preparation denylist'
   );
@@ -1713,24 +1736,30 @@ check('package build config excludes local model/secrets storage', () => {
   const managedSkillResource = extraResources.find((item) => String(item.to || '').replace(/\\/g, '/') === 'managed-skill-packs');
   assert(managedSkillResource, 'bundled managed skill-packs resource must be configured.');
   assert(managedSkillResource.from === 'build/managed-skill-packs', 'bundled managed skill-packs must come from build/managed-skill-packs.');
-  assertIncludesPatterns(managedSkillResource.filter, ['agent-skill-creator/**/*', 'lark-cli/**/*', 'ppt-master/**/*', 'excel-mcp-server/**/*', '!**/.env', '!**/.env.*', '!**/*.log', '!**/auth-session.json', '!**/auth-identity.json', '!**/auth-users.json', '!**/enterprise-admin-journal.jsonl', '!**/session-bindings.json', '!**/model-profiles.json', '!**/.lark/**/*', '!**/.feishu/**/*', '!**/.larksuite/**/*'], 'managed skill-packs extraResources.filter');
+  assertIncludesPatterns(managedSkillResource.filter, ['agent-skill-creator/**/*', 'lark-cli/**/*', 'officecli/**/*', 'opencli/**/*', '!**/.env', '!**/.env.*', '!**/*.log', '!**/auth-session.json', '!**/auth-identity.json', '!**/auth-users.json', '!**/enterprise-admin-journal.jsonl', '!**/session-bindings.json', '!**/model-profiles.json', '!**/.lark/**/*', '!**/.feishu/**/*', '!**/.larksuite/**/*'], 'managed skill-packs extraResources.filter');
+  assertNotIncludesPatterns(managedSkillResource.filter, ['ppt-master/**/*', 'excel-mcp-server/**/*'], 'managed skill-packs retired filters');
   const managedToolResource = extraResources.find((item) => String(item.to || '').replace(/\\/g, '/') === 'managed-tools');
   assert(managedToolResource, 'bundled managed tools resource must be configured.');
   assert(managedToolResource.from === 'build/managed-tools', 'bundled managed tools must come from build/managed-tools.');
-  assertIncludesPatterns(managedToolResource.filter, ['lark-cli/**/*', '!**/.env', '!**/.env.*', '!**/*.log', '!**/auth-session.json', '!**/auth-identity.json', '!**/auth-users.json', '!**/enterprise-admin-journal.jsonl', '!**/session-bindings.json', '!**/model-profiles.json', '!**/.lark/**/*', '!**/.feishu/**/*', '!**/.larksuite/**/*'], 'managed tools extraResources.filter');
+  assertIncludesPatterns(managedToolResource.filter, ['lark-cli/**/*', 'officecli/**/*', 'opencli/**/*', '!**/.env', '!**/.env.*', '!**/*.log', '!**/auth-session.json', '!**/auth-identity.json', '!**/auth-users.json', '!**/enterprise-admin-journal.jsonl', '!**/session-bindings.json', '!**/model-profiles.json', '!**/.lark/**/*', '!**/.feishu/**/*', '!**/.larksuite/**/*'], 'managed tools extraResources.filter');
   const playwrightBinResource = extraResources.find((item) => String(item.to || '').replace(/\\/g, '/') === 'app.asar.unpacked/node_modules/.bin');
   assert(playwrightBinResource, 'Playwright CLI wrappers must be copied into unpacked node_modules .bin.');
   assert(playwrightBinResource.from === 'node_modules/.bin', 'Playwright CLI wrappers must come from node_modules/.bin.');
   assertIncludesPatterns(playwrightBinResource.filter, ['playwright*', '!**/.env', '!**/.env.*', '!**/*.log'], 'Playwright CLI wrapper extraResources.filter');
   assertExistingFile(rel('build/managed-skill-packs/lark-cli/.claude-plugin/plugin.json'), 'prepared Feishu skill manifest');
   assertExistingFile(rel('build/managed-skill-packs/lark-cli/skills/lark-shared/SKILL.md'), 'prepared Feishu shared skill');
+  includesAll(readText('build/managed-skill-packs/lark-cli/skills/lark-shared/SKILL.md'), ['ecorex-auth-handoff-v1', '至少 600 秒', 'raw JSON token'], 'prepared Feishu shared skill must include EcoreX authorization handoff rules.');
   assertExistingFile(rel('build/managed-skill-packs/agent-skill-creator/.claude-plugin/plugin.json'), 'prepared Agent Skill Creator manifest');
   assertExistingFile(rel('build/managed-skill-packs/agent-skill-creator/skills/agent-skill-creator/SKILL.md'), 'prepared Agent Skill Creator skill');
-  assertExistingFile(rel('build/managed-skill-packs/ppt-master/.claude-plugin/plugin.json'), 'prepared PPT Master manifest');
-  assertExistingFile(rel('build/managed-skill-packs/ppt-master/ppt-master/SKILL.md'), 'prepared PPT Master skill');
-  assertExistingFile(rel('build/managed-skill-packs/excel-mcp-server/.claude-plugin/plugin.json'), 'prepared Excel MCP manifest');
-  assertExistingFile(rel('build/managed-skill-packs/excel-mcp-server/skills/excel-mcp-server/mcp-config.json'), 'prepared Excel MCP config');
+  assertExistingFile(rel('build/managed-skill-packs/officecli/.claude-plugin/plugin.json'), 'prepared OfficeCLI manifest');
+  assertExistingFile(rel('build/managed-skill-packs/officecli/skills/officecli/SKILL.md'), 'prepared OfficeCLI skill');
+  assertExistingFile(rel('build/managed-skill-packs/opencli/.claude-plugin/plugin.json'), 'prepared OpenCLI manifest');
+  assertExistingFile(rel('build/managed-skill-packs/opencli/skills/opencli-browser/SKILL.md'), 'prepared OpenCLI browser skill');
   assertExistingFile(rel('build/managed-tools/lark-cli/lark-cli.exe'), 'prepared Feishu CLI executable', 1024 * 1024);
+  assertExistingFile(rel('build/managed-tools/officecli/officecli.exe'), 'prepared OfficeCLI executable', 1024 * 1024);
+  assertExistingFile(rel('build/managed-tools/opencli/bin/opencli.cmd'), 'prepared OpenCLI command wrapper');
+  assertExistingFile(rel('build/managed-tools/opencli/package/dist/src/main.js'), 'prepared OpenCLI runtime entry');
+  assertExistingFile(rel('build/managed-tools/opencli/extension/manifest.json'), 'prepared OpenCLI extension manifest');
 });
 
 check('first-party source has no hardcoded model secrets/base URLs', () => {
@@ -1851,25 +1880,42 @@ check('release artifacts are coherent when present', () => {
       'release bundled Agent Skill Creator skill'
     );
     assertExistingFile(
-      path.join(resourcesDir, 'managed-skill-packs', 'ppt-master', '.claude-plugin', 'plugin.json'),
-      'release bundled PPT Master manifest'
+      path.join(resourcesDir, 'managed-skill-packs', 'officecli', '.claude-plugin', 'plugin.json'),
+      'release bundled OfficeCLI manifest'
     );
     assertExistingFile(
-      path.join(resourcesDir, 'managed-skill-packs', 'ppt-master', 'ppt-master', 'SKILL.md'),
-      'release bundled PPT Master skill'
+      path.join(resourcesDir, 'managed-skill-packs', 'officecli', 'skills', 'officecli', 'SKILL.md'),
+      'release bundled OfficeCLI skill'
     );
     assertExistingFile(
-      path.join(resourcesDir, 'managed-skill-packs', 'excel-mcp-server', '.claude-plugin', 'plugin.json'),
-      'release bundled Excel MCP manifest'
+      path.join(resourcesDir, 'managed-skill-packs', 'opencli', '.claude-plugin', 'plugin.json'),
+      'release bundled OpenCLI manifest'
     );
     assertExistingFile(
-      path.join(resourcesDir, 'managed-skill-packs', 'excel-mcp-server', 'skills', 'excel-mcp-server', 'mcp-config.json'),
-      'release bundled Excel MCP config'
+      path.join(resourcesDir, 'managed-skill-packs', 'opencli', 'skills', 'opencli-browser', 'SKILL.md'),
+      'release bundled OpenCLI browser skill'
     );
     assertExistingFile(
       path.join(resourcesDir, 'managed-tools', 'lark-cli', 'lark-cli.exe'),
       'release bundled Feishu CLI executable',
       1024 * 1024
+    );
+    assertExistingFile(
+      path.join(resourcesDir, 'managed-tools', 'officecli', 'officecli.exe'),
+      'release bundled OfficeCLI executable',
+      1024 * 1024
+    );
+    assertExistingFile(
+      path.join(resourcesDir, 'managed-tools', 'opencli', 'bin', 'opencli.cmd'),
+      'release bundled OpenCLI command wrapper'
+    );
+    assertExistingFile(
+      path.join(resourcesDir, 'managed-tools', 'opencli', 'package', 'dist', 'src', 'main.js'),
+      'release bundled OpenCLI runtime entry'
+    );
+    assertExistingFile(
+      path.join(resourcesDir, 'managed-tools', 'opencli', 'extension', 'manifest.json'),
+      'release bundled OpenCLI extension manifest'
     );
     assertExistingFile(
       path.join(resourcesDir, 'app.asar.unpacked', 'node_modules', 'playwright', 'package.json'),
