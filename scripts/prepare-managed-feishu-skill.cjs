@@ -325,13 +325,149 @@ function openCliPackageJson(sourceRoot) {
 
 function writeOpenCliWrappers(binDir) {
   fs.mkdirSync(binDir, { recursive: true });
+  const runner = [
+    '#!/usr/bin/env node',
+    "const fs = require('fs');",
+    "const os = require('os');",
+    "const path = require('path');",
+    "const { pathToFileURL } = require('url');",
+    "const { spawn } = require('child_process');",
+    '',
+    'const args = process.argv.slice(2);',
+    'const binDir = __dirname;',
+    "const toolRoot = path.resolve(binDir, '..');",
+    "const script = path.join(toolRoot, 'package', 'dist', 'src', 'main.js');",
+    "const scriptUrl = pathToFileURL(script).href;",
+    "const packageJsonPath = path.join(toolRoot, 'package', 'package.json');",
+    "const extensionDir = process.env.ECOREX_OPENCLI_EXTENSION_DIR || path.join(toolRoot, 'extension');",
+    "const baseRoot = process.env.ECOREX_OPENCLI_HOME || path.join(process.env.LOCALAPPDATA || process.env.APPDATA || os.homedir(), 'EcoreX Agent', 'opencli');",
+    "const cacheRoot = process.env.OPENCLI_CACHE_DIR || path.join(baseRoot, 'cache');",
+    "const cdpPort = String(process.env.ECOREX_OPENCLI_CDP_PORT || process.env.OPENCLI_CDP_PORT || '19826');",
+    "process.env.OPENCLI_CONFIG_DIR = process.env.OPENCLI_CONFIG_DIR || baseRoot;",
+    "process.env.OPENCLI_CACHE_DIR = cacheRoot;",
+    "process.env.OPENCLI_CDP_ENDPOINT = process.env.OPENCLI_CDP_ENDPOINT || `http://127.0.0.1:${cdpPort}`;",
+    "process.env.ECOREX_OPENCLI_HOME = baseRoot;",
+    "process.env.ECOREX_OPENCLI_EXTENSION_DIR = extensionDir;",
+    "if (!process.env.HOME) process.env.HOME = baseRoot;",
+    "if (process.platform === 'win32' && !process.env.USERPROFILE) process.env.USERPROFILE = baseRoot;",
+    "fs.mkdirSync(baseRoot, { recursive: true });",
+    "fs.mkdirSync(cacheRoot, { recursive: true });",
+    '',
+    'function browserCandidates() {',
+    '  if (process.env.ECOREX_OPENCLI_BROWSER) return [process.env.ECOREX_OPENCLI_BROWSER];',
+    '  if (process.platform === "win32") {',
+    '    const roots = [process.env.PROGRAMFILES, process.env["PROGRAMFILES(X86)"], process.env.LOCALAPPDATA].filter(Boolean);',
+    '    const suffixes = [',
+    '      ["Google", "Chrome", "Application", "chrome.exe"],',
+    '      ["Microsoft", "Edge", "Application", "msedge.exe"]',
+    '    ];',
+    '    return roots.flatMap((root) => suffixes.map((parts) => path.join(root, ...parts)));',
+    '  }',
+    '  if (process.platform === "darwin") return ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"];',
+    '  return ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "microsoft-edge"];',
+    '}',
+    '',
+    'function shouldLaunchBridge(commandArgs) {',
+    '  if (process.env.ECOREX_OPENCLI_NO_BROWSER === "1") return false;',
+    '  const first = String(commandArgs[0] || "").toLowerCase();',
+    '  if (!first || first === "--help" || first === "-h" || first === "--version" || first === "-v" || first === "-V") return false;',
+    '  if (commandArgs.includes("--help") || commandArgs.includes("-h")) return false;',
+    '  if (first === "daemon" || first === "adapter" || first === "plugin" || first === "profile") return false;',
+    '  return true;',
+    '}',
+    '',
+    'function isDoctorCommand(commandArgs) {',
+    '  return String(commandArgs[0] || "").toLowerCase() === "doctor";',
+    '}',
+    '',
+    'function markRecentlyLaunched() {',
+    '  const stamp = path.join(baseRoot, "browser-bridge-launch.json");',
+    '  try {',
+    '    const stat = fs.statSync(stamp);',
+    '    if (Date.now() - stat.mtimeMs < 15000) return false;',
+    '  } catch {}',
+    '  fs.writeFileSync(stamp, JSON.stringify({ launchedAt: new Date().toISOString() }));',
+    '  return true;',
+    '}',
+    '',
+    'function launchBridgeBrowser() {',
+    '  if (!fs.existsSync(extensionDir)) return false;',
+    '  if (!markRecentlyLaunched()) return false;',
+    '  const browser = browserCandidates().find((candidate) => {',
+    '    if (!candidate) return false;',
+    '    if (path.isAbsolute(candidate)) return fs.existsSync(candidate);',
+    '    return true;',
+    '  });',
+    '  if (!browser) return false;',
+    '  const profileDir = path.join(baseRoot, "browser-automation-profile");',
+    '  fs.mkdirSync(profileDir, { recursive: true });',
+    '  const launchArgs = [',
+    '    `--user-data-dir=${profileDir}`,',
+    '    `--remote-debugging-port=${cdpPort}`,',
+    '    "--remote-allow-origins=*",',
+    '    `--load-extension=${extensionDir}`,',
+    '    `--disable-extensions-except=${extensionDir}`,',
+    '    "--no-first-run",',
+    '    "--no-default-browser-check",',
+    '    "about:blank"',
+    '  ];',
+    '  try {',
+    '    const child = spawn(browser, launchArgs, { detached: true, stdio: "ignore", windowsHide: false });',
+    '    child.unref();',
+    '    return true;',
+    '  } catch {}',
+    '  return false;',
+    '}',
+    '',
+    'function runOpenCli() {',
+    '  process.argv = [process.argv[0], script, ...args];',
+    '  try { process.defaultApp = true; } catch {}',
+    '  import(scriptUrl).catch((error) => {',
+    '    console.error(error && error.stack || error && error.message || String(error));',
+    '    process.exit(1);',
+    '  });',
+    '}',
+    'async function runManagedDoctor() {',
+    '  let version = "unknown";',
+    '  try { version = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")).version || version; } catch {}',
+    '  let targets = [];',
+    '  let browserVersion = "";',
+    '  try {',
+    '    const versionResponse = await fetch(`${process.env.OPENCLI_CDP_ENDPOINT.replace(/\\/$/, "")}/json/version`);',
+    '    const versionBody = await versionResponse.json();',
+    '    browserVersion = versionBody.Browser || "";',
+    '    const targetsResponse = await fetch(`${process.env.OPENCLI_CDP_ENDPOINT.replace(/\\/$/, "")}/json`);',
+    '    targets = await targetsResponse.json();',
+    '  } catch (error) {',
+    '    console.error(`opencli v${version} doctor (EcoreX managed browser)`);',
+    '    console.error(`[FAIL] CDP endpoint: ${process.env.OPENCLI_CDP_ENDPOINT}`);',
+    '    console.error(error && error.message ? error.message : String(error));',
+    '    process.exit(1);',
+    '    return;',
+    '  }',
+    '  const pageTargets = Array.isArray(targets) ? targets.filter((target) => target && target.type === "page" && target.webSocketDebuggerUrl) : [];',
+    '  console.log(`opencli v${version} doctor (EcoreX managed browser)`);',
+    '  console.log(`[OK] Managed browser: ${browserVersion || "available"}`);',
+    '  console.log(`[OK] CDP endpoint: ${process.env.OPENCLI_CDP_ENDPOINT}`);',
+    '  console.log(`[OK] Inspectable pages: ${pageTargets.length}`);',
+    '  process.exit(pageTargets.length ? 0 : 1);',
+    '}',
+    'const launchedBridge = shouldLaunchBridge(args) ? launchBridgeBrowser() : false;',
+    'const delayMs = launchedBridge ? Math.max(0, Number(process.env.ECOREX_OPENCLI_BROWSER_BOOT_DELAY_MS) || 1200) : 0;',
+    'setTimeout(() => {',
+    '  if (isDoctorCommand(args)) { void runManagedDoctor(); return; }',
+    '  runOpenCli();',
+    '}, delayMs);',
+    ''
+  ].join('\n');
+  fs.writeFileSync(path.join(binDir, 'opencli-runner.cjs'), runner, 'utf8');
   const cmd = [
     '@echo off',
     'setlocal',
-    'set "SCRIPT=%~dp0..\\package\\dist\\src\\main.js"',
+    'set "SCRIPT=%~dp0opencli-runner.cjs"',
     'set "ECOREX_NODE=%~dp0..\\..\\..\\..\\EcoreX Agent.exe"',
     'if exist "%ECOREX_NODE%" (',
-    '  set "ELECTRON_RUN_AS_NODE=1"',
+      '  set "ELECTRON_RUN_AS_NODE=1"',
     '  "%ECOREX_NODE%" "%SCRIPT%" %*',
     '  exit /b %ERRORLEVEL%',
     ')',
@@ -345,7 +481,7 @@ function writeOpenCliWrappers(binDir) {
   ].join('\r\n');
   fs.writeFileSync(path.join(binDir, 'opencli.cmd'), cmd, 'utf8');
   const ps1 = [
-    '$script = Join-Path $PSScriptRoot "..\\package\\dist\\src\\main.js"',
+    '$script = Join-Path $PSScriptRoot "opencli-runner.cjs"',
     '$ecorexNode = Join-Path $PSScriptRoot "..\\..\\..\\..\\EcoreX Agent.exe"',
     'if (Test-Path $ecorexNode) {',
     '  $env:ELECTRON_RUN_AS_NODE = "1"',
@@ -364,7 +500,7 @@ function writeOpenCliWrappers(binDir) {
   if (process.platform !== 'win32') {
     const sh = [
       '#!/usr/bin/env sh',
-      'SCRIPT="$(CDPATH= cd -- "$(dirname -- "$0")/../package/dist/src" && pwd)/main.js"',
+      'SCRIPT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/opencli-runner.cjs"',
       'exec node "$SCRIPT" "$@"',
       ''
     ].join('\n');
@@ -372,6 +508,32 @@ function writeOpenCliWrappers(binDir) {
     fs.writeFileSync(shPath, sh, 'utf8');
     fs.chmodSync(shPath, 0o755);
   }
+}
+
+function patchOpenCliRuntimeForEcoreX(packageTarget) {
+  const runtimePath = path.join(packageTarget, 'dist', 'src', 'runtime.js');
+  if (!fs.existsSync(runtimePath)) return;
+  const runtimeSource = fs.readFileSync(runtimePath, 'utf8');
+  const marker = 'if (process.env.OPENCLI_CDP_ENDPOINT)';
+  if (runtimeSource.includes(marker)) return;
+  const needle = [
+    'export function getBrowserFactory(site) {',
+    '    if (site && isElectronApp(site))',
+    '        return CDPBridge;',
+    '    return BrowserBridge;',
+    '}'
+  ].join('\n');
+  const replacement = [
+    'export function getBrowserFactory(site) {',
+    '    if (process.env.OPENCLI_CDP_ENDPOINT)',
+    '        return CDPBridge;',
+    '    if (site && isElectronApp(site))',
+    '        return CDPBridge;',
+    '    return BrowserBridge;',
+    '}'
+  ].join('\n');
+  if (!runtimeSource.includes(needle)) fail('OpenCLI runtime patch target was not found.');
+  fs.writeFileSync(runtimePath, runtimeSource.replace(needle, replacement), 'utf8');
 }
 
 function prepareOpenCliRuntime(sourceRoot, toolTarget, packageInfo) {
@@ -384,6 +546,7 @@ function prepareOpenCliRuntime(sourceRoot, toolTarget, packageInfo) {
     type: packageInfo.type || 'module',
     main: packageInfo.main || 'dist/src/main.js',
     bin: packageInfo.bin || { opencli: 'dist/src/main.js' },
+    exports: packageInfo.exports || undefined,
     dependencies: packageInfo.dependencies || {}
   };
 
@@ -413,6 +576,7 @@ function prepareOpenCliRuntime(sourceRoot, toolTarget, packageInfo) {
   copyDirectory(path.join(sourceExtension, 'dist'), path.join(extensionTarget, 'dist'), 'OpenCLI extension dist');
   copyDirectory(path.join(sourceExtension, 'icons'), path.join(extensionTarget, 'icons'), 'OpenCLI extension icons');
 
+  patchOpenCliRuntimeForEcoreX(packageTarget);
   writeOpenCliWrappers(path.join(toolTarget, 'bin'));
   fs.writeFileSync(
     path.join(toolTarget, 'manifest.json'),
@@ -422,7 +586,7 @@ function prepareOpenCliRuntime(sourceRoot, toolTarget, packageInfo) {
       platform: process.platform,
       executable: process.platform === 'win32' ? 'bin/opencli.cmd' : 'bin/opencli',
       extension: 'extension',
-      extensionInstallHint: 'Chrome Web Store ID ildkmabpimmkaediidaifkhjpohdnifk or bundled unpacked extension directory.',
+      extensionInstallHint: 'Bundled unpacked extension is auto-loaded by EcoreX OpenCLI runner with a dedicated browser profile.',
       source: 'EcoreX managed OpenCLI runtime'
     }, null, 2)}\n`,
     'utf8'

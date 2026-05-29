@@ -112,6 +112,9 @@ const MAX_AGENT_EVENT_QUEUE = 2000;
 const HARD_MAX_AGENT_EVENT_QUEUE = 5000;
 const MAX_AGENT_EVENT_BATCH = 40;
 const AGENT_EVENT_FLUSH_MS = 75;
+const AGENT_STRUCTURED_EVENT_PROTOCOL = 'ecorex.agent-event.v2';
+const AGENT_ASSISTANT_DELTA_FLUSH_MS = 140;
+const MAX_AGENT_ASSISTANT_BUFFER_CHARS = 12 * 1024;
 const AGENT_EVENT_PAUSE_HIGH_WATER = 180;
 const AGENT_EVENT_RESUME_LOW_WATER = 80;
 const MAX_TOOL_LEDGER_ACTIVE_ENTRIES = 200;
@@ -346,7 +349,9 @@ const ECOREX_MANAGED_CAPABILITY_PRIORITY_PROMPT = [
   '1. For DOCX, XLSX, PPTX, report, spreadsheet, slide deck, Office document creation, inspection, validation, or modification, prefer the officecli skill and OfficeCLI runtime first.',
   '2. For browser automation, website workflows, logged-in web pages, or adapter-style website commands, prefer the opencli skill and OpenCLI runtime when available.',
   '3. For Feishu/Lark setup or user authorization, prefer lark-cli split-flow/no-wait guidance when available; expose only the user-facing authorization link/QR, then wait for the user completion signal before continuing.',
-  '4. Fall back to direct local file generation only when the matching managed capability is unavailable or unsuitable, and explain the fallback briefly.'
+  '4. Fall back to direct local file generation only when the matching managed capability is unavailable or unsuitable, and explain the fallback briefly.',
+  '5. Keep progress narration brief. Do not stream private step-by-step reasoning. Surface only the current action, key finding, and next step when useful.',
+  '6. In chat, summarize work in short separated paragraphs like Codex status updates. Avoid repeating "I will check" style lines or raw diagnostic probes.'
 ].join('\n');
 
 const ECOREX_GENERAL_CHAT_ISOLATION_PROMPT = [
@@ -598,6 +603,15 @@ function isInternalAgentOutputLine(value = '') {
   if (!text) return false;
   if (/\[UNDICI-EHPA\]\s+Warning/i.test(text)) return true;
   if (/Use `?node --trace-warnings`?/i.test(text)) return true;
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(text)) return true;
+  if (/^(?:done|WEB_SEARCH_OK|No links found\.?|开始生成回复|正在同步输出|回复生成完成)$/i.test(text)) return true;
+  if (/^WEB_SEARCH_OK/i.test(text)) return true;
+  if (/^opencli\s+v?\d+(?:\.\d+)*\s+doctor\b/i.test(text) && /\b(?:daemon|extension|connectivity|missing|fail|ok)\b/i.test(text)) return true;
+  if (/^opencli\s+v?\d+(?:\.\d+)*\s+doctor$/i.test(text)) return true;
+  if (/\bDaemon restarted on port\b/i.test(text)) return true;
+  if (/\bBrowser Bridge extension\b/i.test(text) && /\b(?:not connected|has not connected|missing)\b/i.test(text)) return true;
+  if (/^\[(?:OK|MISSING|FAIL)\]\s+(?:Daemon|Extension|Connectivity)\b/i.test(text)) return true;
+  if (/^error:\s+unknown command\s+['"].*opencli.*main\.js/i.test(text)) return true;
   if (/^\s*(?:at\s+)?[A-Za-z]:[\\/].*(?:opencli|node|npm).*(?:char:\d+|CategoryInfo|FullyQualifiedErrorId)/i.test(text)) return true;
   if (/^Launching skill:/i.test(text)) return true;
   if (/^\d+\s+---\s*\d+\s+name:\s*[-\w.]+\s+\d+\s+version:/i.test(text)) return true;
@@ -622,6 +636,10 @@ function isInternalAgentOutputLine(value = '') {
   return false;
 }
 
+function isDuplicatePublicStatusLine(value = '') {
+  return /^(?:done|WEB_SEARCH_OK|开始生成回复|正在同步输出|回复生成完成)$/i.test(String(value || '').trim());
+}
+
 function cleanAgentDisplayLine(value = '') {
   let text = String(value || '').trimEnd();
   const numberTokens = text.match(/(?:^|\s)\d{1,3}(?=\s|$)/g) || [];
@@ -629,6 +647,9 @@ function cleanAgentDisplayLine(value = '') {
     text = text.replace(/(^|\s)\d{1,3}(?=\s|$)/g, '$1').replace(/\s{2,}/g, ' ').trim();
   }
   return text
+    .replace(/WEB_SEARCH_OK/gi, '')
+    .replace(/`?\bNo\s*links\s*found\.?`?/gi, '未检索到可直接展示的链接')
+    .replace(/\bNolinksfound\.?/gi, '未检索到可直接展示的链接')
     .replace(/("(?:base_token|folder_token|access_token|refresh_token)"\s*:\s*")[^"]+(")/gi, '$1***$2')
     .replace(/\b(base_token|folder_token|access_token|refresh_token)=([^\s,;]+)/gi, '$1=***')
     .replace(/execution\s+bridge(?=user_code=)/gi, 'execution_bridge?')
@@ -637,10 +658,18 @@ function cleanAgentDisplayLine(value = '') {
 }
 
 function stripInternalAgentOutput(value = '') {
+  const seenStatusLines = new Set();
   return String(value || '')
     .split(/\r?\n/)
     .map((line) => cleanAgentDisplayLine(line))
     .filter((line) => !isInternalAgentOutputLine(line))
+    .filter((line) => {
+      const key = line.trim().toLowerCase();
+      if (!key || !isDuplicatePublicStatusLine(key)) return true;
+      if (seenStatusLines.has(key)) return false;
+      seenStatusLines.add(key);
+      return true;
+    })
     .join('\n')
     .trim();
 }
@@ -827,6 +856,279 @@ function publicBridgeError(result = {}, fallback = 'EcoreX operation failed.') {
 
 function publicAgentText(value = '', limit = MAX_AGENT_EVENT_TEXT_CHARS) {
   return stripInternalAgentOutput(publicProductText(safeOutputText(value, limit)));
+}
+
+function cleanAgentUrlToken(value = '') {
+  return String(value || '')
+    .trim()
+    .replace(/^['"`<([{]+/, '')
+    .replace(/['"`>)\]}.,;，。；]+$/g, '')
+    .replace(/\s+/g, '')
+    .replace(/execution\s+bridge(?=user_code=)/gi, 'execution_bridge?')
+    .replace(/execution\s+bridge(?=\?user_code=)/gi, 'execution_bridge')
+    .replace(/from=execution\s+bridge\b/gi, 'from=execution_bridge');
+}
+
+function externalAuthorizationRequestFromText(value = '') {
+  const text = String(value || '');
+  if (!text) return null;
+  const urlMatch = text.match(/https?:\/\/open\.feishu\.cn\/page\/execution[_\s-]?bridge\??[^\s"'<>）)】\]]*/i)
+    || text.match(/https?:\/\/[^\s"'<>）)】\]]*(?:oauth|authorize|device|verification|auth)[^\s"'<>）)】\]]*/i);
+  const url = cleanAgentUrlToken(urlMatch?.[0] || '');
+  const codeMatch = text.match(/\b(?:user[_ -]?code|device[_ -]?code|verification[_ -]?code)\s*[:：=]\s*([A-Z0-9][A-Z0-9_-]{3,80})/i);
+  const qrHint = text.match(/(?:qr\s*code|二维码|扫码)[^\r\n]{0,240}/i);
+  const authTarget = url || codeMatch?.[1] || qrHint?.[0] || '';
+  if (!authTarget || (url && !/^https?:\/\//i.test(url))) return null;
+  const provider = /feishu|lark|open\.feishu\.cn/i.test(url) || /飞书|lark|feishu/i.test(text)
+    ? '飞书'
+    : '外部授权';
+  return {
+    type: 'authorization',
+    provider,
+    status: 'waiting',
+    title: `等待${provider}授权`,
+    description: '请扫码或打开链接完成授权；完成后 EcoreX 会在当前会话自动接力继续。',
+    action: `打开${provider}授权链接`,
+    url: url || undefined,
+    qrText: safeOutputText(cleanAgentUrlToken(authTarget), 1200)
+  };
+}
+
+function permissionRequestFromAgentText(value = '') {
+  const text = publicAgentText(value, 3000);
+  if (!text) return null;
+  const blocked = /(权限策略.*(?:拦截|阻止)|被.*权限.*(?:拦截|阻止)|需要.*权限确认|权限确认卡|requires?\s+(?:permission|approval)|permission\s+(?:required|denied|blocked)|approval\s+required|do you want to proceed|proceed with)/i.test(text);
+  const localAction = /(mcp__|mcp[_\s-]|tool|browser|playwright|webfetch|websearch|文件|写入|修改|删除|覆盖|移动|重命名|命令|脚本|执行|终端|PowerShell|cmd|bash|shell|node|npm|python|OfficeCLI|OpenCLI|本地|工作区|系统目录)/i.test(text);
+  if (!blocked || !localAction) return null;
+  return {
+    type: 'permission',
+    status: 'waiting',
+    title: '需要确认本地操作',
+    description: '这一步涉及本地命令、文件或系统访问。确认后 EcoreX 会在当前会话继续执行，不会新开会话。',
+    action: safeOutputText(text.replace(/\s+/g, ' ').trim(), 240)
+  };
+}
+
+function userActionFromAgentText(value = '') {
+  return externalAuthorizationRequestFromText(value) || permissionRequestFromAgentText(value);
+}
+
+function firstDeepString(value, keys = []) {
+  const wanted = new Set(keys.map((key) => String(key).toLowerCase()));
+  const seen = new Set();
+  const queue = [value];
+  while (queue.length) {
+    const current = queue.shift();
+    if (!current || typeof current !== 'object' || seen.has(current)) continue;
+    seen.add(current);
+    if (Array.isArray(current)) {
+      queue.push(...current);
+      continue;
+    }
+    for (const [key, item] of Object.entries(current)) {
+      if (wanted.has(String(key).toLowerCase()) && typeof item === 'string' && item.trim()) {
+        return item.trim();
+      }
+      if (item && typeof item === 'object') queue.push(item);
+    }
+  }
+  return '';
+}
+
+function parseLooseJsonObject(value = '') {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Continue with a bounded object extraction pass.
+  }
+  const first = text.indexOf('{');
+  const last = text.lastIndexOf('}');
+  if (first < 0 || last <= first || last - first > 64 * 1024) return null;
+  try {
+    return JSON.parse(text.slice(first, last + 1));
+  } catch {
+    return null;
+  }
+}
+
+function runtimeAuthorizationRequestFromValue(value, context = {}) {
+  if (!value) return null;
+  const rawText = typeof value === 'string' ? value : JSON.stringify(value || {});
+  const parsed = typeof value === 'object' && value ? value : parseLooseJsonObject(rawText);
+  const url =
+    cleanAgentUrlToken(firstDeepString(parsed, [
+      'verification_url',
+      'verification_uri',
+      'verificationUrl',
+      'verificationUri',
+      'auth_url',
+      'authUrl',
+      'authorize_url',
+      'authorizeUrl',
+      'url',
+      'link'
+    ]))
+    || cleanAgentUrlToken(rawText.match(/https?:\/\/open\.feishu\.cn\/page\/execution[_\s-]?bridge\??[^\s"'<>锛?銆慭\]]*/i)?.[0] || '')
+    || cleanAgentUrlToken(rawText.match(/https?:\/\/[^\s"'<>锛?銆慭\]]*(?:oauth|authorize|device|verification|auth)[^\s"'<>锛?銆慭\]]*/i)?.[0] || '');
+  const deviceCode = firstDeepString(parsed, ['device_code', 'deviceCode']);
+  const userCode =
+    firstDeepString(parsed, ['user_code', 'userCode', 'verification_code', 'verificationCode'])
+    || rawText.match(/\b(?:user[_ -]?code|verification[_ -]?code)\s*[:=锛?]\s*([A-Z0-9][A-Z0-9_-]{3,80})/i)?.[1]
+    || '';
+  const looksLikeLark = /feishu|lark|larksuite|open\.feishu\.cn|lark-cli/i.test(rawText)
+    || /lark|feishu/i.test(String(context.toolName || context.command || ''));
+  const hasSplitFlowSignal = Boolean(url || deviceCode || userCode)
+    && (looksLikeLark || /verification[_-]?(url|uri|code)|device[_-]?code|authorization|oauth/i.test(rawText));
+  if (!hasSplitFlowSignal) return null;
+  const expiresIn = Number(firstDeepString(parsed, ['expires_in', 'expiresIn']) || parsed?.expires_in || parsed?.expiresIn || 0) || undefined;
+  const provider = looksLikeLark || /open\.feishu\.cn/i.test(url) ? '飞书' : '外部';
+  return {
+    type: 'authorization',
+    protocol: 'ecorex.user-action.authorization.v1',
+    provider,
+    status: 'waiting',
+    title: `等待${provider}授权`,
+    description: `请打开链接或扫码完成${provider}授权；确认完成后，EcoreX 会在当前会话继续执行。`,
+    action: '打开授权链接',
+    url: /^https?:\/\//i.test(url) ? url : undefined,
+    qrText: url || userCode || deviceCode || undefined,
+    userCode: userCode || undefined,
+    deviceCode: deviceCode || undefined,
+    expiresIn,
+    scope: firstDeepString(parsed, ['scope', 'scopes']) || undefined,
+    domain: firstDeepString(parsed, ['domain', 'domains']) || undefined,
+    command: safeOutputText(context.command || context.toolName || '', 160) || undefined
+  };
+}
+
+function runtimePermissionRequestFromValue(value, context = {}) {
+  if (!value) return null;
+  if (typeof value === 'string') {
+    const rawText = String(value || '');
+    const publicText = publicAgentText(rawText, 1800).replace(/\s+/g, ' ').trim();
+    const contextText = [context.toolName, context.command, context.name].filter(Boolean).join(' ');
+    const blockedByPolicy = /(permission|approval|confirm|user[-_\s]?action).{0,80}(denied|required|requested|needed|blocked)|blocked.{0,80}(permission|approval|policy)|requires?\s+(permission|approval)|approval\s+required|do you want to proceed|proceed with|EcoreX auto mode classifier|权限.{0,24}(拦截|确认|允许|批准|拒绝)|需要.{0,24}(确认|允许|批准|授权)|被当前权限策略拦截/i.test(`${rawText}\n${contextText}`);
+    const mentionsLocalAction = /(mcp__|mcp[_\s-]|tool|bash|powershell|cmd|shell|python|node|npm|pnpm|read|write|edit|delete|move|rename|file|folder|workspace|project|local|browser|opencli|officecli|lark|feishu|命令|工具|文件|目录|浏览器|本地|飞书)/i.test(`${rawText}\n${contextText}`);
+    if (!blockedByPolicy || !mentionsLocalAction) return null;
+    const toolName = safeOutputText(context.toolName || context.command || '', 120);
+    const reason =
+      rawText.match(/(?:Reason|reason|原因)\s*[:：]\s*([^\r\n]+)/i)?.[1]
+      || rawText.match(/(?:permission|approval).{0,80}(?:denied|required|blocked)[^\r\n]*/i)?.[0]
+      || publicText;
+    return {
+      type: 'permission',
+      protocol: 'ecorex.user-action.permission.v1',
+      status: 'waiting',
+      title: toolName ? `确认 ${toolName}` : '需要确认本地操作',
+      description: 'EcoreX 需要你确认后才能继续这一步本地操作。允许后，当前会话会原地继续执行。',
+      action: safeOutputText(reason || toolName || 'confirm', 300),
+      toolName: toolName || undefined,
+      command: safeOutputText(context.command || context.toolName || '', 160) || undefined
+    };
+  }
+  if (typeof value !== 'object') return null;
+  const status = String(value.status || value.state || value.reason || value.code || '').toLowerCase();
+  const type = String(value.type || value.kind || '').toLowerCase();
+  if (!/(permission|approval|confirm|user-action|required|blocked)/i.test(`${type} ${status}`)) return null;
+  const toolName = value.toolName || value.name || context.toolName || '';
+  return {
+    type: 'permission',
+    protocol: 'ecorex.user-action.permission.v1',
+    status: 'waiting',
+    title: safeOutputText(value.title || '需要确认本地操作', 120),
+    description: safeOutputText(value.description || value.message || '本地执行引擎正在等待你的明确确认后继续。', 500),
+    action: safeOutputText(value.action || value.prompt || toolName || 'confirm', 300),
+    toolName: safeOutputText(toolName, 120) || undefined,
+    command: safeOutputText(value.command || context.command || toolName || '', 160) || undefined
+  };
+}
+
+function structuredUserActionFromPayload(payload = {}) {
+  return safeAgentUserAction(payload.userAction)
+    || safeAgentUserAction(payload.actionRequired)
+    || safeAgentUserAction(payload.authorization)
+    || safeAgentUserAction(payload.permissionRequest)
+    || safeAgentUserAction(payload.permission)
+    || safeAgentUserAction(runtimeAuthorizationRequestFromValue(payload.authorization, payload))
+    || safeAgentUserAction(runtimeAuthorizationRequestFromValue(payload.authorizationPayload || payload.authPayload || null, payload))
+    || safeAgentUserAction(runtimePermissionRequestFromValue(payload.permissionRequest || payload.permission, payload))
+    || safeAgentUserAction(runtimePermissionRequestFromValue(payload.permissionPayload || null, payload))
+    || safeAgentUserAction(runtimePermissionRequestFromValue(payload.message || payload.text || payload.detail || null, payload));
+}
+
+function safeAgentUserAction(value) {
+  if (!value || typeof value !== 'object') return null;
+  const type = String(value.type || '').trim().toLowerCase();
+  if (!['authorization', 'permission', 'input', 'confirmation'].includes(type)) return null;
+  const url = cleanAgentUrlToken(value.url || '');
+  return {
+    type,
+    protocol: safeOutputText(value.protocol || (type === 'authorization' ? 'ecorex.user-action.authorization.v1' : 'ecorex.user-action.v1'), 80),
+    provider: safeOutputText(value.provider || '', 80),
+    status: safeOutputText(value.status || 'waiting', 40),
+    title: safeOutputText(value.title || (type === 'authorization' ? '等待外部授权' : '需要确认本地操作'), 120),
+    description: safeOutputText(value.description || '', 500),
+    action: safeOutputText(value.action || '', 300),
+    url: /^https?:\/\//i.test(url) ? url : undefined,
+    qrText: value.qrText ? safeOutputText(cleanAgentUrlToken(value.qrText), 1200) : undefined,
+    userCode: value.userCode ? safeOutputText(value.userCode, 120) : undefined,
+    deviceCode: value.deviceCode ? safeOutputText(value.deviceCode, 240) : undefined,
+    expiresIn: Number.isFinite(Number(value.expiresIn)) ? Number(value.expiresIn) : undefined,
+    scope: value.scope ? safeOutputText(value.scope, 500) : undefined,
+    domain: value.domain ? safeOutputText(value.domain, 160) : undefined,
+    command: value.command ? safeOutputText(value.command, 160) : undefined,
+    toolName: value.toolName ? safeOutputText(value.toolName, 120) : undefined
+  };
+}
+
+function safeAgentRecovery(value = {}) {
+  if (!value || typeof value !== 'object') return null;
+  const status = safeOutputText(value.status || value.reason || value.code || '', 80);
+  const hint = safeOutputText(value.hint || value.recoveryHint || value.message || '', 800);
+  if (!status && !hint) return null;
+  return {
+    protocol: 'ecorex.recovery.v1',
+    status,
+    reason: safeOutputText(value.reason || value.code || status, 120),
+    hint,
+    mode: safeOutputText(value.mode || (value.auto ? 'auto-reattach' : 'manual'), 80),
+    auto: Boolean(value.auto),
+    resumable: value.resumable !== false
+  };
+}
+
+function safeAgentArtifact(value = {}) {
+  if (!value || typeof value !== 'object') return null;
+  const rawPath = value.path || value.filePath || value.target || '';
+  const pathValue = rawPath ? path.resolve(String(rawPath)) : '';
+  const name = safeOutputText(value.name || (pathValue ? path.basename(pathValue) : ''), 240);
+  if (!pathValue && !name) return null;
+  return {
+    protocol: 'ecorex.artifact.v1',
+    path: pathValue || undefined,
+    pathLabel: safeOutputText(value.pathLabel || value.label || (name ? `artifact:/${name}` : ''), 320),
+    name,
+    extension: safeOutputText(value.extension || (pathValue ? path.extname(pathValue).toLowerCase() : ''), 40),
+    kind: safeOutputText(value.kind || 'file', 80),
+    source: safeOutputText(value.source || 'agent', 80),
+    sessionId: value.sessionId ? sanitizeSessionId(value.sessionId) : undefined,
+    previewable: value.previewable !== false
+  };
+}
+
+function safeAgentArtifacts(value) {
+  const items = Array.isArray(value) ? value : (value ? [value] : []);
+  const result = [];
+  for (const item of items) {
+    const artifact = safeAgentArtifact(item);
+    if (artifact && !result.some((existing) => existing.path && artifact.path && isSameWorkspacePath(existing.path, artifact.path))) {
+      result.push(artifact);
+    }
+    if (result.length >= 24) break;
+  }
+  return result;
 }
 
 function parseJsonOutput(text = '') {
@@ -1315,9 +1617,15 @@ function isolatedAgentRuntimeEnv(authContext = null) {
   const appDataDir = path.join(configDir, 'appdata');
   const localAppDataDir = path.join(configDir, 'local-appdata');
   const larkConfigDir = larkCliConfigDir(authContext);
+  const openCliHome = path.join(configDir, 'opencli');
+  const openCliCacheDir = path.join(openCliHome, 'cache');
+  const openCliExtensionDir = path.join(bundledManagedToolsRoot(), OPENCLI_SKILL_PACK_NAME, 'extension');
+  const openCliCdpPort = '19826';
   const nodeModulesDir = packagedNodeModulesDir();
   fs.mkdirSync(appDataDir, { recursive: true });
   fs.mkdirSync(localAppDataDir, { recursive: true });
+  fs.mkdirSync(openCliHome, { recursive: true });
+  fs.mkdirSync(openCliCacheDir, { recursive: true });
   const managedToolPath = prependPathEntries(process.env.PATH || process.env.Path || '', managedToolPathEntries());
   const env = {
     HOME: configDir,
@@ -1331,6 +1639,12 @@ function isolatedAgentRuntimeEnv(authContext = null) {
     ECOREX_AGENT_CONFIG_DIR: configDir,
     LARKSUITE_CLI_CONFIG_DIR: larkConfigDir,
     ECOREX_LARK_CLI_CONFIG_DIR: larkConfigDir,
+    OPENCLI_CONFIG_DIR: openCliHome,
+    OPENCLI_CACHE_DIR: openCliCacheDir,
+    OPENCLI_CDP_ENDPOINT: `http://127.0.0.1:${openCliCdpPort}`,
+    ECOREX_OPENCLI_CDP_PORT: openCliCdpPort,
+    ECOREX_OPENCLI_HOME: openCliHome,
+    ECOREX_OPENCLI_EXTENSION_DIR: openCliExtensionDir,
     CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
     ECOREX_SKILL_SCOPE: 'bundled-only'
   };
@@ -6030,6 +6344,7 @@ process.on('unhandledRejection', (reason) => {
 
 function normalizeAgentState(kind = 'debug', status = '') {
   const value = `${kind || ''} ${status || ''}`.toLowerCase();
+  if (/(authorization-incomplete|authorization-required|user-action-required|permission-required|approval-required|waiting-input|waiting-auth|action-required)/.test(value)) return 'waiting';
   if (/cancel/.test(value)) return 'cancelled';
   if (/(complete|completed|done|success|result)/.test(value)) return 'completed';
   if (/(fail|failed|error|stderr|timeout)/.test(value)) return 'failed';
@@ -6055,6 +6370,9 @@ function agentTaskType(kind = 'debug') {
   if (kind === 'assistant') return 'message';
   if (kind === 'tool') return 'tool';
   if (kind === 'result') return 'result';
+  if (kind === 'artifacts') return 'artifact';
+  if (kind === 'user_action' || kind === 'authorization' || kind === 'permission') return 'action';
+  if (kind === 'recovery') return 'recovery';
   if (kind === 'stderr' || kind === 'error') return 'diagnostic';
   return 'session';
 }
@@ -6266,7 +6584,7 @@ function normalizeAgentEvent(payload = {}, options = {}) {
     payload.task?.id ||
     payload.taskId ||
     `${sessionId || 'agent'}:${taskType}:${String(taskName).toLowerCase().replace(/[^a-z0-9_.:-]+/g, '-').slice(0, 80)}`;
-  const text = safeOutputText(payload.text || '', options.textLimit || MAX_AGENT_EVENT_TEXT_CHARS);
+  const text = publicAgentText(payload.text || '', options.textLimit || MAX_AGENT_EVENT_TEXT_CHARS);
   const ledger = payload.ledger || inferredToolLedgerFromPayload(sessionId, payload, status);
   const safeTools = Array.isArray(payload.tools)
     ? payload.tools.slice(0, 20).map((tool, index) => ({
@@ -6278,6 +6596,7 @@ function normalizeAgentEvent(payload = {}, options = {}) {
     : undefined;
   const event = {
     ...payload,
+    protocol: payload.protocol || AGENT_STRUCTURED_EVENT_PROTOCOL,
     __seq: payload.__seq || ++agentEventSequence,
     sessionId,
     kind,
@@ -6300,6 +6619,53 @@ function normalizeAgentEvent(payload = {}, options = {}) {
 
   if (safeTools) event.tools = safeTools;
   if (ledger) event.ledger = safeToolLedgerValue(ledger);
+  const artifacts = safeAgentArtifacts(payload.artifacts);
+  if (artifacts.length) event.artifacts = artifacts;
+  const recovery = safeAgentRecovery(payload.recovery || (payload.recoveryHint ? {
+    status,
+    reason: payload.reason || status,
+    hint: payload.recoveryHint,
+    auto: ['authorization-incomplete', 'user-action-required', 'stopped', 'timeout'].includes(status),
+    resumable: status !== 'completed'
+  } : null));
+  if (recovery) event.recovery = recovery;
+  const userAction = structuredUserActionFromPayload(payload);
+  const userActionCompleted = userAction && /(completed|complete|success|authenticated|authorized|done)/i.test(userAction.status || '');
+  if (userAction && !userActionCompleted) {
+    const pendingStatus = userAction.type === 'authorization' ? 'authorization-incomplete' : 'user-action-required';
+    event.userAction = userAction;
+    event.actionRequired = userAction;
+    event.requiresUserAction = true;
+    event.waitingForUser = true;
+    if (!event.text && userAction.description) event.text = userAction.description;
+    event.status = pendingStatus;
+    event.state = 'waiting';
+    event.reason = event.reason || pendingStatus;
+    event.recoveryHint = event.recoveryHint || agentRecoveryHint(pendingStatus, { reason: pendingStatus });
+    event.recovery = event.recovery || safeAgentRecovery({
+      status: pendingStatus,
+      reason: pendingStatus,
+      hint: event.recoveryHint,
+      mode: 'auto-reattach',
+      auto: true,
+      resumable: true
+    });
+    event.task.status = pendingStatus;
+    event.task.state = 'waiting';
+    if (userAction.type === 'authorization') event.authorization = userAction;
+    if (userAction.type === 'permission') event.permissionRequest = userAction;
+  } else if (userAction && userActionCompleted) {
+    event.userAction = userAction;
+    if (userAction.type === 'authorization') event.authorization = userAction;
+    if (userAction.type === 'permission') event.permissionRequest = userAction;
+  } else {
+    delete event.userAction;
+    delete event.actionRequired;
+    delete event.requiresUserAction;
+    delete event.waitingForUser;
+    delete event.authorization;
+    delete event.permissionRequest;
+  }
   if (event.toolName) event.toolName = publicAgentToolLabel(event.toolName);
   if (options.includeBackend !== true) {
     delete event.permissionCliMode;
@@ -6378,7 +6744,27 @@ function emitAgentEvent(payload, options = {}) {
     queue = { events: [], dropped: 0, timer: null };
     agentEventQueues.set(sessionId, queue);
   }
-  queue.events.push(event);
+  const previous = queue.events.at(-1);
+  if (
+    event.kind === 'assistant'
+    && previous?.kind === 'assistant'
+    && previous.sessionId === event.sessionId
+    && !event.userAction
+    && !previous.userAction
+    && !event.ledger
+    && !previous.ledger
+    && !event.artifacts
+    && !previous.artifacts
+    && !event.recovery
+    && !previous.recovery
+  ) {
+    previous.text = safeOutputText(`${previous.text || ''}${event.text || ''}`, MAX_AGENT_EVENT_TEXT_CHARS);
+    previous.time = event.time;
+    previous.status = event.status || previous.status;
+    previous.state = event.state || previous.state;
+  } else {
+    queue.events.push(event);
+  }
   if (queue.events.length > MAX_AGENT_EVENT_QUEUE) {
     setAgentStreamsPaused(sessionId, true);
   }
@@ -6512,14 +6898,14 @@ function agentSessionHasSubstantiveResult(entry = {}) {
   if (entry.hasSubstantiveResult) return true;
   return Array.isArray(entry.transcript) && entry.transcript.some((event) => (
     event?.kind === 'result'
+    && !['authorization-incomplete', 'authorization-required', 'waiting-auth', 'user-action-required', 'waiting-input'].includes(String(event.status || '').toLowerCase())
     && !['failed', 'error'].includes(String(event.status || '').toLowerCase())
-    && Boolean(substantiveAgentResultText(event.textPreview || event.text || ''))
+    && (Boolean(substantiveAgentResultText(event.textPreview || event.text || '')) || Boolean(event.artifacts?.length))
   ));
 }
 
 function agentSessionPublicText(entry = {}) {
   return [
-    entry.promptPreview,
     entry.finalResultPreview,
     ...(Array.isArray(entry.transcript) ? entry.transcript.map((event) => event?.textPreview || '') : [])
   ]
@@ -6537,28 +6923,47 @@ function agentOutputLooksCompletedAuthorization(value = '') {
 function agentOutputLooksUnresolvedAuthorization(value = '') {
   const text = String(value || '');
   if (!text || agentOutputLooksCompletedAuthorization(text)) return false;
-  const targetsAuth = /(飞书|feishu|lark|larksuite|授权|认证|登录|auth|oauth|device[_ -]?code|verification[_ -]?url|verification[_ -]?uri|open\.feishu\.cn)/i.test(text);
+  const targetsAuth = /(飞书|feishu|lark|larksuite|lark-cli|open\.feishu\.cn|oauth|device[_ -]?code|verification[_ -]?url|verification[_ -]?uri)/i.test(text);
   if (!targetsAuth) return false;
-  return /(授权飞书|飞书.*授权|lark-cli\s+(?:config\s+init|auth\s+login)|auth\s+login|config\s+init\s+--new|device[_ -]?code|verification[_ -]?(?:url|uri)|open\.feishu\.cn|user_code=|二维码|扫码|打开.*链接|等待.*(?:授权|配置)|not configured|run `?lark-cli (?:config init|auth login)|需要.*授权|请.*授权|请.*登录)/i.test(text);
+  return /(授权飞书|飞书.*授权|lark-cli\s+(?:config\s+init|auth\s+login)|config\s+init\s+--new|device[_ -]?code|verification[_ -]?(?:url|uri)|open\.feishu\.cn|user_code=|二维码|扫码|打开.*链接|等待.*(?:授权|配置)|not configured|run `?lark-cli (?:config init|auth login))/i.test(text);
+}
+
+function authorizationStateFromStructuredEvent(event = {}) {
+  const action = safeAgentUserAction(event.userAction || event.authorization || event.actionRequired);
+  const status = String(event.status || action?.status || '').toLowerCase();
+  if (action?.type === 'authorization') {
+    if (/(completed|complete|success|authenticated|authorized|done)/i.test(action.status || status)) return 'completed';
+    return 'waiting';
+  }
+  if (event.authorization && /(completed|complete|success|authenticated|authorized|done)/i.test(status)) return 'completed';
+  if (status === 'authorization-incomplete' || status === 'authorization-required' || status === 'waiting-auth') return 'waiting';
+  return '';
 }
 
 function agentSessionHasUnresolvedAuthorization(entry = {}) {
   if (entry.authorizationCompleted) return false;
   if (entry.authorizationHandoffStarted) return true;
-  const text = agentSessionPublicText(entry);
-  if (!text) return false;
-  const targetsAuth = /(飞书|feishu|lark|larksuite|授权|认证|登录|auth|oauth|device[_ -]?code|verification[_ -]?url|verification[_ -]?uri)/i.test(text);
-  if (!targetsAuth) return false;
-  const startedOrWaiting = /(授权飞书|飞书.*授权|lark-cli\s+(?:config\s+init|auth\s+login)|auth\s+login|device[_ -]?code|verification[_ -]?(?:url|uri)|二维码|打开.*链接|等待.*授权|not configured|run `?lark-cli config init|需要.*授权|请.*授权|请.*登录)/i.test(text);
-  if (!startedOrWaiting) return false;
-  const completed = /(授权成功|已授权|认证成功|登录成功|配置完成|login success|authenticated|authorization complete|token saved|current user|auth status.*ok|\"ok\"\s*:\s*true)/i.test(text);
-  return !completed;
+  return Array.isArray(entry.transcript) && entry.transcript.some((event) => authorizationStateFromStructuredEvent(event) === 'waiting');
+}
+
+function agentUserActionLooksCompleted(action = {}) {
+  return /(completed|complete|success|authenticated|authorized|done)/i.test(action.status || '');
 }
 
 function agentSessionHasUnresolvedUserBlocker(entry = {}) {
+  const lastAction = safeAgentUserAction(entry.lastUserAction);
+  if (lastAction && lastAction.type !== 'authorization' && !agentUserActionLooksCompleted(lastAction)) return true;
+  if (Array.isArray(entry.transcript) && entry.transcript.some((event) => {
+    const eventAction = safeAgentUserAction(event?.userAction || event?.permissionRequest || event?.actionRequired);
+    const eventStatus = String(event?.status || eventAction?.status || '').toLowerCase();
+    if (eventAction && eventAction.type !== 'authorization' && !agentUserActionLooksCompleted(eventAction)) return true;
+    return ['user-action-required', 'waiting-input', 'permission-required', 'approval-required', 'blocked-user-action'].includes(eventStatus);
+  })) {
+    return true;
+  }
   const text = agentSessionPublicText(entry);
   if (!text) return false;
-  return /(?:unable|cannot|can't|not able|blocked|waiting for user|need user|no input file|missing input|cannot determine|please.{0,40}(?:upload|provide|tell|share))|(?:\u65e0\u6cd5|\u4e0d\u80fd|\u6682\u65f6\u65e0\u6cd5).{0,80}(?:\u5b8c\u6210|\u751f\u6210|\u7ee7\u7eed|\u5224\u65ad)|(?:\u8bf7|\u9700\u8981).{0,40}(?:\u4e0a\u4f20|\u63d0\u4f9b|\u544a\u8bc9|\u8865\u5145|\u8def\u5f84|\u6587\u4ef6)/i.test(text);
+  return /(?:unable|cannot|can't|not able|blocked|waiting for user|need user|no input file|missing input|cannot determine|please.{0,40}(?:upload|provide|tell|share))|(?:\u65e0\u6cd5|\u4e0d\u80fd|\u6682\u65f6\u65e0\u6cd5|\u672a\u80fd).{0,80}(?:\u5b8c\u6210|\u751f\u6210|\u7ee7\u7eed|\u5224\u65ad|\u53d1\u8d77|\u914d\u7f6e)|(?:\u8bf7|\u9700\u8981).{0,40}(?:\u4e0a\u4f20|\u63d0\u4f9b|\u544a\u8bc9|\u8865\u5145|\u8def\u5f84|\u6587\u4ef6|\u786e\u8ba4|\u5141\u8bb8|\u6388\u6743)|\u6743\u9650.{0,24}(?:\u7b56\u7565|\u62e6\u622a|\u786e\u8ba4|\u5141\u8bb8|\u6279\u51c6)|\u88ab.{0,24}\u6743\u9650.{0,24}(?:\u62e6\u622a|\u963b\u6b62)|\u6743\u9650\u786e\u8ba4\u5361|\u98de\u4e66.{0,24}(?:\u914d\u7f6e|\u6388\u6743).{0,24}(?:\u547d\u4ee4|\u88ab\u62e6\u622a)/i.test(text);
 }
 
 function userBlockerAgentResultText() {
@@ -6823,6 +7228,9 @@ function finalizeAgentSession(sessionId, entry, details = {}) {
   }
 
   const status = details.status || agentFinalStatus(details.reason);
+  const finalUserAction = ['authorization-incomplete', 'user-action-required'].includes(status)
+    ? safeAgentUserAction(entry.lastUserAction)
+    : undefined;
   const event = {
     sessionId,
     kind: agentFinalKind(status),
@@ -6831,7 +7239,16 @@ function finalizeAgentSession(sessionId, entry, details = {}) {
     exitCode: details.code,
     signal: details.signal,
     text: details.text || agentFinalText(status, details),
-    recoveryHint: status === 'completed' ? undefined : agentRecoveryHint(status, details)
+    userAction: finalUserAction,
+    recoveryHint: status === 'completed' ? undefined : agentRecoveryHint(status, details),
+    recovery: status === 'completed' ? undefined : {
+      status,
+      reason: details.reason || status,
+      hint: agentRecoveryHint(status, details),
+      mode: ['authorization-incomplete', 'user-action-required', 'stopped'].includes(status) ? 'auto-reattach' : 'manual',
+      auto: ['authorization-incomplete', 'user-action-required', 'stopped'].includes(status),
+      resumable: status !== 'failed'
+    }
   };
   recordSessionEvent(entry, event);
   appendRunJournalEntry(sessionId, entry, status, {
@@ -7763,6 +8180,7 @@ function publicSessionSummary(sessionId, entry = {}, now = Date.now()) {
     durationMs,
     promptPreview: entry.promptPreview || '',
     promptHash: entry.promptHash || undefined,
+    runtimeCwd: entry.cwd || undefined,
     workspacePath: entry.workspacePath || publicWorkspacePath(entry.cwd),
     projectId: entry.projectId || null,
     projectName: entry.projectName || '',
@@ -7776,7 +8194,18 @@ function publicSessionSummary(sessionId, entry = {}, now = Date.now()) {
     fullAccess: Boolean(entry.permissionSnapshot?.fullAccess || permissionPolicy.fullAccess),
     attachmentCount: Number(entry.attachmentCount) || 0,
     ledgerEventCount: Number(entry.ledgerEventCount) || 0,
-    eventCount: Array.isArray(entry.transcript) ? entry.transcript.length : 0
+    eventCount: Array.isArray(entry.transcript) ? entry.transcript.length : 0,
+    lastUserAction: entry.lastUserAction ? safeAgentUserAction(entry.lastUserAction) : undefined,
+    recovery: entry.status && entry.status !== 'running' ? safeAgentRecovery({
+      status: entry.status,
+      reason: entry.lastEventStatus || entry.status,
+      hint: agentRecoveryHint(entry.status, { reason: entry.lastEventStatus || entry.status }),
+      mode: 'auto-reattach',
+      auto: true,
+      resumable: true
+    }) : undefined,
+    autoRecover: true,
+    recoveryMode: 'reattach'
   };
 }
 
@@ -7830,7 +8259,14 @@ function recordSessionEvent(entry, event) {
   const normalized = normalizeAgentEvent(event, { includeRaw: false, textLimit: 2000 });
   entry.lastEventStatus = normalized.status;
   entry.lastEventState = normalized.state;
-  if (['error', 'failed', 'timeout'].includes(String(normalized.status || '').toLowerCase())) {
+  const normalizedStatus = String(normalized.status || '').toLowerCase();
+  if (['authorization-incomplete', 'user-action-required'].includes(normalizedStatus)) {
+    entry.status = normalized.status;
+    entry.state = normalized.state || 'waiting';
+  } else if (normalized.state === 'running' && !['failed', 'error', 'timeout', 'cancelled'].includes(String(entry.state || '').toLowerCase())) {
+    entry.status = normalizedStatus === 'started' ? 'running' : normalized.status;
+    entry.state = 'running';
+  } else if (['error', 'failed', 'timeout'].includes(normalizedStatus)) {
     entry.status = normalized.status;
     entry.state = normalized.state || entry.state;
   }
@@ -7844,17 +8280,31 @@ function recordSessionEvent(entry, event) {
   if (normalized.claudeResultStatus === 'failed') {
     entry.claudeResultFailed = true;
   }
-  if (agentOutputLooksCompletedAuthorization(normalized.text)) {
+  const authorizationState = authorizationStateFromStructuredEvent(normalized);
+  if (authorizationState === 'completed' || agentOutputLooksCompletedAuthorization(normalized.text)) {
     entry.authorizationCompleted = true;
-  } else if (agentOutputLooksUnresolvedAuthorization(normalized.text)) {
+    entry.authorizationHandoffStarted = false;
+    if (!normalized.userAction || normalized.userAction.type === 'authorization') delete entry.lastUserAction;
+  } else if (authorizationState === 'waiting') {
     entry.authorizationHandoffStarted = true;
+  }
+  if (normalized.userAction) {
+    const userActionCompleted = /(completed|complete|success|authenticated|authorized|done)/i.test(normalized.userAction.status || '');
+    if (userActionCompleted) {
+      if (entry.lastUserAction?.type === normalized.userAction.type) delete entry.lastUserAction;
+    } else {
+      entry.lastUserAction = normalized.userAction;
+      if (normalized.userAction.type === 'authorization') entry.authorizationHandoffStarted = true;
+    }
   }
   if (normalized.kind === 'result') {
     entry.resultEventCount = (Number(entry.resultEventCount) || 0) + 1;
-    const resultText = substantiveAgentResultText(normalized.text);
-    if (resultText) {
+    const resultStatus = String(normalized.status || '').toLowerCase();
+    const pendingUserActionResult = ['authorization-incomplete', 'authorization-required', 'waiting-auth', 'user-action-required', 'waiting-input'].includes(resultStatus);
+    const resultText = pendingUserActionResult ? '' : substantiveAgentResultText(normalized.text);
+    if (!pendingUserActionResult && (resultText || normalized.artifacts?.length)) {
       entry.hasSubstantiveResult = true;
-      entry.finalResultPreview = safeTranscriptTextPreview(resultText);
+      entry.finalResultPreview = safeTranscriptTextPreview(resultText || `Generated ${normalized.artifacts.length} artifact(s).`);
     } else if (normalized.claudeResultStatus !== 'failed') {
       entry.emptyResultEventCount = (Number(entry.emptyResultEventCount) || 0) + 1;
     }
@@ -7863,16 +8313,39 @@ function recordSessionEvent(entry, event) {
     entry.ledgerEventCount = (Number(entry.ledgerEventCount) || 0) + 1;
   }
   registerAgentArtifactsFromEvent(entry, normalized);
-  entry.transcript.push({
+  const transcriptEvent = {
     time: normalized.time,
     kind: normalized.kind,
     status: normalized.status,
     state: normalized.state,
     detailStatus: normalized.detailStatus,
     task: normalized.task,
-    ledger: normalized.ledger ? safeToolLedger(normalized.ledger) : undefined,
+    ledger: normalized.ledger ? safeToolLedgerValue(normalized.ledger) : undefined,
+    userAction: normalized.userAction ? safeAgentUserAction(normalized.userAction) : undefined,
+    artifacts: normalized.artifacts?.length ? safeAgentArtifacts(normalized.artifacts) : undefined,
+    recovery: normalized.recovery ? safeAgentRecovery(normalized.recovery) : undefined,
     textPreview: safeTranscriptTextPreview(normalized.text)
-  });
+  };
+  const lastTranscriptEvent = entry.transcript.at(-1);
+  if (
+    transcriptEvent.kind === 'assistant'
+    && lastTranscriptEvent?.kind === 'assistant'
+    && !transcriptEvent.userAction
+    && !lastTranscriptEvent.userAction
+    && !transcriptEvent.ledger
+    && !lastTranscriptEvent.ledger
+    && !transcriptEvent.artifacts
+    && !lastTranscriptEvent.artifacts
+    && !transcriptEvent.recovery
+    && !lastTranscriptEvent.recovery
+  ) {
+    lastTranscriptEvent.time = transcriptEvent.time;
+    lastTranscriptEvent.status = transcriptEvent.status;
+    lastTranscriptEvent.state = transcriptEvent.state;
+    lastTranscriptEvent.textPreview = safeTranscriptTextPreview(`${lastTranscriptEvent.textPreview || ''}${transcriptEvent.textPreview || ''}`);
+  } else {
+    entry.transcript.push(transcriptEvent);
+  }
   if (entry.transcript.length > MAX_TRANSCRIPT_EVENTS) {
     entry.transcript = compactSessionTranscriptEvents(entry.transcript);
   }
@@ -7895,6 +8368,7 @@ function writeSessionTranscript(sessionId, entry, result = {}) {
     signal: result.signal,
     promptPreview: entry.promptPreview || '',
     promptHash: entry.promptHash || undefined,
+    runtimeCwd: entry.cwd || undefined,
     workspacePath: entry.workspacePath || publicWorkspacePath(entry.cwd),
     projectId: entry.projectId || null,
     projectName: entry.projectName || '',
@@ -8333,24 +8807,58 @@ function extractPreviewArtifactTargets(text = '', workspaceRoot = readSettings()
       if (targets.length >= 24) return targets.slice(0, 24);
     }
   }
+
+  const bareFilePattern = new RegExp(`(?<![\\\\/\\w.-])([A-Za-z0-9_\\-\\u4e00-\\u9fff][^\\\\/\\r\\n<>"'\`|]{0,180}?\\.(?:${extPattern}))(?![\\w.-])`, 'gi');
+  for (const match of source.matchAll(bareFilePattern)) {
+    const token = match[1] || match[0];
+    if (!token || /^(?:https?:|www\.)/i.test(token)) continue;
+    addTarget(token);
+    if (targets.length >= 24) return targets.slice(0, 24);
+  }
   return targets.slice(0, 24);
 }
 
+function agentArtifactsFromEvidenceText(sessionId, text = '', workspaceRoot = readSettings().workspaceRoot, source = 'agent-output') {
+  return extractPreviewArtifactTargets(text, workspaceRoot)
+    .filter((target) => {
+      try {
+        return fs.existsSync(target) && fs.statSync(target).isFile();
+      } catch {
+        return false;
+      }
+    })
+    .map((target) => safeAgentArtifact({
+      sessionId,
+      path: target,
+      name: path.basename(target),
+      extension: path.extname(target).toLowerCase(),
+      pathLabel: filePreviewPathLabel(target, { kind: 'agent-artifact', root: path.dirname(target) }),
+      source
+    }))
+    .filter(Boolean)
+    .slice(0, 24);
+}
+
 function artifactCreationEvidenceText(event = {}) {
+  const ledgerItems = Array.isArray(event.ledger) ? event.ledger : [event.ledger].filter(Boolean);
   return [
     event.text,
     event.textPreview,
-    event.ledger?.inputSummary,
-    event.ledger?.outputSummary,
-    event.ledger?.error,
+    ...ledgerItems.flatMap((ledger) => [ledger?.inputSummary, ledger?.outputSummary, ledger?.error]),
+    Array.isArray(event.artifacts) ? JSON.stringify(event.artifacts) : '',
     Array.isArray(event.tools) ? JSON.stringify(event.tools) : ''
   ].filter(Boolean).join('\n');
 }
 
 function eventLooksLikeArtifactWrite(event = {}) {
-  if (event.kind !== 'tool') return false;
+  if (Array.isArray(event.artifacts) && event.artifacts.length) return true;
   const text = artifactCreationEvidenceText(event);
-  return /(File created successfully|created successfully|created at|wrote|written|saved|generated|updated|modified|write|edit|创建|写入|保存|生成|更新|修改)/i.test(text);
+  const hasPreviewTarget = new RegExp(`\\.(?:${filePreviewArtifactExtensionPattern()})(?:\\b|(?=\\s|$|[)\\]}.,;，。；]))`, 'i').test(text);
+  if (event.kind === 'tool') {
+    return /(File created successfully|created successfully|created at|wrote|written|saved|generated|updated|modified|write|edit|创建|写入|保存|生成|更新|修改)/i.test(text);
+  }
+  if (!['result', 'assistant'].includes(String(event.kind || '')) || !hasPreviewTarget) return false;
+  return /(created final files|final files|final deliverables|deliverables|outputs|report|path:|saved|generated|created|wrote|written|生成|保存|产物|报告|文件|交付)/i.test(text);
 }
 
 function registerAgentArtifactAccess(sessionId, target, context = {}) {
@@ -8370,7 +8878,10 @@ function registerAgentArtifactAccess(sessionId, target, context = {}) {
 function registerAgentArtifactsFromEvent(entry, event = {}) {
   const sessionId = event.sessionId || entry?.sessionId;
   if (!sessionId || !eventLooksLikeArtifactWrite(event)) return;
-  const workspaceRoot = readSettings().workspaceRoot;
+  const workspaceRoot = entry?.cwd || readSettings().workspaceRoot;
+  for (const artifact of safeAgentArtifacts(event.artifacts)) {
+    if (artifact.path) registerAgentArtifactAccess(sessionId, artifact.path, { source: artifact.source || 'agent-structured-artifact' });
+  }
   const evidence = artifactCreationEvidenceText(event);
   for (const target of extractPreviewArtifactTargets(evidence, workspaceRoot)) {
     registerAgentArtifactAccess(sessionId, target, { source: 'agent-tool-event' });
@@ -8401,10 +8912,18 @@ function transcriptAuthorizesAgentArtifact(sessionId, target, workspaceRoot) {
   const transcript = sessionTranscriptForPreview(sessionId);
   if (!transcript || !Array.isArray(transcript.events)) return false;
   const resolved = path.resolve(target);
+  const roots = [
+    workspaceRoot,
+    transcript.runtimeCwd,
+    resolveWorkspacePathLabel(transcript.workspacePath, workspaceRoot),
+    resolveWorkspacePathLabel(transcript.projectPath, workspaceRoot)
+  ].filter(Boolean);
   return transcript.events.some((event) => {
     if (!eventLooksLikeArtifactWrite(event)) return false;
-    return extractPreviewArtifactTargets(artifactCreationEvidenceText(event), workspaceRoot)
-      .some((candidate) => isSameWorkspacePath(candidate, resolved));
+    return roots.some((root) => (
+      extractPreviewArtifactTargets(artifactCreationEvidenceText(event), root)
+        .some((candidate) => isSameWorkspacePath(candidate, resolved))
+    ));
   });
 }
 
@@ -8448,6 +8967,7 @@ function addSessionPreviewRoots(roots, sessionId, workspaceRoot) {
   }
   const transcript = sessionTranscriptForPreview(safeSessionId);
   if (!transcript) return;
+  addRoot('session', 'session', transcript.runtimeCwd);
   const workspacePath = resolveWorkspacePathLabel(transcript.workspacePath, workspaceRoot);
   const projectPath = resolveWorkspacePathLabel(transcript.projectPath, workspaceRoot);
   addRoot('session', 'session', workspacePath);
@@ -8501,6 +9021,41 @@ function candidatePreviewPath(rawPath, workspaceRoot) {
   return path.isAbsolute(raw) ? resolved : path.resolve(workspaceRoot, raw);
 }
 
+function candidatePreviewPaths(rawPath, roots = [], workspaceRoot = defaultWorkspaceRoot()) {
+  const raw = String(rawPath || '').trim();
+  const primary = candidatePreviewPath(raw, workspaceRoot);
+  if (
+    path.isAbsolute(raw)
+    || raw.startsWith('workspace:/')
+    || /^file:/i.test(raw)
+    || /^[a-zA-Z][a-zA-Z\d+.-]*:\/\//.test(raw)
+  ) {
+    return [primary];
+  }
+  const candidates = [primary];
+  const candidatePriority = new Map([[path.resolve(primary), 9]]);
+  const rootPriority = { 'agent-artifact': 0, session: 1, project: 2, workspace: 3 };
+  const preferredRoots = roots
+    .filter((root) => ['session', 'project', 'workspace', 'agent-artifact'].includes(root.kind))
+    .sort((left, right) => (rootPriority[left.kind] ?? 9) - (rootPriority[right.kind] ?? 9))
+    .map((root) => root.root)
+    .filter(Boolean);
+  for (const root of preferredRoots) {
+    const candidate = path.resolve(root, raw);
+    if (!candidates.some((item) => isSameWorkspacePath(item, candidate))) {
+      candidates.push(candidate);
+    }
+    const rootKind = roots.find((item) => item.root === root)?.kind || '';
+    candidatePriority.set(path.resolve(candidate), rootPriority[rootKind] ?? 8);
+  }
+  return candidates.sort((left, right) => {
+    const leftExists = fs.existsSync(left) ? 0 : 1;
+    const rightExists = fs.existsSync(right) ? 0 : 1;
+    if (leftExists !== rightExists) return leftExists - rightExists;
+    return (candidatePriority.get(path.resolve(left)) ?? 9) - (candidatePriority.get(path.resolve(right)) ?? 9);
+  });
+}
+
 function resolveMojibakePreviewPath(target) {
   const input = String(target || '');
   if (!input || fs.existsSync(input) || !/[�?\uFFFD]/.test(path.basename(input))) return input;
@@ -8540,13 +9095,22 @@ function resolveFilePreviewTarget(payload = {}) {
   const roots = filePreviewAllowedRoots(input);
   const workspaceRoot = roots.find((root) => root.kind === 'workspace')?.root || defaultWorkspaceRoot();
   const rawPath = input.path || input.filePath || input.pathLabel || input.url;
-  let target = candidatePreviewPath(rawPath, workspaceRoot);
-  let root = roots.find((entry) => isPathInside(entry.root, target));
-  if (!root && isRegisteredSelectedAttachment(target, input)) {
-    root = { kind: 'selected', label: 'selected', root: path.dirname(target) };
-  }
-  if (!root && isRegisteredAgentArtifact(target, input, workspaceRoot)) {
-    root = { kind: 'agent-artifact', label: 'artifact', root: path.dirname(target) };
+  const candidates = candidatePreviewPaths(rawPath, roots, workspaceRoot);
+  let target = candidates[0];
+  let root = null;
+  for (const candidate of candidates) {
+    let candidateRoot = roots.find((entry) => isPathInside(entry.root, candidate));
+    if (!candidateRoot && isRegisteredSelectedAttachment(candidate, input)) {
+      candidateRoot = { kind: 'selected', label: 'selected', root: path.dirname(candidate) };
+    }
+    if (!candidateRoot && isRegisteredAgentArtifact(candidate, input, workspaceRoot)) {
+      candidateRoot = { kind: 'agent-artifact', label: 'artifact', root: path.dirname(candidate) };
+    }
+    if (candidateRoot) {
+      target = candidate;
+      root = candidateRoot;
+      break;
+    }
   }
   if (!root) throw new Error('File preview path is outside allowed roots.');
   const repairedTarget = resolveMojibakePreviewPath(target);
@@ -8673,7 +9237,7 @@ function isRegisteredSelectedAttachment(target, input = {}) {
   pruneSelectedAttachmentAccess();
   const entry = selectedAttachmentAccess.get(path.resolve(target));
   if (!entry) return false;
-  const requestedId = String(input.id || input.attachmentId || '').trim();
+  const requestedId = String(input.attachmentId || input.selectedAttachmentId || input.id || '').trim();
   if (!requestedId || !entry.id || requestedId !== entry.id) return false;
   try {
     const stat = fs.statSync(target);
@@ -10434,9 +10998,33 @@ async function collectCapabilities() {
   return cachedCapabilities;
 }
 
-function normalizeClaudeEvent(sessionId, json) {
+function normalizeClaudeEvent(sessionId, json, context = {}) {
   const base = { sessionId, raw: json, time: new Date().toISOString() };
   const contextManagement = json.context_management || json.contextManagement || null;
+  const nativeUserAction = structuredUserActionFromPayload({
+    userAction: json.userAction || json.user_action,
+    authorization: json.authorization,
+    permissionRequest: json.permissionRequest || json.permission_request,
+    permission: json.permission,
+    actionRequired: json.actionRequired || json.action_required
+  });
+  if (nativeUserAction || json.type === 'user_action' || json.type === 'authorization' || json.type === 'permission') {
+    const action = nativeUserAction
+      || runtimeAuthorizationRequestFromValue(json, context)
+      || runtimePermissionRequestFromValue(json, context);
+    if (action) {
+      const actionCompleted = /(completed|complete|success|authenticated|authorized|done)/i.test(action.status || '');
+      return {
+        ...base,
+        kind: action.type === 'authorization' ? 'authorization' : 'permission',
+        status: actionCompleted ? 'completed' : (action.type === 'authorization' ? 'authorization-incomplete' : 'user-action-required'),
+        userAction: action,
+        authorization: action.type === 'authorization' ? action : undefined,
+        permissionRequest: action.type !== 'authorization' ? action : undefined,
+        text: action.description || action.title || ''
+      };
+    }
+  }
   if (json.type === 'stream_event') {
     const streamEvent = json.event || {};
     const streamType = String(streamEvent.type || '').trim();
@@ -10611,10 +11199,22 @@ function normalizeClaudeEvent(sessionId, json) {
         return match.commandName || match.name || match.toolName || '';
       };
       const resultToolName = resultToolNameFor(toolResults[0], 0);
-      const outputText = publicAgentText(toolResults
+      const rawOutputText = toolResults
         .map(toolResultText)
         .filter(Boolean)
-        .join('\n'));
+        .join('\n');
+      const authAction = runtimeAuthorizationRequestFromValue(rawOutputText, {
+        toolName: resultToolName,
+        command: resultToolName
+      });
+      const explicitPermission = runtimePermissionRequestFromValue(json.permission || json.approval || json.userAction || null, {
+        toolName: resultToolName
+      }) || runtimePermissionRequestFromValue(rawOutputText, {
+        toolName: resultToolName,
+        command: resultToolName
+      });
+      const outputText = publicAgentText(rawOutputText);
+      const artifacts = agentArtifactsFromEvidenceText(sessionId, rawOutputText, context.cwd || readSettings().workspaceRoot, 'tool-result');
       const finishLedgers = toolResults.map((block, index) => {
         const blockOutputText = publicAgentText(toolResultText(block));
         const blockFailed = Boolean(block.is_error);
@@ -10631,11 +11231,15 @@ function normalizeClaudeEvent(sessionId, json) {
       return {
         ...base,
         kind: 'tool',
-        status: failed ? 'failed' : 'completed',
+        status: authAction ? 'authorization-incomplete' : (explicitPermission ? 'user-action-required' : (failed ? 'failed' : 'completed')),
         toolName: resultLabel,
         toolUseId: toolResults[0].tool_use_id,
         ledger: finishLedgers.length === 1 ? finishLedgers[0] : finishLedgers,
-        text: outputText
+        userAction: authAction || explicitPermission || undefined,
+        authorization: authAction || undefined,
+        permissionRequest: explicitPermission || undefined,
+        artifacts: artifacts.length ? artifacts : undefined,
+        text: authAction ? authAction.description : (explicitPermission ? explicitPermission.description : outputText)
       };
     }
   }
@@ -10643,13 +11247,16 @@ function normalizeClaudeEvent(sessionId, json) {
   if (json.type === 'result') {
     const resultSubtype = String(json.subtype || '').trim();
     const resultFailed = Boolean(json.is_error || json.error || /^error/i.test(resultSubtype));
+    const resultText = json.result || json.error?.message || (json.error ? JSON.stringify(json.error) : json.message || '');
+    const artifacts = agentArtifactsFromEvidenceText(sessionId, resultText, context.cwd || readSettings().workspaceRoot, 'final-result');
     return {
       ...base,
       kind: resultFailed ? 'error' : 'result',
       status: resultFailed ? 'failed' : 'completed',
       subtype: resultSubtype || undefined,
       claudeResultStatus: resultFailed ? 'failed' : 'completed',
-      text: publicAgentText(json.result || json.error?.message || (json.error ? JSON.stringify(json.error) : json.message || '')),
+      artifacts: artifacts.length ? artifacts : undefined,
+      text: publicAgentText(resultText),
       costUsd: json.total_cost_usd,
       durationMs: json.duration_ms,
       contextManagement: contextManagement ? safeJsonValue(contextManagement, 8000) : undefined
@@ -10877,6 +11484,8 @@ function runAgent(payload = {}, options = {}) {
     }
 
     let lineBuffer = '';
+    let assistantOutputBuffer = '';
+    let assistantOutputTimer = null;
     const startedEvent = {
       sessionId,
       kind: 'status',
@@ -10940,22 +11549,60 @@ function runAgent(payload = {}, options = {}) {
       totalTimer: null,
       idleTimer: null
     };
+    const flushAssistantOutput = (options = {}) => {
+      if (assistantOutputTimer) {
+        clearTimeout(assistantOutputTimer);
+        assistantOutputTimer = null;
+      }
+      const text = assistantOutputBuffer;
+      assistantOutputBuffer = '';
+      if (!text.trim()) return;
+      const bufferedEvent = {
+        sessionId,
+        kind: 'assistant',
+        status: 'running',
+        text: safeOutputText(text, MAX_AGENT_EVENT_TEXT_CHARS)
+      };
+      recordSessionEvent(entry, bufferedEvent);
+      emitAgentEvent(bufferedEvent, options);
+    };
+    const handleRuntimeEvent = (event, options = {}) => {
+      if (!event) return;
+      const isPlainAssistantDelta =
+        event.kind === 'assistant'
+        && event.text
+        && !event.userAction
+        && !event.authorization
+        && !event.permissionRequest
+        && !event.ledger
+        && !event.artifacts;
+      if (isPlainAssistantDelta) {
+        assistantOutputBuffer = safeOutputText(`${assistantOutputBuffer}${event.text}`, MAX_AGENT_ASSISTANT_BUFFER_CHARS);
+        if (assistantOutputBuffer.length >= MAX_AGENT_ASSISTANT_BUFFER_CHARS) {
+          flushAssistantOutput();
+          return;
+        }
+        if (!assistantOutputTimer) {
+          assistantOutputTimer = setTimeout(() => flushAssistantOutput(), AGENT_ASSISTANT_DELTA_FLUSH_MS);
+        }
+        return;
+      }
+      flushAssistantOutput({ immediate: true });
+      recordSessionEvent(entry, event);
+      emitAgentEvent(event, options);
+    };
     appendRunJournalEntry(sessionId, entry, 'running', { event: 'start' });
     entry.flushBufferedOutput = () => {
+      flushAssistantOutput({ immediate: true });
       if (!lineBuffer.trim()) return;
       const buffered = lineBuffer.trim();
       lineBuffer = '';
       try {
-        const event = normalizeClaudeEvent(sessionId, JSON.parse(buffered));
-        if (event) {
-          recordSessionEvent(entry, event);
-          emitAgentEvent(event);
-        }
+        handleRuntimeEvent(normalizeClaudeEvent(sessionId, JSON.parse(buffered), { cwd: entry.cwd }), { immediate: true });
       } catch {
         if (!hasPublicAgentOutput(buffered)) return;
         const event = { sessionId, kind: 'assistant', text: publicAgentText(buffered) };
-        recordSessionEvent(entry, event);
-        emitAgentEvent(event);
+        handleRuntimeEvent(event, { immediate: true });
       }
     };
     recordSessionEvent(entry, startedEvent);
@@ -11017,16 +11664,11 @@ function runAgent(payload = {}, options = {}) {
         if (!trimmed) continue;
         try {
           const json = JSON.parse(trimmed);
-          const event = normalizeClaudeEvent(sessionId, json);
-          if (event) {
-            recordSessionEvent(runningAgents.get(sessionId), event);
-            emitAgentEvent(event);
-          }
+          handleRuntimeEvent(normalizeClaudeEvent(sessionId, json, { cwd: entry?.cwd || cwd }));
         } catch {
           if (!hasPublicAgentOutput(trimmed)) continue;
           const event = { sessionId, kind: 'assistant', text: publicAgentText(trimmed) };
-          recordSessionEvent(runningAgents.get(sessionId), event);
-          emitAgentEvent(event);
+          handleRuntimeEvent(event);
         }
       }
     });
@@ -11050,8 +11692,7 @@ function runAgent(payload = {}, options = {}) {
         kind: 'stderr',
         text: publicStderrText
       };
-      recordSessionEvent(entry, event);
-      emitAgentEvent(event);
+      handleRuntimeEvent(event);
       writeLog('warn', 'Agent stderr', { sessionId, text: stderrText.slice(0, 4000) });
     });
 

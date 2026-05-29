@@ -33,6 +33,10 @@ function assertMatches(text, pattern, message) {
   assert(pattern.test(text), message);
 }
 
+function assertNotMatches(text, pattern, message) {
+  assert(!pattern.test(text), message);
+}
+
 function functionBody(name) {
   const start = main.indexOf(`function ${name}`);
   assert(start >= 0, `function ${name} is missing.`);
@@ -212,6 +216,11 @@ check('transport stop and cleanup path', () => {
       'function agentOutputLooksUnresolvedAuthorization',
       'function agentSessionHasUnresolvedAuthorization',
       'function agentSessionHasUnresolvedUserBlocker',
+      'function externalAuthorizationRequestFromText',
+      'function permissionRequestFromAgentText',
+      'event.requiresUserAction = true',
+      'event.status = pendingStatus',
+      'event.task.status = pendingStatus',
       'function incompleteAgentResultText',
       'entry.authorizationHandoffStarted = true',
       'entry.authorizationCompleted = true',
@@ -248,6 +257,15 @@ check('runtime status and diagnostics surface', () => {
       'actors: snapshot.actors.map'
     ],
     'public agent runtime status'
+  );
+  const sessionSummaryBody = functionBody('publicSessionSummary');
+  includesAll(
+    sessionSummaryBody,
+    [
+      'autoRecover: true',
+      "recoveryMode: 'reattach'"
+    ],
+    'running session auto reattach protocol'
   );
   const healthBody = functionBody('collectStartupHealth');
   includesAll(
@@ -311,17 +329,49 @@ check('agent stream backpressure and transcript hygiene', () => {
   includesAll(
     main,
     [
+      'const AGENT_STRUCTURED_EVENT_PROTOCOL',
+      'const AGENT_ASSISTANT_DELTA_FLUSH_MS',
+      'const MAX_AGENT_ASSISTANT_BUFFER_CHARS',
       'const MAX_AGENT_EVENT_QUEUE =',
       'const HARD_MAX_AGENT_EVENT_QUEUE =',
       'const AGENT_EVENT_PAUSE_HIGH_WATER =',
       'function setAgentStreamsPaused',
       'function flushAgentEvents',
       'function normalizeAgentEvent',
+      'structuredUserActionFromPayload(payload)',
+      'const userAction = structuredUserActionFromPayload(payload)',
+      'function runtimeAuthorizationRequestFromValue',
+      'function runtimePermissionRequestFromValue',
+      'function safeAgentRecovery',
       'safeTranscriptTextPreview',
       'safeDiagnosticText',
       'safeSessionSummaryForDiagnostics'
     ],
     'agent event and diagnostic hygiene'
+  );
+  const runBody = functionBody('runAgent');
+  includesAll(
+    runBody,
+    [
+      'let assistantOutputBuffer =',
+      'let assistantOutputTimer =',
+      'const flushAssistantOutput =',
+      'const handleRuntimeEvent =',
+      'AGENT_ASSISTANT_DELTA_FLUSH_MS',
+      'MAX_AGENT_ASSISTANT_BUFFER_CHARS',
+      'handleRuntimeEvent(normalizeClaudeEvent(sessionId, json, { cwd: entry?.cwd || cwd }))'
+    ],
+    'assistant delta buffering'
+  );
+  assertMatches(
+    main,
+    /function normalizeAgentEvent[\s\S]*const userAction = structuredUserActionFromPayload\(payload\)[\s\S]*event\.authorization = userAction/,
+    'agent events must use structured userAction payloads instead of public text prompts.'
+  );
+  assertNotMatches(
+    main,
+    /const userAction = safeAgentUserAction\(payload\.userAction\) \|\| userActionFromAgentText\(text\)/,
+    'agent events must not infer permission/authorization cards from arbitrary assistant text.'
   );
 });
 
@@ -339,6 +389,12 @@ check('attachment ingestion, tool ledger and run journal', () => {
       'const attachmentContext = ingestAgentAttachments(payload, { cwd, projectContext })',
       'function toolLedgerStartEvent',
       'function toolLedgerFinishEvent',
+      'function candidatePreviewPaths',
+      'function agentArtifactsFromEvidenceText',
+      'function safeAgentArtifact',
+      'function safeAgentArtifacts',
+      'const bareFilePattern',
+      'runtimeCwd: entry.cwd || undefined',
       'function appendRunJournalEntry',
       'function recentUnfinishedRunJournals',
       "handleSafe('attachment:ingest'",
@@ -365,6 +421,16 @@ check('attachment ingestion, tool ledger and run journal', () => {
     main,
     /const finishLedgers = toolResults\.map[\s\S]*ledger:\s*finishLedgers\.length === 1 \? finishLedgers\[0\] : finishLedgers/,
     'tool result events must carry structured ledger completions for every returned tool result.'
+  );
+  assertMatches(
+    main,
+    /agentArtifactsFromEvidenceText\(sessionId,\s*rawOutputText,\s*context\.cwd \|\| readSettings\(\)\.workspaceRoot,\s*'tool-result'\)/,
+    'tool result artifact paths must be resolved against the session cwd before public preview.'
+  );
+  assertMatches(
+    main,
+    /const rootPriority = \{ 'agent-artifact': 0,\s*session: 1,\s*project: 2,\s*workspace: 3 \}/,
+    'relative artifact preview paths must prefer the running session cwd over the global workspace.'
   );
 });
 

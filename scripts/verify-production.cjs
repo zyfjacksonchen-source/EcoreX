@@ -544,6 +544,12 @@ check('renderer routes agent events by owning conversation', () => {
   assertMatches(app, /running=\{activeConversationRunning\}/, 'composer stop controls must be scoped to the visible conversation.');
   assertMatches(app, /syncCurrentSessionForVisibleConversation\(conversationIdRef\.current\)/, 'switching conversations must not keep a hidden session as the current stop target.');
   assertMatches(app, /function clearMessageRecoveryState[\s\S]*recovery:\s*null/, 'retrying a recoverable task must hide the stale recovery prompt.');
+  assertMatches(app, /function touchRecentChatFromConversationState[\s\S]*storeRecentChatItems\(upsertRecentChatItem[\s\S]*ecorex:recent-chats-changed/, 'background conversation persistence must keep the recent-chat index recoverable.');
+  includesAll(app, ['DELETED_CONVERSATION_STORAGE_KEY', 'rememberDeletedConversationId', 'isDeletedConversationId(safeId)', 'deleteStoredRecentChatItem(id)'], 'deleted conversations must be tombstoned so background persistence cannot resurrect them.');
+  assertMatches(app, /function updateMessagesForConversation[\s\S]*saveConversationState\(ownerConversationId,\s*nextState\)[\s\S]*touchRecentChatFromConversationState\(ownerConversationId,\s*nextState\)/, 'background message updates must be saved and surfaced in recent chats.');
+  assertMatches(app, /if \(!ownerMessages\.some[\s\S]*isAgentSessionFinalEvent\(event\)[\s\S]*appendRecoveredSessionMessage\(ownerConversationId/, 'late terminal events must recreate a stored assistant message instead of dropping hidden-session output.');
+  assertMatches(app, /if \(event\.kind === 'done'\) \{[\s\S]*pendingStructuredAction[\s\S]*statusFromAgentUserAction\(pendingStructuredAction\)[\s\S]*continue;/, 'terminal done events must not overwrite a pending permission or authorization card.');
+  assertMatches(app, /function RecoveryStateNotice[\s\S]*\['recoverable', 'retryable', 'stopped'\]\.includes\(recovery\.state\)[\s\S]*return null/, 'restored or timed-out background sessions must not require a manual recovery click.');
 });
 
 check('auth token exposure and session lifecycle are bounded', () => {
@@ -697,7 +703,13 @@ check('safe local file preview bridge is bounded and redacted', () => {
   assertMatches(main, /isDocumentMetadataPreviewExtension\(file\.extension\)[\s\S]*previewMetadataOnly\(file,\s*'metadata-only'\)/, 'unsupported document files must return metadata-only previews.');
   assertMatches(main, /resolveFilePreviewTarget[\s\S]*isRegisteredSelectedAttachment\(target,\s*input\)/, 'file preview must also support explicit selected-file grants.');
   assertMatches(main, /extractPreviewArtifactTargets[\s\S]*cleanPreviewArtifactPath[\s\S]*\[\^\\\\r\\\\n<>/, 'AI artifact path extraction must tolerate generated paths with spaces while staying line bounded.');
-  assertMatches(main, /resolveFilePreviewTarget[\s\S]*isRegisteredAgentArtifact\(target,\s*input,\s*workspaceRoot\)[\s\S]*kind:\s*'agent-artifact'/, 'same-session AI artifacts must be previewable without opening arbitrary local files.');
+  assertMatches(main, /function agentArtifactsFromEvidenceText[\s\S]*extractPreviewArtifactTargets\(text,\s*workspaceRoot\)[\s\S]*safeAgentArtifact/, 'AI artifact events must expose structured artifact references.');
+  assertMatches(main, /const rootPriority = \{ 'agent-artifact': 0,\s*session: 1,\s*project: 2,\s*workspace: 3 \}/, 'relative AI artifact preview must prefer the session cwd before workspace fallbacks.');
+  assertMatches(main, /extractPreviewArtifactTargets[\s\S]*const bareFilePattern[\s\S]*addTarget\(token\)/, 'AI artifact path extraction must include final bare filenames relative to the run roots.');
+  assertMatches(main, /function eventLooksLikeArtifactWrite[\s\S]*\['result', 'assistant'\][\s\S]*hasPreviewTarget/, 'final assistant/result messages that list generated files must authorize artifact preview.');
+  assertMatches(main, /runtimeCwd:\s*entry\.cwd \|\| undefined/, 'session transcripts must retain the private runtime cwd for persisted relative artifact authorization.');
+  assertMatches(main, /function candidatePreviewPaths[\s\S]*preferredRoots[\s\S]*\['session', 'project', 'workspace', 'agent-artifact'\]/, 'relative preview requests must resolve against session, project, and workspace roots before failing.');
+  assertMatches(main, /resolveFilePreviewTarget[\s\S]*isRegisteredAgentArtifact\((?:target|candidate),\s*input,\s*workspaceRoot\)[\s\S]*kind:\s*'agent-artifact'/, 'same-session AI artifacts must be previewable without opening arbitrary local files.');
   assertMatches(main, /filePreviewPathLabel[\s\S]*kind === 'agent-artifact'[\s\S]*artifact:\//, 'AI artifact preview labels must not expose full local paths.');
   assertMatches(main, /recordSessionEvent[\s\S]*registerAgentArtifactsFromEvent\(entry,\s*normalized\)/, 'tool events must register generated artifact grants for the current session.');
   assertMatches(main, /if \(!requestedId \|\| !entry\.id \|\| requestedId !== entry\.id\) return false;/, 'selected attachment grants must require the generated attachment id.');
@@ -893,7 +905,27 @@ check('agent runtime production guardrails', () => {
     ],
     'agent runtime guardrails'
   );
+  assertMatches(main, /function publicSessionSummary[\s\S]*autoRecover:\s*true[\s\S]*recoveryMode:\s*'reattach'/, 'live running sessions must advertise automatic reattach without requiring a manual recovery click.');
   assertMatches(main, /'--output-format',\s*'stream-json',\s*'--verbose'/, 'stream-json output must always be paired with --verbose.');
+  includesAll(
+    main,
+    [
+      'const AGENT_STRUCTURED_EVENT_PROTOCOL',
+      'const AGENT_ASSISTANT_DELTA_FLUSH_MS',
+      'const MAX_AGENT_ASSISTANT_BUFFER_CHARS',
+      'function runtimeAuthorizationRequestFromValue',
+      'function runtimePermissionRequestFromValue',
+      'function structuredUserActionFromPayload',
+      'function safeAgentRecovery'
+    ],
+    'structured runtime event protocol'
+  );
+  assertMatches(main, /function normalizeAgentEvent[\s\S]*protocol:\s*payload\.protocol \|\| AGENT_STRUCTURED_EVENT_PROTOCOL[\s\S]*const userAction = structuredUserActionFromPayload\(payload\)/, 'agent events must carry the structured protocol and use native userAction payloads.');
+  assertMatches(main, /function normalizeAgentEvent[\s\S]*const text = publicAgentText\(payload\.text \|\| '', options\.textLimit \|\| MAX_AGENT_EVENT_TEXT_CHARS\)/, 'normalized agent events must pass through the same public text sanitizer before renderer IPC.');
+  assertNotMatches(main, /const userAction = safeAgentUserAction\(payload\.userAction\) \|\| userActionFromAgentText\(text\)/, 'backend must not infer authorization or permission cards from arbitrary public assistant text.');
+  assertMatches(main, /function runtimePermissionRequestFromValue[\s\S]*typeof value === 'string'[\s\S]*EcoreX auto mode classifier[\s\S]*ecorex\.user-action\.permission\.v1/, 'raw local permission denials must become structured user-action events instead of chat text.');
+  assertMatches(main, /function agentSessionHasUnresolvedAuthorization[\s\S]*authorizationStateFromStructuredEvent\(event\) === 'waiting'[\s\S]*function agentSessionHasUnresolvedUserBlocker/, 'authorization-incomplete final status must be driven by structured waiting events, not prompt text.');
+  assertMatches(main, /let assistantOutputBuffer = ''[\s\S]*const flushAssistantOutput = [\s\S]*AGENT_ASSISTANT_DELTA_FLUSH_MS[\s\S]*handleRuntimeEvent\(normalizeClaudeEvent\(sessionId,\s*json,\s*\{ cwd: entry\?\.cwd \|\| cwd \}\)\)/, 'assistant token deltas must be buffered before transcript and renderer IPC.');
   assertMatches(main, /'--print'[\s\S]*'--output-format'[\s\S]*'stream-json'[\s\S]*'--plugin-dir'/, 'agent runtime must stream through the full isolated CLI tool surface while explicitly loading bundled plugins.');
   assertNotMatches(main, /'--bare'/, 'agent runtime must not pass --bare because it can hide MCP, Skill, WebSearch, Todo and PowerShell tools.');
   assertMatches(main, /const runtimeEnv = \{[\s\S]*isolatedAgentRuntimeEnv\(options\.authContext \|\| null\)[\s\S]*CLAUDE_CODE_NO_FLICKER:\s*'1'/, 'agent runtime must isolate config while preserving the full default tool surface.');
@@ -934,7 +966,15 @@ check('agent runtime production guardrails', () => {
   assertMatches(main, /function refreshClaudeSessionTranscriptSeen[\s\S]*findClaudeSessionTranscript\(sessionId\)[\s\S]*claudeTranscriptExistenceCache\.delete\(sessionId\)/, 'Claude resume cache must verify transcript files and clear stale resume state.');
   assertMatches(main, /let finalStatus = code === 0 && !entry\.claudeResultFailed \? 'completed' : 'failed'[\s\S]*const incompleteResult = finalStatus === 'completed' && !agentSessionHasSubstantiveResult\(entry\)[\s\S]*const authorizationIncomplete = finalStatus === 'completed' && agentSessionHasUnresolvedAuthorization\(entry\)[\s\S]*const unresolvedUserBlocker = finalStatus === 'completed' && agentSessionHasUnresolvedUserBlocker\(entry\)[\s\S]*if \(authorizationIncomplete\) \{[\s\S]*finalStatus = 'authorization-incomplete'[\s\S]*\} else if \(unresolvedUserBlocker\) \{[\s\S]*finalStatus = 'user-action-required'[\s\S]*\} else if \(incompleteResult\) \{[\s\S]*finalStatus = 'failed'/, 'Claude sessions must not report completed when no substantive result, pending authorization, or unresolved user blocker remains.');
   assertMatches(main, /reason:\s*authorizationIncomplete \? 'authorization-incomplete' : unresolvedUserBlocker \? 'user-action-required' : incompleteResult \? 'incomplete-result'/, 'unfinished user-action blockers must be reported as resumable failures instead of completed tasks.');
+  assertMatches(main, /function normalizeAgentState[\s\S]*authorization-incomplete\|authorization-required\|user-action-required[\s\S]*return 'waiting'/, 'pending authorization and user-action events must never normalize to completed state.');
+  assertMatches(main, /const userAction = structuredUserActionFromPayload\(payload\)[\s\S]*event\.requiresUserAction = true[\s\S]*event\.status = pendingStatus[\s\S]*event\.task\.status = pendingStatus/, 'backend event protocol must mark structured permission and external authorization waits as pending user action.');
+  assertMatches(main, /function permissionRequestFromAgentText[\s\S]*mcp__\|mcp\[_\\s-\]\|tool\|browser\|playwright/, 'backend permission detector must catch MCP/tool/browser permission requests.');
+  assertMatches(main, /function externalAuthorizationRequestFromText[\s\S]*device\[_ -\]\?code[\s\S]*qrText/, 'backend authorization detector must expose links, device codes, and QR payload text.');
   assertMatches(main, /function substantiveAgentResultText[\s\S]*function agentSessionHasSubstantiveResult[\s\S]*function agentSessionHasUnresolvedAuthorization[\s\S]*function agentSessionHasUnresolvedUserBlocker[\s\S]*function incompleteAgentResultText/, 'agent completion must distinguish process exit from usable final output, unfinished authorization, and unresolved user blockers.');
+  assertMatches(main, /function agentSessionHasUnresolvedUserBlocker[\s\S]*entry\.lastUserAction[\s\S]*permission-required[\s\S]*\\u6743\\u9650\\u786e\\u8ba4\\u5361/, 'pending permission actions and Chinese permission-card blockers must keep the agent session waiting.');
+  assertMatches(main, /recordSessionEvent[\s\S]*pendingUserActionResult[\s\S]*const resultText = pendingUserActionResult \? '' : substantiveAgentResultText/, 'pending user-action result text must not be counted as a substantive final answer.');
+  assertMatches(main, /const finalUserAction = \['authorization-incomplete', 'user-action-required'\]\.includes\(status\)[\s\S]*userAction:\s*finalUserAction/, 'final lifecycle events must not reattach stale user-action cards after successful completion.');
+  assertMatches(main, /authorizationState === 'completed'[\s\S]*delete entry\.lastUserAction[\s\S]*normalized\.userAction[\s\S]*userActionCompleted[\s\S]*delete entry\.lastUserAction/, 'completed authorization or permission events must clear stale pending user-action state.');
   assertMatches(main, /recordSessionEvent[\s\S]*normalized\.kind === 'result'[\s\S]*entry\.hasSubstantiveResult = true/, 'result events must mark whether the task produced a substantive final answer.');
   assertNotMatches(main, /child\.on\('close'[\s\S]{0,600}markClaudeSessionTranscriptSeen\(entry\.claudeSessionId\)/, 'agent close must not blindly mark failed or missing Claude transcripts as resumable.');
   assertMatches(main, /streamType === 'error'[\s\S]*claudeResultStatus:\s*'failed'/, 'stream-json error events must be surfaced as failed agent events.');
@@ -1358,7 +1398,10 @@ check('chat state tree and critical front-end affordances', () => {
       'function transferText',
       'function filesFromDataTransfer',
       'function ChatPermissionOverlay',
+      'function InlinePermissionRequest',
       'data-testid="permission-confirmation-card"',
+      "import QRCode from 'qrcode'",
+      'QRCode.toDataURL(qrValue',
       'EcoreX 聊天框内权限确认卡',
       'onDrop={(event) => stageTransferredInput(event, event.dataTransfer)}'
     ],
@@ -1369,14 +1412,27 @@ check('chat state tree and critical front-end affordances', () => {
   assertMatches(app, /if \(event\.kind === 'result'\)[\s\S]*streaming:\s*true[\s\S]*status:\s*'generating'/, 'stream-json result content must not release the running session before the lifecycle final event.');
   assertMatches(app, /relevantEvents[\s\S]*\.filter\(\(event\) => isAgentSessionFinalEvent\(event\)\)/, 'front-end running sessions must finish only on lifecycle final events.');
   assertMatches(app, /terminalPendingUserActionStatus\(event,\s*combinedText\)/, 'authorization or browser handoff prompts must not be shown as completed.');
+  assertMatches(app, /const structuredUserAction = normalizeAgentUserAction\(event\.userAction \|\| event\.authorization \|\| event\.permissionRequest\)[\s\S]*statusFromAgentUserAction\(structuredUserAction\)[\s\S]*userAction: structuredUserAction[\s\S]*continue;/, 'structured backend user-action events must render as pending cards before text-based inference or terminal merging.');
+  assertMatches(app, /function AuthorizationChatContent[\s\S]*QRCode\.toDataURL\(qrValue[\s\S]*openExternalUrlWithBridge\(safeUrl\)/, 'external authorization QR codes and open-link actions must render in assistant chat content.');
+  assertNotMatches(app, /function InlinePermissionRequest[\s\S]*QRCode\.toDataURL\(qrValue/, 'composer permission overlay must stay compact and must not embed QR-rich authorization content.');
+  assertMatches(app, /function normalizeAgentUserAction[\s\S]*userCode:[\s\S]*deviceCode:[\s\S]*expiresIn:/, 'authorization cards must retain device-code fallback fields from structured backend events.');
+  assertMatches(app, /function AuthorizationChatContent[\s\S]*fallbackCode[\s\S]*<code>\{fallbackCode\}<\/code>/, 'authorization chat content must show a manual device/user code when a browser QR flow is not enough.');
+  assertMatches(app, /<ChatPermissionOverlay[\s\S]*request=\{pendingPermissionRequest\?\.request\}/, 'permission confirmation must render from the composer overlay instead of being embedded in assistant chat content.');
+  assertNotMatches(app, /<InlinePermissionRequest[\s\S]*onPermissionReply\?\.\(message,\s*action\)/, 'assistant messages must not embed permission confirmation cards after the overlay owns the flow.');
+  assertMatches(app, /const continuationMessageId = message\.id/, 'permission continuation must reuse the original assistant message instead of creating a new relay chat bubble.');
+  assertMatches(app, /function flushQueuedFollowUps[\s\S]*latestPendingUserActionMessage\(currentConversationId\)[\s\S]*isContinuationPrompt\(cleanPrompt\)[\s\S]*continueFromPermission\(pendingMessage/, 'queued "done/authorized" replies must automatically resume the pending user-action task.');
   assertMatches(app, /recoverDuplicateRunAsQueuedFollowUp\(result[\s\S]*existingMessage:\s*true/, 'duplicate running-session races must be converted back into queued follow-up input.');
   assertMatches(app, /function cleanAgentDisplayLine[\s\S]*numberTokens\.length >= 3[\s\S]*open\\\.feishu\\\.cn[\s\S]*execution_bridge\?/, 'chat renderer must strip execution bridge line-number noise while preserving Feishu links.');
   assertMatches(app, /function isInternalAgentOutputLine[\s\S]*Updated\|Created\|Deleted[\s\S]*task\\s\+#\?\\d\+/, 'chat renderer must suppress raw task-list mutation noise.');
   assertMatches(app, /function isInternalAgentOutputLine[\s\S]*UNDICI-EHPA[\s\S]*name:\\s\*lark-shared/, 'chat renderer must suppress OpenCLI warnings and skill metadata noise.');
   assertMatches(app, /function isInternalAgentOutputLine[\s\S]*lark-execution\\s\+bridge\\s\+auth\\s\+login[\s\S]*base_token/, 'chat renderer must suppress Feishu authorization harness and raw token JSON noise.');
   assertMatches(app, /function isInternalAgentOutputLine[\s\S]*REMINDER:\\s\*You MUST include the sources above/, 'chat renderer must suppress internal web-search citation reminders.');
+  assertMatches(app, /function isInternalAgentOutputLine[\s\S]*WEB_SEARCH_OK[\s\S]*No links found[\s\S]*开始生成回复[\s\S]*正在同步输出/, 'chat renderer must suppress web-search harness status noise.');
+  assertMatches(app, /function isInternalAgentOutputLine[\s\S]*Browser Bridge extension[\s\S]*unknown command[\s\S]*opencli[\s\S]*main\\\.js/, 'chat renderer must suppress OpenCLI browser-bridge diagnostic noise.');
   assertMatches(app, /function publicRunningSessionPrompt[\s\S]*textLooksCorrupted\(clean\)[\s\S]*return fallback/, 'running session strip must hide corrupted or raw internal prompt previews.');
   assertMatches(app, /function publicRunningSessionTitle[\s\S]*textLooksCorrupted\(clean\)[\s\S]*return fallback/, 'running session strip must hide corrupted recovered titles.');
+  assertMatches(app, /function splitAssistantDisplayMessages[\s\S]*assistant-message-thread[\s\S]*renderAssistantExtras/, 'long assistant output must render as separate visible message rows with status controls on the final row.');
+  includesAll(css, ['.assistant-message-thread', '.assistant-card-split', '.assistant-row-spacer'], 'split assistant message row styles');
   assertMatches(app, /const messageStates = \{[\s\S]*interrupted:[\s\S]*authorization-incomplete[\s\S]*user-action-required/, 'message status badges must not render recoverable failures as completed.');
   assertMatches(app, /trackSession\(requestedSessionId[\s\S]*prompt:\s*cleanPrompt \|\| '正在执行任务'/, 'running session strip must use the user task summary instead of the full internal agent prompt.');
   assertMatches(main, /function cleanAgentDisplayLine[\s\S]*numberTokens\.length >= 3[\s\S]*open\\\.feishu\\\.cn[\s\S]*execution_bridge\?/, 'backend event sanitizer must strip execution bridge line-number noise while preserving Feishu links.');
@@ -1384,6 +1440,8 @@ check('chat state tree and critical front-end affordances', () => {
   assertMatches(main, /function isInternalAgentOutputLine[\s\S]*UNDICI-EHPA[\s\S]*name:\\s\*lark-shared/, 'backend event sanitizer must suppress OpenCLI warnings and skill metadata noise.');
   assertMatches(main, /function isInternalAgentOutputLine[\s\S]*lark-execution\\s\+bridge\\s\+auth\\s\+login[\s\S]*base_token/, 'backend event sanitizer must suppress Feishu authorization harness and raw token JSON noise.');
   assertMatches(main, /function isInternalAgentOutputLine[\s\S]*REMINDER:\\s\*You MUST include the sources above/, 'backend event sanitizer must suppress internal web-search citation reminders.');
+  assertMatches(main, /function isInternalAgentOutputLine[\s\S]*WEB_SEARCH_OK[\s\S]*No links found[\s\S]*开始生成回复[\s\S]*正在同步输出/, 'backend event sanitizer must suppress web-search harness status noise.');
+  assertMatches(main, /function isInternalAgentOutputLine[\s\S]*Browser Bridge extension[\s\S]*unknown command[\s\S]*opencli[\s\S]*main\\\.js/, 'backend event sanitizer must suppress OpenCLI browser-bridge diagnostic noise.');
   assertMatches(main, /function agentOutputLooksUnresolvedAuthorization[\s\S]*open\\\.feishu\\\.cn[\s\S]*not configured/, 'backend must keep an internal auth-wait signal before hiding raw Feishu JSON noise.');
   assertMatches(main, /entry\.authorizationCompleted = true[\s\S]*entry\.authorizationHandoffStarted = true/, 'agent transcripts must track Feishu authorization handoff state before public filtering.');
   assertMatches(main, /function stopAgent[\s\S]*agentSessionHasUnresolvedAuthorization\(entry\)[\s\S]*authorizationIncompleteAgentResultText\(\)[\s\S]*agentSessionHasUnresolvedUserBlocker\(entry\)/, 'stopping during external authorization must preserve a waiting-auth status instead of a completed or generic stopped state.');
@@ -1391,11 +1449,14 @@ check('chat state tree and critical front-end affordances', () => {
   assertMatches(main, /input_json_delta'\) return null/, 'backend stream parser must not emit raw tool argument delta events into public chat.');
   assertMatches(app, /function cleanPublicAgentText[\s\S]*isInternalAgentOutputLine/, 'chat renderer must suppress internal launch/progress noise from assistant text.');
   assertNotMatches(app, /PermissionConfirmationModal|permission-confirmation-modal|permission-confirmation-backdrop/, 'permission confirmation must render as an inline chat card, not a full-screen modal.');
-  includesAll(css, ['.chat-permission-overlay', '.chat-permission-card'], 'inline permission confirmation card styles');
+  includesAll(css, ['.chat-permission-overlay', '.chat-permission-card', '.chat-authorization-message'], 'inline permission confirmation and chat authorization styles');
+  assertNotMatches(css, /\.inline-authorization-panel/, 'authorization QR styles must not live in the composer permission overlay.');
   assertNotMatches(css, /\.permission-confirmation-backdrop/, 'permission confirmation CSS must not include the removed full-screen backdrop.');
   assert(!app.includes('setRailExpanded((next) => !next)'), 'chat main must not keep the removed quick project right rail toggle.');
   assert(!app.includes('<aside className={`right-rail'), 'chat main must not render the removed quick project right rail.');
   includesAll(app, ['function finalArtifactsFromText', "source: 'assistant-final'", 'finalArtifacts: mergeArtifactReferences', 'message.finalArtifacts || []', 'function isExplicitLocalArtifactPathToken'], 'final deliverable artifact extraction');
+  assertMatches(app, /function parseArtifactPathToken\(rawValue = '', options = \{\}\)[\s\S]*options\.allowBare[\s\S]*const bareFilePattern[\s\S]*add\(token, \{ allowBare: true \}\)/, 'final deliverable extraction must turn bare generated filenames into previewable artifact cards.');
+  assertMatches(app, /function artifactReferencesFromEvent[\s\S]*event\.artifacts[\s\S]*agent-structured[\s\S]*artifactReferencesFromEvent\(event\)[\s\S]*finalArtifactsFromText\(combinedText\)/, 'structured backend artifact events must create final preview cards even when the answer text omits a path.');
   assertMatches(app, /const candidateArtifactReferences = useMemo\([\s\S]{0,620}message\.finalArtifacts \|\| \[\]/, 'artifact preview shelf must use final result artifacts only.');
   assertMatches(app, /const artifactReferences = useMemo\([\s\S]{0,220}candidateArtifactReferences/, 'artifact preview shelf must render final local artifact cards before opening preview.');
   assertMatches(app, /<ArtifactPreviewShelf[\s\S]{0,420}artifacts=\{artifactReferences\}/, 'artifact preview shelf must render only the computed final artifact list.');

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import QRCode from 'qrcode';
 import {
   Activity,
   AlertTriangle,
@@ -294,7 +295,7 @@ const messageStates = {
   'incomplete-result': { label: '未完成 / 重试', icon: AlertTriangle, tone: 'error' },
   'authorization-incomplete': { label: '待授权 / 可继续', icon: Clock3, tone: 'queued' },
   'user-action-required': { label: '等待确认', icon: Clock3, tone: 'queued' },
-  relaying: { label: '接力中', icon: Loader2, tone: 'thinking' },
+  relaying: { label: '引导中', icon: Loader2, tone: 'thinking' },
   error: { label: '错误 / 重试', icon: AlertTriangle, tone: 'error' }
 };
 
@@ -314,6 +315,7 @@ const DEFAULT_PERMISSION_MODE_KEY = 'ecorex-default-permission-mode';
 const MAX_COMPOSER_ATTACHMENTS = 10;
 const RECENT_CHAT_STORAGE_KEY = 'ecorex-recent-chats';
 const CONVERSATION_STORAGE_KEY = 'ecorex-chat-conversations';
+const DELETED_CONVERSATION_STORAGE_KEY = 'ecorex-deleted-conversations';
 const MAX_RECENT_CHATS = 20;
 const MAX_STORED_CONVERSATIONS = 30;
 const MAX_STORED_MESSAGES_PER_CONVERSATION = 120;
@@ -762,6 +764,15 @@ function isInternalAgentOutputLine(value = '') {
   if (!text) return false;
   if (/\[UNDICI-EHPA\]\s+Warning/i.test(text)) return true;
   if (/Use `?node --trace-warnings`?/i.test(text)) return true;
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(text)) return true;
+  if (/^(?:done|WEB_SEARCH_OK|No links found\.?|开始生成回复|正在同步输出|回复生成完成)$/i.test(text)) return true;
+  if (/^WEB_SEARCH_OK/i.test(text)) return true;
+  if (/^opencli\s+v?\d+(?:\.\d+)*\s+doctor\b/i.test(text) && /\b(?:daemon|extension|connectivity|missing|fail|ok)\b/i.test(text)) return true;
+  if (/^opencli\s+v?\d+(?:\.\d+)*\s+doctor$/i.test(text)) return true;
+  if (/\bDaemon restarted on port\b/i.test(text)) return true;
+  if (/\bBrowser Bridge extension\b/i.test(text) && /\b(?:not connected|has not connected|missing)\b/i.test(text)) return true;
+  if (/^\[(?:OK|MISSING|FAIL)\]\s+(?:Daemon|Extension|Connectivity)\b/i.test(text)) return true;
+  if (/^error:\s+unknown command\s+['"].*opencli.*main\.js/i.test(text)) return true;
   if (/^\s*(?:at\s+)?[A-Za-z]:[\\/].*(?:opencli|node|npm).*(?:char:\d+|CategoryInfo|FullyQualifiedErrorId)/i.test(text)) return true;
   if (/^Launching skill:/i.test(text)) return true;
   if (/^\d+\s+---\s*\d+\s+name:\s*[-\w.]+\s+\d+\s+version:/i.test(text)) return true;
@@ -786,6 +797,10 @@ function isInternalAgentOutputLine(value = '') {
   return false;
 }
 
+function isDuplicatePublicStatusLine(value = '') {
+  return /^(?:done|WEB_SEARCH_OK|开始生成回复|正在同步输出|回复生成完成)$/i.test(String(value || '').trim());
+}
+
 function textLooksCorrupted(value = '') {
   const text = String(value || '').trim();
   if (!text) return true;
@@ -804,6 +819,9 @@ function cleanAgentDisplayLine(value = '') {
     text = text.replace(/(^|\s)\d{1,3}(?=\s|$)/g, '$1').replace(/\s{2,}/g, ' ').trim();
   }
   return text
+    .replace(/WEB_SEARCH_OK/gi, '')
+    .replace(/`?\bNo\s*links\s*found\.?`?/gi, '未检索到可直接展示的链接')
+    .replace(/\bNolinksfound\.?/gi, '未检索到可直接展示的链接')
     .replace(/("(?:base_token|folder_token|access_token|refresh_token)"\s*:\s*")[^"]+(")/gi, '$1***$2')
     .replace(/\b(base_token|folder_token|access_token|refresh_token)=([^\s,;]+)/gi, '$1=***')
     .replace(/execution\s+bridge(?=user_code=)/gi, 'execution_bridge?')
@@ -812,11 +830,19 @@ function cleanAgentDisplayLine(value = '') {
 }
 
 function cleanPublicAgentText(value = '', { dropPathLines = true } = {}) {
+  const seenStatusLines = new Set();
   return String(value || '')
     .split(/\r?\n/)
     .map((line) => cleanAgentDisplayLine(line))
     .filter((line) => !(dropPathLines && looksLikeNoisyLocalPath(line)))
     .filter((line) => !isInternalAgentOutputLine(line))
+    .filter((line) => {
+      const key = line.trim().toLowerCase();
+      if (!key || !isDuplicatePublicStatusLine(key)) return true;
+      if (seenStatusLines.has(key)) return false;
+      seenStatusLines.add(key);
+      return true;
+    })
     .join('\n')
     .replace(/\[EcoreX capability running\]/gi, 'EcoreX 正在调用原生能力')
     .replace(/\bClaude\s*Code\s*CLI\b/gi, 'EcoreX')
@@ -855,6 +881,33 @@ function splitAssistantReadableBlocks(value = '') {
     if (current.trim()) blocks.push(current.trim());
   }
   return blocks;
+}
+
+function splitAssistantDisplayMessages(value = '') {
+  const source = String(value || '').replace(/\n{3,}/g, '\n\n').trim();
+  if (!source) return [];
+  if (source.length <= 520) return [source];
+  if (/```|^\s*\|.+\|\s*$/m.test(source)) return [source];
+  const paragraphs = source.split(/\n{2,}/).map((item) => item.trim()).filter(Boolean);
+  if (paragraphs.length > 1) {
+    return paragraphs.length <= 12 ? paragraphs : [...paragraphs.slice(0, 11), paragraphs.slice(11).join('\n\n')];
+  }
+  const sentences = source.match(/[^。！？!?；;]+[。！？!?；;]?/g) || [source];
+  const parts = [];
+  let current = '';
+  for (const sentence of sentences) {
+    const next = sentence.trim();
+    if (!next) continue;
+    if (current && `${current}${next}`.length > 620) {
+      parts.push(current.trim());
+      current = next;
+    } else {
+      current = `${current}${next}`;
+    }
+  }
+  if (current.trim()) parts.push(current.trim());
+  if (parts.length <= 1) return [source];
+  return parts.length <= 12 ? parts : [...parts.slice(0, 11), parts.slice(11).join('')];
 }
 
 function publicRunningSessionPrompt(value = '', fallback = '正在执行任务') {
@@ -1083,6 +1136,70 @@ function isContinuationPrompt(value = '') {
   return /^(是|对|好|好的|可以|继续|继续吧|同意|确认|允许|允许一次|执行|开始|行|嗯|完成|完成了|已完成|扫码完成|扫完了|授权完成|登录完成|配置完成|done|finished|completed|ok|yes|y|go|continue|继续执行)[。！!,.，\s]*$/i.test(String(value || '').trim());
 }
 
+function localizeAgentUserActionProvider(value = '', type = '') {
+  const text = sanitizeDisplayText(value || '', '');
+  if (/feishu|lark|larksuite|open\.feishu|飞书/i.test(text)) return '飞书';
+  if (!text && type === 'authorization') return '外部';
+  return text;
+}
+
+function localizeAgentUserActionText(value = '', type = '', field = '') {
+  const text = sanitizeDisplayText(value || '', '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  const provider = /feishu|lark|larksuite|open\.feishu|飞书/i.test(text) ? '飞书' : '外部';
+  if (/^waiting for .+ authorization$/i.test(text)) return `等待${provider}授权`;
+  if (/^confirm local action$/i.test(text)) return '需要确认本地操作';
+  const confirmMatch = text.match(/^confirm\s+(.+)$/i);
+  if (confirmMatch?.[1]) return `确认 ${confirmMatch[1].trim()}`;
+  if (/^open-authorization-link$/i.test(text)) return '打开授权链接';
+  if (/^open the link or scan the QR code/i.test(text)) {
+    return '请打开链接或扫码完成授权；确认完成后，EcoreX 会在当前会话继续执行。';
+  }
+  if (/^ecorex needs your confirmation before continuing/i.test(text)) {
+    return 'EcoreX 需要你确认后才能继续这一步本地操作。允许后，当前会话会原地继续执行。';
+  }
+  if (/^the runtime is waiting for explicit confirmation/i.test(text)) {
+    return '本地执行引擎正在等待你的明确确认后继续。';
+  }
+  if (/permission denied or scope errors/i.test(text)) {
+    return '权限被拒绝或作用域异常，需要更新飞书执行桥，或 JSON 输出中出现 _notice。';
+  }
+  if (field === 'description' && type === 'authorization' && /continue in this conversation/i.test(text)) {
+    return '请完成外部授权；确认完成后，EcoreX 会在当前会话继续执行。';
+  }
+  return text;
+}
+
+function normalizeAgentUserAction(value = {}) {
+  if (!value || typeof value !== 'object') return null;
+  const type = String(value.type || '').trim().toLowerCase();
+  if (!['authorization', 'permission'].includes(type)) return null;
+  const url = cleanChatUrlToken(value.url || '');
+  const provider = localizeAgentUserActionProvider(value.provider || '', type);
+  return {
+    type,
+    provider,
+    status: sanitizeDisplayText(value.status || 'waiting', 'waiting'),
+    title: localizeAgentUserActionText(value.title || (type === 'authorization' ? `等待${provider || '外部'}授权` : '需要确认本地操作'), type, 'title'),
+    description: localizeAgentUserActionText(value.description || '', type, 'description'),
+    action: localizeAgentUserActionText(value.action || '', type, 'action'),
+    url: safeChatExternalUrl(url) ? url : '',
+    qrText: sanitizeDisplayText(value.qrText || url || value.userCode || value.deviceCode || '', ''),
+    userCode: sanitizeDisplayText(value.userCode || '', ''),
+    deviceCode: sanitizeDisplayText(value.deviceCode || '', ''),
+    expiresIn: Number.isFinite(Number(value.expiresIn)) ? Number(value.expiresIn) : null,
+    scope: sanitizeDisplayText(value.scope || '', ''),
+    domain: sanitizeDisplayText(value.domain || '', ''),
+    command: sanitizeDisplayText(value.command || '', ''),
+    toolName: sanitizeDisplayText(value.toolName || '', '')
+  };
+}
+
+function statusFromAgentUserAction(action = {}) {
+  if (!action) return '';
+  return action.type === 'authorization' ? 'authorization-incomplete' : 'user-action-required';
+}
+
 function permissionActionFromValue(value = {}) {
   const raw = typeof value === 'string' ? value : value?.action;
   const text = String(raw || '').trim();
@@ -1264,9 +1381,9 @@ function artifactLanguageFromPath(path = '') {
   return ext || 'text';
 }
 
-function parseArtifactPathToken(rawValue = '') {
+function parseArtifactPathToken(rawValue = '', options = {}) {
   let value = stripArtifactPathToken(rawValue);
-  if (!value || /^https?:\/\//i.test(value) || !isExplicitLocalArtifactPathToken(value)) return null;
+  if (!value || /^https?:\/\//i.test(value) || (!options.allowBare && !isExplicitLocalArtifactPathToken(value))) return null;
   try {
     value = decodeURIComponent(value);
   } catch {
@@ -1308,8 +1425,8 @@ function extractArtifactReferences(text = '') {
   const source = String(text || '');
   if (!source) return [];
   const found = new Map();
-  const add = (token) => {
-    const artifact = parseArtifactPathToken(token);
+  const add = (token, options = {}) => {
+    const artifact = parseArtifactPathToken(token, options);
     if (!artifact) return;
     const key = artifact.id.toLowerCase();
     if (!found.has(key)) found.set(key, artifact);
@@ -1336,6 +1453,13 @@ function extractArtifactReferences(text = '') {
     }
   }
 
+  const bareFilePattern = new RegExp(`(?<![\\\\/\\w.-])([A-Za-z0-9_\\-\\u4e00-\\u9fff][^\\\\/\\r\\n<>"'\`|]{0,180}?\\.(?:${extPattern}))(?![\\w.-])`, 'gi');
+  for (const match of source.matchAll(bareFilePattern)) {
+    const token = match[1] || match[0];
+    if (!token || /^(?:https?:|www\.)/i.test(token)) continue;
+    add(token, { allowBare: true });
+  }
+
   return [...found.values()].slice(0, ARTIFACT_PREVIEW_MAX_ITEMS);
 }
 
@@ -1346,6 +1470,29 @@ function finalArtifactsFromText(text = '') {
   ]).map((artifact) => ({ ...artifact, source: 'assistant-final' }));
 }
 
+function artifactReferencesFromEvent(event = {}) {
+  const artifacts = Array.isArray(event.artifacts) ? event.artifacts : [];
+  if (!artifacts.length) return [];
+  return mergeArtifactReferences(artifacts.map((artifact, index) => {
+    if (!artifact || typeof artifact !== 'object') return null;
+    const rawPath = String(artifact.path || artifact.filePath || artifact.location || artifact.raw || artifact.name || '').trim();
+    const name = sanitizeDisplayText(artifact.name || fileNameFromArtifactPath(rawPath) || `产物 ${index + 1}`, `产物 ${index + 1}`);
+    const ext = String(artifact.ext || artifact.extension || artifactExtension(rawPath || name)).replace(/^\./, '').toLowerCase();
+    if (!ext || !ARTIFACT_PREVIEW_EXTENSIONS.includes(ext)) return null;
+    const pathValue = rawPath || name;
+    return {
+      id: String(artifact.id || `${pathValue}:${index}:${ext}`).slice(0, 260),
+      path: pathValue,
+      name,
+      ext,
+      type: artifact.type || artifact.mimeType || '',
+      sizeBytes: Number(artifact.sizeBytes || artifact.size) || 0,
+      source: artifact.source || 'agent-structured',
+      raw: artifact.raw || pathValue
+    };
+  }).filter(Boolean));
+}
+
 function artifactFromAttachment(attachment = {}, index = 0) {
   const path = String(attachment.path || attachment.filePath || '').trim();
   const name = String(attachment.name || attachment.fileName || fileNameFromArtifactPath(path) || `附件 ${index + 1}`).trim();
@@ -1353,6 +1500,7 @@ function artifactFromAttachment(attachment = {}, index = 0) {
   if (!ext || !ARTIFACT_PREVIEW_EXTENSIONS.includes(ext)) return null;
   return {
     id: `attachment:${attachmentStableKey(attachment, index)}:${ext}`,
+    attachmentId: String(attachment.id || attachment.attachmentId || '').trim(),
     path: path || name,
     name,
     ext,
@@ -1763,6 +1911,8 @@ async function previewArtifactWithBridgeUncached(artifact = {}) {
     };
   }
   const payload = {
+    id: artifact.id,
+    attachmentId: artifact.attachmentId || artifact.selectedAttachmentId || '',
     name: artifact.name,
     path: artifact.path,
     filePath: artifact.path,
@@ -1835,6 +1985,8 @@ async function validateArtifactAvailabilityWithBridge(artifact = {}) {
     || (result?.ok !== false && hasPreviewLocation(result))
   );
   const payload = {
+    id: artifact.id,
+    attachmentId: artifact.attachmentId || artifact.selectedAttachmentId || '',
     name: artifact.name,
     path: artifact.path,
     filePath: artifact.path,
@@ -1916,6 +2068,7 @@ async function openAttachmentFileWithBridge(attachment = {}) {
 async function openArtifactFileWithBridge(artifact = {}) {
   const payload = {
     id: artifact.id,
+    attachmentId: artifact.attachmentId || artifact.selectedAttachmentId || '',
     name: artifact.name || fileNameFromArtifactPath(artifact.path),
     path: artifact.path || artifact.filePath,
     filePath: artifact.filePath || artifact.path,
@@ -2161,6 +2314,7 @@ function agentRunPolicySection(prompt = '') {
     '5. 飞书、浏览器 OAuth、扫码或外部授权属于待继续交接：发起后只展示用户可操作的链接/二维码，状态写成待授权；用户回复完成后先验证授权状态，再继续原任务，不能把“已发起授权”当最终完成。',
     '6. 用户提到本地文档、对接文档、飞书文档、创建多维表格或日志时，先检索当前工作区、项目文件、EcoreX 托管 Skill 文档和已配置 CLI/MCP；不要在本地资料检索前要求用户提供链接、token 或字段。',
     '7. 需要生成 PPT/Excel/DOCX/PDF/HTML 等文件时，必须执行到真实文件落地并验证文件存在；如果脚本或命令被权限策略拦截，只输出需要 EcoreX 权限确认卡继续执行的简短说明，不要把脚本路径当作最终交付。',
+    '8. 进度说明只保留当前动作、关键发现和下一步；不要连续输出“我会检查/我将确认”式思考过程，长进度请拆成短段落。',
     realtimePlatformSearchPolicySection(prompt)
   ].join('\n');
 }
@@ -2207,7 +2361,9 @@ function loadRawRecentChatItems() {
 function loadRecentChatItems() {
   const owner = currentConversationStorageOwner();
   const conversations = loadRawConversationMap();
+  const deletedConversationIds = loadDeletedConversationIds();
   return loadRawRecentChatItems()
+    .filter((item) => !deletedConversationIds.has(item.id))
     .filter((item) => !owner || !item.ownerEmail || item.ownerEmail === owner)
     .map((item) => {
       const conversation = conversations[item.id];
@@ -2228,6 +2384,7 @@ function storeRecentChatItems(items = []) {
       ? loadRawRecentChatItems().filter((item) => item.ownerEmail && item.ownerEmail !== owner)
       : [];
     const normalized = [...retainedOtherOwnerItems, ...items]
+      .filter((item) => !isDeletedConversationId(item?.id))
       .map((item, index) => normalizeRecentChatItem({
         ...item,
         ownerEmail: item?.ownerEmail || owner
@@ -2241,9 +2398,49 @@ function storeRecentChatItems(items = []) {
   }
 }
 
+function loadDeletedConversationIds() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(DELETED_CONVERSATION_STORAGE_KEY) || '[]');
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.map((id) => String(id || '').trim()).filter(Boolean));
+  } catch {
+    return new Set();
+  }
+}
+
+function storeDeletedConversationIds(ids = new Set()) {
+  try {
+    localStorage.setItem(DELETED_CONVERSATION_STORAGE_KEY, JSON.stringify([...ids].slice(-MAX_STORED_CONVERSATIONS * 3)));
+  } catch {
+    // Deletion tombstones are best-effort; the conversation body is still removed above.
+  }
+}
+
+function rememberDeletedConversationId(id) {
+  const safeId = String(id || '').trim();
+  if (!safeId) return;
+  const ids = loadDeletedConversationIds();
+  ids.add(safeId);
+  storeDeletedConversationIds(ids);
+}
+
+function forgetDeletedConversationId(id) {
+  const safeId = String(id || '').trim();
+  if (!safeId) return;
+  const ids = loadDeletedConversationIds();
+  if (!ids.delete(safeId)) return;
+  storeDeletedConversationIds(ids);
+}
+
+function isDeletedConversationId(id) {
+  const safeId = String(id || '').trim();
+  return Boolean(safeId && loadDeletedConversationIds().has(safeId));
+}
+
 function updateStoredRecentChatItem(id, patch = {}) {
   const safeId = String(id || '').trim();
   if (!safeId) return [];
+  if (isDeletedConversationId(safeId)) return loadRecentChatItems();
   const items = loadRecentChatItems().map((item) => (
     item.id === safeId ? normalizeRecentChatItem({ ...item, ...patch, id: safeId }) : item
   )).filter(Boolean);
@@ -2254,9 +2451,11 @@ function updateStoredRecentChatItem(id, patch = {}) {
 function deleteStoredRecentChatItem(id) {
   const safeId = String(id || '').trim();
   if (!safeId) return [];
+  rememberDeletedConversationId(safeId);
   const items = loadRecentChatItems().filter((item) => item.id !== safeId);
   storeRecentChatItems(items);
   deleteConversationState(safeId);
+  window.dispatchEvent?.(new CustomEvent('ecorex:recent-chats-changed'));
   return items;
 }
 
@@ -2283,10 +2482,14 @@ function deleteStoredProjectChatReferences(projectId) {
   const safeProjectId = String(projectId || '').trim();
   if (!safeProjectId) return;
   const removedIds = new Set(loadRecentChatItems().filter((item) => item.projectId === safeProjectId).map((item) => item.id));
+  removedIds.forEach((id) => rememberDeletedConversationId(id));
   storeRecentChatItems(loadRecentChatItems().filter((item) => item.projectId !== safeProjectId));
   const conversations = loadConversationMap();
   for (const id of Object.keys(conversations)) {
-    if (removedIds.has(id) || conversations[id]?.projectId === safeProjectId) delete conversations[id];
+    if (removedIds.has(id) || conversations[id]?.projectId === safeProjectId) {
+      rememberDeletedConversationId(id);
+      delete conversations[id];
+    }
   }
   storeConversationMap(conversations);
   window.dispatchEvent?.(new CustomEvent('ecorex:recent-chats-changed'));
@@ -2303,6 +2506,41 @@ function upsertRecentChatItem(items = [], item = {}) {
     && !(entry.title === normalized.title && (entry.projectId || '') === (normalized.projectId || ''))
   ));
   return [normalized, ...deduped].slice(0, MAX_RECENT_CHATS);
+}
+
+function recentChatTitleFromConversationState(state = {}, fallback = '') {
+  const messages = Array.isArray(state.messages) ? state.messages : [];
+  const userMessage = messages.find((message) => message?.role === 'user' && readableMessageText(message));
+  if (userMessage) return readableMessageText(userMessage);
+  const promptMessage = messages.find((message) => String(message?.originalPrompt || '').trim());
+  if (promptMessage) return promptMessage.originalPrompt;
+  const readableMessage = messages.find((message) => readableMessageText(message));
+  if (readableMessage) return readableMessageText(readableMessage);
+  return fallback || state.title || state.projectName || '新会话';
+}
+
+function touchRecentChatFromConversationState(id, state = {}) {
+  const safeId = String(id || '').trim();
+  if (!safeId) return;
+  if (isDeletedConversationId(safeId)) return;
+  const currentItems = loadRecentChatItems();
+  const existing = currentItems.find((item) => item.id === safeId);
+  const existingTitle = existing?.title && existing.title !== '新会话' ? existing.title : '';
+  const title = sanitizeDisplayText(
+    existingTitle || recentChatTitleFromConversationState(state),
+    '新会话'
+  ).replace(/\s+/g, ' ').slice(0, 44);
+  const nextItem = {
+    id: safeId,
+    claudeSessionId: String(state.claudeSessionId || existing?.claudeSessionId || safeId).slice(0, 120),
+    title: title || '新会话',
+    time: existing?.time || recentChatTimeLabel(),
+    updatedAt: Date.now(),
+    projectId: String(state.projectId || existing?.projectId || '').slice(0, 120),
+    projectName: String(state.projectName || existing?.projectName || '').slice(0, 120)
+  };
+  storeRecentChatItems(upsertRecentChatItem(currentItems, nextItem));
+  window.dispatchEvent?.(new CustomEvent('ecorex:recent-chats-changed'));
 }
 
 function loadRawConversationMap() {
@@ -2461,6 +2699,7 @@ function sanitizeLiveMessages(messages = []) {
 
 function saveConversationState(id, patch = {}) {
   if (!id) return;
+  if (isDeletedConversationId(id)) return;
   const map = loadConversationMap();
   const previous = map[id] || {};
   const projectId = String(Object.prototype.hasOwnProperty.call(patch, 'projectId') ? patch.projectId || '' : previous.projectId || '').slice(0, 120);
@@ -3071,6 +3310,7 @@ function Sidebar({ page, setPage, logout, authStatus, collapsed = false, onToggl
 
   function startNewChat(project = null) {
     const id = createLocalId('conversation');
+    forgetDeletedConversationId(id);
     const projectId = project?.id || '';
     const projectName = project?.name || '';
     const item = {
@@ -3224,6 +3464,7 @@ function Sidebar({ page, setPage, logout, authStatus, collapsed = false, onToggl
 
   function openBlankChatAfterDelete() {
     const id = createLocalId('conversation');
+    forgetDeletedConversationId(id);
     setActiveConversationId(id);
     setPage('chat');
     window.dispatchEvent?.(new CustomEvent('ecorex:new-chat', {
@@ -3250,6 +3491,7 @@ function Sidebar({ page, setPage, logout, authStatus, collapsed = false, onToggl
 
   useEffect(() => {
     const upsert = (event) => {
+      if (event.detail?.id && isDeletedConversationId(event.detail.id)) return;
       if (event.detail?.id) setActiveConversationId(event.detail.id);
       setRecentItems((items) => {
         const nextItems = upsertRecentChatItem(items, event.detail || {});
@@ -3540,11 +3782,10 @@ function Sidebar({ page, setPage, logout, authStatus, collapsed = false, onToggl
               aria-label={`删除 ${title}`}
               onClick={(event) => {
                 event.stopPropagation();
-                setRecentItems((items) => {
-                  const nextItems = items.filter((item) => item.id !== id);
-                  storeRecentChatItems(nextItems);
-                  deleteConversationState(id);
-                  if (index === 0) {
+                const deletingActive = id === activeConversationId || (!activeConversationId && index === 0);
+                setRecentItems(() => {
+                  const nextItems = deleteStoredRecentChatItem(id);
+                  if (deletingActive) {
                     window.setTimeout(() => {
                       const nextHistory = nextItems.find((item) => !item.projectId);
                       if (nextHistory) openRecentChat(nextHistory);
@@ -5181,8 +5422,29 @@ function dedupeAdjacentRepeatedLines(value = '') {
   return output.join('\n');
 }
 
+function dedupeRepeatedParagraphBlocks(value = '') {
+  const blocks = String(value || '').split(/(\n{2,})/);
+  const output = [];
+  const seen = new Set();
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = blocks[index];
+    if (/^\n{2,}$/.test(block)) {
+      if (output.length && !/^\n{2,}$/.test(output.at(-1))) output.push(block);
+      continue;
+    }
+    const comparable = normalizeDuplicateAssistantSegment(block);
+    if (comparable && comparable.length >= 40 && seen.has(comparable)) {
+      if (/^\n{2,}$/.test(output.at(-1) || '')) output.pop();
+      continue;
+    }
+    output.push(block);
+    if (comparable && comparable.length >= 40) seen.add(comparable);
+  }
+  return output.join('').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 function dedupeAssistantOutputText(value = '') {
-  return dedupeAdjacentRepeatedLines(dedupeAdjacentRepeatedSentences(value));
+  return dedupeRepeatedParagraphBlocks(dedupeAdjacentRepeatedLines(dedupeAdjacentRepeatedSentences(value)));
 }
 
 function isMeaningfulAssistantOverlap(value = '') {
@@ -5286,6 +5548,7 @@ function substantiveTerminalTextFromEvent(event = {}) {
 function agentEventHasOwnSubstantiveTerminalOutput(event = {}) {
   if (!event || !['result', 'done'].includes(event.kind)) return false;
   if (substantiveTerminalTextFromEvent(event)) return true;
+  if (artifactReferencesFromEvent(event).length) return true;
   if (finalArtifactsFromText(String(event.text || '')).length) return true;
   return agentEventHasExplicitTerminalSuccess(event);
 }
@@ -5330,12 +5593,15 @@ function textLooksPendingUserAction(value = '') {
   const text = cleanAssistantOutputText(value).toLowerCase();
   if (!text) return false;
   if (textLooksCompletedUserAction(text)) return false;
-  return /(open\.feishu\.cn|execution[_ -]?bridge|user_code=|device[_ -]?code|verification[_ -]?(url|uri)|二维码|扫码|授权|登录|认证|打开.*链接|完成后.*继续|告诉我.*完成|tell me.*done|waiting for.*auth|waiting for.*user|please.{0,40}(upload|provide|tell|share)|unable|cannot|can't|not able|no input file|missing input|无法|不能|暂时无法|请.{0,40}(上传|提供|告诉|补充|路径|文件)|需要.{0,40}(上传|提供|告诉|补充|路径|文件))/i.test(text);
+  return /(open\.feishu\.cn|execution[_ -]?bridge|user_code=|device[_ -]?code|verification[_ -]?(url|uri)|二维码|扫码|授权|登录|认证|打开.*链接|完成后.*继续|告诉我.*完成|tell me.*done|waiting for.*auth|waiting for.*user|please.{0,40}(upload|provide|tell|share)|unable|cannot|can't|not able|no input file|missing input|无法|不能|暂时无法|未能.{0,40}(发起|配置|继续)|权限.{0,24}(策略|拦截|确认|允许|批准)|权限确认卡|请.{0,40}(上传|提供|告诉|补充|路径|文件|确认|允许|授权)|需要.{0,40}(上传|提供|告诉|补充|路径|文件|确认|允许|授权))/i.test(text);
 }
 
 function pendingUserActionStatusFromText(value = '') {
   const text = cleanAssistantOutputText(value).toLowerCase();
   if (!textLooksPendingUserAction(text)) return '';
+  if (/(权限.{0,24}(策略|拦截|确认|允许|批准)|权限确认卡|需要.{0,32}(权限确认|允许执行|确认.*命令)|被.{0,24}权限.{0,24}(拦截|阻止))/i.test(text)) {
+    return 'user-action-required';
+  }
   if (/(open\.feishu\.cn|execution[_ -]?bridge|user_code=|device[_ -]?code|verification[_ -]?(url|uri)|oauth|auth|authorization|login|lark|feishu|授权|登录|认证|飞书)/i.test(text)) {
     return 'authorization-incomplete';
   }
@@ -5384,12 +5650,14 @@ function permissionPromptStatusFromText(value = '') {
   const text = cleanAssistantOutputText(value).toLowerCase();
   if (!text) return '';
   if (textLooksCompletedUserAction(text)) return '';
+  const permissionPolicyBlock = /(权限.{0,24}(策略|拦截|确认|允许|批准)|权限确认卡|需要.{0,32}(权限确认|允许执行|确认.*命令)|被.{0,24}权限.{0,24}(拦截|阻止))/i.test(text);
   const externalHandoff = /(open\.feishu\.cn|execution[_\s-]?bridge|user_code=|device[_\s-]?code|verification[_\s-]?(url|uri)|oauth|authorization|authorize|login|lark|feishu|二维码|扫码|授权|登录|认证|飞书|浏览器|browser|return here|tell me done|完成后.{0,40}(告诉|继续|返回))/i.test(text);
+  const mentionsToolOrLocalAction = isHighRiskPermissionText(text)
+    || /(mcp__|mcp[_\s-]|tool|bash|powershell|cmd|shell|python|node|npm|pnpm|read|write|edit|multiedit|delete|move|rename|file|folder|workspace|project|local|browser|link|open\.feishu\.cn|execution[_\s-]?bridge|飞书|本地|命令|文件|目录|链接)/i.test(text);
+  if (permissionPolicyBlock && mentionsToolOrLocalAction) return 'user-action-required';
   if (externalHandoff && textLooksPendingUserAction(text)) return 'authorization-incomplete';
   const hasPromptLanguage = /(do you want to proceed|proceed with|permission\s+(required|requested|needed|approval)|requires?\s+permission|needs?\s+permission|approval\s+required|approve|allow|confirm|continue\?|是否|要不要|请确认|等待确认|允许|可以执行|确认后|继续执行|需要.{0,24}(确认|允许|授权|批准))/i.test(text);
   if (!hasPromptLanguage) return '';
-  const mentionsToolOrLocalAction = isHighRiskPermissionText(text)
-    || /(mcp__|mcp[_\s-]|tool|bash|powershell|cmd|shell|python|node|npm|pnpm|read|write|edit|multiedit|delete|move|rename|file|folder|workspace|project|local|browser|link|open\.feishu\.cn|execution[_\s-]?bridge|飞书|本地|命令|文件|目录|链接)/i.test(text);
   if (!mentionsToolOrLocalAction) return '';
   return externalHandoff ? 'authorization-incomplete' : 'user-action-required';
 }
@@ -5579,7 +5847,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
   const conversationSaveTimerRef = useRef(null);
   const conversationSaveSnapshotRef = useRef(null);
   const pendingCancelsRef = useRef(new Set());
-  const permissionContinuationLocksRef = useRef(new Set());
+  const permissionContinuationLocksRef = useRef(new Map());
   const statusTimers = useRef([]);
   const attachmentObjectUrlsRef = useRef(new Set());
   const conversationIdRef = useRef(conversationId);
@@ -5707,6 +5975,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     if (!snapshot) return;
     conversationSaveSnapshotRef.current = null;
     saveConversationState(snapshot.id, snapshot.state);
+    touchRecentChatFromConversationState(snapshot.id, snapshot.state);
   }
 
   function rememberAttachmentObjectUrl(url) {
@@ -6201,6 +6470,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     };
     storedEventsByConversation.current.set(ownerConversationId, nextState);
     saveConversationState(ownerConversationId, nextState);
+    touchRecentChatFromConversationState(ownerConversationId, nextState);
   }
 
   function updateTimelineForConversation(ownerConversationId, updater) {
@@ -6222,6 +6492,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     };
     storedEventsByConversation.current.set(ownerConversationId, nextState);
     saveConversationState(ownerConversationId, nextState);
+    touchRecentChatFromConversationState(ownerConversationId, nextState);
   }
 
   function trackSession(sessionId, meta = {}) {
@@ -6347,10 +6618,40 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         ? messagesRef.current
         : (loadConversationState(ownerConversationId)?.messages || storedEventsByConversation.current.get(ownerConversationId)?.messages || []);
       if (!ownerMessages.some((message) => message.id === messageId)) {
-        if (now - (event.__queuedAt || now) < PENDING_AGENT_EVENT_TTL_MS) {
+        if (!isAgentSessionFinalEvent(event) && now - (event.__queuedAt || now) < PENDING_AGENT_EVENT_TTL_MS) {
           deferredEvents.push({ ...event, __queuedAt: event.__queuedAt || now });
+          continue;
         }
-        continue;
+        const row = runningSessionRowsRef.current.find((item) => (
+          item.sessionId === event.sessionId || item.id === event.sessionId
+        )) || {};
+        const recoveryTimeline = timelineItemFromAgentEvent(event);
+        appendRecoveredSessionMessage(ownerConversationId, {
+          id: messageId,
+          role: 'assistant',
+          text: '',
+          time: formatAgentEventTime(event),
+          streaming: !isAgentSessionFinalEvent(event),
+          status: event.kind === 'timeout'
+            ? 'timeout'
+            : event.kind === 'error'
+              ? 'error'
+              : event.kind === 'cancelled'
+                ? 'cancelled'
+                : 'thinking',
+          error: ['timeout', 'error'].includes(event.kind),
+          sessionId: event.sessionId,
+          claudeSessionId: owner?.claudeSessionId || row.claudeSessionId || ownerConversationId,
+          projectId: owner?.projectId || row.projectId || '',
+          projectName: owner?.projectName || row.projectName || '',
+          silentRecovery: false,
+          originalPrompt: row.prompt || row.promptPreview || '',
+          recovery: isAgentSessionFinalEvent(event) ? recoveryStateFromAgentEvent(event) : null,
+          timeline: recoveryTimeline ? [recoveryTimeline] : []
+        }, {
+          projectId: owner?.projectId || row.projectId || '',
+          projectName: owner?.projectName || row.projectName || ''
+        });
       }
       const conversationEvents = eventsByConversation.get(ownerConversationId) || [];
       conversationEvents.push(event);
@@ -6412,6 +6713,34 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         };
 
         for (const event of messageEvents) {
+          const structuredUserAction = normalizeAgentUserAction(event.userAction || event.authorization || event.permissionRequest);
+          if (structuredUserAction) {
+            const pendingStatus = statusFromAgentUserAction(structuredUserAction);
+            const promptText = structuredUserAction.description
+              || structuredUserAction.action
+              || permissionPromptTextFromEvent(event, nextItem.permissionPromptText || nextItem.text)
+              || (structuredUserAction.type === 'authorization'
+                ? '请完成外部授权后继续当前任务。'
+                : 'EcoreX 请求继续当前本地操作，请确认是否允许。');
+            nextItem = {
+              ...nextItem,
+              text: '',
+              userAction: structuredUserAction,
+              authorization: structuredUserAction.type === 'authorization' ? structuredUserAction : undefined,
+              permissionRequest: structuredUserAction.type === 'permission' ? structuredUserAction : undefined,
+              permissionPromptText: promptText,
+              streaming: false,
+              status: pendingStatus,
+              backendStatus: pendingStatus,
+              error: false,
+              meta: '',
+              recovery: null,
+              permissionDecision: null,
+              silentRecovery: false
+            };
+            continue;
+          }
+
           const immediatePendingStatus = immediatePendingUserActionStatus(event, [
             nextItem.text,
             nextItem.permissionPromptText
@@ -6458,7 +6787,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
 
           if (event.kind === 'result') {
             const combinedText = [nextItem.text, event.text].filter(Boolean).join('\n');
-            const finalArtifacts = finalArtifactsFromText(combinedText);
+            const finalArtifacts = mergeArtifactReferences([
+              ...artifactReferencesFromEvent(event),
+              ...finalArtifactsFromText(combinedText)
+            ]);
             let pendingStatus = terminalPendingUserActionStatus(event, combinedText);
             const permissionContinuationHasAnswer = nextItem.permissionDecision?.status === 'running'
               && cleanAssistantOutputText(nextItem.text || '').trim();
@@ -6500,6 +6832,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
                 error: false,
                 meta: '',
                 recovery: null,
+                permissionDecision: null,
                 silentRecovery: false
               };
               continue;
@@ -6523,9 +6856,27 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           }
 
           if (event.kind === 'done') {
+            const pendingStructuredAction = normalizeAgentUserAction(nextItem.userAction || nextItem.authorization || nextItem.permissionRequest);
+            if (pendingStructuredAction && !nextItem.permissionDecision?.status) {
+              const pendingStatus = statusFromAgentUserAction(pendingStructuredAction);
+              nextItem = {
+                ...nextItem,
+                streaming: false,
+                status: pendingStatus,
+                backendStatus: pendingStatus,
+                error: false,
+                recovery: null,
+                permissionDecision: null,
+                silentRecovery: false
+              };
+              continue;
+            }
             const terminalText = isGenericTerminalText(event.text) ? '' : cleanResultOutputText(event.text);
             const combinedText = [nextItem.text, terminalText].filter(Boolean).join('\n');
-            const finalArtifacts = finalArtifactsFromText(combinedText);
+            const finalArtifacts = mergeArtifactReferences([
+              ...artifactReferencesFromEvent(event),
+              ...finalArtifactsFromText(combinedText)
+            ]);
             const mergedArtifacts = finalArtifacts.length
               ? mergeArtifactReferences([...(nextItem.finalArtifacts || []), ...finalArtifacts])
               : nextItem.finalArtifacts;
@@ -6578,6 +6929,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
                 text: cleanAssistantOutputText(nextItem.text) || terminalText || cleanResultOutputText(event.text),
                 finalArtifacts: mergedArtifacts,
                 recovery: null,
+                permissionDecision: null,
                 silentRecovery: false
               };
               continue;
@@ -6638,7 +6990,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
               ? ''
               : cleanResultOutputText(terminalEvent.text);
           if (terminalText.trim()) {
-            const finalArtifacts = finalArtifactsFromText(terminalText);
+            const finalArtifacts = mergeArtifactReferences([
+              ...artifactReferencesFromEvent(terminalEvent),
+              ...finalArtifactsFromText(terminalText)
+            ]);
             const pendingStatus = terminalPendingUserActionStatus(terminalEvent, terminalText);
             nextItem = {
               ...nextItem,
@@ -6804,19 +7159,20 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           text: '',
           time: formatAgentEventTime(row),
           streaming: active,
-          status: active ? (row.status === 'error' ? 'error' : 'thinking') : (recovery.state === 'retryable' ? 'error' : 'cancelled'),
+          status: active ? (row.status === 'error' ? 'error' : 'thinking') : 'interrupted',
+          error: active && row.status === 'error',
           sessionId,
           claudeSessionId: row.claudeSessionId || '',
           projectId: ownerProjectId || '',
           projectName: ownerProjectName || '',
           silentRecovery: !active,
           originalPrompt: row.prompt || row.promptPreview || '',
-          recovery: active ? null : recovery,
+          recovery: null,
           timeline: [[
             `恢复运行会话 ${index + 1}`,
             formatSessionStatus(row.status || row.state || 'running'),
             formatAgentEventTime(row),
-            recovery.tone || (row.status === 'error' ? 'danger' : 'running')
+            active ? (recovery.tone || (row.status === 'error' ? 'danger' : 'running')) : 'pending'
           ]]
         }, { projectId: ownerProjectId, projectName: ownerProjectName });
       } else if (sessionId && messageId) {
@@ -6865,7 +7221,8 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
                 ...message,
                 streaming: false,
                 status: message.status === 'complete' ? 'interrupted' : (message.status || 'interrupted'),
-                recovery: message.recovery || recovery,
+                recovery: null,
+                error: false,
                 originalPrompt: message.originalPrompt || row.prompt || row.promptPreview || ''
               }
             : message
@@ -7254,6 +7611,39 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     if (hasRunningSessionForConversation(activeConversationId)) return;
     const readyItems = pendingFollowUpsRef.current.filter((item) => item.conversationId === currentConversationId);
     if (!readyItems.length) return;
+    const pendingMessage = latestPendingUserActionMessage(currentConversationId);
+    if (pendingMessage && readyItems.length === 1) {
+      const item = readyItems[0];
+      const cleanPrompt = clampComposerPromptText(item.prompt || '').trim();
+      const hasPayload = Boolean((item.attachments || []).length || (item.references || []).length);
+      if (isContinuationPrompt(cleanPrompt) && !hasPayload) {
+        pendingFollowUpsRef.current = pendingFollowUpsRef.current.filter((entry) => entry.id !== item.id);
+        updateMessagesForConversation(currentConversationId, (messages) => messages.map((message) => (
+          message.id === item.id ? { ...message, status: 'read', queuedNudgeAt: Date.now() } : message
+        )));
+        await continueFromPermission(pendingMessage, {
+          action: 'resume',
+          label: /扫码|扫完/i.test(cleanPrompt) ? '扫码已完成' : /登录/i.test(cleanPrompt) ? '登录已完成' : /授权/i.test(cleanPrompt) ? '授权已完成' : '继续处理'
+        });
+        return;
+      }
+    }
+    if (pendingMessage) {
+      const readyIds = new Set(readyItems.map((item) => item.id));
+      updateMessagesForConversation(currentConversationId, (messages) => messages.map((message) => (
+        readyIds.has(message.id)
+          ? { ...message, status: 'queued', queuedNudgeAt: Date.now(), guideQueuedAt: Date.now() }
+          : message
+      )));
+      updateTimelineForConversation(currentConversationId, (items) => appendTimeline(items, [
+        '已加入引导队列',
+        '等待当前授权或确认完成后自动继续',
+        formatAgentEventTime(),
+        'pending',
+        'status'
+      ]));
+      return;
+    }
     const readyIds = new Set(readyItems.map((item) => item.id));
     pendingFollowUpsRef.current = pendingFollowUpsRef.current.filter((item) => (
       item.conversationId !== currentConversationId || !readyIds.has(item.id)
@@ -7308,16 +7698,37 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       });
       return;
     }
+    const alreadyQueued = pendingFollowUpsRef.current.some((item) => item.id === message.id);
+    if (!alreadyQueued) {
+      enqueueFollowUpPrompt(cleanPrompt, serializeAgentAttachments(message.attachments || []), {
+        userId: message.id,
+        existingMessage: true,
+        conversationId: ownerConversationId,
+        claudeSessionId: message.claudeSessionId || conversationSessionIdRef.current || ownerConversationId,
+        references: message.references || [],
+        time: message.time
+      });
+    }
+    updateMessagesForConversation(ownerConversationId, (items) => items.map((item) => (
+      item.id === message.id ? { ...item, queuedNudgeAt: Date.now(), guideQueuedAt: Date.now() } : item
+    )));
+    if (pendingMessage) {
+      updateTimelineForConversation(ownerConversationId, (items) => appendTimeline(items, [
+        '已加入引导队列',
+        '等待当前授权或确认完成后自动继续',
+        formatAgentEventTime(),
+        'pending',
+        'status'
+      ]));
+      return;
+    }
     if (!hasRunningSessionForConversation(ownerConversationId)) {
       await flushQueuedFollowUps(ownerConversationId);
       return;
     }
-    updateMessagesForConversation(ownerConversationId, (items) => items.map((item) => (
-      item.id === message.id ? { ...item, queuedNudgeAt: Date.now() } : item
-    )));
     updateTimelineForConversation(ownerConversationId, (items) => appendTimeline(items, [
-      '已标记追加消息',
-      '当前任务结束后优先接力',
+      '已加入引导队列',
+      '当前任务结束后自动合并上下文',
       formatAgentEventTime(),
       'pending',
       'status'
@@ -7344,8 +7755,27 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     const cleanAttachments = filterAttachmentsForProjectScope(serializeAgentAttachments(attachmentList), activeProject?.id || '');
     const cleanReferences = sanitizeComposerReferences(Array.isArray(queuedReferences) ? queuedReferences : composerReferences);
     if (!cleanPrompt && !cleanAttachments.length && !cleanReferences.length) return { ok: false, reason: 'empty' };
+    const pendingMessageForPrompt = !forceRun ? latestPendingUserActionMessage(activeConversationId) : null;
+    if (pendingMessageForPrompt && !fromQueue && !forceRun) {
+      if (
+        isContinuationPrompt(cleanPrompt)
+        && !cleanAttachments.length
+        && !cleanReferences.length
+      ) {
+        setPrompt('');
+        setComposerReferences([]);
+        clearAttachments({ revoke: false });
+        await continueFromPermission(pendingMessageForPrompt, {
+          action: 'resume',
+          label: /扫码|扫完/i.test(cleanPrompt) ? '扫码已完成' : /登录/i.test(cleanPrompt) ? '登录已完成' : /授权/i.test(cleanPrompt) ? '授权已完成' : '已完成'
+        });
+        return { ok: true, reason: 'continued' };
+      }
+      enqueueFollowUpPrompt(cleanPrompt, cleanAttachments, { references: cleanReferences });
+      return { ok: false, reason: 'queued' };
+    }
     if (hasRunningSessionForConversation(activeConversationId) && !forceRun) {
-      const pendingMessage = latestPendingUserActionMessage(activeConversationId);
+      const pendingMessage = pendingMessageForPrompt || latestPendingUserActionMessage(activeConversationId);
       if (
         pendingMessage
         && isContinuationPrompt(cleanPrompt)
@@ -7361,7 +7791,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         });
         return { ok: true, reason: 'continued' };
       }
-      enqueueFollowUpPrompt(cleanPrompt, cleanAttachments);
+      enqueueFollowUpPrompt(cleanPrompt, cleanAttachments, { references: cleanReferences });
       return { ok: false, reason: 'queued' };
     }
     const attachmentSection = attachmentPromptSection(cleanAttachments);
@@ -7753,10 +8183,78 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     return true;
   }
 
+  async function resolvePermissionDenial(message = {}, decision = permissionActionFromValue('deny')) {
+    const ownerConversationId = String(message.conversationId || conversationIdRef.current || '');
+    const now = formatAgentEventTime();
+    const request = permissionRequestFromMessage(message, message.timeline || timeline, { includeResolved: true });
+    const isAuthorization = request?.type === 'authorization';
+    const blockedSessionId = String(message.sessionId || message.agentSessionId || '').trim();
+    if (blockedSessionId) {
+      finishSession(blockedSessionId);
+      if (window.ecorex?.stopPrompt) {
+        window.ecorex.stopPrompt(blockedSessionId).catch((error) => {
+          if (isUnauthorizedError(error)) onUnauthorized?.();
+        });
+      }
+    }
+    updateMessagesForConversation(ownerConversationId, (items) =>
+      items.map((item) =>
+        item.id === message.id
+          ? {
+              ...item,
+              streaming: false,
+              status: 'complete',
+              userAction: null,
+              authorization: null,
+              permissionRequest: null,
+              permissionPromptText: item.permissionPromptText || item.text || '',
+              error: false,
+              recovery: null,
+              permissionDecision: {
+                action: decision.action,
+                label: decision.label,
+                status: 'denied',
+                at: Date.now()
+              },
+              text: cleanAssistantOutputText(item.text || '').trim()
+                ? item.text
+                : (isAuthorization
+                    ? '已停止等待授权。你可以稍后重新发起任务，或改用无需授权的方案。'
+                    : '已取消本次本地操作。EcoreX 未执行该操作。'),
+              silentRecovery: false,
+              showTrace: true,
+              timeline: appendTimeline(item.timeline || [], [
+                isAuthorization ? '授权已取消' : '权限已拒绝',
+                decision.label,
+                now,
+                'warn',
+                'status'
+              ])
+            }
+          : item
+      )
+    );
+    updateTimelineForConversation(ownerConversationId, (items) => appendTimeline(items, [
+      isAuthorization ? '授权已取消' : '权限已拒绝',
+      decision.label,
+      now,
+      'warn',
+      'status'
+    ]));
+    permissionContinuationLocksRef.current.delete(message.id);
+    scheduleStatusTimer(() => flushQueuedFollowUps(ownerConversationId), 80);
+  }
+
   async function continueFromPermission(message = {}, actionValue = 'allow') {
-    if (!message?.id || permissionContinuationLocksRef.current.has(message.id)) return;
-    permissionContinuationLocksRef.current.add(message.id);
+    if (!message?.id) return;
     const decision = permissionActionFromValue(actionValue);
+    const existingLock = permissionContinuationLocksRef.current.get(message.id);
+    if (existingLock && decision.action !== 'deny' && Date.now() - existingLock.at < 1200) return;
+    permissionContinuationLocksRef.current.set(message.id, { action: decision.action, at: Date.now() });
+    if (decision.action === 'deny') {
+      await resolvePermissionDenial(message, decision);
+      return;
+    }
     const requestedSessionId = createLocalId('session');
     const continuationContext = permissionContinuationContextFromMessage(message);
     const continuationPrompt = [
@@ -7766,11 +8264,11 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     const now = formatAgentEventTime();
     const accessMode = decision.accessMode || normalizeAccessMode(permissionMode);
     const requestedPermissionMode = permissionModeFromAccessMode(accessMode);
-    const continuationMessageId = createLocalId('assistant-permission');
+    const continuationMessageId = message.id;
     const continuationLabel = decision.action === 'resume'
-      ? '用户已完成授权，接力执行'
+      ? '用户已完成授权，引导执行'
       : decision.action === 'allow'
-        ? '权限已确认，接力执行'
+        ? '权限已确认，引导执行'
         : decision.action === 'plan'
           ? '权限选择为只做计划'
           : '权限已拒绝';
@@ -7796,19 +8294,23 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         item.id === message.id
           ? {
               ...item,
-              streaming: false,
+              streaming: true,
               status: 'relaying',
               text: '',
+              userAction: null,
+              authorization: null,
+              permissionRequest: null,
               permissionPromptText: item.permissionPromptText || item.text || '',
               error: false,
+              recovery: null,
               permissionDecision: {
                 action: decision.action,
                 label: decision.label,
                 status: 'running',
                 at: Date.now()
               },
-              silentRecovery: true,
-              showTrace: false,
+              silentRecovery: false,
+              showTrace: true,
               timeline: appendTimeline(item.timeline || [], [
                 continuationLabel,
                 decision.label,
@@ -8067,6 +8569,11 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
 
   async function openUserAttachment(attachment = {}) {
     if (!attachment.path && !attachment.filePath) return;
+    const artifact = artifactFromAttachment(attachment, 0);
+    if (artifact) {
+      setFocusArtifact({ ...artifact, source: 'selected-attachment' });
+      return;
+    }
     const result = await openAttachmentFileWithBridge(attachment);
     if (result?.unauthorized) {
       onUnauthorized?.();
@@ -8532,6 +9039,9 @@ function ChatMessage({
   const permissionPromptRequest = message.role === 'assistant'
     ? permissionRequestFromMessage(message, timeline, { includeResolved: true })
     : null;
+  const authorizationPromptRequest = permissionPromptRequest?.type === 'authorization'
+    ? permissionPromptRequest
+    : null;
   const rawText = message.role === 'assistant' && permissionPromptRequest
     ? ''
     : message.role === 'assistant'
@@ -8544,6 +9054,7 @@ function ChatMessage({
     || message.ledger?.length
     || message.attachmentIngest?.length
     || message.rich
+    || authorizationPromptRequest
   );
   const hiddenArtifactIds = useMemo(() => new Set(message.hiddenArtifactIds || []), [message.hiddenArtifactIds]);
   const artifactContext = useMemo(() => ({
@@ -8588,6 +9099,11 @@ function ChatMessage({
       ? message.attachments.map((attachment) => attachment.ingest).filter(Boolean)
       : []
   ), [message.attachments]);
+  const shouldCollapse = message.role === 'assistant' && rawText.length > ASSISTANT_COLLAPSE_CHARS;
+  const displayText = shouldCollapse && !expanded
+    ? `${rawText.slice(0, ASSISTANT_COLLAPSE_CHARS)}...`
+    : rawText;
+  const displayParts = useMemo(() => splitAssistantDisplayMessages(displayText), [displayText]);
   if (message.role === 'user') {
     const queued = String(message.status || '').toLowerCase() === 'queued';
     return (
@@ -8602,7 +9118,7 @@ function ChatMessage({
           {queued && (
             <button className="queued-message-action" type="button" onClick={() => onActivateQueued?.(message)}>
               <CornerDownRight size={13} />
-              {message.queuedNudgeAt ? '已标记接力' : '接力这条'}
+              {message.queuedNudgeAt ? '已加入引导' : '作为引导'}
             </button>
           )}
           <MessageStatus status={message.status || 'read'} time={message.time} compact />
@@ -8612,52 +9128,90 @@ function ChatMessage({
     );
   }
 
-  if (permissionPromptRequest && !hasVisibleAssistantContent) return null;
   if (message.silentRecovery && !hasVisibleAssistantContent) return null;
 
-  const shouldCollapse = message.role === 'assistant' && rawText.length > ASSISTANT_COLLAPSE_CHARS;
-  const displayText = shouldCollapse && !expanded
-    ? `${rawText.slice(0, ASSISTANT_COLLAPSE_CHARS)}...`
-    : rawText;
+  const assistantStatus = message.status || (message.streaming ? 'thinking' : 'complete');
+  const renderAssistantText = (textValue, className = 'assistant-text') => (
+    textValue.trim() ? (
+      <RichMessageText
+        text={textValue}
+        className={className}
+        imageArtifacts={artifactReferences}
+        role="assistant"
+      />
+    ) : null
+  );
+  const renderAssistantExtras = () => (
+    <>
+      {shouldCollapse && (
+        <button className="text-expand" type="button" onClick={() => setExpanded((value) => !value)}>
+          {expanded ? '收起长回复' : `展开全文（${rawText.length.toLocaleString('zh-CN')} 字符）`}
+        </button>
+      )}
+      <ArtifactPreviewShelf
+        artifacts={artifactReferences}
+        createdTime={message.time}
+        onOpenArtifact={onOpenArtifact}
+        onOpenArtifactLocal={onOpenArtifactLocal}
+        onHideArtifact={(artifact) => onHideArtifact?.(message.id, artifact.id)}
+      />
+      <AttachmentIngestionSummary items={message.attachmentIngest || []} />
+      <ToolResultInline items={message.ledger || []} />
+      <ToolLedgerDisclosure items={message.ledger || []} />
+      <RecoveryStateNotice recovery={message.recovery} status={message.status} onRetry={() => onRetry?.(message)} />
+      {message.rich && <CampaignPerformanceReport />}
+      {message.streaming && <ThinkingIndicator phase={message.status} compact={hasVisibleAssistantContent} />}
+      {showTrace && <InlineAgentTrace timeline={timeline} sourceMap={sourceMap} priority="low" />}
+      {!message.streaming && message.error && !message.recovery && !message.silentRecovery && (
+        <button className="message-retry-link" type="button" onClick={() => onRetry?.(message)}>
+          <Loader2 size={15} />
+          重试
+        </button>
+      )}
+    </>
+  );
+
+  if (displayParts.length > 1) {
+    return (
+      <div className="assistant-message-thread" id={`message-${message.id}`}>
+        {displayParts.map((part, index) => {
+          const isLast = index === displayParts.length - 1;
+          const textClassName = shouldCollapse && !expanded ? 'assistant-text collapsed' : 'assistant-text';
+          return (
+            <div
+              className={`assistant-row assistant-row-split ${index > 0 ? 'continued' : ''} ${message.error && isLast ? 'error' : ''}`}
+              key={`${message.id}-row-${index}`}
+            >
+              {index === 0 ? <Logo compact /> : <span className="assistant-row-spacer" aria-hidden="true" />}
+              <div className={`assistant-card assistant-card-split ${message.streaming && isLast ? 'live' : ''}`}>
+                {(index === 0 || isLast) && (
+                  <div className="assistant-head">
+                    <span className="time">{index === 0 ? message.time : ''}</span>
+                    {isLast && <MessageStatus status={assistantStatus} compact />}
+                  </div>
+                )}
+                {index === 0 && authorizationPromptRequest && <AuthorizationChatContent request={authorizationPromptRequest} />}
+                {renderAssistantText(part, textClassName)}
+                {isLast && renderAssistantExtras()}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
   return (
     <div className={`assistant-row ${message.error ? 'error' : ''}`} id={`message-${message.id}`}>
       <Logo compact />
       <div className="assistant-card">
         <div className="assistant-head">
           <span className="time">{message.time}</span>
-          <MessageStatus status={message.status || (message.streaming ? 'thinking' : 'complete')} compact />
+          <MessageStatus status={assistantStatus} compact />
         </div>
-        <RichMessageText
-          text={displayText}
-          className={shouldCollapse && !expanded ? 'assistant-text collapsed' : 'assistant-text'}
-          imageArtifacts={artifactReferences}
-          role="assistant"
-        />
-        {shouldCollapse && (
-          <button className="text-expand" type="button" onClick={() => setExpanded((value) => !value)}>
-            {expanded ? '收起长回复' : `展开全文（${rawText.length.toLocaleString('zh-CN')} 字符）`}
-          </button>
-        )}
-        <ArtifactPreviewShelf
-          artifacts={artifactReferences}
-          createdTime={message.time}
-          onOpenArtifact={onOpenArtifact}
-          onOpenArtifactLocal={onOpenArtifactLocal}
-          onHideArtifact={(artifact) => onHideArtifact?.(message.id, artifact.id)}
-        />
-        <AttachmentIngestionSummary items={message.attachmentIngest || []} />
-        <ToolResultInline items={message.ledger || []} />
-        <ToolLedgerDisclosure items={message.ledger || []} />
-        <RecoveryStateNotice recovery={message.recovery} status={message.status} onRetry={() => onRetry?.(message)} />
-        {message.rich && <CampaignPerformanceReport />}
-        {message.streaming && <ThinkingIndicator phase={message.status} compact={hasVisibleAssistantContent} />}
-        {showTrace && <InlineAgentTrace timeline={timeline} sourceMap={sourceMap} priority="low" />}
-        {!message.streaming && message.error && (
-          <button className="message-retry-link" type="button" onClick={() => onRetry?.(message)}>
-            <Loader2 size={15} />
-            重试
-          </button>
-        )}
+        {authorizationPromptRequest && <AuthorizationChatContent request={authorizationPromptRequest} />}
+        {renderAssistantText(displayText, shouldCollapse && !expanded ? 'assistant-text collapsed' : 'assistant-text')}
+        {renderAssistantExtras()}
       </div>
     </div>
   );
@@ -8761,11 +9315,14 @@ function ToolLedgerDisclosure({ items = [] }) {
 
 function RecoveryStateNotice({ recovery, status, onRetry }) {
   if (!recovery?.state) return null;
-  const completed = ['complete', 'completed'].includes(String(status || '').toLowerCase());
-  const active = ['thinking', 'generating', 'sending'].includes(String(status || '').toLowerCase());
+  const statusText = String(status || '').toLowerCase();
+  const completed = ['complete', 'completed'].includes(statusText);
+  const active = ['thinking', 'generating', 'sending', 'relaying'].includes(statusText);
+  const waiting = ['authorization-incomplete', 'user-action-required', 'interrupted'].includes(statusText);
+  if (waiting || ['recoverable', 'retryable', 'stopped'].includes(recovery.state) || recovery.auto || recovery.mode === 'auto-reattach') return null;
   if (completed && recovery.state === 'recoverable') return null;
   if (active && recovery.state === 'recoverable') return null;
-  const canRetry = ['recoverable', 'retryable'].includes(recovery.state) || ['error', 'timeout', 'interrupted'].includes(String(status || '').toLowerCase());
+  const canRetry = ['retryable'].includes(recovery.state) || ['error', 'timeout'].includes(statusText);
   return (
     <div className={`message-recovery-state ${recovery.tone || 'running'}`}>
       <Clock3 size={15} />
@@ -9178,14 +9735,14 @@ function AttachmentPreviewList({ attachments = [], onRemove, onOpen, compact = f
         const progress = Math.max(0, Math.min(100, Math.round(Number(attachment.progress) || 0)));
         const statusText = attachment.status === 'uploading'
           ? `上传中... ${progress}%`
-          : clickable ? '单击打开' : '已添加';
+          : clickable ? '单击预览' : '已添加';
         return (
           <div
             className={`attachment-chip ${kindClass} ${clickable ? 'clickable' : ''}`}
             key={attachment.id || attachment.name}
             role={clickable ? 'button' : undefined}
             tabIndex={clickable ? 0 : undefined}
-            title={clickable ? '用本机默认应用打开' : attachment.name}
+            title={clickable ? '在 EcoreX 中预览' : attachment.name}
             onClick={clickable ? () => onOpen(attachment) : undefined}
             onKeyDown={clickable ? (event) => {
               if (event.key === 'Enter' || event.key === ' ') {
@@ -9412,7 +9969,7 @@ function MessageStatus({ status = 'complete', time, compact = false }) {
 }
 
 function ThinkingIndicator({ phase = 'thinking', compact = false }) {
-  const label = phase === 'generating' ? 'AI 正在生成' : phase === 'relaying' ? '接力执行中' : 'AI 思考中';
+  const label = phase === 'generating' ? 'AI 正在生成' : phase === 'relaying' ? '引导执行中' : 'AI 思考中';
   return (
     <div className={`thinking-indicator ${phase === 'generating' ? 'generating' : 'thinking'} ${compact ? 'compact' : ''}`}>
       <span className="thinking-orbit"><i /><i /><i /></span>
@@ -11087,8 +11644,54 @@ function summarizePermissionRequestText(value = '') {
   return text.length > 180 ? `${text.slice(0, 180)}...` : text;
 }
 
+function authorizationProviderFromText(value = '') {
+  return /open\.feishu\.cn|feishu|lark|larksuite|execution[_\s-]?bridge|飞书/i.test(String(value || ''))
+    ? '飞书'
+    : '外部';
+}
+
+function authorizationRequestFromText(value = '') {
+  const candidate = cleanAssistantOutputText(value || '');
+  if (!candidate) return null;
+  const url = cleanChatUrlToken(
+    candidate.match(/https?:\/\/open\.feishu\.cn\/page\/execution[_\s-]?bridge\??[^\s"'<>，。)\]}]*/i)?.[0]
+    || candidate.match(/https?:\/\/[^\s"'<>，。)\]}]*(?:oauth|authorize|device|verification|auth)[^\s"'<>，。)\]}]*/i)?.[0]
+    || ''
+  );
+  const userCode =
+    candidate.match(/\b(?:user[_ -]?code|verification[_ -]?code)\s*[:=：]\s*([A-Z0-9][A-Z0-9_-]{3,80})/i)?.[1]
+    || candidate.match(/(?:验证码|授权码)\s*[:=：]\s*([A-Z0-9][A-Z0-9_-]{3,80})/i)?.[1]
+    || '';
+  const hasAuthSignal = /(open\.feishu\.cn|execution[_\s-]?bridge|authorization|authorize|oauth|verification|device[_\s-]?code|授权|登录|扫码|二维码|完成后)/i.test(candidate);
+  if (!hasAuthSignal || (!url && !userCode)) return null;
+  const safeUrl = safeChatExternalUrl(url) ? url : '';
+  const provider = authorizationProviderFromText(candidate);
+  return {
+    type: 'authorization',
+    provider,
+    status: 'waiting',
+    title: `等待${provider}授权`,
+    description: `请打开链接或扫码完成${provider}授权；完成后点击「已完成，继续」，EcoreX 会在当前会话继续执行。`,
+    action: safeUrl ? `打开${provider}授权链接` : `${provider}授权`,
+    url: safeUrl,
+    qrText: safeUrl || userCode,
+    userCode
+  };
+}
+
 function permissionRequestFromMessage(message = {}, timeline = [], options = {}) {
   if (message.role !== 'assistant') return null;
+  const structuredAction = normalizeAgentUserAction(message.userAction || message.authorization || message.permissionRequest);
+  if (structuredAction && !message.permissionDecision?.status) {
+    return {
+      ...structuredAction,
+      title: structuredAction.title || (structuredAction.type === 'authorization' ? '等待外部授权' : '需要确认本地操作'),
+      description: structuredAction.description || (structuredAction.type === 'authorization'
+        ? '请扫码或打开链接完成授权；完成后 EcoreX 会在当前会话继续执行。'
+        : '请选择是否允许，EcoreX 会在当前会话继续执行，不会新开会话。'),
+      action: structuredAction.action || (structuredAction.type === 'authorization' ? '打开授权链接' : '确认本地操作')
+    };
+  }
   if (!options.includeResolved && message.permissionDecision?.status) return null;
   const text = cleanAssistantOutputText(message.text || '');
   const promptText = cleanAssistantOutputText(message.permissionPromptText || '');
@@ -11099,6 +11702,8 @@ function permissionRequestFromMessage(message = {}, timeline = [], options = {})
   const isPendingUserActionMessage = messageStatus === 'authorization-incomplete' || messageStatus === 'user-action-required';
   if (!isPendingUserActionMessage && /^(complete|completed|done|success|succeeded|已完成)$/.test(messageStatus)) return null;
   const looksLikeExternalHandoff = /(open\.feishu\.cn|execution[_\s-]?bridge|authorization|authorize|授权|登录|扫码|浏览器|browser|完成后|告诉我|tell me done|return here)/i.test(candidate);
+  const authorizationRequest = authorizationRequestFromText(candidate);
+  if (authorizationRequest && (isPendingUserActionMessage || looksLikeExternalHandoff)) return authorizationRequest;
   const hasPermissionPrompt = /(是否|要不要|请确认|允许|授权|等待确认|确认后|继续执行|可以执行|approve|allow|confirm|do you want to proceed|proceed with|permission\s+(required|denied|policy|approval)|requires?\s+permission|need(?:s|ed)?\s+permission|blocked\s+by\s+.*permission)/i.test(candidate);
   const shouldShowUserActionCard = isPendingUserActionMessage && looksLikeExternalHandoff;
   if (!shouldShowUserActionCard && !isHighRiskPermissionText(candidate)) return null;
@@ -11143,25 +11748,101 @@ function InlineAgentTrace({ timeline = [], sourceMap, priority = 'normal' }) {
   );
 }
 
-function InlinePermissionRequest({ request, onReply, className = '' }) {
-  if (!request) return null;
-  const options = [
-    ['允许一次', '允许一次，继续执行上一轮请求的本地操作。'],
-    ['拒绝', '拒绝本次本地操作，请给出无需该操作的替代方案。'],
-    ['只做计划', '先不要执行本地操作，请改为输出只读计划和风险说明。']
-  ];
+function AuthorizationChatContent({ request }) {
+  const safeUrl = safeChatExternalUrl(request?.url || '');
+  const qrValue = String(request?.qrText || request?.url || request?.userCode || request?.deviceCode || '').trim();
+  const [qrDataUrl, setQrDataUrl] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    setQrDataUrl('');
+    if (!request || request.type !== 'authorization' || !qrValue) return () => {
+      cancelled = true;
+    };
+    QRCode.toDataURL(qrValue, {
+      width: 152,
+      margin: 1,
+      color: {
+        dark: '#0b1118',
+        light: '#ffffff'
+      }
+    }).then((url) => {
+      if (!cancelled) setQrDataUrl(url);
+    }).catch(() => {
+      if (!cancelled) setQrDataUrl('');
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [request?.type, qrValue]);
+
+  if (!request || request.type !== 'authorization' || (!safeUrl && !qrValue)) return null;
+  const providerLabel = request.provider || '外部';
+  const fallbackCode = request.userCode || request.deviceCode || '';
   return (
-    <div className={`inline-permission-request ${className}`.trim()}>
+    <div className="chat-authorization-message" data-testid="authorization-chat-message">
+      {qrDataUrl ? (
+        <img src={qrDataUrl} alt={`${providerLabel}授权二维码`} />
+      ) : (
+        <span className="chat-authorization-placeholder">二维码生成中</span>
+      )}
+      <div>
+        <strong>扫码或打开链接完成{providerLabel}授权</strong>
+        <span>完成后点击输入框上方的「已完成，继续」，EcoreX 会在当前会话继续执行。</span>
+        {safeUrl && (
+          <a
+            href={safeUrl}
+            onClick={(event) => {
+              event.preventDefault();
+              openExternalUrlWithBridge(safeUrl);
+            }}
+          >
+            {safeUrl}
+          </a>
+        )}
+        {fallbackCode && <code>{fallbackCode}</code>}
+      </div>
+    </div>
+  );
+}
+
+function InlinePermissionRequest({ request, onReply, className = '' }) {
+  const isAuthorization = request?.type === 'authorization';
+  if (!request) return null;
+  const providerLabel = request.provider || '外部';
+  const operationLabel = request.toolName || request.command || request.scope || request.domain || '';
+  const options = isAuthorization
+    ? [
+        { label: '已完成，继续', reply: { action: 'resume', label: `${providerLabel}授权已完成` }, primary: true },
+        { label: '只做计划', reply: '只做计划' },
+        { label: '无法授权', reply: '拒绝' }
+      ]
+    : [
+        { label: '允许一次', reply: '允许一次，继续执行上一轮请求的本地操作。', primary: true },
+        { label: '拒绝', reply: '拒绝本次本地操作，请给出无需该操作的替代方案。' },
+        { label: '只做计划', reply: '先不要执行本地操作，请改为输出只读计划和风险说明。' }
+      ];
+  return (
+    <div
+      className={`inline-permission-request ${isAuthorization ? 'authorization' : ''} ${className}`.trim()}
+      data-testid="permission-confirmation-card"
+    >
       <ShieldCheck size={18} />
       <div>
         <strong>{request.title}</strong>
+        {operationLabel && <span className="permission-confirmation-meta">{operationLabel}</span>}
         {request.action && <span className="permission-confirmation-action">{request.action}</span>}
         <span>{request.description}</span>
       </div>
       <div className="inline-permission-actions">
-        {options.map(([label, reply]) => (
-          <button key={label} type="button" onClick={() => onReply?.(reply)}>
-            {label}
+        {options.map((option) => (
+          <button
+            className={option.primary ? 'primary' : ''}
+            key={option.label}
+            type="button"
+            onClick={() => onReply?.(option.reply)}
+          >
+            {option.label}
           </button>
         ))}
       </div>
@@ -11176,7 +11857,7 @@ function ChatPermissionOverlay({ request, onReply }) {
       className="chat-permission-overlay"
       data-testid="permission-confirmation-card"
       role="group"
-      aria-label="Permission confirmation"
+      aria-label="本地操作确认"
     >
       <InlinePermissionRequest request={request} onReply={onReply} className="chat-permission-card" />
     </div>
