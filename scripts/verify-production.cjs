@@ -502,6 +502,8 @@ check('local desktop auth is first-run bound and encrypted', () => {
   assertMatches(main, /super_admin:[\s\S]*'xin:query'[\s\S]*admin:[\s\S]*'xin:query'[\s\S]*user:\s*\['profile:update',\s*'agent:operate'\]/, 'Xin Assistant CLI access must be limited to super administrators and administrators.');
   assertMatches(main, /handleSafe\('xin-agent:natural-query'[\s\S]*requiredPermission:\s*'xin:query'/, 'Xin Assistant natural-language CLI queries must require xin:query permission.');
   includesAll(main, ["'project detail'", "'task list'", "'user list'", "'sync state'", "'sync changes'"], 'Xin Assistant extended command whitelist');
+  includesAll(main, ['function xinAgentKeywordReportQueryFromText', "workflow: 'account-keyword-report'", 'runXinAgentKeywordReportWorkflow', 'Xin Agent keyword report workflow completed'], 'Xin Assistant keyword spend workflow');
+  assertMatches(main, /function runXinAgentQuery[\s\S]*Xin Agent query started[\s\S]*Xin Agent query completed/, 'Xin Assistant direct CLI calls must be logged without raw JSON payloads.');
 });
 
 check('agent session bindings are persisted and project isolated', () => {
@@ -1462,6 +1464,8 @@ check('chat state tree and critical front-end affordances', () => {
   assertMatches(app, /function publicRunningSessionPrompt[\s\S]*textLooksCorrupted\(clean\)[\s\S]*return fallback/, 'running session strip must hide corrupted or raw internal prompt previews.');
   assertMatches(app, /function publicRunningSessionTitle[\s\S]*textLooksCorrupted\(clean\)[\s\S]*return fallback/, 'running session strip must hide corrupted recovered titles.');
   assertMatches(app, /function splitAssistantDisplayMessages[\s\S]*assistant-message-thread[\s\S]*renderAssistantExtras/, 'long assistant output must render as separate visible message rows with status controls on the final row.');
+  assertMatches(app, /function looksLikeXinAgentNaturalQuery[\s\S]*hasSpendQuestion[\s\S]*hasSpendQuestion/, 'business spend questions must use the direct Xin Assistant query path instead of a generic agent run.');
+  includesAll(app, ['account_keyword_report', 'xinAgentWorkflowReportSummary', '匹配账户'], 'Xin Assistant keyword report rendering');
   includesAll(css, ['.assistant-message-thread', '.assistant-card-split', '.assistant-row-spacer'], 'split assistant message row styles');
   assertMatches(app, /const messageStates = \{[\s\S]*interrupted:[\s\S]*authorization-incomplete[\s\S]*user-action-required/, 'message status badges must not render recoverable failures as completed.');
   assertMatches(app, /trackSession\(requestedSessionId[\s\S]*prompt:\s*cleanPrompt \|\| '正在执行任务'/, 'running session strip must use the user task summary instead of the full internal agent prompt.');

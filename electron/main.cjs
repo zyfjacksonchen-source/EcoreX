@@ -7741,6 +7741,16 @@ async function runXinAgentQuery(payload = {}, authContext = null) {
   if (!invocation.command) {
     return xinAgentError('not-configured', 'xin-agent CLI location is not configured.');
   }
+  writeLog('info', 'Xin Agent query started', {
+    mode: invocation.mode,
+    command: query.command,
+    platform: query.platform || null,
+    xhsChannel: query.xhs_channel || null,
+    accountId: query.account_id || null,
+    projectId: query.project_id || null,
+    limit: query.limit || null,
+    offset: query.offset || null
+  });
   const runtimeEnv = isolatedAgentRuntimeEnv(authContext);
   if (invocation.mode === 'ssh') {
     for (const key of ['HOME', 'USERPROFILE', 'APPDATA', 'HOMEDRIVE', 'HOMEPATH', 'ProgramData', 'WINDIR', 'SystemRoot']) {
@@ -7755,6 +7765,14 @@ async function runXinAgentQuery(payload = {}, authContext = null) {
   });
   const parsed = parseXinAgentJsonStdout(output.stdout);
   if (!parsed) {
+    writeLog('warn', 'Xin Agent query returned non-JSON output', {
+      mode: invocation.mode,
+      command: query.command,
+      exitCode: output.code,
+      stdoutChars: String(output.stdout || '').length,
+      stderrChars: String(output.stderr || '').length,
+      truncated: Boolean(output.truncated)
+    });
     return xinAgentError('invalid-json', 'xin-agent CLI did not return JSON.', {
       meta: {
         mode: invocation.mode,
@@ -7764,6 +7782,19 @@ async function runXinAgentQuery(payload = {}, authContext = null) {
       }
     });
   }
+  const parsedRows = Array.isArray(parsed.data)
+    ? parsed.data.length
+    : parsed.data && typeof parsed.data === 'object'
+      ? Object.values(parsed.data).filter((value) => Array.isArray(value)).reduce((sum, value) => sum + value.length, 0)
+      : 0;
+  writeLog('info', 'Xin Agent query completed', {
+    mode: invocation.mode,
+    command: query.command,
+    ok: parsed.ok === true,
+    rows: parsedRows,
+    exitCode: output.code,
+    truncated: Boolean(output.truncated)
+  });
   return {
     ok: parsed.ok === true,
     data: parsed.data ?? null,
@@ -7785,6 +7816,162 @@ async function runXinAgentQuery(payload = {}, authContext = null) {
       offset: query.offset || null,
       exitCode: output.code,
       truncated: Boolean(output.truncated)
+    }
+  };
+}
+
+function xinAgentRowsFromResult(result = {}) {
+  if (Array.isArray(result.data)) return result.data;
+  if (!result.data || typeof result.data !== 'object') return [];
+  for (const key of ['items', 'rows', 'accounts', 'projects', 'reports', 'records', 'list', 'data']) {
+    if (Array.isArray(result.data[key])) return result.data[key];
+  }
+  return [];
+}
+
+function xinAgentTextIncludes(row = {}, keyword = '') {
+  const needle = String(keyword || '').trim().toLowerCase();
+  if (!needle) return false;
+  const fields = [
+    row.account_id,
+    row.accountId,
+    row.account_name,
+    row.accountName,
+    row.name,
+    row.company_name,
+    row.companyName,
+    row.project_name,
+    row.projectName
+  ];
+  return fields.some((value) => String(value || '').toLowerCase().includes(needle));
+}
+
+function uniqueXinAgentAccounts(accounts = []) {
+  const seen = new Set();
+  const result = [];
+  for (const account of accounts) {
+    const key = [
+      account.platform || '',
+      account.xhs_channel || account.xhsChannel || '',
+      account.account_id || account.accountId || account.id || ''
+    ].join(':');
+    if (!key.trim() || seen.has(key)) continue;
+    seen.add(key);
+    result.push(account);
+  }
+  return result;
+}
+
+async function runXinAgentKeywordReportWorkflow(query = {}, authContext = null) {
+  const keyword = String(query.keyword || '').trim();
+  const platform = query.platform === 'bili' ? 'bili' : 'xhs';
+  const channels = platform === 'xhs'
+    ? (query.xhs_channel ? [query.xhs_channel] : ['spotlight', 'chengfeng'])
+    : [undefined];
+  const errors = [];
+  const accountResultsByChannel = await Promise.all(channels.map(async (channel) => {
+    const accountResult = await runXinAgentQuery({
+      command: 'account list',
+      platform,
+      xhs_channel: channel,
+      limit: 500,
+      offset: 0
+    }, authContext);
+    if (accountResult.ok === false) {
+      return {
+        rows: [],
+        error: {
+          stage: 'account list',
+          platform,
+          xhs_channel: channel || null,
+          error: accountResult.error || null
+        }
+      };
+    }
+    return { rows: xinAgentRowsFromResult(accountResult), error: null };
+  }));
+  for (const item of accountResultsByChannel) {
+    if (item.error) errors.push(item.error);
+  }
+  const accountResults = accountResultsByChannel.flatMap((item) => item.rows);
+
+  const accounts = uniqueXinAgentAccounts(accountResults.filter((row) => xinAgentTextIncludes(row, keyword)));
+  const limitedAccounts = accounts.slice(0, Math.max(1, Math.min(20, normalizeXinAgentInteger(query.limit, 20))));
+  const reportResults = await Promise.all(limitedAccounts.map(async (account) => {
+    const accountId = String(account.account_id || account.accountId || account.id || '').trim();
+    if (!accountId) return { report: null, error: null };
+    const reportResult = await runXinAgentQuery({
+      command: 'report summary',
+      platform: account.platform || platform,
+      xhs_channel: account.xhs_channel || account.xhsChannel || query.xhs_channel || 'spotlight',
+      account_id: accountId,
+      start_date: query.start_date,
+      end_date: query.end_date,
+      limit: 500,
+      offset: 0
+    }, authContext);
+    if (reportResult.ok === false) {
+      return {
+        report: null,
+        error: {
+          stage: 'report summary',
+          account_id: accountId,
+          account_name: account.account_name || account.accountName || account.name || '',
+          error: reportResult.error || null
+        }
+      };
+    }
+    return {
+      report: {
+        account,
+        rows: xinAgentRowsFromResult(reportResult),
+        data: reportResult.data
+      },
+      error: null
+    };
+  }));
+  const reports = [];
+  for (const item of reportResults) {
+    if (item.error) errors.push(item.error);
+    if (item.report) reports.push(item.report);
+  }
+
+  writeLog('info', 'Xin Agent keyword report workflow completed', {
+    keyword,
+    platform,
+    channels,
+    matchedAccounts: accounts.length,
+    queriedAccounts: limitedAccounts.length,
+    reportGroups: reports.length,
+    errors: errors.length
+  });
+
+  return {
+    ok: true,
+    matched: true,
+    query,
+    data: {
+      workflow: 'account_keyword_report',
+      keyword,
+      platform,
+      xhs_channel: query.xhs_channel || null,
+      start_date: query.start_date,
+      end_date: query.end_date,
+      accounts,
+      queried_accounts: limitedAccounts,
+      reports,
+      errors
+    },
+    meta: {
+      workflow: 'account_keyword_report',
+      command: 'report summary',
+      platform,
+      keyword,
+      start_date: query.start_date,
+      end_date: query.end_date,
+      account_count: accounts.length,
+      report_count: reports.length,
+      error_count: errors.length
     }
   };
 }
@@ -7823,8 +8010,95 @@ function xinAgentLimitFromText(text = '') {
   return match ? Math.max(1, Math.min(500, Number.parseInt(match[1], 10) || 500)) : 500;
 }
 
+function xinAgentDateInShanghai(date = new Date()) {
+  try {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Shanghai',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    });
+    return formatter.format(date);
+  } catch {
+    return date.toISOString().slice(0, 10);
+  }
+}
+
+function xinAgentTodayDate() {
+  return xinAgentDateInShanghai(new Date());
+}
+
+function xinAgentNaturalDateRange(text = '') {
+  const explicit = xinAgentDatesFromText(text);
+  if (explicit.start_date) return explicit;
+  const source = String(text || '');
+  if (/(today|now|real[-\s]?time|\u4eca\u5929|\u4eca\u65e5|\u5b9e\u65f6|\u5f53\u524d)/i.test(source)) {
+    const today = xinAgentTodayDate();
+    return { start_date: today, end_date: today };
+  }
+  const yesterday = /(yesterday|\u6628\u5929|\u6628\u65e5)/i.test(source);
+  if (yesterday) {
+    const value = xinAgentDateInShanghai(new Date(Date.now() - 24 * 60 * 60 * 1000));
+    return { start_date: value, end_date: value };
+  }
+  return explicit;
+}
+
+function xinAgentKeywordFromText(text = '') {
+  const source = String(text || '').trim();
+  if (!source) return '';
+  const explicit = source.match(/(?:account|account_name|name|keyword|\u8d26\u53f7\u540d|\u8d26\u6237\u540d|\u4e3b\u4f53\u540d|\u5ba2\u6237|contains?|\u5305\u542b)\s*[:：=]?\s*["'“”「]?([^"'“”「」、,，。；;\s]{2,40})/i)?.[1];
+  if (explicit) return explicit.trim();
+  const quoted = source.match(/[“"「']([^”"」']{2,40})[”"」']/)?.[1];
+  if (quoted && !/(account|project|report|summary|\u8d26\u53f7|\u8d26\u6237|\u9879\u76ee|\u62a5\u8868|\u6d88\u8017|\u6570\u636e)/i.test(quoted)) {
+    return quoted.trim();
+  }
+  const cleaned = source
+    .replace(/xin[_ -]?agent|xhs|bili|account|project|report|summary|schema|list|detail|sync|changes|state/gi, ' ')
+    .replace(/\b(?:today|yesterday|now|real[-\s]?time|limit|offset)\b/gi, ' ')
+    .replace(/小红书|聚光|乘风|B站|哔哩|芯助手|投放|报表|数据|效果|实时|今日|今天|昨天|昨日|当前|消耗|花费|曝光|点击|转化|账户|账号|列表|清单|查询|查看|看下|查一下|查|帮我|请|多少|是多少|口径|汇总|相关|客户|主体|名称|的|一下/g, ' ')
+    .replace(/--[a-z0-9_-]+/gi, ' ')
+    .replace(/\d{4}-\d{2}-\d{2}/g, ' ')
+    .replace(/[，。；;,.!?！？:："'“”「」()[\]{}<>]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const candidates = cleaned
+    .split(/\s+/)
+    .map((item) => item.trim())
+    .filter((item) => item.length >= 2 && item.length <= 40 && !/^\d+$/.test(item));
+  return candidates.sort((a, b) => b.length - a.length)[0] || '';
+}
+
+function xinAgentKeywordReportQueryFromText(text = '') {
+  const source = String(text || '');
+  const hasMetricIntent = /(spend|cost|summary|report|\u6d88\u8017|\u82b1\u8d39|\u62a5\u8868|\u6295\u653e\u6570\u636e|\u6548\u679c|\u5b9e\u65f6)/i.test(source);
+  const hasDateIntent = /(today|yesterday|now|real[-\s]?time|\u4eca\u5929|\u4eca\u65e5|\u6628\u5929|\u6628\u65e5|\u5b9e\u65f6|\u5f53\u524d|\d{4}-\d{2}-\d{2})/i.test(source);
+  if (!hasMetricIntent || !hasDateIntent) return null;
+  const accountId = xinAgentAccountIdFromText(source);
+  if (accountId) return null;
+  const keyword = xinAgentKeywordFromText(source);
+  if (!keyword) return null;
+  const platform = /(b站|哔哩|bili)/i.test(source) ? 'bili' : 'xhs';
+  const xhsChannel = /(乘风|chengfeng)/i.test(source) ? 'chengfeng' : /(聚光|spotlight)/i.test(source) ? 'spotlight' : '';
+  const dates = xinAgentNaturalDateRange(source);
+  if (!dates.start_date || !dates.end_date) return null;
+  return {
+    workflow: 'account-keyword-report',
+    command: 'report summary',
+    keyword,
+    platform,
+    xhs_channel: platform === 'xhs' ? xhsChannel : undefined,
+    start_date: dates.start_date,
+    end_date: dates.end_date,
+    limit: xinAgentLimitFromText(source),
+    offset: normalizeXinAgentInteger(source.toLowerCase().match(/offset\D{0,8}(\d+)/i)?.[1], 0)
+  };
+}
+
 function xinAgentExtendedNaturalQuery(prompt = '') {
   const text = String(prompt || '');
+  const keywordReportQuery = xinAgentKeywordReportQueryFromText(text);
+  if (keywordReportQuery) return keywordReportQuery;
   const hasXinSource = /(xin[_ -]?agent|xhs|bili|\u82af\u52a9\u624b|\u5c0f\u7ea2\u4e66|\u805a\u5149|\u4e58\u98ce|B\u7ad9|\u6295\u653e|\u62a5\u8868)/i.test(text);
   const hasExplicitCommand = /(project\s*detail|task\s*list|user\s*list|sync\s*state|sync\s*changes|--project-id|--include-archived|--include-resigned|\u9879\u76ee\u8be6\u60c5|\u4efb\u52a1\u5217\u8868|\u4efb\u52a1\u6e05\u5355|\u7528\u6237\u5217\u8868|\u6210\u5458\u5217\u8868|\u540c\u6b65\u72b6\u6001|\u540c\u6b65\u53d8\u66f4|\u589e\u91cf)/i.test(text);
   if (!hasXinSource && !hasExplicitCommand) return null;
@@ -7861,7 +8135,7 @@ function xinAgentNaturalQueryFromText(text = '') {
   const lower = prompt.toLowerCase();
   const extendedQuery = xinAgentExtendedNaturalQuery(prompt);
   if (extendedQuery) return extendedQuery;
-  const relevant = /(芯助手|xin[_ -]?agent|小红书|聚光|乘风|xhs|b站|bili|账号列表|账户列表|项目列表|投放报表|投放数据|报表数据|account list|project list|report summary)/i.test(prompt);
+  const relevant = /(芯助手|xin[_ -]?agent|小红书|聚光|乘风|xhs|b站|bili|账号列表|账户列表|项目列表|投放报表|投放数据|报表数据|实时消耗|今日消耗|今天消耗|消耗数据|account list|project list|report summary)/i.test(prompt);
   if (!relevant) return null;
   let command = '';
   if (/(schema|字段|命令|支持什么|能力清单|数据结构)/i.test(prompt)) command = 'schema';
@@ -7893,6 +8167,9 @@ async function runXinAgentNaturalQuery(payload = {}, authContext = null) {
   const input = optionalObjectPayload(payload, 'xin agent natural query payload');
   const query = xinAgentNaturalQueryFromText(input.prompt || input.text || input.query || '');
   if (!query) return { ok: true, matched: false };
+  if (query.workflow === 'account-keyword-report') {
+    return runXinAgentKeywordReportWorkflow(query, authContext);
+  }
   const result = await runXinAgentQuery(query, authContext);
   return {
     ...result,

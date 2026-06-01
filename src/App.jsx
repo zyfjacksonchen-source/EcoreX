@@ -967,7 +967,8 @@ function looksLikeXinAgentNaturalQuery(value = '') {
   const text = String(value || '');
   const hasXinSource = /(xin[_ -]?agent|xhs|bili|芯助手|小红书|聚光|乘风|B站|投放|报表)/i.test(text);
   const hasExplicitCommand = /(account list|project list|project detail|report summary|task list|user list|sync state|sync changes|--project-id|--account-id|--since|账号列表|账户列表|项目列表|项目详情|任务列表|任务清单|用户列表|成员列表|同步状态|同步变更|增量)/i.test(text);
-  return hasXinSource || hasExplicitCommand;
+  const hasSpendQuestion = /(今日|今天|昨日|昨天|实时|当前|\d{4}-\d{2}-\d{2}).{0,16}(消耗|花费|投放数据|效果|报表)|(消耗|花费|投放数据|效果|报表).{0,16}(今日|今天|昨日|昨天|实时|当前|\d{4}-\d{2}-\d{2})/i.test(text);
+  return hasXinSource || hasExplicitCommand || hasSpendQuestion;
 }
 
 function xinAgentResultRows(data) {
@@ -1008,6 +1009,23 @@ function xinAgentRowSummary(row = {}) {
   return Object.entries(row).slice(0, 6).map(([key, value]) => `${key}: ${xinAgentCompactValue(value)}`).join(' ｜ ');
 }
 
+function xinAgentWorkflowReportSummary(group = {}) {
+  const account = group.account || {};
+  const rows = Array.isArray(group.rows) ? group.rows : xinAgentResultRows(group.data);
+  const accountName = account.account_name || account.accountName || account.name || account.account_id || account.id || '未知账户';
+  if (!rows.length) {
+    const data = group.data && typeof group.data === 'object' ? group.data : {};
+    const summary = Object.entries(data)
+      .filter(([, value]) => value !== null && value !== undefined && value !== '')
+      .slice(0, 6)
+      .map(([key, value]) => `${key}: ${xinAgentCompactValue(Array.isArray(value) ? `${value.length} 项` : value)}`)
+      .join(' ｜ ');
+    return summary ? `${accountName}: ${summary}` : `${accountName}: 已查询，暂无报表行`;
+  }
+  const row = rows[0] || {};
+  return `${accountName}: ${xinAgentRowSummary(row)}`;
+}
+
 function xinAgentSyncTableLines(data = {}, mode = 'state') {
   const tables = data && typeof data === 'object' && data.tables && typeof data.tables === 'object'
     ? data.tables
@@ -1038,6 +1056,31 @@ function formatXinAgentQueryAnswer(result = {}) {
       `状态：失败`,
       `原因：${error.message || error.code || '查询失败'}`
     ].join('\n');
+  }
+  if (result.data?.workflow === 'account_keyword_report') {
+    const data = result.data || {};
+    const accounts = Array.isArray(data.accounts) ? data.accounts : [];
+    const queried = Array.isArray(data.queried_accounts) ? data.queried_accounts : accounts;
+    const reports = Array.isArray(data.reports) ? data.reports : [];
+    const errors = Array.isArray(data.errors) ? data.errors : [];
+    const accountLines = queried.slice(0, 6).map((account, index) => (
+      `${index + 1}. ${xinAgentRowSummary(account)}`
+    ));
+    const reportLines = reports.slice(0, 6).map((group, index) => (
+      `${index + 1}. ${xinAgentWorkflowReportSummary(group)}`
+    ));
+    return [
+      `结果：${title}`,
+      `关键词：${data.keyword || query.keyword || '未指定'}`,
+      data.start_date && data.end_date ? `日期：${data.start_date} 至 ${data.end_date}` : '',
+      `匹配账户：${accounts.length} 个${accounts.length > queried.length ? `，已查询前 ${queried.length} 个` : ''}`,
+      reportLines.length ? '报表摘要：' : '',
+      ...reportLines,
+      !reportLines.length && accountLines.length ? '匹配账户：' : '',
+      ...(!reportLines.length ? accountLines : []),
+      errors.length ? `提醒：${errors.length} 个账户报表查询失败，已保留可用结果。` : '',
+      !accounts.length ? '未找到名称或主体匹配的账户。' : ''
+    ].filter(Boolean).join('\n');
   }
   if (command === 'sync state') {
     const lines = xinAgentSyncTableLines(result.data, 'state');
