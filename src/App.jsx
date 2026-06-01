@@ -965,6 +965,9 @@ function assistantReportBlocks(value = '') {
 
 function looksLikeXinAgentNaturalQuery(value = '') {
   const text = String(value || '');
+  const isXinMetaQuestion = /(xin\s*assistant|xin[_ -]?agent|芯助手)/i.test(text)
+    && /(耗时|时间.{0,8}(过长|太长|太久|很久)|太慢|慢|卡住|卡死|不返回|没有返回|无返回|日志|最近.*日志|根因|原因|解决方案|修复|排查|debug|调试|性能|latency|slow|timeout|stuck)/i.test(text);
+  if (isXinMetaQuestion) return false;
   const hasXinSource = /(xin[_ -]?agent|xhs|bili|芯助手|小红书|聚光|乘风|B站|投放|报表)/i.test(text);
   const hasExplicitCommand = /(account list|project list|project detail|report summary|task list|user list|sync state|sync changes|--project-id|--account-id|--since|账号列表|账户列表|项目列表|项目详情|任务列表|任务清单|用户列表|成员列表|同步状态|同步变更|增量)/i.test(text);
   const hasSpendQuestion = /(今日|今天|昨日|昨天|实时|当前|\d{4}-\d{2}-\d{2}).{0,16}(消耗|花费|投放数据|效果|报表)|(消耗|花费|投放数据|效果|报表).{0,16}(今日|今天|昨日|昨天|实时|当前|\d{4}-\d{2}-\d{2})/i.test(text);
