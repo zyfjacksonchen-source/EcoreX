@@ -487,6 +487,31 @@ async function runPromptAndWait(page, payload, timeoutMs) {
   }, { payload, timeoutMs });
 }
 
+function cleanSmokeEventText(value = '') {
+  return String(value || '')
+    .replace(/\bWEB_SEARCH_OK\b/gi, '')
+    .replace(/\bdone\b/gi, '')
+    .trim();
+}
+
+function bestVisibleFinalText(events = []) {
+  const clean = (value) => cleanSmokeEventText(value);
+  const result = [...events].reverse().find((event) => (
+    event.kind === 'result'
+    && clean(event.text)
+    && !/^(done|complete|completed|success|ok|finished)$/i.test(clean(event.text))
+  ));
+  if (result) return clean(result.text);
+  const done = [...events].reverse().find((event) => (
+    event.kind === 'done'
+    && clean(event.text)
+    && !/^(done|complete|completed|success|ok|finished)$/i.test(clean(event.text))
+  ));
+  if (done) return clean(done.text);
+  const assistant = [...events].reverse().find((event) => event.kind === 'assistant' && clean(event.text));
+  return clean(assistant?.text || '');
+}
+
 async function runWebSearchSmoke(page) {
   const sessionId = `packaged-web-search-${Date.now()}`;
   const prompt = [
@@ -505,7 +530,7 @@ async function runWebSearchSmoke(page) {
   }, 8 * 60 * 1000 + 20_000);
   const allText = (result.events || []).map((event) => [event.toolName, event.text, ...(event.tools || []).map((tool) => tool.name)].join(' ')).join('\n');
   const sawSearchTool = /(WebSearch|联网检索|准备联网检索|search)/i.test(allText);
-  const finalText = (result.events || []).map((event) => event.text || '').join('\n');
+  const finalText = bestVisibleFinalText(result.events || []);
   if (!result.start?.ok) throw new Error(`Web search run did not start: ${JSON.stringify(result.start)}`);
   if (result.timeout) throw new Error(`Web search run timed out. Events: ${allText.slice(-1200)}`);
   if (!result.terminal || result.terminal.kind !== 'done') throw new Error(`Web search run did not finish successfully: ${JSON.stringify(result.terminal)}`);
@@ -519,6 +544,43 @@ async function runWebSearchSmoke(page) {
     terminal: result.terminal,
     sawSearchTool,
     finalPreview: finalText.slice(-1200)
+  };
+}
+
+function xinAgentRows(data) {
+  if (Array.isArray(data)) return data;
+  if (!data || typeof data !== 'object') return [];
+  for (const key of ['items', 'rows', 'accounts', 'projects', 'reports', 'records', 'list', 'data']) {
+    if (Array.isArray(data[key])) return data[key];
+  }
+  return [];
+}
+
+async function runXinAgentSmoke(page) {
+  const result = await page.evaluate(async () => {
+    if (typeof window.ecorex?.queryXinAgentNatural !== 'function') {
+      return { ok: false, error: { message: 'queryXinAgentNatural IPC is not available.' } };
+    }
+    return window.ecorex.queryXinAgentNatural({
+      prompt: '用芯助手查询小红书聚光账号列表 limit 2'
+    });
+  });
+  if (result?.unauthorized) throw new Error(`Xin Assistant query was not authorized for packaged owner: ${JSON.stringify(result)}`);
+  if (result?.matched !== true) throw new Error(`Xin Assistant natural-language query was not matched: ${JSON.stringify(result)}`);
+  if (result?.ok !== true) throw new Error(`Xin Assistant natural-language query failed: ${JSON.stringify(result).slice(0, 1000)}`);
+  const rows = xinAgentRows(result.data);
+  if (!rows.length) throw new Error(`Xin Assistant query returned no rows: ${JSON.stringify(result).slice(0, 1000)}`);
+  const syncState = await page.evaluate(async () => window.ecorex.queryXinAgent({ command: 'sync state' }));
+  if (syncState?.ok !== true) throw new Error(`Xin Assistant sync state failed: ${JSON.stringify(syncState).slice(0, 1000)}`);
+  return {
+    matched: true,
+    ok: true,
+    command: result.query?.command || result.meta?.command || '',
+    platform: result.query?.platform || result.meta?.platform || '',
+    xhsChannel: result.query?.xhs_channel || result.meta?.xhs_channel || '',
+    rowCount: rows.length,
+    syncStateOk: true,
+    sampleKeys: Object.keys(rows[0] || {}).slice(0, 8)
   };
 }
 
@@ -548,11 +610,13 @@ async function main() {
       await page.bringToFront();
       await login(page);
       const filePreview = await runFilePreviewSmoke(browser, page);
+      const xinAgent = await runXinAgentSmoke(page);
       const webSearch = await runWebSearchSmoke(page);
       console.log(JSON.stringify({
         ok: true,
         packagedExe,
         filePreview,
+        xinAgent,
         webSearch
       }, null, 2));
     } finally {

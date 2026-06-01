@@ -20,7 +20,6 @@ import {
   CircleDashed,
   Clock3,
   Code2,
-  CornerDownRight,
   ClipboardList,
   Copy,
   Database,
@@ -280,7 +279,7 @@ const initialTimeline = [
 ];
 
 const messageStates = {
-  queued: { label: '排队中', icon: Clock3, tone: 'queued' },
+  queued: { label: '待处理', icon: Clock3, tone: 'queued' },
   sending: { label: '发送中', icon: CircleDashed, tone: 'sending' },
   sent: { label: '已发送', icon: CircleCheck, tone: 'sent' },
   read: { label: '已读', icon: CheckCheck, tone: 'read' },
@@ -295,7 +294,7 @@ const messageStates = {
   'incomplete-result': { label: '未完成 / 重试', icon: AlertTriangle, tone: 'error' },
   'authorization-incomplete': { label: '待授权 / 可继续', icon: Clock3, tone: 'queued' },
   'user-action-required': { label: '等待确认', icon: Clock3, tone: 'queued' },
-  relaying: { label: '引导中', icon: Loader2, tone: 'thinking' },
+  relaying: { label: '继续中', icon: Loader2, tone: 'thinking' },
   error: { label: '错误 / 重试', icon: AlertTriangle, tone: 'error' }
 };
 
@@ -322,6 +321,7 @@ const MAX_STORED_MESSAGES_PER_CONVERSATION = 120;
 const MAX_CONVERSATION_STORAGE_CHARS = 4 * 1024 * 1024;
 const MAX_LIVE_MESSAGES_PER_CONVERSATION = 180;
 const MAX_LIVE_ASSISTANT_TEXT_CHARS = 60000;
+const MAX_LIVE_PROCESS_TEXT_CHARS = 140;
 const FRONT_AGENT_EVENT_TEXT_CHARS = 20000;
 const MAX_COMPOSER_PROMPT_CHARS = 80000;
 const MAX_PENDING_FOLLOWUPS = 20;
@@ -376,7 +376,7 @@ const MANAGED_SECRET_DEFINITIONS = [
 const DEFAULT_PERMISSION_OPTION = {
   value: 'default',
   label: '默认权限',
-  description: '联网搜索、网页读取和常规工具自动执行；文件读写、命令执行和系统目录访问继续请求确认。',
+  description: '项目内读取、检索、diff、测试、构建等常规开发动作自动执行；写入/删除、安装依赖、部署上传、系统目录和高风险操作继续确认。',
   tone: 'default'
 };
 
@@ -615,7 +615,12 @@ function cleanChatUrlToken(value = '') {
   while (/[)\]}.,;!?，。；：！？]$/.test(token)) {
     token = token.slice(0, -1);
   }
-  return token.trim();
+  return token
+    .replace(/\/page\/execution[_\s-]*bridge(?=\?)/gi, '/page/cli')
+    .replace(/from=execution[_\s-]*bridge\b/gi, 'from=cli')
+    .replace(/execution[_\s-]*bridge(?=user_code=)/gi, 'cli?')
+    .replace(/execution[_\s-]*bridge(?=\?user_code=)/gi, 'cli')
+    .trim();
 }
 
 function safeChatExternalUrl(value = '', { mediaOnly = false } = {}) {
@@ -766,6 +771,7 @@ function isInternalAgentOutputLine(value = '') {
   if (/Use `?node --trace-warnings`?/i.test(text)) return true;
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(text)) return true;
   if (/^(?:done|WEB_SEARCH_OK|No links found\.?|开始生成回复|正在同步输出|回复生成完成)$/i.test(text)) return true;
+  if (/^搜索工具返回[:：]\s*未检索到可直接展示的链接[。.]?$/i.test(text)) return true;
   if (/^WEB_SEARCH_OK/i.test(text)) return true;
   if (/^opencli\s+v?\d+(?:\.\d+)*\s+doctor\b/i.test(text) && /\b(?:daemon|extension|connectivity|missing|fail|ok)\b/i.test(text)) return true;
   if (/^opencli\s+v?\d+(?:\.\d+)*\s+doctor$/i.test(text)) return true;
@@ -815,7 +821,7 @@ function textLooksCorrupted(value = '') {
 function cleanAgentDisplayLine(value = '') {
   let text = String(value || '').trimEnd();
   const numberTokens = text.match(/(?:^|\s)\d{1,3}(?=\s|$)/g) || [];
-  if (numberTokens.length >= 3 && /(https?:\/\/|open\.feishu\.cn|execution[_\s-]?bridge|授权|配置|链接|打开)/i.test(text)) {
+  if (numberTokens.length >= 3 && /(https?:\/\/|open\.feishu\.cn|page\/cli|execution[_\s-]*bridge|授权|配置|链接|打开)/i.test(text)) {
     text = text.replace(/(^|\s)\d{1,3}(?=\s|$)/g, '$1').replace(/\s{2,}/g, ' ').trim();
   }
   return text
@@ -824,9 +830,10 @@ function cleanAgentDisplayLine(value = '') {
     .replace(/\bNolinksfound\.?/gi, '未检索到可直接展示的链接')
     .replace(/("(?:base_token|folder_token|access_token|refresh_token)"\s*:\s*")[^"]+(")/gi, '$1***$2')
     .replace(/\b(base_token|folder_token|access_token|refresh_token)=([^\s,;]+)/gi, '$1=***')
-    .replace(/execution\s+bridge(?=user_code=)/gi, 'execution_bridge?')
-    .replace(/execution\s+bridge(?=\?user_code=)/gi, 'execution_bridge')
-    .replace(/from=execution\s+bridge\b/gi, 'from=execution_bridge');
+    .replace(/\/page\/execution[_\s-]*bridge(?=\?)/gi, '/page/cli')
+    .replace(/from=execution[_\s-]*bridge\b/gi, 'from=cli')
+    .replace(/execution[_\s-]*bridge(?=user_code=)/gi, 'cli?')
+    .replace(/execution[_\s-]*bridge(?=\?user_code=)/gi, 'cli');
 }
 
 function cleanPublicAgentText(value = '', { dropPathLines = true } = {}) {
@@ -886,6 +893,7 @@ function splitAssistantReadableBlocks(value = '') {
 function splitAssistantDisplayMessages(value = '') {
   const source = String(value || '').replace(/\n{3,}/g, '\n\n').trim();
   if (!source) return [];
+  if (isReportLikeAssistantText(source)) return [source];
   if (source.length <= 520) return [source];
   if (/```|^\s*\|.+\|\s*$/m.test(source)) return [source];
   const paragraphs = source.split(/\n{2,}/).map((item) => item.trim()).filter(Boolean);
@@ -908,6 +916,164 @@ function splitAssistantDisplayMessages(value = '') {
   if (current.trim()) parts.push(current.trim());
   if (parts.length <= 1) return [source];
   return parts.length <= 12 ? parts : [...parts.slice(0, 11), parts.slice(11).join('')];
+}
+
+function isReportLikeAssistantText(value = '') {
+  const text = String(value || '').trim();
+  if (text.length > 900) return true;
+  if (/^#{1,3}\s+\S+/m.test(text)) return true;
+  if (/^\s*(?:一|二|三|四|五|六|七|八|九|十)[、.]\s*\S+/m.test(text)) return true;
+  if (/^\s*\d+[.、]\s+\S+/m.test(text) && text.split(/\n/).length >= 6) return true;
+  if (/(分析报告|调研报告|体验分析|风险评估|技术方案|总结|结论|建议)/.test(text) && text.length > 420) return true;
+  return false;
+}
+
+function stripReportInlineMarks(value = '') {
+  return String(value || '')
+    .replace(/^\s*#{1,6}\s*/, '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .trim();
+}
+
+function assistantReportBlockKind(block = '', index = 0) {
+  const text = String(block || '').trim();
+  if (!text) return 'empty';
+  if (/^#{1,3}\s+\S+/.test(text)) return index === 0 ? 'title' : 'heading';
+  if (/^\s*(?:一|二|三|四|五|六|七|八|九|十)[、.]\s*\S+/.test(text)) return 'heading';
+  if (/^\s*\d+[.、]\s+\S+/.test(text) && text.length < 90) return 'heading';
+  const lines = text.split(/\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length >= 2 && lines.every((line) => /^[-•·]\s+|^\d+[.、]\s+/.test(line))) return 'list';
+  if (
+    lines.length >= 2
+    && lines.length <= 6
+    && lines.every((line) => /^[^：:\n]{2,18}[：:]\s*\S{1,48}$/.test(line))
+  ) return 'metric';
+  if (/^(关键结论|核心发现|风险提示|下一步|建议|结论)[：:]/.test(text) && text.length < 260) return 'callout';
+  return index === 0 && text.length < 160 ? 'lead' : 'paragraph';
+}
+
+function assistantReportBlocks(value = '') {
+  const source = String(value || '').replace(/\n{3,}/g, '\n\n').trim();
+  if (!source) return [];
+  return source
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean)
+    .map((block, index) => ({ id: `report-block-${index}`, kind: assistantReportBlockKind(block, index), text: block }));
+}
+
+function looksLikeXinAgentNaturalQuery(value = '') {
+  const text = String(value || '');
+  const hasXinSource = /(xin[_ -]?agent|xhs|bili|芯助手|小红书|聚光|乘风|B站|投放|报表)/i.test(text);
+  const hasExplicitCommand = /(account list|project list|project detail|report summary|task list|user list|sync state|sync changes|--project-id|--account-id|--since|账号列表|账户列表|项目列表|项目详情|任务列表|任务清单|用户列表|成员列表|同步状态|同步变更|增量)/i.test(text);
+  return hasXinSource || hasExplicitCommand;
+}
+
+function xinAgentResultRows(data) {
+  if (Array.isArray(data)) return data;
+  if (!data || typeof data !== 'object') return [];
+  for (const key of ['items', 'rows', 'accounts', 'projects', 'reports', 'records', 'list', 'data']) {
+    if (Array.isArray(data[key])) return data[key];
+  }
+  return [];
+}
+
+function xinAgentCompactValue(value) {
+  if (value === null || value === undefined || value === '') return '';
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : '';
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  return String(value).replace(/\s+/g, ' ').slice(0, 80);
+}
+
+function xinAgentRowSummary(row = {}) {
+  if (!row || typeof row !== 'object') return xinAgentCompactValue(row);
+  const keys = [
+    'account_id', 'accountId', 'id', 'name', 'account_name', 'accountName',
+    'project_id', 'projectId', 'project_name', 'projectName',
+    'task_id', 'taskId', 'task_name', 'taskName',
+    'user_id', 'userId', 'user_name', 'userName', 'nickname',
+    'app_id', 'appId', 'platform', 'xhs_channel', 'channel',
+    'status', 'state', 'archived', 'resigned', 'row_count', 'fingerprint',
+    'cost', 'spend', 'impression', 'impressions', 'click', 'clicks',
+    'conversion', 'conversions', 'date', 'updated_at', 'updatedAt'
+  ];
+  const parts = [];
+  for (const key of keys) {
+    if (parts.length >= 6) break;
+    const value = xinAgentCompactValue(row[key]);
+    if (value) parts.push(`${key}: ${value}`);
+  }
+  if (parts.length) return parts.join(' ｜ ');
+  return Object.entries(row).slice(0, 6).map(([key, value]) => `${key}: ${xinAgentCompactValue(value)}`).join(' ｜ ');
+}
+
+function xinAgentSyncTableLines(data = {}, mode = 'state') {
+  const tables = data && typeof data === 'object' && data.tables && typeof data.tables === 'object'
+    ? data.tables
+    : {};
+  return Object.entries(tables)
+    .slice(0, 10)
+    .map(([name, detail]) => {
+      const item = detail && typeof detail === 'object' ? detail : {};
+      const count = mode === 'changes'
+        ? (Array.isArray(item.rows) ? item.rows.length : 0)
+        : (item.row_count ?? item.count ?? 0);
+      const marker = item.fingerprint ? ` · ${String(item.fingerprint).slice(0, 10)}` : '';
+      const time = item.max_updated_at || item.max_created_at || item.max_fetched_at || item.max_report_date || '';
+      return `${name}: ${count} 条${time ? ` · ${time}` : ''}${marker}`;
+    });
+}
+
+function formatXinAgentQueryAnswer(result = {}) {
+  const query = result.query || result.meta || {};
+  const command = query.command || result.meta?.command || 'schema';
+  const platform = query.platform || result.meta?.platform || '';
+  const channel = query.xhs_channel || result.meta?.xhs_channel || '';
+  const title = ['芯助手查询完成', command, platform, channel].filter(Boolean).join(' · ');
+  if (!result.ok) {
+    const error = result.error || {};
+    return [
+      `结果：${title}`,
+      `状态：失败`,
+      `原因：${error.message || error.code || '查询失败'}`
+    ].join('\n');
+  }
+  if (command === 'sync state') {
+    const lines = xinAgentSyncTableLines(result.data, 'state');
+    return [
+      `结果：${title}`,
+      result.data?.generated_at ? `生成时间：${result.data.generated_at}` : '',
+      ...lines
+    ].filter(Boolean).join('\n');
+  }
+  if (command === 'sync changes') {
+    const lines = xinAgentSyncTableLines(result.data, 'changes');
+    return [
+      `结果：${title}`,
+      result.data?.since ? `起始时间：${result.data.since}` : '',
+      typeof result.data?.total_returned === 'number' ? `返回：${result.data.total_returned} 条变更` : '',
+      ...lines
+    ].filter(Boolean).join('\n');
+  }
+  const rows = xinAgentResultRows(result.data);
+  const total = Array.isArray(rows) ? rows.length : 0;
+  const preview = rows.slice(0, 8).map((row, index) => `${index + 1}. ${xinAgentRowSummary(row)}`).filter(Boolean);
+  if (preview.length) {
+    return [
+      `结果：${title}`,
+      `记录：${total} 条${total >= 8 ? '，以下显示前 8 条' : ''}`,
+      ...preview
+    ].join('\n');
+  }
+  if (result.data && typeof result.data === 'object') {
+    const summary = Object.entries(result.data)
+      .slice(0, 10)
+      .map(([key, value]) => `${key}: ${xinAgentCompactValue(Array.isArray(value) ? `${value.length} 项` : value)}`)
+      .join('\n');
+    return [`结果：${title}`, summary].filter(Boolean).join('\n');
+  }
+  return [`结果：${title}`, xinAgentCompactValue(result.data) || '已返回空结果。'].join('\n');
 }
 
 function publicRunningSessionPrompt(value = '', fallback = '正在执行任务') {
@@ -1208,7 +1374,7 @@ function permissionActionFromValue(value = {}) {
       action: 'resume',
       label: typeof value === 'object' && value?.label ? String(value.label).slice(0, 80) : '已完成授权',
       tone: 'running',
-      prompt: '用户已完成上一轮等待的外部授权、扫码或浏览器确认步骤。请沿用同一会话继续刚才被阻塞的任务，不要把这条回执当成新的业务需求，不要重新排队或重复询问；如果仍未授权成功，请给出可操作的下一步。'
+	      prompt: '用户已完成上一轮等待的外部授权、扫码或浏览器确认步骤。请沿用同一会话继续刚才被阻塞的任务，不要把这条回执当成新的业务需求，不要重复询问；如果仍未授权成功，请给出可操作的下一步。'
     };
   }
   if (text === 'allow' || /允许|确认|继续|approve|yes/i.test(text)) {
@@ -2306,12 +2472,12 @@ function realtimePlatformSearchPolicySection(prompt = '') {
 
 function agentRunPolicySection(prompt = '') {
   return [
-    '执行策略：',
-    '1. 联网搜索、网页读取、MCP 调用、SKILLS 调用、只读信息检索和常规分析工具由 EcoreX 自主判断并直接执行，不要先询问用户是否允许。',
-    '2. 涉及本地文件写入/修改/删除、命令执行、系统目录访问或不可逆变更时，触发 EcoreX 聊天框内权限确认卡，让用户点击按钮确认；不要要求用户在聊天里回复“继续”或“确认”。',
+	    '执行策略：',
+	    '1. 联网搜索、网页读取、MCP 调用、SKILLS 调用、当前项目内文件读取/检索、git status/diff、测试、lint、build、只读诊断和常规分析工具由 EcoreX 自主判断并直接执行，不要先询问用户是否允许。',
+	    '2. 涉及本地文件写入/修改/删除/覆盖、安装依赖、启动长驻 dev server、部署上传、git commit/push、凭据读取、系统目录访问或不可逆变更时，触发 EcoreX 聊天框内权限确认卡，让用户点击按钮确认；不要要求用户在聊天里回复“继续”或“确认”。',
     '3. 简单问答只返回答案；复杂任务只展示当前动作、关键计划和必要风险，不输出完整调试日志或冗长状态树。',
     '4. 有限任务不要启动长期后台命令；如果命令被转入后台，必须立即读取输出、完成验证或停止后台任务，并给出最终结论或明确待继续原因。',
-    '5. 飞书、浏览器 OAuth、扫码或外部授权属于待继续交接：发起后只展示用户可操作的链接/二维码，状态写成待授权；用户回复完成后先验证授权状态，再继续原任务，不能把“已发起授权”当最终完成。',
+	    '5. 飞书、浏览器 OAuth、扫码或外部授权属于待继续交接：发起后只在聊天内容里展示用户可操作的链接/二维码，状态写成待授权；用户点击“已完成，继续”或回复完成后先验证授权状态，再继续原任务，不能把“已发起授权”当最终完成。',
     '6. 用户提到本地文档、对接文档、飞书文档、创建多维表格或日志时，先检索当前工作区、项目文件、EcoreX 托管 Skill 文档和已配置 CLI/MCP；不要在本地资料检索前要求用户提供链接、token 或字段。',
     '7. 需要生成 PPT/Excel/DOCX/PDF/HTML 等文件时，必须执行到真实文件落地并验证文件存在；如果脚本或命令被权限策略拦截，只输出需要 EcoreX 权限确认卡继续执行的简短说明，不要把脚本路径当作最终交付。',
     '8. 进度说明只保留当前动作、关键发现和下一步；不要连续输出“我会检查/我将确认”式思考过程，长进度请拆成短段落。',
@@ -2604,17 +2770,19 @@ function sanitizeStoredMessages(messages = [], scope = {}) {
   const conversationProjectName = String(scope.projectName || '').trim().slice(0, 120);
   return (Array.isArray(messages) ? messages : [])
     .slice(-MAX_STORED_MESSAGES_PER_CONVERSATION)
-    .map((message) => {
-      const messageProjectId = String(message.projectId || conversationProjectId || '').slice(0, 120);
-      const messageProjectName = String(message.projectName || conversationProjectName || '').slice(0, 120);
-      const scopedAttachments = filterAttachmentsForProjectScope(message.attachments || [], conversationProjectId);
-      const wasStreaming = Boolean(message.streaming);
-      return {
+	    .map((message) => {
+	      const messageProjectId = String(message.projectId || conversationProjectId || '').slice(0, 120);
+	      const messageProjectName = String(message.projectName || conversationProjectName || '').slice(0, 120);
+	      const scopedAttachments = filterAttachmentsForProjectScope(message.attachments || [], conversationProjectId);
+	      const wasStreaming = Boolean(message.streaming);
+	      const rawStatus = String(message.status || '').slice(0, 40);
+	      const safeStatus = message.role === 'user' && rawStatus.toLowerCase() === 'queued' ? 'read' : rawStatus;
+	      return {
         id: String(message.id || createLocalId('message')).slice(0, 120),
         role: message.role === 'user' ? 'user' : 'assistant',
         text: String(message.text || '').slice(0, 12000),
         time: String(message.time || '').slice(0, 16),
-        status: wasStreaming ? 'interrupted' : String(message.status || '').slice(0, 40),
+	        status: wasStreaming ? 'interrupted' : safeStatus,
         error: Boolean(message.error),
         streaming: false,
         sessionId: message.sessionId ? String(message.sessionId).slice(0, 120) : undefined,
@@ -2688,11 +2856,44 @@ function sanitizeLiveMessages(messages = []) {
       const maxText = message.role === 'assistant'
         ? MAX_LIVE_ASSISTANT_TEXT_CHARS
         : MAX_COMPOSER_PROMPT_CHARS;
+      const rawStatus = String(message.status || '').toLowerCase();
+      const nextStatus = message.role === 'user' && rawStatus === 'queued' ? 'read' : message.status;
+      const nextQueuedNudgeAt = message.role === 'user' && rawStatus === 'queued' ? undefined : message.queuedNudgeAt;
+      const nextGuideQueuedAt = message.role === 'user' && rawStatus === 'queued' ? undefined : message.guideQueuedAt;
+      const nextText = clampLongText(message.text || '', maxText);
+      const nextOriginalPrompt = message.originalPrompt
+        ? clampLongText(message.originalPrompt, MAX_COMPOSER_PROMPT_CHARS)
+        : message.originalPrompt;
+      const nextLedger = Array.isArray(message.ledger) && message.ledger.length > MAX_STORED_LEDGER_ITEMS
+        ? message.ledger.slice(-MAX_STORED_LEDGER_ITEMS)
+        : message.ledger;
+      const nextLiveProcess = sanitizeLiveProcessState(message.liveProcess);
+      const hasLiveProcess = Boolean(nextLiveProcess);
+      const liveProcessChanged = hasLiveProcess
+        ? (
+            !message.liveProcess
+            || nextLiveProcess.text !== message.liveProcess.text
+            || nextLiveProcess.at !== message.liveProcess.at
+            || nextLiveProcess.kind !== message.liveProcess.kind
+          )
+        : Boolean(message.liveProcess);
+      const changed = nextStatus !== message.status
+        || nextQueuedNudgeAt !== message.queuedNudgeAt
+        || nextGuideQueuedAt !== message.guideQueuedAt
+        || nextText !== message.text
+        || nextOriginalPrompt !== message.originalPrompt
+        || nextLedger !== message.ledger
+        || liveProcessChanged;
+      if (!changed) return message;
       return {
         ...message,
-        text: clampLongText(message.text || '', maxText),
-        originalPrompt: message.originalPrompt ? clampLongText(message.originalPrompt, MAX_COMPOSER_PROMPT_CHARS) : message.originalPrompt,
-        ledger: Array.isArray(message.ledger) ? message.ledger.slice(-MAX_STORED_LEDGER_ITEMS) : message.ledger
+        status: nextStatus,
+        queuedNudgeAt: nextQueuedNudgeAt,
+        guideQueuedAt: nextGuideQueuedAt,
+        text: nextText,
+        originalPrompt: nextOriginalPrompt,
+        ledger: nextLedger,
+        liveProcess: nextLiveProcess
       };
     });
 }
@@ -5118,7 +5319,7 @@ function formatAgentEventStatus(value, fallback = '进行中') {
     active: '进行中',
     progress: '进行中',
     pending: '等待中',
-    queued: '排队中',
+	    queued: '待处理',
     starting: '启动中',
     started: '已启动',
     'authorization-incomplete': '等待授权',
@@ -5176,7 +5377,7 @@ function timelineItemFromAgentEvent(event) {
     timeout: '已超时',
     error: '失败'
   };
-  const pendingStatus = pendingUserActionStatus(event, event.text || '');
+  const pendingStatus = pendingUserActionStatusFromEvent(event);
   const pendingLabelMap = {
     'authorization-incomplete': '等待授权完成',
     'user-action-required': '等待用户继续'
@@ -5443,8 +5644,29 @@ function dedupeRepeatedParagraphBlocks(value = '') {
   return output.join('').replace(/\n{3,}/g, '\n\n').trim();
 }
 
+function dedupeRepeatedVisibleLines(value = '') {
+  const seen = new Set();
+  return String(value || '')
+    .split(/\r?\n/)
+    .filter((line) => {
+      const comparable = normalizeDuplicateAssistantSegment(line);
+      if (!comparable) return true;
+      const plain = String(line || '').trim();
+      const safeToDropWhenRepeated = comparable.length >= 36
+        || /^(?:sources?|搜索关键词|可核验结论|结论|结果|记录|状态|风险|提醒|下一步|验证|文件|hash|sha256)[：:]/i.test(plain)
+        || /^[-*]?\s*\[[^\]]+\]\(https?:\/\//i.test(plain)
+        || /^https?:\/\//i.test(plain);
+      if (safeToDropWhenRepeated && seen.has(comparable)) return false;
+      if (safeToDropWhenRepeated) seen.add(comparable);
+      return true;
+    })
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function dedupeAssistantOutputText(value = '') {
-  return dedupeRepeatedParagraphBlocks(dedupeAdjacentRepeatedLines(dedupeAdjacentRepeatedSentences(value)));
+  return dedupeRepeatedVisibleLines(dedupeRepeatedParagraphBlocks(dedupeAdjacentRepeatedLines(dedupeAdjacentRepeatedSentences(value))));
 }
 
 function isMeaningfulAssistantOverlap(value = '') {
@@ -5468,11 +5690,11 @@ function assistantTextOverlapLength(existing = '', incoming = '') {
 }
 
 function cleanAssistantOutputText(value = '') {
-  return dedupeAssistantOutputText(cleanPublicAgentText(String(value || '')
+  return stripAssistantProcessNarrationBlocks(dedupeAssistantOutputText(cleanPublicAgentText(String(value || '')
     .replace(/^\s*\*\s+/gm, '- ')
     .replace(/\*\*([^*\n]+)\*\*/g, '$1')
     .replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '$1')
-    .replace(/\*/g, '')));
+    .replace(/\*/g, ''))));
 }
 
 function redactArtifactPathsInResultLine(line = '') {
@@ -5589,11 +5811,25 @@ function textLooksCompletedUserAction(value = '') {
   return /((授权|认证|登录|扫码|二维码|oauth|browser).{0,24}(已完成|完成|成功|已通过|已接上|done|finished|completed|succeeded)|(已完成|完成|done|finished|completed|succeeded).{0,24}(授权|认证|登录|扫码|二维码|oauth|browser))/i.test(text);
 }
 
+function textLooksNegatedUserAction(value = '') {
+  const text = cleanAssistantOutputText(value).toLowerCase();
+  if (!text) return false;
+  return /(没有|无|无需|不需要|不用|未发现|不存在).{0,28}(待确认|待授权|等待确认|等待授权|权限确认|授权|确认|被拦截|阻塞|续跑|继续)|(?:no|not|without|none).{0,36}(pending|permission|authorization|approval|confirmation|blocked|user action)/i.test(text);
+}
+
 function textLooksPendingUserAction(value = '') {
   const text = cleanAssistantOutputText(value).toLowerCase();
   if (!text) return false;
+  if (textLooksNegatedUserAction(text)) return false;
   if (textLooksCompletedUserAction(text)) return false;
   return /(open\.feishu\.cn|execution[_ -]?bridge|user_code=|device[_ -]?code|verification[_ -]?(url|uri)|二维码|扫码|授权|登录|认证|打开.*链接|完成后.*继续|告诉我.*完成|tell me.*done|waiting for.*auth|waiting for.*user|please.{0,40}(upload|provide|tell|share)|unable|cannot|can't|not able|no input file|missing input|无法|不能|暂时无法|未能.{0,40}(发起|配置|继续)|权限.{0,24}(策略|拦截|确认|允许|批准)|权限确认卡|请.{0,40}(上传|提供|告诉|补充|路径|文件|确认|允许|授权)|需要.{0,40}(上传|提供|告诉|补充|路径|文件|确认|允许|授权))/i.test(text);
+}
+
+function textLooksTerminalPendingUserAction(value = '') {
+  const text = cleanAssistantOutputText(value).toLowerCase();
+  if (!text) return false;
+  if (textLooksNegatedUserAction(text) || textLooksCompletedUserAction(text)) return false;
+  return /(open\.feishu\.cn|user_code=|device[_ -]?code|verification[_ -]?(url|uri)|二维码|扫码|打开.{0,24}链接|完成后.{0,40}(告诉|继续|返回)|tell me.{0,24}done|权限确认卡|请.{0,40}(上传|提供|告诉|补充|路径|文件|确认|允许|授权)|需要.{0,40}(上传|提供|补充|路径|文件|权限确认|允许执行|确认.{0,12}命令|授权)|do you want to proceed|proceed with|approval\s+required|requires?\s+permission|needs?\s+permission)/i.test(text);
 }
 
 function pendingUserActionStatusFromText(value = '') {
@@ -5665,17 +5901,21 @@ function permissionPromptStatusFromText(value = '') {
 function immediatePendingUserActionStatus(event = {}, currentText = '') {
   const stateStatus = pendingUserActionStatusFromEvent(event);
   if (stateStatus) return stateStatus;
-  return permissionPromptStatusFromText([
-    currentText,
-    permissionCandidateTextFromEvent(event)
-  ].filter(Boolean).join('\n'));
+  const eventText = permissionCandidateTextFromEvent(event);
+  const eventStatus = permissionPromptStatusFromText(eventText);
+  if (eventStatus) return eventStatus;
+  if (['result', 'done', 'error'].includes(String(event.kind || '').toLowerCase())) return '';
+  const combinedText = [currentText, eventText].filter(Boolean).join('\n');
+  if (!textLooksTerminalPendingUserAction(combinedText)) return '';
+  return permissionPromptStatusFromText(combinedText);
 }
 
 function terminalPendingUserActionStatus(event = {}, existingText = '') {
   const direct = immediatePendingUserActionStatus(event, '');
   if (direct) return direct;
   if (agentEventHasOwnSubstantiveTerminalOutput(event)) return '';
-  return pendingUserActionStatusFromText(existingText);
+  if (!textLooksTerminalPendingUserAction(existingText)) return '';
+  return permissionPromptStatusFromText(existingText);
 }
 
 function permissionPromptTextFromEvent(event = {}, fallback = '') {
@@ -5688,6 +5928,71 @@ function permissionPromptTextFromEvent(event = {}, fallback = '') {
   const label = toolName || toolNames[0] || '';
   if (label) return `EcoreX 请求调用 ${label}，请确认是否允许继续。`;
   return cleanAssistantOutputText(fallback || '');
+}
+
+function compactPermissionActionText(value = '', fallback = '继续当前操作') {
+  const text = cleanAssistantOutputText(value).replace(/\s+/g, ' ').trim();
+  if (!text || text.length > 260 || isReportLikeAssistantText(text)) return fallback;
+  return text.length > 96 ? `${text.slice(0, 96)}...` : text;
+}
+
+function permissionActionTextFromStructuredAction(action = {}, event = {}, fallback = '') {
+  const actionText = [
+    action.command,
+    action.toolName,
+    action.scope,
+    action.domain,
+    action.action
+  ].filter(Boolean).join(' · ');
+  const eventText = [
+    event.toolName,
+    event.tool,
+    event.task?.name
+  ].filter(Boolean).join(' · ');
+  const defaultText = action.type === 'authorization' ? '打开授权链接或扫码' : '继续当前本地操作';
+  return compactPermissionActionText(actionText || eventText || fallback, fallback || defaultText);
+}
+
+function permissionPromptTextForState(action = {}, event = {}, fallback = '') {
+  if (action.type === 'authorization') {
+    return compactPermissionActionText(
+      action.url || action.userCode || action.deviceCode || action.action || action.description || fallback,
+      '等待外部授权'
+    );
+  }
+  return permissionActionTextFromStructuredAction(action, event, fallback || '继续当前本地操作');
+}
+
+function visibleAssistantTextFromUserActionEvent(event = {}, action = {}) {
+  const text = cleanAssistantOutputText(event.text || '');
+  if (!text) return '';
+  const looksGenericPrompt = /^(ecorex\s+)?(需要|请求).{0,40}(确认|允许|授权|继续)|^请确认是否允许|^do you want to proceed/i.test(text)
+    && text.length < 180
+    && !/(结果|清单|分类|位置|核对|已完成|原因|当前看到|包括|报告|周报|todo|风险|交付)/i.test(text);
+  if (looksGenericPrompt) return '';
+  const normalizedText = normalizeDuplicateAssistantSegment(text);
+  const actionParts = [
+    action.title,
+    action.type === 'authorization' ? action.description : '',
+    action.action,
+    action.url,
+    action.qrText,
+    action.userCode,
+    action.deviceCode,
+    action.command,
+    action.toolName,
+    action.scope,
+    action.domain
+  ].map((part) => normalizeDuplicateAssistantSegment(part)).filter(Boolean);
+  if (normalizedText && actionParts.some((part) => (
+    part === normalizedText
+    || (part.length >= 24 && normalizedText.includes(part))
+    || (normalizedText.length >= 24 && part.includes(normalizedText))
+  ))) {
+    return '';
+  }
+  if (text.length < 180 && pendingUserActionStatusFromText(text) && !textLooksTerminalPendingUserAction(text)) return '';
+  return text;
 }
 
 function messageHasSubstantiveTerminalOutput(message = {}, event = {}) {
@@ -5718,6 +6023,120 @@ function mergeAssistantOutputText(existing = '', incoming = '') {
   const overlap = assistantTextOverlapLength(existingText, incomingText);
   if (overlap > 0) return cleanAssistantOutputText(`${existingText}${incomingText.slice(overlap)}`);
   return cleanAssistantOutputText(mergeAssistantText(existingText, incomingText));
+}
+
+function cleanAssistantStreamingDelta(value = '') {
+  return stripAssistantProcessNarrationBlocks(cleanPublicAgentText(String(value || '')
+    .replace(/^\s*\*\s+/gm, '- ')
+    .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+    .replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '$1')
+    .replace(/\*/g, ''), { dropPathLines: true }));
+}
+
+function mergeAssistantStreamingText(existing = '', incoming = '') {
+  const existingText = String(existing || '');
+  const incomingText = cleanAssistantStreamingDelta(incoming);
+  if (!incomingText) return existingText;
+  if (!existingText) return incomingText;
+  if (incomingText === existingText || existingText.endsWith(incomingText)) return existingText;
+  if (incomingText.startsWith(existingText) && existingText.length >= 16) return incomingText;
+  const overlap = assistantTextOverlapLength(existingText.slice(-1600), incomingText);
+  const nextText = overlap > 0
+    ? `${existingText}${incomingText.slice(overlap)}`
+    : mergeAssistantText(existingText, incomingText);
+  const compactText = incomingText.length > 80 && /\n{2,}/.test(nextText)
+    ? dedupeRepeatedParagraphBlocks(nextText)
+    : nextText;
+  return clampLongText(compactText, MAX_LIVE_ASSISTANT_TEXT_CHARS);
+}
+
+function isProcessNarrationLineFast(value = '') {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text || text.length > 280) return false;
+  if (/^(?:#{1,6}\s|[-+]\s|\d+[.)、]\s|[一二三四五六七八九十]+[、.]\s)/.test(text)) return false;
+  if (/^(?:I\s+(?:will|am|can|need|should)|I'll|I’ll|I'm|I’m|Let me|Next|Now|Checking|Reading|Searching|Fetching|Running|Opening|Inspecting|Analyzing|Verifying|Generating|Preparing|Waiting)\b/i.test(text)) return true;
+  if (/\b(?:I will|I'll|I’ll|I'm going to|I’m going to|I am going to|let me|I need to)\b/i.test(text)) return true;
+  if (/^(?:我会|我将|我先|我来|我正在|正在|先|接下来|下一步|继续|准备|开始|检查|查看|读取|搜索|检索|调用|运行|确认|尝试|整理|生成|等待|分析|定位|排查|验证|补充|打开|获取|保留)/.test(text)) return true;
+  if (/(?:我会|我将|我先|我正在|我会先|我会继续|我将继续|我会检查|我会查看|我会读取|我会尝试|我会用|我会保留|我会补充|我会确认|我会判断|我会整理|正在|接下来|下一步|先检查|先确认|Trace已生成|缓存目录|网络明细|浏览器命令|页面读取|网页读取)/.test(text)) return true;
+  if (/^(?:opencli|openexecution bridge|execution bridge|daemon|browser command|trace|cache directory|web read|network detail)\b/i.test(text)) return true;
+  return false;
+}
+
+function stripProcessNarrationFromLine(value = '') {
+  const line = String(value || '').trim();
+  if (!line) return '';
+  if (isProcessNarrationLineFast(line)) return '';
+  const sentences = line.match(/[^。！？!?]+[。！？!?]?/g) || [line];
+  if (sentences.length <= 1) return line;
+  return sentences
+    .filter((sentence) => !isProcessNarrationLineFast(sentence))
+    .join('')
+    .trim();
+}
+
+function stripAssistantProcessNarrationBlocks(value = '') {
+  const source = String(value || '').replace(/\n{3,}/g, '\n\n').trim();
+  if (!source) return '';
+  return source
+    .split(/\n{2,}/)
+    .map((block) => {
+      const lines = block.split(/\r?\n/);
+      if (lines.length === 1) {
+        return stripProcessNarrationFromLine(lines[0]);
+      }
+      return lines
+        .map(stripProcessNarrationFromLine)
+        .filter(Boolean)
+        .join('\n')
+        .trim();
+    })
+    .filter(Boolean)
+    .join('\n\n')
+    .trim();
+}
+
+function lightweightAssistantProcessText(value = '') {
+  return cleanPublicAgentText(value, { dropPathLines: true })
+    .replace(/^\s*[-*]\s+/gm, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function assistantProcessNarrationText(value = '') {
+  const source = lightweightAssistantProcessText(value);
+  if (!source || source.length > 1200 || isReportLikeAssistantText(source)) return '';
+  const lines = source.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  const candidate = (lines.filter((line) => !isInternalAgentOutputLine(line)).at(-1) || source).trim();
+  const sentences = candidate.match(/[^。！？!?]+[。！？!?]?/g) || [candidate];
+  const text = (sentences.at(-1) || candidate).trim();
+  if (!text || textLooksCorrupted(text)) return '';
+  return sanitizeDisplayText(text, '').slice(0, MAX_LIVE_PROCESS_TEXT_CHARS);
+}
+
+function isAssistantProcessNarration(value = '') {
+  const text = assistantProcessNarrationText(value);
+  if (!text) return false;
+  if (cleanAssistantStreamingDelta(value).length >= 320 && !isProcessNarrationLineFast(text)) return false;
+  return isProcessNarrationLineFast(text);
+}
+
+function liveProcessTextFromAgentEvent(event = {}) {
+  const directText = assistantProcessNarrationText(event.text || event.message || event.detail || '');
+  if (directText && isProcessNarrationLineFast(directText)) return directText;
+  const label = agentDisclosureLabel(event);
+  const status = formatAgentEventStatus(event.status || event.state || event.kind, '');
+  return assistantProcessNarrationText([label, status].filter(Boolean).join('：'));
+}
+
+function sanitizeLiveProcessState(liveProcess) {
+  if (!liveProcess || typeof liveProcess !== 'object') return undefined;
+  const text = assistantProcessNarrationText(liveProcess.text || liveProcess.label || '');
+  if (!text) return undefined;
+  return {
+    text,
+    at: Number(liveProcess.at) || null,
+    kind: String(liveProcess.kind || '').slice(0, 40)
+  };
 }
 
 function finalizeAssistantOutputText(existing = '', incoming = '', options = {}) {
@@ -5846,6 +6265,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
   const flushTimerRef = useRef(null);
   const conversationSaveTimerRef = useRef(null);
   const conversationSaveSnapshotRef = useRef(null);
+  const scrollFrameRef = useRef(null);
   const pendingCancelsRef = useRef(new Set());
   const permissionContinuationLocksRef = useRef(new Map());
   const statusTimers = useRef([]);
@@ -5948,6 +6368,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
 
   function scrollMessagesToLatest(behavior = 'smooth') {
     const scroll = () => {
+      scrollFrameRef.current = null;
       const node = messageListRef.current;
       if (!node) return;
       autoScrollPinnedRef.current = true;
@@ -5955,7 +6376,8 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       node.scrollTo({ top: node.scrollHeight, behavior });
     };
     if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
-      window.requestAnimationFrame(scroll);
+      if (scrollFrameRef.current) window.cancelAnimationFrame?.(scrollFrameRef.current);
+      scrollFrameRef.current = window.requestAnimationFrame(scroll);
     } else {
       scroll();
     }
@@ -6425,9 +6847,9 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     });
   }
 
-  function runningSessionIdForConversation(activeConversationId, rows = runningSessionRowsRef.current) {
-    const targetId = String(activeConversationId || '');
-    if (!targetId) return null;
+	  function runningSessionIdForConversation(activeConversationId, rows = runningSessionRowsRef.current) {
+	    const targetId = String(activeConversationId || '');
+	    if (!targetId) return null;
     const row = (Array.isArray(rows) ? rows : []).find((item) => {
       if (!isRunningSessionActive(item)) return false;
       const owner = sessionOwnerForSession(item.sessionId || item.id, item);
@@ -6437,11 +6859,89 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     for (const sessionId of Array.from(runningSessionsRef.current)) {
       const owner = sessionOwnersRef.current.get(sessionId);
       if (String(owner?.conversationId || '') === targetId) return sessionId;
-    }
-    return null;
-  }
+	    }
+	    return null;
+	  }
 
-  function syncCurrentSessionForVisibleConversation(activeConversationId = conversationIdRef.current, rows = runningSessionRowsRef.current) {
+	  function markPendingUserActionSuperseded(message = {}, ownerConversationId = conversationIdRef.current) {
+	    if (!message?.id) return;
+	    const conversationId = String(ownerConversationId || message.conversationId || conversationIdRef.current || '');
+	    const now = formatAgentEventTime();
+	    permissionContinuationLocksRef.current.delete(message.id);
+	    updateMessagesForConversation(conversationId, (items) => items.map((item) => (
+	      item.id === message.id
+	        ? {
+	            ...item,
+	            streaming: false,
+	            status: 'interrupted',
+	            userAction: null,
+	            authorization: null,
+	            permissionRequest: null,
+	            permissionDecision: {
+	              action: 'superseded',
+	              label: '用户发送了新的输入',
+	              status: 'interrupted',
+	              at: Date.now()
+	            },
+	            recovery: null,
+	            silentRecovery: false,
+	            timeline: appendTimeline(item.timeline || [], [
+	              '已停止等待用户操作',
+	              '开始处理新的输入',
+	              now,
+	              'pending',
+	              'status'
+	            ])
+	          }
+	        : item
+	    )));
+	    updateTimelineForConversation(conversationId, (items) => appendTimeline(items, [
+	      '已停止等待用户操作',
+	      '开始处理新的输入',
+	      now,
+	      'pending',
+	      'status'
+	    ]));
+	  }
+
+	  async function interruptRunningSessionForConversation(ownerConversationId = conversationIdRef.current) {
+	    const conversationId = String(ownerConversationId || conversationIdRef.current || '');
+	    const sessionId = runningSessionIdForConversation(conversationId);
+	    if (!sessionId) return false;
+	    const owner = sessionOwnerForSession(sessionId);
+	    const messageId = sessionMap.current.get(sessionId)
+	      || owner?.messageId
+	      || runningSessionRowsRef.current.find((row) => row.sessionId === sessionId || row.id === sessionId)?.messageId;
+	    pendingCancelsRef.current.add(sessionId);
+	    updateMessagesForConversation(conversationId, (items) =>
+	      items.map((item) =>
+	        item.id === messageId
+	          ? {
+	              ...item,
+	              streaming: false,
+	              status: 'cancelled',
+	              text: item.text || '已停止上一轮任务，开始处理你的新输入。',
+	              timeline: appendTimeline(item.timeline || [], ['用户发送新输入，已停止上一轮', '已切换', formatAgentEventTime(), 'pending'])
+	            }
+	          : item
+	      )
+	    );
+	    updateTimelineForConversation(conversationId, (items) => appendTimeline(items, ['用户发送新输入，已停止上一轮', '已切换', formatAgentEventTime(), 'pending']));
+	    try {
+	      if (window.ecorex?.stopPrompt) {
+	        const result = await window.ecorex.stopPrompt(sessionId);
+	        if (result?.unauthorized) onUnauthorized?.();
+	      }
+	    } catch (error) {
+	      if (isUnauthorizedError(error)) onUnauthorized?.();
+	    } finally {
+	      pendingCancelsRef.current.delete(sessionId);
+	      finishSession(sessionId);
+	    }
+	    return true;
+	  }
+
+	  function syncCurrentSessionForVisibleConversation(activeConversationId = conversationIdRef.current, rows = runningSessionRowsRef.current) {
     const nextSessionId = runningSessionIdForConversation(activeConversationId, rows);
     currentSessionIdRef.current = nextSessionId;
     setCurrentSessionId(nextSessionId);
@@ -6574,17 +7074,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     sessionMap.current.delete(sessionId);
     sessionOwnersRef.current.delete(sessionId);
     const nextRows = commitRunningSessionRows((rows) => rows.filter((row) => row.sessionId !== sessionId));
-    if (currentSessionIdRef.current === sessionId) {
-      syncCurrentSessionForVisibleConversation(conversationIdRef.current, nextRows);
-    }
-    if (owner?.conversationId && !hasRunningSessionForConversation(owner.conversationId) && pendingFollowUpsRef.current.some((item) => item.conversationId === owner.conversationId)) {
-      scheduleStatusTimer(() => flushQueuedFollowUps(owner.conversationId), 80);
-    }
-    [...new Set(pendingFollowUpsRef.current.map((item) => item.conversationId).filter(Boolean))]
-      .filter((pendingConversationId) => pendingConversationId !== owner?.conversationId)
-      .filter((pendingConversationId) => !hasRunningSessionForConversation(pendingConversationId))
-      .forEach((pendingConversationId) => scheduleStatusTimer(() => flushQueuedFollowUps(pendingConversationId), 80));
-  }
+	    if (currentSessionIdRef.current === sessionId) {
+	      syncCurrentSessionForVisibleConversation(conversationIdRef.current, nextRows);
+	    }
+	  }
 
   function applyAgentEvents(events) {
     if (!events.length) return false;
@@ -6724,17 +7217,20 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
                 : 'EcoreX 请求继续当前本地操作，请确认是否允许。');
             nextItem = {
               ...nextItem,
-              text: '',
+              text: visibleAssistantTextFromUserActionEvent(event, structuredUserAction)
+                ? mergeAssistantOutputText(nextItem.text, visibleAssistantTextFromUserActionEvent(event, structuredUserAction))
+                : nextItem.text,
               userAction: structuredUserAction,
               authorization: structuredUserAction.type === 'authorization' ? structuredUserAction : undefined,
               permissionRequest: structuredUserAction.type === 'permission' ? structuredUserAction : undefined,
-              permissionPromptText: promptText,
+              permissionPromptText: permissionPromptTextForState(structuredUserAction, event, nextItem.permissionPromptText || promptText),
               streaming: false,
               status: pendingStatus,
               backendStatus: pendingStatus,
               error: false,
               meta: '',
               recovery: null,
+              liveProcess: undefined,
               permissionDecision: null,
               silentRecovery: false
             };
@@ -6752,13 +7248,17 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
                 : 'EcoreX 请求继续当前本地操作，请确认是否允许。');
             nextItem = {
               ...nextItem,
-              text: cleanAssistantOutputText(nextItem.text) || promptText,
-              permissionPromptText: promptText,
+              text: cleanAssistantOutputText(nextItem.text),
+              permissionPromptText: compactPermissionActionText(
+                promptText,
+                immediatePendingStatus === 'authorization-incomplete' ? '等待外部授权' : '继续当前本地操作'
+              ),
               streaming: false,
               status: immediatePendingStatus,
               error: false,
               meta: '',
               recovery: null,
+              liveProcess: undefined,
               silentRecovery: false
             };
             if (!['result', 'done', 'error'].includes(event.kind)) {
@@ -6767,20 +7267,35 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           }
 
           if (['status', 'tool', 'ledger', 'attachment', 'recovery', 'stderr', 'debug'].includes(event.kind)) {
+            const liveProcessText = liveProcessTextFromAgentEvent(event);
             nextItem = {
               ...nextItem,
               status: nextItem.status === 'generating' ? 'generating' : 'thinking',
-              backendStatus: event.status || event.kind
+              backendStatus: event.status || event.kind,
+              liveProcess: liveProcessText
+                ? { text: liveProcessText, at: Date.now(), kind: event.kind }
+                : nextItem.liveProcess
             };
             continue;
           }
 
           if (event.kind === 'assistant') {
+            const liveProcessText = assistantProcessNarrationText(event.text);
+            if (liveProcessText && isAssistantProcessNarration(event.text)) {
+              nextItem = {
+                ...nextItem,
+                streaming: true,
+                status: String(nextItem.text || '').trim() ? 'generating' : 'thinking',
+                liveProcess: { text: liveProcessText, at: Date.now(), kind: 'assistant' }
+              };
+              continue;
+            }
             nextItem = {
               ...nextItem,
-              text: mergeAssistantOutputText(nextItem.text, event.text),
+              text: mergeAssistantStreamingText(nextItem.text, event.text),
               streaming: true,
-              status: 'generating'
+              status: 'generating',
+              liveProcess: nextItem.liveProcess
             };
             continue;
           }
@@ -6791,7 +7306,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
               ...artifactReferencesFromEvent(event),
               ...finalArtifactsFromText(combinedText)
             ]);
-            let pendingStatus = terminalPendingUserActionStatus(event, combinedText);
+            const directPendingStatus = immediatePendingUserActionStatus(event, '');
+            let pendingStatus = directPendingStatus || (
+              nextItem.permissionDecision?.status === 'running' ? '' : terminalPendingUserActionStatus(event, combinedText)
+            );
             const permissionContinuationHasAnswer = nextItem.permissionDecision?.status === 'running'
               && cleanAssistantOutputText(nextItem.text || '').trim();
             if (pendingStatus && permissionContinuationHasAnswer && !immediatePendingUserActionStatus(event, '')) {
@@ -6816,6 +7334,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
                 error: true,
                 meta: '',
                 recovery: agentRecoveryText(event),
+                userAction: null,
+                authorization: null,
+                permissionRequest: null,
+                liveProcess: undefined,
                 silentRecovery: false
               };
               continue;
@@ -6832,6 +7354,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
                 error: false,
                 meta: '',
                 recovery: null,
+                liveProcess: undefined,
                 permissionDecision: null,
                 silentRecovery: false
               };
@@ -6839,9 +7362,12 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
             }
             const previousWasPending = ['authorization-incomplete', 'user-action-required'].includes(String(nextItem.status || '').toLowerCase());
             const eventResultText = cleanResultOutputText(event.text || '');
-            const finalizedResultText = previousWasPending && eventResultText
+            const finalizedResultText = eventResultText
               ? eventResultText
-              : (finalizeAssistantOutputText(nextItem.text, event.text, { preserveArtifactLabels: true }) || permissionContinuationTextFallback);
+              : (previousWasPending
+                  ? cleanAssistantOutputText(nextItem.text)
+                  : finalizeAssistantOutputText(nextItem.text, event.text, { preserveArtifactLabels: true }))
+                || permissionContinuationTextFallback;
             nextItem = {
               ...nextItem,
               text: finalizedResultText,
@@ -6850,6 +7376,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
               status: 'generating',
               meta: '',
               recovery: null,
+              userAction: null,
+              authorization: null,
+              permissionRequest: null,
+              liveProcess: undefined,
               silentRecovery: false
             };
             continue;
@@ -6866,6 +7396,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
                 backendStatus: pendingStatus,
                 error: false,
                 recovery: null,
+                liveProcess: undefined,
                 permissionDecision: null,
                 silentRecovery: false
               };
@@ -6880,7 +7411,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
             const mergedArtifacts = finalArtifacts.length
               ? mergeArtifactReferences([...(nextItem.finalArtifacts || []), ...finalArtifacts])
               : nextItem.finalArtifacts;
-            const pendingStatus = terminalPendingUserActionStatus(event, combinedText);
+            const directPendingStatus = immediatePendingUserActionStatus(event, '');
+            const pendingStatus = directPendingStatus || (
+              nextItem.permissionDecision?.status === 'running' ? '' : terminalPendingUserActionStatus(event, combinedText)
+            );
             const permissionContinuationHasAnswer = nextItem.permissionDecision?.status === 'running'
               && cleanAssistantOutputText(nextItem.text || '').trim();
             if (
@@ -6898,6 +7432,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
                 error: false,
                 finalArtifacts: mergedArtifacts,
                 recovery: null,
+                userAction: null,
+                authorization: null,
+                permissionRequest: null,
+                liveProcess: undefined,
                 silentRecovery: true
               };
               continue;
@@ -6906,7 +7444,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
               ...nextItem,
               text: cleanAssistantOutputText(nextItem.text) || terminalText,
               finalArtifacts: mergedArtifacts
-            }, event) || (!permissionContinuationHasAnswer && textLooksPendingUserAction(combinedText)));
+            }, event) || (!permissionContinuationHasAnswer && textLooksTerminalPendingUserAction(combinedText)));
             if (terminalFailed) {
               nextItem = {
                 ...nextItem,
@@ -6916,6 +7454,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
                 text: cleanAssistantOutputText(nextItem.text) || incompleteTerminalResultText(event),
                 finalArtifacts: mergedArtifacts,
                 recovery: agentRecoveryText(event),
+                userAction: null,
+                authorization: null,
+                permissionRequest: null,
+                liveProcess: undefined,
                 silentRecovery: false
               };
               continue;
@@ -6929,6 +7471,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
                 text: cleanAssistantOutputText(nextItem.text) || terminalText || cleanResultOutputText(event.text),
                 finalArtifacts: mergedArtifacts,
                 recovery: null,
+                liveProcess: undefined,
                 permissionDecision: null,
                 silentRecovery: false
               };
@@ -6942,6 +7485,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
               text: cleanAssistantOutputText(nextItem.text) || terminalText,
               finalArtifacts: mergedArtifacts,
               recovery: null,
+              userAction: null,
+              authorization: null,
+              permissionRequest: null,
+              liveProcess: undefined,
               silentRecovery: false
             };
             continue;
@@ -6953,7 +7500,11 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
               streaming: false,
               status: 'cancelled',
               error: false,
-              text: cleanAssistantOutputText(nextItem.text || event.text || agentRecoveryText(event))
+              text: cleanAssistantOutputText(nextItem.text || event.text || agentRecoveryText(event)),
+              userAction: null,
+              authorization: null,
+              permissionRequest: null,
+              liveProcess: undefined
             };
             continue;
           }
@@ -6964,13 +7515,22 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
               streaming: false,
               status: 'timeout',
               error: true,
-              text: cleanAssistantOutputText(nextItem.text || event.text || agentRecoveryText(event))
+              text: cleanAssistantOutputText(nextItem.text || event.text || agentRecoveryText(event)),
+              userAction: null,
+              authorization: null,
+              permissionRequest: null,
+              liveProcess: undefined
             };
             continue;
           }
 
           if (event.kind === 'error') {
-            const pendingStatus = terminalPendingUserActionStatus(event, [nextItem.text, event.text].filter(Boolean).join('\n'));
+            const directPendingStatus = immediatePendingUserActionStatus(event, '');
+            const pendingStatus = directPendingStatus || (
+              nextItem.permissionDecision?.status === 'running'
+                ? ''
+                : terminalPendingUserActionStatus(event, [nextItem.text, event.text].filter(Boolean).join('\n'))
+            );
             nextItem = {
               ...nextItem,
               streaming: false,
@@ -6978,6 +7538,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
               error: !pendingStatus,
               text: cleanAssistantOutputText(nextItem.text || event.text || agentRecoveryText(event)),
               recovery: pendingStatus ? null : nextItem.recovery,
+              userAction: pendingStatus ? nextItem.userAction : null,
+              authorization: pendingStatus ? nextItem.authorization : null,
+              permissionRequest: pendingStatus ? nextItem.permissionRequest : null,
+              liveProcess: undefined,
               silentRecovery: false
             };
           }
@@ -6994,7 +7558,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
               ...artifactReferencesFromEvent(terminalEvent),
               ...finalArtifactsFromText(terminalText)
             ]);
-            const pendingStatus = terminalPendingUserActionStatus(terminalEvent, terminalText);
+            const directPendingStatus = immediatePendingUserActionStatus(terminalEvent, '');
+            const pendingStatus = directPendingStatus || (
+              nextItem.permissionDecision?.status === 'running' ? '' : terminalPendingUserActionStatus(terminalEvent, terminalText)
+            );
             nextItem = {
               ...nextItem,
               text: terminalText,
@@ -7005,6 +7572,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
               status: pendingStatus || (terminalEvent.kind === 'error' ? 'error' : 'complete'),
               error: !pendingStatus && terminalEvent.kind === 'error',
               recovery: pendingStatus ? null : (terminalEvent.kind === 'error' ? nextItem.recovery : null),
+              userAction: pendingStatus ? nextItem.userAction : null,
+              authorization: pendingStatus ? nextItem.authorization : null,
+              permissionRequest: pendingStatus ? nextItem.permissionRequest : null,
+              liveProcess: undefined,
               silentRecovery: pendingStatus ? false : (terminalEvent.kind === 'error' ? nextItem.silentRecovery : false)
             };
           }
@@ -7012,11 +7583,13 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
 
         if (nextItem.permissionDecision?.status === 'running' && terminalEvent && isAgentSessionFinalEvent(terminalEvent)) {
           permissionContinuationLocksRef.current.delete(item.id);
+          const directPendingStatus = immediatePendingUserActionStatus(terminalEvent, '');
+          const finalDecisionStatus = directPendingStatus || (terminalEvent.kind === 'done' ? 'complete' : terminalEvent.kind);
           nextItem = {
             ...nextItem,
             permissionDecision: {
               ...nextItem.permissionDecision,
-              status: terminalPendingUserActionStatus(terminalEvent, nextItem.text) || (terminalEvent.kind === 'done' ? 'complete' : terminalEvent.kind),
+              status: finalDecisionStatus,
               at: Date.now()
             }
           };
@@ -7320,6 +7893,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
   useEffect(() => () => {
     statusTimers.current.forEach((timer) => clearTimeout(timer));
     clearTimeout(flushTimerRef.current);
+    if (scrollFrameRef.current) window.cancelAnimationFrame?.(scrollFrameRef.current);
     clearTimeout(conversationSaveTimerRef.current);
     conversationSaveTimerRef.current = null;
     flushConversationSave();
@@ -7372,7 +7946,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       conversationSaveTimerRef.current = window.setTimeout(() => {
         conversationSaveTimerRef.current = null;
         flushConversationSave();
-      }, CONVERSATION_SAVE_DEBOUNCE_MS);
+      }, running ? Math.max(CONVERSATION_SAVE_DEBOUNCE_MS, 900) : CONVERSATION_SAVE_DEBOUNCE_MS);
     }
   }, [conversationId, activeProject, contextSummary, contextCompactedAt, messages, timeline]);
 
@@ -7386,7 +7960,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
 
   useEffect(() => {
     if (messages.length <= 2 || autoScrollPinnedRef.current) {
-      scrollMessagesToLatest(messages.length <= 2 ? 'auto' : 'smooth');
+      scrollMessagesToLatest(messages.length <= 2 || running ? 'auto' : 'smooth');
     } else {
       setShowJumpLatest(true);
     }
@@ -7508,10 +8082,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     clearAttachments({ revoke: false });
   }
 
-  function recoverDuplicateRunAsQueuedFollowUp(result = {}, context = {}) {
-    const duplicateSessionId = String(result.duplicateOf || result.sessionId || '').trim();
-    const duplicateMessageId = String(result.messageId || '').trim();
-    const ownerConversationId = String(result.conversationId || context.conversationId || conversationIdRef.current || '');
+	  function recoverDuplicateRunWithoutQueue(result = {}, context = {}) {
+	    const duplicateSessionId = String(result.duplicateOf || result.sessionId || '').trim();
+	    const duplicateMessageId = String(result.messageId || '').trim();
+	    const ownerConversationId = String(result.conversationId || context.conversationId || conversationIdRef.current || '');
     if (duplicateSessionId && duplicateMessageId) {
       sessionMap.current.set(duplicateSessionId, duplicateMessageId);
       trackSession(duplicateSessionId, {
@@ -7531,19 +8105,23 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       )));
     }
     if (context.requestedSessionId) finishSession(context.requestedSessionId);
-    if (context.assistantId) {
-      updateMessagesForConversation(context.conversationId, (items) => items.filter((message) => message.id !== context.assistantId));
-    }
-    enqueueFollowUpPrompt(context.cleanPrompt || '', context.cleanAttachments || [], {
-      userId: context.userId,
-      existingMessage: true,
-      conversationId: context.conversationId,
-      claudeSessionId: result.claudeSessionId || context.claudeSessionId,
-      references: context.cleanReferences || [],
-      time: context.time
-    });
-    return true;
-  }
+	    if (context.assistantId) {
+	      updateMessagesForConversation(context.conversationId, (items) => items.filter((message) => message.id !== context.assistantId));
+	    }
+	    if (context.userId) {
+	      updateMessagesForConversation(context.conversationId, (items) => items.map((message) => (
+	        message.id === context.userId ? { ...message, status: 'read' } : message
+	      )));
+	    }
+	    updateTimelineForConversation(ownerConversationId, (items) => appendTimeline(items, [
+	      '运行已接入现有任务',
+	      '请等待当前任务结束后重新发送需要覆盖的新指令',
+	      formatAgentEventTime(),
+	      'pending',
+	      'status'
+	    ]));
+	    return true;
+	  }
 
   function buildQueuedFollowUpPrompt(items = []) {
     if (items.length === 1) {
@@ -7636,7 +8214,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
           : message
       )));
       updateTimelineForConversation(currentConversationId, (items) => appendTimeline(items, [
-        '已加入引导队列',
+	        '已记录待处理输入',
         '等待当前授权或确认完成后自动继续',
         formatAgentEventTime(),
         'pending',
@@ -7714,7 +8292,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     )));
     if (pendingMessage) {
       updateTimelineForConversation(ownerConversationId, (items) => appendTimeline(items, [
-        '已加入引导队列',
+	        '已记录待处理输入',
         '等待当前授权或确认完成后自动继续',
         formatAgentEventTime(),
         'pending',
@@ -7727,12 +8305,94 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
       return;
     }
     updateTimelineForConversation(ownerConversationId, (items) => appendTimeline(items, [
-      '已加入引导队列',
+	      '已记录待处理输入',
       '当前任务结束后自动合并上下文',
       formatAgentEventTime(),
       'pending',
       'status'
     ]));
+  }
+
+  async function runDirectXinAgentNaturalQuery(cleanPrompt = '', activeConversationId = conversationIdRef.current, activeProject = null) {
+    if (!window.ecorex?.queryXinAgentNatural || !looksLikeXinAgentNaturalQuery(cleanPrompt)) return null;
+    const now = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    const userId = `user-${Date.now()}`;
+    const assistantId = `assistant-${Date.now()}`;
+    autoScrollPinnedRef.current = true;
+    setShowJumpLatest(false);
+    syncRecentChatFromPrompt(activeConversationId, cleanPrompt || '芯助手数据查询', activeProject, conversationSessionIdRef.current || activeConversationId);
+    updateMessagesForConversation(activeConversationId, (items) => [
+      ...items,
+      {
+        id: userId,
+        role: 'user',
+        text: cleanPrompt,
+        time: now,
+        status: 'sending'
+      },
+      {
+        id: assistantId,
+        role: 'assistant',
+        text: '',
+        time: now,
+        streaming: true,
+        status: 'thinking',
+        projectId: activeProject?.id || '',
+        projectName: activeProject?.name || '',
+        originalPrompt: cleanPrompt,
+        showTrace: false,
+        liveProcess: { text: '正在读取芯助手数据', at: Date.now(), kind: 'tool' },
+        timeline: [['芯助手数据查询', '读取中', now, 'pending', 'tool']]
+      }
+    ]);
+    setPrompt('');
+    setComposerReferences([]);
+    clearAttachments({ revoke: false });
+    scheduleMessageStatus(userId, 'sent', 180, activeConversationId);
+    scheduleMessageStatus(userId, 'read', 520, activeConversationId);
+    try {
+      const result = await window.ecorex.queryXinAgentNatural({ prompt: cleanPrompt });
+      if (result?.unauthorized) onUnauthorized?.();
+      const text = result?.matched === false
+        ? '未识别为芯助手数据查询。请补充平台、命令、账号 ID 和日期范围。'
+        : formatXinAgentQueryAnswer(result);
+      updateMessagesForConversation(activeConversationId, (items) => items.map((item) => (
+        item.id === assistantId
+          ? {
+              ...item,
+              text,
+              streaming: false,
+              status: result?.ok === false || result?.unauthorized || result?.forbidden ? 'error' : 'complete',
+              error: Boolean(result?.ok === false || result?.unauthorized || result?.forbidden),
+              liveProcess: undefined,
+              timeline: appendTimeline(item.timeline || [], [
+                '芯助手数据查询',
+                result?.ok === false ? '失败' : '完成',
+                formatAgentEventTime(),
+                result?.ok === false ? 'danger' : 'success',
+                'tool'
+              ])
+            }
+          : item
+      )));
+      return { ok: result?.ok !== false, reason: 'xin-agent-query', assistantId, result };
+    } catch (error) {
+      const unauthorized = isUnauthorizedError(error);
+      if (unauthorized) onUnauthorized?.();
+      updateMessagesForConversation(activeConversationId, (items) => items.map((item) => (
+        item.id === assistantId
+          ? {
+              ...item,
+              text: unauthorized ? '登录状态已过期，请重新登录后继续。' : `芯助手查询失败：${sanitizeDisplayText(error?.message, '请稍后重试。')}`,
+              streaming: false,
+              status: 'error',
+              error: true,
+              liveProcess: undefined
+            }
+          : item
+      )));
+      return { ok: false, reason: unauthorized ? 'unauthorized' : 'xin-agent-error', assistantId };
+    }
   }
 
   async function sendPrompt(text = prompt, attachmentList = attachments, options = {}) {
@@ -7756,10 +8416,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     const cleanReferences = sanitizeComposerReferences(Array.isArray(queuedReferences) ? queuedReferences : composerReferences);
     if (!cleanPrompt && !cleanAttachments.length && !cleanReferences.length) return { ok: false, reason: 'empty' };
     const pendingMessageForPrompt = !forceRun ? latestPendingUserActionMessage(activeConversationId) : null;
-    if (pendingMessageForPrompt && !fromQueue && !forceRun) {
-      if (
-        isContinuationPrompt(cleanPrompt)
-        && !cleanAttachments.length
+	    if (pendingMessageForPrompt && !fromQueue && !forceRun) {
+	      if (
+	        isContinuationPrompt(cleanPrompt)
+	        && !cleanAttachments.length
         && !cleanReferences.length
       ) {
         setPrompt('');
@@ -7768,14 +8428,13 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         await continueFromPermission(pendingMessageForPrompt, {
           action: 'resume',
           label: /扫码|扫完/i.test(cleanPrompt) ? '扫码已完成' : /登录/i.test(cleanPrompt) ? '登录已完成' : /授权/i.test(cleanPrompt) ? '授权已完成' : '已完成'
-        });
-        return { ok: true, reason: 'continued' };
-      }
-      enqueueFollowUpPrompt(cleanPrompt, cleanAttachments, { references: cleanReferences });
-      return { ok: false, reason: 'queued' };
-    }
-    if (hasRunningSessionForConversation(activeConversationId) && !forceRun) {
-      const pendingMessage = pendingMessageForPrompt || latestPendingUserActionMessage(activeConversationId);
+	        });
+	        return { ok: true, reason: 'continued' };
+	      }
+	      markPendingUserActionSuperseded(pendingMessageForPrompt, activeConversationId);
+	    }
+	    if (hasRunningSessionForConversation(activeConversationId) && !forceRun) {
+	      const pendingMessage = pendingMessageForPrompt || latestPendingUserActionMessage(activeConversationId);
       if (
         pendingMessage
         && isContinuationPrompt(cleanPrompt)
@@ -7788,11 +8447,21 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         await continueFromPermission(pendingMessage, {
           action: 'resume',
           label: /扫码|扫完/i.test(cleanPrompt) ? '扫码已完成' : /登录/i.test(cleanPrompt) ? '登录已完成' : /授权/i.test(cleanPrompt) ? '授权已完成' : '已完成'
-        });
-        return { ok: true, reason: 'continued' };
-      }
-      enqueueFollowUpPrompt(cleanPrompt, cleanAttachments, { references: cleanReferences });
-      return { ok: false, reason: 'queued' };
+	        });
+	        return { ok: true, reason: 'continued' };
+	      }
+	      await interruptRunningSessionForConversation(activeConversationId);
+	    }
+    if (
+      !fromQueue
+      && !forceRun
+      && cleanPrompt
+      && !cleanAttachments.length
+      && !cleanReferences.length
+      && looksLikeXinAgentNaturalQuery(cleanPrompt)
+    ) {
+      const directXinResult = await runDirectXinAgentNaturalQuery(cleanPrompt, activeConversationId, activeProject);
+      if (directXinResult) return directXinResult;
     }
     const attachmentSection = attachmentPromptSection(cleanAttachments);
     const referenceSection = buildComposerReferenceSection(cleanReferences);
@@ -7950,7 +8619,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
             );
             return { ok: false, reason: 'duplicate', code: result.code, assistantId };
           }
-          recoverDuplicateRunAsQueuedFollowUp(result, {
+	      recoverDuplicateRunWithoutQueue(result, {
             userId: useQueuedMessages ? queuedMessageIds[0] : userId,
             assistantId,
             requestedSessionId,
@@ -8177,6 +8846,15 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
         claudeSessionId: owner.claudeSessionId || item.claudeSessionId,
         projectId: owner.projectId || item.projectId || '',
         projectName: owner.projectName || item.projectName || '',
+        userAction: null,
+        authorization: null,
+        permissionRequest: null,
+        permissionDecision: {
+          action: 'allow',
+          label: '已确认',
+          status: 'running',
+          at: Date.now()
+        },
         timeline: appendTimeline(item.timeline || [], ['权限已确认，继续等待当前执行', '已接入运行会话', formatAgentEventTime(), 'pending', 'status'])
       } : item))
     );
@@ -8265,10 +8943,10 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
     const accessMode = decision.accessMode || normalizeAccessMode(permissionMode);
     const requestedPermissionMode = permissionModeFromAccessMode(accessMode);
     const continuationMessageId = message.id;
-    const continuationLabel = decision.action === 'resume'
-      ? '用户已完成授权，引导执行'
-      : decision.action === 'allow'
-        ? '权限已确认，引导执行'
+	    const continuationLabel = decision.action === 'resume'
+	      ? '用户已完成授权，继续执行'
+	      : decision.action === 'allow'
+	        ? '权限已确认，继续执行'
         : decision.action === 'plan'
           ? '权限选择为只做计划'
           : '权限已拒绝';
@@ -8296,7 +8974,7 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
               ...item,
               streaming: true,
               status: 'relaying',
-              text: '',
+              text: item.text || '',
               userAction: null,
               authorization: null,
               permissionRequest: null,
@@ -8646,8 +9324,12 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
             </button>
           )}
           {visibleMessages.map((message) => {
+            const assistantPreviewText = message.role === 'assistant'
+              ? (message.streaming ? cleanAssistantStreamingDelta(message.text || '') : cleanAssistantOutputText(message.text || ''))
+              : '';
             const hasAnswerPreview = Boolean(
-              cleanAssistantOutputText(message.text || '').trim()
+              assistantPreviewText.trim()
+              || message.liveProcess?.text
               || message.finalArtifacts?.length
               || message.rich
             );
@@ -8669,7 +9351,6 @@ function ChatView({ backendStatus, backendError, capabilities, authStatus, refre
                 showTrace={shouldShowTrace}
                 onRetry={retryMessage}
                 onPermissionReply={continueFromPermission}
-                onActivateQueued={activateQueuedMessage}
                 onInsertArtifactReference={insertArtifactReference}
                 onOpenArtifact={(artifact) => setFocusArtifact(artifact)}
                 onOpenArtifactLocal={openGeneratedArtifact}
@@ -9020,6 +9701,217 @@ function RichMessageText({ text = '', className = '', imageArtifacts = [], role 
   return <div className={`rich-message-text ${className}`}>{nodes}</div>;
 }
 
+function StreamingAssistantText({ text = '', className = '' }) {
+  if (!String(text || '').trim()) return null;
+  return (
+    <div className={`streaming-assistant-text ${className}`} data-testid="streaming-assistant-text">
+      {text}
+    </div>
+  );
+}
+
+function AssistantReportText({ text = '', className = '', imageArtifacts = [] }) {
+  const blocks = useMemo(() => assistantReportBlocks(text), [text]);
+  if (!blocks.length) {
+    return <RichMessageText text={text} className={className} imageArtifacts={imageArtifacts} role="assistant" />;
+  }
+  return (
+    <article className={`assistant-report ${className}`} data-testid="assistant-report">
+      {blocks.map((block, index) => {
+        const cleanText = stripReportInlineMarks(block.text);
+        if (!cleanText) return null;
+        if (block.kind === 'title') {
+          const lines = cleanText.split(/\n/).map((line) => line.trim()).filter(Boolean);
+          return (
+            <header className="assistant-report-title" key={block.id}>
+              <span>{/报告|分析|方案|评估|复盘/.test(cleanText) ? '报告级输出' : 'EcoreX 产物'}</span>
+              <h2>{lines[0]}</h2>
+              {lines.slice(1).join(' ') && <p>{lines.slice(1).join(' ')}</p>}
+            </header>
+          );
+        }
+        if (block.kind === 'heading') {
+          return <h3 className="assistant-report-heading" key={block.id}>{cleanText}</h3>;
+        }
+        if (block.kind === 'metric') {
+          return (
+            <div className="assistant-report-metrics" key={block.id}>
+              {cleanText.split(/\n/).map((line, metricIndex) => {
+                const [label, ...rest] = line.split(/[：:]/);
+                const value = rest.join('：').trim();
+                return (
+                  <div className="assistant-report-metric" key={`${block.id}-${metricIndex}`}>
+                    <span>{stripReportInlineMarks(label)}</span>
+                    <strong>{stripReportInlineMarks(value)}</strong>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        }
+        if (block.kind === 'list') {
+          return (
+            <div className="assistant-report-list" key={block.id}>
+              {cleanText.split(/\n/).map((line, lineIndex) => (
+                <div className="assistant-report-list-item" key={`${block.id}-${lineIndex}`}>
+                  <span>{lineIndex + 1}</span>
+                  <RichMessageText
+                    text={line.replace(/^[-•·]\s+|^\d+[.、]\s+/, '')}
+                    className="assistant-report-inline"
+                    role="assistant"
+                  />
+                </div>
+              ))}
+            </div>
+          );
+        }
+        if (block.kind === 'callout') {
+          return (
+            <div className="assistant-report-callout" key={block.id}>
+              <RichMessageText text={cleanText} className="assistant-report-inline" role="assistant" />
+            </div>
+          );
+        }
+        return (
+          <div className={`assistant-report-paragraph ${index === 0 ? 'lead' : ''}`} key={block.id}>
+            <RichMessageText text={cleanText} className="assistant-report-inline" role="assistant" />
+          </div>
+        );
+      })}
+      {Boolean(imageArtifacts?.length) && (
+        <RichMessageText text="" className="assistant-report-media" imageArtifacts={imageArtifacts} role="assistant" />
+      )}
+    </article>
+  );
+}
+
+function assistantProcessActionLabel(label = '', status = '', kind = '', tone = '') {
+  const text = cleanPublicAgentText(`${label} ${status}`, { dropPathLines: true }).replace(/\s+/g, ' ').trim();
+  const pendingLike = tone === 'pending'
+    || /authorization-incomplete|user-action-required|waiting|等待|待授权|待确认|需要确认|请确认|权限确认/i.test(text);
+  if (pendingLike && /授权|扫码|登录|外部/.test(text)) return '等待授权';
+  if (pendingLike && /权限|确认|允许/.test(text)) return '等待确认';
+  if (/联网|检索|搜索|web\s*search/i.test(text)) return '检索网页';
+  if (/网页|读取网页|web\s*fetch|fetch/i.test(text)) return '读取网页';
+  if (/附件|上传|解析/.test(text)) return '读取附件';
+  if (/文件|查看|读取|grep|glob|read|ls\b/i.test(text)) return '查看文件';
+  if (/写入|修改|编辑|生成文件|保存/.test(text)) return '修改文件';
+  if (/命令|脚本|终端|bash|powershell|npm|pnpm|pip|uv|git/i.test(text)) return '运行命令';
+  if (/测试|lint|build|构建|校验/.test(text)) return '运行检查';
+  if (/报告|排版|PPT|演示|网页|设计|产物/.test(text)) return '整理产物';
+  if (/回复|生成/.test(text) || kind === 'assistant') return '生成回复';
+  if (/结果|最终|完成/.test(text) || kind === 'result' || kind === 'done') return '整理结果';
+  return sanitizeDisplayText(label || status, '处理步骤').slice(0, 28);
+}
+
+function assistantProcessDetail(label = '', status = '') {
+  const cleanLabel = cleanPublicAgentText(label, { dropPathLines: true }).trim();
+  const cleanStatus = cleanPublicAgentText(status, { dropPathLines: true }).trim();
+  const detail = cleanStatus && cleanStatus !== cleanLabel ? cleanStatus : cleanLabel;
+  return sanitizeDisplayText(detail, '').slice(0, 72);
+}
+
+function isUserActionWaitingProcessItem(item = {}) {
+  const text = cleanPublicAgentText(`${item.label || ''} ${item.detail || ''}`, { dropPathLines: true }).replace(/\s+/g, ' ').trim();
+  if (!text) return false;
+  return (item.tone === 'pending' || /等待|待授权|待确认|user-action-required|authorization-incomplete/i.test(text))
+    && /(等待授权|等待确认|权限确认|请确认|授权|扫码|允许|继续)/i.test(text);
+}
+
+function assistantProcessItems(timeline = [], ledger = []) {
+  const timelineItems = publicTraceItems(Array.isArray(timeline) ? timeline : []).map(([label, status, time, tone, kind]) => ({
+    label: assistantProcessActionLabel(label, status, kind, tone),
+    detail: assistantProcessDetail(label, status),
+    time,
+    tone: tone || 'running',
+    kind: kind || 'status'
+  }));
+  const ledgerItems = (Array.isArray(ledger) ? ledger : [])
+    .filter(Boolean)
+    .filter((item) => !isNoisyToolLedgerItem(item))
+    .map((item) => ({
+      label: assistantProcessActionLabel(item.toolName, item.action || item.status, item.kind || 'ledger', item.tone || 'running'),
+      detail: assistantProcessDetail(item.action || item.toolName, item.status),
+      time: item.time,
+      tone: item.tone || 'running',
+      kind: item.kind || 'ledger'
+    }));
+  const seen = new Set();
+  return [...timelineItems, ...ledgerItems]
+    .filter((item) => !isUserActionWaitingProcessItem(item))
+    .filter((item) => item.label && !isInternalAgentOutputLine(`${item.label} ${item.detail}`))
+    .filter((item) => {
+      const key = `${item.label}:${item.detail}:${item.kind}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(-12);
+}
+
+function assistantProcessSummary(items = []) {
+  if (!items.length) return '已处理任务步骤';
+  const labels = [];
+  for (const item of items) {
+    if (!labels.includes(item.label)) labels.push(item.label);
+    if (labels.length >= 3) break;
+  }
+  return `已${labels.join('、')}`;
+}
+
+function assistantCurrentProcessLabel(items = [], status = '') {
+  const active = [...items].reverse().find((item) => ['running', 'pending', 'warn'].includes(item.tone));
+  const latest = active || items.at(-1);
+  if (latest?.label) return latest.detail && latest.detail !== latest.label
+    ? `${latest.label}：${latest.detail}`
+    : latest.label;
+  return formatAgentEventStatus(status, '正在处理');
+}
+
+function AssistantProcessDisclosure({ timeline = [], ledger = [], streaming = false, status = '', show = true, processText = '' }) {
+  const [expanded, setExpanded] = useState(false);
+  const items = useMemo(() => assistantProcessItems(timeline, ledger), [timeline, ledger]);
+  const liveText = useMemo(() => assistantProcessNarrationText(processText), [processText]);
+  if (!show && !streaming) return null;
+  if (!items.length && !streaming && !liveText) return null;
+  const summary = assistantProcessSummary(items);
+  const current = liveText || assistantCurrentProcessLabel(items, status);
+  const visibleItems = expanded ? items.slice(-8) : [];
+
+  if (streaming) {
+    return (
+      <div className="assistant-process assistant-process-live" data-testid="assistant-process" aria-live="polite">
+        <div className="assistant-live-step">
+          <span className="assistant-step-spinner" aria-hidden="true" />
+          <strong>正在处理</strong>
+          <em>{current}</em>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`assistant-process assistant-process-folded ${expanded ? 'expanded' : ''}`} data-testid="assistant-process">
+      <button className="assistant-process-summary" type="button" onClick={() => setExpanded((value) => !value)}>
+        <span>{summary}</span>
+        {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+      </button>
+      {expanded && (
+        <div className="assistant-process-list">
+          {visibleItems.map((item, index) => (
+            <div className={`assistant-process-row ${item.tone || 'running'}`} key={`${item.label}-${item.detail}-${index}`}>
+              <span className="assistant-process-node" />
+              <strong>{item.label}</strong>
+              {item.detail && <em>{item.detail}</em>}
+              {item.time && <small>{item.time}</small>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ChatMessage({
   message,
   timeline,
@@ -9027,7 +9919,6 @@ function ChatMessage({
   showTrace = false,
   onRetry,
   onPermissionReply,
-  onActivateQueued,
   onInsertArtifactReference,
   onOpenArtifact,
   onOpenArtifactLocal,
@@ -9035,6 +9926,7 @@ function ChatMessage({
   onOpenAttachment
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [copyResultNotice, setCopyResultNotice] = useState('');
   const [availableArtifactIds, setAvailableArtifactIds] = useState(() => new Set());
   const permissionPromptRequest = message.role === 'assistant'
     ? permissionRequestFromMessage(message, timeline, { includeResolved: true })
@@ -9042,13 +9934,13 @@ function ChatMessage({
   const authorizationPromptRequest = permissionPromptRequest?.type === 'authorization'
     ? permissionPromptRequest
     : null;
-  const rawText = message.role === 'assistant' && permissionPromptRequest
-    ? ''
-    : message.role === 'assistant'
-      ? cleanAssistantOutputText(message.text || '')
-      : (message.text || '');
+  const rawText = message.role === 'assistant'
+    ? (message.streaming ? cleanAssistantStreamingDelta(message.text || '') : cleanAssistantOutputText(message.text || ''))
+    : (message.text || '');
+  const liveProcessText = message.role === 'assistant' ? assistantProcessNarrationText(message.liveProcess?.text || '') : '';
   const hasVisibleAssistantContent = Boolean(
     rawText.trim()
+    || liveProcessText
     || message.error
     || message.finalArtifacts?.length
     || message.ledger?.length
@@ -9103,26 +9995,22 @@ function ChatMessage({
   const displayText = shouldCollapse && !expanded
     ? `${rawText.slice(0, ASSISTANT_COLLAPSE_CHARS)}...`
     : rawText;
-  const displayParts = useMemo(() => splitAssistantDisplayMessages(displayText), [displayText]);
-  if (message.role === 'user') {
-    const queued = String(message.status || '').toLowerCase() === 'queued';
-    return (
-      <div className="user-row" id={`message-${message.id}`}>
-        <div className="user-bubble">
+  const isReportLike = message.role === 'assistant' && isReportLikeAssistantText(rawText);
+  const displayParts = useMemo(() => (
+    message.streaming ? [displayText].filter((part) => part.trim()) : splitAssistantDisplayMessages(displayText)
+  ), [displayText, message.streaming]);
+	  if (message.role === 'user') {
+	    return (
+	      <div className="user-row" id={`message-${message.id}`}>
+	        <div className="user-bubble">
           <RichMessageText text={message.text} className="user-text" role="user" />
           {Boolean(message.attachments?.length) && (
             <AttachmentPreviewList attachments={message.attachments} compact onOpen={onOpenAttachment} />
-          )}
-          <MessageReferenceList references={message.references || []} compact />
-          <AttachmentIngestionSummary items={userAttachmentIngest} compact />
-          {queued && (
-            <button className="queued-message-action" type="button" onClick={() => onActivateQueued?.(message)}>
-              <CornerDownRight size={13} />
-              {message.queuedNudgeAt ? '已加入引导' : '作为引导'}
-            </button>
-          )}
-          <MessageStatus status={message.status || 'read'} time={message.time} compact />
-        </div>
+	          )}
+	          <MessageReferenceList references={message.references || []} compact />
+	          <AttachmentIngestionSummary items={userAttachmentIngest} compact />
+	          <MessageStatus status={message.status || 'read'} time={message.time} compact />
+	        </div>
         <div className="avatar user-avatar">张</div>
       </div>
     );
@@ -9131,15 +10019,52 @@ function ChatMessage({
   if (message.silentRecovery && !hasVisibleAssistantContent) return null;
 
   const assistantStatus = message.status || (message.streaming ? 'thinking' : 'complete');
+  const copyAssistantResult = async () => {
+    const copied = await copyTextToClipboard(rawText);
+    setCopyResultNotice(copied ? '已复制' : '复制失败');
+    window.setTimeout(() => setCopyResultNotice(''), 1400);
+  };
+  const renderResultCopyButton = () => (
+    rawText.trim() && !message.streaming ? (
+      <button
+        className="assistant-result-copy"
+        type="button"
+        title="复制结果"
+        aria-label="复制结果"
+        onClick={copyAssistantResult}
+      >
+        <Copy size={14} />
+        {copyResultNotice && <span>{copyResultNotice}</span>}
+      </button>
+    ) : null
+  );
   const renderAssistantText = (textValue, className = 'assistant-text') => (
-    textValue.trim() ? (
+    textValue.trim() ? (message.streaming ? (
+      <StreamingAssistantText text={textValue} className={className} />
+    ) : isReportLike ? (
+      <AssistantReportText
+        text={textValue}
+        className={className}
+        imageArtifacts={artifactReferences}
+      />
+    ) : (
       <RichMessageText
         text={textValue}
         className={className}
         imageArtifacts={artifactReferences}
         role="assistant"
       />
-    ) : null
+    )) : null
+  );
+  const renderAssistantProcess = (placement = 'after') => (
+    <AssistantProcessDisclosure
+      timeline={message.timeline || timeline}
+      ledger={message.ledger || []}
+      streaming={Boolean(message.streaming && placement === 'before')}
+      status={assistantStatus}
+      show={showTrace || message.streaming}
+      processText={liveProcessText}
+    />
   );
   const renderAssistantExtras = () => (
     <>
@@ -9156,12 +10081,10 @@ function ChatMessage({
         onHideArtifact={(artifact) => onHideArtifact?.(message.id, artifact.id)}
       />
       <AttachmentIngestionSummary items={message.attachmentIngest || []} />
-      <ToolResultInline items={message.ledger || []} />
-      <ToolLedgerDisclosure items={message.ledger || []} />
       <RecoveryStateNotice recovery={message.recovery} status={message.status} onRetry={() => onRetry?.(message)} />
       {message.rich && <CampaignPerformanceReport />}
-      {message.streaming && <ThinkingIndicator phase={message.status} compact={hasVisibleAssistantContent} />}
-      {showTrace && <InlineAgentTrace timeline={timeline} sourceMap={sourceMap} priority="low" />}
+      {message.streaming && !showTrace && !hasVisibleAssistantContent && <ThinkingIndicator phase={message.status} compact={hasVisibleAssistantContent} />}
+      {!message.streaming && renderAssistantProcess('after')}
       {!message.streaming && message.error && !message.recovery && !message.silentRecovery && (
         <button className="message-retry-link" type="button" onClick={() => onRetry?.(message)}>
           <Loader2 size={15} />
@@ -9183,14 +10106,20 @@ function ChatMessage({
               key={`${message.id}-row-${index}`}
             >
               {index === 0 ? <Logo compact /> : <span className="assistant-row-spacer" aria-hidden="true" />}
-              <div className={`assistant-card assistant-card-split ${message.streaming && isLast ? 'live' : ''}`}>
+              <div className={`assistant-card assistant-card-split ${isReportLike ? 'report-card' : ''} ${message.streaming && isLast ? 'live' : ''}`}>
                 {(index === 0 || isLast) && (
                   <div className="assistant-head">
                     <span className="time">{index === 0 ? message.time : ''}</span>
-                    {isLast && <MessageStatus status={assistantStatus} compact />}
+                    {isLast && (
+                      <span className="assistant-head-actions">
+                        {renderResultCopyButton()}
+                        <MessageStatus status={assistantStatus} compact />
+                      </span>
+                    )}
                   </div>
                 )}
                 {index === 0 && authorizationPromptRequest && <AuthorizationChatContent request={authorizationPromptRequest} />}
+                {isLast && message.streaming && renderAssistantProcess('before')}
                 {renderAssistantText(part, textClassName)}
                 {isLast && renderAssistantExtras()}
               </div>
@@ -9204,12 +10133,16 @@ function ChatMessage({
   return (
     <div className={`assistant-row ${message.error ? 'error' : ''}`} id={`message-${message.id}`}>
       <Logo compact />
-      <div className="assistant-card">
+      <div className={`assistant-card ${isReportLike ? 'report-card' : ''}`}>
         <div className="assistant-head">
           <span className="time">{message.time}</span>
-          <MessageStatus status={assistantStatus} compact />
+          <span className="assistant-head-actions">
+            {renderResultCopyButton()}
+            <MessageStatus status={assistantStatus} compact />
+          </span>
         </div>
         {authorizationPromptRequest && <AuthorizationChatContent request={authorizationPromptRequest} />}
+        {message.streaming && renderAssistantProcess('before')}
         {renderAssistantText(displayText, shouldCollapse && !expanded ? 'assistant-text collapsed' : 'assistant-text')}
         {renderAssistantExtras()}
       </div>
@@ -9969,7 +10902,7 @@ function MessageStatus({ status = 'complete', time, compact = false }) {
 }
 
 function ThinkingIndicator({ phase = 'thinking', compact = false }) {
-  const label = phase === 'generating' ? 'AI 正在生成' : phase === 'relaying' ? '引导执行中' : 'AI 思考中';
+  const label = phase === 'generating' ? 'AI 正在生成' : phase === 'relaying' ? '继续执行中' : 'AI 思考中';
   return (
     <div className={`thinking-indicator ${phase === 'generating' ? 'generating' : 'thinking'} ${compact ? 'compact' : ''}`}>
       <span className="thinking-orbit"><i /><i /><i /></span>
@@ -10331,7 +11264,7 @@ function Composer({
           <button
             className="send"
             data-testid="chat-send-button"
-            title={running ? '追加发送' : '发送'}
+	            title={running ? '停止上一轮并发送' : '发送'}
             type="button"
             onClick={() => sendPrompt(prompt, attachments)}
           >
@@ -11586,6 +12519,11 @@ function AbilityGrid({ setPage }) {
 function isPublicTraceItem(item = []) {
   const [label = '', status = '', , tone = '', kind = ''] = item;
   if (/能力索引|source map|57MB/i.test(`${label} ${status}`)) return false;
+  const waitingActionText = `${label} ${status}`;
+  if ((tone === 'pending' || /authorization-incomplete|user-action-required|等待|待授权|待确认/i.test(waitingActionText))
+    && /(等待授权|等待确认|权限确认|请确认|扫码|授权|允许|继续)/i.test(waitingActionText)) {
+    return false;
+  }
   const publicKinds = new Set(['tool', 'ledger', 'attachment', 'recovery', 'stderr', 'result', 'done', 'cancelled', 'error', 'timeout']);
   if (tone === 'danger') return true;
   if (publicKinds.has(kind)) return true;
@@ -11654,7 +12592,7 @@ function authorizationRequestFromText(value = '') {
   const candidate = cleanAssistantOutputText(value || '');
   if (!candidate) return null;
   const url = cleanChatUrlToken(
-    candidate.match(/https?:\/\/open\.feishu\.cn\/page\/execution[_\s-]?bridge\??[^\s"'<>，。)\]}]*/i)?.[0]
+    candidate.match(/https?:\/\/open\.feishu\.cn\/page\/(?:cli|execution[_\s-]*bridge)\??[^\s"'<>，。)\]}]*/i)?.[0]
     || candidate.match(/https?:\/\/[^\s"'<>，。)\]}]*(?:oauth|authorize|device|verification|auth)[^\s"'<>，。)\]}]*/i)?.[0]
     || ''
   );
@@ -11683,6 +12621,19 @@ function permissionRequestFromMessage(message = {}, timeline = [], options = {})
   if (message.role !== 'assistant') return null;
   const structuredAction = normalizeAgentUserAction(message.userAction || message.authorization || message.permissionRequest);
   if (structuredAction && !message.permissionDecision?.status) {
+    const isAuthorization = structuredAction.type === 'authorization';
+    return {
+      ...structuredAction,
+      title: isAuthorization ? '等待外部授权' : '需要确认本地操作',
+      description: isAuthorization
+        ? '请完成授权后继续。二维码、链接和授权码保留在聊天内容中。'
+        : '请确认是否允许继续当前本地操作。',
+      action: permissionActionTextFromStructuredAction(
+        structuredAction,
+        {},
+        isAuthorization ? '打开授权链接或扫码' : '继续当前本地操作'
+      )
+    };
     return {
       ...structuredAction,
       title: structuredAction.title || (structuredAction.type === 'authorization' ? '等待外部授权' : '需要确认本地操作'),
@@ -11711,7 +12662,7 @@ function permissionRequestFromMessage(message = {}, timeline = [], options = {})
   return {
     title: '需要确认本地操作',
     description: '这一步可能涉及文件、命令或系统目录访问。请选择是否允许，EcoreX 会在当前会话继续执行，不会新开会话。',
-    action: summarizePermissionRequestText(text || promptText || traceText)
+    action: compactPermissionActionText(traceText || promptText || text, '继续当前本地操作')
   };
 }
 
@@ -11811,6 +12762,10 @@ function InlinePermissionRequest({ request, onReply, className = '' }) {
   if (!request) return null;
   const providerLabel = request.provider || '外部';
   const operationLabel = request.toolName || request.command || request.scope || request.domain || '';
+  const actionText = compactPermissionActionText(
+    request.action || operationLabel,
+    isAuthorization ? '打开授权链接或扫码' : '继续当前本地操作'
+  );
   const options = isAuthorization
     ? [
         { label: '已完成，继续', reply: { action: 'resume', label: `${providerLabel}授权已完成` }, primary: true },
@@ -11831,7 +12786,7 @@ function InlinePermissionRequest({ request, onReply, className = '' }) {
       <div>
         <strong>{request.title}</strong>
         {operationLabel && <span className="permission-confirmation-meta">{operationLabel}</span>}
-        {request.action && <span className="permission-confirmation-action">{request.action}</span>}
+        {actionText && <span className="permission-confirmation-action">{actionText}</span>}
         <span>{request.description}</span>
       </div>
       <div className="inline-permission-actions">
@@ -13762,11 +14717,11 @@ function DiagnosticsView({ backendStatus, backendError, capabilities, authStatus
                 {fullAccessEnabled ? <AlertTriangle size={16} /> : <ShieldCheck size={16} />}
                 <div>
                   <strong>{fullAccessEnabled ? '当前默认：完全访问权限' : '当前默认：默认权限'}</strong>
-                  <span>
-                    {fullAccessEnabled
-                      ? '本地执行确认会被跳过，仅建议用于可信工作区。'
-                      : '敏感本地操作会继续请求确认。'}
-                  </span>
+	                  <span>
+	                    {fullAccessEnabled
+	                      ? '本地执行确认会被跳过，仅建议用于可信工作区。'
+	                      : '常规开发检查自动执行，敏感本地操作继续请求确认。'}
+	                  </span>
                 </div>
                 {fullAccessEnabled && (
                   <button type="button" onClick={revokeFullAccessSetting} disabled={Boolean(saving)}>
@@ -13777,7 +14732,7 @@ function DiagnosticsView({ backendStatus, backendError, capabilities, authStatus
               <div className="permission-risk-grid">
                 <span className="safe">
                   <ShieldCheck size={13} />
-                  默认权限会在文件写入、命令执行和系统目录访问前继续确认。
+	                  默认权限会自动执行项目内读取、检索、diff、测试、构建；写入/删除、安装、部署、系统目录和高风险命令前继续确认。
                 </span>
                 <span className="risk">
                   <AlertTriangle size={13} />

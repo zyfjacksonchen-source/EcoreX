@@ -138,7 +138,7 @@ function verifyCommand(command, args, label, options = {}) {
 function patchFeishuSharedSkill(skillTarget) {
   const sharedSkillPath = path.join(skillTarget, 'skills', 'lark-shared', 'SKILL.md');
   if (!fs.existsSync(sharedSkillPath)) return;
-  const marker = '<!-- ecorex-auth-handoff-v1 -->';
+  const marker = '<!-- ecorex-auth-handoff-v2 -->';
   let text = fs.readFileSync(sharedSkillPath, 'utf8');
   if (text.includes(marker)) return;
   const insert = [
@@ -147,9 +147,11 @@ function patchFeishuSharedSkill(skillTarget) {
     '## EcoreX 桌面端授权交接规则',
     '',
     '- `config init`、`auth login`、扫码、OAuth 或浏览器授权不是业务完成，只是进入外部授权等待态。',
-    '- 优先使用 split-flow / `--no-wait --json`。拿到用户可操作的链接后，原样展示链接并生成二维码，然后结束本轮并说明“待授权完成后继续”。',
+    '- 用户授权优先使用 `lark-cli auth login --no-wait --json`。读取 JSON 里的 `verification_url` / `device_code`，不要自己拼 URL，也不要把 `/page/cli` 改成其它路径。',
+    '- 拿到 `verification_url` 后必须调用 `lark-cli auth qrcode "<verification_url>" --output <png>` 生成二维码，并在聊天内容里按“原始链接在上、二维码在下”的顺序展示给用户。',
+    '- 展示授权链接或二维码后立刻结束本轮，等待用户确认；不要在同一轮继续执行 `--device-code` 阻塞轮询，否则会让用户以为当前任务卡死。',
+    '- 用户回复“完成 / 扫码完成 / 授权完成”后，再执行 `lark-cli auth login --device-code <device_code>` 或只读授权状态检查，确认本机当前用户授权已保存，再恢复原任务。',
     '- 如果命令只能阻塞等待，必须使用后台方式并给足至少 600 秒的 timeout；读取到链接/二维码后不要把后台等待输出当最终结果。',
-    '- 用户回复“完成 / 扫码完成 / 授权完成”后，先执行只读状态检查或继续对应 device-code 流程，确认本机当前用户授权已保存，再恢复原任务。',
     '- 不要向用户展示 runner、harness、timeout、raw JSON token、base_token、folder_token、access_token、调试路径或完整命令日志。',
     ''
   ].join('\n');
@@ -240,6 +242,74 @@ function prepareAgentSkillCreator() {
   const copied = copyDirectory(sourceRoot, skillDir, 'Agent Skill Creator');
   console.log(`Prepared managed Agent Skill Creator ${version} from ${sourceRoot}`);
   console.log(`  skill: ${copied.files} files, ${copied.bytes} bytes`);
+}
+
+function prepareFrontendDesignSkill() {
+  const name = 'frontend-design';
+  const version = '1.0.0';
+  const skillTarget = path.join(managedSkillRoot, name);
+  const skillDir = path.join(skillTarget, 'skills', name);
+  const skillText = [
+    '---',
+    'name: frontend-design',
+    'description: Use this EcoreX design skill by default for report-grade layouts, PPT/story decks, web pages, dashboards, UI deliverables, and polished final artifacts before handing implementation to OfficeCLI, OpenCLI, or local code tools.',
+    `version: ${version}`,
+    '---',
+    '',
+    '# Frontend Design',
+    '',
+    'Use this skill whenever the user asks EcoreX to create or improve a PPT, report, web page, dashboard, visual analysis, UI flow, landing page, product page, or final deliverable that should look polished instead of plain text.',
+    '',
+    '## Default Routing',
+    '',
+    '- Treat this skill as the design layer for PPT, report, webpage, dashboard, and final artifact work.',
+    '- For PPTX/DOCX/XLSX implementation, design the structure and visual system first, then use OfficeCLI to create or modify the real file.',
+    '- For browser/web validation, design the experience first, then use OpenCLI or Playwright-style browser checks when available.',
+    '- For Feishu/Lark publishing, design the artifact first, then use the managed Feishu/Lark capability only for the publishing or authorization step.',
+    '',
+    '## Output Standard',
+    '',
+    '- Deliver report-grade hierarchy: concise title, useful subtitle, key metric cards when relevant, clear sections, callouts, source/context chips, and a short final recommendation.',
+    '- Keep progress narration short. Do not stream long private reasoning. Surface only the current action, key finding, and next step.',
+    '- Preserve EcoreX product language. Do not mention underlying implementation engines or vendor CLI names to the user.',
+    '- Prefer real usable artifacts over decorative mockups. A webpage should be runnable, a deck should be a real deck, and a report should be structured enough to present.',
+    '- Use restrained professional composition for business tools: dense but readable information, stable spacing, clear controls, and no decorative background blobs.',
+    '- Use visual evidence when it helps: screenshots, charts, tables, thumbnails, icons, preview images, or generated visuals that directly support the deliverable.',
+    '',
+    '## PPT And Report Rules',
+    '',
+    '- Start from the audience and decision the artifact supports.',
+    '- Use a clear narrative arc: context, key findings, evidence, implications, action plan.',
+    '- Make each slide or report section carry one primary point.',
+    '- Use consistent typography, spacing, accent color, and chart/table treatment across the artifact.',
+    '- For PPT preview or validation, prefer the real Office/Vue Office preview path rather than converting the deck into a PDF-like document view.',
+    '',
+    '## Web And UI Rules',
+    '',
+    '- Build the actual usable screen first, not a marketing explanation page, unless the user explicitly asks for a landing page.',
+    '- Keep controls familiar: icons for tools, segmented controls for modes, toggles for binary settings, sliders or inputs for numbers, tabs for views.',
+    '- Ensure text never overlaps, buttons remain stable, and mobile/desktop layouts are both polished.',
+    '',
+    '## Final Response',
+    '',
+    '- Summarize the delivered artifact, changed files, verification status, and any remaining blocker in short separated paragraphs.',
+    '- Keep the final report readable as a polished product output, not a raw execution log.',
+    '',
+    'EcoreX report-grade-layout-v1',
+    ''
+  ].join('\n');
+
+  cleanGeneratedDir(skillTarget);
+  writeManifest(skillTarget, {
+    name,
+    displayName: 'Frontend Design',
+    description: 'Default report-grade design layer for PPT, reports, webpages, dashboards, UI deliverables, and polished final artifacts.',
+    version,
+    skills: './skills'
+  });
+  fs.mkdirSync(skillDir, { recursive: true });
+  fs.writeFileSync(path.join(skillDir, 'SKILL.md'), skillText, 'utf8');
+  console.log(`Prepared managed Frontend Design Skill ${version}`);
 }
 
 function removeRetiredManagedResources() {
@@ -630,8 +700,54 @@ function prepareOpenCli() {
   console.log(`  runtime: ${path.relative(rootDir, toolTarget)} (${versionText})`);
 }
 
+function prepareXinAgentCli() {
+  const name = 'xin-agent';
+  const sourceRoot = path.join(rootDir, 'resources', 'xin-agent');
+  const skillSource = path.join(sourceRoot, 'skill');
+  const toolSource = path.join(sourceRoot, 'tools');
+  if (!fs.existsSync(path.join(skillSource, 'SKILL.md'))) fail(`Xin Agent skill source is missing: ${skillSource}`);
+  if (!fs.existsSync(path.join(toolSource, 'xin-agent-query.js'))) fail(`Xin Agent tool source is missing: ${toolSource}`);
+
+  const skillTarget = path.join(managedSkillRoot, name);
+  const toolTarget = path.join(managedToolRoot, name);
+  cleanGeneratedDir(skillTarget);
+  cleanGeneratedDir(toolTarget);
+  writeManifest(skillTarget, {
+    name,
+    displayName: 'Xin Assistant CLI',
+    description: 'Read-only enterprise advertising data queries through the EcoreX-managed Xin Assistant CLI.',
+    version: '1.0.0',
+    skills: './skills'
+  });
+  fs.mkdirSync(path.join(skillTarget, 'skills', name), { recursive: true });
+  copyRequiredFile(path.join(skillSource, 'SKILL.md'), path.join(skillTarget, 'skills', name, 'SKILL.md'), 'Xin Agent Skill');
+  const copied = copyDirectory(toolSource, toolTarget, 'Xin Agent CLI');
+  try {
+    fs.chmodSync(path.join(toolTarget, 'xin-agent-query'), 0o755);
+    fs.chmodSync(path.join(toolTarget, 'xin-agent-query.js'), 0o755);
+  } catch {
+    // Windows packaging uses the .cmd shim.
+  }
+  fs.writeFileSync(
+    path.join(toolTarget, 'manifest.json'),
+    `${JSON.stringify({
+      name,
+      version: '1.0.0',
+      platform: process.platform,
+      executable: process.platform === 'win32' ? 'xin-agent-query.cmd' : 'xin-agent-query',
+      source: 'EcoreX managed Xin Assistant CLI wrapper',
+      mode: 'direct-cli-json'
+    }, null, 2)}\n`,
+    'utf8'
+  );
+  console.log('Prepared managed Xin Assistant CLI 1.0.0');
+  console.log(`  runtime: ${path.relative(rootDir, toolTarget)} (${copied.files} files, ${copied.bytes} bytes)`);
+}
+
 removeRetiredManagedResources();
 prepareFeishuSkill();
 prepareAgentSkillCreator();
+prepareFrontendDesignSkill();
 prepareOfficeCli();
 prepareOpenCli();
+prepareXinAgentCli();

@@ -82,6 +82,8 @@ const BUNDLED_MANAGED_TOOLS_DIR_NAME = 'managed-tools';
 const LARK_CLI_SKILL_PACK_NAME = 'lark-cli';
 const OFFICE_CLI_SKILL_PACK_NAME = 'officecli';
 const OPENCLI_SKILL_PACK_NAME = 'opencli';
+const FRONTEND_DESIGN_SKILL_PACK_NAME = 'frontend-design';
+const XIN_AGENT_CLI_SKILL_PACK_NAME = 'xin-agent';
 const RUN_JOURNAL_FILE_NAME = 'agent-run-journal.jsonl';
 const CRASH_SUMMARY_FILE_NAME = 'crash-summary.json';
 const TELEMETRY_QUEUE_FILE_NAME = 'telemetry-queue.json';
@@ -139,6 +141,7 @@ const ATTACHMENT_INLINE_TEXT_CHARS = 16 * 1024;
 const ATTACHMENT_IMAGE_BASE64_SAMPLE_CHARS = 4096;
 const MAX_AGENT_ATTACHMENTS = 12;
 const MAX_ATTACHMENT_PROMPT_CHARS = 32 * 1024;
+const ATTACHMENT_STAGING_TTL_MS = 24 * 60 * 60 * 1000;
 const SELECTED_ATTACHMENT_ACCESS_TTL_MS = 4 * 60 * 60 * 1000;
 const MAX_SELECTED_ATTACHMENT_ACCESS = 200;
 const AGENT_ARTIFACT_ACCESS_TTL_MS = 24 * 60 * 60 * 1000;
@@ -191,8 +194,8 @@ const FULL_ACCESS_CLAUDE_FLAG = '--dangerously-skip-permissions';
 const PUBLIC_PERMISSION_MODES = ['default', FULL_ACCESS_PERMISSION_MODE];
 const WINDOW_CONTROL_ACTIONS = new Set(['minimize', 'maximize', 'close']);
 const USER_ROLE_PERMISSIONS = Object.freeze({
-  super_admin: ['profile:update', 'users:manage', 'enterprise:manage', 'settings:manage', 'secrets:manage', 'models:manage', 'mcp:manage', 'skills:manage', 'agent:operate'],
-  admin: ['profile:update', 'enterprise:manage', 'settings:manage', 'secrets:manage', 'models:manage', 'mcp:manage', 'skills:manage', 'agent:operate'],
+  super_admin: ['profile:update', 'users:manage', 'enterprise:manage', 'settings:manage', 'secrets:manage', 'models:manage', 'mcp:manage', 'skills:manage', 'agent:operate', 'xin:query'],
+  admin: ['profile:update', 'enterprise:manage', 'settings:manage', 'secrets:manage', 'models:manage', 'mcp:manage', 'skills:manage', 'agent:operate', 'xin:query'],
   user: ['profile:update', 'agent:operate']
 });
 const USER_ROLES = new Set(Object.keys(USER_ROLE_PERMISSIONS));
@@ -206,7 +209,7 @@ const PERMISSION_POLICIES = Object.freeze({
     cliMode: 'auto',
     cliFlags: [],
     label: '默认权限',
-    description: '联网搜索、网页读取和常规工具自动执行；文件读写、命令执行和系统目录访问继续按权限确认。',
+    description: '项目内读取、检索、diff、测试、构建等常规开发动作自动执行；写入/删除、安装依赖、部署上传、系统目录和高风险操作继续确认。',
     fullAccess: false
   },
   acceptEdits: {
@@ -325,7 +328,7 @@ const AGENT_SYSTEM_PROMPT = [
   '默认使用专业、可靠、面向业务结果的中文表达，输出要便于广告运营、市场、创意、数据分析与项目管理团队直接落地。',
   '输出不要使用星号作为 Markdown 标记，不要使用 *、** 或星号项目符号；列表请使用中文序号或短句换行。',
   '需要事实核验、外部资料、网页信息或时效性内容时，应主动使用联网检索与网页读取能力；需要本地资料时，应主动使用文件读取、写入、编辑、检索、命令执行和 MCP 工具。',
-  '联网搜索、网页读取和常规非文件工具不需要先询问用户，直接执行并在结果中说明来源；涉及读取、写入、编辑用户文件、运行命令或访问系统目录时，遵循权限确认。',
+  '联网搜索、网页读取、项目内文件读取/检索、git status/diff、测试、lint、build 和只读诊断命令不需要先询问用户，直接执行并在结果中说明来源；涉及写入/删除/覆盖文件、安装依赖、启动长驻服务、部署上传、git commit/push、凭据、系统目录或不可逆变更时，遵循权限确认。',
   '需要浏览器自动化、网页交互或截图校验时，优先使用 Playwright；Windows 安装版优先调用系统 Edge channel msedge。',
   '有限任务不要启动长期后台命令，除非用户明确要求后台运行；如命令被转入后台，必须立即查看输出、完成验证或停止该后台任务，不能把会话悬挂在等待状态。',
   '只有在已经给出明确最终结论、交付物路径或阻塞原因后，任务才算完成；如果授权、文件、路径或外部系统仍未完成，应明确说明待继续状态。'
@@ -339,19 +342,31 @@ const ECOREX_AGENT_SYSTEM_PROMPT = [
   '默认使用专业、可靠、面向业务结果的中文表达，输出要便于广告运营、市场、创意、数据分析与项目管理团队直接落地。',
   '输出不要使用星号作为 Markdown 标记，不要使用 *、** 或星号项目符号；列表请使用中文序号或短句换行。',
   '需要事实核验、外部资料、网页信息或时效性内容时，应主动使用联网检索与网页读取能力；需要本地资料时，应主动使用文件读取、写入、编辑、检索、命令执行和 MCP 工具。',
-  '联网搜索、网页读取和常规非文件工具不需要先询问用户，直接执行并在结果中说明来源；涉及读取、写入、编辑用户文件、运行命令或访问系统目录时，遵循权限确认。',
+  '联网搜索、网页读取、项目内文件读取/检索、git status/diff、测试、lint、build 和只读诊断命令不需要先询问用户，直接执行并在结果中说明来源；涉及写入/删除/覆盖文件、安装依赖、启动长驻服务、部署上传、git commit/push、凭据、系统目录或不可逆变更时，遵循权限确认。',
   '需要浏览器自动化、网页交互或截图校验时，优先使用 Playwright；Windows 安装版优先调用系统 Edge channel msedge。',
   '涉及飞书、浏览器 OAuth、扫码或外部授权时，必须把链接/二维码交给用户后标记为待授权或待继续；用户回复完成后先验证授权状态，再继续原任务，不能把“已发起授权”当作最终完成。'
 ].join('\n');
 
 const ECOREX_MANAGED_CAPABILITY_PRIORITY_PROMPT = [
   'Managed capability priority:',
-  '1. For DOCX, XLSX, PPTX, report, spreadsheet, slide deck, Office document creation, inspection, validation, or modification, prefer the officecli skill and OfficeCLI runtime first.',
-  '2. For browser automation, website workflows, logged-in web pages, or adapter-style website commands, prefer the opencli skill and OpenCLI runtime when available.',
-  '3. For Feishu/Lark setup or user authorization, prefer lark-cli split-flow/no-wait guidance when available; expose only the user-facing authorization link/QR, then wait for the user completion signal before continuing.',
-  '4. Fall back to direct local file generation only when the matching managed capability is unavailable or unsuitable, and explain the fallback briefly.',
-  '5. Keep progress narration brief. Do not stream private step-by-step reasoning. Surface only the current action, key finding, and next step when useful.',
-  '6. In chat, summarize work in short separated paragraphs like Codex status updates. Avoid repeating "I will check" style lines or raw diagnostic probes.'
+  '1. For PPT, report, webpage, dashboard, UI, visual analysis, and polished final artifacts, use the frontend-design skill as the default design layer first, then hand implementation to the matching managed capability.',
+  '2. For DOCX, XLSX, PPTX, report, spreadsheet, slide deck, Office document creation, inspection, validation, or modification, prefer the officecli skill and OfficeCLI runtime after the design structure is clear.',
+  '3. For browser automation, website workflows, logged-in web pages, or adapter-style website commands, prefer the opencli skill and OpenCLI runtime when available.',
+  '4. For Feishu/Lark setup or user authorization, prefer lark-cli split-flow/no-wait guidance when available; expose only the user-facing authorization link/QR, then wait for the user completion signal before continuing.',
+  '5. Fall back to direct local file generation only when the matching managed capability is unavailable or unsuitable, and explain the fallback briefly.',
+  '6. Keep progress narration brief. Do not stream private step-by-step reasoning. Surface only the current action, key finding, and next step when useful.',
+  '7. During execution, never repeat "I will check / I will continue / I will try" narration. Replace it with one current status line when needed.',
+  '8. Final chat output must contain only key results, key changes, verification status, risks, and next required user action. Use short separated paragraphs or concise bullets.'
+].join('\n');
+
+const ECOREX_DEVELOPER_WORKFLOW_PROMPT = [
+  'Developer workflow coverage:',
+  '1. EcoreX can inspect project structure, open/select local project folders, understand the current Git repository, keep code context across the task, trace call chains, and answer questions from whole-project context.',
+  '2. EcoreX can run test/lint/build/dev-server scripts, local scripts, Git commands, initialization commands, and package-manager commands such as npm, pnpm, pip, uv, and related project tools when available in the workspace.',
+  '3. EcoreX can plan which files to change, show before/after diffs, explain every change, accept further adjustment requests, answer questions about a specific diff, and summarize final changes, test status, risks, and remaining blockers.',
+  '4. EcoreX can add features, fix bugs, refactor code, change UI, adjust API logic, add configuration, improve error handling, remove dead code, generate or update tests, and update README/API/change/deployment/test documentation.',
+  '5. EcoreX can analyze logs, failed tests, runtime errors, modules, functions, classes, data structures, interface fields, database table designs, requirements, product flows, technical plans, task lists, development plans, and risk points.',
+  '6. For long tasks, keep progress updates short and useful: what changed, which files were touched, what failed or passed, and what still needs user confirmation.'
 ].join('\n');
 
 const ECOREX_GENERAL_CHAT_ISOLATION_PROMPT = [
@@ -454,6 +469,9 @@ function managedToolPathEntries() {
   const openCliBinDir = path.join(root, OPENCLI_SKILL_PACK_NAME, 'bin');
   const openCliCommand = path.join(openCliBinDir, isWindows ? 'opencli.cmd' : 'opencli');
   if (fs.existsSync(openCliCommand)) entries.push(openCliBinDir);
+  const xinAgentDir = path.join(root, XIN_AGENT_CLI_SKILL_PACK_NAME);
+  const xinAgentCommand = path.join(xinAgentDir, isWindows ? 'xin-agent-query.cmd' : 'xin-agent-query');
+  if (fs.existsSync(xinAgentCommand)) entries.push(xinAgentDir);
   return entries;
 }
 
@@ -594,8 +612,7 @@ function publicProductText(value = '') {
     .replace(/\bMCP servers?\b/gi, 'MCP')
     .replace(/\bMCP\b/gi, 'MCP')
     .replace(/\bplugin marketplace\b/gi, 'SKILLS library')
-    .replace(/\bplugins?\b/gi, 'SKILLS')
-    .replace(/\bCLI\b/gi, 'execution bridge');
+    .replace(/\bplugins?\b/gi, 'SKILLS');
 }
 
 function isInternalAgentOutputLine(value = '') {
@@ -605,6 +622,7 @@ function isInternalAgentOutputLine(value = '') {
   if (/Use `?node --trace-warnings`?/i.test(text)) return true;
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(text)) return true;
   if (/^(?:done|WEB_SEARCH_OK|No links found\.?|开始生成回复|正在同步输出|回复生成完成)$/i.test(text)) return true;
+  if (/^搜索工具返回[:：]\s*未检索到可直接展示的链接[。.]?$/i.test(text)) return true;
   if (/^WEB_SEARCH_OK/i.test(text)) return true;
   if (/^opencli\s+v?\d+(?:\.\d+)*\s+doctor\b/i.test(text) && /\b(?:daemon|extension|connectivity|missing|fail|ok)\b/i.test(text)) return true;
   if (/^opencli\s+v?\d+(?:\.\d+)*\s+doctor$/i.test(text)) return true;
@@ -643,7 +661,7 @@ function isDuplicatePublicStatusLine(value = '') {
 function cleanAgentDisplayLine(value = '') {
   let text = String(value || '').trimEnd();
   const numberTokens = text.match(/(?:^|\s)\d{1,3}(?=\s|$)/g) || [];
-  if (numberTokens.length >= 3 && /(https?:\/\/|open\.feishu\.cn|execution[_\s-]?bridge|授权|配置|链接|打开)/i.test(text)) {
+  if (numberTokens.length >= 3 && /(https?:\/\/|open\.feishu\.cn|page\/cli|execution[_\s-]*bridge|授权|配置|链接|打开)/i.test(text)) {
     text = text.replace(/(^|\s)\d{1,3}(?=\s|$)/g, '$1').replace(/\s{2,}/g, ' ').trim();
   }
   return text
@@ -652,9 +670,10 @@ function cleanAgentDisplayLine(value = '') {
     .replace(/\bNolinksfound\.?/gi, '未检索到可直接展示的链接')
     .replace(/("(?:base_token|folder_token|access_token|refresh_token)"\s*:\s*")[^"]+(")/gi, '$1***$2')
     .replace(/\b(base_token|folder_token|access_token|refresh_token)=([^\s,;]+)/gi, '$1=***')
-    .replace(/execution\s+bridge(?=user_code=)/gi, 'execution_bridge?')
-    .replace(/execution\s+bridge(?=\?user_code=)/gi, 'execution_bridge')
-    .replace(/from=execution\s+bridge\b/gi, 'from=execution_bridge');
+    .replace(/\/page\/execution[_\s-]*bridge(?=\?)/gi, '/page/cli')
+    .replace(/from=execution[_\s-]*bridge\b/gi, 'from=cli')
+    .replace(/execution[_\s-]*bridge(?=user_code=)/gi, 'cli?')
+    .replace(/execution[_\s-]*bridge(?=\?user_code=)/gi, 'cli');
 }
 
 function stripInternalAgentOutput(value = '') {
@@ -672,6 +691,36 @@ function stripInternalAgentOutput(value = '') {
     })
     .join('\n')
     .trim();
+}
+
+function normalizeDuplicatePublicSegment(value = '') {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[\s`*_~"'“”‘’()[\]{}<>《》【】,，.。!！?？:：;；、-]+/g, '');
+}
+
+function dedupePublicAgentText(value = '') {
+  const blocks = String(value || '').split(/(\n{2,})/);
+  const output = [];
+  const seen = new Set();
+  for (const block of blocks) {
+    if (/^\n{2,}$/.test(block)) {
+      if (output.length && !/^\n{2,}$/.test(output.at(-1))) output.push(block);
+      continue;
+    }
+    const comparable = normalizeDuplicatePublicSegment(block);
+    if (comparable && comparable.length >= 48 && seen.has(comparable)) {
+      if (/^\n{2,}$/.test(output.at(-1) || '')) output.pop();
+      continue;
+    }
+    output.push(block);
+    if (comparable && comparable.length >= 48) seen.add(comparable);
+  }
+  return output.join('').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function publicAgentText(value = '', limit = MAX_AGENT_EVENT_TEXT_CHARS) {
+  return dedupePublicAgentText(stripInternalAgentOutput(publicProductText(safeOutputText(value, limit))));
 }
 
 function hasPublicAgentOutput(value = '') {
@@ -854,25 +903,22 @@ function publicBridgeError(result = {}, fallback = 'EcoreX operation failed.') {
   return text || fallback;
 }
 
-function publicAgentText(value = '', limit = MAX_AGENT_EVENT_TEXT_CHARS) {
-  return stripInternalAgentOutput(publicProductText(safeOutputText(value, limit)));
-}
-
 function cleanAgentUrlToken(value = '') {
   return String(value || '')
     .trim()
     .replace(/^['"`<([{]+/, '')
     .replace(/['"`>)\]}.,;，。；]+$/g, '')
     .replace(/\s+/g, '')
-    .replace(/execution\s+bridge(?=user_code=)/gi, 'execution_bridge?')
-    .replace(/execution\s+bridge(?=\?user_code=)/gi, 'execution_bridge')
-    .replace(/from=execution\s+bridge\b/gi, 'from=execution_bridge');
+    .replace(/\/page\/execution[_\s-]*bridge(?=\?)/gi, '/page/cli')
+    .replace(/from=execution[_\s-]*bridge\b/gi, 'from=cli')
+    .replace(/execution[_\s-]*bridge(?=user_code=)/gi, 'cli?')
+    .replace(/execution[_\s-]*bridge(?=\?user_code=)/gi, 'cli');
 }
 
 function externalAuthorizationRequestFromText(value = '') {
   const text = String(value || '');
   if (!text) return null;
-  const urlMatch = text.match(/https?:\/\/open\.feishu\.cn\/page\/execution[_\s-]?bridge\??[^\s"'<>）)】\]]*/i)
+  const urlMatch = text.match(/https?:\/\/open\.feishu\.cn\/page\/(?:cli|execution[_\s-]*bridge)\??[^\s"'<>）)】\]]*/i)
     || text.match(/https?:\/\/[^\s"'<>）)】\]]*(?:oauth|authorize|device|verification|auth)[^\s"'<>）)】\]]*/i);
   const url = cleanAgentUrlToken(urlMatch?.[0] || '');
   const codeMatch = text.match(/\b(?:user[_ -]?code|device[_ -]?code|verification[_ -]?code)\s*[:：=]\s*([A-Z0-9][A-Z0-9_-]{3,80})/i);
@@ -960,9 +1006,13 @@ function runtimeAuthorizationRequestFromValue(value, context = {}) {
   const url =
     cleanAgentUrlToken(firstDeepString(parsed, [
       'verification_url',
+      'verification_url_complete',
       'verification_uri',
+      'verification_uri_complete',
       'verificationUrl',
+      'verificationUrlComplete',
       'verificationUri',
+      'verificationUriComplete',
       'auth_url',
       'authUrl',
       'authorize_url',
@@ -970,7 +1020,7 @@ function runtimeAuthorizationRequestFromValue(value, context = {}) {
       'url',
       'link'
     ]))
-    || cleanAgentUrlToken(rawText.match(/https?:\/\/open\.feishu\.cn\/page\/execution[_\s-]?bridge\??[^\s"'<>锛?銆慭\]]*/i)?.[0] || '')
+    || cleanAgentUrlToken(rawText.match(/https?:\/\/open\.feishu\.cn\/page\/(?:cli|execution[_\s-]*bridge)\??[^\s"'<>锛?銆慭\]]*/i)?.[0] || '')
     || cleanAgentUrlToken(rawText.match(/https?:\/\/[^\s"'<>锛?銆慭\]]*(?:oauth|authorize|device|verification|auth)[^\s"'<>锛?銆慭\]]*/i)?.[0] || '');
   const deviceCode = firstDeepString(parsed, ['device_code', 'deviceCode']);
   const userCode =
@@ -1645,6 +1695,14 @@ function isolatedAgentRuntimeEnv(authContext = null) {
     ECOREX_OPENCLI_CDP_PORT: openCliCdpPort,
     ECOREX_OPENCLI_HOME: openCliHome,
     ECOREX_OPENCLI_EXTENSION_DIR: openCliExtensionDir,
+    ECOREX_AUTH_ROLE: normalizeUserRole(authContext?.user?.role || 'user'),
+    ECOREX_AUTH_PERMISSIONS: (authContext?.permissions || []).join(','),
+    ECOREX_XIN_AGENT_ALLOWED: authContextHasPermission(authContext, 'xin:query') ? '1' : '0',
+    ECOREX_XIN_AGENT_REMOTE: process.env.ECOREX_XIN_AGENT_REMOTE || 'ubuntu@140.143.183.53',
+    ECOREX_XIN_AGENT_REMOTE_PORT: process.env.ECOREX_XIN_AGENT_REMOTE_PORT || '22',
+    ECOREX_XIN_AGENT_REMOTE_CWD: process.env.ECOREX_XIN_AGENT_REMOTE_CWD || '/opt/xhs-report',
+    ECOREX_XIN_AGENT_SSH_HOME: process.env.USERPROFILE || process.env.HOME || '',
+    ECOREX_XIN_AGENT_SSH_PROGRAMDATA: process.env.ProgramData || '',
     CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
     ECOREX_SKILL_SCOPE: 'bundled-only'
   };
@@ -5671,7 +5729,13 @@ function sanitizePayload(payload = {}) {
         .filter((plugin) => !isBlockedLocalSkillName(plugin))
         .slice(0, 12)
     : [];
-  const attachmentContext = ingestAgentAttachments(payload, { cwd, projectContext });
+  const attachmentContext = ingestAgentAttachments(payload, {
+    cwd,
+    projectContext,
+    sessionId: sanitizeSessionId(payload.sessionId),
+    conversationId: sanitizeSessionId(payload.conversationId || payload.sessionId),
+    includePromptText: true
+  });
   const prompt = composePromptWithAttachmentContext(userPrompt, attachmentContext, maxPromptChars);
 
   return {
@@ -5884,6 +5948,7 @@ function agentSystemPromptForProject(projectContext) {
     return [
       ECOREX_AGENT_SYSTEM_PROMPT,
       ECOREX_MANAGED_CAPABILITY_PRIORITY_PROMPT,
+      ECOREX_DEVELOPER_WORKFLOW_PROMPT,
       ECOREX_GENERAL_CHAT_ISOLATION_PROMPT
     ].filter(Boolean).join('\n\n');
   }
@@ -5907,6 +5972,7 @@ function agentSystemPromptForProject(projectContext) {
   return [
     ECOREX_AGENT_SYSTEM_PROMPT,
     ECOREX_MANAGED_CAPABILITY_PRIORITY_PROMPT,
+    ECOREX_DEVELOPER_WORKFLOW_PROMPT,
     '',
     '当前任务已绑定到一个 EcoreX 广告项目。你必须把文件读写、命令执行和长期记忆限制在该项目上下文内。',
     fields.join('\n'),
@@ -6294,6 +6360,7 @@ function createWindow() {
 app.whenReady().then(createWindow);
 
 app.whenReady().then(() => {
+  pruneDefaultAgentAttachmentStaging();
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     const responseUrl = String(details.url || '');
     if (/^http:\/\/127\.0\.0\.1:(?!5188(?:\/|$))/.test(responseUrl)) {
@@ -6896,11 +6963,21 @@ function substantiveAgentResultText(value = '') {
 
 function agentSessionHasSubstantiveResult(entry = {}) {
   if (entry.hasSubstantiveResult) return true;
-  return Array.isArray(entry.transcript) && entry.transcript.some((event) => (
+  const events = Array.isArray(entry.transcript) ? entry.transcript : [];
+  if (events.some((event) => (
     event?.kind === 'result'
-    && !['authorization-incomplete', 'authorization-required', 'waiting-auth', 'user-action-required', 'waiting-input'].includes(String(event.status || '').toLowerCase())
+    && !agentEventHasPendingUserActionStatus(event)
     && !['failed', 'error'].includes(String(event.status || '').toLowerCase())
     && (Boolean(substantiveAgentResultText(event.textPreview || event.text || '')) || Boolean(event.artifacts?.length))
+  ))) {
+    return true;
+  }
+  return events.some((event) => (
+    event?.kind === 'assistant'
+    && !agentEventHasPendingUserActionStatus(event)
+    && Boolean(substantiveAgentResultText(event.textPreview || event.text || ''))
+    && !agentOutputLooksUnresolvedAuthorization(event.textPreview || event.text || '')
+    && !agentOutputLooksProcessOnly(event.textPreview || event.text || '')
   ));
 }
 
@@ -6914,6 +6991,18 @@ function agentSessionPublicText(entry = {}) {
     .join('\n');
 }
 
+function agentEventHasPendingUserActionStatus(event = {}) {
+  const status = String(event?.status || event?.state || '').toLowerCase();
+  return ['authorization-incomplete', 'authorization-required', 'waiting-auth', 'user-action-required', 'waiting-input', 'permission-required', 'approval-required', 'blocked-user-action'].includes(status);
+}
+
+function agentOutputLooksProcessOnly(value = '') {
+  const text = safeTranscriptText(value);
+  if (!text) return false;
+  if (/(已完成|完成整理|最终|结果|总结|交付|报告|清单|分类结果|核对结果|当前已交付|todo|风险|原因找到了)/i.test(text)) return false;
+  return /^(正在|我会|我将|我先|准备|开始|继续|下一步|已读取.{0,80}准备|当前阻塞[:：])/i.test(text);
+}
+
 function agentOutputLooksCompletedAuthorization(value = '') {
   const text = String(value || '');
   if (!text) return false;
@@ -6923,9 +7012,9 @@ function agentOutputLooksCompletedAuthorization(value = '') {
 function agentOutputLooksUnresolvedAuthorization(value = '') {
   const text = String(value || '');
   if (!text || agentOutputLooksCompletedAuthorization(text)) return false;
-  const targetsAuth = /(飞书|feishu|lark|larksuite|lark-cli|open\.feishu\.cn|oauth|device[_ -]?code|verification[_ -]?url|verification[_ -]?uri)/i.test(text);
+  const targetsAuth = /(飞书|feishu|lark|larksuite|lark-cli|open\.feishu\.cn|page\/cli|oauth|device[_ -]?code|verification[_ -]?url|verification[_ -]?uri)/i.test(text);
   if (!targetsAuth) return false;
-  return /(授权飞书|飞书.*授权|lark-cli\s+(?:config\s+init|auth\s+login)|config\s+init\s+--new|device[_ -]?code|verification[_ -]?(?:url|uri)|open\.feishu\.cn|user_code=|二维码|扫码|打开.*链接|等待.*(?:授权|配置)|not configured|run `?lark-cli (?:config init|auth login))/i.test(text);
+  return /(授权飞书|飞书.*授权|lark-cli\s+(?:config\s+init|auth\s+login|auth\s+qrcode)|config\s+init\s+--new|device[_ -]?code|verification[_ -]?(?:url|uri)|open\.feishu\.cn|page\/cli|user_code=|二维码|扫码|打开.*链接|等待.*(?:授权|配置)|not configured|run `?lark-cli (?:config init|auth login|auth qrcode))/i.test(text);
 }
 
 function authorizationStateFromStructuredEvent(event = {}) {
@@ -6961,6 +7050,7 @@ function agentSessionHasUnresolvedUserBlocker(entry = {}) {
   })) {
     return true;
   }
+  if (agentSessionHasSubstantiveResult(entry)) return false;
   const text = agentSessionPublicText(entry);
   if (!text) return false;
   return /(?:unable|cannot|can't|not able|blocked|waiting for user|need user|no input file|missing input|cannot determine|please.{0,40}(?:upload|provide|tell|share))|(?:\u65e0\u6cd5|\u4e0d\u80fd|\u6682\u65f6\u65e0\u6cd5|\u672a\u80fd).{0,80}(?:\u5b8c\u6210|\u751f\u6210|\u7ee7\u7eed|\u5224\u65ad|\u53d1\u8d77|\u914d\u7f6e)|(?:\u8bf7|\u9700\u8981).{0,40}(?:\u4e0a\u4f20|\u63d0\u4f9b|\u544a\u8bc9|\u8865\u5145|\u8def\u5f84|\u6587\u4ef6|\u786e\u8ba4|\u5141\u8bb8|\u6388\u6743)|\u6743\u9650.{0,24}(?:\u7b56\u7565|\u62e6\u622a|\u786e\u8ba4|\u5141\u8bb8|\u6279\u51c6)|\u88ab.{0,24}\u6743\u9650.{0,24}(?:\u62e6\u622a|\u963b\u6b62)|\u6743\u9650\u786e\u8ba4\u5361|\u98de\u4e66.{0,24}(?:\u914d\u7f6e|\u6388\u6743).{0,24}(?:\u547d\u4ee4|\u88ab\u62e6\u622a)/i.test(text);
@@ -7264,6 +7354,9 @@ function finalizeAgentSession(sessionId, entry, details = {}) {
     code: details.code,
     signal: details.signal
   });
+  if (!['authorization-incomplete', 'user-action-required'].includes(status)) {
+    cleanupAgentAttachmentStagingFiles(entry.attachmentContext?.stagedFiles || []);
+  }
   emitAgentEvent(event, { immediate: true });
   return true;
 }
@@ -7381,6 +7474,431 @@ function commandOutput(command, args = [], options = {}) {
       finish({ ok: code === 0, code, stdout: stdout.trim(), stderr: stderr.trim(), truncated });
     });
   });
+}
+
+const XIN_AGENT_QUERY_COMMANDS = new Set([
+  'schema',
+  'account list',
+  'project list',
+  'project detail',
+  'report summary',
+  'task list',
+  'user list',
+  'sync state',
+  'sync changes'
+]);
+const XIN_AGENT_PLATFORMS = new Set(['xhs', 'bili']);
+const XIN_AGENT_XHS_CHANNELS = new Set(['spotlight', 'chengfeng']);
+
+function xinAgentError(code, message, extra = {}) {
+  return {
+    ok: false,
+    error: {
+      code,
+      message
+    },
+    ...extra
+  };
+}
+
+function normalizeXinAgentCommand(value = '') {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ');
+}
+
+function normalizeXinAgentDate(value = '') {
+  const text = String(value || '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : '';
+}
+
+function normalizeXinAgentDateTime(value = '') {
+  const text = String(value || '').trim().replace('T', ' ');
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return `${text} 00:00:00`;
+  return /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}$/.test(text) ? text : '';
+}
+
+function normalizeXinAgentInteger(value, fallback = 0) {
+  const number = Number.parseInt(String(value ?? ''), 10);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function normalizeXinAgentBoolean(value) {
+  if (typeof value === 'boolean') return value;
+  const text = String(value ?? '').trim().toLowerCase();
+  return ['1', 'true', 'yes', 'y', 'on', 'include'].includes(text);
+}
+
+function normalizeXinAgentId(value = '', label = 'id') {
+  const text = String(value || '').trim();
+  if (!/^\d{1,32}$/.test(text)) throw new Error(`${label} is required.`);
+  return text;
+}
+
+function normalizeXinAgentQuery(payload = {}) {
+  const input = optionalObjectPayload(payload, 'xin agent query payload');
+  const command = normalizeXinAgentCommand(input.command || input.action || '');
+  if (!XIN_AGENT_QUERY_COMMANDS.has(command)) {
+    throw new Error('Unsupported xin-agent command.');
+  }
+  if (command === 'schema') return { command, args: ['schema'] };
+
+  const limit = Math.max(1, Math.min(500, normalizeXinAgentInteger(input.limit, 500)));
+  const offset = Math.max(0, normalizeXinAgentInteger(input.offset, 0));
+
+  if (command === 'sync state') {
+    return { command, args: ['sync', 'state'] };
+  }
+
+  if (command === 'sync changes') {
+    const since = normalizeXinAgentDateTime(input.since || input.since_at || input.sinceAt);
+    if (!since) throw new Error('since is required as YYYY-MM-DD HH:mm:ss.');
+    return {
+      command,
+      since,
+      limit,
+      args: ['sync', 'changes', '--since', since, '--limit', String(limit)]
+    };
+  }
+
+  if (command === 'project detail') {
+    const projectId = normalizeXinAgentId(input.project_id || input.projectId, 'project_id');
+    return {
+      command,
+      project_id: projectId,
+      limit,
+      args: ['project', 'detail', '--project-id', projectId, '--limit', String(limit)]
+    };
+  }
+
+  if (command === 'task list') {
+    const projectId = normalizeXinAgentId(input.project_id || input.projectId, 'project_id');
+    const includeArchived = normalizeXinAgentBoolean(input.include_archived || input.includeArchived);
+    const args = ['task', 'list', '--project-id', projectId];
+    if (includeArchived) args.push('--include-archived');
+    args.push('--limit', String(limit));
+    return {
+      command,
+      project_id: projectId,
+      include_archived: includeArchived,
+      limit,
+      args
+    };
+  }
+
+  if (command === 'user list') {
+    const includeResigned = normalizeXinAgentBoolean(input.include_resigned || input.includeResigned);
+    const args = ['user', 'list'];
+    if (includeResigned) args.push('--include-resigned');
+    args.push('--limit', String(limit));
+    return {
+      command,
+      include_resigned: includeResigned,
+      limit,
+      args
+    };
+  }
+
+  const platform = String(input.platform || 'xhs').trim().toLowerCase();
+  if (!XIN_AGENT_PLATFORMS.has(platform)) throw new Error('Unsupported xin-agent platform.');
+  if (command === 'project list' && platform !== 'xhs') {
+    throw new Error('project list currently supports xhs only.');
+  }
+
+  const xhsChannel = String(input.xhs_channel || input.xhsChannel || input.channel || 'spotlight').trim().toLowerCase();
+  if (platform === 'xhs' && !XIN_AGENT_XHS_CHANNELS.has(xhsChannel)) {
+    throw new Error('Unsupported xhs channel.');
+  }
+
+  const args = command.split(' ');
+  args.push('--source', 'mpi', '--platform', platform);
+  if (platform === 'xhs') args.push('--xhs-channel', xhsChannel);
+
+  const accountId = String(input.account_id || input.accountId || '').trim();
+  if (['project list', 'report summary'].includes(command)) {
+    if (!/^\d{1,32}$/.test(accountId)) throw new Error('account_id is required.');
+    args.push('--account-id', accountId);
+  }
+
+  const startDate = normalizeXinAgentDate(input.start_date || input.startDate);
+  const endDate = normalizeXinAgentDate(input.end_date || input.endDate);
+  if (['project list', 'report summary'].includes(command)) {
+    if (!startDate || !endDate) throw new Error('start_date and end_date are required.');
+    args.push('--start-date', startDate, '--end-date', endDate);
+  }
+
+  args.push('--limit', String(limit), '--offset', String(offset));
+  return {
+    command,
+    platform,
+    xhs_channel: platform === 'xhs' ? xhsChannel : undefined,
+    account_id: accountId || undefined,
+    start_date: startDate || undefined,
+    end_date: endDate || undefined,
+    limit,
+    offset,
+    args
+  };
+}
+
+function posixQuote(value = '') {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function xinAgentCliInvocation(args = []) {
+  const explicitMode = String(process.env.ECOREX_XIN_AGENT_MODE || '').trim().toLowerCase();
+  const localAppDir = process.env.ECOREX_XIN_AGENT_APP_DIR || '/app';
+  const localDockerDir = process.env.ECOREX_XIN_AGENT_DOCKER_DIR || '/opt/xhs-report';
+  const remote = String(process.env.ECOREX_XIN_AGENT_REMOTE || 'ubuntu@140.143.183.53').trim();
+  const remotePort = String(process.env.ECOREX_XIN_AGENT_REMOTE_PORT || '22').trim();
+  const remoteCwd = String(process.env.ECOREX_XIN_AGENT_REMOTE_CWD || '/opt/xhs-report').trim();
+
+  if (
+    explicitMode === 'direct'
+    || (!isWindows && fs.existsSync(path.join(localAppDir, 'xin_agent_cli.py')))
+  ) {
+    return {
+      command: process.env.ECOREX_XIN_AGENT_PYTHON || 'python',
+      args: ['xin_agent_cli.py', ...args],
+      cwd: localAppDir,
+      mode: 'direct'
+    };
+  }
+
+  if (
+    explicitMode === 'docker'
+    || (!isWindows && fs.existsSync(localDockerDir))
+  ) {
+    return {
+      command: process.env.ECOREX_XIN_AGENT_DOCKER_COMMAND || 'sudo',
+      args: ['docker', 'compose', 'exec', '-T', 'web', 'python', 'xin_agent_cli.py', ...args],
+      cwd: localDockerDir,
+      mode: 'docker'
+    };
+  }
+
+  if (!remote) {
+    return { command: '', args: [], cwd: defaultCommandCwd(), mode: 'missing' };
+  }
+  const remoteCommand = [
+    'cd',
+    posixQuote(remoteCwd),
+    '&&',
+    'sudo',
+    'docker',
+    'compose',
+    'exec',
+    '-T',
+    'web',
+    'python',
+    'xin_agent_cli.py',
+    ...args.map(posixQuote)
+  ].join(' ');
+  return {
+    command: process.env.ECOREX_XIN_AGENT_SSH_COMMAND || 'ssh',
+    args: ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', '-p', remotePort, remote, remoteCommand],
+    cwd: defaultCommandCwd(),
+    mode: 'ssh'
+  };
+}
+
+function parseXinAgentJsonStdout(stdout = '') {
+  const text = String(stdout || '').trim();
+  if (!text) return null;
+  for (const line of text.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)) {
+    if (!line.startsWith('{')) continue;
+    try {
+      return JSON.parse(line);
+    } catch {
+      // Keep looking; the CLI contract is one JSON object on stdout.
+    }
+  }
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    try {
+      return JSON.parse(text.slice(start, end + 1));
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+async function runXinAgentQuery(payload = {}, authContext = null) {
+  if (!authContextHasPermission(authContext, 'xin:query')) {
+    return forbiddenResponse('xin:query');
+  }
+  let query;
+  try {
+    query = normalizeXinAgentQuery(payload);
+  } catch (error) {
+    return xinAgentError('invalid-query', error instanceof Error ? error.message : String(error));
+  }
+  const invocation = xinAgentCliInvocation(query.args);
+  if (!invocation.command) {
+    return xinAgentError('not-configured', 'xin-agent CLI location is not configured.');
+  }
+  const runtimeEnv = isolatedAgentRuntimeEnv(authContext);
+  if (invocation.mode === 'ssh') {
+    for (const key of ['HOME', 'USERPROFILE', 'APPDATA', 'HOMEDRIVE', 'HOMEPATH', 'ProgramData', 'WINDIR', 'SystemRoot']) {
+      if (process.env[key]) runtimeEnv[key] = process.env[key];
+    }
+  }
+  const output = await commandOutput(invocation.command, invocation.args, {
+    cwd: invocation.cwd,
+    timeoutMs: Math.max(5000, Math.min(120000, normalizeXinAgentInteger(payload.timeoutMs, 60000))),
+    includeSecrets: false,
+    env: runtimeEnv
+  });
+  const parsed = parseXinAgentJsonStdout(output.stdout);
+  if (!parsed) {
+    return xinAgentError('invalid-json', 'xin-agent CLI did not return JSON.', {
+      meta: {
+        mode: invocation.mode,
+        exitCode: output.code,
+        stderr: safeOutputText(output.stderr, 800),
+        stdout: safeOutputText(output.stdout, 800)
+      }
+    });
+  }
+  return {
+    ok: parsed.ok === true,
+    data: parsed.data ?? null,
+    error: parsed.ok === true ? null : (parsed.error || { code: 'cli-error', message: 'xin-agent CLI returned ok=false.' }),
+    meta: {
+      ...(parsed.meta && typeof parsed.meta === 'object' ? parsed.meta : {}),
+      mode: invocation.mode,
+      command: query.command,
+      platform: query.platform || null,
+      xhs_channel: query.xhs_channel || null,
+      account_id: query.account_id || null,
+      project_id: query.project_id || null,
+      start_date: query.start_date || null,
+      end_date: query.end_date || null,
+      since: query.since || null,
+      include_archived: Boolean(query.include_archived),
+      include_resigned: Boolean(query.include_resigned),
+      limit: query.limit || null,
+      offset: query.offset || null,
+      exitCode: output.code,
+      truncated: Boolean(output.truncated)
+    }
+  };
+}
+
+function xinAgentDatesFromText(text = '') {
+  const dates = [...String(text || '').matchAll(/\b(20\d{2}-\d{2}-\d{2})\b/g)].map((match) => match[1]);
+  return { start_date: dates[0] || '', end_date: dates[1] || dates[0] || '' };
+}
+
+function xinAgentAccountIdFromText(text = '') {
+  const source = String(text || '');
+  const unicode = source.match(/(?:--account-id|account[_ -]?id|\u8d26\u53f7\s*id|\u8d26\u6237\s*id|\u8d26\u53f7ID|\u8d26\u6237ID)\D{0,12}(\d{1,32})/i)?.[1];
+  if (unicode) return unicode;
+  const explicit = source.match(/(?:--account-id|account[_ -]?id|账号\s*id|账户\s*id|账号ID|账户ID)\D{0,12}(\d{4,32})/i)?.[1];
+  if (explicit) return explicit;
+  return '';
+}
+
+function xinAgentProjectIdFromText(text = '') {
+  const source = String(text || '');
+  const explicit = source.match(/(?:--project-id|project[_ -]?id|\u9879\u76ee\s*id|\u9879\u76eeID)\D{0,12}(\d{1,32})/i)?.[1];
+  if (explicit) return explicit;
+  return '';
+}
+
+function xinAgentSinceFromText(text = '') {
+  const source = String(text || '');
+  const match = source.match(/(?:--since|since|\u4ece|\u81ea|changes?\s+since)\D{0,16}["']?(\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}:\d{2})?)["']?/i);
+  return normalizeXinAgentDateTime(match?.[1] || '');
+}
+
+function xinAgentLimitFromText(text = '') {
+  const unicodeMatch = String(text || '').match(/(?:limit|\u9650\u5236|\u6700\u5927|\u524d)\D{0,8}(\d{1,4})/i);
+  if (unicodeMatch) return Math.max(1, Math.min(500, Number.parseInt(unicodeMatch[1], 10) || 500));
+  const match = String(text || '').match(/(?:limit|限制|最多|前)\D{0,8}(\d{1,4})/i);
+  return match ? Math.max(1, Math.min(500, Number.parseInt(match[1], 10) || 500)) : 500;
+}
+
+function xinAgentExtendedNaturalQuery(prompt = '') {
+  const text = String(prompt || '');
+  const hasXinSource = /(xin[_ -]?agent|xhs|bili|\u82af\u52a9\u624b|\u5c0f\u7ea2\u4e66|\u805a\u5149|\u4e58\u98ce|B\u7ad9|\u6295\u653e|\u62a5\u8868)/i.test(text);
+  const hasExplicitCommand = /(project\s*detail|task\s*list|user\s*list|sync\s*state|sync\s*changes|--project-id|--include-archived|--include-resigned|\u9879\u76ee\u8be6\u60c5|\u4efb\u52a1\u5217\u8868|\u4efb\u52a1\u6e05\u5355|\u7528\u6237\u5217\u8868|\u6210\u5458\u5217\u8868|\u540c\u6b65\u72b6\u6001|\u540c\u6b65\u53d8\u66f4|\u589e\u91cf)/i.test(text);
+  if (!hasXinSource && !hasExplicitCommand) return null;
+  if (/(sync\s*state|\u540c\u6b65\u72b6\u6001|row_count|fingerprint|\u884c\u6570|\u6307\u7eb9)/i.test(text)) {
+    return { command: 'sync state' };
+  }
+  if (/(sync\s*changes|\u540c\u6b65\u53d8\u66f4|\u589e\u91cf|\u65b0\u589e|\u66f4\u65b0|\u53d8\u66f4)/i.test(text)) {
+    return { command: 'sync changes', since: xinAgentSinceFromText(text), limit: xinAgentLimitFromText(text) };
+  }
+  if (/(project\s*detail|\u9879\u76ee\u8be6\u60c5|\u9879\u76ee\u660e\u7ec6)/i.test(text)) {
+    return { command: 'project detail', project_id: xinAgentProjectIdFromText(text), limit: xinAgentLimitFromText(text) };
+  }
+  if (/(task\s*list|\u4efb\u52a1\u5217\u8868|\u4efb\u52a1\u6e05\u5355)/i.test(text) || (/\u4efb\u52a1/i.test(text) && xinAgentProjectIdFromText(text))) {
+    return {
+      command: 'task list',
+      project_id: xinAgentProjectIdFromText(text),
+      include_archived: /(?:--include-archived|include[_ -]?archived|\u5305\u542b\u5f52\u6863|\u542b\u5f52\u6863|\u5df2\u5f52\u6863)/i.test(text),
+      limit: xinAgentLimitFromText(text)
+    };
+  }
+  if (/(user\s*list|\u7528\u6237\u5217\u8868|\u6210\u5458\u5217\u8868|\u5458\u5de5\u5217\u8868|\u79bb\u804c)/i.test(text)) {
+    return {
+      command: 'user list',
+      include_resigned: /(?:--include-resigned|include[_ -]?resigned|\u5305\u542b\u79bb\u804c|\u542b\u79bb\u804c|\u5df2\u79bb\u804c)/i.test(text),
+      limit: xinAgentLimitFromText(text)
+    };
+  }
+  return null;
+}
+
+function xinAgentNaturalQueryFromText(text = '') {
+  const prompt = String(text || '').trim();
+  if (!prompt) return null;
+  const lower = prompt.toLowerCase();
+  const extendedQuery = xinAgentExtendedNaturalQuery(prompt);
+  if (extendedQuery) return extendedQuery;
+  const relevant = /(芯助手|xin[_ -]?agent|小红书|聚光|乘风|xhs|b站|bili|账号列表|账户列表|项目列表|投放报表|投放数据|报表数据|account list|project list|report summary)/i.test(prompt);
+  if (!relevant) return null;
+  let command = '';
+  if (/(schema|字段|命令|支持什么|能力清单|数据结构)/i.test(prompt)) command = 'schema';
+  else if (/(账号|账户|account)\s*(列表|清单|list)?/i.test(prompt)) command = 'account list';
+  else if (/(项目|project)\s*(列表|清单|list)?/i.test(prompt)) command = 'project list';
+  else if (/(报表|summary|消耗|曝光|点击|转化|数据|效果)/i.test(prompt)) command = 'report summary';
+  if (!command) return null;
+  if (command === 'schema') return { command };
+  const platform = /(b站|哔哩|bili)/i.test(prompt) ? 'bili' : 'xhs';
+  const xhsChannel = /(乘风|chengfeng)/i.test(prompt) ? 'chengfeng' : 'spotlight';
+  const dates = xinAgentDatesFromText(prompt);
+  const query = {
+    command,
+    platform,
+    xhs_channel: platform === 'xhs' ? xhsChannel : undefined,
+    account_id: xinAgentAccountIdFromText(prompt),
+    start_date: dates.start_date,
+    end_date: dates.end_date,
+    limit: xinAgentLimitFromText(prompt),
+    offset: normalizeXinAgentInteger(lower.match(/offset\D{0,8}(\d+)/i)?.[1], 0)
+  };
+  return query;
+}
+
+async function runXinAgentNaturalQuery(payload = {}, authContext = null) {
+  if (!authContextHasPermission(authContext, 'xin:query')) {
+    return forbiddenResponse('xin:query');
+  }
+  const input = optionalObjectPayload(payload, 'xin agent natural query payload');
+  const query = xinAgentNaturalQueryFromText(input.prompt || input.text || input.query || '');
+  if (!query) return { ok: true, matched: false };
+  const result = await runXinAgentQuery(query, authContext);
+  return {
+    ...result,
+    matched: true,
+    query
+  };
 }
 
 function nativeClaudePackageName() {
@@ -9160,6 +9678,127 @@ function isImageAttachmentMime(mimeType = '') {
   return /^image\/(png|jpe?g|webp|gif|svg\+xml)$/i.test(String(mimeType || ''));
 }
 
+function imageAttachmentStagingExtension(metadata = {}) {
+  const extension = String(metadata.extension || '').toLowerCase();
+  if (['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg'].includes(extension)) return extension;
+  const mime = String(metadata.mimeType || '').toLowerCase();
+  if (/jpe?g/.test(mime)) return '.jpg';
+  if (/webp/.test(mime)) return '.webp';
+  if (/gif/.test(mime)) return '.gif';
+  if (/svg/.test(mime)) return '.svg';
+  return '.png';
+}
+
+function safeAttachmentStageSessionName(value = '') {
+  const text = String(value || '').replace(/[^a-zA-Z0-9_.-]+/g, '-').slice(0, 80);
+  return text || 'session';
+}
+
+function relativeAttachmentStagePath(cwd = '', target = '') {
+  const root = String(cwd || '').trim();
+  if (!root) return target;
+  try {
+    const resolvedRoot = path.resolve(root);
+    const resolvedTarget = path.resolve(target);
+    if (!isPathInside(resolvedRoot, resolvedTarget)) return resolvedTarget;
+    const relative = path.relative(resolvedRoot, resolvedTarget);
+    return relative && !relative.startsWith('..') ? relative : resolvedTarget;
+  } catch {
+    return target;
+  }
+}
+
+function safeAttachmentStagingRoot(context = {}) {
+  const cwd = String(context.cwd || '').trim();
+  try {
+    if (cwd) {
+      const resolved = path.resolve(cwd);
+      if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
+        return resolved;
+      }
+    }
+  } catch {
+    // Fall through to the controlled general workspace.
+  }
+  return generalAgentWorkspaceDir();
+}
+
+function pruneAgentAttachmentStagingDir(baseDir, now = Date.now()) {
+  const root = path.resolve(String(baseDir || ''));
+  if (!root || path.basename(root) !== '.ecorex-attachments' || !fs.existsSync(root)) return;
+  let entries = [];
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const target = path.join(root, entry.name);
+    const resolved = path.resolve(target);
+    if (!isPathInside(root, resolved)) continue;
+    try {
+      const stat = fs.statSync(resolved);
+      if (now - stat.mtimeMs <= ATTACHMENT_STAGING_TTL_MS) continue;
+      if (entry.isDirectory()) {
+        fs.rmSync(resolved, { recursive: true, force: true });
+      } else if (entry.isFile()) {
+        fs.unlinkSync(resolved);
+      }
+    } catch {
+      // Staging cleanup is best-effort.
+    }
+  }
+}
+
+function agentAttachmentStagingDir(context = {}) {
+  const root = safeAttachmentStagingRoot(context);
+  const baseDir = path.join(root, '.ecorex-attachments');
+  pruneAgentAttachmentStagingDir(baseDir);
+  const dir = path.join(baseDir, safeAttachmentStageSessionName(context.sessionId || context.conversationId || 'session'));
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function stageImageAttachmentForAgent(buffer, metadata = {}, digest = sha256Hex(buffer), context = {}) {
+  const extension = imageAttachmentStagingExtension(metadata);
+  const fileName = `${safeAttachmentName(metadata.name || 'image', 'image').replace(/[^\w.-]+/g, '_').slice(0, 80) || 'image'}-${digest.slice(0, 16)}${extension}`;
+  const target = path.join(agentAttachmentStagingDir(context), fileName);
+  fs.writeFileSync(target, buffer);
+  return {
+    path: target,
+    label: relativeAttachmentStagePath(context.cwd, target)
+  };
+}
+
+function cleanupAgentAttachmentStagingFiles(files = []) {
+  const uniqueFiles = [...new Set((Array.isArray(files) ? files : []).map((item) => path.resolve(String(item || ''))).filter(Boolean))];
+  for (const file of uniqueFiles) {
+    if (!file.split(/[\\/]+/).includes('.ecorex-attachments')) continue;
+    try {
+      if (fs.existsSync(file) && fs.statSync(file).isFile()) fs.unlinkSync(file);
+      const parent = path.dirname(file);
+      if (
+        path.basename(parent) !== '.ecorex-attachments'
+        && parent.split(/[\\/]+/).includes('.ecorex-attachments')
+        && fs.existsSync(parent)
+        && fs.readdirSync(parent).length === 0
+      ) {
+        fs.rmdirSync(parent);
+      }
+    } catch {
+      // Staging cleanup is best-effort.
+    }
+  }
+}
+
+function pruneDefaultAgentAttachmentStaging() {
+  try {
+    pruneAgentAttachmentStagingDir(path.join(generalAgentWorkspaceDir(), '.ecorex-attachments'));
+  } catch {
+    // Startup cleanup must never block the app.
+  }
+}
+
 function isVideoAttachmentMime(mimeType = '') {
   return /^video\/(mp4|webm|ogg|quicktime|x-m4v)$/i.test(String(mimeType || ''));
 }
@@ -9325,16 +9964,31 @@ function textAttachmentContextFromBuffer(buffer, metadata) {
   };
 }
 
-function imageAttachmentContextFromBuffer(buffer, metadata) {
+function imageAttachmentContextFromBuffer(buffer, metadata, context = {}) {
   if (buffer.length > ATTACHMENT_IMAGE_MAX_BYTES) {
     return { ...metadata, kind: 'image', previewable: false, reason: 'too-large', maxBytes: ATTACHMENT_IMAGE_MAX_BYTES };
   }
   const digest = sha256Hex(buffer);
+  let visionPath = '';
+  let visionPathLabel = '';
+  let visionPathError = '';
+  if (context.includePromptText !== false) {
+    try {
+      const staged = stageImageAttachmentForAgent(buffer, metadata, digest, context);
+      visionPath = staged.path;
+      visionPathLabel = staged.label;
+    } catch (error) {
+      visionPathError = error instanceof Error ? error.message : String(error);
+    }
+  }
   return {
     ...metadata,
     kind: 'image',
     previewable: true,
     sha256: digest,
+    visionPath,
+    visionPathLabel,
+    visionPathError: visionPathError ? safeOutputText(visionPathError, 500) : undefined,
     base64Sample: buffer.toString('base64').slice(0, ATTACHMENT_IMAGE_BASE64_SAMPLE_CHARS),
     base64SampleTruncated: buffer.toString('base64').length > ATTACHMENT_IMAGE_BASE64_SAMPLE_CHARS
   };
@@ -9368,10 +10022,10 @@ function ingestAttachmentFromPath(input = {}, context = {}) {
   }
   const buffer = fs.readFileSync(target);
   if (isText) return textAttachmentContextFromBuffer(buffer, metadata);
-  return imageAttachmentContextFromBuffer(buffer, metadata);
+  return imageAttachmentContextFromBuffer(buffer, metadata, context);
 }
 
-function ingestAttachmentFromDataUrl(input = {}) {
+function ingestAttachmentFromDataUrl(input = {}, context = {}) {
   const dataUrl = input.previewUrl || input.previewDataUrl || input.dataUrl || '';
   const parsed = parseAttachmentDataUrl(dataUrl);
   if (!parsed) return null;
@@ -9380,7 +10034,7 @@ function ingestAttachmentFromDataUrl(input = {}) {
     return textAttachmentContextFromBuffer(parsed.buffer, metadata);
   }
   if (isImageAttachmentMime(metadata.mimeType)) {
-    return imageAttachmentContextFromBuffer(parsed.buffer, metadata);
+    return imageAttachmentContextFromBuffer(parsed.buffer, metadata, context);
   }
   return { ...metadata, kind: 'binary', previewable: false, reason: 'unsupported-type' };
 }
@@ -9435,7 +10089,10 @@ function buildAttachmentPromptBlock(context = {}) {
       lines.push(item.textExcerpt);
     } else if (item.kind === 'image') {
       if (item.sha256) lines.push(`- sha256: ${item.sha256}`);
-      if (item.base64Sample) {
+      if (item.visionPath) {
+        lines.push(`- local image file for visual/OCR inspection: ${item.visionPathLabel || item.visionPath}`);
+        lines.push('- visual instruction: inspect the image file directly with the available image-capable file reading tool before answering; do not infer from the filename or a base64 sample.');
+      } else if (item.base64Sample) {
         lines.push(`- base64 sample${item.base64SampleTruncated ? ' (truncated)' : ''}:`);
         lines.push(item.base64Sample);
       }
@@ -9452,17 +10109,22 @@ function buildAttachmentPromptBlock(context = {}) {
 }
 
 function ingestAgentAttachments(payload = {}, context = {}) {
+  const includePromptText = context.includePromptText !== false;
   const inputItems = [
     ...(Array.isArray(payload.attachments) ? payload.attachments : []),
     ...(Array.isArray(payload.attachmentContext?.attachments) ? payload.attachmentContext.attachments : [])
   ].slice(0, MAX_AGENT_ATTACHMENTS);
   const items = [];
+  const promptItems = [];
+  const stagedFiles = [];
   const warnings = [];
   for (const rawItem of inputItems) {
     const item = rawItem && typeof rawItem === 'object' ? rawItem : {};
     try {
-      const ingested = ingestAttachmentFromPath(item, context) || ingestAttachmentFromDataUrl(item);
+      const ingested = ingestAttachmentFromPath(item, { ...context, includePromptText }) || ingestAttachmentFromDataUrl(item, { ...context, includePromptText });
       if (ingested) {
+        if (includePromptText) promptItems.push(ingested);
+        if (ingested.visionPath) stagedFiles.push(ingested.visionPath);
         items.push(publicAttachmentContextItem(ingested));
       } else {
         warnings.push({ name: safeAttachmentName(item.name || 'attachment'), reason: 'no-readable-source' });
@@ -9481,9 +10143,11 @@ function ingestAgentAttachments(payload = {}, context = {}) {
     warnings,
     notes
   };
+  if (!includePromptText) return publicContext;
   return {
     ...publicContext,
-    promptText: buildAttachmentPromptBlock(publicContext)
+    stagedFiles,
+    promptText: buildAttachmentPromptBlock({ ...publicContext, items: promptItems })
   };
 }
 
@@ -9504,7 +10168,7 @@ function ingestAttachmentsForPreview(payload = {}) {
     ? projectContextFromProject(workspaceRoot, resolveProject({ id: input.projectId }, { allowArchived: false }).project)
     : activeProjectContext();
   const cwd = projectContext?.projectPath || workspaceRoot;
-  const attachmentContext = ingestAgentAttachments(input, { cwd, projectContext });
+  const attachmentContext = ingestAgentAttachments(input, { cwd, projectContext, includePromptText: false });
   return { ok: true, attachmentContext };
 }
 
@@ -10978,11 +11642,19 @@ async function collectCapabilities() {
     sourceMap: publicSourceMapStats(map),
     permissionModes: publicPermissionPolicies(),
     models: modelCapabilityOptions(),
-    builtIns: [
-      '本地文件读取、写入、编辑、检索与目录遍历',
-      '本地命令执行与工作区操作',
-      '联网检索与网页信息获取',
-      'MCP 与工具调用',
+	    builtIns: [
+	      '本地文件读取、写入、编辑、检索与目录遍历',
+	      '本地命令执行与工作区操作',
+	      '测试、lint、build、dev server、脚本、项目初始化、Git 与包管理命令',
+	      '计划修改文件、查看前后 diff、接受/拒绝改动、针对 diff 追问与解释改动原因',
+	      '新增功能、修复 bug、重构代码、修改 UI、调整接口逻辑、配置项、错误处理、清理无用代码与测试生成',
+	      'README、API 文档、使用说明、变更日志、PR 描述、部署说明与测试说明生成',
+	      '代码逻辑、函数、类、模块职责、调用链、架构、日志、失败原因与风险评估分析',
+	      '长任务异步协作、阶段进度汇报、最终改动汇总与继续调整',
+	      '需求拆解、技术方案、UI 交互、接口字段、数据库表、任务列表和开发计划',
+	      'frontend-design 报告级排版、PPT 叙事结构、网页/UI 视觉方案与最终产物设计',
+	      '联网检索与网页信息获取',
+	      'MCP 与工具调用',
       '默认权限与完全访问权限模式',
       '后台任务、多 Agent 调度与取消恢复',
       '生命周期保护、权限确认与诊断能力',
@@ -11869,6 +12541,9 @@ handleSafe('diagnostics:open-location', openDiagnosticsLocation, { authRequired:
 handleSafe('diagnostics:crash-recovery', (_event, payload) => getCrashRecoveryStatus(payload), { authRequired: true });
 handleSafe('telemetry:status', () => ({ ok: true, telemetry: publicTelemetryStatus() }), { authRequired: true });
 handleSafe('telemetry:flush', (_event, payload) => flushAnonymousTelemetry(payload), { authRequired: true });
+handleSafe('xin-agent:schema', (_event, payload, authContext) => runXinAgentQuery({ ...(payload || {}), command: 'schema' }, authContext), { authRequired: true, requiredPermission: 'xin:query' });
+handleSafe('xin-agent:query', (_event, payload, authContext) => runXinAgentQuery(payload, authContext), { authRequired: true, requiredPermission: 'xin:query' });
+handleSafe('xin-agent:natural-query', (_event, payload, authContext) => runXinAgentNaturalQuery(payload, authContext), { authRequired: true, requiredPermission: 'xin:query' });
 handleSafe('workspace:select-directory', (event, payload) => selectWorkspaceDirectory(event, payload), { authRequired: true });
 handleSafe('workspace:list', (_event, payload) => listWorkspace(payload), { authRequired: true });
 handleSafe('workspace:ensure', (_event, payload) => ensureWorkspace(payload), { authRequired: true });

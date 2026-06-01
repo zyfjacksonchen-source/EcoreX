@@ -181,13 +181,17 @@ async function main() {
           larkSharedLoaded: childNames.includes('lark-shared'),
           skillCreatorInstalled: installedNames.includes('agent-skill-creator'),
           skillCreatorLoaded: childNames.includes('agent-skill-creator'),
+          frontendDesignInstalled: installedNames.includes('frontend-design'),
+          frontendDesignLoaded: childNames.includes('frontend-design'),
           officeCliInstalled: installedNames.includes('officecli'),
           officeCliLoaded: childNames.includes('officecli'),
           openCliInstalled: installedNames.includes('opencli'),
-          openCliLoaded: childNames.includes('opencli-browser')
+          openCliLoaded: childNames.includes('opencli-browser'),
+          xinAgentInstalled: installedNames.includes('xin-agent'),
+          xinAgentLoaded: childNames.includes('xin-agent')
         };
       });
-      if (!skillValues.ok || !skillValues.larkInstalled || !skillValues.larkSharedLoaded || !skillValues.skillCreatorInstalled || !skillValues.skillCreatorLoaded || !skillValues.officeCliInstalled || !skillValues.officeCliLoaded || !skillValues.openCliInstalled || !skillValues.openCliLoaded) {
+      if (!skillValues.ok || !skillValues.larkInstalled || !skillValues.larkSharedLoaded || !skillValues.skillCreatorInstalled || !skillValues.skillCreatorLoaded || !skillValues.frontendDesignInstalled || !skillValues.frontendDesignLoaded || !skillValues.officeCliInstalled || !skillValues.officeCliLoaded || !skillValues.openCliInstalled || !skillValues.openCliLoaded || !skillValues.xinAgentInstalled || !skillValues.xinAgentLoaded) {
         throw new Error(`Packaged bundled skills did not seed correctly: ${JSON.stringify(skillValues)}`);
       }
 
@@ -255,13 +259,17 @@ async function main() {
           larkSharedLoaded: childNames.includes('lark-shared'),
           skillCreatorInstalled: installedNames.includes('agent-skill-creator'),
           skillCreatorLoaded: childNames.includes('agent-skill-creator'),
+          frontendDesignInstalled: installedNames.includes('frontend-design'),
+          frontendDesignLoaded: childNames.includes('frontend-design'),
           officeCliInstalled: installedNames.includes('officecli'),
           officeCliLoaded: childNames.includes('officecli'),
           openCliInstalled: installedNames.includes('opencli'),
-          openCliLoaded: childNames.includes('opencli-browser')
+          openCliLoaded: childNames.includes('opencli-browser'),
+          xinAgentInstalled: installedNames.includes('xin-agent'),
+          xinAgentLoaded: childNames.includes('xin-agent')
         };
       });
-      if (!resetValues.ok || !resetValues.larkInstalled || !resetValues.larkSharedLoaded || !resetValues.skillCreatorInstalled || !resetValues.skillCreatorLoaded || !resetValues.officeCliInstalled || !resetValues.officeCliLoaded || !resetValues.openCliInstalled || !resetValues.openCliLoaded) {
+      if (!resetValues.ok || !resetValues.larkInstalled || !resetValues.larkSharedLoaded || !resetValues.skillCreatorInstalled || !resetValues.skillCreatorLoaded || !resetValues.frontendDesignInstalled || !resetValues.frontendDesignLoaded || !resetValues.officeCliInstalled || !resetValues.officeCliLoaded || !resetValues.openCliInstalled || !resetValues.openCliLoaded || !resetValues.xinAgentInstalled || !resetValues.xinAgentLoaded) {
         throw new Error(`Packaged skill reset did not restore bundled skills: ${JSON.stringify(resetValues)}`);
       }
 

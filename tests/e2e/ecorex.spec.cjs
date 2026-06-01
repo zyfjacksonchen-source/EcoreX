@@ -924,6 +924,13 @@ test.describe('EcoreX Agent Electron E2E', () => {
         description: 'Drive Chrome and website adapters through OpenCLI.'
       },
       {
+        name: 'frontend-design',
+        title: 'Frontend Design',
+        sourceKind: 'skill-collection',
+        category: 'design',
+        description: 'Default report-grade design layer for PPT, reports, webpages, and UI deliverables.'
+      },
+      {
         name: 'lark-cli',
         title: 'lark-cli',
         sourceKind: 'skill-collection',
@@ -938,8 +945,8 @@ test.describe('EcoreX Agent Electron E2E', () => {
       return { skills, mcp };
     });
     expect(direct.skills.ok).toBe(true);
-    expect(direct.skills.skills.map((item) => item.name).sort()).toEqual(['lark-cli', 'officecli', 'opencli']);
-    expect(direct.skills.counts.totalSkills).toBe(3);
+    expect(direct.skills.skills.map((item) => item.name).sort()).toEqual(['frontend-design', 'lark-cli', 'officecli', 'opencli']);
+    expect(direct.skills.counts.totalSkills).toBe(4);
     expect(direct.mcp.ok).toBe(true);
     expect(direct.mcp.services.map((item) => item.packageName)).not.toContain('excel-mcp-server');
 
@@ -949,6 +956,7 @@ test.describe('EcoreX Agent Electron E2E', () => {
     await page.locator('[data-testid="system-settings-tab-skills"]').click();
     await expect(page.locator('[data-testid="skills-page"]')).toContainText(/OfficeCLI|officecli/i);
     await expect(page.locator('[data-testid="skills-page"]')).toContainText(/OpenCLI|opencli/i);
+    await expect(page.locator('[data-testid="skills-page"]')).toContainText(/Frontend Design|frontend-design|前端设计/i);
     await expect(page.locator('[data-testid="skills-page"]')).toContainText(/lark|飞书|execution bridge/i);
     await page.locator('[data-testid="system-settings-tab-mcp"]').click();
     await expect(page.locator('[data-testid="mcp-page"]')).not.toContainText(/excel[-\s]?mcp[-\s]?server/i);

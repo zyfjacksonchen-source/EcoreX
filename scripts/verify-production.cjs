@@ -392,6 +392,8 @@ check('model adapter syntax', () => {
 
 check('agent runtime smoke syntax', () => {
   nodeCheck('scripts/agent-runtime-smoke.cjs');
+  nodeCheck('scripts/packaged-runtime-smoke.cjs');
+  nodeCheck('scripts/lint-smoke.cjs');
   nodeCheck('scripts/prepare-vue-office.cjs');
   nodeCheck('scripts/verify-vue-office-vendor.cjs');
 });
@@ -497,6 +499,9 @@ check('local desktop auth is first-run bound and encrypted', () => {
   assertMatches(main, /function writeAuthUsers[\s\S]*encoding:\s*'safeStorage\/v1'[\s\S]*encryptLocalPayload\(envelope\)/, 'auth users must be encrypted with safeStorage.');
   assertMatches(main, /handleSafe\('auth:user:create'[\s\S]*requiredPermission:\s*'users:manage'/, 'user creation must require user management permission.');
   assertMatches(main, /handleSafe\('enterprise:action'[\s\S]*requiredPermission:\s*'enterprise:manage'/, 'enterprise actions must require enterprise management permission.');
+  assertMatches(main, /super_admin:[\s\S]*'xin:query'[\s\S]*admin:[\s\S]*'xin:query'[\s\S]*user:\s*\['profile:update',\s*'agent:operate'\]/, 'Xin Assistant CLI access must be limited to super administrators and administrators.');
+  assertMatches(main, /handleSafe\('xin-agent:natural-query'[\s\S]*requiredPermission:\s*'xin:query'/, 'Xin Assistant natural-language CLI queries must require xin:query permission.');
+  includesAll(main, ["'project detail'", "'task list'", "'user list'", "'sync state'", "'sync changes'"], 'Xin Assistant extended command whitelist');
 });
 
 check('agent session bindings are persisted and project isolated', () => {
@@ -525,17 +530,17 @@ check('renderer routes agent events by owning conversation', () => {
   includesAll(
     app,
     [
-      'function sessionOwnerForSession',
-      'function hasRunningSessionForConversation',
-      'function runningSessionIdForConversation',
-      'function syncCurrentSessionForVisibleConversation',
-      'storedEventsByConversation',
-      'loadConversationState(ownerConversationId)',
-      'saveConversationState(ownerConversationId',
-      'flushQueuedFollowUps(owner.conversationId)',
-      'hasRunningSessionForConversation(activeConversationId)',
-      'queuedConversationId',
-      'activeConversationRunning'
+	      'function sessionOwnerForSession',
+	      'function hasRunningSessionForConversation',
+	      'function runningSessionIdForConversation',
+	      'function interruptRunningSessionForConversation',
+	      'function syncCurrentSessionForVisibleConversation',
+	      'storedEventsByConversation',
+	      'loadConversationState(ownerConversationId)',
+	      'saveConversationState(ownerConversationId',
+	      'hasRunningSessionForConversation(activeConversationId)',
+	      'queuedConversationId',
+	      'activeConversationRunning'
     ],
     'owner-aware renderer session routing'
   );
@@ -780,7 +785,8 @@ check('agent attachments, tool ledger and run journal are production-safe', () =
       'function resolveAttachmentTarget',
       'function ingestAgentAttachments',
       'function composePromptWithAttachmentContext',
-      'const attachmentContext = ingestAgentAttachments(payload, { cwd, projectContext })',
+      'const attachmentContext = ingestAgentAttachments(payload, {',
+      'includePromptText: true',
       'prompt,',
       'userPrompt,',
       'attachmentContext,',
@@ -798,7 +804,9 @@ check('agent attachments, tool ledger and run journal are production-safe', () =
   );
   assertMatches(main, /resolveAttachmentTarget[\s\S]*isPathInside\(entry\.root,\s*target\)[\s\S]*isRegisteredSelectedAttachment\(target,\s*input\)[\s\S]*pathContainsSymlink\(root\.root,\s*target\)/, 'attachment ingestion must stay inside project/workspace or selected-file grants and reject symlink traversal.');
   assertMatches(main, /ingestAttachmentFromPath[\s\S]*fs\.readFileSync\(target\)[\s\S]*textAttachmentContextFromBuffer|ingestAttachmentFromPath[\s\S]*textAttachmentContextFromBuffer\(buffer,\s*metadata\)/, 'attachment ingestion must read bounded text payloads for the agent prompt.');
-  assertMatches(main, /imageAttachmentContextFromBuffer[\s\S]*base64Sample[\s\S]*ATTACHMENT_IMAGE_BASE64_SAMPLE_CHARS/, 'image attachment ingestion must include only bounded base64 summaries.');
+  assertMatches(main, /imageAttachmentContextFromBuffer[\s\S]*stageImageAttachmentForAgent[\s\S]*visionPathLabel[\s\S]*buildAttachmentPromptBlock[\s\S]*local image file for visual\/OCR inspection/, 'image attachment ingestion must hand a real staged image path to the agent for visual/OCR inspection.');
+  assertMatches(main, /function ingestAttachmentsForPreview[\s\S]*ingestAgentAttachments\(input,\s*\{\s*cwd,\s*projectContext,\s*includePromptText:\s*false\s*\}\)/, 'renderer attachment preview ingestion must not return internal promptText or staged vision paths.');
+  assertMatches(main, /function finalizeAgentSession[\s\S]*cleanupAgentAttachmentStagingFiles\(entry\.attachmentContext\?\.stagedFiles/, 'agent image attachment staging files must be cleaned after terminal runs.');
   assertMatches(main, /appendRunJournalEntry\(sessionId,\s*entry,\s*'running',\s*\{\s*event:\s*'start'\s*\}\)/, 'run journal must record session start.');
   assertMatches(main, /appendRunJournalEntry\(sessionId,\s*entry,\s*status,[\s\S]*event:\s*'finish'/, 'run journal must record session finish.');
   assertMatches(preload, /ingestAttachments:\s*\(payload\)\s*=>\s*safeInvoke\('attachment:ingest',\s*withAuth\(payload\)\)/, 'preload must expose only authenticated attachment ingestion IPC.');
@@ -957,8 +965,9 @@ check('agent runtime production guardrails', () => {
   assertMatches(main, /child\.stdin\.end\(`\$\{prompt\}\\n`\)/, 'agent prompt must be written to stdin.');
   assertNotMatches(main, /args\.push\(\s*prompt\s*\)|spawn\([^)]*prompt/s, 'agent prompt must not be passed through process argv.');
   assert(/const profile = store\.profiles\.find\(\(item\) => item\.model === normalizedModel\) \|\| null/.test(main), 'model profile env must only match the selected model exactly.');
-  assertMatches(main, /default:\s*\{[\s\S]*?permissionMode:\s*'auto'[\s\S]*?cliMode:\s*'auto'/, 'default permission mode must use auto mode while preserving the full native tool surface.');
-  assertNotMatches(main, /CLAUDE_AUTO_ALLOWED_TOOL_SET|'--allowedTools'|"--allowedTools"/, 'agent runtime must not narrow the native tool surface with an allowedTools whitelist.');
+	  assertMatches(main, /default:\s*\{[\s\S]*?permissionMode:\s*'auto'[\s\S]*?cliMode:\s*'auto'/, 'default permission mode must use auto mode while preserving the full native tool surface.');
+	  includesAll(main, ['ECOREX_DEVELOPER_WORKFLOW_PROMPT', 'frontend-design skill as the default design layer', 'frontend-design 报告级排版', 'test/lint/build/dev-server scripts', 'git status/diff', '测试、lint、build、dev server'], 'agent prompt and capability inventory must advertise the full developer workflow surface.');
+	  assertNotMatches(main, /CLAUDE_AUTO_ALLOWED_TOOL_SET|'--allowedTools'|"--allowedTools"/, 'agent runtime must not narrow the native tool surface with an allowedTools whitelist.');
   assertMatches(main, /sanitizeClaudeSessionId\(payload\.claudeSessionId \|\| payload\.conversationId,\s*payload\.sessionId\)/, 'Claude session id must be stable for frontend conversations with session fallback.');
   assertMatches(main, /const claudeResumeExistingSession = claudeSessionTranscriptExists\(claudeSessionId\)/, 'Claude session reuse must detect existing CLI transcripts.');
   assertMatches(main, /if \(claudeResumeExistingSession\) \{\s*args\.push\('--resume', claudeSessionId\);\s*\} else \{\s*args\.push\('--session-id', claudeSessionId\);/s, 'Claude CLI must resume existing sessions and only create new sessions with --session-id.');
@@ -1016,6 +1025,9 @@ check('chat disclosure stays public-safe', () => {
       'function publicTraceItems',
       'slice(-6)',
       'function InlineAgentTrace',
+      'function AssistantProcessDisclosure',
+      'function StreamingAssistantText',
+      'function AssistantReportText',
       'function isContextCompactEvent',
       'contextSummary',
       'claude-cli-compact'
@@ -1369,7 +1381,7 @@ check('chat state tree and critical front-end affordances', () => {
       "const AGENT_SESSION_FINAL_KINDS = new Set(['done', 'error', 'cancelled', 'timeout'])",
       'function isAgentSessionFinalEvent',
       'function textLooksPendingUserAction',
-      'function recoverDuplicateRunAsQueuedFollowUp',
+	      'function recoverDuplicateRunWithoutQueue',
       'function agentRunPolicySection',
       '有限任务不要启动长期后台命令',
       "status: 'cancelled'",
@@ -1391,7 +1403,7 @@ check('chat state tree and critical front-end affordances', () => {
       'TaskUpdate|正在整理工具参数|开始生成回复|正在同步输出|回复生成完成',
       'REMINDER:',
       'Updated|Created|Deleted',
-      'execution\\s+bridge(?=user_code=)',
+      'page/cli',
       'chatMediaKind(safeUrl)',
       'openExternalUrlWithBridge(safeUrl)',
       'function stageTransferredInput',
@@ -1408,10 +1420,26 @@ check('chat state tree and critical front-end affordances', () => {
     'chat state tree and artifact focus layout'
   );
   includesAll(app, ["replace(/\\bClaude\\s*Code\\s*CLI\\b/gi, 'EcoreX')", "replace(/\\bClaude\\b/gi, 'EcoreX')"], 'assistant-visible product naming sanitizer');
+  assertNotMatches(main, /replace\(\s*\/\\bCLI\\b\/gi,\s*['"]execution bridge['"]\s*\)/, 'backend product sanitizer must not rewrite generic CLI inside authorization URLs.');
+  includesAll(main, [
+    'function cleanAgentUrlToken',
+    ".replace(/\\/page\\/execution[_\\s-]*bridge(?=\\?)/gi, '/page/cli')",
+    ".replace(/from=execution[_\\s-]*bridge\\b/gi, 'from=cli')"
+  ], 'backend URL cleaner must repair legacy Feishu execution-bridge URLs back to page/cli.');
+  assertMatches(main, /function runtimeAuthorizationRequestFromValue[\s\S]*verification_uri_complete[\s\S]*verificationUriComplete[\s\S]*page\\\/\(\?:cli\|execution/, 'backend structured authorization parser must keep lark-cli verification_uri_complete/page/cli links.');
+  includesAll(app, [
+    'function cleanChatUrlToken',
+    ".replace(/\\/page\\/execution[_\\s-]*bridge(?=\\?)/gi, '/page/cli')",
+    ".replace(/from=execution[_\\s-]*bridge\\b/gi, 'from=cli')"
+  ], 'chat URL cleaner must repair legacy Feishu execution-bridge URLs back to page/cli.');
+  assertMatches(app, /function authorizationRequestFromText[\s\S]*open\\\.feishu\\\.cn\\\/page\\\/\(\?:cli\|execution/, 'chat authorization parser must recognize Feishu page/cli links.');
   assertNotMatches(app, /<RunningSessionStrip\b/, 'running session strip must stay hidden from the main chat UI.');
   assertMatches(app, /if \(event\.kind === 'result'\)[\s\S]*streaming:\s*true[\s\S]*status:\s*'generating'/, 'stream-json result content must not release the running session before the lifecycle final event.');
   assertMatches(app, /relevantEvents[\s\S]*\.filter\(\(event\) => isAgentSessionFinalEvent\(event\)\)/, 'front-end running sessions must finish only on lifecycle final events.');
   assertMatches(app, /terminalPendingUserActionStatus\(event,\s*combinedText\)/, 'authorization or browser handoff prompts must not be shown as completed.');
+  assertMatches(app, /function timelineItemFromAgentEvent[\s\S]*const pendingStatus = pendingUserActionStatusFromEvent\(event\)/, 'timeline rows must not infer waiting authorization or confirmation from ordinary assistant result text.');
+  assertMatches(app, /function terminalPendingUserActionStatus[\s\S]*textLooksTerminalPendingUserAction\(existingText\)[\s\S]*permissionPromptStatusFromText\(existingText\)/, 'terminal events must only become pending user-action states from explicit actionable prompts.');
+  assertMatches(app, /function visibleAssistantTextFromUserActionEvent[\s\S]*action\.type === 'authorization' \? action\.description : ''[\s\S]*return text;/, 'structured permission cards must not swallow substantive result text into the overlay.');
   assertMatches(app, /const structuredUserAction = normalizeAgentUserAction\(event\.userAction \|\| event\.authorization \|\| event\.permissionRequest\)[\s\S]*statusFromAgentUserAction\(structuredUserAction\)[\s\S]*userAction: structuredUserAction[\s\S]*continue;/, 'structured backend user-action events must render as pending cards before text-based inference or terminal merging.');
   assertMatches(app, /function AuthorizationChatContent[\s\S]*QRCode\.toDataURL\(qrValue[\s\S]*openExternalUrlWithBridge\(safeUrl\)/, 'external authorization QR codes and open-link actions must render in assistant chat content.');
   assertNotMatches(app, /function InlinePermissionRequest[\s\S]*QRCode\.toDataURL\(qrValue/, 'composer permission overlay must stay compact and must not embed QR-rich authorization content.');
@@ -1420,14 +1448,16 @@ check('chat state tree and critical front-end affordances', () => {
   assertMatches(app, /<ChatPermissionOverlay[\s\S]*request=\{pendingPermissionRequest\?\.request\}/, 'permission confirmation must render from the composer overlay instead of being embedded in assistant chat content.');
   assertNotMatches(app, /<InlinePermissionRequest[\s\S]*onPermissionReply\?\.\(message,\s*action\)/, 'assistant messages must not embed permission confirmation cards after the overlay owns the flow.');
   assertMatches(app, /const continuationMessageId = message\.id/, 'permission continuation must reuse the original assistant message instead of creating a new relay chat bubble.');
-  assertMatches(app, /function flushQueuedFollowUps[\s\S]*latestPendingUserActionMessage\(currentConversationId\)[\s\S]*isContinuationPrompt\(cleanPrompt\)[\s\S]*continueFromPermission\(pendingMessage/, 'queued "done/authorized" replies must automatically resume the pending user-action task.');
-  assertMatches(app, /recoverDuplicateRunAsQueuedFollowUp\(result[\s\S]*existingMessage:\s*true/, 'duplicate running-session races must be converted back into queued follow-up input.');
-  assertMatches(app, /function cleanAgentDisplayLine[\s\S]*numberTokens\.length >= 3[\s\S]*open\\\.feishu\\\.cn[\s\S]*execution_bridge\?/, 'chat renderer must strip execution bridge line-number noise while preserving Feishu links.');
+	  assertMatches(app, /if \(pendingMessageForPrompt && !fromQueue && !forceRun\)[\s\S]*continueFromPermission\(pendingMessageForPrompt[\s\S]*markPendingUserActionSuperseded\(pendingMessageForPrompt, activeConversationId\)/, 'done/authorized replies must resume pending user-action tasks directly, while new input supersedes stale waiting cards.');
+	  assertMatches(app, /if \(hasRunningSessionForConversation\(activeConversationId\) && !forceRun\)[\s\S]*continueFromPermission\(pendingMessage[\s\S]*interruptRunningSessionForConversation\(activeConversationId\)/, 'new user input during a running task must interrupt the current run instead of entering a follow-up queue.');
+	  assertMatches(app, /function recoverDuplicateRunWithoutQueue[\s\S]*status:\s*'read'[\s\S]*运行已接入现有任务/, 'duplicate running-session races must not create queued/manual guide messages.');
+	  assertNotMatches(app, /<button className="queued-message-action"/, 'user messages must not expose manual guide/queue buttons.');
+  assertMatches(app, /function cleanAgentDisplayLine[\s\S]*numberTokens\.length >= 3[\s\S]*open\\\.feishu\\\.cn[\s\S]*\/page\/cli/, 'chat renderer must strip line-number noise while preserving Feishu page/cli links.');
   assertMatches(app, /function isInternalAgentOutputLine[\s\S]*Updated\|Created\|Deleted[\s\S]*task\\s\+#\?\\d\+/, 'chat renderer must suppress raw task-list mutation noise.');
   assertMatches(app, /function isInternalAgentOutputLine[\s\S]*UNDICI-EHPA[\s\S]*name:\\s\*lark-shared/, 'chat renderer must suppress OpenCLI warnings and skill metadata noise.');
   assertMatches(app, /function isInternalAgentOutputLine[\s\S]*lark-execution\\s\+bridge\\s\+auth\\s\+login[\s\S]*base_token/, 'chat renderer must suppress Feishu authorization harness and raw token JSON noise.');
   assertMatches(app, /function isInternalAgentOutputLine[\s\S]*REMINDER:\\s\*You MUST include the sources above/, 'chat renderer must suppress internal web-search citation reminders.');
-  assertMatches(app, /function isInternalAgentOutputLine[\s\S]*WEB_SEARCH_OK[\s\S]*No links found[\s\S]*开始生成回复[\s\S]*正在同步输出/, 'chat renderer must suppress web-search harness status noise.');
+  assertMatches(app, /function isInternalAgentOutputLine[\s\S]*WEB_SEARCH_OK[\s\S]*No links found[\s\S]*搜索工具返回[\s\S]*开始生成回复[\s\S]*正在同步输出/, 'chat renderer must suppress web-search harness status noise.');
   assertMatches(app, /function isInternalAgentOutputLine[\s\S]*Browser Bridge extension[\s\S]*unknown command[\s\S]*opencli[\s\S]*main\\\.js/, 'chat renderer must suppress OpenCLI browser-bridge diagnostic noise.');
   assertMatches(app, /function publicRunningSessionPrompt[\s\S]*textLooksCorrupted\(clean\)[\s\S]*return fallback/, 'running session strip must hide corrupted or raw internal prompt previews.');
   assertMatches(app, /function publicRunningSessionTitle[\s\S]*textLooksCorrupted\(clean\)[\s\S]*return fallback/, 'running session strip must hide corrupted recovered titles.');
@@ -1435,15 +1465,17 @@ check('chat state tree and critical front-end affordances', () => {
   includesAll(css, ['.assistant-message-thread', '.assistant-card-split', '.assistant-row-spacer'], 'split assistant message row styles');
   assertMatches(app, /const messageStates = \{[\s\S]*interrupted:[\s\S]*authorization-incomplete[\s\S]*user-action-required/, 'message status badges must not render recoverable failures as completed.');
   assertMatches(app, /trackSession\(requestedSessionId[\s\S]*prompt:\s*cleanPrompt \|\| '正在执行任务'/, 'running session strip must use the user task summary instead of the full internal agent prompt.');
-  assertMatches(main, /function cleanAgentDisplayLine[\s\S]*numberTokens\.length >= 3[\s\S]*open\\\.feishu\\\.cn[\s\S]*execution_bridge\?/, 'backend event sanitizer must strip execution bridge line-number noise while preserving Feishu links.');
+  assertMatches(main, /function cleanAgentDisplayLine[\s\S]*numberTokens\.length >= 3[\s\S]*open\\\.feishu\\\.cn[\s\S]*\/page\/cli/, 'backend event sanitizer must strip line-number noise while preserving Feishu page/cli links.');
   assertMatches(main, /function isInternalAgentOutputLine[\s\S]*Updated\|Created\|Deleted[\s\S]*task\\s\+#\?\\d\+/, 'backend event sanitizer must suppress raw task-list mutation noise.');
   assertMatches(main, /function isInternalAgentOutputLine[\s\S]*UNDICI-EHPA[\s\S]*name:\\s\*lark-shared/, 'backend event sanitizer must suppress OpenCLI warnings and skill metadata noise.');
   assertMatches(main, /function isInternalAgentOutputLine[\s\S]*lark-execution\\s\+bridge\\s\+auth\\s\+login[\s\S]*base_token/, 'backend event sanitizer must suppress Feishu authorization harness and raw token JSON noise.');
   assertMatches(main, /function isInternalAgentOutputLine[\s\S]*REMINDER:\\s\*You MUST include the sources above/, 'backend event sanitizer must suppress internal web-search citation reminders.');
-  assertMatches(main, /function isInternalAgentOutputLine[\s\S]*WEB_SEARCH_OK[\s\S]*No links found[\s\S]*开始生成回复[\s\S]*正在同步输出/, 'backend event sanitizer must suppress web-search harness status noise.');
+  assertMatches(main, /function isInternalAgentOutputLine[\s\S]*WEB_SEARCH_OK[\s\S]*No links found[\s\S]*搜索工具返回[\s\S]*开始生成回复[\s\S]*正在同步输出/, 'backend event sanitizer must suppress web-search harness status noise.');
   assertMatches(main, /function isInternalAgentOutputLine[\s\S]*Browser Bridge extension[\s\S]*unknown command[\s\S]*opencli[\s\S]*main\\\.js/, 'backend event sanitizer must suppress OpenCLI browser-bridge diagnostic noise.');
   assertMatches(main, /function agentOutputLooksUnresolvedAuthorization[\s\S]*open\\\.feishu\\\.cn[\s\S]*not configured/, 'backend must keep an internal auth-wait signal before hiding raw Feishu JSON noise.');
   assertMatches(main, /entry\.authorizationCompleted = true[\s\S]*entry\.authorizationHandoffStarted = true/, 'agent transcripts must track Feishu authorization handoff state before public filtering.');
+  assertMatches(main, /function agentSessionHasSubstantiveResult[\s\S]*event\?\.kind === 'assistant'[\s\S]*agentOutputLooksProcessOnly/, 'backend must count substantive assistant output so final answers are not swallowed by empty result events.');
+  assertMatches(main, /function agentSessionHasUnresolvedUserBlocker[\s\S]*agentSessionHasSubstantiveResult\(entry\)[\s\S]*agentSessionPublicText/, 'backend must not reclassify substantive final answers as waiting user-action from broad text heuristics.');
   assertMatches(main, /function stopAgent[\s\S]*agentSessionHasUnresolvedAuthorization\(entry\)[\s\S]*authorizationIncompleteAgentResultText\(\)[\s\S]*agentSessionHasUnresolvedUserBlocker\(entry\)/, 'stopping during external authorization must preserve a waiting-auth status instead of a completed or generic stopped state.');
   assertMatches(main, /function safeTranscriptText[\s\S]*stripInternalAgentOutput\(redactSensitiveText\(value\)\)/, 'session transcript previews must use the same internal noise filter as live chat output.');
   assertMatches(main, /input_json_delta'\) return null/, 'backend stream parser must not emit raw tool argument delta events into public chat.');
@@ -1658,10 +1690,14 @@ check('package build config excludes local model/secrets storage', () => {
     pkg.scripts['test:agent-runtime'] === 'node scripts/agent-runtime-smoke.cjs',
     'test:agent-runtime must run the offline agent runtime smoke script.'
   );
-  assert(
-    pkg.scripts['test:model-adapter'] === 'node scripts/test-model-adapter.cjs',
-    'test:model-adapter must run the offline model adapter smoke script.'
-  );
+	  assert(
+	    pkg.scripts['test:model-adapter'] === 'node scripts/test-model-adapter.cjs',
+	    'test:model-adapter must run the offline model adapter smoke script.'
+	  );
+	  assert(
+	    pkg.scripts.lint === 'node scripts/lint-smoke.cjs',
+	    'lint must provide a first-class project lint entry for local developer workflow checks.'
+	  );
   assert(
     pkg.scripts['release:fix-metadata'] === 'node scripts/fix-release-metadata.cjs',
     'release:fix-metadata must run the release metadata repair script.'
@@ -1779,7 +1815,9 @@ check('package build config excludes local model/secrets storage', () => {
       'session-bindings\\.json',
       'model-profiles\\.json',
       'patchFeishuSharedSkill',
-      'ecorex-auth-handoff-v1'
+      'ecorex-auth-handoff-v2',
+      'prepareFrontendDesignSkill',
+      'EcoreX report-grade-layout-v1'
     ],
     'managed Feishu skill preparation denylist'
   );
@@ -1797,30 +1835,37 @@ check('package build config excludes local model/secrets storage', () => {
   const managedSkillResource = extraResources.find((item) => String(item.to || '').replace(/\\/g, '/') === 'managed-skill-packs');
   assert(managedSkillResource, 'bundled managed skill-packs resource must be configured.');
   assert(managedSkillResource.from === 'build/managed-skill-packs', 'bundled managed skill-packs must come from build/managed-skill-packs.');
-  assertIncludesPatterns(managedSkillResource.filter, ['agent-skill-creator/**/*', 'lark-cli/**/*', 'officecli/**/*', 'opencli/**/*', '!**/.env', '!**/.env.*', '!**/*.log', '!**/auth-session.json', '!**/auth-identity.json', '!**/auth-users.json', '!**/enterprise-admin-journal.jsonl', '!**/session-bindings.json', '!**/model-profiles.json', '!**/.lark/**/*', '!**/.feishu/**/*', '!**/.larksuite/**/*'], 'managed skill-packs extraResources.filter');
+  assertIncludesPatterns(managedSkillResource.filter, ['agent-skill-creator/**/*', 'frontend-design/**/*', 'lark-cli/**/*', 'officecli/**/*', 'opencli/**/*', 'xin-agent/**/*', '!**/.env', '!**/.env.*', '!**/*.log', '!**/auth-session.json', '!**/auth-identity.json', '!**/auth-users.json', '!**/enterprise-admin-journal.jsonl', '!**/session-bindings.json', '!**/model-profiles.json', '!**/.lark/**/*', '!**/.feishu/**/*', '!**/.larksuite/**/*'], 'managed skill-packs extraResources.filter');
   assertNotIncludesPatterns(managedSkillResource.filter, ['ppt-master/**/*', 'excel-mcp-server/**/*'], 'managed skill-packs retired filters');
   const managedToolResource = extraResources.find((item) => String(item.to || '').replace(/\\/g, '/') === 'managed-tools');
   assert(managedToolResource, 'bundled managed tools resource must be configured.');
   assert(managedToolResource.from === 'build/managed-tools', 'bundled managed tools must come from build/managed-tools.');
-  assertIncludesPatterns(managedToolResource.filter, ['lark-cli/**/*', 'officecli/**/*', 'opencli/**/*', '!**/.env', '!**/.env.*', '!**/*.log', '!**/auth-session.json', '!**/auth-identity.json', '!**/auth-users.json', '!**/enterprise-admin-journal.jsonl', '!**/session-bindings.json', '!**/model-profiles.json', '!**/.lark/**/*', '!**/.feishu/**/*', '!**/.larksuite/**/*'], 'managed tools extraResources.filter');
+  assertIncludesPatterns(managedToolResource.filter, ['lark-cli/**/*', 'officecli/**/*', 'opencli/**/*', 'xin-agent/**/*', '!**/.env', '!**/.env.*', '!**/*.log', '!**/auth-session.json', '!**/auth-identity.json', '!**/auth-users.json', '!**/enterprise-admin-journal.jsonl', '!**/session-bindings.json', '!**/model-profiles.json', '!**/.lark/**/*', '!**/.feishu/**/*', '!**/.larksuite/**/*'], 'managed tools extraResources.filter');
   const playwrightBinResource = extraResources.find((item) => String(item.to || '').replace(/\\/g, '/') === 'app.asar.unpacked/node_modules/.bin');
   assert(playwrightBinResource, 'Playwright CLI wrappers must be copied into unpacked node_modules .bin.');
   assert(playwrightBinResource.from === 'node_modules/.bin', 'Playwright CLI wrappers must come from node_modules/.bin.');
   assertIncludesPatterns(playwrightBinResource.filter, ['playwright*', '!**/.env', '!**/.env.*', '!**/*.log'], 'Playwright CLI wrapper extraResources.filter');
   assertExistingFile(rel('build/managed-skill-packs/lark-cli/.claude-plugin/plugin.json'), 'prepared Feishu skill manifest');
   assertExistingFile(rel('build/managed-skill-packs/lark-cli/skills/lark-shared/SKILL.md'), 'prepared Feishu shared skill');
-  includesAll(readText('build/managed-skill-packs/lark-cli/skills/lark-shared/SKILL.md'), ['ecorex-auth-handoff-v1', '至少 600 秒', 'raw JSON token'], 'prepared Feishu shared skill must include EcoreX authorization handoff rules.');
+  includesAll(readText('build/managed-skill-packs/lark-cli/skills/lark-shared/SKILL.md'), ['ecorex-auth-handoff-v2', 'verification_url', 'auth qrcode', '至少 600 秒', 'raw JSON token'], 'prepared Feishu shared skill must include EcoreX authorization handoff rules.');
   assertExistingFile(rel('build/managed-skill-packs/agent-skill-creator/.claude-plugin/plugin.json'), 'prepared Agent Skill Creator manifest');
   assertExistingFile(rel('build/managed-skill-packs/agent-skill-creator/skills/agent-skill-creator/SKILL.md'), 'prepared Agent Skill Creator skill');
+  assertExistingFile(rel('build/managed-skill-packs/frontend-design/.claude-plugin/plugin.json'), 'prepared Frontend Design manifest');
+  assertExistingFile(rel('build/managed-skill-packs/frontend-design/skills/frontend-design/SKILL.md'), 'prepared Frontend Design skill');
+  includesAll(readText('build/managed-skill-packs/frontend-design/skills/frontend-design/SKILL.md'), ['report-grade layouts', 'PPT', 'webpage', 'EcoreX report-grade-layout-v1'], 'prepared Frontend Design skill must include report-grade default routing.');
   assertExistingFile(rel('build/managed-skill-packs/officecli/.claude-plugin/plugin.json'), 'prepared OfficeCLI manifest');
   assertExistingFile(rel('build/managed-skill-packs/officecli/skills/officecli/SKILL.md'), 'prepared OfficeCLI skill');
   assertExistingFile(rel('build/managed-skill-packs/opencli/.claude-plugin/plugin.json'), 'prepared OpenCLI manifest');
   assertExistingFile(rel('build/managed-skill-packs/opencli/skills/opencli-browser/SKILL.md'), 'prepared OpenCLI browser skill');
+  assertExistingFile(rel('build/managed-skill-packs/xin-agent/.claude-plugin/plugin.json'), 'prepared Xin Agent manifest');
+  assertExistingFile(rel('build/managed-skill-packs/xin-agent/skills/xin-agent/SKILL.md'), 'prepared Xin Agent skill');
   assertExistingFile(rel('build/managed-tools/lark-cli/lark-cli.exe'), 'prepared Feishu CLI executable', 1024 * 1024);
   assertExistingFile(rel('build/managed-tools/officecli/officecli.exe'), 'prepared OfficeCLI executable', 1024 * 1024);
   assertExistingFile(rel('build/managed-tools/opencli/bin/opencli.cmd'), 'prepared OpenCLI command wrapper');
   assertExistingFile(rel('build/managed-tools/opencli/package/dist/src/main.js'), 'prepared OpenCLI runtime entry');
   assertExistingFile(rel('build/managed-tools/opencli/extension/manifest.json'), 'prepared OpenCLI extension manifest');
+  assertExistingFile(rel('build/managed-tools/xin-agent/xin-agent-query.cmd'), 'prepared Xin Agent command wrapper');
+  assertExistingFile(rel('build/managed-tools/xin-agent/xin-agent-query.js'), 'prepared Xin Agent runtime entry');
 });
 
 check('first-party source has no hardcoded model secrets/base URLs', () => {
@@ -1939,6 +1984,14 @@ check('release artifacts are coherent when present', () => {
     assertExistingFile(
       path.join(resourcesDir, 'managed-skill-packs', 'agent-skill-creator', 'skills', 'agent-skill-creator', 'SKILL.md'),
       'release bundled Agent Skill Creator skill'
+    );
+    assertExistingFile(
+      path.join(resourcesDir, 'managed-skill-packs', 'frontend-design', '.claude-plugin', 'plugin.json'),
+      'release bundled Frontend Design manifest'
+    );
+    assertExistingFile(
+      path.join(resourcesDir, 'managed-skill-packs', 'frontend-design', 'skills', 'frontend-design', 'SKILL.md'),
+      'release bundled Frontend Design skill'
     );
     assertExistingFile(
       path.join(resourcesDir, 'managed-skill-packs', 'officecli', '.claude-plugin', 'plugin.json'),
