@@ -1,0 +1,19 @@
+{
+  "scannedAt": "2026-06-09",
+  "scope": "deploy/ecorex-download",
+  "framework": "vanilla-html",
+  "fontStack": "system-ui",
+  "palette": "EcoreX orange enterprise tokens",
+  "motion": "motion-cut",
+  "spacing": "8px scale",
+  "preserve": [
+    "EcoreX brand",
+    "v0.1.1 release identity",
+    "standalone static download page boundary"
+  ],
+  "introduce": [
+    "Hallmark mobile responsiveness gates",
+    "light and dark theme toggle",
+    "manifest-driven package list"
+  ]
+}

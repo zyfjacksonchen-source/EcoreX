@@ -1,275 +1,115 @@
 {
   "name": "ecorex-agent",
-  "version": "0.1.3",
+  "version": "0.1.1",
   "private": true,
-  "author": "EcoreX",
-  "description": "EcoreX desktop AI agent for advertising workflows.",
-  "main": "electron/main.cjs",
   "type": "module",
-  "config": {
-    "electron_builder_binaries_mirror": "https://npmmirror.com/mirrors/electron-builder-binaries/"
+  "bin": {
+    "claude-haha": "./bin/claude-haha"
   },
   "scripts": {
-    "dev": "concurrently -k \"vite --host 127.0.0.1 --port 5188 --strictPort\" \"wait-on tcp:5188 && node electron/run-electron.cjs\"",
-    "verify:native": "node scripts/verify-native.cjs",
-    "test:agent-runtime": "node scripts/agent-runtime-smoke.cjs",
-    "test:model-adapter": "node scripts/test-model-adapter.cjs",
-    "test:real-agent": "node scripts/real-agent-stress.cjs",
-    "audit:security": "node scripts/security-audit.cjs",
-    "verify:install-matrix": "node scripts/verify-install-matrix.cjs",
-    "verify:mac": "node scripts/verify-macos-release-env.cjs",
-    "test:packaged-input": "node scripts/packaged-input-smoke.cjs",
-    "test:packaged-runtime": "node scripts/packaged-runtime-smoke.cjs",
-    "test:packaged-project": "node scripts/packaged-project-smoke.cjs",
-    "assets:mac-icon": "node scripts/create-mac-icon.cjs",
-    "release:clean": "node scripts/clean-release-artifacts.cjs",
-    "release:policy": "node scripts/prepare-release-policy.cjs",
-    "release:fix-metadata": "node scripts/fix-release-metadata.cjs",
-    "provisioning:export": "node scripts/run-electron-script.cjs scripts/create-provisioning-from-local-state.cjs",
-    "prepare:managed-feishu": "node scripts/prepare-managed-feishu-skill.cjs",
-    "prepare:vue-office": "node scripts/prepare-vue-office.cjs",
-    "verify:vue-office": "node scripts/verify-vue-office-vendor.cjs",
-    "verify:release-clean": "node scripts/verify-release-clean.cjs",
-    "verify:production": "npm run test:agent-runtime && node scripts/verify-production.cjs && npm run test:model-adapter && npm run verify:release-clean",
-    "verify:production:strict": "npm run test:agent-runtime && node scripts/verify-production.cjs --strict && npm run test:model-adapter && npm run verify:release-clean",
-    "verify:production:release": "npm run test:agent-runtime && node scripts/verify-production.cjs --strict --require-signed-artifact && npm run test:model-adapter && npm run verify:release-clean",
-    "test:agent-smoke": "npm run verify:production",
-    "test:e2e": "playwright test -c playwright.e2e.config.cjs",
-    "test:e2e:responsive": "playwright test -c playwright.e2e.config.cjs --grep @responsive",
-    "test:responsive": "node scripts/responsiveness-smoke.cjs",
-    "lint": "node scripts/lint-smoke.cjs",
-    "build": "vite build",
-    "preview": "vite preview --host 127.0.0.1 --port 5188 --strictPort",
-    "pack": "npm run release:clean && npm run prepare:managed-feishu && npm run build && npm run verify:production && npm run verify:native && npm run verify:vue-office && electron-builder --dir && npm run release:fix-metadata && npm run verify:production",
-    "dist": "npm run release:clean && npm run prepare:managed-feishu && npm run build && npm run verify:production && npm run verify:native && npm run verify:vue-office && electron-builder --win --x64 && npm run release:fix-metadata && npm run verify:production",
-    "dist:mac": "npm run release:clean && npm run assets:mac-icon && npm run build && npm run verify:production:strict && npm run verify:native && npm run verify:vue-office && electron-builder --mac --x64 --arm64 && npm run release:policy && npm run verify:mac && npm run verify:release-clean",
-    "dist:release": "npm run release:clean && npm run prepare:managed-feishu && npm run build && npm run verify:production:strict && npm run verify:native && npm run verify:vue-office && electron-builder --win --x64 && npm run release:fix-metadata && npm run verify:production:release"
+    "claude-haha": "bun run ./bin/claude-haha",
+    "start": "bun run ./bin/claude-haha",
+    "check:pr": "bun run scripts/pr/check-pr.ts",
+    "check:impact": "bun run scripts/pr/impact-report.ts",
+    "check:policy": "bun test scripts/pr/change-policy.test.ts scripts/pr/changed-files.test.ts scripts/pr/pr-triage-workflow.test.ts scripts/pr/pr-quality-workflow.test.ts scripts/pr/release-workflow.test.ts scripts/pr/quality-contract.test.ts scripts/release-update-metadata.test.ts scripts/git-hooks/install.test.ts scripts/quality-gate/quarantine.test.ts scripts/quality-gate/coverage.test.ts scripts/quality-gate/provider-smoke/execute.test.ts scripts/quality-gate/desktop-smoke/execute.test.ts scripts/quality-gate/providerTargets.test.ts scripts/quality-gate/runner.test.ts && bun run check:quarantine",
+    "check:server": "bun run scripts/pr/run-server-tests.ts",
+    "check:desktop": "cd desktop && bun run lint && bun run test -- --run && bun run build",
+    "check:electron": "cd desktop && bun run check:electron",
+    "check:adapters": "cd adapters && bun test",
+    "check:native": "cd desktop && bun run build:sidecars && bun run check:electron && CSC_IDENTITY_AUTO_DISCOVERY=false bun run electron:package:dir && cd .. && bun run test:package-smoke:current",
+    "check:docs": "npm ci --loglevel=error && npm run --loglevel=error docs:build",
+    "check:persistence-upgrade": "bun run scripts/quality-gate/persistence-upgrade.ts",
+    "check:quarantine": "bun run scripts/quality-gate/quarantine.ts --enforce-review-date",
+    "check:coverage": "bun run scripts/quality-gate/coverage.ts",
+    "hooks:install": "bun run scripts/git-hooks/install.ts",
+    "verify": "bun run quality:pr",
+    "quality:gate": "bun run scripts/quality-gate/index.ts",
+    "quality:verify": "bun run quality:pr",
+    "quality:providers": "bun run scripts/quality-gate/providers.ts",
+    "quality:pr": "bun run quality:gate --mode pr",
+    "quality:push": "bun run quality:gate --mode pr --skip coverage",
+    "quality:baseline": "bun run quality:gate --mode baseline",
+    "quality:release": "bun run quality:gate --mode release",
+    "quality:smoke": "bun run quality:gate --mode baseline --allow-live --only 'provider-smoke:*' --only 'desktop-smoke:*'",
+    "test:package-smoke": "bun run scripts/quality-gate/package-smoke/index.ts",
+    "test:package-smoke:current": "bun run scripts/quality-gate/package-smoke/current.ts",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs"
   },
   "dependencies": {
-    "@anthropic-ai/claude-code": "2.1.143",
-    "@playwright/test": "^1.60.0",
-    "lucide-react": "^0.468.0",
+    "@anthropic-ai/sandbox-runtime": "^0.0.44",
+    "@anthropic-ai/sdk": "^0.80.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.1020.0",
+    "@commander-js/extra-typings": "^14.0.0",
+    "@growthbook/growthbook": "^1.6.5",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@opentelemetry/api-logs": "^0.214.0",
+    "@opentelemetry/core": "^2.6.1",
+    "@opentelemetry/resources": "^2.6.1",
+    "@opentelemetry/sdk-logs": "^0.214.0",
+    "@opentelemetry/sdk-metrics": "^2.6.1",
+    "@opentelemetry/sdk-trace-base": "^2.6.1",
+    "@opentelemetry/semantic-conventions": "^1.40.0",
+    "ajv": "^8.18.0",
+    "asciichart": "^1.5.25",
+    "auto-bind": "^5.0.1",
+    "axios": "^1.14.0",
+    "bidi-js": "^1.0.3",
+    "chalk": "^5.6.2",
+    "chokidar": "^5.0.0",
+    "cli-boxes": "^4.0.1",
+    "code-excerpt": "^4.0.0",
+    "diff": "^8.0.4",
+    "emoji-regex": "^10.6.0",
+    "env-paths": "^4.0.0",
+    "execa": "^9.6.1",
+    "figures": "^6.1.0",
+    "fuse.js": "^7.1.0",
+    "get-east-asian-width": "^1.5.0",
+    "google-auth-library": "^10.6.2",
+    "highlight.js": "^11.11.1",
+    "https-proxy-agent": "^8.0.0",
+    "ignore": "^7.0.5",
+    "indent-string": "^5.0.0",
+    "ink": "^6.8.0",
+    "jsonc-parser": "^3.3.1",
+    "lodash-es": "^4.17.23",
+    "lru-cache": "^11.2.7",
+    "marked": "^17.0.5",
+    "medium-zoom": "^1.1.0",
+    "p-map": "^7.0.4",
+    "picomatch": "^4.0.4",
+    "proper-lockfile": "^4.1.2",
     "qrcode": "^1.5.4",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react": "^19.2.4",
+    "react-reconciler": "^0.33.0",
+    "semver": "^7.7.4",
+    "shell-quote": "^1.8.3",
+    "signal-exit": "^4.1.0",
+    "stack-utils": "^2.0.6",
+    "strip-ansi": "^7.2.0",
+    "supports-hyperlinks": "^4.4.0",
+    "tree-kill": "^1.2.2",
+    "turndown": "^7.2.4",
+    "type-fest": "^5.5.0",
+    "undici": "^7.24.6",
+    "usehooks-ts": "^3.1.1",
+    "vscode-jsonrpc": "^8.2.1",
+    "vscode-languageserver-types": "^3.17.5",
+    "wrap-ansi": "^10.0.0",
+    "ws": "^8.20.0",
+    "xss": "^1.0.15",
+    "yaml": "^2.8.3",
+    "zod": "^4.3.6"
+  },
+  "overrides": {
+    "follow-redirects": "^1.16.0"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "^4.3.4",
-    "concurrently": "^9.1.0",
-    "electron": "^33.3.1",
-    "electron-builder": "^25.1.8",
-    "vite": "^6.0.7",
-    "wait-on": "^8.0.1"
-  },
-  "build": {
-    "appId": "com.ecorex.agent",
-    "productName": "EcoreX Agent",
-    "artifactName": "${productName} Setup ${version}.${ext}",
-    "copyright": "Copyright © 2026 EcoreX",
-    "directories": {
-      "output": "release"
-    },
-    "electronDist": "node_modules/electron/dist",
-    "electronDownload": {
-      "mirror": "https://npmmirror.com/mirrors/electron/"
-    },
-    "files": [
-      "dist/**/*",
-      "electron/**/*",
-      "build/icon.ico",
-      "package.json",
-      "node_modules/@anthropic-ai/claude-code/**/*",
-      "node_modules/@anthropic-ai/claude-code-darwin-arm64/**/*",
-      "node_modules/@anthropic-ai/claude-code-darwin-x64/**/*",
-      "node_modules/@anthropic-ai/claude-code-win32-x64/**/*",
-      "node_modules/.bin/playwright*",
-      "node_modules/@playwright/test/**/*",
-      "node_modules/playwright/**/*",
-      "node_modules/playwright-core/**/*",
-      "!**/.env",
-      "!**/.env.*",
-      "!**/*.log",
-      "!**/settings.json",
-      "!**/secrets.json",
-      "!**/auth-session.json",
-      "!**/auth-identity.json",
-      "!**/auth-users.json",
-      "!**/enterprise-admin-journal.jsonl",
-      "!**/session-bindings.json",
-      "!**/skill-packs.json",
-      "!**/skill-packs/**/*",
-      "!**/model-profiles.json",
-      "!**/.ecorex-project.json",
-      "!**/.ecorex-projects.json",
-      "!**/.ecorex-memory/**/*",
-      "!**/.mcp.json",
-      "!**/.claude/**/*",
-      "!**/.codex/**/*",
-      "!**/.agents/**/*",
-      "!**/.lark/**/*",
-      "!**/.feishu/**/*",
-      "!**/.larksuite/**/*",
-      "!**/superpowers/**/*",
-      "!**/huashu-design/**/*",
-      "!**/huashu_design/**/*"
-    ],
-    "asarUnpack": [
-      "node_modules/@anthropic-ai/claude-code/bin/**/*",
-      "node_modules/@anthropic-ai/claude-code-darwin-arm64/**/*",
-      "node_modules/@anthropic-ai/claude-code-darwin-x64/**/*",
-      "node_modules/@anthropic-ai/claude-code-win32-x64/**/*",
-      "node_modules/.bin/playwright*",
-      "node_modules/@playwright/test/**/*",
-      "node_modules/playwright/**/*",
-      "node_modules/playwright-core/**/*"
-    ],
-    "extraResources": [
-      {
-        "from": "build/provisioning",
-        "to": "provisioning",
-        "filter": [
-          "ecorex-provisioning.json",
-          "!**/.env",
-          "!**/.env.*",
-          "!**/*.log"
-        ]
-      },
-      {
-        "from": "build/managed-skill-packs",
-        "to": "managed-skill-packs",
-        "filter": [
-          "agent-skill-creator/**/*",
-          "frontend-design/**/*",
-          "lark-cli/**/*",
-          "officecli/**/*",
-          "opencli/**/*",
-          "xin-agent/**/*",
-          "!**/.env",
-          "!**/.env.*",
-          "!**/*.log",
-          "!**/settings.json",
-          "!**/secrets.json",
-          "!**/auth-session.json",
-          "!**/auth-identity.json",
-          "!**/auth-users.json",
-          "!**/enterprise-admin-journal.jsonl",
-          "!**/session-bindings.json",
-          "!**/model-profiles.json",
-          "!**/.lark/**/*",
-          "!**/.feishu/**/*",
-          "!**/.larksuite/**/*"
-        ]
-      },
-      {
-        "from": "build/managed-tools",
-        "to": "managed-tools",
-        "filter": [
-          "lark-cli/**/*",
-          "officecli/**/*",
-          "opencli/**/*",
-          "xin-agent/**/*",
-          "!**/.env",
-          "!**/.env.*",
-          "!**/*.log",
-          "!**/settings.json",
-          "!**/secrets.json",
-          "!**/auth-session.json",
-          "!**/auth-identity.json",
-          "!**/auth-users.json",
-          "!**/enterprise-admin-journal.jsonl",
-          "!**/session-bindings.json",
-          "!**/model-profiles.json",
-          "!**/.lark/**/*",
-          "!**/.feishu/**/*",
-          "!**/.larksuite/**/*"
-        ]
-      },
-      {
-        "from": "node_modules/.bin",
-        "to": "app.asar.unpacked/node_modules/.bin",
-        "filter": [
-          "playwright*",
-          "!**/.env",
-          "!**/.env.*",
-          "!**/*.log"
-        ]
-      },
-      {
-        "from": "vendor/vue-office",
-        "to": "vue-office",
-        "filter": [
-          "index.html",
-          "README.md",
-          "manifest.json",
-          "js-preview-lib/**/*",
-          "!**/*.map",
-          "!**/test-files/**/*",
-          "!**/.DS_Store",
-          "!**/Thumbs.db"
-        ]
-      }
-    ],
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "icon": "build/icon.ico"
-    },
-    "mac": {
-      "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        },
-        {
-          "target": "zip",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        }
-      ],
-      "category": "public.app-category.business",
-      "icon": "build/icon.icns",
-      "hardenedRuntime": true,
-      "gatekeeperAssess": false,
-      "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.inherit.plist"
-    },
-    "dmg": {
-      "artifactName": "${productName}-${version}-${arch}.${ext}",
-      "sign": false,
-      "contents": [
-        {
-          "x": 130,
-          "y": 220
-        },
-        {
-          "x": 410,
-          "y": 220,
-          "type": "link",
-          "path": "/Applications"
-        }
-      ]
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowElevation": false,
-      "allowToChangeInstallationDirectory": true,
-      "include": "build/installer.nsh",
-      "uninstallDisplayName": "EcoreX Agent",
-      "createDesktopShortcut": false,
-      "createStartMenuShortcut": true,
-      "shortcutName": "EcoreX Agent"
-    }
+    "mermaid": "^11.14.0",
+    "vitepress": "^1.6.3",
+    "vitepress-plugin-mermaid": "^2.0.17",
+    "vue": "^3.5.13"
   }
 }

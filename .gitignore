@@ -1,83 +1,85 @@
-node_modules/
-终端源代码/
-
-# Playwright artifacts.
-test-results/
-playwright-report/
-
-# Local Electron build outputs. Installers are uploaded as GitHub release assets.
-release/win-unpacked/
-release/__uninstaller-nsis-*.exe
-release/*.exe
-release/*.exe.blockmap
-release/*.dmg
-release/*.zip
-release/*.blockmap
-release/latest.yml
-release/latest*.yml
-release/*.json
-release/real-agent-stress-*.json
-
-# Static landing deployment payloads. Source stays in landing/, large downloads
-# are deployed separately.
-landing/*-deploy-*.tar
-landing/*/downloads/*.zip
-landing/*/downloads/*.exe
-landing/*/downloads/*.exe.blockmap
-build/provisioning/ecorex-provisioning.json
-build/managed-skill-packs/agent-skill-creator/
-build/managed-skill-packs/frontend-design/
-build/managed-skill-packs/lark-cli/
-build/managed-skill-packs/officecli/
-build/managed-skill-packs/opencli/
-build/managed-skill-packs/xin-agent/
-build/managed-tools/lark-cli/
-build/managed-tools/officecli/
-build/managed-tools/opencli/
-build/managed-tools/xin-agent/
-
-# Local QA reports generated during release readiness checks.
-reports/qa/
-
-# Accidental root-level renderer/main build copies.
-/index-*.js
-/index-*.css
-/main.cjs
-
-# Keep full upstream preview checkouts outside this repository; only commit/copy
-# the small static vendor/vue-office runtime produced by prepare:vue-office.
-
-# Local secrets and transient logs.
 .env
 .env.*
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-
-# Local Agent/LLM runtime state; never commit machine-specific profiles.
-.codex/
-.claude/
-.mcp/
-.mcp.json
-.agents/
-settings.json
-secrets.json
-auth-session.json
-auth-identity.json
-auth-users.json
-enterprise-admin-journal.jsonl
-session-bindings.json
-model-profiles.json
-.lark/
-.feishu/
-.larksuite/
-.ecorex-project.json
-.ecorex-projects.json
-
-# Editor and OS noise.
+!.env.example
+node_modules
+openspec
 .DS_Store
-Thumbs.db
-.idea/
-.vscode/
+
+# Computer Use runtime (auto-generated)
+.runtime/
+extracted-natives/
+
+# Adapter attachment cache (created at runtime by AttachmentStore when
+# running adapter tests or the feishu/telegram adapters locally)
+.lark-attachments/
+.tg-attachments/
+
+# Playwright MCP snapshots & logs
+.playwright-mcp/
+
+# OMX state/logs
+.omx/
+
+# E2E screenshots
+e2e-*.png
+
+# Quality gate reports
+artifacts/quality-runs/
+artifacts/coverage/
+
+# Desktop build output
+desktop/dist/
+desktop/electron-dist/
+desktop/build-artifacts/
+desktop/src-tauri/binaries/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+desktop/package-lock.json
+
+# Download page deployment packages
+deploy/ecorex-download/packages/*
+!deploy/ecorex-download/packages/manifest.json
+
+# Desktop brand asset candidates (keep only selected ones in public/)
+desktop/brand-assets/
+
+# Claude local config & auto-generated
+.claude/
+
+# Superpowers plans & specs (local only)
+docs/superpowers/
+.superpowers/
+
+# Temp server/web logs
+.tmp-*.log
+
+# Debug / temp screenshots (root dir only)
+/*.png
+bug_attachments/
+
+# Private keys & credentials
+*.pem
+*.key
+*.p12
+credentials*.json
+
+# TS build cache
+*.tsbuildinfo
+
+# Temp markdown snapshots
+sidebar-snapshot.md
+
+# VitePress
+docs/.vitepress/dist
+docs/.vitepress/cache
+runtime/__pycache__
+
+# IDE
+.idea
+
+# Codex logs
+.codex-logs/
+
+# Local AI assistant artifacts (graph, notes)
+CLAUDE.md
+graphify-out/

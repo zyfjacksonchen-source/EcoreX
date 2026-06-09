@@ -1,0 +1,37 @@
+{
+  "product": "EcoreX",
+  "version": "0.1.1",
+  "updatedAt": "2026-06-09",
+  "artifacts": [
+    {
+      "id": "windows-x64",
+      "platform": "Windows",
+      "variant": "x64 installer",
+      "fileName": "EcoreX-0.1.1-win-x64.exe",
+      "href": "packages/EcoreX-0.1.1-win-x64.exe",
+      "size": "164.6 MB",
+      "sha256": "B07C9A2A1A348CDA2CC4910DEAC6CD65558ED21E1DE1CE2FA7239A3524AAB33B",
+      "status": "ready"
+    },
+    {
+      "id": "macos-arm64-dmg",
+      "platform": "macOS",
+      "variant": "Apple Silicon DMG",
+      "fileName": "EcoreX-0.1.1-mac-arm64.dmg",
+      "href": "packages/EcoreX-0.1.1-mac-arm64.dmg",
+      "size": null,
+      "sha256": null,
+      "status": "pending"
+    },
+    {
+      "id": "macos-arm64-zip",
+      "platform": "macOS",
+      "variant": "Apple Silicon ZIP",
+      "fileName": "EcoreX-0.1.1-mac-arm64.zip",
+      "href": "packages/EcoreX-0.1.1-mac-arm64.zip",
+      "size": null,
+      "sha256": null,
+      "status": "pending"
+    }
+  ]
+}

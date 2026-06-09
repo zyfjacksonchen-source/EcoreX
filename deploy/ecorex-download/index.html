@@ -1,0 +1,691 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>EcoreX 下载中心</title>
+    <style>
+      /* Hallmark pre-emit critique: P5 H4 E5 S5 R5 V4 */
+      :root {
+        color-scheme: light;
+        --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        --color-page: #f6f0e8;
+        --color-panel: #fffaf3;
+        --color-panel-strong: #ffffff;
+        --color-ink: #201811;
+        --color-muted: #706457;
+        --color-subtle: #948779;
+        --color-accent: #e95f1a;
+        --color-accent-strong: #c94b10;
+        --color-accent-soft: #fff0e5;
+        --color-accent-ink: #ffffff;
+        --color-rule: #e8d8c8;
+        --color-rule-strong: #d9bfa6;
+        --color-positive: #1f7a4f;
+        --color-warning: #9a5a0b;
+        --color-disabled: #a3988b;
+        --color-shadow: rgba(79, 43, 17, 0.12);
+        --color-focus: #2f7dbd;
+        --space-1: 4px;
+        --space-2: 8px;
+        --space-3: 12px;
+        --space-4: 16px;
+        --space-5: 20px;
+        --space-6: 24px;
+        --space-7: 32px;
+        --space-8: 40px;
+        --radius-1: 6px;
+        --radius-2: 8px;
+        --radius-3: 14px;
+        --shadow-panel: 0 24px 70px var(--color-shadow);
+      }
+
+      [data-theme="dark"] {
+        color-scheme: dark;
+        --color-page: #171310;
+        --color-panel: #211914;
+        --color-panel-strong: #2a2019;
+        --color-ink: #fff6ed;
+        --color-muted: #c9b9aa;
+        --color-subtle: #a49384;
+        --color-accent: #ff7a2f;
+        --color-accent-strong: #ff9659;
+        --color-accent-soft: #3a2318;
+        --color-accent-ink: #1b120d;
+        --color-rule: #3d2d24;
+        --color-rule-strong: #5a4031;
+        --color-positive: #76d39e;
+        --color-warning: #efb45b;
+        --color-disabled: #76685b;
+        --color-shadow: rgba(0, 0, 0, 0.34);
+        --color-focus: #8abff2;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        min-height: 100%;
+        margin: 0;
+        overflow-x: clip;
+      }
+
+      body {
+        background:
+          linear-gradient(180deg, var(--color-panel) 0, var(--color-page) 38%, var(--color-page) 100%);
+        color: var(--color-ink);
+        font-family: var(--font-sans);
+        letter-spacing: 0;
+      }
+
+      a {
+        color: inherit;
+      }
+
+      button,
+      a {
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      .page {
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        min-height: 100vh;
+      }
+
+      .shell {
+        width: min(1120px, calc(100% - var(--space-6)));
+        margin: 0 auto;
+      }
+
+      .topbar {
+        border-bottom: 1px solid var(--color-rule);
+        background: color-mix(in srgb, var(--color-panel) 86%, transparent);
+      }
+
+      .topbar-inner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 72px;
+        gap: var(--space-4);
+      }
+
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        min-width: 0;
+        gap: var(--space-3);
+      }
+
+      .mark {
+        display: grid;
+        flex: 0 0 auto;
+        place-items: center;
+        width: 38px;
+        height: 38px;
+        border: 1px solid var(--color-rule-strong);
+        border-radius: var(--radius-2);
+        background: var(--color-accent);
+        color: var(--color-accent-ink);
+        font-weight: 800;
+      }
+
+      .brand-text {
+        min-width: 0;
+      }
+
+      .brand-name {
+        margin: 0;
+        font-size: 18px;
+        font-weight: 800;
+        line-height: 1.1;
+        overflow-wrap: anywhere;
+      }
+
+      .brand-subtitle {
+        margin: var(--space-1) 0 0;
+        color: var(--color-muted);
+        font-size: 13px;
+      }
+
+      .theme-toggle {
+        display: inline-grid;
+        grid-template-columns: 1fr 1fr;
+        width: 132px;
+        height: 36px;
+        padding: var(--space-1);
+        border: 1px solid var(--color-rule);
+        border-radius: var(--radius-2);
+        background: var(--color-panel-strong);
+      }
+
+      .theme-toggle button {
+        border: 0;
+        border-radius: var(--radius-1);
+        background: transparent;
+        color: var(--color-muted);
+        font: 700 13px/1 var(--font-sans);
+        cursor: pointer;
+      }
+
+      .theme-toggle button[aria-pressed="true"] {
+        background: var(--color-accent);
+        color: var(--color-accent-ink);
+      }
+
+      .theme-toggle button:focus-visible,
+      .download-link:focus-visible {
+        outline: 2px solid var(--color-focus);
+        outline-offset: 2px;
+      }
+
+      main {
+        padding: var(--space-8) 0;
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 0.95fr) minmax(280px, 0.55fr);
+        align-items: stretch;
+        gap: var(--space-6);
+      }
+
+      .intro {
+        display: flex;
+        min-width: 0;
+        flex-direction: column;
+        justify-content: space-between;
+        border: 1px solid var(--color-rule);
+        border-radius: var(--radius-3);
+        background: var(--color-panel-strong);
+        padding: clamp(var(--space-6), 4vw, 56px);
+        box-shadow: var(--shadow-panel);
+      }
+
+      .kicker {
+        width: fit-content;
+        margin: 0 0 var(--space-4);
+        border: 1px solid var(--color-rule-strong);
+        border-radius: var(--radius-1);
+        padding: var(--space-2) var(--space-3);
+        color: var(--color-accent-strong);
+        font-size: 13px;
+        font-weight: 800;
+      }
+
+      h1 {
+        max-width: 760px;
+        margin: 0;
+        font-size: clamp(40px, 7vw, 82px);
+        line-height: 0.96;
+        letter-spacing: 0;
+        overflow-wrap: anywhere;
+      }
+
+      .release-line {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--space-3);
+        margin: var(--space-7) 0 0;
+        color: var(--color-muted);
+        font-size: 15px;
+      }
+
+      .release-line strong {
+        color: var(--color-ink);
+      }
+
+      .status-panel {
+        display: grid;
+        align-content: space-between;
+        min-width: 0;
+        border: 1px solid var(--color-rule);
+        border-radius: var(--radius-3);
+        background: var(--color-panel);
+        padding: var(--space-5);
+      }
+
+      .status-title {
+        margin: 0;
+        color: var(--color-muted);
+        font-size: 13px;
+        font-weight: 800;
+        text-transform: uppercase;
+      }
+
+      .status-version {
+        margin: var(--space-4) 0;
+        font-size: clamp(42px, 6vw, 64px);
+        font-weight: 850;
+        line-height: 0.95;
+        overflow-wrap: anywhere;
+      }
+
+      .status-meta {
+        display: grid;
+        gap: var(--space-3);
+        margin: 0;
+      }
+
+      .meta-row {
+        display: flex;
+        justify-content: space-between;
+        gap: var(--space-4);
+        border-top: 1px solid var(--color-rule);
+        padding-top: var(--space-3);
+        color: var(--color-muted);
+        font-size: 14px;
+      }
+
+      .meta-row strong {
+        color: var(--color-ink);
+        text-align: right;
+      }
+
+      .downloads {
+        margin-top: var(--space-6);
+        border: 1px solid var(--color-rule);
+        border-radius: var(--radius-3);
+        background: var(--color-panel-strong);
+        overflow: clip;
+      }
+
+      .downloads-head {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: end;
+        gap: var(--space-5);
+        border-bottom: 1px solid var(--color-rule);
+        padding: var(--space-6);
+      }
+
+      .downloads-head h2 {
+        margin: 0;
+        font-size: 28px;
+        line-height: 1.05;
+        overflow-wrap: anywhere;
+      }
+
+      .downloads-head p {
+        margin: var(--space-2) 0 0;
+        color: var(--color-muted);
+        font-size: 14px;
+      }
+
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: var(--space-2);
+      }
+
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        min-height: 28px;
+        border: 1px solid var(--color-rule);
+        border-radius: var(--radius-1);
+        padding: 0 var(--space-3);
+        color: var(--color-muted);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .artifact-list {
+        display: grid;
+      }
+
+      .artifact {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(180px, auto);
+        gap: var(--space-5);
+        align-items: center;
+        padding: var(--space-6);
+      }
+
+      .artifact + .artifact {
+        border-top: 1px solid var(--color-rule);
+      }
+
+      .artifact-main {
+        min-width: 0;
+      }
+
+      .platform {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: var(--space-3);
+      }
+
+      .platform h3 {
+        margin: 0;
+        font-size: 21px;
+        line-height: 1.1;
+        overflow-wrap: anywhere;
+      }
+
+      .state {
+        border: 1px solid var(--color-rule);
+        border-radius: var(--radius-1);
+        padding: var(--space-1) var(--space-2);
+        color: var(--color-warning);
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .state.is-ready {
+        color: var(--color-positive);
+      }
+
+      .file-name {
+        margin: var(--space-3) 0 0;
+        color: var(--color-muted);
+        font-family: var(--font-mono);
+        font-size: 13px;
+        line-height: 1.5;
+        overflow-wrap: anywhere;
+      }
+
+      .artifact-meta {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: var(--space-3);
+        margin-top: var(--space-4);
+        max-width: 680px;
+      }
+
+      .detail {
+        min-width: 0;
+        border: 1px solid var(--color-rule);
+        border-radius: var(--radius-2);
+        padding: var(--space-3);
+        background: var(--color-panel);
+      }
+
+      .detail span {
+        display: block;
+        color: var(--color-subtle);
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .detail strong {
+        display: block;
+        margin-top: var(--space-1);
+        color: var(--color-ink);
+        font-family: var(--font-mono);
+        font-size: 12px;
+        font-weight: 700;
+        overflow-wrap: anywhere;
+      }
+
+      .download-link {
+        display: inline-grid;
+        place-items: center;
+        min-width: 164px;
+        min-height: 44px;
+        border-radius: var(--radius-2);
+        background: var(--color-accent);
+        color: var(--color-accent-ink);
+        font-size: 14px;
+        font-weight: 850;
+        text-align: center;
+        text-decoration: none;
+      }
+
+      .download-link[aria-disabled="true"] {
+        background: var(--color-rule);
+        color: var(--color-disabled);
+        cursor: not-allowed;
+        pointer-events: none;
+      }
+
+      .note {
+        margin-top: var(--space-6);
+        border-left: 4px solid var(--color-accent);
+        padding: var(--space-3) 0 var(--space-3) var(--space-4);
+        color: var(--color-muted);
+        font-size: 14px;
+        line-height: 1.7;
+      }
+
+      footer {
+        border-top: 1px solid var(--color-rule);
+        padding: var(--space-5) 0;
+        color: var(--color-muted);
+        font-size: 13px;
+      }
+
+      @media (max-width: 820px) {
+        .hero,
+        .downloads-head,
+        .artifact {
+          grid-template-columns: minmax(0, 1fr);
+        }
+
+        .legend {
+          justify-content: flex-start;
+        }
+
+        .download-link {
+          width: 100%;
+        }
+      }
+
+      @media (max-width: 520px) {
+        .shell {
+          width: min(100% - var(--space-4), 1120px);
+        }
+
+        .topbar-inner {
+          align-items: flex-start;
+          flex-direction: column;
+          justify-content: center;
+          padding: var(--space-4) 0;
+        }
+
+        .theme-toggle {
+          width: 100%;
+        }
+
+        main {
+          padding: var(--space-5) 0;
+        }
+
+        .intro,
+        .status-panel,
+        .downloads-head,
+        .artifact {
+          padding: var(--space-4);
+        }
+
+        .artifact-meta {
+          grid-template-columns: minmax(0, 1fr);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header class="topbar">
+        <div class="shell topbar-inner">
+          <div class="brand" aria-label="EcoreX">
+            <div class="mark" aria-hidden="true">EX</div>
+            <div class="brand-text">
+              <p class="brand-name">EcoreX</p>
+              <p class="brand-subtitle">企业下载中心</p>
+            </div>
+          </div>
+          <div class="theme-toggle" aria-label="切换显示模式">
+            <button type="button" data-theme-value="light" aria-pressed="true">明亮</button>
+            <button type="button" data-theme-value="dark" aria-pressed="false">深色</button>
+          </div>
+        </div>
+      </header>
+
+      <main class="shell">
+        <section class="hero" aria-labelledby="page-title">
+          <div class="intro">
+            <div>
+              <p class="kicker">企业客户端</p>
+              <h1 id="page-title">EcoreX 下载中心</h1>
+            </div>
+            <p class="release-line">
+              <span>当前版本 <strong id="release-version">v0.1.1</strong></span>
+              <span>更新日期 <strong id="release-date">2026-06-09</strong></span>
+            </p>
+          </div>
+
+          <aside class="status-panel" aria-label="发布状态">
+            <div>
+              <p class="status-title">Release</p>
+              <p class="status-version" id="status-version">0.1.1</p>
+            </div>
+            <dl class="status-meta">
+              <div class="meta-row">
+                <dt>Windows</dt>
+                <dd><strong id="windows-state">待发布</strong></dd>
+              </div>
+              <div class="meta-row">
+                <dt>macOS</dt>
+                <dd><strong id="macos-state">待发布</strong></dd>
+              </div>
+            </dl>
+          </aside>
+        </section>
+
+        <section class="downloads" aria-labelledby="downloads-title">
+          <div class="downloads-head">
+            <div>
+              <h2 id="downloads-title">安装包</h2>
+              <p>仅保留企业客户端下载入口。安装包发布后，按钮会自动切换为可下载状态。</p>
+            </div>
+            <div class="legend" aria-label="文件状态说明">
+              <span class="chip">v0.1.1</span>
+              <span class="chip">Windows</span>
+              <span class="chip">macOS</span>
+            </div>
+          </div>
+          <div class="artifact-list" id="artifact-list" aria-live="polite"></div>
+        </section>
+
+        <p class="note">如页面显示待发布，请等待管理员同步安装包和校验信息。</p>
+      </main>
+
+      <footer>
+        <div class="shell">EcoreX enterprise distribution. Version managed release page.</div>
+      </footer>
+    </div>
+
+    <script>
+      const fallbackManifest = {
+        product: "EcoreX",
+        version: "0.1.1",
+        updatedAt: "2026-06-09",
+        artifacts: [
+          {
+            id: "windows-x64",
+            platform: "Windows",
+            variant: "x64 installer",
+            fileName: "EcoreX-0.1.1-win-x64.exe",
+            href: "packages/EcoreX-0.1.1-win-x64.exe",
+            size: null,
+            sha256: null,
+            status: "pending"
+          },
+          {
+            id: "macos-arm64-dmg",
+            platform: "macOS",
+            variant: "Apple Silicon DMG",
+            fileName: "EcoreX-0.1.1-mac-arm64.dmg",
+            href: "packages/EcoreX-0.1.1-mac-arm64.dmg",
+            size: null,
+            sha256: null,
+            status: "pending"
+          },
+          {
+            id: "macos-arm64-zip",
+            platform: "macOS",
+            variant: "Apple Silicon ZIP",
+            fileName: "EcoreX-0.1.1-mac-arm64.zip",
+            href: "packages/EcoreX-0.1.1-mac-arm64.zip",
+            size: null,
+            sha256: null,
+            status: "pending"
+          }
+        ]
+      }
+
+      const statusText = {
+        ready: "已发布",
+        pending: "待发布"
+      }
+
+      const setTheme = (theme) => {
+        const nextTheme = theme === "dark" ? "dark" : "light"
+        document.documentElement.dataset.theme = nextTheme
+        localStorage.setItem("ecorex-download-theme", nextTheme)
+        document.querySelectorAll("[data-theme-value]").forEach((button) => {
+          button.setAttribute("aria-pressed", String(button.dataset.themeValue === nextTheme))
+        })
+      }
+
+      const savedTheme = localStorage.getItem("ecorex-download-theme")
+      setTheme(savedTheme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"))
+
+      document.querySelectorAll("[data-theme-value]").forEach((button) => {
+        button.addEventListener("click", () => setTheme(button.dataset.themeValue))
+      })
+
+      const detail = (label, value) => `
+        <div class="detail">
+          <span>${label}</span>
+          <strong>${value || "待同步"}</strong>
+        </div>
+      `
+
+      const render = (manifest) => {
+        document.getElementById("release-version").textContent = `v${manifest.version}`
+        document.getElementById("release-date").textContent = manifest.updatedAt
+        document.getElementById("status-version").textContent = manifest.version
+
+        const artifacts = Array.isArray(manifest.artifacts) ? manifest.artifacts : []
+        const windowsReady = artifacts.some((artifact) => artifact.platform === "Windows" && artifact.status === "ready")
+        const macReady = artifacts.some((artifact) => artifact.platform === "macOS" && artifact.status === "ready")
+        document.getElementById("windows-state").textContent = windowsReady ? "已发布" : "待发布"
+        document.getElementById("macos-state").textContent = macReady ? "已发布" : "待发布"
+
+        document.getElementById("artifact-list").innerHTML = artifacts.map((artifact) => {
+          const ready = artifact.status === "ready"
+          const actionLabel = ready ? `下载 ${artifact.platform}` : "待发布"
+          return `
+            <article class="artifact">
+              <div class="artifact-main">
+                <div class="platform">
+                  <h3>${artifact.platform} · ${artifact.variant}</h3>
+                  <span class="state ${ready ? "is-ready" : ""}">${statusText[artifact.status] || statusText.pending}</span>
+                </div>
+                <p class="file-name">${artifact.fileName}</p>
+                <div class="artifact-meta">
+                  ${detail("文件大小", artifact.size)}
+                  ${detail("SHA-256", artifact.sha256)}
+                </div>
+              </div>
+              <a class="download-link" href="${ready ? artifact.href : "#"}" aria-disabled="${String(!ready)}">${actionLabel}</a>
+            </article>
+          `
+        }).join("")
+      }
+
+      fetch("packages/manifest.json", { cache: "no-store" })
+        .then((response) => response.ok ? response.json() : fallbackManifest)
+        .then(render)
+        .catch(() => render(fallbackManifest))
+    </script>
+  </body>
+</html>
