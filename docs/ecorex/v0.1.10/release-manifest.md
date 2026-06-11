@@ -75,6 +75,7 @@
 - Added `scripts/check-ecorex-server-release.sh`, copied by the install script into `$ADMIN_ROOT/server`, to verify release/current files, Admin API files, server helpers, and public route status from the server.
 - Added import-safe Caddy route snippet `deploy/ecorex-site/caddy/ecorex-agent.routes.caddy` and release-zip inclusion, so existing Caddy site blocks can import only the EcoreX routes.
 - The acceptance-log verification note was first synced to GitHub snapshot commit `66139aebfaa6e613d3295aa427665f56af1c8e59` on both `main` and `codex/ecorex-v0.1.10-productization`; strict release verification still fails at public `manifest.json` with HTTP 404 until server static release/Caddy `file_server` wiring is applied.
+- Fixed the GitHub API fallback used by the release and acceptance verifiers so refs such as `codex/ecorex-v0.1.10-productization` are requested through singular slash-preserving `git/ref/{ref}` paths instead of `%2F`-encoded paths or plural `git/refs`; when env tokens are unset, the fallback can use Git credential helper tokens for private repository checks.
 
 ## Pending Release Steps
 

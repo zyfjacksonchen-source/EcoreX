@@ -70,6 +70,21 @@ function Get-GitHubToken {
             return $value
         }
     }
+    if (Get-Command git -ErrorAction SilentlyContinue) {
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            $credential = "protocol=https`nhost=github.com`n`n" | git credential fill 2>$null
+            if ($LASTEXITCODE -eq 0 -and $credential) {
+                $password = (($credential -split "`n") | Where-Object { $_ -like "password=*" } | Select-Object -First 1) -replace "^password=", ""
+                if ($password) {
+                    return $password
+                }
+            }
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+    }
     return ""
 }
 
@@ -96,7 +111,10 @@ function Get-RemoteHead {
         throw "git ls-remote failed and GitHub API fallback cannot parse $GitRemoteUrl"
     }
 
-    $branchPath = $Branch -replace "/", "%2F"
+    # GitHub's "Get a reference" endpoint is singular /git/ref/{ref}.
+    # Branch names with slashes stay as path segments; encoding slash as %2F
+    # or using plural /git/refs/... returns 404.
+    $branchPath = $Branch
     $headers = @{
         "Accept" = "application/vnd.github+json"
         "User-Agent" = "ecorex-acceptance"
@@ -105,7 +123,7 @@ function Get-RemoteHead {
     if ($token) {
         $headers.Authorization = "Bearer $token"
     }
-    $response = Invoke-WebRequest -UseBasicParsing -Uri "https://api.github.com/repos/$($Matches.owner)/$($Matches.repo)/git/refs/heads/$branchPath" -Headers $headers -TimeoutSec 60
+    $response = Invoke-WebRequest -UseBasicParsing -Uri "https://api.github.com/repos/$($Matches.owner)/$($Matches.repo)/git/ref/heads/$branchPath" -Headers $headers -TimeoutSec 60
     $payload = $response.Content | ConvertFrom-Json
     return [ordered]@{
         sha = [string]$payload.object.sha

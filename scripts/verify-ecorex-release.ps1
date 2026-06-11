@@ -152,6 +152,21 @@ function Get-GitHubApiToken {
             return $value
         }
     }
+    if (Get-Command git -ErrorAction SilentlyContinue) {
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            $credential = "protocol=https`nhost=github.com`n`n" | git credential fill 2>$null
+            if ($LASTEXITCODE -eq 0 -and $credential) {
+                $password = (($credential -split "`n") | Where-Object { $_ -like "password=*" } | Select-Object -First 1) -replace "^password=", ""
+                if ($password) {
+                    return $password
+                }
+            }
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+    }
     return ""
 }
 
@@ -194,8 +209,11 @@ function Get-RemoteBranchHead {
         $headers["Authorization"] = "Bearer $token"
     }
 
-    $branchPath = $Branch -replace "/", "%2F"
-    $url = "https://api.github.com/repos/$($repoParts.owner)/$($repoParts.repo)/git/refs/heads/$branchPath"
+    # GitHub's "Get a reference" endpoint is singular /git/ref/{ref}.
+    # Branch names with slashes stay as path segments; encoding slash as %2F
+    # or using plural /git/refs/... returns 404.
+    $branchPath = $Branch
+    $url = "https://api.github.com/repos/$($repoParts.owner)/$($repoParts.repo)/git/ref/heads/$branchPath"
     try {
         $response = Invoke-WebRequest -UseBasicParsing -Uri $url -Headers $headers -TimeoutSec 60
         $payload = $response.Content | ConvertFrom-Json
