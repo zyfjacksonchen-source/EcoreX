@@ -70,6 +70,7 @@
 - Latest public handoff zip was regenerated after the second hardening pass with SHA256 `DDF69409D5E3183644A11D11089E883419409BC705DFCFCD8C86CAA46359FD31`.
 - Added server-side deployment helpers after the public route still returned 404: `scripts/install-ecorex-public-release.sh`, `deploy/ecorex-site/nginx/ecorex-agent.conf.example`, and `deploy/ecorex-admin-api/systemd/ecorex-admin-api.service.example`.
 - Local Linux/WSL install smoke found and fixed a release-blocking handoff issue: Windows `Compress-Archive` had produced backslash zip entries that Linux extracted as literal backslash filenames. The release zip generator now writes `/` entries, the installer normalizes legacy entries, and temp install verified the expected release/current layout.
+- Added `scripts/test-ecorex-v0.1.10-acceptance.ps1` as a consolidated acceptance harness for local package integrity, Linux install smoke, GitHub refs, and public route status. It supports `-AllowPublicBlocked` so current 404 routing remains visible without hiding local/package evidence.
 
 ## Pending Release Steps
 

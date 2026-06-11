@@ -51,6 +51,7 @@
 - 2026-06-11: Rebuilt and re-signed the Windows installer after the second hardening pass. New installer SHA256 `ACA52B7ACF7D73FBCA62F3F5AB92C057AB50B8FBD188C3AD7105B665569D482B`, size `117529360`. Installed-app smoke passed with sidecar ready on port `19142`. Public release zip regenerated with server helpers included; SHA256 `DDF69409D5E3183644A11D11089E883419409BC705DFCFCD8C86CAA46359FD31`, size `120274162`.
 - 2026-06-11: Public release verification was retried after proxy was enabled. `https://www.ecoreai.cn/ecorex-agent/manifest.json` now returns HTTP 404, so production deployment/routing is still the remaining external blocker.
 - 2026-06-11: Server handoff was hardened after local Linux/WSL smoke found Windows `Compress-Archive` stored backslash zip entries. `prepare-ecorex-public-release.ps1` now writes zip entries with `/`, and `install-ecorex-public-release.sh` also normalizes legacy backslash entries. Temporary install smoke under `tmp/deploy-smoke` verified release `index.html`, `manifest.json`, `admin/index.html`, and the Windows installer exist after install.
+- 2026-06-11: Added `scripts/test-ecorex-v0.1.10-acceptance.ps1` to consolidate local/package/GitHub/public status checks. First run passed local manifest, installer signature/hash, release zip path safety, Linux install smoke, Admin auth route, and GitHub refs; it correctly reported public static route 404 as blocked.
 
 ## Known Follow-Up
 

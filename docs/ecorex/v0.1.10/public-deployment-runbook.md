@@ -166,6 +166,16 @@ powershell -ExecutionPolicy Bypass -File scripts\verify-ecorex-release.ps1 `
   -SkipGitRemoteCheck
 ```
 
+Before deployment, or while the public route is still being wired, run the local/package acceptance harness:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\test-ecorex-v0.1.10-acceptance.ps1 `
+  -AllowPublicBlocked `
+  -ExpectedGitHubCommit <current-remote-snapshot-sha>
+```
+
+This checks the local manifest, signed Windows installer, public release zip contents, Linux-safe zip paths, temp install layout, GitHub refs, and the current public route status. It should only report `Public static route` as blocked before the production `/ecorex-agent` route is deployed.
+
 When verifying GitHub source sync in the same pass, omit `-SkipGitRemoteCheck` and pass the current remote snapshot commit. This is needed because the Windows handoff may update GitHub through a clean snapshot/API commit whose SHA differs from the local shallow CowAgent commit:
 
 ```powershell
