@@ -14,7 +14,9 @@
 - Local git branch: `codex/ecorex-v0.1.10-productization`
 - GitHub SSH push target prepared: `git@github.com:zhangyifanjackson-dotcom/EcoreX.git`
 - GitHub HTTPS push target prepared: `https://github.com/zhangyifanjackson-dotcom/EcoreX.git`
-- GitHub push status: SSH path blocked locally by missing public-key access; HTTPS token path is used for current handoff.
+- GitHub push status: succeeded via HTTPS token using Git for Windows `schannel` TLS backend.
+- GitHub pushed branches: `main` and `codex/ecorex-v0.1.10-productization` both point to the same clean EcoreX v0.1.10 source snapshot.
+- GitHub overwrite note: `main` was force-updated with lease to replace the previous repository contents, matching the product handoff requirement.
 - Git bundle handoff: `release-artifacts/EcoreX_0.1.10-productization.bundle`, size `6,518,904`, SHA256 `B53B9CBB8276E9D5FF1D9A589571FA565D605DD9AD74730C27901A0BFE611A1A`.
 - Git patch handoff: `release-artifacts/EcoreX_0.1.10-productization.patch`, size `15,109,034`, SHA256 `A2D8B5731648D2566F6E7571A8540A1DF0A8B732A29CDCAEA3BA83C2ABC0AA9C`.
 - macOS arm64/x64 artifacts: metadata prepared; signing, notarization, and Gatekeeper validation skipped for this Windows round.

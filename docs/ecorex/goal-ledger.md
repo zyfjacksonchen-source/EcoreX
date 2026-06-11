@@ -38,6 +38,7 @@
 - 2026-06-11: Added `scripts/prepare-ecorex-public-release.ps1` and generated `release-artifacts/EcoreX_0.1.10-public-release.zip` for server handoff. Zip SHA256 `6AB1DB6F4E7BE995264298306C9DD0F294EBE7FCAD995312D4461A6CADC4DD64`; contents verified to exclude stale v0.1.4 installer and pycache.
 - 2026-06-11: Created local git branch `codex/ecorex-v0.1.10-productization` and local commit for the v0.1.10 productization work. Added remote `ecorex` -> `git@github.com:zhangyifanjackson-dotcom/EcoreX.git`; SSH push failed on this machine with `Permission denied (publickey)`, so HTTPS token push is the current GitHub handoff path.
 - 2026-06-11: Generated offline Git handoff artifacts in `release-artifacts/`: `EcoreX_0.1.10-productization.bundle` and `.patch`. Bundle verification passed and can recreate the v0.1.10 productization branch from the pre-HTTPS-push handoff commit on a GitHub-authorized machine.
+- 2026-06-11: GitHub HTTPS token push succeeded after switching Git for Windows to the `schannel` TLS backend. Because the local CowAgent checkout is shallow and could not push full history to a different repository, a clean source snapshot was exported and pushed as a root commit to both `main` and `codex/ecorex-v0.1.10-productization` in `zhangyifanjackson-dotcom/EcoreX`. The remote `main` update used `--force-with-lease` to intentionally replace the old repository contents with the EcoreX v0.1.10 snapshot.
 
 ## Known Follow-Up
 
