@@ -9,8 +9,8 @@
 - Windows size: `117,529,360` bytes
 - Windows SHA256: `ACA52B7ACF7D73FBCA62F3F5AB92C057AB50B8FBD188C3AD7105B665569D482B`
 - Public deployment zip: `release-artifacts/EcoreX_0.1.10-public-release.zip`
-- Public deployment zip size: `120,270,696` bytes
-- Public deployment zip SHA256: `55DF0CD87FB3FE9E123A0E9C2513E66F0D201C65B36F003C0D2B51A54421D99D`
+- Public deployment zip size: `120,273,778` bytes
+- Public deployment zip SHA256: `8021D0B5DEF60CAF6758FD4E9DABA22866AC6374F059434894011AE066DD0829`
 - Local git branch: `codex/ecorex-v0.1.10-productization`
 - GitHub SSH push target prepared: `git@github.com:zhangyifanjackson-dotcom/EcoreX.git`
 - GitHub HTTPS push target prepared: `https://github.com/zhangyifanjackson-dotcom/EcoreX.git`
@@ -67,7 +67,8 @@
   - `desktop/scripts/smoke-renderer-visual.ps1` screenshot smoke for auth, light main, and dark main states.
 - Latest Windows package rebuild passed `npm run package:win:signed`; Authenticode status is `Valid` for `release/win-unpacked/EcoreX.exe` and `release/EcoreX_0.1.10_x64-setup.exe`.
 - Latest installed-app smoke passed: installer found, app started, sidecar ready, cleanup completed on port `19142`.
-- Latest public handoff zip was regenerated after the second hardening pass with SHA256 `55DF0CD87FB3FE9E123A0E9C2513E66F0D201C65B36F003C0D2B51A54421D99D`.
+- Latest public handoff zip was regenerated after the second hardening pass with SHA256 `8021D0B5DEF60CAF6758FD4E9DABA22866AC6374F059434894011AE066DD0829`.
+- Added server-side deployment helpers after the public route still returned 404: `scripts/install-ecorex-public-release.sh`, `deploy/ecorex-site/nginx/ecorex-agent.conf.example`, and `deploy/ecorex-admin-api/systemd/ecorex-admin-api.service.example`.
 
 ## Pending Release Steps
 

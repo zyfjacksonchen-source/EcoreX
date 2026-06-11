@@ -14,8 +14,8 @@
 Preferred handoff artifact:
 
 - `release-artifacts/EcoreX_0.1.10-public-release.zip`
-- size `120,270,696`
-- SHA256 `55DF0CD87FB3FE9E123A0E9C2513E66F0D201C65B36F003C0D2B51A54421D99D`
+- size `120,273,778`
+- SHA256 `8021D0B5DEF60CAF6758FD4E9DABA22866AC6374F059434894011AE066DD0829`
 
 Generate or refresh it with:
 
@@ -30,6 +30,9 @@ The zip contains:
 - `admin-api/ecorex_admin_api.py`
 - `admin-api/Dockerfile`
 - `admin-api/README.md`
+- `server/install-ecorex-public-release.sh`
+- `server/nginx/ecorex-agent.conf.example`
+- `server/systemd/ecorex-admin-api.service.example`
 - `checksums.json`
 
 It intentionally excludes older installers, SQLite files, pycache, local runtime folders, and development build output.
@@ -70,6 +73,10 @@ Raw source paths:
 - Admin API:
   - `deploy/ecorex-admin-api/ecorex_admin_api.py`
   - `deploy/ecorex-admin-api/Dockerfile`
+- Server deployment helpers:
+  - `scripts/install-ecorex-public-release.sh`
+  - `deploy/ecorex-site/nginx/ecorex-agent.conf.example`
+  - `deploy/ecorex-admin-api/systemd/ecorex-admin-api.service.example`
 
 The local downloads directory may contain older installers. Only files referenced by the v0.1.10 `manifest.json` need to be exposed as current release artifacts.
 
@@ -110,6 +117,25 @@ Do not enable default demo users in production. `ECOREX_SEED_DEFAULT_USERS` and 
 
 ## Deployment Steps
 
+Preferred scripted deployment on the Linux server:
+
+```bash
+export EXPECTED_SHA256=8021D0B5DEF60CAF6758FD4E9DABA22866AC6374F059434894011AE066DD0829
+bash scripts/install-ecorex-public-release.sh /path/to/EcoreX_0.1.10-public-release.zip
+```
+
+The script verifies the zip, creates a new `/srv/ecorex-agent-download/releases/<timestamp>-v0.1.10` directory, copies Admin API files to `/srv/ecorex-agent-admin/app`, preserves old releases, and atomically updates `/srv/ecorex-agent-download/current`.
+
+If only the zip is present on the server, extract the helper first:
+
+```bash
+unzip -j EcoreX_0.1.10-public-release.zip server/install-ecorex-public-release.sh -d /tmp/ecorex-release
+export EXPECTED_SHA256=8021D0B5DEF60CAF6758FD4E9DABA22866AC6374F059434894011AE066DD0829
+bash /tmp/ecorex-release/install-ecorex-public-release.sh EcoreX_0.1.10-public-release.zip
+```
+
+Manual deployment equivalent:
+
 1. Create a new server release directory.
 2. Unzip `release-artifacts/EcoreX_0.1.10-public-release.zip` on the server, or copy the equivalent raw files listed above.
 3. Copy `site/**` into the new static release directory.
@@ -118,6 +144,16 @@ Do not enable default demo users in production. `ECOREX_SEED_DEFAULT_USERS` and 
 6. Ensure `manifest.json` contains the new hash and `status: ready` for `windows-x64`.
 7. Update `/srv/ecorex-agent-download/current` to point to the new release directory.
 8. Keep the previous release directory and previous Admin API image/script available for rollback.
+
+Nginx routing should expose public static downloads while protecting Admin static pages and proxying Admin/client API routes. Use `deploy/ecorex-site/nginx/ecorex-agent.conf.example` as the route template, and run `nginx -t` before reload.
+
+If systemd is used for the Admin API, copy `deploy/ecorex-admin-api/systemd/ecorex-admin-api.service.example` to `/etc/systemd/system/ecorex-admin-api.service`, create the `ecorex` service user if needed, edit `/srv/ecorex-agent-admin/env/ecorex-admin-api.env`, then run:
+
+```bash
+systemctl daemon-reload
+systemctl enable --now ecorex-admin-api.service
+systemctl status ecorex-admin-api.service
+```
 
 ## Verification
 

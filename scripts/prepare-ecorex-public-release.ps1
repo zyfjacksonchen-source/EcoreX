@@ -74,7 +74,8 @@ if (Test-Path -LiteralPath $zipPath) {
 
 $siteOut = Join-Path $stagingRoot "site"
 $adminOut = Join-Path $stagingRoot "admin-api"
-New-Item -ItemType Directory -Force -Path $siteOut, $adminOut | Out-Null
+$serverOut = Join-Path $stagingRoot "server"
+New-Item -ItemType Directory -Force -Path $siteOut, $adminOut, $serverOut | Out-Null
 
 Get-ChildItem -LiteralPath $siteRootResolved -Force | Where-Object { $_.Name -ne "downloads" } | ForEach-Object {
     Copy-Item -LiteralPath $_.FullName -Destination $siteOut -Recurse -Force
@@ -92,6 +93,20 @@ foreach ($fileName in $adminFiles) {
     }
 }
 
+$serverFiles = @(
+    @{ Source = "scripts/install-ecorex-public-release.sh"; Target = "install-ecorex-public-release.sh" },
+    @{ Source = "deploy/ecorex-site/nginx/ecorex-agent.conf.example"; Target = "nginx/ecorex-agent.conf.example" },
+    @{ Source = "deploy/ecorex-admin-api/systemd/ecorex-admin-api.service.example"; Target = "systemd/ecorex-admin-api.service.example" }
+)
+foreach ($entry in $serverFiles) {
+    $source = Resolve-UnderDirectory -Path (Join-Path $repoRoot $entry.Source) -Base $repoRoot
+    if (Test-Path -LiteralPath $source) {
+        $target = Join-Path $serverOut $entry.Target
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+        Copy-Item -LiteralPath $source -Destination $target -Force
+    }
+}
+
 $stagedInstaller = Join-Path $downloadOut $windowsArtifact.fileName
 $stagedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $stagedInstaller).Hash.ToUpperInvariant()
 $stagedSize = (Get-Item -LiteralPath $stagedInstaller).Length
@@ -105,6 +120,7 @@ $checksums = [ordered]@{
     generatedAt = (Get-Date).ToString("o")
     siteRoot = "site"
     adminApiRoot = "admin-api"
+    serverHelperRoot = "server"
     windows = [ordered]@{
         fileName = $windowsArtifact.fileName
         relativePath = "site/downloads/$($windowsArtifact.fileName)"
