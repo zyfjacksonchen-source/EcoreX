@@ -6,11 +6,11 @@
 - Version: `0.1.10`
 - Date: 2026-06-11
 - Windows artifact: `desktop/release/EcoreX_0.1.10_x64-setup.exe`
-- Windows size: `117,527,592` bytes
-- Windows SHA256: `0AC3396261591F8433A36D13FF31FD47DFC4CB9E8119539AA2C188100661FD91`
+- Windows size: `120,050,856` bytes
+- Windows SHA256: `14D57A4F15D2F99DDC04975D5E636707F648864665D4F3F4D5A011516626DB55`
 - Public deployment zip: `release-artifacts/EcoreX_0.1.10-public-release.zip`
-- Public deployment zip size: `120,267,301` bytes
-- Public deployment zip SHA256: `6AB1DB6F4E7BE995264298306C9DD0F294EBE7FCAD995312D4461A6CADC4DD64`
+- Public deployment zip size: `122,791,331` bytes
+- Public deployment zip SHA256: `CE05311BE1FE949ACA1483349EC543E5A945C4D45211DF533EA1AA0B6F068429`
 - Local git branch: `codex/ecorex-v0.1.10-productization`
 - GitHub SSH push target prepared: `git@github.com:zhangyifanjackson-dotcom/EcoreX.git`
 - GitHub HTTPS push target prepared: `https://github.com/zhangyifanjackson-dotcom/EcoreX.git`
@@ -41,6 +41,8 @@
 - Admin DOM static smoke confirmed all 28 `data-*` hooks are represented by JavaScript bindings/render logic.
 - Edge headless visual smoke rendered the local download page and Admin page. It caught and fixed an Admin first-load modal bug caused by CSS overriding `[hidden]`; the follow-up screenshot verified a clean first load.
 - Download directory hash smoke confirmed `deploy/ecorex-site/downloads/EcoreX_0.1.10_x64-setup.exe` matches the manifest hash and size.
+- Agent stream usage normalizer smoke passed for `prompt_tokens`/`completion_tokens`, `input_tokens`/`output_tokens`, and camelCase usage envelopes.
+- Renderer telemetry path now reports provider usage from SSE `done` once per completed turn, with estimated-token fallback; `done` replaces final assistant text instead of duplicating streamed deltas.
 - Packaged Windows runtime contains `enterprise-policy.json` with the public EcoreX Admin API URLs and public desktop channel key; no model API key is embedded in the installer.
 - `npm run stage:runtime:win` passed in `desktop/`.
 - `npm run package:win:signed` passed in `desktop/` after retrying a transient Electron Builder download timeout.
@@ -49,9 +51,11 @@
   - app started: true
   - sidecar ready: true
   - cleanup completed: true
+- After the usage/SSE fix, full Electron Builder directory packaging hit transient GitHub 443 timeouts twice. The release was rebuilt by safely updating the existing `win-unpacked` app.asar/runtime, re-signing, and running `electron-builder --win nsis --x64 --prepackaged release/win-unpacked --publish never`; the regenerated setup exe signature is valid and installed smoke passed again.
 - Cross-agent review completed for Admin API, Desktop UX, and Electron/runtime. Blocking findings were fixed before final packaging.
 - Public verification script was run with `-SkipGitRemoteCheck`; it correctly failed because the public manifest is still v0.1.7 and therefore does not match the local v0.1.10 installer hash.
-- `scripts/prepare-ecorex-public-release.ps1` generated a clean public deployment zip. Zip inspection confirmed it contains `site/manifest.json`, `site/downloads/EcoreX_0.1.10_x64-setup.exe`, `admin-api/ecorex_admin_api.py`, and `checksums.json`, and excludes old v0.1.4 installers and `__pycache__`.
+- `scripts/prepare-ecorex-public-release.ps1` generated a clean public deployment zip. Zip inspection confirmed it contains `site/manifest.json`, `site/downloads/EcoreX_0.1.10_x64-setup.exe`, `admin-api/ecorex_admin_api.py`, and `checksums.json`, excludes old v0.1.4 installers and `__pycache__`, and the zipped Windows installer hash matches `14D57A4F15D2F99DDC04975D5E636707F648864665D4F3F4D5A011516626DB55`.
+- `scripts/verify-ecorex-release.ps1 -LocalWindowsInstaller desktop\release\EcoreX_0.1.10_x64-setup.exe -SkipGitRemoteCheck` was rerun after the rebuild. It correctly still reports public blockers because `https://www.ecoreai.cn/ecorex-agent/manifest.json` serves v0.1.7 and therefore compares the local v0.1.10 installer against the old public hash.
 - Git bundle verification passed: bundle contains `refs/heads/codex/ecorex-v0.1.10-productization` at `f7861062df11b88aa783ff1e736ca92253532363` and records a complete history.
 
 ## Pending Release Steps
@@ -60,4 +64,4 @@
 - Use `docs/ecorex/v0.1.10/public-deployment-runbook.md` for the public host sync and post-deploy verification sequence.
 - Run a human visual pass on the installed desktop UI for login, first chat, stop, paste attachment, quota block, and error telemetry.
 - Run macOS arm64/x64 signing, notarization, Gatekeeper, and installed-app smoke later on a Mac.
-- Wire provider-returned actual token usage into desktop usage events when the upstream response contract is finalized.
+- Public live model chat still needs to be checked after the production host serves v0.1.10.

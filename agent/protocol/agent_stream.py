@@ -35,6 +35,45 @@ MAX_STORED_REASONING_CHARS = 4 * 1024  # 4 KB
 _REASONING_TRUNCATE_MARKER = "\n\n... [reasoning truncated, {omitted} chars omitted] ...\n\n"
 
 
+def _coerce_usage_int(value) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _normalize_usage(usage: dict, model_name: str = "") -> dict:
+    """Normalize OpenAI-compatible usage envelopes for desktop telemetry."""
+    if not isinstance(usage, dict):
+        return {}
+    input_tokens = _coerce_usage_int(
+        usage.get("prompt_tokens")
+        or usage.get("input_tokens")
+        or usage.get("inputTokens")
+        or usage.get("promptTokens")
+    )
+    output_tokens = _coerce_usage_int(
+        usage.get("completion_tokens")
+        or usage.get("output_tokens")
+        or usage.get("completionTokens")
+        or usage.get("outputTokens")
+    )
+    total_tokens = _coerce_usage_int(
+        usage.get("total_tokens")
+        or usage.get("totalTokens")
+    )
+    if total_tokens <= 0 and (input_tokens or output_tokens):
+        total_tokens = input_tokens + output_tokens
+    if total_tokens <= 0:
+        return {}
+    return {
+        "inputTokens": input_tokens,
+        "outputTokens": output_tokens,
+        "totalTokens": total_tokens,
+        "model": model_name or "",
+    }
+
+
 def _truncate_reasoning_for_storage(text: str) -> str:
     """Trim long reasoning to head + tail with an omission marker.
 
@@ -698,7 +737,11 @@ class AgentStreamExecutor:
                 # Emit before agent_end so channels can mark UI as cancelled
                 self._emit_event("agent_cancelled", {"final_response": final_response})
             logger.info(f"[Agent] 🏁 Done ({turn} turns)" + (" [cancelled]" if cancelled else ""))
-            self._emit_event("agent_end", {"final_response": final_response, "cancelled": cancelled})
+            self._emit_event("agent_end", {
+                "final_response": final_response,
+                "cancelled": cancelled,
+                "usage": self.agent.last_usage,
+            })
 
         return final_response
 
@@ -789,6 +832,7 @@ class AgentStreamExecutor:
         tool_calls_buffer = {}  # {index: {id, name, arguments}}
         gemini_raw_parts = None  # Preserve Gemini thoughtSignature for round-trip
         stop_reason = None  # Track why the stream stopped
+        self.agent.last_usage = None
 
         try:
             stream = self.model.call_stream(request)
@@ -816,8 +860,14 @@ class AgentStreamExecutor:
                             "content": full_content,
                             "tool_calls": [],
                             "cancelled": True,
+                            "usage": self.agent.last_usage,
                         })
                         raise AgentCancelledError("cancelled during LLM streaming")
+
+                if isinstance(chunk, dict):
+                    usage = _normalize_usage(chunk.get("usage"), getattr(self.model, "model", ""))
+                    if usage:
+                        self.agent.last_usage = usage
 
                 # Check for errors
                 if isinstance(chunk, dict) and chunk.get("error"):
@@ -1058,7 +1108,8 @@ class AgentStreamExecutor:
                 "content": "",
                 "tool_calls": [],
                 "empty_retry": True,
-                "stop_reason": stop_reason
+                "stop_reason": stop_reason,
+                "usage": self.agent.last_usage,
             })
             # Retry without retry flag to avoid infinite loop
             return self._call_llm_stream(
@@ -1110,7 +1161,8 @@ class AgentStreamExecutor:
 
         self._emit_event("message_end", {
             "content": full_content,
-            "tool_calls": tool_calls
+            "tool_calls": tool_calls,
+            "usage": self.agent.last_usage,
         })
 
         return full_content, tool_calls

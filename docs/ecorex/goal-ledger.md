@@ -4,7 +4,7 @@
 
 - Version: v0.1.10
 - Objective: productize EcoreX desktop and admin for ordinary Windows/macOS users, while keeping the agent core compatible.
-- Current branch/worktree note: `deploy/` and `desktop/` are currently untracked in this workspace. Treat them as active EcoreX product files and do not remove them as cleanup.
+- Current branch/worktree note: `deploy/`, `desktop/`, Admin API, and EcoreX docs are active product files. Generated release/runtime folders remain ignored and should not be hand-edited as source of truth.
 
 ## Work Ownership
 
@@ -35,13 +35,15 @@
 - 2026-06-11: Fixed an actual out-of-box gap: `stage-runtime-win.ps1` and `stage-runtime-mac.sh` now stage a default non-secret enterprise policy when no env override is provided. Admin API accepts the same default public desktop channel key unless `ECOREX_CLIENT_EVENT_KEY` overrides it. Rebuilt signed Windows installer with packaged `enterprise-policy.json`.
 - 2026-06-11: Public release verification against `https://www.ecoreai.cn/ecorex-agent` still reports v0.1.7. Treat production deployment as a remaining external release step; do not mark the goal complete from local evidence alone.
 - 2026-06-11: Local browser smoke with Edge rendered the v0.1.10 download and Admin pages. It exposed an Admin first-load empty modal caused by CSS overriding `[hidden]`; fixed in `deploy/ecorex-site/admin/admin.css` and verified with a second screenshot.
-- 2026-06-11: Added `scripts/prepare-ecorex-public-release.ps1` and generated `release-artifacts/EcoreX_0.1.10-public-release.zip` for server handoff. Zip SHA256 `6AB1DB6F4E7BE995264298306C9DD0F294EBE7FCAD995312D4461A6CADC4DD64`; contents verified to exclude stale v0.1.4 installer and pycache.
+- 2026-06-11: Added `scripts/prepare-ecorex-public-release.ps1` and generated `release-artifacts/EcoreX_0.1.10-public-release.zip` for server handoff. Current zip SHA256 `CE05311BE1FE949ACA1483349EC543E5A945C4D45211DF533EA1AA0B6F068429`; contents verified to exclude stale v0.1.4 installer and pycache.
 - 2026-06-11: Created local git branch `codex/ecorex-v0.1.10-productization` and local commit for the v0.1.10 productization work. Added remote `ecorex` -> `git@github.com:zhangyifanjackson-dotcom/EcoreX.git`; SSH push failed on this machine with `Permission denied (publickey)`, so HTTPS token push is the current GitHub handoff path.
 - 2026-06-11: Generated offline Git handoff artifacts in `release-artifacts/`: `EcoreX_0.1.10-productization.bundle` and `.patch`. Bundle verification passed and can recreate the v0.1.10 productization branch from the pre-HTTPS-push handoff commit on a GitHub-authorized machine.
 - 2026-06-11: GitHub HTTPS token push succeeded after switching Git for Windows to the `schannel` TLS backend. Because the local CowAgent checkout is shallow and could not push full history to a different repository, a clean source snapshot was exported and pushed as a root commit to both `main` and `codex/ecorex-v0.1.10-productization` in `zhangyifanjackson-dotcom/EcoreX`. The remote `main` update used `--force-with-lease` to intentionally replace the old repository contents with the EcoreX v0.1.10 snapshot.
+- 2026-06-11: Fixed desktop usage accounting path after completion audit. Agent stream now normalizes provider `usage` envelopes, Web SSE `done` carries usage to the renderer, and renderer reports real token usage once per completed turn with estimated-token fallback. Also fixed SSE `done` handling so final text replaces the assistant bubble instead of duplicating streamed deltas, and Stop clears immediately after `done`.
+- 2026-06-11: Rebuilt the Windows package after the usage/SSE fix via manual prepackaged NSIS path because full Electron Builder packaging hit transient GitHub 443 timeouts. New signed installer SHA256 `14D57A4F15D2F99DDC04975D5E636707F648864665D4F3F4D5A011516626DB55`, size `120050856`. Installed smoke passed again with sidecar ready.
 
 ## Known Follow-Up
 
 - Deploy or point the product build at the production Admin API before final live enterprise login/model chat acceptance.
-- Provider-returned actual token usage still needs to be normalized into usage events; quota enforcement works with current reported/estimated token counts.
+- Provider usage is now normalized when upstream returns a standard usage envelope; estimated tokens remain as fallback for providers that omit usage in streaming responses.
 - Run the skipped macOS signing/notarization/Gatekeeper pass on Mac hardware.

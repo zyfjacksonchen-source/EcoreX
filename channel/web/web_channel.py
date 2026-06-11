@@ -266,6 +266,34 @@ class WebChannel(ChatChannel):
             logger.debug(f"[WebChannel] _fetch_latest_pair_seqs failed: {e}")
             return {"user_seq": None, "bot_seq": None}
 
+    def _fetch_agent_usage(self, session_id: str):
+        """Return the latest provider usage captured by the agent, if any."""
+        if not session_id:
+            return None
+        try:
+            ab = Bridge().get_agent_bridge()
+            agent = getattr(ab, "agents", {}).get(session_id)
+            usage = getattr(agent, "last_usage", None) if agent else None
+            return usage if isinstance(usage, dict) and usage.get("totalTokens") else None
+        except Exception as e:
+            logger.debug(f"[WebChannel] _fetch_agent_usage failed: {e}")
+            return None
+
+    def _build_done_event(self, request_id: str, session_id: str, content: str):
+        seqs = self._fetch_latest_pair_seqs(session_id)
+        payload = {
+            "type": "done",
+            "content": content,
+            "request_id": request_id,
+            "timestamp": time.time(),
+            "user_seq": seqs.get("user_seq"),
+            "bot_seq": seqs.get("bot_seq"),
+        }
+        usage = self._fetch_agent_usage(session_id)
+        if usage:
+            payload["usage"] = usage
+        return payload
+
     def send(self, reply: Reply, context: Context):
         try:
             if reply.type in self.NOT_SUPPORT_REPLYTYPE:
@@ -306,15 +334,9 @@ class WebChannel(ChatChannel):
                 if reply.type in (ReplyType.IMAGE_URL, ReplyType.FILE) and content.startswith("file://"):
                     text_content = getattr(reply, 'text_content', '')
                     if text_content:
-                        seqs = self._fetch_latest_pair_seqs(session_id)
-                        self.sse_queues[request_id].put({
-                            "type": "done",
-                            "content": text_content,
-                            "request_id": request_id,
-                            "timestamp": time.time(),
-                            "user_seq": seqs.get("user_seq"),
-                            "bot_seq": seqs.get("bot_seq"),
-                        })
+                        self.sse_queues[request_id].put(
+                            self._build_done_event(request_id, session_id, text_content)
+                        )
                     logger.debug(f"SSE skipped duplicate file for request {request_id}")
                     return
 
@@ -325,15 +347,9 @@ class WebChannel(ChatChannel):
                     logger.debug(f"SSE skipped http media reply for request {request_id}")
                     return
 
-                seqs = self._fetch_latest_pair_seqs(session_id)
-                self.sse_queues[request_id].put({
-                    "type": "done",
-                    "content": content,
-                    "request_id": request_id,
-                    "timestamp": time.time(),
-                    "user_seq": seqs.get("user_seq"),
-                    "bot_seq": seqs.get("bot_seq"),
-                })
+                self.sse_queues[request_id].put(
+                    self._build_done_event(request_id, session_id, content)
+                )
                 logger.debug(f"SSE done sent for request {request_id}")
                 # Auto-trigger TTS once the bot finishes its text reply. The
                 # synthesis runs in the background so the chat stream is never
@@ -473,6 +489,7 @@ class WebChannel(ChatChannel):
                     "content": f"❌ {err_msg}",
                     "request_id": request_id,
                     "timestamp": time.time(),
+                    "usage": data.get("usage") or self._fetch_agent_usage(self.request_to_session.get(request_id, "")),
                 })
 
             elif event_type == "agent_cancelled":
@@ -512,6 +529,7 @@ class WebChannel(ChatChannel):
                             ),
                             "request_id": request_id,
                             "timestamp": time.time(),
+                            "usage": data.get("usage") or self._fetch_agent_usage(self.request_to_session.get(request_id, "")),
                         })
 
             elif event_type == "file_to_send":

@@ -6,16 +6,16 @@
 - Public release is not yet updated: `https://www.ecoreai.cn/ecorex-agent/manifest.json` returned v0.1.7 during the 2026-06-11 verification pass.
 - Windows installer is signed and locally smoke-tested:
   - `desktop/release/EcoreX_0.1.10_x64-setup.exe`
-  - size `117,527,592`
-  - SHA256 `0AC3396261591F8433A36D13FF31FD47DFC4CB9E8119539AA2C188100661FD91`
+  - size `120,050,856`
+  - SHA256 `14D57A4F15D2F99DDC04975D5E636707F648864665D4F3F4D5A011516626DB55`
 
 ## Files To Publish
 
 Preferred handoff artifact:
 
 - `release-artifacts/EcoreX_0.1.10-public-release.zip`
-- size `120,267,301`
-- SHA256 `6AB1DB6F4E7BE995264298306C9DD0F294EBE7FCAD995312D4461A6CADC4DD64`
+- size `122,791,331`
+- SHA256 `CE05311BE1FE949ACA1483349EC543E5A945C4D45211DF533EA1AA0B6F068429`
 
 Generate or refresh it with:
 

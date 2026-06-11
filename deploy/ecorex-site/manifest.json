@@ -10,8 +10,8 @@
       "variant": "x64 installer",
       "fileName": "EcoreX_0.1.10_x64-setup.exe",
       "href": "downloads/EcoreX_0.1.10_x64-setup.exe",
-      "size": 117527592,
-      "sha256": "0AC3396261591F8433A36D13FF31FD47DFC4CB9E8119539AA2C188100661FD91",
+      "size": 120050856,
+      "sha256": "14D57A4F15D2F99DDC04975D5E636707F648864665D4F3F4D5A011516626DB55",
       "status": "ready",
       "source": "local-v0.1.10-productization; signed Windows installer; installed runtime smoke passed"
     },

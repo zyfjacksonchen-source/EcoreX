@@ -46,7 +46,8 @@ import {
   type FileAttachment,
   type PermissionMode,
   type PermissionState,
-  type RuntimeSnapshot
+  type RuntimeSnapshot,
+  type TokenUsage
 } from "./services/ecorexApi";
 
 type ThemeMode = "light" | "dark";
@@ -155,6 +156,15 @@ function mapSessions(snapshot: RuntimeSnapshot, activeSessionId: string, localTi
 
 function estimateTokens(text: string, files: FileAttachment[]) {
   return Math.max(1, Math.ceil(text.length / 2) + files.length * 120);
+}
+
+function usageTotal(usage?: TokenUsage | null) {
+  if (!usage) return 0;
+  const total = Number(usage.totalTokens || 0);
+  if (Number.isFinite(total) && total > 0) return total;
+  const input = Number(usage.inputTokens || 0);
+  const output = Number(usage.outputTokens || 0);
+  return Math.max(0, (Number.isFinite(input) ? input : 0) + (Number.isFinite(output) ? output : 0));
 }
 
 function detectNeededPack(text: string, files: FileAttachment[], packs: CapabilityPack[]) {
@@ -373,7 +383,8 @@ export function App() {
       return;
     }
 
-    const quota = await checkEnterpriseQuota(estimateTokens(text, attachments));
+    const estimatedTokens = estimateTokens(text, attachments);
+    const quota = await checkEnterpriseQuota(estimatedTokens);
     if (quota.quota && quota.quota.allowed === false) {
       setApproval({ type: "quota", title: "额度已达到上限", message: quota.quota.reason || "当前账号暂时不能继续发送。" });
       return;
@@ -393,11 +404,36 @@ export function App() {
     setAttachments([]);
     setApproval(null);
 
+    let usageReported = false;
+    const reportChatUsage = (usage: TokenUsage | undefined, source: "provider" | "estimated") => {
+      if (usageReported) return;
+      usageReported = true;
+      const totalTokens = usageTotal(usage) || estimatedTokens;
+      void reportDesktopEvent({
+        type: "usage",
+        source: "Desktop",
+        category: "chat",
+        label: "message",
+        amount: totalTokens,
+        sessionId: activeSessionId,
+        detail: {
+          inputTokens: usage?.inputTokens || 0,
+          outputTokens: usage?.outputTokens || 0,
+          totalTokens,
+          model: usage?.model || runtimeSnapshot.version,
+          provider: usage?.provider || "",
+          estimatedTokens,
+          usageSource: source
+        }
+      });
+    };
+
     try {
       const result = await sendChatMessage({ sessionId: activeSessionId, message: text, attachments });
       if (result.status === "error") throw new Error(result.message || "发送失败");
       if (result.inline_reply) {
         setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, content: result.inline_reply || "", pending: false } : item));
+        reportChatUsage(result.usage, usageTotal(result.usage) ? "provider" : "estimated");
       }
       if (result.request_id && result.stream) {
         setActiveRequestId(result.request_id);
@@ -411,25 +447,30 @@ export function App() {
               streamCleanup.current?.();
               return;
             }
-            if (item.content) {
+            if (item.type === "done") {
+              setMessages((current) => current.map((message) => message.id === assistantId ? {
+                ...message,
+                content: item.content || message.content,
+                pending: false,
+                userSeq: typeof item.user_seq === "number" ? item.user_seq : message.userSeq
+              } : message));
+              setActiveRequestId("");
+              reportChatUsage(item.usage, usageTotal(item.usage) ? "provider" : "estimated");
+              return;
+            }
+            if (item.type === "message_update" && item.content) {
               setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: `${message.content}${item.content}`, pending: false } : message));
             }
           },
           onError: () => {
             setActiveRequestId("");
             setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, pending: false } : message));
+            reportChatUsage(undefined, "estimated");
           }
         });
+      } else if (!result.inline_reply) {
+        reportChatUsage(result.usage, usageTotal(result.usage) ? "provider" : "estimated");
       }
-      void reportDesktopEvent({
-        type: "usage",
-        source: "Desktop",
-        category: "chat",
-        label: "message",
-        amount: estimateTokens(text, attachments),
-        sessionId: activeSessionId,
-        detail: { estimatedTokens: estimateTokens(text, attachments), model: runtimeSnapshot.version }
-      });
       generateSessionTitle({ sessionId: activeSessionId, userMessage: text }).then((title) => {
         if (title) setActiveSessionTitle(title);
       }).catch(() => undefined);

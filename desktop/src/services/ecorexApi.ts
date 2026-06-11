@@ -76,6 +76,15 @@ export type ChatSendResult = {
   request_id?: string;
   stream?: boolean;
   inline_reply?: string;
+  usage?: TokenUsage;
+};
+
+export type TokenUsage = {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  model?: string;
+  provider?: string;
 };
 
 export type StreamItem = {
@@ -83,6 +92,9 @@ export type StreamItem = {
   content?: string;
   message?: string;
   tool?: string;
+  user_seq?: number;
+  bot_seq?: number;
+  usage?: TokenUsage;
 };
 
 type ApiSuccess = Record<string, unknown> & {
