@@ -1,0 +1,45 @@
+{
+  "product": "EcoreX",
+  "version": "0.1.10",
+  "updatedAt": "2026-06-11",
+  "notes": "EcoreX v0.1.10 productization release. Windows is the validation target for this round. macOS arm64/x64 packaging metadata is retained, but signing, notarization, and Gatekeeper verification are intentionally skipped and will be completed on a Mac.",
+  "artifacts": [
+    {
+      "id": "windows-x64",
+      "platform": "Windows",
+      "variant": "x64 installer",
+      "fileName": "EcoreX_0.1.10_x64-setup.exe",
+      "href": "downloads/EcoreX_0.1.10_x64-setup.exe",
+      "size": 117527592,
+      "sha256": "0AC3396261591F8433A36D13FF31FD47DFC4CB9E8119539AA2C188100661FD91",
+      "status": "ready",
+      "source": "local-v0.1.10-productization; signed Windows installer; installed runtime smoke passed"
+    },
+    {
+      "id": "macos-arm64-dmg",
+      "platform": "macOS",
+      "variant": "Apple Silicon DMG",
+      "fileName": "EcoreX_0.1.10_arm64.dmg",
+      "href": "downloads/EcoreX_0.1.10_arm64.dmg",
+      "size": "pending",
+      "sha256": "pending",
+      "status": "pending-mac-validation",
+      "source": "macOS signing/notarization skipped in this Windows round"
+    },
+    {
+      "id": "macos-x64-dmg",
+      "platform": "macOS",
+      "variant": "Intel DMG",
+      "fileName": "EcoreX_0.1.10_x64.dmg",
+      "href": "downloads/EcoreX_0.1.10_x64.dmg",
+      "size": "pending",
+      "sha256": "pending",
+      "status": "pending-mac-validation",
+      "source": "macOS signing/notarization skipped in this Windows round"
+    }
+  ],
+  "admin": {
+    "href": "admin/",
+    "auth": "basic"
+  }
+}

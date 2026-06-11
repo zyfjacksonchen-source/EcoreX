@@ -1,0 +1,65 @@
+/* Hallmark pre-emit critique: P5 H5 E4 S5 R4 V4 */
+:root {
+  --font-sans: Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+
+  --radius-xs: 6px;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
+  --radius-pill: 999px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  --motion-fast: 120ms;
+  --motion-base: 180ms;
+  --motion-slow: 260ms;
+  --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+:root[data-theme="light"] {
+  --color-bg: oklch(0.985 0.006 78);
+  --color-surface: oklch(1 0 0);
+  --color-surface-raised: oklch(0.995 0.004 78);
+  --color-surface-muted: oklch(0.96 0.012 78);
+  --color-border: oklch(0.895 0.012 78);
+  --color-border-strong: oklch(0.82 0.018 72);
+  --color-text: oklch(0.215 0.025 50);
+  --color-muted: oklch(0.52 0.025 65);
+  --color-brand: oklch(0.69 0.18 48);
+  --color-brand-strong: oklch(0.59 0.19 43);
+  --color-brand-soft: oklch(0.94 0.05 58);
+  --color-info: oklch(0.58 0.14 250);
+  --color-success: oklch(0.58 0.13 150);
+  --color-warning: oklch(0.74 0.16 78);
+  --color-danger: oklch(0.6 0.19 28);
+  --color-overlay: oklch(0 0 0 / 0.28);
+  --shadow-popover: 0 18px 48px oklch(0.32 0.03 50 / 0.16);
+}
+
+:root[data-theme="dark"] {
+  --color-bg: oklch(0.16 0.018 55);
+  --color-surface: oklch(0.205 0.018 55);
+  --color-surface-raised: oklch(0.245 0.02 55);
+  --color-surface-muted: oklch(0.29 0.024 55);
+  --color-border: oklch(0.34 0.025 58);
+  --color-border-strong: oklch(0.42 0.032 58);
+  --color-text: oklch(0.94 0.01 74);
+  --color-muted: oklch(0.72 0.02 68);
+  --color-brand: oklch(0.76 0.17 55);
+  --color-brand-strong: oklch(0.82 0.16 58);
+  --color-brand-soft: oklch(0.31 0.07 52);
+  --color-info: oklch(0.74 0.12 245);
+  --color-success: oklch(0.72 0.12 150);
+  --color-warning: oklch(0.82 0.14 80);
+  --color-danger: oklch(0.74 0.16 30);
+  --color-overlay: oklch(0 0 0 / 0.48);
+  --shadow-popover: 0 18px 48px oklch(0 0 0 / 0.36);
+}

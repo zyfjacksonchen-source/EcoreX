@@ -1,0 +1,56 @@
+appId: com.ecorex.desktop
+productName: EcoreX
+copyright: Copyright (c) 2026 EcoreX
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - package.json
+
+asar: true
+
+extraMetadata:
+  main: dist-electron/main.js
+
+extraResources:
+  - from: runtime/ecorex-runtime
+    to: ecorex-runtime
+    filter:
+      - "**/*"
+
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: EcoreX_${version}_${arch}-setup.${ext}
+  signExecutable: false
+  forceCodeSigning: false
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+
+mac:
+  icon: build/icon.icns
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+  artifactName: EcoreX_${version}_${arch}.${ext}
+  category: public.app-category.productivity
+
+dmg:
+  artifactName: EcoreX_${version}_${arch}.${ext}

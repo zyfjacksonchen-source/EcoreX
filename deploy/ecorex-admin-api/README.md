@@ -1,0 +1,12 @@
+# EcoreX Admin API
+
+Lightweight zero-dependency Admin API for the EcoreX download/admin site.
+
+- Runtime: Python stdlib only.
+- Storage: SQLite.
+- Intended path: protected by Caddy Basic Auth at `/ecorex-agent/admin/api/*`.
+- Local/root static-site compatibility: `/admin/api/*` and `/api/admin/*` are also normalized to the same API routes so `deploy/ecorex-site/admin/` can run from a normal `/admin/` path.
+- Data directory: `/srv/ecorex-agent-admin/data`.
+- Client desktop channel key defaults to `ecorex-desktop-v0.1.10` when `ECOREX_CLIENT_EVENT_KEY` is not set. Treat this as a public app channel marker, not as a secret. Model credentials still require an authenticated enterprise user token.
+
+The API keeps product admin state separate from the static download release path and from the CowAgent agent core.

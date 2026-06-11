@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "product": "EcoreX",
+  "packs": [
+    {
+      "id": "feishu-lark",
+      "name": "飞书 / Lark 连接器",
+      "summary": "用于飞书机器人、应用模板注册、消息与文档连接。",
+      "installMode": "user-or-admin",
+      "estimatedSizeMb": 58,
+      "requirements": ["lark-oapi>=1.5.5"],
+      "moduleChecks": ["lark_oapi"],
+      "failureHint": "请检查企业网络是否允许访问 PyPI，或让管理员预置飞书连接器能力包。"
+    },
+    {
+      "id": "office-pdf",
+      "name": "Office / PDF 预览解析",
+      "summary": "用于 PDF、Word、Excel、PPT 等文件的文本抽取与预览增强。",
+      "installMode": "user-or-admin",
+      "estimatedSizeMb": 92,
+      "requirements": ["pypdf", "pdfminer.six", "python-docx", "python-pptx", "openpyxl", "xlsxwriter", "markdownify"],
+      "moduleChecks": ["pypdf", "pdfminer", "docx", "pptx", "openpyxl", "xlsxwriter", "markdownify"],
+      "failureHint": "文件仍可用系统应用打开；解析增强安装失败时请保存日志给管理员。"
+    },
+    {
+      "id": "browser-automation",
+      "name": "浏览器自动化",
+      "summary": "用于网页操作、复杂网页抓取和浏览器型工具。",
+      "installMode": "admin-recommended",
+      "estimatedSizeMb": 180,
+      "requirements": ["playwright"],
+      "postInstallCommands": ["python -m playwright install chromium"],
+      "moduleChecks": ["playwright"],
+      "failureHint": "浏览器自动化包较大，企业网络建议由管理员预置或配置内网镜像。"
+    },
+    {
+      "id": "voice",
+      "name": "语音能力",
+      "summary": "用于语音识别、语音输入和语音相关模型连接。",
+      "installMode": "user-or-admin",
+      "estimatedSizeMb": 45,
+      "requirements": ["SpeechRecognition", "websocket-client>=1.4.0"],
+      "moduleChecks": ["speech_recognition", "websocket"],
+      "failureHint": "语音能力安装失败不会影响文字对话；请检查麦克风驱动和网络后重试。"
+    },
+    {
+      "id": "im-channels",
+      "name": "长尾 IM 渠道",
+      "summary": "用于 Slack、Discord、Telegram、微信、企业微信、钉钉等渠道。",
+      "installMode": "admin-recommended",
+      "estimatedSizeMb": 95,
+      "requirements": [
+        "wechatpy",
+        "dingtalk_stream",
+        "websocket-client>=1.4.0",
+        "pycryptodome",
+        "python-telegram-bot",
+        "slack_bolt",
+        "discord.py"
+      ],
+      "moduleChecks": ["wechatpy", "dingtalk_stream", "websocket", "Crypto", "telegram", "slack_bolt", "discord"],
+      "failureHint": "渠道包适合由管理员按企业模板预装；安装失败时普通桌面对话仍可继续。"
+    },
+    {
+      "id": "memory-heavy",
+      "name": "高级记忆与数据处理",
+      "summary": "用于向量检索、表格分析和重型本地数据处理。",
+      "installMode": "admin-recommended",
+      "estimatedSizeMb": 120,
+      "requirements": ["numpy", "pandas"],
+      "moduleChecks": ["numpy", "pandas"],
+      "failureHint": "高级记忆和表格分析需要较大运行时；建议管理员预装或配置镜像源。"
+    },
+    {
+      "id": "model-connectors",
+      "name": "模型厂商 SDK",
+      "summary": "用于通义千问、智谱、Gemini 等需要官方 SDK 的模型入口。",
+      "installMode": "user-or-admin",
+      "estimatedSizeMb": 80,
+      "requirements": ["dashscope", "zai-sdk", "google-generativeai"],
+      "moduleChecks": ["dashscope", "zai", "google.generativeai"],
+      "failureHint": "模型 SDK 安装失败时可继续使用 OpenAI 兼容接口；需要该厂商模型时请检查网络或让管理员预置。"
+    }
+  ]
+}

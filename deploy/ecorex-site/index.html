@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>EcoreX 下载中心</title>
+    <meta
+      name="description"
+      content="EcoreX 是面向广告团队的桌面端 AI Agent，支持 Windows 与 macOS 下载。"
+    />
+    <link rel="icon" href="./assets/icon.png" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="topbar">
+        <a class="brand" href="./" aria-label="EcoreX 下载中心">
+          <img src="./assets/icon.png" alt="" />
+          <span>EcoreX</span>
+        </a>
+        <nav class="nav-links" aria-label="页面导航">
+          <a href="#download">下载</a>
+          <a href="#capability">能力</a>
+          <a href="./admin/">管理端</a>
+          <button class="icon-button" type="button" data-theme-toggle aria-label="切换明暗模式">
+            <span data-theme-icon>☀</span>
+          </button>
+        </nav>
+      </header>
+
+      <main>
+        <section class="hero" aria-label="EcoreX 下载">
+          <img class="hero-media" src="./assets/ecorex-app-preview.png" alt="EcoreX 桌面端界面预览" />
+          <div class="hero-copy">
+            <p class="eyebrow">桌面端 AI Agent</p>
+            <h1>EcoreX</h1>
+            <p class="lead">
+              面向广告投放、素材创意、数据复盘与客户项目协同的桌面工作区。
+              安装完成后即可进入会话、项目和本地文件流。
+            </p>
+            <div class="hero-actions">
+              <a class="button primary" href="#download">选择系统下载</a>
+              <a class="button ghost" href="./admin/">管理员入口</a>
+            </div>
+          </div>
+        </section>
+
+        <section class="release-strip" aria-label="发布状态">
+          <div>
+            <span>当前发布</span>
+            <strong data-version>0.1.10</strong>
+          </div>
+          <div>
+            <span>Windows 签名</span>
+            <strong>已验证</strong>
+          </div>
+          <div>
+            <span>macOS 包</span>
+            <strong>待 Mac 验证</strong>
+          </div>
+          <div>
+            <span>更新日期</span>
+            <strong data-updated>2026-06-11</strong>
+          </div>
+        </section>
+
+        <section class="downloads" id="download" aria-label="下载 EcoreX">
+          <div class="section-heading">
+            <p class="eyebrow">下载</p>
+            <h2>选择你的设备</h2>
+          </div>
+          <div class="download-grid" data-downloads>
+            <article class="download-card skeleton">
+              <span class="platform-icon">...</span>
+              <h3>正在读取版本</h3>
+              <p>请稍候</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="capability-band" id="capability" aria-label="能力概览">
+          <img src="./assets/ecorex-ecosystem-hub.png" alt="EcoreX 能力结构预览" />
+          <div>
+            <p class="eyebrow">开箱即用</p>
+            <h2>给广告团队准备的本地 Agent。</h2>
+            <div class="feature-list">
+              <span title="会话、项目与运行状态会在桌面端左侧清晰呈现。">项目与会话</span>
+              <span title="点击文件后再打开预览，不干扰默认对话。">文件预览</span>
+              <span title="Skill、MCP、办公 CLI 统一收在设置入口。">能力设置</span>
+              <span title="管理员通过网页统一查看用户、用量和错误记录。">企业管理</span>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <span>EcoreX Desktop</span>
+        <a href="./manifest.json">版本清单</a>
+      </footer>
+    </div>
+    <script src="./site.js"></script>
+  </body>
+</html>
