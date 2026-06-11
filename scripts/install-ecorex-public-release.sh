@@ -106,9 +106,13 @@ install -d "$RELEASE_ROOT/releases"
 install -d "$ADMIN_ROOT/app"
 install -d "$ADMIN_ROOT/data"
 install -d "$ADMIN_ROOT/env"
+install -d "$ADMIN_ROOT/server"
 
 cp -a "$tmp_dir/site" "$release_dir"
 cp -a "$tmp_dir/admin-api/." "$ADMIN_ROOT/app/"
+if [[ -d "$tmp_dir/server" ]]; then
+  cp -a "$tmp_dir/server/." "$ADMIN_ROOT/server/"
+fi
 
 env_file="$ADMIN_ROOT/env/ecorex-admin-api.env"
 if [[ ! -f "$env_file" ]]; then
@@ -143,4 +147,5 @@ releaseDir: $release_dir
 current: $RELEASE_ROOT/current
 adminApp: $ADMIN_ROOT/app
 adminEnv: $env_file
+serverHelpers: $ADMIN_ROOT/server
 EOF

@@ -176,6 +176,7 @@ if (-not (Test-Path -LiteralPath $ReleaseZip)) {
             "site/downloads/EcoreX_0.1.10_x64-setup.exe",
             "admin-api/ecorex_admin_api.py",
             "server/install-ecorex-public-release.sh",
+            "server/check-ecorex-server-release.sh",
             "server/caddy/Caddyfile.example",
             "server/nginx/ecorex-agent.conf.example",
             "server/systemd/ecorex-admin-api.service.example"
@@ -214,6 +215,9 @@ RELEASE_ROOT="$releaseRoot" ADMIN_ROOT="$adminRoot" RESTART_SERVICE=0 EXPECTED_S
 test -f "$releaseRoot/current/manifest.json" || test -f "$releaseRoot/releases/"*/manifest.json
 test -f "$adminRoot/app/ecorex_admin_api.py"
 test -f "$adminRoot/env/ecorex-admin-api.env"
+test -f "$adminRoot/server/caddy/Caddyfile.example"
+test -f "$adminRoot/server/check-ecorex-server-release.sh"
+CHECK_PUBLIC=0 CHECK_CADDY=0 RELEASE_ROOT="$releaseRoot" ADMIN_ROOT="$adminRoot" bash "$adminRoot/server/check-ecorex-server-release.sh" >/tmp/ecorex-acceptance-server-check.log
 "@
         $script = $script -replace "\\", "/"
         $previousErrorActionPreference = $ErrorActionPreference

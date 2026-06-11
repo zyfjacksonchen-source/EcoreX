@@ -9,8 +9,8 @@
 - Windows size: `117,529,360` bytes
 - Windows SHA256: `ACA52B7ACF7D73FBCA62F3F5AB92C057AB50B8FBD188C3AD7105B665569D482B`
 - Public deployment zip: `release-artifacts/EcoreX_0.1.10-public-release.zip`
-- Public deployment zip size: `120,275,068` bytes
-- Public deployment zip SHA256: `DAA53EEDAB95EBE15800FEBCE6E0DC9F5C660DA2D843E7BF7AC8F2CE824D13CA`
+- Public deployment zip size: `120,276,449` bytes
+- Public deployment zip SHA256: `E9E90E793F0AFCEF40225A0FD3D8F6B6C52EB96B76392600A8EAEB026E0D08EB`
 - Local git branch: `codex/ecorex-v0.1.10-productization`
 - GitHub SSH push target prepared: `git@github.com:zhangyifanjackson-dotcom/EcoreX.git`
 - GitHub HTTPS push target prepared: `https://github.com/zhangyifanjackson-dotcom/EcoreX.git`
@@ -67,11 +67,12 @@
   - `desktop/scripts/smoke-renderer-visual.ps1` screenshot smoke for auth, light main, and dark main states.
 - Latest Windows package rebuild passed `npm run package:win:signed`; Authenticode status is `Valid` for `release/win-unpacked/EcoreX.exe` and `release/EcoreX_0.1.10_x64-setup.exe`.
 - Latest installed-app smoke passed: installer found, app started, sidecar ready, cleanup completed on port `19142`.
-- Latest public handoff zip was regenerated after the second hardening pass with SHA256 `DAA53EEDAB95EBE15800FEBCE6E0DC9F5C660DA2D843E7BF7AC8F2CE824D13CA`.
+- Latest public handoff zip was regenerated after the second hardening pass with SHA256 `E9E90E793F0AFCEF40225A0FD3D8F6B6C52EB96B76392600A8EAEB026E0D08EB`.
 - Added server-side deployment helpers after the public route still returned 404: `scripts/install-ecorex-public-release.sh`, `deploy/ecorex-site/nginx/ecorex-agent.conf.example`, and `deploy/ecorex-admin-api/systemd/ecorex-admin-api.service.example`.
 - Local Linux/WSL install smoke found and fixed a release-blocking handoff issue: Windows `Compress-Archive` had produced backslash zip entries that Linux extracted as literal backslash filenames. The release zip generator now writes `/` entries, the installer normalizes legacy entries, and temp install verified the expected release/current layout.
 - Added `scripts/test-ecorex-v0.1.10-acceptance.ps1` as a consolidated acceptance harness for local package integrity, Linux install smoke, GitHub refs, and public route status. It supports `-AllowPublicBlocked` so current 404 routing remains visible without hiding local/package evidence.
 - Live route diagnosis shows Caddy is the active server: Admin/API paths are reachable, but static `/ecorex-agent/*` is not. Added `deploy/ecorex-site/caddy/Caddyfile.example` and release-zip inclusion for the Caddy route template.
+- Added `scripts/check-ecorex-server-release.sh`, copied by the install script into `$ADMIN_ROOT/server`, to verify release/current files, Admin API files, server helpers, and public route status from the server.
 
 ## Pending Release Steps
 

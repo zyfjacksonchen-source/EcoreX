@@ -14,8 +14,8 @@
 Preferred handoff artifact:
 
 - `release-artifacts/EcoreX_0.1.10-public-release.zip`
-- size `120,275,068`
-- SHA256 `DAA53EEDAB95EBE15800FEBCE6E0DC9F5C660DA2D843E7BF7AC8F2CE824D13CA`
+- size `120,276,449`
+- SHA256 `E9E90E793F0AFCEF40225A0FD3D8F6B6C52EB96B76392600A8EAEB026E0D08EB`
 
 Generate or refresh it with:
 
@@ -31,6 +31,7 @@ The zip contains:
 - `admin-api/Dockerfile`
 - `admin-api/README.md`
 - `server/install-ecorex-public-release.sh`
+- `server/check-ecorex-server-release.sh`
 - `server/caddy/Caddyfile.example`
 - `server/nginx/ecorex-agent.conf.example`
 - `server/systemd/ecorex-admin-api.service.example`
@@ -78,6 +79,7 @@ Raw source paths:
   - `deploy/ecorex-admin-api/Dockerfile`
 - Server deployment helpers:
   - `scripts/install-ecorex-public-release.sh`
+  - `scripts/check-ecorex-server-release.sh`
   - `deploy/ecorex-site/nginx/ecorex-agent.conf.example`
   - `deploy/ecorex-admin-api/systemd/ecorex-admin-api.service.example`
 
@@ -123,17 +125,25 @@ Do not enable default demo users in production. `ECOREX_SEED_DEFAULT_USERS` and 
 Preferred scripted deployment on the Linux server:
 
 ```bash
-export EXPECTED_SHA256=DAA53EEDAB95EBE15800FEBCE6E0DC9F5C660DA2D843E7BF7AC8F2CE824D13CA
+export EXPECTED_SHA256=E9E90E793F0AFCEF40225A0FD3D8F6B6C52EB96B76392600A8EAEB026E0D08EB
 bash scripts/install-ecorex-public-release.sh /path/to/EcoreX_0.1.10-public-release.zip
 ```
 
-The script verifies the zip, creates a new `/srv/ecorex-agent-download/releases/<timestamp>-v0.1.10` directory, copies Admin API files to `/srv/ecorex-agent-admin/app`, preserves old releases, and atomically updates `/srv/ecorex-agent-download/current`.
+The script verifies the zip, creates a new `/srv/ecorex-agent-download/releases/<timestamp>-v0.1.10` directory, copies Admin API files to `/srv/ecorex-agent-admin/app`, copies server helper scripts/configs to `/srv/ecorex-agent-admin/server`, preserves old releases, and atomically updates `/srv/ecorex-agent-download/current`.
+
+After installation, run the server-side check:
+
+```bash
+CHECK_PUBLIC=1 CHECK_CADDY=1 bash /srv/ecorex-agent-admin/server/check-ecorex-server-release.sh
+```
+
+Before the Caddy route is reloaded, this check is expected to fail public static route checks. After the Caddy file_server mapping is applied, it should pass `manifest`, `root`, `admin auth`, and `client API gate`.
 
 If only the zip is present on the server, extract the helper first:
 
 ```bash
 unzip -j EcoreX_0.1.10-public-release.zip server/install-ecorex-public-release.sh -d /tmp/ecorex-release
-export EXPECTED_SHA256=DAA53EEDAB95EBE15800FEBCE6E0DC9F5C660DA2D843E7BF7AC8F2CE824D13CA
+export EXPECTED_SHA256=E9E90E793F0AFCEF40225A0FD3D8F6B6C52EB96B76392600A8EAEB026E0D08EB
 bash /tmp/ecorex-release/install-ecorex-public-release.sh EcoreX_0.1.10-public-release.zip
 ```
 
