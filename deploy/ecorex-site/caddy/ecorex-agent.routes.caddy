@@ -1,0 +1,30 @@
+# Import this file inside the existing www.ecoreai.cn site block.
+# Replace <replace-with-caddy-hash> with: caddy hash-password
+
+redir /ecorex-agent /ecorex-agent/
+redir /ecorex-agent/admin /ecorex-agent/admin/
+
+handle /ecorex-agent/admin/api/* {
+    reverse_proxy 127.0.0.1:18084
+}
+
+handle /ecorex-agent/api/admin/* {
+    reverse_proxy 127.0.0.1:18084
+}
+
+handle /ecorex-agent/client/* {
+    reverse_proxy 127.0.0.1:18084
+}
+
+handle_path /ecorex-agent/admin/* {
+    basic_auth {
+        admin <replace-with-caddy-hash>
+    }
+    root * /srv/ecorex-agent-download/current/admin
+    file_server
+}
+
+handle_path /ecorex-agent/* {
+    root * /srv/ecorex-agent-download/current
+    file_server
+}

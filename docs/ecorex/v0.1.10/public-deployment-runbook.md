@@ -14,8 +14,8 @@
 Preferred handoff artifact:
 
 - `release-artifacts/EcoreX_0.1.10-public-release.zip`
-- size `120,276,449`
-- SHA256 `E9E90E793F0AFCEF40225A0FD3D8F6B6C52EB96B76392600A8EAEB026E0D08EB`
+- size `120,277,051`
+- SHA256 `EAD857656A7399DCCC7D5052049DF889D22BA0C4B38D25658DA04CB7D76571F1`
 
 Generate or refresh it with:
 
@@ -33,6 +33,7 @@ The zip contains:
 - `server/install-ecorex-public-release.sh`
 - `server/check-ecorex-server-release.sh`
 - `server/caddy/Caddyfile.example`
+- `server/caddy/ecorex-agent.routes.caddy`
 - `server/nginx/ecorex-agent.conf.example`
 - `server/systemd/ecorex-admin-api.service.example`
 - `checksums.json`
@@ -72,6 +73,7 @@ Raw source paths:
   - `deploy/ecorex-site/admin/**`
 - Caddy route template:
   - `deploy/ecorex-site/caddy/Caddyfile.example`
+  - `deploy/ecorex-site/caddy/ecorex-agent.routes.caddy`
 - Windows artifact:
   - `deploy/ecorex-site/downloads/EcoreX_0.1.10_x64-setup.exe`
 - Admin API:
@@ -125,7 +127,7 @@ Do not enable default demo users in production. `ECOREX_SEED_DEFAULT_USERS` and 
 Preferred scripted deployment on the Linux server:
 
 ```bash
-export EXPECTED_SHA256=E9E90E793F0AFCEF40225A0FD3D8F6B6C52EB96B76392600A8EAEB026E0D08EB
+export EXPECTED_SHA256=EAD857656A7399DCCC7D5052049DF889D22BA0C4B38D25658DA04CB7D76571F1
 bash scripts/install-ecorex-public-release.sh /path/to/EcoreX_0.1.10-public-release.zip
 ```
 
@@ -143,7 +145,7 @@ If only the zip is present on the server, extract the helper first:
 
 ```bash
 unzip -j EcoreX_0.1.10-public-release.zip server/install-ecorex-public-release.sh -d /tmp/ecorex-release
-export EXPECTED_SHA256=E9E90E793F0AFCEF40225A0FD3D8F6B6C52EB96B76392600A8EAEB026E0D08EB
+export EXPECTED_SHA256=EAD857656A7399DCCC7D5052049DF889D22BA0C4B38D25658DA04CB7D76571F1
 bash /tmp/ecorex-release/install-ecorex-public-release.sh EcoreX_0.1.10-public-release.zip
 ```
 
@@ -158,7 +160,7 @@ Manual deployment equivalent:
 7. Update `/srv/ecorex-agent-download/current` to point to the new release directory.
 8. Keep the previous release directory and previous Admin API image/script available for rollback.
 
-Caddy is the observed public server for `www.ecoreai.cn`. Use `deploy/ecorex-site/caddy/Caddyfile.example` as the route template: API routes should reverse proxy to `127.0.0.1:18084`, while `/ecorex-agent/*` should use `file_server` rooted at `/srv/ecorex-agent-download/current`. Run `caddy validate` before reload.
+Caddy is the observed public server for `www.ecoreai.cn`. If the site block already exists, import `deploy/ecorex-site/caddy/ecorex-agent.routes.caddy` inside the existing `www.ecoreai.cn` block. Use `deploy/ecorex-site/caddy/Caddyfile.example` only as a complete-site reference. API routes should reverse proxy to `127.0.0.1:18084`, while `/ecorex-agent/*` should use `file_server` rooted at `/srv/ecorex-agent-download/current`. Run `caddy validate` before reload.
 
 Nginx routing is also documented for alternate deployments. Use `deploy/ecorex-site/nginx/ecorex-agent.conf.example` only if the host is migrated to Nginx, and run `nginx -t` before reload.
 

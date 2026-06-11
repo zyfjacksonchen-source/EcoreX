@@ -178,6 +178,7 @@ if (-not (Test-Path -LiteralPath $ReleaseZip)) {
             "server/install-ecorex-public-release.sh",
             "server/check-ecorex-server-release.sh",
             "server/caddy/Caddyfile.example",
+            "server/caddy/ecorex-agent.routes.caddy",
             "server/nginx/ecorex-agent.conf.example",
             "server/systemd/ecorex-admin-api.service.example"
         )
@@ -216,6 +217,7 @@ test -f "$releaseRoot/current/manifest.json" || test -f "$releaseRoot/releases/"
 test -f "$adminRoot/app/ecorex_admin_api.py"
 test -f "$adminRoot/env/ecorex-admin-api.env"
 test -f "$adminRoot/server/caddy/Caddyfile.example"
+test -f "$adminRoot/server/caddy/ecorex-agent.routes.caddy"
 test -f "$adminRoot/server/check-ecorex-server-release.sh"
 CHECK_PUBLIC=0 CHECK_CADDY=0 RELEASE_ROOT="$releaseRoot" ADMIN_ROOT="$adminRoot" bash "$adminRoot/server/check-ecorex-server-release.sh" >/tmp/ecorex-acceptance-server-check.log
 "@
