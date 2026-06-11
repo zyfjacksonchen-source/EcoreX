@@ -55,6 +55,7 @@
 - 2026-06-11: Public route diagnosis refined from live headers: `www.ecoreai.cn` is served by Caddy; `/ecorex-agent/client/*` reaches the Python Admin API and returns 403 without client key, while `/ecorex-agent/*` static routes still return 404. Added `deploy/ecorex-site/caddy/Caddyfile.example` and included it in the release zip.
 - 2026-06-11: Added `scripts/check-ecorex-server-release.sh` and included it in the release zip. The install script now copies server helpers to `$ADMIN_ROOT/server`, and acceptance smoke invokes the server check with local temp roots.
 - 2026-06-11: Added import-safe Caddy route snippet `deploy/ecorex-site/caddy/ecorex-agent.routes.caddy`. The complete `Caddyfile.example` now imports the snippet, so existing `www.ecoreai.cn` site blocks can add only the EcoreX routes without duplicating the site block.
+- 2026-06-11: Retried strict public release verification after proxy was enabled. `https://www.ecoreai.cn/ecorex-agent/manifest.json` still returns HTTP 404 while Admin/API routes remain reachable, so the only open blocker is server-side static release/Caddy `file_server` wiring. The acceptance-log verification note was first synced to GitHub snapshot commit `66139aebfaa6e613d3295aa427665f56af1c8e59` on both `main` and `codex/ecorex-v0.1.10-productization`.
 
 ## Known Follow-Up
 
