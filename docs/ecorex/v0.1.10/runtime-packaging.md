@@ -46,5 +46,5 @@
 ## Release Metadata
 
 - Version sources must be unified to `0.1.10`: desktop package files, manifest, release docs, and verification script defaults.
-- Current Windows installer: `EcoreX_0.1.10_x64-setup.exe`, size `120,050,856` bytes, SHA256 `14D57A4F15D2F99DDC04975D5E636707F648864665D4F3F4D5A011516626DB55`.
+- Current Windows installer: `EcoreX_0.1.10_x64-setup.exe`, size `117,529,360` bytes, SHA256 `ACA52B7ACF7D73FBCA62F3F5AB92C057AB50B8FBD188C3AD7105B665569D482B`.
 - Windows installed smoke passed after the enterprise policy packaging fix and again after the usage/SSE fix: install found, app started, sidecar ready, cleanup completed.

@@ -5,6 +5,7 @@ const state = {
     users: [],
     usageByUser: [],
     logs: [],
+    logUsers: [],
     capabilities: [],
     capabilityPolicy: { mirror: "https://pypi.org/simple", mode: "ask", offlineCache: "未配置" },
     globalModel: null,
@@ -64,6 +65,18 @@ function setApiStatus(connected, message = "") {
   node.dataset.connected = connected ? "true" : "false";
   node.textContent = connected ? "已连接" : "离线";
   node.title = message || (connected ? "正在使用服务器管理数据" : "管理 API 不可用");
+}
+
+function showNotice(message, tone = "warn") {
+  const node = $("[data-admin-notice]");
+  if (!node) return;
+  node.hidden = false;
+  node.dataset.tone = tone;
+  node.textContent = message;
+  window.clearTimeout(showNotice.timer);
+  showNotice.timer = window.setTimeout(() => {
+    node.hidden = true;
+  }, tone === "error" ? 8000 : 4200);
 }
 
 async function request(path, options = {}) {
@@ -140,7 +153,8 @@ function renderLogFilters() {
   const select = $("[data-log-user-filter]");
   if (!select) return;
   const current = select.value;
-  select.innerHTML = `<option value="">全部用户</option>${state.data.users.map((u) => `<option value="${escapeHtml(u.email)}">${escapeHtml(u.name)} / ${escapeHtml(u.email)}</option>`).join("")}`;
+  const users = state.data.logUsers?.length ? state.data.logUsers : state.data.users;
+  select.innerHTML = `<option value="">全部用户</option>${users.map((u) => `<option value="${escapeHtml(u.email)}">${escapeHtml(u.name)} / ${escapeHtml(u.email)}${u.deletedAt ? "（已删除）" : ""}</option>`).join("")}`;
   select.value = current;
 }
 
@@ -275,10 +289,18 @@ async function loadState(query = "") {
 }
 
 async function mutate(path, options) {
-  const payload = await request(path, options);
-  mergeState(payload.state || payload);
-  setApiStatus(true);
-  render();
+  try {
+    const payload = await request(path, options);
+    mergeState(payload.state || payload);
+    setApiStatus(true);
+    render();
+    showNotice("操作已保存", "info");
+    return payload;
+  } catch (error) {
+    setApiStatus(false, error.message);
+    showNotice(error.message || "操作失败，请检查权限或稍后重试。", "error");
+    throw error;
+  }
 }
 
 function showModal(title, templateName, setup) {
@@ -324,8 +346,12 @@ $("[data-user-form]")?.addEventListener("submit", async (event) => {
   const payload = Object.fromEntries(new FormData(form).entries());
   payload.dailyTokenLimit = Number(payload.dailyTokenLimit || 0);
   payload.weeklyTokenLimit = Number(payload.weeklyTokenLimit || 0);
-  await mutate("/users", { method: "POST", body: JSON.stringify(payload) });
-  form.reset();
+  try {
+    await mutate("/users", { method: "POST", body: JSON.stringify(payload) });
+    form.reset();
+  } catch {
+    // mutate already surfaced the error.
+  }
 });
 
 $("[data-users]")?.addEventListener("click", (event) => {
@@ -349,8 +375,12 @@ $("[data-users]")?.addEventListener("click", (event) => {
         const payload = Object.fromEntries(new FormData(form).entries());
         payload.dailyTokenLimit = Number(payload.dailyTokenLimit || 0);
         payload.weeklyTokenLimit = Number(payload.weeklyTokenLimit || 0);
-        await mutate(`/users/${encodeURIComponent(user.id)}`, { method: "PATCH", body: JSON.stringify(payload) });
-        closeModal();
+        try {
+          await mutate(`/users/${encodeURIComponent(user.id)}`, { method: "PATCH", body: JSON.stringify(payload) });
+          closeModal();
+        } catch {
+          // mutate already surfaced the error.
+        }
       });
     });
   }
@@ -362,18 +392,22 @@ $("[data-users]")?.addEventListener("click", (event) => {
       form.elements.id.value = user.id;
       form.addEventListener("submit", async (submitEvent) => {
         submitEvent.preventDefault();
-        await mutate(`/users/${encodeURIComponent(user.id)}/reset-password`, {
-          method: "POST",
-          body: JSON.stringify({ password: form.elements.password.value }),
-        });
-        closeModal();
+        try {
+          await mutate(`/users/${encodeURIComponent(user.id)}/reset-password`, {
+            method: "POST",
+            body: JSON.stringify({ password: form.elements.password.value }),
+          });
+          closeModal();
+        } catch {
+          // mutate already surfaced the error.
+        }
       });
     });
   }
   if (remove) {
     const user = state.data.users.find((item) => item.id === remove.dataset.userDelete);
     if (!user || !confirm(`确认删除/禁用用户 ${user.name}？历史用量和错误记录会保留。`)) return;
-    mutate(`/users/${encodeURIComponent(user.id)}`, { method: "DELETE" });
+    mutate(`/users/${encodeURIComponent(user.id)}`, { method: "DELETE" }).catch(() => undefined);
   }
 });
 
@@ -394,7 +428,7 @@ $("[data-logs]")?.addEventListener("click", (event) => {
   });
 });
 
-$("[data-clear-errors]")?.addEventListener("click", () => mutate("/logs/mark-read", { method: "POST", body: JSON.stringify({}) }));
+$("[data-clear-errors]")?.addEventListener("click", () => mutate("/logs/mark-read", { method: "POST", body: JSON.stringify({}) }).catch(() => undefined));
 
 $("[data-model-edit]")?.addEventListener("click", () => {
   const model = state.data.globalModel || {};
@@ -407,8 +441,12 @@ $("[data-model-edit]")?.addEventListener("click", () => {
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const payload = Object.fromEntries(new FormData(form).entries());
-      await mutate("/model-credentials/global", { method: "POST", body: JSON.stringify(payload) });
-      closeModal();
+      try {
+        await mutate("/model-credentials/global", { method: "POST", body: JSON.stringify(payload) });
+        closeModal();
+      } catch {
+        // mutate already surfaced the error.
+      }
     });
   });
 });
@@ -417,7 +455,7 @@ $("[data-capability-form]")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
   const payload = Object.fromEntries(new FormData(form).entries());
-  await mutate("/capability-policy", { method: "POST", body: JSON.stringify(payload) });
+  await mutate("/capability-policy", { method: "POST", body: JSON.stringify(payload) }).catch(() => undefined);
 });
 
 loadState();

@@ -16,7 +16,7 @@ EcoreX v0.1.10 turns the current desktop/admin demo into a usable enterprise AI 
 
 ## Current Risks
 
-- Public `https://www.ecoreai.cn/ecorex-agent/` still served v0.1.7 during the latest verification pass; local v0.1.10 artifacts are ready but not deployed publicly.
+- Public `https://www.ecoreai.cn/ecorex-agent/manifest.json` returned HTTP 404 during the latest verification retry; local v0.1.10 artifacts are ready but not deployed publicly.
 - Provider-returned token usage is normalized when present; estimated token usage remains as fallback for streaming providers that omit usage.
 - macOS signing, notarization, Gatekeeper, and installed smoke remain deferred to the later Mac environment.
 

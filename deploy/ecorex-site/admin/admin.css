@@ -135,6 +135,19 @@ nav {
 
 .workspace-header { margin-bottom: 18px; }
 
+.admin-notice {
+  margin: -6px 0 16px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 34%, var(--rule));
+  border-radius: 12px;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--warn) 10%, var(--surface));
+}
+
+.admin-notice[hidden] {
+  display: none;
+}
+
 .header-actions {
   display: inline-flex;
   align-items: center;
@@ -207,7 +220,7 @@ h2 { margin-bottom: 0; font-size: 22px; }
 }
 
 .form-grid.compact { grid-template-columns: 1.2fr 1.2fr 1fr auto; }
-.filter-bar { grid-template-columns: 1fr 1fr 1fr auto; }
+.filter-bar { grid-template-columns: 1.2fr 0.9fr 1fr 0.9fr 0.9fr auto; }
 
 label {
   display: grid;

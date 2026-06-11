@@ -36,6 +36,7 @@
           <button class="theme-toggle" type="button" data-theme-toggle>明暗切换</button>
         </div>
       </header>
+      <div class="admin-notice" data-admin-notice hidden></div>
 
       <section class="metric-grid" aria-label="概览指标">
         <article><span>用户</span><strong data-metric="users">0</strong></article>
@@ -88,6 +89,8 @@
           <label>用户<select name="userEmail" data-log-user-filter><option value="">全部用户</option></select></label>
           <label>级别<select name="level"><option value="">全部级别</option><option value="error">错误</option><option value="warn">警告</option><option value="info">信息</option></select></label>
           <label>设备<input name="deviceId" placeholder="设备 ID" autocomplete="off" /></label>
+          <label>开始<input name="from" type="date" /></label>
+          <label>结束<input name="to" type="date" /></label>
           <button type="submit">筛选</button>
         </form>
         <div class="log-list" data-logs></div>

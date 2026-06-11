@@ -138,6 +138,13 @@ export async function enterpriseLogout() {
   return window.ecorexDesktop?.enterpriseLogout?.();
 }
 
+export async function enterpriseChangePassword(input: { oldPassword: string; newPassword: string }) {
+  if (!window.ecorexDesktop?.enterpriseChangePassword) {
+    throw new Error("企业密码桥接不可用");
+  }
+  return window.ecorexDesktop.enterpriseChangePassword(input);
+}
+
 export async function checkEnterpriseQuota(estimatedTokens: number) {
   if (!window.ecorexDesktop?.checkEnterpriseQuota) {
     return { ok: true, quota: { allowed: true } };
@@ -258,14 +265,14 @@ export async function deleteMessagePair(input: { sessionId: string; userSeq: num
   });
 }
 
-export async function chooseLocalFiles(): Promise<FileAttachment[]> {
+export async function chooseLocalFiles(webPort = 9899): Promise<FileAttachment[]> {
   if (!window.ecorexDesktop?.chooseFiles) {
     return [];
   }
   const files = await window.ecorexDesktop.chooseFiles();
   return files.map((file) => ({
     ...file,
-    previewDataUrl: file.file_type === "image" ? filePreviewUrl(file.file_path, 9899) : undefined
+    previewDataUrl: file.file_type === "image" ? filePreviewUrl(file.file_path, webPort) : undefined
   }));
 }
 

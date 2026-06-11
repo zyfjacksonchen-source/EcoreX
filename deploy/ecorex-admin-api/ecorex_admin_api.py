@@ -17,6 +17,7 @@ VERSION = "0.1.10"
 PASSWORD_ITERATIONS = 180000
 SESSION_DAYS = 7
 DEFAULT_CLIENT_EVENT_KEY = "ecorex-desktop-v0.1.10"
+DEFAULT_ADMIN_USERNAME = "admin"
 
 DEFAULT_USERS = [
     ("运营管理员", "admin@ecorex.local", "admin", "active"),
@@ -108,6 +109,23 @@ def mask_secret(value):
 
 def hash_token(token):
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def env_flag(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def admin_auth_configured():
+    return bool(os.environ.get("ECOREX_ADMIN_PASSWORD") or os.environ.get("ECOREX_ADMIN_TOKEN") or os.environ.get("ECOREX_ADMIN_API_KEY"))
+
+
+def constant_equal(left, right):
+    if not left or not right:
+        return False
+    return hmac.compare_digest(str(left), str(right))
 
 
 def hash_password(password):
@@ -270,33 +288,50 @@ class AdminStore:
     def seed(self, conn):
         created = now_iso()
         if conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
-            conn.executemany(
-                """
-                INSERT INTO users
-                (id, name, email, role, status, password_hash, must_change_password, daily_token_limit, weekly_token_limit, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        str(uuid.uuid4()),
-                        name,
-                        email,
-                        role,
-                        status,
-                        hash_password("EcoreX123!"),
-                        100000,
-                        500000,
-                        created,
-                        created,
-                    )
-                    for name, email, role, status in DEFAULT_USERS
-                ],
-            )
+            seed_password = os.environ.get("ECOREX_SEED_DEFAULT_PASSWORD", "")
+            if env_flag("ECOREX_SEED_DEFAULT_USERS") and seed_password:
+                conn.executemany(
+                    """
+                    INSERT INTO users
+                    (id, name, email, role, status, password_hash, must_change_password, daily_token_limit, weekly_token_limit, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            str(uuid.uuid4()),
+                            name,
+                            email,
+                            role,
+                            status,
+                            hash_password(seed_password),
+                            100000,
+                            500000,
+                            created,
+                            created,
+                        )
+                        for name, email, role, status in DEFAULT_USERS
+                    ],
+                )
         else:
             for row in conn.execute("SELECT id FROM users WHERE password_hash IS NULL OR password_hash=''").fetchall():
                 conn.execute(
                     "UPDATE users SET password_hash=?, must_change_password=1, updated_at=? WHERE id=?",
-                    (hash_password("EcoreX123!"), created, row["id"]),
+                    (hash_password(secrets.token_urlsafe(18)), created, row["id"]),
+                )
+        if not env_flag("ECOREX_ALLOW_DEFAULT_USERS"):
+            default_emails = [email for _, email, _, _ in DEFAULT_USERS]
+            rows = conn.execute(
+                f"SELECT id FROM users WHERE lower(email) IN ({','.join('?' for _ in default_emails)}) AND deleted_at IS NULL",
+                [email.lower() for email in default_emails],
+            ).fetchall()
+            if rows:
+                conn.executemany(
+                    "UPDATE users SET status='disabled', deleted_at=?, updated_at=? WHERE id=?",
+                    [(created, created, row["id"]) for row in rows],
+                )
+                conn.executemany(
+                    "UPDATE client_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL",
+                    [(created, row["id"]) for row in rows],
                 )
 
         if conn.execute("SELECT COUNT(*) FROM usage_events").fetchone()[0] == 0:
@@ -344,6 +379,7 @@ class AdminStore:
             )]
             usage_by_user = self.usage_by_user(conn)
             logs = self.query_logs(conn, filters)
+            log_users = self.log_users(conn)
             policy = dict(conn.execute("SELECT mirror, mode, offline_cache AS offlineCache, updated_at AS updatedAt FROM capability_policy WHERE id = 1").fetchone())
             capabilities = [dict(row) for row in conn.execute("SELECT id, name, mode, size, status, updated_at AS updatedAt FROM capability_packs ORDER BY id")]
             global_model = self.get_global_model(conn, masked=True)
@@ -365,6 +401,7 @@ class AdminStore:
                 "usage": self.legacy_usage(conn),
                 "usageByUser": usage_by_user,
                 "logs": logs,
+                "logUsers": log_users,
                 "capabilityPolicy": policy,
                 "capabilities": capabilities,
                 "globalModel": global_model,
@@ -405,9 +442,8 @@ class AdminStore:
     def usage_by_user(self, conn):
         users = conn.execute(
             """
-            SELECT id, name, email, daily_token_limit, weekly_token_limit
+            SELECT id, name, email, daily_token_limit, weekly_token_limit, deleted_at
             FROM users
-            WHERE deleted_at IS NULL
             ORDER BY created_at DESC
             """
         ).fetchall()
@@ -421,6 +457,7 @@ class AdminStore:
                     "email": user["email"],
                     "dailyTokenLimit": int(user["daily_token_limit"] or 0),
                     "weeklyTokenLimit": int(user["weekly_token_limit"] or 0),
+                    "deletedAt": user["deleted_at"],
                     "dailyTokens": quota["dailyUsed"],
                     "weeklyTokens": quota["weeklyUsed"],
                     "totalTokens": quota["totalUsed"],
@@ -431,6 +468,31 @@ class AdminStore:
                 }
             )
         return result
+
+    def log_users(self, conn):
+        rows = conn.execute(
+            """
+            SELECT name, email, deleted_at FROM users
+            UNION
+            SELECT COALESCE(NULLIF(user_email, ''), '未知用户') AS name, user_email AS email, NULL AS deleted_at
+            FROM error_logs
+            WHERE user_email IS NOT NULL AND user_email != ''
+            UNION
+            SELECT COALESCE(NULLIF(user_email, ''), '未知用户') AS name, user_email AS email, NULL AS deleted_at
+            FROM usage_events
+            WHERE user_email IS NOT NULL AND user_email != ''
+            ORDER BY email
+            """
+        ).fetchall()
+        return [
+            {
+                "name": row["name"] or row["email"],
+                "email": row["email"],
+                "deletedAt": row["deleted_at"],
+            }
+            for row in rows
+            if row["email"]
+        ]
 
     def query_logs(self, conn, filters=None):
         filters = filters or {}
@@ -445,6 +507,12 @@ class AdminStore:
         if filters.get("level"):
             where.append("level=?")
             values.append(compact_text(filters["level"], 32))
+        if filters.get("from"):
+            where.append("created_at>=?")
+            values.append(compact_text(filters["from"], 40))
+        if filters.get("to"):
+            where.append("created_at<=?")
+            values.append(compact_text(filters["to"], 40))
         sql = "SELECT * FROM error_logs"
         if where:
             sql += " WHERE " + " AND ".join(where)
@@ -854,6 +922,9 @@ class AdminStore:
         user = self.require_session(token, device_id)
         user_email = user["email"]
         with self.connect() as conn:
+            quota = self.quota_state(conn, user_email)
+            if not quota["allowed"]:
+                raise PermissionError(quota["reason"] or "token quota exceeded")
             selected = self.get_global_model(conn, masked=False)
         if not selected or not selected.get("enabled"):
             return {"ok": True, "configured": False, "settings": {}, "updatedAt": "", "version": VERSION}
@@ -937,17 +1008,17 @@ class AdminStore:
             conn.commit()
         return self.state()
 
-    def ingest_event(self, payload, include_state=True, token="", device_id=""):
+    def ingest_event(self, payload, include_state=True, token="", device_id="", require_user=False):
         kind = compact_text(payload.get("type") or payload.get("kind"), 32)
         stamp = now_iso()
         user_email = compact_text(payload.get("userEmail") or payload.get("user_email"), 180).lower()
         device_from_header = compact_text(device_id, 180)
-        if token:
-            try:
-                user = self.require_session(token, device_id or payload.get("deviceId"))
-                user_email = user["email"]
-            except PermissionError:
-                pass
+        resolved_device_id = compact_text(payload.get("deviceId") or payload.get("device_id") or device_from_header, 180)
+        if token or require_user:
+            user = self.require_session(token, device_id or payload.get("deviceId"))
+            user_email = user["email"]
+            device_from_header = compact_text(user["device_id"] or device_from_header, 180)
+            resolved_device_id = device_from_header
         with self.connect() as conn:
             if kind == "usage":
                 detail = payload.get("detail") or {}
@@ -970,7 +1041,7 @@ class AdminStore:
                         compact_text(payload.get("label") or payload.get("category") or "桌面端调用", 120),
                         amount,
                         user_email,
-                        compact_text(payload.get("deviceId") or payload.get("device_id") or device_from_header, 180),
+                        resolved_device_id,
                         compact_text(payload.get("sessionId") or payload.get("session_id"), 180),
                         compact_text(payload.get("model") or detail.get("model"), 120),
                         compact_text(payload.get("provider") or detail.get("provider"), 80),
@@ -995,7 +1066,7 @@ class AdminStore:
                         compact_text(payload.get("message") or "客户端事件", 1000),
                         "unread" if kind == "error" else "read",
                         user_email,
-                        compact_text(payload.get("deviceId") or payload.get("device_id") or device_from_header, 180),
+                        resolved_device_id,
                         compact_text(payload.get("sessionId") or payload.get("session_id"), 180),
                         compact_text(payload.get("tool"), 120),
                         compact_text(payload.get("appVersion") or payload.get("app_version") or VERSION, 40),
@@ -1036,13 +1107,33 @@ class AdminHandler(BaseHTTPRequestHandler):
     def _query(self):
         return {key: values[-1] for key, values in parse_qs(urlparse(self.path).query).items()}
 
+    def _origin_allowed(self):
+        origin = self.headers.get("Origin", "")
+        if not origin:
+            return ""
+        allowed = {
+            item.strip()
+            for item in os.environ.get("ECOREX_ALLOWED_ORIGINS", "").split(",")
+            if item.strip()
+        }
+        host = self.headers.get("Host", "")
+        if host:
+            allowed.add(f"https://{host}")
+            allowed.add(f"http://{host}")
+        return origin if origin in allowed else ""
+
+    def _send_cors_headers(self):
+        origin = self._origin_allowed()
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Access-Control-Allow-Credentials", "true")
+
     def _json(self, status, payload):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Access-Control-Allow-Origin", self.headers.get("Origin") or "*")
-        self.send_header("Access-Control-Allow-Credentials", "true")
+        self._send_cors_headers()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -1061,6 +1152,46 @@ class AdminHandler(BaseHTTPRequestHandler):
         provided = self.headers.get("X-EcoreX-Client-Key", "")
         return bool(expected) and hmac.compare_digest(expected, provided)
 
+    def _admin_authorized(self):
+        token = os.environ.get("ECOREX_ADMIN_TOKEN") or os.environ.get("ECOREX_ADMIN_API_KEY")
+        if token:
+            provided = self.headers.get("X-EcoreX-Admin-Key", "")
+            auth = self.headers.get("Authorization", "")
+            if auth.lower().startswith("bearer "):
+                provided = auth.split(" ", 1)[1].strip()
+            if constant_equal(provided, token):
+                return True
+
+        password = os.environ.get("ECOREX_ADMIN_PASSWORD", "")
+        if password:
+            username = os.environ.get("ECOREX_ADMIN_USERNAME", DEFAULT_ADMIN_USERNAME)
+            auth = self.headers.get("Authorization", "")
+            if auth.lower().startswith("basic "):
+                try:
+                    decoded = base64.b64decode(auth.split(" ", 1)[1].strip()).decode("utf-8")
+                    provided_user, provided_password = decoded.split(":", 1)
+                    return constant_equal(provided_user, username) and constant_equal(provided_password, password)
+                except Exception:
+                    return False
+        return False
+
+    def _require_admin(self):
+        if not admin_auth_configured():
+            self._json(503, {"ok": False, "error": "admin authentication is not configured"})
+            return False
+        if self._admin_authorized():
+            return True
+        body = json.dumps({"ok": False, "error": "admin authentication required"}, ensure_ascii=False).encode("utf-8")
+        self.send_response(401)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self._send_cors_headers()
+        self.send_header("WWW-Authenticate", 'Basic realm="EcoreX Admin"')
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        return False
+
     def _user_token(self):
         auth = self.headers.get("Authorization", "")
         if auth.lower().startswith("bearer "):
@@ -1071,11 +1202,10 @@ class AdminHandler(BaseHTTPRequestHandler):
         self.send_response(204)
         self.send_header(
             "Access-Control-Allow-Headers",
-            "Authorization, Content-Type, X-EcoreX-Client-Key, X-EcoreX-User-Email, X-EcoreX-User-Token, X-EcoreX-Device-Id, X-EcoreX-Org-Id",
+            "Authorization, Content-Type, X-EcoreX-Admin-Key, X-EcoreX-Client-Key, X-EcoreX-User-Email, X-EcoreX-User-Token, X-EcoreX-Device-Id, X-EcoreX-Org-Id",
         )
         self.send_header("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
-        self.send_header("Access-Control-Allow-Origin", self.headers.get("Origin") or "*")
-        self.send_header("Access-Control-Allow-Credentials", "true")
+        self._send_cors_headers()
         self.end_headers()
 
     def do_GET(self):
@@ -1084,8 +1214,12 @@ class AdminHandler(BaseHTTPRequestHandler):
             if path in ("/", "/health"):
                 self._json(200, {"ok": True, "product": "EcoreX", "version": VERSION})
             elif path == "/state":
+                if not self._require_admin():
+                    return
                 self._json(200, self.store.state(self._query()))
             elif path == "/logs":
+                if not self._require_admin():
+                    return
                 self._json(200, {"ok": True, "logs": self.store.state(self._query())["logs"]})
             elif path in ("/client/model-config", "/model-config"):
                 if not self._client_key_valid():
@@ -1116,28 +1250,43 @@ class AdminHandler(BaseHTTPRequestHandler):
         try:
             payload = self._read_json()
             if path == "/users":
+                if not self._require_admin():
+                    return
                 self._json(200, self.store.create_user(payload))
-            elif path == "/auth/change-password":
+            elif path in ("/client/auth/change-password", "/auth/change-password"):
+                if not self._client_key_valid():
+                    self._json(403, {"ok": False, "error": "invalid client key"})
+                    return
                 self._json(200, self.store.change_password({**payload, "token": self._user_token()}))
             elif path in ("/client/auth/login", "/auth/login"):
-                if path.startswith("/client") and not self._client_key_valid():
+                if not self._client_key_valid():
                     self._json(403, {"ok": False, "error": "invalid client key"})
                     return
                 self._json(200, self.store.login(payload))
             elif path in ("/client/quota/check", "/quota/check"):
-                if path.startswith("/client") and not self._client_key_valid():
+                if not self._client_key_valid():
                     self._json(403, {"ok": False, "error": "invalid client key"})
                     return
                 self._json(200, self.store.check_quota(payload, self._user_token(), self.headers.get("X-EcoreX-Device-Id", "")))
             elif path == "/logs/mark-read":
+                if not self._require_admin():
+                    return
                 self._json(200, self.store.mark_logs_read(payload))
             elif path == "/usage/reset":
+                if not self._require_admin():
+                    return
                 self._json(200, self.store.reset_usage(payload))
             elif path == "/capability-policy":
+                if not self._require_admin():
+                    return
                 self._json(200, self.store.update_policy(payload))
             elif path in ("/model-credentials", "/model-credentials/global"):
+                if not self._require_admin():
+                    return
                 self._json(200, self.store.create_model_credential(payload))
             elif path == "/events":
+                if not self._require_admin():
+                    return
                 self._json(200, self.store.ingest_event(payload))
             elif path in ("/client/events", "/events/client"):
                 if not self._client_key_valid():
@@ -1150,11 +1299,14 @@ class AdminHandler(BaseHTTPRequestHandler):
                         include_state=False,
                         token=self._user_token(),
                         device_id=self.headers.get("X-EcoreX-Device-Id", ""),
+                        require_user=True,
                     ),
                 )
             else:
                 parts = path.strip("/").split("/")
                 if len(parts) == 3 and parts[0] == "users" and parts[2] == "reset-password":
+                    if not self._require_admin():
+                        return
                     self._json(200, self.store.reset_user_password(parts[1], payload))
                 else:
                     self._json(404, {"ok": False, "error": "not found"})
@@ -1173,10 +1325,16 @@ class AdminHandler(BaseHTTPRequestHandler):
             payload = self._read_json()
             parts = path.strip("/").split("/")
             if len(parts) == 2 and parts[0] == "users":
+                if not self._require_admin():
+                    return
                 self._json(200, self.store.update_user(parts[1], payload))
             elif len(parts) == 2 and parts[0] == "model-credentials":
+                if not self._require_admin():
+                    return
                 self._json(200, self.store.update_model_credential(parts[1], payload))
             elif path == "/model-credentials/global":
+                if not self._require_admin():
+                    return
                 self._json(200, self.store.upsert_global_model(payload))
             else:
                 self._json(404, {"ok": False, "error": "not found"})
@@ -1193,8 +1351,12 @@ class AdminHandler(BaseHTTPRequestHandler):
             payload = {}
             parts = path.strip("/").split("/")
             if len(parts) == 2 and parts[0] == "users":
+                if not self._require_admin():
+                    return
                 self._json(200, self.store.delete_user(parts[1], payload))
             elif len(parts) == 2 and parts[0] == "model-credentials":
+                if not self._require_admin():
+                    return
                 self._json(400, {"ok": False, "error": "global model cannot be deleted"})
             else:
                 self._json(404, {"ok": False, "error": "not found"})

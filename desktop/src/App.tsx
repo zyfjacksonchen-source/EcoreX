@@ -21,6 +21,7 @@ import {
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   cancelChatRequest,
+  enterpriseChangePassword,
   checkEnterpriseQuota,
   chooseLocalFiles,
   deleteMessagePair,
@@ -268,6 +269,8 @@ export function App() {
   const [packs, setPacks] = useState<CapabilityPack[]>([]);
   const [permissionState, setPermissionState] = useState<PermissionState | null>(null);
   const [toast, setToast] = useState("");
+  const [passwordDraft, setPasswordDraft] = useState({ oldPassword: "", newPassword: "", confirmPassword: "" });
+  const [passwordBusy, setPasswordBusy] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const streamCleanup = useRef<null | (() => void)>(null);
 
@@ -277,10 +280,10 @@ export function App() {
   }, [theme]);
 
   useEffect(() => {
-    getEnterpriseSession().then((existing) => {
-      setSession(existing);
-      setAuthChecked(true);
-    });
+    getEnterpriseSession()
+      .then((existing) => setSession(existing))
+      .catch(() => setSession(null))
+      .finally(() => setAuthChecked(true));
   }, []);
 
   useEffect(() => {
@@ -353,17 +356,30 @@ export function App() {
   }
 
   async function chooseFiles() {
-    const files = await chooseLocalFiles();
-    setAttachments((current) => [...current, ...files]);
+    try {
+      const files = await chooseLocalFiles(sidecarStatus.webPort);
+      setAttachments((current) => [...current, ...files]);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "选择文件失败");
+    }
   }
 
   async function handlePaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
     const files = Array.from(event.clipboardData.files || []);
     if (!files.length) return;
     event.preventDefault();
-    const saved = await Promise.all(files.map((file) => savePastedFile(file)));
-    setAttachments((current) => [...current, ...saved.filter(Boolean) as FileAttachment[]]);
-    setToast("已添加粘贴的文件");
+    try {
+      const saved = await Promise.all(files.map((file) => savePastedFile(file)));
+      const nextFiles = saved.filter(Boolean) as FileAttachment[];
+      if (!nextFiles.length) {
+        setToast("未能添加粘贴的文件");
+        return;
+      }
+      setAttachments((current) => [...current, ...nextFiles]);
+      setToast("已添加粘贴的文件");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "粘贴附件失败");
+    }
   }
 
   async function sendNow(skipCapabilityCheck = false) {
@@ -448,17 +464,38 @@ export function App() {
               return;
             }
             if (item.type === "done") {
-              setMessages((current) => current.map((message) => message.id === assistantId ? {
-                ...message,
-                content: item.content || message.content,
-                pending: false,
-                userSeq: typeof item.user_seq === "number" ? item.user_seq : message.userSeq
-              } : message));
+              setMessages((current) => current.map((message) => {
+                if (message.id === userMessage.id && typeof item.user_seq === "number") {
+                  return { ...message, userSeq: item.user_seq };
+                }
+                if (message.id === assistantId) {
+                  return {
+                    ...message,
+                    content: item.content || message.content,
+                    pending: false,
+                    userSeq: typeof item.user_seq === "number" ? item.user_seq : message.userSeq
+                  };
+                }
+                return message;
+              }));
               setActiveRequestId("");
               reportChatUsage(item.usage, usageTotal(item.usage) ? "provider" : "estimated");
               return;
             }
-            if (item.type === "message_update" && item.content) {
+            if (item.type === "error") {
+              const message = item.content || item.message || "运行时返回错误";
+              setMessages((current) => current.map((entry) => entry.id === assistantId ? {
+                ...entry,
+                content: message,
+                pending: false
+              } : entry));
+              setActiveRequestId("");
+              streamCleanup.current?.();
+              reportChatUsage(item.usage, usageTotal(item.usage) ? "provider" : "estimated");
+              void reportDesktopEvent({ type: "error", source: "Desktop", message, sessionId: activeSessionId });
+              return;
+            }
+            if ((item.type === "message_update" || item.type === "delta") && item.content) {
               setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: `${message.content}${item.content}`, pending: false } : message));
             }
           },
@@ -555,6 +592,32 @@ export function App() {
     setSession(null);
     setMessages([]);
     setApproval(null);
+  }
+
+  async function submitPasswordChange(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (passwordDraft.newPassword.length < 8) {
+      setApproval({ type: "error", title: "密码太短", message: "新密码至少需要 8 个字符。" });
+      return;
+    }
+    if (passwordDraft.newPassword !== passwordDraft.confirmPassword) {
+      setApproval({ type: "error", title: "两次密码不一致", message: "请重新输入并确认新密码。" });
+      return;
+    }
+    setPasswordBusy(true);
+    try {
+      const nextSession = await enterpriseChangePassword({
+        oldPassword: passwordDraft.oldPassword,
+        newPassword: passwordDraft.newPassword
+      });
+      setSession(nextSession);
+      setPasswordDraft({ oldPassword: "", newPassword: "", confirmPassword: "" });
+      setToast("密码已更新");
+    } catch (error) {
+      setApproval({ type: "error", title: "密码修改失败", message: error instanceof Error ? error.message : "请稍后重试。" });
+    } finally {
+      setPasswordBusy(false);
+    }
   }
 
   if (!authChecked) {
@@ -688,11 +751,21 @@ export function App() {
           {attachments.length > 0 && (
             <div className="attachment-tray">
               {attachments.map((file) => (
-                <button key={file.file_path} onClick={() => setPreviewFile(file)} title="点击预览，右侧弹层会显示文件">
-                  {file.previewDataUrl ? <img src={file.previewDataUrl} alt="" /> : fileIcon(file)}
-                  <span>{file.file_name}</span>
-                  <span role="button" tabIndex={0} aria-label={`移除 ${file.file_name}`} onClick={(event) => { event.stopPropagation(); setAttachments((current) => current.filter((item) => item.file_path !== file.file_path)); }}><X aria-hidden="true" /></span>
-                </button>
+                <article key={file.file_path}>
+                  <button className="attachment-preview" type="button" onClick={() => setPreviewFile(file)} title="点击预览，右侧弹层会显示文件">
+                    {file.previewDataUrl ? <img src={file.previewDataUrl} alt="" /> : fileIcon(file)}
+                    <span>{file.file_name}</span>
+                  </button>
+                  <button
+                    className="attachment-remove"
+                    type="button"
+                    aria-label={`移除 ${file.file_name}`}
+                    title="移除附件"
+                    onClick={() => setAttachments((current) => current.filter((item) => item.file_path !== file.file_path))}
+                  >
+                    <X aria-hidden="true" />
+                  </button>
+                </article>
               ))}
             </div>
           )}
@@ -730,8 +803,41 @@ export function App() {
               <article><strong>账号</strong><span>{session.user.name} / {session.user.email}</span><button onClick={logout}><LogOut aria-hidden="true" />退出登录</button></article>
               <article><strong>主题</strong><span>当前为 {theme === "dark" ? "深色" : "明亮"} 模式</span><button onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <SunMedium aria-hidden="true" /> : <Moon aria-hidden="true" />}切换主题</button></article>
               <article><strong>权限</strong><span>{permissionState ? `模式 ${permissionModeLabel(permissionState.mode)}，已保存 ${permissionState.grantsCount} 条授权` : "权限状态暂不可用"}</span><button onClick={() => resetPermissionGrants().then(setPermissionState)}>清空授权</button></article>
-              <article><strong>运行时</strong><span>{sidecarStatus.message}</span><button onClick={() => loadRuntimeSnapshot().then(setRuntimeSnapshot)}>重新检查</button></article>
+              <article><strong>Skill / MCP</strong><span>{runtimeSnapshot.skillsCount} 个 Skill，{runtimeSnapshot.toolsCount} 个工具通道</span><button onClick={() => loadRuntimeSnapshot().then(setRuntimeSnapshot)}>重新检查</button></article>
+              <article><strong>模型策略</strong><span>{runtimeSnapshot.modelsCount} 个企业模型映射，{runtimeSnapshot.status === "ready" ? "已同步" : "等待同步"}</span><button onClick={() => loadRuntimeSnapshot().then(setRuntimeSnapshot)}>刷新策略</button></article>
+              <article><strong>文件预览</strong><span>点击附件后再显示预览；系统打开前会进行权限确认。</span><button onClick={() => setPreviewFile(null)}>关闭预览</button></article>
+              <article><strong>诊断</strong><span>{sidecarStatus.message}</span><button onClick={() => loadRuntimeSnapshot().then(setRuntimeSnapshot)}>重新检查</button></article>
             </div>
+            <form className="password-form" onSubmit={submitPasswordChange}>
+              <strong>修改登录密码</strong>
+              <input
+                value={passwordDraft.oldPassword}
+                onChange={(event) => setPasswordDraft((current) => ({ ...current, oldPassword: event.target.value }))}
+                type="password"
+                placeholder="当前密码"
+                autoComplete="current-password"
+                required
+              />
+              <input
+                value={passwordDraft.newPassword}
+                onChange={(event) => setPasswordDraft((current) => ({ ...current, newPassword: event.target.value }))}
+                type="password"
+                placeholder="新密码，至少 8 位"
+                autoComplete="new-password"
+                minLength={8}
+                required
+              />
+              <input
+                value={passwordDraft.confirmPassword}
+                onChange={(event) => setPasswordDraft((current) => ({ ...current, confirmPassword: event.target.value }))}
+                type="password"
+                placeholder="确认新密码"
+                autoComplete="new-password"
+                minLength={8}
+                required
+              />
+              <button type="submit" disabled={passwordBusy}>{passwordBusy ? "正在保存" : "更新密码"}</button>
+            </form>
             <div className="permission-modes">
               {(["smart-ask", "always-ask", "read-only", "custom"] as PermissionMode[]).map((mode) => (
                 <button key={mode} className={permissionState?.mode === mode ? "is-active" : ""} onClick={() => updatePermissionMode(mode).then(setPermissionState)}>

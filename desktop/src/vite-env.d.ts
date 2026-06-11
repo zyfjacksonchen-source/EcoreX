@@ -99,6 +99,20 @@ interface Window {
       quota?: Record<string, unknown>;
     }>;
     enterpriseLogout: () => Promise<unknown>;
+    enterpriseChangePassword: (input: { oldPassword: string; newPassword: string }) => Promise<{
+      expiresAt: string;
+      deviceId: string;
+      authenticated: true;
+      user: {
+        id: string;
+        name: string;
+        email: string;
+        role: string;
+        status: string;
+        mustChangePassword?: boolean;
+      };
+      quota?: Record<string, unknown>;
+    }>;
     checkEnterpriseQuota: (estimatedTokens: number) => Promise<{
       ok: boolean;
       quota?: {

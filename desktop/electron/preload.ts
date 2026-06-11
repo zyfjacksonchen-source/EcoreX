@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld("ecorexDesktop", {
   enterpriseLogin: (input: { email: string; password: string }) =>
     ipcRenderer.invoke("ecorex:enterprise-login", input) as Promise<unknown>,
   enterpriseLogout: () => ipcRenderer.invoke("ecorex:enterprise-logout") as Promise<unknown>,
+  enterpriseChangePassword: (input: { oldPassword: string; newPassword: string }) =>
+    ipcRenderer.invoke("ecorex:enterprise-change-password", input) as Promise<unknown>,
   checkEnterpriseQuota: (estimatedTokens: number) =>
     ipcRenderer.invoke("ecorex:check-enterprise-quota", estimatedTokens) as Promise<unknown>,
   refreshEnterprisePolicy: () => ipcRenderer.invoke("ecorex:refresh-enterprise-policy") as Promise<{

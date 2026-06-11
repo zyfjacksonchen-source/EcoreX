@@ -6,11 +6,11 @@
 - Version: `0.1.10`
 - Date: 2026-06-11
 - Windows artifact: `desktop/release/EcoreX_0.1.10_x64-setup.exe`
-- Windows size: `120,050,856` bytes
-- Windows SHA256: `14D57A4F15D2F99DDC04975D5E636707F648864665D4F3F4D5A011516626DB55`
+- Windows size: `117,529,360` bytes
+- Windows SHA256: `ACA52B7ACF7D73FBCA62F3F5AB92C057AB50B8FBD188C3AD7105B665569D482B`
 - Public deployment zip: `release-artifacts/EcoreX_0.1.10-public-release.zip`
-- Public deployment zip size: `122,791,331` bytes
-- Public deployment zip SHA256: `CE05311BE1FE949ACA1483349EC543E5A945C4D45211DF533EA1AA0B6F068429`
+- Public deployment zip size: `120,270,696` bytes
+- Public deployment zip SHA256: `55DF0CD87FB3FE9E123A0E9C2513E66F0D201C65B36F003C0D2B51A54421D99D`
 - Local git branch: `codex/ecorex-v0.1.10-productization`
 - GitHub SSH push target prepared: `git@github.com:zhangyifanjackson-dotcom/EcoreX.git`
 - GitHub HTTPS push target prepared: `https://github.com/zhangyifanjackson-dotcom/EcoreX.git`
@@ -21,7 +21,7 @@
 - Git bundle handoff: `release-artifacts/EcoreX_0.1.10-productization.bundle`, size `6,518,904`, SHA256 `B53B9CBB8276E9D5FF1D9A589571FA565D605DD9AD74730C27901A0BFE611A1A`.
 - Git patch handoff: `release-artifacts/EcoreX_0.1.10-productization.patch`, size `15,109,034`, SHA256 `A2D8B5731648D2566F6E7571A8540A1DF0A8B732A29CDCAEA3BA83C2ABC0AA9C`.
 - macOS arm64/x64 artifacts: metadata prepared; signing, notarization, and Gatekeeper validation skipped for this Windows round.
-- Public host state: `https://www.ecoreai.cn/ecorex-agent/manifest.json` still returned v0.1.7 during the 2026-06-11 verification pass. The local release directory is v0.1.10, but production deployment is still pending.
+- Public host state: `https://www.ecoreai.cn/ecorex-agent/manifest.json` returned HTTP 404 during the latest 2026-06-11 verification retry after proxy was enabled. Earlier verification had seen v0.1.7. The local release directory is v0.1.10, but production deployment/routing is still pending.
 
 ## Verification Evidence
 
@@ -54,15 +54,24 @@
   - cleanup completed: true
 - After the usage/SSE fix, full Electron Builder directory packaging hit transient GitHub 443 timeouts twice. The release was rebuilt by safely updating the existing `win-unpacked` app.asar/runtime, re-signing, and running `electron-builder --win nsis --x64 --prepackaged release/win-unpacked --publish never`; the regenerated setup exe signature is valid and installed smoke passed again.
 - Cross-agent review completed for Admin API, Desktop UX, and Electron/runtime. Blocking findings were fixed before final packaging.
-- Public verification script was run with `-SkipGitRemoteCheck`; it correctly failed because the public manifest is still v0.1.7 and therefore does not match the local v0.1.10 installer hash.
-- `scripts/prepare-ecorex-public-release.ps1` generated a clean public deployment zip. Zip inspection confirmed it contains `site/manifest.json`, `site/downloads/EcoreX_0.1.10_x64-setup.exe`, `admin-api/ecorex_admin_api.py`, and `checksums.json`, excludes old v0.1.4 installers and `__pycache__`, and the zipped Windows installer hash matches `14D57A4F15D2F99DDC04975D5E636707F648864665D4F3F4D5A011516626DB55`.
-- `scripts/verify-ecorex-release.ps1 -LocalWindowsInstaller desktop\release\EcoreX_0.1.10_x64-setup.exe -SkipGitRemoteCheck` was rerun after the rebuild. It correctly still reports public blockers because `https://www.ecoreai.cn/ecorex-agent/manifest.json` serves v0.1.7 and therefore compares the local v0.1.10 installer against the old public hash.
+- Public verification script was run with `-SkipGitRemoteCheck`; it correctly failed because the public manifest route currently returns HTTP 404.
+- `scripts/prepare-ecorex-public-release.ps1` generated a clean public deployment zip. Zip inspection confirmed it contains `site/manifest.json`, `site/downloads/EcoreX_0.1.10_x64-setup.exe`, `admin-api/ecorex_admin_api.py`, and `checksums.json`, excludes old v0.1.4 installers and `__pycache__`, and the zipped Windows installer hash matches `ACA52B7ACF7D73FBCA62F3F5AB92C057AB50B8FBD188C3AD7105B665569D482B`.
+- `scripts/verify-ecorex-release.ps1 -LocalWindowsInstaller desktop\release\EcoreX_0.1.10_x64-setup.exe -SkipGitRemoteCheck` was rerun after the rebuild. It correctly still reports public blockers because `https://www.ecoreai.cn/ecorex-agent/manifest.json` returns HTTP 404.
 - `scripts/verify-ecorex-release.ps1` now supports `-ExpectedGitHubCommit` for snapshot/API GitHub handoff verification, so release checks can validate remote `main` and `codex/ecorex-v0.1.10-productization` without requiring the local shallow CowAgent commit SHA to match the remote clean snapshot SHA. If Git transport is unstable, the verifier can fall back to GitHub refs API using `ECOREX_GITHUB_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN` from the environment.
 - Git bundle verification passed: bundle contains `refs/heads/codex/ecorex-v0.1.10-productization` at `f7861062df11b88aa783ff1e736ca92253532363` and records a complete history.
+- Second cross-agent audit smoke passed after the admin/desktop hardening pass:
+  - `python -m py_compile deploy\ecorex-admin-api\ecorex_admin_api.py`
+  - `npm run typecheck`
+  - `npm run build`
+  - Admin API HTTP security smoke covering admin auth, disabled demo users, login, password change, client-key gating for the password alias, trusted session device attribution, over-quota model denial, invalid client event denial, and raw event admin gate.
+  - `desktop/scripts/smoke-renderer-visual.ps1` screenshot smoke for auth, light main, and dark main states.
+- Latest Windows package rebuild passed `npm run package:win:signed`; Authenticode status is `Valid` for `release/win-unpacked/EcoreX.exe` and `release/EcoreX_0.1.10_x64-setup.exe`.
+- Latest installed-app smoke passed: installer found, app started, sidecar ready, cleanup completed on port `19142`.
+- Latest public handoff zip was regenerated after the second hardening pass with SHA256 `55DF0CD87FB3FE9E123A0E9C2513E66F0D201C65B36F003C0D2B51A54421D99D`.
 
 ## Pending Release Steps
 
-- Upload or sync the final Windows artifact to the public release/download host when ready. The local `deploy/ecorex-site/downloads/` directory already contains the v0.1.10 installer, but that directory is intentionally ignored by git.
+- Upload or sync the final Windows artifact to the public release/download host when ready. The local `deploy/ecorex-site/downloads/` directory is intentionally ignored by git.
 - Use `docs/ecorex/v0.1.10/public-deployment-runbook.md` for the public host sync and post-deploy verification sequence.
 - Run a human visual pass on the installed desktop UI for login, first chat, stop, paste attachment, quota block, and error telemetry.
 - Run macOS arm64/x64 signing, notarization, Gatekeeper, and installed-app smoke later on a Mac.

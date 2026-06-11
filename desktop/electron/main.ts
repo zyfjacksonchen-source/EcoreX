@@ -88,6 +88,10 @@ app.whenReady().then(async () => {
     sidecar.clearEnterpriseModelConfig("已退出登录，模型策略已清空");
     return { ok: true };
   });
+  ipcMain.handle("ecorex:enterprise-change-password", async (_event, input: { oldPassword: string; newPassword: string }) => {
+    const session = await enterpriseAuth.changePassword(input);
+    return enterpriseAuth.toSessionView(session);
+  });
   ipcMain.handle("ecorex:check-enterprise-quota", (_event, estimatedTokens: number) =>
     enterpriseAuth.checkQuota(estimatedTokens)
   );
@@ -121,6 +125,10 @@ app.whenReady().then(async () => {
   ipcMain.handle("ecorex:open-path", async (event, filePath: string) => {
     if (!filePath || !path.isAbsolute(filePath)) {
       return "invalid path";
+    }
+    const decision = await permissions.authorizeOpenPath(event, filePath);
+    if (!decision.allowed) {
+      return `denied: ${decision.reason}`;
     }
     const result = await shell.openPath(filePath);
     await permissions.writeOpenResult(filePath, result);

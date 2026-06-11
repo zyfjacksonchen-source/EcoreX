@@ -3,19 +3,19 @@
 ## Current State
 
 - Local release is ready.
-- Public release is not yet updated: `https://www.ecoreai.cn/ecorex-agent/manifest.json` returned v0.1.7 during the 2026-06-11 verification pass.
+- Public release is not yet updated: `https://www.ecoreai.cn/ecorex-agent/manifest.json` returned HTTP 404 during the latest 2026-06-11 verification retry after proxy was enabled. Earlier verification had seen v0.1.7.
 - Windows installer is signed and locally smoke-tested:
   - `desktop/release/EcoreX_0.1.10_x64-setup.exe`
-  - size `120,050,856`
-  - SHA256 `14D57A4F15D2F99DDC04975D5E636707F648864665D4F3F4D5A011516626DB55`
+  - size `117,529,360`
+  - SHA256 `ACA52B7ACF7D73FBCA62F3F5AB92C057AB50B8FBD188C3AD7105B665569D482B`
 
 ## Files To Publish
 
 Preferred handoff artifact:
 
 - `release-artifacts/EcoreX_0.1.10-public-release.zip`
-- size `122,791,331`
-- SHA256 `CE05311BE1FE949ACA1483349EC543E5A945C4D45211DF533EA1AA0B6F068429`
+- size `120,270,696`
+- SHA256 `55DF0CD87FB3FE9E123A0E9C2513E66F0D201C65B36F003C0D2B51A54421D99D`
 
 Generate or refresh it with:
 
@@ -96,9 +96,17 @@ Set on the server service:
 ```bash
 ECOREX_ADMIN_DB=/data/ecorex-admin.sqlite3
 ECOREX_CLIENT_EVENT_KEY=ecorex-desktop-v0.1.10
+ECOREX_ALLOWED_ORIGINS=https://www.ecoreai.cn
+ECOREX_ADMIN_USERNAME=admin
+ECOREX_ADMIN_PASSWORD=<set-a-strong-password>
+# Or use token/key auth for Admin API automation:
+# ECOREX_ADMIN_TOKEN=<set-a-strong-token>
+# ECOREX_ADMIN_API_KEY=<set-a-strong-key>
 ```
 
 The client event key is a public desktop channel marker, not a model/API secret. Model credentials are released only after ordinary user login and valid enterprise user token validation.
+
+Do not enable default demo users in production. `ECOREX_SEED_DEFAULT_USERS` and `ECOREX_ALLOW_DEFAULT_USERS` are for controlled local/demo recovery only, and require explicit environment configuration.
 
 ## Deployment Steps
 
@@ -106,9 +114,10 @@ The client event key is a public desktop channel marker, not a model/API secret.
 2. Unzip `release-artifacts/EcoreX_0.1.10-public-release.zip` on the server, or copy the equivalent raw files listed above.
 3. Copy `site/**` into the new static release directory.
 4. Update/redeploy the Admin API from `admin-api/ecorex_admin_api.py`.
-5. Ensure `manifest.json` contains the new hash and `status: ready` for `windows-x64`.
-6. Update `/srv/ecorex-agent-download/current` to point to the new release directory.
-7. Keep the previous release directory and previous Admin API image/script available for rollback.
+5. Configure Admin credentials and allowed origins before exposing `/admin/api/*`.
+6. Ensure `manifest.json` contains the new hash and `status: ready` for `windows-x64`.
+7. Update `/srv/ecorex-agent-download/current` to point to the new release directory.
+8. Keep the previous release directory and previous Admin API image/script available for rollback.
 
 ## Verification
 
@@ -139,8 +148,10 @@ Expected:
 - Windows public download returns HTTP 200.
 - Local installer hash matches the public manifest hash.
 - Authenticode signature is valid.
-- Unauthenticated model/capability routes return 403.
+- Admin routes return 401 without admin auth.
+- Unauthenticated model/capability routes return 403 or 401 depending on route and missing credential.
 - Client-key-only model config returns 401.
+- Invalid or over-quota user sessions do not receive model credentials.
 - If `-ExpectedGitHubCommit` is used, remote `main` and `codex/ecorex-v0.1.10-productization` both match that commit.
 - macOS artifact checks are skipped in this Windows round.
 

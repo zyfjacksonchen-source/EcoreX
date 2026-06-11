@@ -70,5 +70,6 @@ Current verified checks:
 - `npm audit --audit-level=critical`
 - `python -m py_compile channel\web\web_channel.py`
 - Static check: no color literals outside `desktop/src/styles/tokens.css`
+- `powershell -ExecutionPolicy Bypass -File scripts\smoke-renderer-visual.ps1`
 
-Browser screenshot verification is still pending because the in-app browser control tool was not available in this run.
+The renderer visual smoke uses Edge headless with a temporary mocked desktop bridge. It verifies the built auth screen, light workbench, and dark workbench screenshots without starting the sidecar.

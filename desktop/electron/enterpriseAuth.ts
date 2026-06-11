@@ -126,6 +126,45 @@ export class EnterpriseAuthManager {
     return { ok: true };
   }
 
+  async changePassword(input: { oldPassword: string; newPassword: string }) {
+    const session = this.getSession();
+    const policy = this.loadPolicy();
+    const changeUrl = this.deriveClientUrl(policy, "auth/change-password");
+    if (!session) {
+      throw new Error("请先登录。");
+    }
+    if (!changeUrl || !policy.clientEventKey) {
+      throw new Error("企业密码服务未配置。");
+    }
+    const response = await fetch(changeUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${session.token}`,
+        "X-EcoreX-User-Token": session.token,
+        "X-EcoreX-Client-Key": policy.clientEventKey,
+        "X-EcoreX-Device-Id": session.deviceId,
+        "X-EcoreX-Org-Id": policy.orgId || ""
+      },
+      body: JSON.stringify({
+        oldPassword: input.oldPassword,
+        newPassword: input.newPassword,
+        deviceId: session.deviceId
+      })
+    });
+    const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+    if (!response.ok || payload.ok === false) {
+      throw new Error(payload.error || `修改密码失败：HTTP ${response.status}`);
+    }
+    const nextSession: EnterpriseSession = {
+      ...session,
+      user: { ...session.user, mustChangePassword: false },
+      savedAt: new Date().toISOString()
+    };
+    await fsp.writeFile(this.sessionPath(), JSON.stringify(nextSession, null, 2), "utf8");
+    return nextSession;
+  }
+
   async checkQuota(estimatedTokens = 0) {
     const session = this.getSession();
     const policy = this.loadPolicy();

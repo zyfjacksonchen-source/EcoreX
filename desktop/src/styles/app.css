@@ -474,16 +474,48 @@ button:disabled {
   padding-bottom: 2px;
 }
 
-.attachment-tray button {
+.attachment-tray article {
   min-width: 140px;
   max-width: 220px;
   height: 42px;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
-  padding: 0 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+}
+
+.attachment-tray .attachment-preview {
+  min-width: 0;
+  height: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 0 0 0 8px;
+  border: 0;
+  border-radius: var(--radius-pill) 0 0 var(--radius-pill);
+  background: transparent;
   text-align: left;
+}
+
+.attachment-tray .attachment-remove {
+  width: 32px;
+  min-height: 32px;
+  height: 32px;
+  margin-right: 4px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+}
+
+.attachment-tray .attachment-preview:hover,
+.attachment-tray .attachment-remove:hover {
+  background: var(--color-surface-muted);
 }
 
 .attachment-tray img {
@@ -593,6 +625,7 @@ button:disabled {
 }
 
 .settings-grid article,
+.password-form,
 .pack-list article {
   display: grid;
   gap: 10px;
@@ -603,12 +636,32 @@ button:disabled {
 }
 
 .settings-grid button,
+.password-form button,
 .pack-list button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 7px;
   padding: 0 12px;
+}
+
+.password-form {
+  grid-template-columns: 1fr 1fr 1fr auto;
+  align-items: end;
+}
+
+.password-form strong {
+  grid-column: 1 / -1;
+}
+
+.password-form input {
+  min-height: 38px;
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 0 12px;
+  color: var(--color-text);
+  background: var(--color-surface);
 }
 
 .permission-modes {
@@ -720,6 +773,10 @@ button:disabled {
 
   .settings-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .password-form {
+    grid-template-columns: 1fr;
   }
 
   .approval-bar {
