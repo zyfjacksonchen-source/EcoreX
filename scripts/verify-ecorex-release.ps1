@@ -8,6 +8,8 @@ param(
     [string]$ClientUserToken = "",
     [string]$ClientDeviceId = "verify-device",
     [string]$GitRemoteUrl = "https://github.com/zhangyifanjackson-dotcom/EcoreX.git",
+    [string]$GitProductBranch = "codex/ecorex-v0.1.10-productization",
+    [string]$ExpectedGitHubCommit = "",
     [switch]$SkipMacArtifacts = $true,
     [switch]$SkipGitRemoteCheck
 )
@@ -128,6 +130,86 @@ function Invoke-ClientStatus {
         throw "curl exited with $LASTEXITCODE while checking $Url"
     }
     return [int]($status -join "")
+}
+
+function Get-GitHubRepoParts {
+    param([string]$RemoteUrl)
+
+    if ($RemoteUrl -match "github\.com[:/](?<owner>[^/]+)/(?<repo>[^/.]+)(\.git)?$") {
+        return [ordered]@{
+            owner = $Matches.owner
+            repo = $Matches.repo
+        }
+    }
+
+    return $null
+}
+
+function Get-GitHubApiToken {
+    foreach ($name in @("ECOREX_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN")) {
+        $value = [Environment]::GetEnvironmentVariable($name)
+        if ($value) {
+            return $value
+        }
+    }
+    return ""
+}
+
+function Get-RemoteBranchHead {
+    param(
+        [string]$RemoteUrl,
+        [string]$Branch
+    )
+
+    $ref = "refs/heads/$Branch"
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $gitOutput = git ls-remote $RemoteUrl $ref 2>$null
+        $gitExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($gitExitCode -eq 0 -and $gitOutput) {
+        $sha = (($gitOutput -join "`n") -split "\s+")[0]
+        if ($sha) {
+            return [ordered]@{
+                sha = $sha
+                source = "git ls-remote"
+            }
+        }
+    }
+
+    $repoParts = Get-GitHubRepoParts $RemoteUrl
+    if (-not $repoParts) {
+        throw "git ls-remote failed and $RemoteUrl is not a supported GitHub remote URL"
+    }
+
+    $token = Get-GitHubApiToken
+    $headers = @{
+        "Accept" = "application/vnd.github+json"
+        "User-Agent" = "ecorex-release-verifier"
+    }
+    if ($token) {
+        $headers["Authorization"] = "Bearer $token"
+    }
+
+    $branchPath = $Branch -replace "/", "%2F"
+    $url = "https://api.github.com/repos/$($repoParts.owner)/$($repoParts.repo)/git/refs/heads/$branchPath"
+    try {
+        $response = Invoke-WebRequest -UseBasicParsing -Uri $url -Headers $headers -TimeoutSec 60
+        $payload = $response.Content | ConvertFrom-Json
+        if ($payload.object.sha) {
+            return [ordered]@{
+                sha = [string]$payload.object.sha
+                source = "GitHub API"
+            }
+        }
+    } catch {
+        throw "git ls-remote failed and GitHub API fallback failed for ${Branch}: $($_.Exception.Message)"
+    }
+
+    throw "No SHA returned for $Branch"
 }
 
 function Assert-Hash {
@@ -305,21 +387,28 @@ if ($SkipGitRemoteCheck) {
         if ($LASTEXITCODE -ne 0) {
             throw "git rev-parse failed"
         }
-        $remoteLine = git ls-remote $GitRemoteUrl refs/heads/main
-        if ($LASTEXITCODE -ne 0) {
-            throw "git ls-remote failed for $GitRemoteUrl"
-        }
-        $remoteHead = ($remoteLine -split "\s+")[0]
+        $remoteRef = Get-RemoteBranchHead $GitRemoteUrl "main"
+        $remoteHead = $remoteRef.sha
+        $productRef = Get-RemoteBranchHead $GitRemoteUrl $GitProductBranch
+        $productHead = $productRef.sha
         $dirty = git status --porcelain
         if ($LASTEXITCODE -ne 0) {
             throw "git status failed"
         }
-        if ($localHead -eq $remoteHead -and -not $dirty) {
-            $checks.Add((New-Check "GitHub main sync" "pass" "Local HEAD matches remote main: $localHead and worktree is clean."))
-        } elseif ($dirty) {
+        if ($dirty) {
             $checks.Add((New-Check "GitHub main sync" "fail" "Worktree has uncommitted changes." "blocker"))
+        } elseif ($productHead -ne $remoteHead) {
+            $checks.Add((New-Check "GitHub main sync" "fail" "Remote main $remoteHead differs from $GitProductBranch $productHead." "blocker"))
+        } elseif ($ExpectedGitHubCommit) {
+            if ($remoteHead -eq $ExpectedGitHubCommit) {
+                $checks.Add((New-Check "GitHub main sync" "pass" "Remote main and $GitProductBranch match expected commit $ExpectedGitHubCommit. Sources: main=$($remoteRef.source), product=$($productRef.source). Worktree is clean."))
+            } else {
+                $checks.Add((New-Check "GitHub main sync" "fail" "Remote main $remoteHead differs from expected $ExpectedGitHubCommit." "blocker"))
+            }
+        } elseif ($localHead -eq $remoteHead) {
+            $checks.Add((New-Check "GitHub main sync" "pass" "Local HEAD matches remote main: $localHead and worktree is clean."))
         } else {
-            $checks.Add((New-Check "GitHub main sync" "fail" "Local HEAD $localHead differs from remote main $remoteHead." "blocker"))
+            $checks.Add((New-Check "GitHub main sync" "fail" "Local HEAD $localHead differs from remote main $remoteHead. Pass -ExpectedGitHubCommit when the remote was synced as a clean snapshot/API commit." "blocker"))
         }
     } catch {
         $checks.Add((New-Check "GitHub main sync" "fail" $_.Exception.Message "blocker"))

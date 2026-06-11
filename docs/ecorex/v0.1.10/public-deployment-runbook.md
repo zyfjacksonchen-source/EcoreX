@@ -121,6 +121,18 @@ powershell -ExecutionPolicy Bypass -File scripts\verify-ecorex-release.ps1 `
   -SkipGitRemoteCheck
 ```
 
+When verifying GitHub source sync in the same pass, omit `-SkipGitRemoteCheck` and pass the current remote snapshot commit. This is needed because the Windows handoff may update GitHub through a clean snapshot/API commit whose SHA differs from the local shallow CowAgent commit:
+
+```powershell
+$remoteHead = (git ls-remote https://github.com/zhangyifanjackson-dotcom/EcoreX.git refs/heads/main) -split "\s+" | Select-Object -First 1
+powershell -ExecutionPolicy Bypass -File scripts\verify-ecorex-release.ps1 `
+  -LocalWindowsInstaller desktop\release\EcoreX_0.1.10_x64-setup.exe `
+  -ClientEventKey ecorex-desktop-v0.1.10 `
+  -ExpectedGitHubCommit $remoteHead
+```
+
+If `git ls-remote` is unstable on the current network, set `ECOREX_GITHUB_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN` in the shell before running the verifier. The script will fall back to GitHub's refs API for the GitHub sync check.
+
 Expected:
 
 - Public manifest product/version passes with `EcoreX 0.1.10`.
@@ -129,6 +141,7 @@ Expected:
 - Authenticode signature is valid.
 - Unauthenticated model/capability routes return 403.
 - Client-key-only model config returns 401.
+- If `-ExpectedGitHubCommit` is used, remote `main` and `codex/ecorex-v0.1.10-productization` both match that commit.
 - macOS artifact checks are skipped in this Windows round.
 
 After creating a real ordinary user, pass `-ClientUserToken` to verify authenticated model policy delivery.

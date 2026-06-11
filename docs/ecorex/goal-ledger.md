@@ -42,6 +42,7 @@
 - 2026-06-11: Fixed desktop usage accounting path after completion audit. Agent stream now normalizes provider `usage` envelopes, Web SSE `done` carries usage to the renderer, and renderer reports real token usage once per completed turn with estimated-token fallback. Also fixed SSE `done` handling so final text replaces the assistant bubble instead of duplicating streamed deltas, and Stop clears immediately after `done`.
 - 2026-06-11: Rebuilt the Windows package after the usage/SSE fix via manual prepackaged NSIS path because full Electron Builder packaging hit transient GitHub 443 timeouts. New signed installer SHA256 `14D57A4F15D2F99DDC04975D5E636707F648864665D4F3F4D5A011516626DB55`, size `120050856`. Installed smoke passed again with sidecar ready.
 - 2026-06-11: Synced the usage/SSE source fix to GitHub through the GitHub Git Data API because normal Git transport was still unstable on port 443. The source sync commit is `45c5a7dfc92be9933c8895732c36469ed3a85e4b`; documentation-only follow-ups may advance the remote refs beyond that commit.
+- 2026-06-11: Strengthened `scripts/verify-ecorex-release.ps1` for the clean snapshot/API GitHub handoff path. It can now validate remote `main` and `codex/ecorex-v0.1.10-productization` against an expected remote commit instead of incorrectly requiring the local shallow CowAgent commit SHA to equal the remote snapshot SHA. It also falls back to GitHub refs API when `git ls-remote` is unstable and a token is provided through the environment.
 
 ## Known Follow-Up
 
