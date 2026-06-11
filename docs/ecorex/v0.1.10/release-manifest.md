@@ -9,8 +9,8 @@
 - Windows size: `117,529,360` bytes
 - Windows SHA256: `ACA52B7ACF7D73FBCA62F3F5AB92C057AB50B8FBD188C3AD7105B665569D482B`
 - Public deployment zip: `release-artifacts/EcoreX_0.1.10-public-release.zip`
-- Public deployment zip size: `120,273,778` bytes
-- Public deployment zip SHA256: `8021D0B5DEF60CAF6758FD4E9DABA22866AC6374F059434894011AE066DD0829`
+- Public deployment zip size: `120,274,162` bytes
+- Public deployment zip SHA256: `DDF69409D5E3183644A11D11089E883419409BC705DFCFCD8C86CAA46359FD31`
 - Local git branch: `codex/ecorex-v0.1.10-productization`
 - GitHub SSH push target prepared: `git@github.com:zhangyifanjackson-dotcom/EcoreX.git`
 - GitHub HTTPS push target prepared: `https://github.com/zhangyifanjackson-dotcom/EcoreX.git`
@@ -67,8 +67,9 @@
   - `desktop/scripts/smoke-renderer-visual.ps1` screenshot smoke for auth, light main, and dark main states.
 - Latest Windows package rebuild passed `npm run package:win:signed`; Authenticode status is `Valid` for `release/win-unpacked/EcoreX.exe` and `release/EcoreX_0.1.10_x64-setup.exe`.
 - Latest installed-app smoke passed: installer found, app started, sidecar ready, cleanup completed on port `19142`.
-- Latest public handoff zip was regenerated after the second hardening pass with SHA256 `8021D0B5DEF60CAF6758FD4E9DABA22866AC6374F059434894011AE066DD0829`.
+- Latest public handoff zip was regenerated after the second hardening pass with SHA256 `DDF69409D5E3183644A11D11089E883419409BC705DFCFCD8C86CAA46359FD31`.
 - Added server-side deployment helpers after the public route still returned 404: `scripts/install-ecorex-public-release.sh`, `deploy/ecorex-site/nginx/ecorex-agent.conf.example`, and `deploy/ecorex-admin-api/systemd/ecorex-admin-api.service.example`.
+- Local Linux/WSL install smoke found and fixed a release-blocking handoff issue: Windows `Compress-Archive` had produced backslash zip entries that Linux extracted as literal backslash filenames. The release zip generator now writes `/` entries, the installer normalizes legacy entries, and temp install verified the expected release/current layout.
 
 ## Pending Release Steps
 

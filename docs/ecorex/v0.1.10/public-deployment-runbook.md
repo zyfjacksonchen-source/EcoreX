@@ -14,8 +14,8 @@
 Preferred handoff artifact:
 
 - `release-artifacts/EcoreX_0.1.10-public-release.zip`
-- size `120,273,778`
-- SHA256 `8021D0B5DEF60CAF6758FD4E9DABA22866AC6374F059434894011AE066DD0829`
+- size `120,274,162`
+- SHA256 `DDF69409D5E3183644A11D11089E883419409BC705DFCFCD8C86CAA46359FD31`
 
 Generate or refresh it with:
 
@@ -120,7 +120,7 @@ Do not enable default demo users in production. `ECOREX_SEED_DEFAULT_USERS` and 
 Preferred scripted deployment on the Linux server:
 
 ```bash
-export EXPECTED_SHA256=8021D0B5DEF60CAF6758FD4E9DABA22866AC6374F059434894011AE066DD0829
+export EXPECTED_SHA256=DDF69409D5E3183644A11D11089E883419409BC705DFCFCD8C86CAA46359FD31
 bash scripts/install-ecorex-public-release.sh /path/to/EcoreX_0.1.10-public-release.zip
 ```
 
@@ -130,7 +130,7 @@ If only the zip is present on the server, extract the helper first:
 
 ```bash
 unzip -j EcoreX_0.1.10-public-release.zip server/install-ecorex-public-release.sh -d /tmp/ecorex-release
-export EXPECTED_SHA256=8021D0B5DEF60CAF6758FD4E9DABA22866AC6374F059434894011AE066DD0829
+export EXPECTED_SHA256=DDF69409D5E3183644A11D11089E883419409BC705DFCFCD8C86CAA46359FD31
 bash /tmp/ecorex-release/install-ecorex-public-release.sh EcoreX_0.1.10-public-release.zip
 ```
 

@@ -16,16 +16,33 @@ need_cmd() {
   fi
 }
 
-need_cmd unzip
-need_cmd sha256sum
 need_cmd python3
+
+calc_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print toupper($1)}'
+  else
+    python3 - "$1" <<'PY'
+import hashlib
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+digest = hashlib.sha256()
+with path.open("rb") as handle:
+    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+        digest.update(chunk)
+print(digest.hexdigest().upper())
+PY
+  fi
+}
 
 if [[ ! -f "$ZIP_PATH" ]]; then
   echo "Release zip not found: $ZIP_PATH" >&2
   exit 1
 fi
 
-actual_sha="$(sha256sum "$ZIP_PATH" | awk '{print toupper($1)}')"
+actual_sha="$(calc_sha256 "$ZIP_PATH")"
 if [[ -n "$EXPECTED_SHA256" && "$actual_sha" != "${EXPECTED_SHA256^^}" ]]; then
   echo "Release zip SHA256 mismatch: expected ${EXPECTED_SHA256^^}, got $actual_sha" >&2
   exit 1
@@ -40,7 +57,26 @@ cleanup() {
 }
 trap cleanup EXIT
 
-unzip -q "$ZIP_PATH" -d "$tmp_dir"
+python3 - "$ZIP_PATH" "$tmp_dir" <<'PY'
+import pathlib
+import sys
+import zipfile
+
+zip_path = pathlib.Path(sys.argv[1])
+target = pathlib.Path(sys.argv[2]).resolve()
+with zipfile.ZipFile(zip_path) as archive:
+    for member in archive.infolist():
+        normalized = member.filename.replace("\\", "/")
+        destination = (target / normalized).resolve()
+        if not str(destination).startswith(str(target)):
+            raise SystemExit(f"Unsafe zip member path: {member.filename}")
+        if member.is_dir():
+            destination.mkdir(parents=True, exist_ok=True)
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with archive.open(member) as source, destination.open("wb") as output:
+            output.write(source.read())
+PY
 
 for required in "site/index.html" "site/manifest.json" "site/admin/index.html" "admin-api/ecorex_admin_api.py" "checksums.json"; do
   if [[ ! -e "$tmp_dir/$required" ]]; then
