@@ -95,6 +95,7 @@ foreach ($fileName in $adminFiles) {
 
 $serverFiles = @(
     @{ Source = "scripts/install-ecorex-public-release.sh"; Target = "install-ecorex-public-release.sh" },
+    @{ Source = "deploy/ecorex-site/caddy/Caddyfile.example"; Target = "caddy/Caddyfile.example" },
     @{ Source = "deploy/ecorex-site/nginx/ecorex-agent.conf.example"; Target = "nginx/ecorex-agent.conf.example" },
     @{ Source = "deploy/ecorex-admin-api/systemd/ecorex-admin-api.service.example"; Target = "systemd/ecorex-admin-api.service.example" }
 )

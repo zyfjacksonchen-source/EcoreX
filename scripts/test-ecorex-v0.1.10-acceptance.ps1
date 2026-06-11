@@ -47,6 +47,22 @@ function Invoke-HeadStatus {
     }
 }
 
+function Invoke-GetStatus {
+    param([string]$Url)
+    try {
+        $response = Invoke-WebRequest -UseBasicParsing -Uri $Url -Method Get -MaximumRedirection 5 -TimeoutSec 30 -ErrorAction Stop
+        return [ordered]@{ statusCode = [int]$response.StatusCode; ok = $true; error = ""; server = [string]$response.Headers["Server"] }
+    } catch {
+        $statusCode = $null
+        $server = ""
+        if ($_.Exception.Response) {
+            $statusCode = [int]$_.Exception.Response.StatusCode
+            $server = [string]$_.Exception.Response.Headers["Server"]
+        }
+        return [ordered]@{ statusCode = $statusCode; ok = $false; error = $_.Exception.Message; server = $server }
+    }
+}
+
 function Get-GitHubToken {
     foreach ($name in @("ECOREX_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN")) {
         $value = [Environment]::GetEnvironmentVariable($name)
@@ -61,8 +77,15 @@ function Get-RemoteHead {
     param([string]$Branch)
 
     $ref = "refs/heads/$Branch"
-    $remoteOutput = git ls-remote $GitRemoteUrl $ref 2>$null
-    if ($LASTEXITCODE -eq 0 -and $remoteOutput) {
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $remoteOutput = git ls-remote $GitRemoteUrl $ref 2>$null
+        $gitExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($gitExitCode -eq 0 -and $remoteOutput) {
         return [ordered]@{
             sha = (($remoteOutput -join "`n") -split "\s+")[0]
             source = "git ls-remote"
@@ -153,6 +176,7 @@ if (-not (Test-Path -LiteralPath $ReleaseZip)) {
             "site/downloads/EcoreX_0.1.10_x64-setup.exe",
             "admin-api/ecorex_admin_api.py",
             "server/install-ecorex-public-release.sh",
+            "server/caddy/Caddyfile.example",
             "server/nginx/ecorex-agent.conf.example",
             "server/systemd/ecorex-admin-api.service.example"
         )
@@ -212,17 +236,28 @@ $base = $PublicBaseUrl.TrimEnd("/")
 $manifestHead = Invoke-HeadStatus "$base/manifest.json"
 $rootHead = Invoke-HeadStatus "$base/"
 $adminHead = Invoke-HeadStatus "$base/admin/"
+$clientCapabilityGet = Invoke-GetStatus "$base/client/capability-policy"
+$clientModelGet = Invoke-GetStatus "$base/client/model-config"
 if ($manifestHead.statusCode -eq 200 -and $rootHead.statusCode -eq 200) {
     $results.Add((New-Result "Public static route" "pass" "$base serves manifest and root."))
 } else {
     $severity = if ($AllowPublicBlocked) { "warn" } else { "blocker" }
     $status = if ($AllowPublicBlocked) { "blocked" } else { "fail" }
-    $results.Add((New-Result "Public static route" $status "manifest=$($manifestHead.statusCode), root=$($rootHead.statusCode). $($manifestHead.error)" $severity))
+    $diagnosis = ""
+    if ($manifestHead.statusCode -eq 404 -and $rootHead.statusCode -eq 404 -and $adminHead.statusCode -eq 401 -and $clientCapabilityGet.statusCode -eq 403) {
+        $diagnosis = " Admin/API routes are reachable, so the likely missing piece is Caddy/static file_server mapping for /ecorex-agent/* to /srv/ecorex-agent-download/current."
+    }
+    $results.Add((New-Result "Public static route" $status "manifest=$($manifestHead.statusCode), root=$($rootHead.statusCode). $($manifestHead.error)$diagnosis" $severity))
 }
 if ($adminHead.statusCode -eq 401) {
     $results.Add((New-Result "Public admin auth route" "pass" "$base/admin/ returns HTTP 401 without credentials."))
 } else {
     $results.Add((New-Result "Public admin auth route" "blocked" "$base/admin/ returned HTTP $($adminHead.statusCode)." "warn"))
+}
+if ($clientCapabilityGet.statusCode -eq 403 -and $clientModelGet.statusCode -eq 403) {
+    $results.Add((New-Result "Public client API proxy" "pass" "Unauthenticated client capability/model routes return HTTP 403, so the API proxy is reachable."))
+} else {
+    $results.Add((New-Result "Public client API proxy" "blocked" "capability=$($clientCapabilityGet.statusCode), model=$($clientModelGet.statusCode)." "warn"))
 }
 
 try {

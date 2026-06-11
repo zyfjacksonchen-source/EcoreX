@@ -14,8 +14,8 @@
 Preferred handoff artifact:
 
 - `release-artifacts/EcoreX_0.1.10-public-release.zip`
-- size `120,274,162`
-- SHA256 `DDF69409D5E3183644A11D11089E883419409BC705DFCFCD8C86CAA46359FD31`
+- size `120,275,068`
+- SHA256 `DAA53EEDAB95EBE15800FEBCE6E0DC9F5C660DA2D843E7BF7AC8F2CE824D13CA`
 
 Generate or refresh it with:
 
@@ -31,6 +31,7 @@ The zip contains:
 - `admin-api/Dockerfile`
 - `admin-api/README.md`
 - `server/install-ecorex-public-release.sh`
+- `server/caddy/Caddyfile.example`
 - `server/nginx/ecorex-agent.conf.example`
 - `server/systemd/ecorex-admin-api.service.example`
 - `checksums.json`
@@ -68,6 +69,8 @@ Raw source paths:
   - `deploy/ecorex-site/manifest.json`
   - `deploy/ecorex-site/assets/**`
   - `deploy/ecorex-site/admin/**`
+- Caddy route template:
+  - `deploy/ecorex-site/caddy/Caddyfile.example`
 - Windows artifact:
   - `deploy/ecorex-site/downloads/EcoreX_0.1.10_x64-setup.exe`
 - Admin API:
@@ -120,7 +123,7 @@ Do not enable default demo users in production. `ECOREX_SEED_DEFAULT_USERS` and 
 Preferred scripted deployment on the Linux server:
 
 ```bash
-export EXPECTED_SHA256=DDF69409D5E3183644A11D11089E883419409BC705DFCFCD8C86CAA46359FD31
+export EXPECTED_SHA256=DAA53EEDAB95EBE15800FEBCE6E0DC9F5C660DA2D843E7BF7AC8F2CE824D13CA
 bash scripts/install-ecorex-public-release.sh /path/to/EcoreX_0.1.10-public-release.zip
 ```
 
@@ -130,7 +133,7 @@ If only the zip is present on the server, extract the helper first:
 
 ```bash
 unzip -j EcoreX_0.1.10-public-release.zip server/install-ecorex-public-release.sh -d /tmp/ecorex-release
-export EXPECTED_SHA256=DDF69409D5E3183644A11D11089E883419409BC705DFCFCD8C86CAA46359FD31
+export EXPECTED_SHA256=DAA53EEDAB95EBE15800FEBCE6E0DC9F5C660DA2D843E7BF7AC8F2CE824D13CA
 bash /tmp/ecorex-release/install-ecorex-public-release.sh EcoreX_0.1.10-public-release.zip
 ```
 
@@ -145,7 +148,9 @@ Manual deployment equivalent:
 7. Update `/srv/ecorex-agent-download/current` to point to the new release directory.
 8. Keep the previous release directory and previous Admin API image/script available for rollback.
 
-Nginx routing should expose public static downloads while protecting Admin static pages and proxying Admin/client API routes. Use `deploy/ecorex-site/nginx/ecorex-agent.conf.example` as the route template, and run `nginx -t` before reload.
+Caddy is the observed public server for `www.ecoreai.cn`. Use `deploy/ecorex-site/caddy/Caddyfile.example` as the route template: API routes should reverse proxy to `127.0.0.1:18084`, while `/ecorex-agent/*` should use `file_server` rooted at `/srv/ecorex-agent-download/current`. Run `caddy validate` before reload.
+
+Nginx routing is also documented for alternate deployments. Use `deploy/ecorex-site/nginx/ecorex-agent.conf.example` only if the host is migrated to Nginx, and run `nginx -t` before reload.
 
 If systemd is used for the Admin API, copy `deploy/ecorex-admin-api/systemd/ecorex-admin-api.service.example` to `/etc/systemd/system/ecorex-admin-api.service`, create the `ecorex` service user if needed, edit `/srv/ecorex-agent-admin/env/ecorex-admin-api.env`, then run:
 
