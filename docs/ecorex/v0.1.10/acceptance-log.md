@@ -44,6 +44,7 @@
 
 ## Manual Follow-Up
 
+- Latest strict release verification on 2026-06-11 after proxy was enabled still fails at `https://www.ecoreai.cn/ecorex-agent/manifest.json` with HTTP 404. The wider acceptance harness passes local/package/GitHub/API checks with only `Public static route` blocked.
 - Run a human visual pass on the installed Windows app for login, first chat, stop, paste image/file, quota block, and error telemetry.
 - Deploy or sync `deploy/ecorex-site/` plus the v0.1.10 installer to the production `/ecorex-agent` host before validating real enterprise login and real model chat end to end. Public manifest currently returns HTTP 404.
 - Run macOS package signing/notarization/Gatekeeper on Mac hardware as a separate acceptance pass.
