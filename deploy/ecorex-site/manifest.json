@@ -32,10 +32,10 @@
                           "variant":  "Apple Silicon DMG",
                           "fileName":  "EcoreX_0.1.11_arm64.dmg",
                           "href":  "downloads/EcoreX_0.1.11_arm64.dmg",
-                          "size":  "pending",
-                          "sha256":  "pending",
-                          "status":  "pending-mac-validation",
-                          "source":  "macOS signing/notarization skipped in this Windows round"
+                          "size":  150067486,
+                          "sha256":  "3A93E7F10E59E52D99C69C8AB9590B98D3BB7E5BBC7C1E54894F41472EDECB4D",
+                          "status":  "ready-unsigned",
+                          "source":  "GitHub Actions run 27412042545; notarize=false; signing/notarization/Gatekeeper validation deferred to Mac environment"
                       },
                       {
                           "id":  "macos-x64-dmg",
@@ -43,10 +43,10 @@
                           "variant":  "Intel DMG",
                           "fileName":  "EcoreX_0.1.11_x64.dmg",
                           "href":  "downloads/EcoreX_0.1.11_x64.dmg",
-                          "size":  "pending",
-                          "sha256":  "pending",
-                          "status":  "pending-mac-validation",
-                          "source":  "macOS signing/notarization skipped in this Windows round"
+                          "size":  156273299,
+                          "sha256":  "3D00CD7A5BE63E1BD33ED9A6F8CD2213A988F30267A5A2A5412C09D83B9318A5",
+                          "status":  "ready-unsigned",
+                          "source":  "GitHub Actions run 27412042545; notarize=false; signing/notarization/Gatekeeper validation deferred to Mac environment"
                       }
                   ],
     "admin":  {

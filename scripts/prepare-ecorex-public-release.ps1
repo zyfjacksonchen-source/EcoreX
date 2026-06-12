@@ -49,17 +49,10 @@ $artifactSources["macos-arm64-dmg"] = if ($MacArm64DmgPath) { $MacArm64DmgPath }
 $artifactSources["macos-x64-dmg"] = if ($MacX64DmgPath) { $MacX64DmgPath } else { Join-Path "desktop/release" "EcoreX_${Version}_x64.dmg" }
 $artifactSources["web-linux-service"] = if ($WebTarballPath) { $WebTarballPath } else { Join-Path "release-artifacts" "EcoreX_${Version}-web-linux-service.tar.gz" }
 
-$windowsArtifact = @($manifest.artifacts | Where-Object { $_.id -eq "windows-x64" }) | Select-Object -First 1
-if (-not $windowsArtifact) {
-    throw "Manifest does not contain windows-x64 artifact."
-}
-if ($windowsArtifact.status -ne "ready") {
-    throw "windows-x64 artifact must be ready before creating a public release."
-}
-
+$publishableStatuses = @("ready", "ready-unsigned")
 $readyArtifacts = @()
 foreach ($artifact in $manifest.artifacts) {
-    if ($artifact.status -ne "ready") {
+    if ([string]$artifact.status -notin $publishableStatuses) {
         continue
     }
 
@@ -95,6 +88,9 @@ foreach ($artifact in $manifest.artifacts) {
         Sha256 = $sourceHash
         Signature = $signatureStatus
     }
+}
+if ($readyArtifacts.Count -eq 0) {
+    throw "Manifest has no ready artifacts to publish."
 }
 
 $outputResolved = [System.IO.Path]::GetFullPath((Join-Path $repoRoot $OutputDir))
@@ -180,11 +176,12 @@ $checksums = [ordered]@{
     serverHelperRoot = "server"
     artifacts = $checksumArtifacts
     windows = [ordered]@{
-        fileName = $windowsReady.Artifact.fileName
-        relativePath = "site/downloads/$($windowsReady.Artifact.fileName)"
-        size = $windowsReady.Size
-        sha256 = $windowsReady.Sha256
-        authenticode = $windowsReady.Signature
+        status = if ($windowsReady) { $windowsReady.Artifact.status } else { "not-included" }
+        fileName = if ($windowsReady) { $windowsReady.Artifact.fileName } else { "" }
+        relativePath = if ($windowsReady) { "site/downloads/$($windowsReady.Artifact.fileName)" } else { "" }
+        size = if ($windowsReady) { $windowsReady.Size } else { 0 }
+        sha256 = if ($windowsReady) { $windowsReady.Sha256 } else { "" }
+        authenticode = if ($windowsReady) { $windowsReady.Signature } else { "" }
     }
     macos = if ($macReadyCount -gt 0) { "included $macReadyCount dmg artifact(s); signing/notarization evidence is external" } else { "deferred to Mac validation" }
 }

@@ -9,14 +9,20 @@
 - WebUI Linux service: `release-artifacts/EcoreX_0.1.11-web-linux-service.tar.gz`
 - WebUI size: `2,845,730`
 - WebUI SHA256: `2C991A1F5D6EF885C98F25AD5C3502A79D260830A7C106C96E77B53633359828`
+- macOS arm64 DMG: `desktop/release/EcoreX_0.1.11_arm64.dmg`, size `150,067,486`, SHA256 `3A93E7F10E59E52D99C69C8AB9590B98D3BB7E5BBC7C1E54894F41472EDECB4D`, status `ready-unsigned`
+- macOS x64 DMG: `desktop/release/EcoreX_0.1.11_x64.dmg`, size `156,273,299`, SHA256 `3D00CD7A5BE63E1BD33ED9A6F8CD2213A988F30267A5A2A5412C09D83B9318A5`, status `ready-unsigned`
+- Public release zip: `release-artifacts/EcoreX_0.1.11-public-release.zip`
+- Public release zip size: `5,648,452`
+- Public release zip SHA256: `5826F726869ABC9907CC243800E1F4A2372DE6AB77B5A948CD4CFBC9443B1256`
 
 ## Public Manifest State
 - Product: `EcoreX`
 - Version: `0.1.11`
 - Windows: rebuilt locally and recorded in manifest as `pending-signature`; do not publish until Authenticode signing is completed.
 - WebUI Linux service: ready locally and recorded in manifest as the parallel `0.1.11-web.1` lightweight Web distribution.
-- macOS arm64 DMG: pending real artifact.
-- macOS x64 DMG: pending real artifact.
+- Public release zip: generated with the current ready Web artifact; Windows remains `pending-signature` and macOS remains pending.
+- macOS arm64 DMG: real artifact recorded in manifest as `ready-unsigned`.
+- macOS x64 DMG: real artifact recorded in manifest as `ready-unsigned`.
 
 ## Build Notes
 - Standard `npm run package:win:signed` rebuilt runtime and renderer but hit an Electron Builder network timeout during full directory packaging.
@@ -38,3 +44,4 @@
 - Capability policy default is now `preinstall`; production DB was migrated to `mode = preinstall` and public `/client/capability-policy` returns version `0.1.11`.
 - WebUI service installs independently as `ecorex-web`, defaults to `127.0.0.1:9909`, serializes concurrent installs with `/var/lock/ecorex-web-install.lock`, and stores shared cross-surface state under `<agent_workspace>/.ecorex/`.
 - WebUI `/app/` now packages `channel/web/static/app`, copied from the existing desktop renderer static output without running desktop build steps during this Web release pass.
+- The public release zip was structure-validated locally: static site, Admin API, server helpers, `checksums.json`, and `site/downloads/EcoreX_0.1.11-web-linux-service.tar.gz` are present and the Web artifact hash/size matches `checksums.json`.

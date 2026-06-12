@@ -85,21 +85,32 @@ for required in "site/index.html" "site/manifest.json" "site/admin/index.html" "
   fi
 done
 
-python3 - "$tmp_dir" <<'PY'
+python3 - "$tmp_dir" "$VERSION" <<'PY'
+import hashlib
 import json
 import pathlib
 import sys
 
 root = pathlib.Path(sys.argv[1])
+expected_version = sys.argv[2]
 checksums = json.loads((root / "checksums.json").read_text(encoding="utf-8-sig"))
-if checksums.get("version") != "0.1.11":
-    raise SystemExit(f"Unexpected release version: {checksums.get('version')}")
-windows = checksums.get("windows") or {}
-installer = root / windows.get("relativePath", "")
-if not installer.is_file():
-    raise SystemExit(f"Windows installer missing from release zip: {installer}")
-if installer.stat().st_size != int(windows.get("size") or 0):
-    raise SystemExit("Windows installer size does not match checksums.json")
+if checksums.get("version") != expected_version:
+    raise SystemExit(f"Unexpected release version: {checksums.get('version')}; expected {expected_version}")
+artifacts = checksums.get("artifacts") or {}
+if not artifacts:
+    raise SystemExit("checksums.json does not contain any ready artifacts")
+for artifact_id, artifact in artifacts.items():
+    rel = artifact.get("relativePath", "")
+    if not rel:
+        raise SystemExit(f"Artifact {artifact_id} has no relativePath")
+    path = root / rel
+    if not path.is_file():
+        raise SystemExit(f"Artifact {artifact_id} missing from release zip: {path}")
+    if path.stat().st_size != int(artifact.get("size") or 0):
+        raise SystemExit(f"Artifact {artifact_id} size does not match checksums.json")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest().upper()
+    if digest != str(artifact.get("sha256") or "").upper():
+        raise SystemExit(f"Artifact {artifact_id} SHA256 does not match checksums.json")
 PY
 
 install -d "$RELEASE_ROOT/releases"

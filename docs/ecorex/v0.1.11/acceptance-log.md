@@ -31,9 +31,9 @@
 | WebUI package runtime smoke | Pass | Extracted the final tarball to a temp directory, started its `runtime/app.py` with a temp venv/workspace, and verified `/auth/login`, `/app/`, JS/CSS assets, `/api/ui-state`, and `/api/installations`. |
 | WebUI co-install state | Pass | Web backend exposes `/api/installations` and `/api/ui-state`, stores under `<agent_workspace>/.ecorex/`, and `/message` uses cross-process per-session locks. |
 | WebUI concurrent install guard | Pass static | `scripts/install-ecorex-web.sh` serializes installs with `/var/lock/ecorex-web-install.lock` and stale-lock cleanup. Linux runtime execution still needs host validation. |
-| macOS DMG artifacts | Pending | Must be produced by GitHub Actions/macOS runner and then added to manifest/downloads with real hashes. |
-| Public release zip | Pending | Regenerate after DMG artifacts are available, so the zip contains Windows and macOS downloads. |
-| Public deployment | Pending | Deploy latest Admin/download package after release zip is regenerated. |
+| macOS DMG artifacts | Pass unsigned | GitHub Actions run `27412042545` produced DMGs with `notarize=false`. arm64 size `150,067,486`, SHA256 `3A93E7F10E59E52D99C69C8AB9590B98D3BB7E5BBC7C1E54894F41472EDECB4D`; x64 size `156,273,299`, SHA256 `3D00CD7A5BE63E1BD33ED9A6F8CD2213A988F30267A5A2A5412C09D83B9318A5`. |
+| Public release zip | Pass Web-only | `EcoreX_0.1.11-public-release.zip`, size `5,648,452`, SHA256 `5826F726869ABC9907CC243800E1F4A2372DE6AB77B5A948CD4CFBC9443B1256`; structure validation found static site, Admin API, server helpers, `checksums.json`, and the ready Web tarball. Regenerate after Windows signing/macOS artifacts are ready. |
+| Public deployment | Pending production access | Web-ready public release zip is generated and structure-validated; production upload, `install-ecorex-public-release.sh`, `install-ecorex-web.sh`, and public `check-ecorex-web-release.sh` still need to run on the server. |
 
 ## Notes
 - A hand-test reported `invalid client key` after installing v0.1.11. Root cause: production Admin API was still v0.1.10 and accepted only the old client key. The production container was rebuilt with the v0.1.11 Admin API and env compatibility keys.
