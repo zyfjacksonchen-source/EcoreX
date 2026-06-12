@@ -29,6 +29,385 @@ from config import conf
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
 VIDEO_EXTENSIONS = {".mp4", ".webm", ".avi", ".mov", ".mkv"}
 
+
+def _web_app_bridge_script() -> str:
+    """Small browser bridge so the desktop React app can reuse WebUI HTTP APIs."""
+    return r"""
+<script>
+(function () {
+  if (window.ecorexDesktop) return;
+
+  var WEB_CLIENT_KEY = "ecorex-web-v0.1.11-web.1";
+  var WEB_SESSION_KEY = "ecorex-web-enterprise-session";
+  var WEB_DEVICE_KEY = "ecorex-web-device-id";
+  var webPort = Number(window.location.port || (window.location.protocol === "https:" ? 443 : 80));
+  var status = {
+    state: "running",
+    message: "Connected to EcoreX Web runtime",
+    webPort: webPort
+  };
+  var listeners = new Set();
+
+  function parseJson(text) {
+    try {
+      return text ? JSON.parse(text) : {};
+    } catch (error) {
+      throw new Error(text || "Invalid JSON response");
+    }
+  }
+
+  function deviceId() {
+    var existing = "";
+    try { existing = window.localStorage.getItem(WEB_DEVICE_KEY) || ""; } catch (error) {}
+    if (existing) return existing;
+    var next = "web-" + Math.random().toString(16).slice(2) + "-" + Date.now().toString(16);
+    try { window.localStorage.setItem(WEB_DEVICE_KEY, next); } catch (error) {}
+    return next;
+  }
+
+  function readAdminSession() {
+    try {
+      var raw = window.localStorage.getItem(WEB_SESSION_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function writeAdminSession(session) {
+    try {
+      if (session) window.localStorage.setItem(WEB_SESSION_KEY, JSON.stringify(session));
+      else window.localStorage.removeItem(WEB_SESSION_KEY);
+    } catch (error) {}
+  }
+
+  function webSession(authRequired) {
+    var admin = readAdminSession();
+    if (admin && admin.user && admin.token) return admin;
+    return {
+      authenticated: true,
+      deviceId: deviceId(),
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      user: {
+        id: authRequired ? "web-password" : "web-local",
+        name: "EcoreX WebUI",
+        email: authRequired ? "webui@ecorex.local" : "local-webui@ecorex.local",
+        role: "user",
+        status: "active"
+      },
+      quota: { allowed: true, runtime: "webui" }
+    };
+  }
+
+  function clientBase() {
+    return window.ECOREX_WEB_CLIENT_BASE || runtimePath("/client");
+  }
+
+  function runtimePrefix() {
+    var path = window.location.pathname || "";
+    var markers = ["/app", "/chat", "/auth", "/message", "/upload", "/uploads", "/api", "/poll", "/stream", "/cancel", "/config", "/assets"];
+    for (var i = 0; i < markers.length; i += 1) {
+      var marker = markers[i];
+      var idx = path.indexOf(marker);
+      if (idx >= 0) return path.slice(0, idx);
+    }
+    return "";
+  }
+
+  function isRuntimePath(path) {
+    return path === "/message" ||
+      path === "/upload" ||
+      path === "/poll" ||
+      path === "/stream" ||
+      path === "/cancel" ||
+      path === "/chat" ||
+      path === "/config" ||
+      path.indexOf("/app") === 0 ||
+      path.indexOf("/auth/") === 0 ||
+      path.indexOf("/uploads/") === 0 ||
+      path.indexOf("/api/") === 0 ||
+      path.indexOf("/assets/") === 0 ||
+      path.indexOf("/client/") === 0;
+  }
+
+  function runtimePath(path) {
+    if (!path || path.charAt(0) !== "/" || path.indexOf("//") === 0) return path;
+    var prefix = runtimePrefix();
+    if (!prefix || path.indexOf(prefix + "/") === 0) return path;
+    return prefix + path;
+  }
+
+  async function apiJson(request) {
+    request = request || {};
+    var method = request.method || "GET";
+    var headers = { "Accept": "application/json" };
+    var init = {
+      method: method,
+      credentials: "same-origin",
+      headers: headers
+    };
+    if (request.body !== undefined && method !== "GET") {
+      headers["Content-Type"] = "application/json";
+      init.body = JSON.stringify(request.body);
+    }
+    var response = await fetch(runtimePath(request.path || "/"), init);
+    var text = await response.text();
+    var payload = parseJson(text);
+    if (!response.ok || payload.status === "error") {
+      var err = new Error(payload.message || response.statusText || "Request failed");
+      err.code = payload.code;
+      err.payload = payload;
+      throw err;
+    }
+    return payload;
+  }
+
+  function localRuntimeUrl(value) {
+    if (!value || typeof value !== "string") return value;
+    try {
+      var parsed = new URL(value, window.location.href);
+      var loopback = parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost" || parsed.hostname === "::1";
+      var sameOrigin = parsed.origin === window.location.origin;
+      if ((loopback || sameOrigin) && isRuntimePath(parsed.pathname)) {
+        return runtimePath(parsed.pathname) + parsed.search + parsed.hash;
+      }
+    } catch (error) {}
+    return value;
+  }
+
+  function patchUrlProperty(proto, prop) {
+    var descriptor = Object.getOwnPropertyDescriptor(proto, prop);
+    if (!descriptor || !descriptor.set || !descriptor.get) return;
+    Object.defineProperty(proto, prop, {
+      configurable: true,
+      enumerable: descriptor.enumerable,
+      get: function () { return descriptor.get.call(this); },
+      set: function (value) { descriptor.set.call(this, localRuntimeUrl(value)); }
+    });
+  }
+
+  patchUrlProperty(HTMLImageElement.prototype, "src");
+  patchUrlProperty(HTMLIFrameElement.prototype, "src");
+  patchUrlProperty(HTMLAnchorElement.prototype, "href");
+
+  var nativeSetAttribute = Element.prototype.setAttribute;
+  Element.prototype.setAttribute = function (name, value) {
+    var attr = String(name || "").toLowerCase();
+    if ((attr === "src" || attr === "href") && typeof value === "string") {
+      value = localRuntimeUrl(value);
+    }
+    return nativeSetAttribute.call(this, name, value);
+  };
+
+  var NativeEventSource = window.EventSource;
+  if (NativeEventSource) {
+    window.EventSource = function (url, options) {
+      url = localRuntimeUrl(url);
+      return new NativeEventSource(url, options);
+    };
+    window.EventSource.prototype = NativeEventSource.prototype;
+  }
+
+  function uploadBlob(file, fileName) {
+    var form = new FormData();
+    form.append("file", file, fileName || file.name || ("upload-" + Date.now()));
+    return fetch(runtimePath("/upload"), { method: "POST", credentials: "same-origin", body: form })
+      .then(function (response) {
+        return response.text().then(function (text) {
+          var payload = parseJson(text);
+          if (!response.ok || payload.status !== "success") {
+            throw new Error(payload.message || "Upload failed");
+          }
+          return {
+            file_path: payload.file_path,
+            file_name: payload.file_name || fileName || file.name || "upload",
+            file_type: payload.file_type || (file.type && file.type.indexOf("image/") === 0 ? "image" : "file")
+          };
+        });
+      });
+  }
+
+  function chooseFiles() {
+    return new Promise(function (resolve, reject) {
+      var input = document.createElement("input");
+      input.type = "file";
+      input.multiple = true;
+      input.style.position = "fixed";
+      input.style.left = "-9999px";
+      input.addEventListener("change", function () {
+        var files = Array.prototype.slice.call(input.files || []);
+        input.remove();
+        Promise.all(files.map(function (file) { return uploadBlob(file, file.name); })).then(resolve, reject);
+      }, { once: true });
+      document.body.appendChild(input);
+      input.click();
+    });
+  }
+
+  function savePastedFile(payload) {
+    payload = payload || {};
+    var binary = atob(payload.dataBase64 || "");
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+    var blob = new Blob([bytes], { type: payload.mimeType || "application/octet-stream" });
+    return uploadBlob(blob, payload.fileName || ("paste-" + Date.now()));
+  }
+
+  async function clientJson(path, method, body, requireToken) {
+    var session = readAdminSession();
+    var headers = {
+      "Accept": "application/json",
+      "Content-Type": "application/json",
+      "X-EcoreX-Client-Key": WEB_CLIENT_KEY,
+      "X-EcoreX-Device-Id": deviceId()
+    };
+    if (session && session.token) headers["X-EcoreX-User-Token"] = session.token;
+    if (requireToken && !headers["X-EcoreX-User-Token"]) {
+      return null;
+    }
+    var response = await fetch(clientBase() + path, {
+      method: method || "POST",
+      credentials: "same-origin",
+      headers: headers,
+      body: body === undefined ? undefined : JSON.stringify(body || {})
+    });
+    var payload = parseJson(await response.text());
+    if (!response.ok) throw new Error(payload.error || payload.message || "Client request failed");
+    return payload;
+  }
+
+  window.ecorexDesktop = {
+    apiJson: apiJson,
+    getSidecarStatus: async function () { return status; },
+    onSidecarStatus: function (callback) {
+      try { callback(status); } catch (error) {}
+      listeners.add(callback);
+      return function () { listeners.delete(callback); };
+    },
+    shouldUseDarkColors: !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches),
+    chooseFiles: chooseFiles,
+    chooseProjectFolder: async function () { return null; },
+    savePastedFile: savePastedFile,
+    openPath: async function (filePath) {
+      var url = filePath && String(filePath).indexOf("/uploads/") === 0 ? runtimePath(filePath) : runtimePath("/api/file") + "?path=" + encodeURIComponent(filePath || "");
+      window.open(url, "_blank", "noopener,noreferrer");
+      return "";
+    },
+    getPermissionState: async function () { return null; },
+    setPermissionMode: async function () { return null; },
+    resetPermissionGrants: async function () { return null; },
+    listCapabilityPacks: async function () { return []; },
+    installCapabilityPack: async function () { return null; },
+    reportTelemetry: async function (event) {
+      try { await clientJson("/events", "POST", event || {}, true); } catch (error) {}
+    },
+    getEnterpriseSession: async function () {
+      var auth = await apiJson({ path: "/auth/check", method: "GET" });
+      if (auth.auth_required && !auth.authenticated) return null;
+      return webSession(auth.auth_required);
+    },
+    enterpriseLogin: async function (input) {
+      input = input || {};
+      var adminPayload = null;
+      try {
+        adminPayload = await clientJson("/auth/login", "POST", {
+          email: input.email,
+          password: input.password,
+          deviceId: deviceId(),
+          appVersion: "0.1.11-web.1"
+        }, false);
+      } catch (error) {}
+      if (adminPayload && adminPayload.token && adminPayload.user) {
+        var adminSession = {
+          authenticated: true,
+          token: adminPayload.token,
+          deviceId: deviceId(),
+          expiresAt: adminPayload.expiresAt || new Date(Date.now() + 7 * 86400 * 1000).toISOString(),
+          user: adminPayload.user,
+          quota: adminPayload.quota || { allowed: true }
+        };
+        writeAdminSession(adminSession);
+        try { await apiJson({ path: "/auth/login", method: "POST", body: { password: input.password } }); } catch (error) {}
+        return adminSession;
+      }
+      await apiJson({ path: "/auth/login", method: "POST", body: { password: input.password } });
+      return webSession(true);
+    },
+    enterpriseLogout: async function () {
+      writeAdminSession(null);
+      return apiJson({ path: "/auth/logout", method: "POST", body: {} });
+    },
+    enterpriseChangePassword: async function (input) {
+      return clientJson("/auth/change-password", "POST", input || {}, true);
+    },
+    checkEnterpriseQuota: async function (estimatedTokens) {
+      try {
+        var quota = await clientJson("/quota/check", "POST", { estimatedTokens: estimatedTokens || 0 }, true);
+        if (quota) return quota;
+      } catch (error) {}
+      return { ok: true, quota: { allowed: true } };
+    },
+    refreshEnterprisePolicy: async function () { return { restarted: false }; }
+  };
+})();
+</script>
+"""
+
+
+def _inject_web_app_bridge(html: str) -> str:
+    bridge_script = _web_app_bridge_script()
+    base_script = """<script data-ecorex-web-base>
+(function () {
+  var path = window.location.pathname || "/app/";
+  var idx = path.indexOf("/app");
+  var href = idx >= 0 ? path.slice(0, idx + 5) : "/app/";
+  if (href.charAt(href.length - 1) !== "/") href += "/";
+  document.write('<base href="' + href.replace(/"/g, "%22") + '">');
+})();
+</script>"""
+    if 'data-ecorex-web-base' not in html and '<base ' not in html:
+        html = html.replace("<head>", "<head>\n    " + base_script, 1)
+    if "window.ecorexDesktop" not in html:
+        marker = '<script type="module"'
+        if marker in html:
+            html = html.replace(marker, bridge_script + "\n    " + marker, 1)
+        else:
+            html = html.replace("</head>", bridge_script + "\n</head>", 1)
+    return html
+
+
+def _default_web_app_html() -> str:
+    return _inject_web_app_bridge("""<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>EcoreX Web App</title>
+    <style>
+      :root { color-scheme: light dark; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #101418; color: #edf2f7; }
+      main { width: min(720px, calc(100vw - 40px)); }
+      h1 { font-size: clamp(28px, 5vw, 44px); margin: 0 0 12px; letter-spacing: 0; }
+      p { color: #aeb8c4; line-height: 1.7; margin: 0 0 22px; }
+      nav { display: flex; flex-wrap: wrap; gap: 10px; }
+      a { color: #101418; background: #edf2f7; border-radius: 8px; padding: 10px 14px; text-decoration: none; font-weight: 650; }
+      a.secondary { color: #edf2f7; background: #25303b; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>EcoreX Web App</h1>
+      <p>The parallel Web entry is active. Drop a built app into channel/web/static/app to replace this shell; backend APIs are shared with the existing WebUI.</p>
+      <nav>
+        <a href="../chat">Open classic chat</a>
+        <a class="secondary" href="../api/installations">Installations API</a>
+        <a class="secondary" href="../api/ui-state">UI state API</a>
+      </nav>
+    </main>
+  </body>
+</html>
+""")
+
 def _get_web_password() -> str:
     # Coerce to str so non-string values in config.json (e.g. numeric password) won't break comparisons
     pwd = conf().get("web_password", "")
@@ -294,6 +673,36 @@ class WebChannel(ChatChannel):
             payload["usage"] = usage
         return payload
 
+    @staticmethod
+    def _release_context_session_lock(context: Context) -> None:
+        session_lock = None
+        try:
+            session_lock = context.get("session_lock") if context else None
+        except Exception:
+            session_lock = None
+        if not session_lock:
+            return
+        try:
+            session_lock.release()
+            try:
+                context["session_lock"] = None
+            except Exception:
+                pass
+        except Exception as e:
+            logger.debug(f"[WebChannel] session lock release skipped: {e}")
+
+    def _thread_pool_callback(self, session_id, **kwargs):
+        parent_callback = super()._thread_pool_callback(session_id, **kwargs)
+        context = kwargs.get("context")
+
+        def callback(worker):
+            try:
+                parent_callback(worker)
+            finally:
+                self._release_context_session_lock(context)
+
+        return callback
+
     def send(self, reply: Reply, context: Context):
         try:
             if reply.type in self.NOT_SUPPORT_REPLYTYPE:
@@ -542,7 +951,10 @@ class WebChannel(ChatChannel):
                 q.put({
                     "type": "image" if is_image else "file",
                     "content": web_url,
+                    "url": web_url,
+                    "path": file_path,
                     "file_name": file_name,
+                    "file_type": file_type,
                 })
 
         return on_event
@@ -815,6 +1227,7 @@ class WebChannel(ChatChannel):
         Returns a request_id for tracking this specific request.
         Supports optional attachments (file paths from /upload).
         """
+        session_lock = None
         try:
             data = web.data()
             json_data = json.loads(data)
@@ -845,6 +1258,16 @@ class WebChannel(ChatChannel):
                     "stream": False,
                     "inline_reply": msg_text,
                 })
+
+            try:
+                from common.ecorex_workspace import SessionBusyError, SessionLock
+                session_lock = SessionLock(_get_workspace_root(), session_id).acquire()
+            except SessionBusyError:
+                return json.dumps({
+                    "status": "error",
+                    "code": "session_busy",
+                    "message": i18n.t("该会话正在执行中，请稍后再试", "This session is already running. Please try again shortly."),
+                }, ensure_ascii=False)
 
             # Append file references to the prompt (same format as QQ channel)
             if attachments:
@@ -890,11 +1313,14 @@ class WebChannel(ChatChannel):
                 logger.warning(f"[WebChannel] Context is None for session {session_id}, message may be filtered")
                 if request_id in self.sse_queues:
                     del self.sse_queues[request_id]
+                if session_lock:
+                    session_lock.release()
                 return json.dumps({"status": "error", "message": "Message was filtered"})
 
             context["session_id"] = session_id
             context["receiver"] = session_id
             context["request_id"] = request_id
+            context["session_lock"] = session_lock
             if is_voice_input:
                 # Web channel runs its own TTS post-pipeline via
                 # _maybe_dispatch_auto_tts; don't set desire_rtype here or
@@ -904,13 +1330,29 @@ class WebChannel(ChatChannel):
             if use_sse:
                 context["on_event"] = self._make_sse_callback(request_id)
 
-            threading.Thread(target=self.produce, args=(context,)).start()
+            threading.Thread(target=self._produce_with_session_lock, args=(context, session_lock), daemon=True).start()
 
             return json.dumps({"status": "success", "request_id": request_id, "stream": use_sse})
 
         except Exception as e:
+            try:
+                if session_lock:
+                    session_lock.release()
+            except Exception:
+                pass
             logger.error(f"Error processing message: {e}")
             return json.dumps({"status": "error", "message": str(e)})
+
+    def _produce_with_session_lock(self, context: Context, session_lock):
+        try:
+            self.produce(context)
+        except Exception:
+            try:
+                if session_lock:
+                    session_lock.release()
+            except Exception as e:
+                logger.debug(f"[WebChannel] session lock release skipped: {e}")
+            raise
 
     def stream_response(self, request_id: str):
         """
@@ -1137,8 +1579,22 @@ class WebChannel(ChatChannel):
             os.makedirs(static_dir)
             logger.debug(f"[WebChannel] Created static directory: {static_dir}")
 
+        try:
+            from cli import __version__
+            from common.ecorex_workspace import register_installation
+            register_installation(_get_workspace_root(), "webui", {
+                "version": __version__,
+                "bindHost": host,
+                "port": port,
+                "url": f"http://localhost:{port}/app/",
+            })
+        except Exception as e:
+            logger.debug(f"[WebChannel] installation manifest registration skipped: {e}")
+
         urls = (
             '/', 'RootHandler',
+            '/app', 'WebAppRootHandler',
+            '/app/(.*)', 'WebAppAssetHandler',
             '/auth/login', 'AuthLoginHandler',
             '/auth/check', 'AuthCheckHandler',
             '/auth/logout', 'AuthLogoutHandler',
@@ -1171,6 +1627,8 @@ class WebChannel(ChatChannel):
             '/api/sessions/(.*)', 'SessionDetailHandler',
             '/api/history', 'HistoryHandler',
             '/api/messages/delete', 'MessageDeleteHandler',
+            '/api/ui-state', 'UiStateHandler',
+            '/api/installations', 'InstallationsHandler',
             '/api/logs', 'LogsHandler',
             '/api/version', 'VersionHandler',
             '/assets/(.*)', 'AssetsHandler',
@@ -1222,6 +1680,43 @@ class WebChannel(ChatChannel):
 class RootHandler:
     def GET(self):
         raise web.seeother('/chat')
+
+
+def _serve_web_app_asset(file_path: str = ""):
+    app_dir = os.path.realpath(os.path.join(os.path.dirname(__file__), "static", "app"))
+    requested = (file_path or "").strip("/")
+    target = os.path.realpath(os.path.join(app_dir, requested)) if requested else os.path.join(app_dir, "index.html")
+    if not _is_within_directory(app_dir, target):
+        raise web.notfound()
+    if not os.path.isfile(target):
+        if requested and os.path.splitext(requested)[1]:
+            raise web.notfound()
+        target = os.path.join(app_dir, "index.html")
+    if not os.path.isfile(target):
+        web.header("Content-Type", "text/html; charset=utf-8")
+        web.header("Cache-Control", "no-cache, no-store, must-revalidate")
+        return _default_web_app_html()
+    content_type = mimetypes.guess_type(target)[0] or "text/html"
+    if os.path.basename(target) == "index.html":
+        web.header("Content-Type", "text/html; charset=utf-8")
+        web.header("Cache-Control", "no-cache, no-store, must-revalidate")
+        with open(target, "r", encoding="utf-8") as f:
+            return _inject_web_app_bridge(f.read())
+    else:
+        web.header("Content-Type", content_type)
+        web.header("Cache-Control", "public, max-age=31536000, immutable")
+        with open(target, "rb") as f:
+            return f.read()
+
+
+class WebAppRootHandler:
+    def GET(self):
+        return _serve_web_app_asset("")
+
+
+class WebAppAssetHandler:
+    def GET(self, file_path):
+        return _serve_web_app_asset(file_path)
 
 
 class AuthCheckHandler:
@@ -4030,6 +4525,74 @@ class MessageDeleteHandler:
             return json.dumps({"status": "success", "deleted": deleted}, ensure_ascii=False)
         except Exception as e:
             logger.error(f"[WebChannel] Message delete error: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
+
+
+class UiStateHandler:
+    def GET(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            from common.ecorex_workspace import load_ui_state
+            state = load_ui_state(_get_workspace_root())
+            return json.dumps({"status": "success", "state": state}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] UI state GET error: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
+
+    def PUT(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            raw = web.data() or b"{}"
+            if len(raw) > 1024 * 1024:
+                return json.dumps({"status": "error", "message": "ui state payload too large"})
+            body = json.loads(raw)
+            incoming = body.get("state", body)
+            if not isinstance(incoming, dict):
+                return json.dumps({"status": "error", "message": "state must be an object"})
+            from common.ecorex_workspace import save_ui_state
+            state = save_ui_state(_get_workspace_root(), incoming)
+            return json.dumps({"status": "success", "state": state}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] UI state PUT error: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
+
+    def POST(self):
+        return self.PUT()
+
+
+class InstallationsHandler:
+    def GET(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            from common.ecorex_workspace import load_installation_manifest
+            manifest = load_installation_manifest(_get_workspace_root())
+            return json.dumps({"status": "success", "manifest": manifest}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] installations GET error: {e}")
+            return json.dumps({"status": "error", "message": str(e)})
+
+    def POST(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            raw = web.data() or b"{}"
+            if len(raw) > 256 * 1024:
+                return json.dumps({"status": "error", "message": "installation payload too large"})
+            body = json.loads(raw)
+            surface = (body.get("surface") or "").strip()
+            if not surface:
+                return json.dumps({"status": "error", "message": "surface is required"})
+            metadata = body.get("metadata", {})
+            if not isinstance(metadata, dict):
+                return json.dumps({"status": "error", "message": "metadata must be an object"})
+            from common.ecorex_workspace import register_installation
+            manifest = register_installation(_get_workspace_root(), surface, metadata)
+            return json.dumps({"status": "success", "manifest": manifest}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] installations POST error: {e}")
             return json.dumps({"status": "error", "message": str(e)})
 
 

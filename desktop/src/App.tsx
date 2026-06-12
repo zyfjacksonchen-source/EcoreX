@@ -1012,19 +1012,25 @@ export function App() {
 
   function appendToolStart(message: ChatItem, item: StreamItem): ChatItem {
     const next = flushIntermediateContent(finishRunningSteps(message));
+    const toolName = item.tool || item.name || "tool";
+    const steps = [...(next.steps || [])];
+    const toolIndex = steps.findIndex((step) => step.type === "tool" && step.name === toolName);
+    const runningTool: Extract<AgentStepDisclosure, { type: "tool" }> = {
+      type: "tool",
+      name: toolName,
+      arguments: item.arguments ?? item.input,
+      status: "running",
+      running: true
+    };
+    if (toolIndex >= 0) {
+      steps[toolIndex] = runningTool;
+    } else {
+      steps.push(runningTool);
+    }
     return {
       ...next,
       pending: true,
-      steps: [
-        ...(next.steps || []),
-        {
-          type: "tool",
-          name: item.tool || item.name,
-          arguments: item.arguments ?? item.input,
-          status: "running",
-          running: true
-        }
-      ]
+      steps
     };
   }
 
@@ -1037,6 +1043,15 @@ export function App() {
       if (step.type === "tool" && step.running && (!toolName || step.name === toolName)) {
         targetIndex = index;
         break;
+      }
+    }
+    if (targetIndex < 0 && toolName) {
+      for (let index = steps.length - 1; index >= 0; index -= 1) {
+        const step = steps[index];
+        if (step.type === "tool" && step.name === toolName) {
+          targetIndex = index;
+          break;
+        }
       }
     }
     const completedTool: Extract<AgentStepDisclosure, { type: "tool" }> = {
@@ -1079,7 +1094,7 @@ export function App() {
         {
           type: "media",
           fileType: type,
-          url: item.url || item.path || item.content,
+          url: item.path || item.url || item.content,
           fileName: item.file_name || item.name
         }
       ]
@@ -1130,6 +1145,33 @@ export function App() {
       : text;
 
     const estimatedTokens = estimateTokens(outboundText || text, outboundAttachments);
+    let streamTextChars = 0;
+    let streamToolChars = 0;
+    let streamSawDelta = false;
+    const observeStreamUsage = (item: StreamItem) => {
+      const textPart = String(item.content || item.text || item.message || "");
+      if (item.type === "delta" || item.type === "message_update" || item.type === "reasoning" || item.type === "thinking" || item.type === "phase") {
+        streamTextChars += textPart.length;
+        if (item.type === "delta" || item.type === "message_update") {
+          streamSawDelta = true;
+        }
+      }
+      if (item.type === "done" && !streamSawDelta) {
+        streamTextChars += textPart.length;
+      }
+      if (item.type === "tool_start" || item.type === "tool_end") {
+        streamToolChars += 80;
+        try {
+          streamToolChars += JSON.stringify(item.arguments ?? item.input ?? item.result ?? item.content ?? "").length;
+        } catch {
+          streamToolChars += String(item.result ?? item.content ?? "").length;
+        }
+      }
+      if (item.type === "file" || item.type === "image" || item.type === "video" || item.type === "voice_attach") {
+        streamToolChars += 120;
+      }
+    };
+    const liveEstimatedTokens = () => estimatedTokens + Math.ceil(streamTextChars / 2) + Math.ceil(streamToolChars / 3);
     const quota = await checkEnterpriseQuota(estimatedTokens);
     if (quota.quota && quota.quota.allowed === false) {
       setApproval({ type: "quota", title: "额度已达到上限", message: quota.quota.reason || "当前账号暂时不能继续发送。" });
@@ -1162,7 +1204,10 @@ export function App() {
     const reportChatUsage = (usage: TokenUsage | undefined, source: "provider" | "estimated") => {
       if (usageReported) return;
       usageReported = true;
-      const totalTokens = usageTotal(usage) || estimatedTokens;
+      const providerTotal = usageTotal(usage);
+      const localEstimate = liveEstimatedTokens();
+      const totalTokens = Math.max(providerTotal, localEstimate, estimatedTokens);
+      const usageSource = providerTotal >= localEstimate && providerTotal > 0 ? source : "estimated";
       void reportDesktopEvent({
         type: "usage",
         source: "Desktop",
@@ -1171,13 +1216,15 @@ export function App() {
         amount: totalTokens,
         sessionId: requestSessionId,
         detail: {
-          inputTokens: usage?.inputTokens || 0,
-          outputTokens: usage?.outputTokens || 0,
+          inputTokens: usage?.inputTokens || estimatedTokens,
+          outputTokens: usage?.outputTokens || Math.max(0, totalTokens - estimatedTokens),
           totalTokens,
           model: usage?.model || runtimeSnapshot.version,
           provider: usage?.provider || "",
           estimatedTokens,
-          usageSource: source
+          streamEstimatedTokens: localEstimate,
+          providerTotalTokens: providerTotal,
+          usageSource
         }
       });
     };
@@ -1186,6 +1233,7 @@ export function App() {
       const result = await sendChatMessage({ sessionId: requestSessionId, message: outboundText, attachments: outboundAttachments });
       if (result.status === "error") throw new Error(result.message || "发送失败");
       if (result.inline_reply) {
+        streamTextChars += result.inline_reply.length;
         updateSessionMessages(requestSessionId, (current) => current.map((item) => item.id === assistantId ? { ...item, content: result.inline_reply || "", pending: false } : item));
         reportChatUsage(result.usage, usageTotal(result.usage) ? "provider" : "estimated");
       }
@@ -1197,6 +1245,7 @@ export function App() {
           webPort: sidecarStatus.webPort,
           onItem: (item) => {
             if (item.request_id && item.request_id !== result.request_id) return;
+            observeStreamUsage(item);
             if (item.type === "cancelled") {
               updateAssistantMessage(requestSessionId, assistantId, (message) => ({
                 ...finishRunningSteps(message),
@@ -1405,6 +1454,13 @@ export function App() {
   async function confirmOpenFile(file: FileAttachment) {
     const result = await openLocalPath(file.file_path);
     setApproval(null);
+    if (result) {
+      setToast(result.startsWith("denied") ? "已取消打开文件" : result);
+    }
+  }
+
+  async function openArtifactFile(file: { file_path: string; file_name: string; file_type?: FileAttachment["file_type"] }) {
+    const result = await openLocalPath(file.file_path);
     if (result) {
       setToast(result.startsWith("denied") ? "已取消打开文件" : result);
     }
@@ -1684,11 +1740,13 @@ export function App() {
                     reasoning={message.reasoning}
                     steps={message.steps}
                     toolCalls={message.toolCalls}
+                    onOpenLocalFile={(file) => void openArtifactFile(file)}
+                    localFilePreviewUrl={(filePath) => filePreviewUrl(filePath, sidecarStatus.webPort)}
                   />
                   {message.attachments?.length ? (
                     <div className="message-files">
                       {message.attachments.map((file) => (
-                        <button key={file.file_path} onClick={() => setPreviewFile(file)} title="点击预览文件">
+                        <button key={file.file_path} onClick={() => void openArtifactFile(file)} title="点击在本地打开">
                           {fileIcon(file)}{file.file_name}
                         </button>
                       ))}

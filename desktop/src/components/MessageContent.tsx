@@ -44,6 +44,12 @@ export type AgentStepDisclosure =
       fileName?: string;
     };
 
+type LocalFilePayload = {
+  file_path: string;
+  file_name: string;
+  file_type?: "image" | "video" | "file";
+};
+
 const REASONING_RENDER_CAP = 4 * 1024;
 const LONG_REPLY_COLLAPSE_CHARS = 1400;
 const LONG_REPLY_PREVIEW_CHARS = 520;
@@ -66,11 +72,46 @@ function safeUrl(value: string) {
   }
 }
 
+function safeImageUrl(value: string) {
+  try {
+    const url = new URL(value, window.location.href);
+    return ["http:", "https:"].includes(url.protocol) || url.href.startsWith("data:image/") ? url.href : "";
+  } catch {
+    return "";
+  }
+}
+
+function localPathFromSource(value?: string) {
+  const source = String(value || "").trim();
+  if (!source) return "";
+  if (/^file:\/\//i.test(source)) {
+    try {
+      return decodeURIComponent(source.replace(/^file:\/+/i, ""));
+    } catch {
+      return source.replace(/^file:\/+/i, "");
+    }
+  }
+  if (/^[a-zA-Z]:[\\/]/.test(source) || source.startsWith("\\\\") || source.startsWith("/")) {
+    return source;
+  }
+  return "";
+}
+
+function basenameFromPath(value: string) {
+  const normalized = value.replace(/\\/g, "/");
+  return normalized.split("/").filter(Boolean).pop() || value;
+}
+
 function renderInline(value: string) {
   let html = escapeHtml(value);
   html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
   html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt: string, href: string) => {
+    const src = safeImageUrl(href);
+    if (!src) return escapeHtml(alt);
+    return `<img class="markdown-image" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}" loading="lazy" />`;
+  });
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label: string, href: string) => {
     return `<a href="${escapeHtml(safeUrl(href))}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`;
   });
@@ -207,7 +248,7 @@ function ToolStep({ step }: { step: ToolCallDisclosure }) {
   const isError = step.is_error === true || step.status === "error" || step.status === "failed";
   const running = step.running === true || step.status === "running";
   return (
-    <details className={`agent-step agent-tool-step${isError ? " tool-failed" : ""}`} open={running || undefined}>
+    <details className={`agent-step agent-tool-step${isError ? " tool-failed" : ""}`} open={running || isError || undefined}>
       <summary title={running ? "工具正在执行，完成后可查看输入和结果" : "展开查看工具输入和结果"}>
         <span className={`tool-status-dot${running ? " is-running" : isError ? " is-error" : " is-done"}`} aria-hidden="true" />
         <span className="tool-name">{step.name || "工具调用"}</span>
@@ -229,8 +270,41 @@ function ToolStep({ step }: { step: ToolCallDisclosure }) {
   );
 }
 
-function MediaStep({ step }: { step: Extract<AgentStepDisclosure, { type: "media" }> }) {
+function MediaStep({ step, onOpenLocalFile, localFilePreviewUrl }: {
+  step: Extract<AgentStepDisclosure, { type: "media" }>;
+  onOpenLocalFile?: (file: LocalFilePayload) => void;
+  localFilePreviewUrl?: (filePath: string) => string;
+}) {
   if (!step.url) return null;
+  const localPath = localPathFromSource(step.url);
+  if (localPath && step.fileType === "image" && localFilePreviewUrl) {
+    const fileName = step.fileName || basenameFromPath(localPath);
+    const image = <img className="agent-media-image" src={localFilePreviewUrl(localPath)} alt={fileName} />;
+    if (!onOpenLocalFile) return image;
+    return (
+      <button
+        type="button"
+        className="agent-media-button"
+        onClick={() => onOpenLocalFile({ file_path: localPath, file_name: fileName, file_type: "image" })}
+        title="点击在本地打开"
+      >
+        {image}
+      </button>
+    );
+  }
+  if (localPath && onOpenLocalFile) {
+    const fileName = step.fileName || basenameFromPath(localPath);
+    return (
+      <button
+        type="button"
+        className="agent-file-link"
+        onClick={() => onOpenLocalFile({ file_path: localPath, file_name: fileName, file_type: step.fileType || "file" })}
+        title="点击在本地打开"
+      >
+        {fileName}
+      </button>
+    );
+  }
   if (step.fileType === "image") {
     return <img className="agent-media-image" src={step.url} alt={step.fileName || "image"} />;
   }
@@ -244,7 +318,36 @@ function MediaStep({ step }: { step: Extract<AgentStepDisclosure, { type: "media
   );
 }
 
-function renderStep(step: AgentStepDisclosure, index: number): ReactNode {
+function compactToolSteps(steps: AgentStepDisclosure[]) {
+  const compacted: AgentStepDisclosure[] = [];
+  const toolIndexes = new Map<string, number>();
+  const toolCounts = new Map<string, number>();
+  for (const step of steps) {
+    if (step.type !== "tool") {
+      compacted.push(step);
+      continue;
+    }
+    const rawName = step.name || "tool";
+    const count = (toolCounts.get(rawName) || 0) + 1;
+    toolCounts.set(rawName, count);
+    const displayStep = count > 1 ? { ...step, name: `${rawName} (${count} 次)` } : step;
+    const existingIndex = toolIndexes.get(rawName);
+    if (existingIndex === undefined) {
+      toolIndexes.set(rawName, compacted.length);
+      compacted.push(displayStep);
+    } else {
+      compacted[existingIndex] = displayStep;
+    }
+  }
+  return compacted;
+}
+
+function renderStep(
+  step: AgentStepDisclosure,
+  index: number,
+  onOpenLocalFile?: (file: LocalFilePayload) => void,
+  localFilePreviewUrl?: (filePath: string) => string
+): ReactNode {
   if (step.type === "thinking") return <ThinkingStep key={index} content={step.content} running={step.running} />;
   if (step.type === "tool") return <ToolStep key={index} step={step} />;
   if (step.type === "content") {
@@ -257,7 +360,7 @@ function renderStep(step: AgentStepDisclosure, index: number): ReactNode {
   if (step.type === "phase") {
     return <div className="agent-step agent-phase-step" key={index}>{step.content}</div>;
   }
-  return <MediaStep key={index} step={step} />;
+  return <MediaStep key={index} step={step} onOpenLocalFile={onOpenLocalFile} localFilePreviewUrl={localFilePreviewUrl} />;
 }
 
 function splitSteps(steps: AgentStepDisclosure[], content: string) {
@@ -298,9 +401,12 @@ export function MessageContent(props: {
   reasoning?: string;
   steps?: AgentStepDisclosure[];
   toolCalls?: ToolCallDisclosure[];
+  onOpenLocalFile?: (file: LocalFilePayload) => void;
+  localFilePreviewUrl?: (filePath: string) => string;
 }) {
   const steps = props.steps || [];
   const { mainContent, visibleSteps } = splitSteps(steps, props.content);
+  const compactedSteps = compactToolSteps(visibleSteps);
   const legacySteps: ReactNode[] = [];
 
   if (!steps.length && props.role !== "user") {
@@ -312,7 +418,7 @@ export function MessageContent(props: {
     <div className="message-content" aria-live={props.pending ? "polite" : undefined}>
       {(visibleSteps.length > 0 || legacySteps.length > 0) && (
         <div className="agent-steps">
-          {visibleSteps.map(renderStep)}
+          {compactedSteps.map((step, index) => renderStep(step, index, props.onOpenLocalFile, props.localFilePreviewUrl))}
           {legacySteps}
         </div>
       )}

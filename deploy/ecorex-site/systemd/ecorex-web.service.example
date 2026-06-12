@@ -1,0 +1,21 @@
+[Unit]
+Description=EcoreX WebUI Runtime
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ecorex
+Group=ecorex
+WorkingDirectory=/opt/ecorex-web/current/runtime
+EnvironmentFile=/etc/ecorex-web/ecorex-web.env
+Environment=PYTHONPATH=/opt/ecorex-web/current/runtime
+ExecStart=/opt/ecorex-web/venv/bin/python /opt/ecorex-web/current/runtime/app.py
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

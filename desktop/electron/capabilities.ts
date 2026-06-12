@@ -534,7 +534,7 @@ export class CapabilityManager {
           ok: false,
           policy: {
             mirror: "https://pypi.org/simple",
-            mode: "ask",
+            mode: "preinstall",
             offlineCache: ""
           },
           capabilities: []

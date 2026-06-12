@@ -2,6 +2,7 @@
 # Place these inside the existing https server block for www.ecoreai.cn.
 
 set $ecorex_admin_api http://127.0.0.1:18084;
+set $ecorex_web_runtime http://127.0.0.1:9909;
 
 location = /ecorex-agent {
     return 301 /ecorex-agent/;
@@ -9,6 +10,10 @@ location = /ecorex-agent {
 
 location = /ecorex-agent/admin {
     return 301 /ecorex-agent/admin/;
+}
+
+location = /ecorex-agent/app {
+    return 301 /ecorex-agent/app/;
 }
 
 location ^~ /ecorex-agent/admin/api/ {
@@ -33,6 +38,34 @@ location ^~ /ecorex-agent/client/ {
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+
+location ~ ^/ecorex-agent/(stream|api/logs)$ {
+    rewrite ^/ecorex-agent(/.*)$ $1 break;
+    proxy_pass $ecorex_web_runtime;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header Connection "";
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 1h;
+    proxy_send_timeout 1h;
+    add_header X-Accel-Buffering no always;
+}
+
+location ~ ^/ecorex-agent/(app/|auth/|message$|upload$|uploads/|api/|poll$|cancel$|chat$|config$|assets/) {
+    rewrite ^/ecorex-agent(/.*)$ $1 break;
+    proxy_pass $ecorex_web_runtime;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header Connection "";
+    proxy_buffering off;
+    proxy_read_timeout 1h;
+    proxy_send_timeout 1h;
 }
 
 location ^~ /ecorex-agent/admin/ {

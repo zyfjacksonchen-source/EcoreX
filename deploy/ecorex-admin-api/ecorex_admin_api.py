@@ -20,7 +20,11 @@ VERSION = "0.1.11"
 PASSWORD_ITERATIONS = 180000
 SESSION_DAYS = 7
 DEFAULT_CLIENT_EVENT_KEY = "ecorex-desktop-v0.1.11"
-DEFAULT_COMPAT_CLIENT_EVENT_KEYS = ("ecorex-desktop-v0.1.10", "ecorex-desktop-v0.1.11")
+DEFAULT_COMPAT_CLIENT_EVENT_KEYS = (
+    "ecorex-desktop-v0.1.10",
+    "ecorex-desktop-v0.1.11",
+    "ecorex-web-v0.1.11-web.1",
+)
 DEFAULT_ADMIN_USERNAME = "admin"
 
 DEFAULT_USERS = [
@@ -360,7 +364,7 @@ class AdminStore:
         if conn.execute("SELECT COUNT(*) FROM capability_policy").fetchone()[0] == 0:
             conn.execute(
                 "INSERT INTO capability_policy (id, mirror, mode, offline_cache, updated_at) VALUES (1, ?, ?, ?, ?)",
-                ("https://pypi.org/simple", "ask", "未配置", created),
+                ("https://pypi.org/simple", "preinstall", "未配置", created),
             )
         if conn.execute("SELECT COUNT(*) FROM capability_packs").fetchone()[0] == 0:
             conn.executemany(
@@ -830,7 +834,7 @@ class AdminStore:
 
     def update_policy(self, payload):
         mirror = compact_text(payload.get("mirror"), 300) or "https://pypi.org/simple"
-        mode = compact_text(payload.get("mode"), 32) or "ask"
+        mode = compact_text(payload.get("mode"), 32) or "preinstall"
         offline_cache = compact_text(payload.get("offlineCache") or payload.get("offline_cache"), 300) or "未配置"
         if mode not in ("ask", "preinstall", "disabled"):
             raise ValueError("invalid capability policy mode")

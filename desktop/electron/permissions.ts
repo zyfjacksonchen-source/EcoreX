@@ -53,6 +53,17 @@ function isInside(parent: string, child: string) {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+function defaultOpenRoots() {
+  const roots = [
+    app.getPath("userData"),
+    path.join(app.getPath("home"), "cow"),
+    path.join(app.getPath("home"), ".cow"),
+    path.join(app.getPath("appData"), "ecorex-agent"),
+    path.join(app.getPath("appData"), "ecorex-desktop", "pasted-files")
+  ];
+  return roots.map((root) => path.resolve(root));
+}
+
 function safeJson(value: unknown) {
   return JSON.stringify(value, null, 2);
 }
@@ -155,14 +166,14 @@ export class PermissionManager {
       return { allowed: true, reason: "selected-by-user" };
     }
 
-    if (settings.mode === "smart-ask" && isInside(app.getPath("userData"), target)) {
+    if (settings.mode === "smart-ask" && defaultOpenRoots().some((root) => isInside(root, target))) {
       await this.writeAudit("open-local-path", "allow", {
         mode: settings.mode,
         pathClass,
         target,
-        reason: "ecorex-user-data"
+        reason: "ecorex-managed-workspace"
       });
-      return { allowed: true, reason: "ecorex-user-data" };
+      return { allowed: true, reason: "ecorex-managed-workspace" };
     }
 
     const decision = await this.promptOpenPath(event, target, settings.mode, pathClass);

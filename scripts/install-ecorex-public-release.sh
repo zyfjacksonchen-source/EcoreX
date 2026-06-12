@@ -118,7 +118,7 @@ env_file="$ADMIN_ROOT/env/ecorex-admin-api.env"
 if [[ ! -f "$env_file" ]]; then
   cat > "$env_file" <<'EOF'
 ECOREX_ADMIN_DB=/srv/ecorex-agent-admin/data/ecorex-admin.sqlite3
-ECOREX_CLIENT_EVENT_KEYS=ecorex-desktop-v0.1.10,ecorex-desktop-v0.1.11
+ECOREX_CLIENT_EVENT_KEYS=ecorex-desktop-v0.1.10,ecorex-desktop-v0.1.11,ecorex-web-v0.1.11-web.1
 ECOREX_ALLOWED_ORIGINS=https://www.ecoreai.cn
 ECOREX_ADMIN_USERNAME=admin
 ECOREX_ADMIN_PASSWORD=change-this-before-starting

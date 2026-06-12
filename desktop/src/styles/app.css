@@ -477,10 +477,14 @@ button:disabled {
   text-align: left;
 }
 
-.session-row:hover,
-.session-row.is-active {
+.session-row:hover {
   border-color: var(--color-border);
   background: var(--color-surface-muted);
+}
+
+.session-row.is-active {
+  border-color: var(--color-brand);
+  background: color-mix(in srgb, var(--color-brand) 8%, var(--color-surface-muted));
 }
 
 .session-main {
@@ -534,7 +538,7 @@ button:disabled {
 }
 
 .session-row.is-waiting {
-  background: color-mix(in srgb, var(--color-brand) 8%, transparent);
+  background: transparent;
 }
 
 .thinking-indicator {
@@ -852,6 +856,14 @@ button:disabled {
   text-decoration: underline;
 }
 
+.markdown-content .markdown-image {
+  display: block;
+  max-width: min(420px, 100%);
+  height: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
 .markdown-content pre,
 .tool-detail-content,
 .thinking-stream-pre {
@@ -912,6 +924,15 @@ button:disabled {
 
 .agent-step[open] summary {
   border-bottom: 1px solid var(--color-border);
+}
+
+.agent-tool-step.tool-failed {
+  border-color: color-mix(in srgb, var(--color-danger) 45%, var(--color-border));
+  background: color-mix(in srgb, var(--color-danger) 5%, var(--color-surface-raised));
+}
+
+.agent-tool-step.tool-failed summary {
+  color: var(--color-text);
 }
 
 .thinking-full,
@@ -993,6 +1014,21 @@ button:disabled {
 
 .agent-media-video {
   display: block;
+}
+
+.agent-media-button {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+}
+
+.agent-media-button:hover .agent-media-image,
+.agent-media-button:focus-visible .agent-media-image {
+  border-color: var(--color-brand);
 }
 
 .agent-file-link {
