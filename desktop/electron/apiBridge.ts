@@ -15,6 +15,8 @@ function isAllowedPath(pathname: string, method: string) {
     "POST /auth/logout",
     "POST /message",
     "POST /cancel",
+    "GET /api/tool-permissions",
+    "POST /api/tool-permissions",
     "POST /upload",
     "GET /api/sessions",
     "GET /api/history",

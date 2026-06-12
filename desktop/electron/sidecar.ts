@@ -102,6 +102,7 @@ export class SidecarManager {
         ...process.env,
         ...this.enterpriseEnv,
         ECOREX_DESKTOP: "1",
+        ECOREX_DESKTOP_USER_DATA: app.getPath("userData"),
         PYTHONPATH: [this.repoRoot, this.resolveCapabilityPythonPath(), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
         PLAYWRIGHT_BROWSERS_PATH:
           process.platform === "darwin"

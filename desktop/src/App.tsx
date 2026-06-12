@@ -48,6 +48,7 @@ import {
   checkEnterpriseQuota,
   chooseProjectFolder,
   chooseLocalFiles,
+  decideToolPermission,
   deleteMessagePair,
   enableDefaultSkills,
   enterpriseLogin,
@@ -1302,6 +1303,42 @@ export function App() {
               }
               return;
             }
+            if (item.type === "tool_permission_request") {
+              const permissionRequestId = item.permission_request_id || "";
+              if (!permissionRequestId) return;
+              setApproval({
+                type: "permission",
+                title: item.title || "本机工具执行前确认",
+                message: item.message || `EcoreX 将执行 ${item.tool || "tool"}，请确认是否允许。`,
+                actions: [
+                  {
+                    label: "允许本次",
+                    primary: true,
+                    onClick: () => void answerToolPermission(permissionRequestId, "allow_once")
+                  },
+                  {
+                    label: "始终允许",
+                    onClick: () => void answerToolPermission(permissionRequestId, "always_allow")
+                  },
+                  {
+                    label: "拒绝",
+                    onClick: () => void answerToolPermission(permissionRequestId, "deny")
+                  }
+                ]
+              });
+              updateAssistantMessage(requestSessionId, assistantId, (message) => ({
+                ...message,
+                pending: true,
+                steps: [
+                  ...(message.steps || []),
+                  {
+                    type: "phase",
+                    content: `等待本机工具授权：${item.tool || "tool"}`
+                  }
+                ]
+              }));
+              return;
+            }
             if (item.type === "tool_start") {
               updateAssistantMessage(requestSessionId, assistantId, (message) => appendToolStart(message, item));
               return;
@@ -1381,6 +1418,7 @@ export function App() {
     const requestId = activeSessionRequestId;
     if (!requestId) return;
     await cancelChatRequest({ requestId, sessionId: activeSessionId });
+    setApproval(null);
     clearSessionRequestState(activeSessionId);
     updateSessionMessages(activeSessionId, (current) => current.map((message) => message.pending ? {
       ...finishRunningSteps(message),
@@ -1456,6 +1494,23 @@ export function App() {
     setApproval(null);
     if (result) {
       setToast(result.startsWith("denied") ? "已取消打开文件" : result);
+    }
+  }
+
+  async function answerToolPermission(requestId: string, decision: "allow_once" | "always_allow" | "deny") {
+    try {
+      const result = await decideToolPermission({
+        requestId,
+        decision,
+        remember: decision === "always_allow"
+      });
+      if (result.status === "error") {
+        setToast(result.message || "权限确认已失效");
+      }
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "权限确认失败");
+    } finally {
+      setApproval(null);
     }
   }
 

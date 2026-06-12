@@ -859,6 +859,18 @@ class WebChannel(ChatChannel):
                 arguments = data.get("arguments", {})
                 q.put({"type": "tool_start", "tool": tool_name, "arguments": arguments})
 
+            elif event_type == "tool_permission_request":
+                q.put({
+                    "type": "tool_permission_request",
+                    "permission_request_id": data.get("id", ""),
+                    "tool": data.get("tool", "tool"),
+                    "title": data.get("title", ""),
+                    "message": data.get("message", ""),
+                    "summary": data.get("summary", ""),
+                    "mode": data.get("mode", ""),
+                    "created_at": data.get("created_at", ""),
+                })
+
             elif event_type == "tool_execution_end":
                 tool_name = data.get("tool_name", "tool")
                 status = data.get("status", "success")
@@ -1607,6 +1619,7 @@ class WebChannel(ChatChannel):
             '/poll', 'PollHandler',
             '/stream', 'StreamHandler',
             '/cancel', 'CancelHandler',
+            '/api/tool-permissions', 'ToolPermissionHandler',
             '/chat', 'ChatHandler',
             '/config', 'ConfigHandler',
             '/api/models', 'ModelsHandler',
@@ -1937,6 +1950,38 @@ class CancelHandler:
     def POST(self):
         _require_auth()
         return WebChannel().cancel_request()
+
+
+class ToolPermissionHandler:
+    def GET(self):
+        _require_auth()
+        try:
+            from common.ecorex_tool_permissions import get_tool_permission_broker
+
+            return json.dumps(get_tool_permission_broker().list_pending(), ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] tool permission list error: {e}")
+            return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
+
+    def POST(self):
+        _require_auth()
+        try:
+            payload = json.loads(web.data() or b"{}")
+            request_id = (payload.get("request_id") or payload.get("permission_request_id") or "").strip()
+            decision = (payload.get("decision") or "").strip()
+            remember = bool(payload.get("remember"))
+            if not request_id:
+                return json.dumps({"status": "error", "message": "missing request_id"}, ensure_ascii=False)
+
+            from common.ecorex_tool_permissions import get_tool_permission_broker
+
+            return json.dumps(
+                get_tool_permission_broker().decide(request_id, decision, remember),
+                ensure_ascii=False,
+            )
+        except Exception as e:
+            logger.error(f"[WebChannel] tool permission decision error: {e}")
+            return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
 
 
 class StreamHandler:

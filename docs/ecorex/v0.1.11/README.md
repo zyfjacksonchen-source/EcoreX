@@ -10,16 +10,17 @@
 
 ## Current Evidence
 - Windows installer: `desktop/release/EcoreX_0.1.11_x64-setup.exe`
-- Current rebuilt Windows installer size: `117,428,366` bytes
-- Current rebuilt Windows installer SHA256: `0E18A6FC935EA37D93452B238BD3A313673BF3970B2BE7AF381ABB3AA4F06851`
+- Current rebuilt Windows installer size: `117,572,805` bytes
+- Current rebuilt Windows installer SHA256: `CF0C5FFAFDF8A0C7FC0991BDFCBE5609917375D232AA419AAFCAE6329321CD18`
 - Authenticode: `NotSigned` for the current rebuilt installer; previous signed installer was superseded by later fixes.
 - Installed Windows smoke: passed unsigned; app started, sidecar ready, `/auth/check` returned success, and `/api/tools` included `bash`, `web_fetch`, and `browser`.
 - Renderer visual smoke: passed for auth, main, settings, abilities, light and dark modes.
 - Production Admin API hotfix: deployed v0.1.11 code and confirmed `ecorex-desktop-v0.1.11` reaches the public capability-policy route with `mode = preinstall`.
-- WebUI service tarball: `release-artifacts/EcoreX_0.1.11-web-linux-service.tar.gz`, size `2,845,730`, SHA256 `2C991A1F5D6EF885C98F25AD5C3502A79D260830A7C106C96E77B53633359828`; package scan found no `desktop/` entries and `/app/` uses the desktop renderer static shell.
+- WebUI service tarball: `release-artifacts/EcoreX_0.1.11-web-linux-service.tar.gz`, size `2,846,017`, SHA256 `7C08D86502943275E40E1924D6283D5419C2A2BF769078EB9AABC9B3E3AE9FC2`; package scan found no `desktop/` entries and `/app/` uses the desktop renderer static shell.
 - macOS unsigned DMGs: GitHub Actions run `27412042545`; arm64 size `150,067,486`, SHA256 `3A93E7F10E59E52D99C69C8AB9590B98D3BB7E5BBC7C1E54894F41472EDECB4D`; x64 size `156,273,299`, SHA256 `3D00CD7A5BE63E1BD33ED9A6F8CD2213A988F30267A5A2A5412C09D83B9318A5`.
-- Public release zip: `release-artifacts/EcoreX_0.1.11-public-release.zip`, size `311,225,021`, SHA256 `B9C24718A8C168A91BF2CADF282A076E20FF9AA0A5A1F93A6AFA0B61A6D72DD2`; generated with the ready Web artifact and both macOS unsigned DMGs while Windows remains pending signature.
+- Public release zip: `release-artifacts/EcoreX_0.1.11-public-release.zip`, size `311,225,935`, SHA256 `71D2196AEEF4A331F321D996839E09D8D9A03B70DB113C959B4048F48B6C9DE7`; generated with the ready Web artifact and both macOS unsigned DMGs while Windows remains pending signature.
 - Production download page: `https://www.ecoreai.cn/ecorex-agent/manifest.json` is live as v0.1.11; Windows is `pending-signature`, macOS is `ready-unsigned`, WebUI is `ready`.
+- Production WebUI: `ecorex-web.service` is active on the server, bound to Docker bridge `172.18.0.1:9909`, and public `https://www.ecoreai.cn/ecorex-agent/app/` passes login, app, auth-check, version, and SSE checks.
 
 ## macOS Boundary
 - The repository contains a GitHub Actions macOS DMG workflow for arm64 and x64.
@@ -29,8 +30,7 @@
 ## Remaining Release Steps
 - Complete Authenticode signing for the current rebuilt Windows installer; update final signed size/hash in docs and `deploy/ecorex-site/manifest.json`.
 - Repeat signed installed smoke after signing.
-- Push v0.1.11 branch to GitHub.
+- Push v0.1.11 branch to GitHub when SSH/HTTPS credentials are available; current `git push ecorex` is blocked by SSH public-key access, so use the generated bundle handoff meanwhile.
 - Keep macOS unsigned DMGs clearly marked as signing/notarization/Gatekeeper deferred on the download page.
 - Regenerate `release-artifacts/EcoreX_0.1.11-public-release.zip` after Windows signing is completed so the signed Windows installer can be included.
-- Deploy the latest Admin/download package to `https://www.ecoreai.cn/ecorex-agent/`.
-- Run Linux `install-ecorex-web.sh` and `check-ecorex-web-release.sh` against the production host after the Web tarball is uploaded.
+- Re-run public deployment only after Windows signing changes `windows-x64` from `pending-signature` to `ready`.

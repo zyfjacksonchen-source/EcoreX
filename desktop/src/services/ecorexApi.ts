@@ -165,6 +165,8 @@ export type ChatSendResult = {
   usage?: TokenUsage;
 };
 
+export type ToolPermissionDecision = "allow_once" | "always_allow" | "deny";
+
 export type TokenUsage = {
   inputTokens?: number;
   outputTokens?: number;
@@ -178,6 +180,7 @@ export type StreamItem = {
   content?: string;
   text?: string;
   message?: string;
+  title?: string;
   tool?: string;
   name?: string;
   arguments?: unknown;
@@ -186,6 +189,10 @@ export type StreamItem = {
   status?: string;
   execution_time?: number;
   has_tool_calls?: boolean;
+  permission_request_id?: string;
+  summary?: string;
+  mode?: string;
+  created_at?: string;
   request_id?: string;
   timestamp?: number;
   file_name?: string;
@@ -366,6 +373,18 @@ export async function cancelChatRequest(input: { requestId?: string; sessionId?:
     request_id: input.requestId,
     session_id: input.sessionId,
     lang: "zh"
+  });
+}
+
+export async function decideToolPermission(input: {
+  requestId: string;
+  decision: ToolPermissionDecision;
+  remember?: boolean;
+}) {
+  return apiJson<{ status?: string; allowed?: boolean; message?: string }>("/api/tool-permissions", "POST", {
+    request_id: input.requestId,
+    decision: input.decision,
+    remember: input.remember
   });
 }
 

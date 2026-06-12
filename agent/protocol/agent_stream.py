@@ -253,6 +253,22 @@ class AgentStreamExecutor:
                 })
             except Exception as e:
                 logger.error(f"Event callback error: {e}")
+
+    def _authorize_tool_execution(self, tool_name: str, tool_id: str, arguments: dict) -> dict:
+        """Ask the desktop permission broker before high-risk local tools run."""
+        try:
+            from common.ecorex_tool_permissions import get_tool_permission_broker
+
+            return get_tool_permission_broker().authorize(
+                tool_name=tool_name,
+                tool_call_id=tool_id,
+                arguments=arguments,
+                emit_event=self._emit_event,
+                cancel_event=self.cancel_event,
+            )
+        except Exception as e:
+            logger.warning(f"[Agent] desktop tool permission check skipped: {e}")
+            return {"allowed": True, "reason": "permission-check-error"}
     
     def _is_thinking_enabled(self) -> bool:
         """Whether deep-thinking mode is on at the model layer.
@@ -1210,6 +1226,22 @@ class AgentStreamExecutor:
                     "result": f"{stop_reason}\n\n当前方法行不通，请尝试完全不同的方法或向用户询问更多信息。",
                     "execution_time": 0
                 }
+            return result
+
+        permission = self._authorize_tool_execution(tool_name, tool_id, arguments)
+        if not permission.get("allowed", True):
+            reason = permission.get("reason") or "User denied local tool execution."
+            result = {
+                "status": "error",
+                "result": reason,
+                "execution_time": 0
+            }
+            self._record_tool_result(tool_name, arguments, False)
+            self._emit_event("tool_execution_end", {
+                "tool_call_id": tool_id,
+                "tool_name": tool_name,
+                **result
+            })
             return result
 
         self._emit_event("tool_execution_start", {
