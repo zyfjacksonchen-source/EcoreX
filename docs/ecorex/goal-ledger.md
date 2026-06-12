@@ -2,8 +2,8 @@
 
 ## Active Goal
 
-- Version: v0.1.10
-- Objective: productize EcoreX desktop and admin for ordinary Windows/macOS users, while keeping the agent core compatible.
+- Version: v0.1.11 / 0.1.11-web.1
+- Objective: productize the parallel EcoreX WebUI release alongside the desktop app, keeping the full Agent core, shared records, unchanged Admin management, and clean public deployment handoff.
 - Current branch/worktree note: `deploy/`, `desktop/`, Admin API, and EcoreX docs are active product files. Generated release/runtime folders remain ignored and should not be hand-edited as source of truth.
 
 ## Work Ownership
@@ -15,6 +15,7 @@
 | Desktop Renderer | Main agent + review agent | `desktop/src/` | Implemented | One-screen Codex-style layout, login, Chinese settings, composer UX, fixed approval bar. |
 | Electron Runtime | Main agent + review agent | `desktop/electron/`, `desktop/scripts/` | Implemented | Login context, sanitized renderer session, policy cache, capability install feedback, Windows installed smoke. |
 | Release/Docs | Main agent | `docs/ecorex/`, manifest/package metadata | Implemented | v0.1.10 records, acceptance evidence, artifact hash/size, macOS skipped boundary. |
+| Parallel WebUI | Main agent | `channel/web/`, `common/ecorex_workspace.py`, Web release scripts | Implemented local/package | Linux Web service package, desktop visual shell under `/app/`, shared `.ecorex` workspace state, concurrent install guard. |
 
 ## Guardrails
 
@@ -73,6 +74,9 @@
 - 2026-06-12: Composer textarea now auto-resizes with typed content and switches to an internal scrollbar after the configured maximum height, preserving the compact bottom composer layout during long prompts.
 - 2026-06-12: Rebuilt and signed the Windows package after the desktop UX correction pass. Latest `EcoreX_0.1.10_x64-setup.exe` is `117,442,400` bytes with SHA256 `BE89ADCEAE56D8097D54B1394B2CA47E752F3BD93D51F3F8374D2E0B9F14A308`; regenerated `EcoreX_0.1.10-public-release.zip` is `120,192,890` bytes with SHA256 `DC8BE4CF01E77F7C40962E572A35638636D70448AF820E4DA5474AB4B724AE15`.
 - 2026-06-12: Advanced v0.1.11 desktop UX/SSE/persona work. Windows installer `EcoreX_0.1.11_x64-setup.exe` is signed and installed smoke passed; size `117,469,216`, SHA256 `5ADF10F90DB64E46C6A92CB9FC0730F0A37D0C45B2F55B7EC566E25CF12E3685`. Production Admin API was hotfixed to v0.1.11 after hand-test login returned `invalid client key`; public client routes now accept both v0.1.10 and v0.1.11 keys. macOS DMG upload remains pending GitHub Actions/macOS runner artifacts.
+- 2026-06-12: Parallel WebUI package is locally ready as `EcoreX_0.1.11-web-linux-service.tar.gz` with SHA256 `2C991A1F5D6EF885C98F25AD5C3502A79D260830A7C106C96E77B53633359828`. Public release zip `EcoreX_0.1.11-public-release.zip` now contains the ready Web tarball and both macOS `ready-unsigned` DMGs, excludes Windows while it remains `pending-signature`, and has SHA256 `B9C24718A8C168A91BF2CADF282A076E20FF9AA0A5A1F93A6AFA0B61A6D72DD2`. Temporary Linux install smoke passed with manifest-driven artifact checks.
+- 2026-06-12: SSH `git push` to `ecorex` remains blocked by missing public-key access on this Windows machine, but GitHub Git Data API sync succeeded. Remote `main` and `codex/ecorex-v0.1.11-productization` were advanced through `7c9575e8d90ed0f339a09bad29da97bce5dfa989`.
+- 2026-06-12: Production download page current symlink now points at v0.1.11 pending-signature deployment. Public manifest is v0.1.11 with Windows `pending-signature`, macOS DMGs `ready-unsigned`, and WebUI tarball `ready`. Windows final publication is blocked until Authenticode signing works again for the rebuilt installer.
 
 ## Known Follow-Up
 

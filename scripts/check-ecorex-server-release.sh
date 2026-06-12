@@ -73,28 +73,73 @@ check_dir "$RELEASE_ROOT/releases"
 check_file "$current/index.html"
 check_file "$current/manifest.json"
 check_file "$current/admin/index.html"
-check_file "$current/downloads/EcoreX_${VERSION}_x64-setup.exe"
 check_file "$ADMIN_ROOT/app/ecorex_admin_api.py"
 check_file "$ADMIN_ROOT/env/ecorex-admin-api.env"
 check_file "$ADMIN_ROOT/server/caddy/Caddyfile.example"
 
-python3 - "$current/manifest.json" "$VERSION" <<'PY'
+if ! python3 - "$current/manifest.json" "$current/downloads" "$VERSION" <<'PY'
+import hashlib
 import json
 import pathlib
 import sys
 
 manifest = pathlib.Path(sys.argv[1])
-expected = sys.argv[2]
+downloads = pathlib.Path(sys.argv[2])
+expected = sys.argv[3]
+publishable = {"ready", "ready-unsigned"}
+failures = 0
+
+def fail(message):
+    global failures
+    print(f"FAIL {message}")
+    failures += 1
+
+def hash_file(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest().upper()
+
 if not manifest.is_file():
     raise SystemExit(0)
 payload = json.loads(manifest.read_text(encoding="utf-8-sig"))
 if payload.get("product") == "EcoreX" and payload.get("version") == expected:
     print(f"PASS manifest EcoreX {expected}")
 else:
-    print(f"FAIL manifest product={payload.get('product')} version={payload.get('version')} expected={expected}")
-    raise SystemExit(1)
+    fail(f"manifest product={payload.get('product')} version={payload.get('version')} expected={expected}")
+
+ready_count = 0
+for artifact in payload.get("artifacts") or []:
+    artifact_id = artifact.get("id") or artifact.get("fileName") or "unknown"
+    status = artifact.get("status") or ""
+    file_name = artifact.get("fileName") or ""
+    if status not in publishable:
+        print(f"SKIP artifact {artifact_id} status={status}")
+        continue
+    ready_count += 1
+    path = downloads / file_name
+    if not file_name or not path.is_file():
+        fail(f"missing artifact {artifact_id} file={file_name}")
+        continue
+    expected_size = int(artifact.get("size") or 0)
+    actual_size = path.stat().st_size
+    if actual_size != expected_size:
+        fail(f"artifact {artifact_id} size={actual_size} expected={expected_size}")
+        continue
+    actual_sha = hash_file(path)
+    expected_sha = str(artifact.get("sha256") or "").upper()
+    if actual_sha != expected_sha:
+        fail(f"artifact {artifact_id} sha256={actual_sha} expected={expected_sha}")
+        continue
+    print(f"PASS artifact {artifact_id} {file_name}")
+
+if ready_count == 0:
+    fail("manifest has no ready artifacts")
+
+raise SystemExit(1 if failures else 0)
 PY
-if [[ $? -ne 0 ]]; then
+then
   failures=$((failures + 1))
 fi
 
@@ -111,6 +156,57 @@ if [[ "$CHECK_PUBLIC" == "1" ]]; then
   check_http "public-root" "$PUBLIC_BASE_URL/" "200"
   check_http "public-admin-auth" "$PUBLIC_BASE_URL/admin/" "401"
   check_http "public-client-gate" "$PUBLIC_BASE_URL/client/model-config" "403"
+  if ! python3 - "$current/manifest.json" "$PUBLIC_BASE_URL" <<'PY'
+import json
+import pathlib
+import sys
+import urllib.error
+import urllib.request
+
+manifest = pathlib.Path(sys.argv[1])
+base_url = sys.argv[2].rstrip("/")
+publishable = {"ready", "ready-unsigned"}
+failures = 0
+
+def status_for(url):
+    request = urllib.request.Request(url, method="HEAD")
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return response.status
+    except urllib.error.HTTPError as exc:
+        if exc.code != 405:
+            return exc.code
+    request = urllib.request.Request(url, method="GET")
+    request.add_header("Range", "bytes=0-0")
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return response.status
+    except urllib.error.HTTPError as exc:
+        return exc.code
+    except Exception as exc:
+        return f"error:{exc}"
+
+payload = json.loads(manifest.read_text(encoding="utf-8-sig"))
+for artifact in payload.get("artifacts") or []:
+    status = artifact.get("status") or ""
+    artifact_id = artifact.get("id") or artifact.get("fileName") or "unknown"
+    if status not in publishable:
+        print(f"SKIP public artifact {artifact_id} status={status}")
+        continue
+    href = artifact.get("href") or f"downloads/{artifact.get('fileName', '')}"
+    url = f"{base_url}/{href.lstrip('/')}"
+    status_code = status_for(url)
+    if status_code in (200, 206):
+        print(f"PASS http artifact {artifact_id} {url} -> {status_code}")
+    else:
+        print(f"FAIL http artifact {artifact_id} {url} -> {status_code}")
+        failures += 1
+
+raise SystemExit(1 if failures else 0)
+PY
+  then
+    failures=$((failures + 1))
+  fi
 fi
 
 if [[ "$failures" -gt 0 ]]; then
