@@ -49,6 +49,12 @@ function artifactAction(artifact) {
   if (artifact.status === "ready") {
     return `<a class="download-link" href="./${artifact.href}" download>下载</a>`;
   }
+  if (artifact.status === "ready-unsigned") {
+    return `<a class="download-link" href="./${artifact.href}" download title="${artifact.source || "未签名或未公证产物"}">下载（未公证）</a>`;
+  }
+  if (artifact.status === "pending-signature") {
+    return `<span class="download-link is-disabled" title="${artifact.source || "Windows 签名待完成"}">待签名</span>`;
+  }
   return `<span class="download-link is-disabled" title="${artifact.source || "该平台产物仍在准备中"}">待验证</span>`;
 }
 
