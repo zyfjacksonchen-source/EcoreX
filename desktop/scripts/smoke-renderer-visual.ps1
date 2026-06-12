@@ -231,15 +231,15 @@ try {
   const theme = params.get("theme") || "light";
   window.localStorage.setItem("ecorex-theme", theme);
   window.localStorage.setItem("ecorex-projects", JSON.stringify([{
-    id: "project-cowagent",
-    name: "CowAgent",
-    path: "C:\\CowAgent",
-    memoryPath: "C:\\CowAgent\\.ecorex\\project-memory.md",
-    dreamsPath: "C:\\CowAgent\\.ecorex\\dreams",
+    id: "project-ecorex",
+    name: "EcoreX",
+    path: "C:\\EcoreX",
+    memoryPath: "C:\\EcoreX\\.ecorex\\project-memory.md",
+    dreamsPath: "C:\\EcoreX\\.ecorex\\dreams",
     updatedAt: new Date().toISOString()
   }]));
-  window.localStorage.setItem("ecorex-session-projects", JSON.stringify({ "ads-growth": "project-cowagent" }));
-  window.localStorage.setItem("ecorex-session-titles", JSON.stringify({ "ads-growth": "zhayujie/CowAgent.git 将项目改造成 EcoreX" }));
+  window.localStorage.setItem("ecorex-session-projects", JSON.stringify({ "ads-growth": "project-ecorex" }));
+  window.localStorage.setItem("ecorex-session-titles", JSON.stringify({ "ads-growth": "\u4ea6\u82af\u5e7f\u544a\u589e\u957f\u9879\u76ee" }));
   const session = {
     authenticated: true,
     expiresAt: new Date(Date.now() + 86400000).toISOString(),
@@ -291,7 +291,7 @@ try {
     openPath: async () => "",
     apiJson: async (request) => {
       const path = request.path || "";
-      if (path === "/api/version") return { version: "0.1.10" };
+      if (path === "/api/version") return { version: "0.1.11" };
       if (path.startsWith("/api/sessions/") && path.endsWith("/generate_title")) return { status: "success", title: "Ad delivery report" };
       if (path.startsWith("/api/sessions")) return { sessions: [{ session_id: "ads-growth", title: "EcoreX ad growth project", msg_count: 4, last_active: new Date().toISOString() }], total: 1 };
       if (path.startsWith("/api/history")) return { messages: history };

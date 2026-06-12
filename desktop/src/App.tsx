@@ -1,4 +1,5 @@
 import {
+  ArrowDownToLine,
   AtSign,
   Bell,
   Bot,
@@ -16,7 +17,6 @@ import {
   HardDrive,
   Image as ImageIcon,
   KeyRound,
-  LoaderCircle,
   LogOut,
   Moon,
   MoreHorizontal,
@@ -41,6 +41,7 @@ import {
 } from "lucide-react";
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { ClipboardEvent, MouseEvent, ReactNode } from "react";
+import { MessageContent, type AgentStepDisclosure, type ToolCallDisclosure } from "./components/MessageContent";
 import {
   cancelChatRequest,
   enterpriseChangePassword,
@@ -77,11 +78,16 @@ import {
   type PermissionMode,
   type PermissionState,
   type ProjectFolder,
+  type RuntimeMessage,
   type RuntimeSkill,
+  type RuntimeStep,
+  type RuntimeToolCall,
   type RuntimeTool,
   type RuntimeSnapshot,
+  type StreamItem,
   type TokenUsage
 } from "./services/ecorexApi";
+import { CHAT_SCROLL_THRESHOLD_PX, getChatScrollState, scrollElementToBottom } from "./utils/chatUx";
 
 type ThemeMode = "light" | "dark";
 type SidecarStatus = {
@@ -94,7 +100,7 @@ type SessionRow = {
   id: string;
   title: string;
   detail: string;
-  updatedAt: string;
+  updatedAt: string | number;
   status: "active" | "waiting" | "ready" | "failed";
   pinned?: boolean;
   projectId?: string;
@@ -107,7 +113,13 @@ type ChatItem = {
   createdAt: string;
   attachments?: FileAttachment[];
   pending?: boolean;
+  reasoning?: string;
+  steps?: AgentStepDisclosure[];
+  toolCalls?: ToolCallDisclosure[];
+  cancelled?: boolean;
+  requestId?: string;
   userSeq?: number;
+  botSeq?: number;
 };
 type ApprovalState =
   | {
@@ -223,9 +235,10 @@ function applyTheme(theme: ThemeMode) {
   document.documentElement.dataset.theme = theme;
 }
 
-function formatTime(value?: string) {
+function formatTime(value?: string | number) {
   if (!value) return "刚刚";
-  const date = new Date(value);
+  const normalized = typeof value === "number" && value < 10_000_000_000 ? value * 1000 : value;
+  const date = new Date(normalized);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
@@ -315,6 +328,15 @@ function fileIcon(file: FileAttachment) {
   return <FileText aria-hidden="true" />;
 }
 
+function ThinkingIndicator({ label = "思考中", compact = false }: { label?: string; compact?: boolean }) {
+  return (
+    <span className={`thinking-indicator${compact ? " is-compact" : ""}`} title={label}>
+      <span className="thinking-ring" aria-hidden="true" />
+      {!compact && <span>{label}</span>}
+    </span>
+  );
+}
+
 function permissionModeLabel(mode?: PermissionMode) {
   return mode === "smart-ask"
     ? "智能确认"
@@ -330,12 +352,74 @@ function permissionModeLabel(mode?: PermissionMode) {
 function projectContextPrompt(project: ProjectFolder) {
   return [
     "【EcoreX 项目上下文】",
+    "默认沟通风格：专业、严谨、克制，称呼用户为“同学”。",
+    "对外身份始终是 EcoreX，不自称 CowAgent 或 COW。",
     `项目名称：${project.name}`,
     `项目文件夹：${project.path}`,
     `项目记忆：${project.memoryPath || `${project.path}/.ecorex/project-memory.md`}`,
     `项目梦境蒸馏：${project.dreamsPath || `${project.path}/.ecorex/dreams`}`,
     "请优先围绕该项目文件夹读取、分析、写入文件。需要总结或沉淀时，只写入项目记忆，不写入全局 MEMORY.md。"
   ].join("\n");
+}
+
+function normalizeToolCall(tool: RuntimeToolCall | ToolCallDisclosure): ToolCallDisclosure {
+  const fn = "function" in tool ? tool.function : undefined;
+  return {
+    name: tool.name || ("tool" in tool ? tool.tool : undefined) || fn?.name,
+    arguments: tool.arguments ?? ("input" in tool ? tool.input : undefined) ?? fn?.arguments,
+    result: tool.result,
+    status: tool.status,
+    is_error: tool.is_error,
+    execution_time: tool.execution_time
+  };
+}
+
+function normalizeStep(step: RuntimeStep): AgentStepDisclosure {
+  const type = String(step.type || "").toLowerCase();
+  const content = step.content || step.text || step.thinking || "";
+  if (type === "thinking" || type === "reasoning") {
+    return { type: "thinking", content };
+  }
+  if (type === "tool" || type === "tool_start" || type === "tool_end") {
+    return {
+      type: "tool",
+      name: step.name || step.tool,
+      arguments: step.arguments ?? step.input,
+      result: step.result,
+      status: step.status,
+      is_error: step.is_error,
+      execution_time: step.execution_time,
+      running: type === "tool_start" || step.status === "running"
+    };
+  }
+  if (type === "phase") {
+    return { type: "phase", content };
+  }
+  if (type === "image" || type === "video" || type === "file" || step.file_type) {
+    const fileType = step.file_type === "image" || step.file_type === "video" ? step.file_type : type === "image" || type === "video" ? type : "file";
+    return {
+      type: "media",
+      fileType,
+      url: step.path || content,
+      fileName: step.file_name
+    };
+  }
+  return { type: "content", content };
+}
+
+function mapRuntimeMessage(item: RuntimeMessage, sessionId: string, index: number): ChatItem {
+  return {
+    id: `${sessionId}-${index}`,
+    role: item.role === "user" ? "user" : "assistant",
+    content: item.content || "",
+    createdAt: item.created_at ? new Date(item.created_at * 1000).toISOString() : new Date().toISOString(),
+    reasoning: item.reasoning,
+    steps: item.steps?.map(normalizeStep),
+    toolCalls: item.tool_calls?.map(normalizeToolCall),
+    requestId: item.request_id,
+    userSeq: item.user_seq ?? item.seq,
+    botSeq: item.role === "assistant" ? item.seq : undefined
+  };
 }
 
 function toolEnabled(tools: RuntimeTool[] | undefined, name: string) {
@@ -409,10 +493,11 @@ export function App() {
   const [messages, setMessages] = useState<ChatItem[]>([]);
   const [composerText, setComposerText] = useState("");
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
-  const [activeRequestId, setActiveRequestId] = useState("");
+  const [, setActiveRequestId] = useState("");
   const [approval, setApproval] = useState<ApprovalState | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [showJumpLatest, setShowJumpLatest] = useState(false);
   const [previewFile, setPreviewFile] = useState<FileAttachment | null>(null);
   const [packs, setPacks] = useState<CapabilityPack[]>([]);
   const [permissionState, setPermissionState] = useState<PermissionState | null>(null);
@@ -434,9 +519,12 @@ export function App() {
   const [passwordDraft, setPasswordDraft] = useState({ oldPassword: "", newPassword: "", confirmPassword: "" });
   const [passwordBusy, setPasswordBusy] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const messageListRef = useRef<HTMLDivElement | null>(null);
   const streamCleanup = useRef<null | (() => void)>(null);
   const streamCleanups = useRef<Record<string, () => void>>({});
   const activeSessionIdRef = useRef(activeSessionId);
+  const autoScrollRef = useRef(true);
+  const completedRequestIds = useRef<StringBoolMap>({});
   const preloadDone = useRef(false);
 
   useEffect(() => {
@@ -493,6 +581,17 @@ export function App() {
     const frame = window.requestAnimationFrame(syncComposerHeight);
     return () => window.cancelAnimationFrame(frame);
   }, [composerText, activeSessionId]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      if (autoScrollRef.current) {
+        scrollToLatest(false);
+      } else {
+        updateJumpLatestState();
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [messages, activeSessionId]);
 
   useEffect(() => {
     getEnterpriseSession()
@@ -645,6 +744,22 @@ export function App() {
     textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
   }
 
+  function updateJumpLatestState() {
+    const list = messageListRef.current;
+    if (!list) return;
+    const state = getChatScrollState(list, CHAT_SCROLL_THRESHOLD_PX);
+    autoScrollRef.current = state.autoScrollEnabled;
+    setShowJumpLatest(state.showJumpLatest);
+  }
+
+  function scrollToLatest(forceAuto = true) {
+    const list = messageListRef.current;
+    if (!list) return;
+    if (forceAuto) autoScrollRef.current = true;
+    scrollElementToBottom(list, forceAuto ? "smooth" : "auto");
+    setShowJumpLatest(false);
+  }
+
   function restoreCachedSession(sessionId: string) {
     const cached = sessionUiState[sessionId];
     if (!cached) return false;
@@ -657,6 +772,8 @@ export function App() {
   }
 
   async function selectSession(row: SessionRow) {
+    autoScrollRef.current = true;
+    setShowJumpLatest(false);
     setActiveSessionId(row.id);
     setActiveSessionTitle(row.title);
     setActiveProjectId(row.projectId || null);
@@ -670,15 +787,7 @@ export function App() {
     setAttachments([]);
     try {
       const history = await loadSessionHistory(row.id);
-      setMessages(
-        history.map((item, index) => ({
-          id: `${row.id}-${index}`,
-          role: item.role === "user" ? "user" : "assistant",
-          content: item.content || "",
-          createdAt: item.created_at ? new Date(item.created_at * 1000).toISOString() : new Date().toISOString(),
-          userSeq: item.user_seq ?? item.seq
-        }))
-      );
+      setMessages(history.map((item, index) => mapRuntimeMessage(item, row.id, index)));
     } catch (error) {
       setToast(error instanceof Error ? error.message : "加载会话失败");
     }
@@ -863,13 +972,131 @@ export function App() {
     }
   }
 
-  function finishSessionRequest(sessionId: string) {
+  function updateAssistantMessage(sessionId: string, assistantId: string, updater: (message: ChatItem) => ChatItem) {
+    updateSessionMessages(sessionId, (current) => current.map((message) => message.id === assistantId ? updater(message) : message));
+  }
+
+  function finishRunningSteps(message: ChatItem): ChatItem {
+    const steps = (message.steps || []).map((step) => {
+      if (step.type === "thinking" && step.running) {
+        return { ...step, running: false };
+      }
+      if (step.type === "tool" && step.running) {
+        return { ...step, running: false, status: step.status === "running" ? "done" : step.status };
+      }
+      return step;
+    });
+    return { ...message, steps };
+  }
+
+  function appendReasoningStep(message: ChatItem, chunk: string): ChatItem {
+    const steps = [...(message.steps || [])];
+    const last = steps[steps.length - 1];
+    if (last?.type === "thinking" && last.running) {
+      steps[steps.length - 1] = { ...last, content: `${last.content || ""}${chunk}` };
+    } else {
+      steps.push({ type: "thinking", content: chunk, running: true, startedAt: Date.now() });
+    }
+    return { ...message, pending: true, steps };
+  }
+
+  function flushIntermediateContent(message: ChatItem): ChatItem {
+    const content = message.content.trim();
+    if (!content) return message;
+    return {
+      ...message,
+      content: "",
+      steps: [...(message.steps || []), { type: "content", content, intermediate: true }]
+    };
+  }
+
+  function appendToolStart(message: ChatItem, item: StreamItem): ChatItem {
+    const next = flushIntermediateContent(finishRunningSteps(message));
+    return {
+      ...next,
+      pending: true,
+      steps: [
+        ...(next.steps || []),
+        {
+          type: "tool",
+          name: item.tool || item.name,
+          arguments: item.arguments ?? item.input,
+          status: "running",
+          running: true
+        }
+      ]
+    };
+  }
+
+  function appendToolEnd(message: ChatItem, item: StreamItem): ChatItem {
+    const steps = [...(message.steps || [])];
+    const toolName = item.tool || item.name;
+    let targetIndex = -1;
+    for (let index = steps.length - 1; index >= 0; index -= 1) {
+      const step = steps[index];
+      if (step.type === "tool" && step.running && (!toolName || step.name === toolName)) {
+        targetIndex = index;
+        break;
+      }
+    }
+    const completedTool: Extract<AgentStepDisclosure, { type: "tool" }> = {
+      type: "tool",
+      name: toolName,
+      arguments: item.arguments ?? item.input,
+      result: item.result ?? item.content ?? item.message,
+      status: item.status || "done",
+      execution_time: item.execution_time,
+      is_error: item.status === "error" || item.status === "failed",
+      running: false
+    };
+    if (targetIndex >= 0) {
+      const previous = steps[targetIndex];
+      if (previous.type === "tool") {
+        steps[targetIndex] = {
+          ...previous,
+          ...completedTool,
+          arguments: completedTool.arguments ?? previous.arguments
+        };
+      }
+    } else {
+      steps.push(completedTool);
+    }
+    return { ...message, pending: true, steps };
+  }
+
+  function appendMediaStep(message: ChatItem, item: StreamItem): ChatItem {
+    const next = finishRunningSteps(message);
+    const type = item.type === "image" || item.file_type === "image"
+      ? "image"
+      : item.type === "video" || item.file_type === "video"
+        ? "video"
+        : "file";
+    return {
+      ...next,
+      pending: true,
+      steps: [
+        ...(next.steps || []),
+        {
+          type: "media",
+          fileType: type,
+          url: item.url || item.path || item.content,
+          fileName: item.file_name || item.name
+        }
+      ]
+    };
+  }
+
+  function clearSessionRequestState(sessionId: string) {
     setActiveRequestId("");
     setSessionRequestIds((current) => {
       const next = { ...current };
       delete next[sessionId];
       return next;
     });
+  }
+
+  function finishSessionRequest(sessionId: string) {
+    clearSessionRequestState(sessionId);
     streamCleanups.current[sessionId]?.();
     delete streamCleanups.current[sessionId];
   }
@@ -969,9 +1196,15 @@ export function App() {
           requestId: result.request_id,
           webPort: sidecarStatus.webPort,
           onItem: (item) => {
+            if (item.request_id && item.request_id !== result.request_id) return;
             if (item.type === "cancelled") {
-              updateSessionMessages(requestSessionId, (current) => current.map((message) => message.id === assistantId ? { ...message, content: message.content || "已停止", pending: false } : message));
-              finishSessionRequest(requestSessionId);
+              updateAssistantMessage(requestSessionId, assistantId, (message) => ({
+                ...finishRunningSteps(message),
+                content: message.content || "已停止",
+                pending: false,
+                cancelled: true
+              }));
+              clearSessionRequestState(requestSessionId);
               return;
             }
             if (item.type === "done") {
@@ -981,22 +1214,24 @@ export function App() {
                 }
                 if (message.id === assistantId) {
                   return {
-                    ...message,
+                    ...finishRunningSteps(message),
                     content: item.content || message.content,
                     pending: false,
-                    userSeq: typeof item.user_seq === "number" ? item.user_seq : message.userSeq
+                    userSeq: typeof item.user_seq === "number" ? item.user_seq : message.userSeq,
+                    botSeq: typeof item.bot_seq === "number" ? item.bot_seq : message.botSeq
                   };
                 }
                 return message;
               }));
-              finishSessionRequest(requestSessionId);
+              completedRequestIds.current[result.request_id || ""] = true;
+              clearSessionRequestState(requestSessionId);
               reportChatUsage(item.usage, usageTotal(item.usage) ? "provider" : "estimated");
               return;
             }
             if (item.type === "error") {
               const message = item.content || item.message || "运行时返回错误";
               updateSessionMessages(requestSessionId, (current) => current.map((entry) => entry.id === assistantId ? {
-                ...entry,
+                ...finishRunningSteps(entry),
                 content: message,
                 pending: false
               } : entry));
@@ -1005,13 +1240,59 @@ export function App() {
               void reportDesktopEvent({ type: "error", source: "Desktop", message, sessionId: requestSessionId });
               return;
             }
+            if (item.type === "reasoning" || item.type === "thinking") {
+              const chunk = item.content || item.text || "";
+              if (chunk) {
+                updateAssistantMessage(requestSessionId, assistantId, (message) => appendReasoningStep(message, chunk));
+              }
+              return;
+            }
+            if (item.type === "message_end") {
+              if (item.has_tool_calls) {
+                updateAssistantMessage(requestSessionId, assistantId, (message) => flushIntermediateContent(finishRunningSteps(message)));
+              }
+              return;
+            }
+            if (item.type === "tool_start") {
+              updateAssistantMessage(requestSessionId, assistantId, (message) => appendToolStart(message, item));
+              return;
+            }
+            if (item.type === "tool_end") {
+              updateAssistantMessage(requestSessionId, assistantId, (message) => appendToolEnd(message, item));
+              return;
+            }
+            if (item.type === "image" || item.type === "video" || item.type === "file" || item.type === "voice_attach") {
+              updateAssistantMessage(requestSessionId, assistantId, (message) => appendMediaStep(message, item));
+              if (item.type === "voice_attach") {
+                finishSessionRequest(requestSessionId);
+                delete completedRequestIds.current[result.request_id || ""];
+              }
+              return;
+            }
+            if (item.type === "phase" && (item.content || item.message)) {
+              updateAssistantMessage(requestSessionId, assistantId, (message) => ({
+                ...message,
+                pending: true,
+                steps: [...(message.steps || []), { type: "phase", content: item.content || item.message }]
+              }));
+              return;
+            }
             if ((item.type === "message_update" || item.type === "delta") && item.content) {
-              updateSessionMessages(requestSessionId, (current) => current.map((message) => message.id === assistantId ? { ...message, content: `${message.content}${item.content}`, pending: false } : message));
+              updateAssistantMessage(requestSessionId, assistantId, (message) => ({
+                ...finishRunningSteps(message),
+                content: `${message.content}${item.content}`,
+                pending: true
+              }));
             }
           },
           onError: () => {
+            if (completedRequestIds.current[result.request_id || ""]) {
+              delete completedRequestIds.current[result.request_id || ""];
+              finishSessionRequest(requestSessionId);
+              return;
+            }
             finishSessionRequest(requestSessionId);
-            updateSessionMessages(requestSessionId, (current) => current.map((message) => message.id === assistantId ? { ...message, pending: false } : message));
+            updateAssistantMessage(requestSessionId, assistantId, (message) => ({ ...finishRunningSteps(message), pending: false }));
             reportChatUsage(undefined, "estimated");
           }
         });
@@ -1041,7 +1322,7 @@ export function App() {
       }).catch(() => undefined);
     } catch (error) {
       const message = error instanceof Error ? error.message : "发送失败";
-        updateSessionMessages(requestSessionId, (current) => current.map((item) => item.id === assistantId ? { ...item, content: message, pending: false } : item));
+      updateSessionMessages(requestSessionId, (current) => current.map((item) => item.id === assistantId ? { ...finishRunningSteps(item), content: message, pending: false } : item));
       finishSessionRequest(requestSessionId);
       void reportDesktopEvent({ type: "error", source: "Desktop", message, sessionId: requestSessionId });
     }
@@ -1051,8 +1332,13 @@ export function App() {
     const requestId = activeSessionRequestId;
     if (!requestId) return;
     await cancelChatRequest({ requestId, sessionId: activeSessionId });
-    finishSessionRequest(activeSessionId);
-    updateSessionMessages(activeSessionId, (current) => current.map((message) => message.pending ? { ...message, content: message.content || "已停止", pending: false } : message));
+    clearSessionRequestState(activeSessionId);
+    updateSessionMessages(activeSessionId, (current) => current.map((message) => message.pending ? {
+      ...finishRunningSteps(message),
+      content: message.content || "已停止",
+      pending: false,
+      cancelled: true
+    } : message));
   }
 
   async function undoLastTurn() {
@@ -1228,11 +1514,19 @@ export function App() {
   const renderSessionRow = (row: SessionRow) => {
     const cachedMessages = sessionUiState[row.id]?.messages || [];
     const isRunning = Boolean(sessionRequestIds[row.id]) || cachedMessages.some((message) => message.pending);
+    const isActive = row.id === activeSessionId;
     const rowTitle = `${row.title}\n${row.detail}\n${formatTime(row.updatedAt)}`;
     return (
-      <article className={`session-row is-${isRunning ? "waiting" : row.status}`} key={row.id}>
-        <button className="session-main" type="button" onClick={() => void selectSession(row)} title={rowTitle}>
-          {isRunning ? <LoaderCircle className="spin-icon" aria-hidden="true" /> : row.projectId ? <FolderOpen aria-hidden="true" /> : <Bot aria-hidden="true" />}
+      <article className={`session-row is-${isRunning ? "waiting" : row.status}${isActive ? " is-active" : ""}`} key={row.id}>
+        <button
+          className="session-main"
+          type="button"
+          onClick={() => void selectSession(row)}
+          title={rowTitle}
+          data-tooltip={rowTitle}
+          aria-current={isActive ? "page" : undefined}
+        >
+          {isRunning ? <ThinkingIndicator compact /> : row.projectId ? <FolderOpen aria-hidden="true" /> : <Bot aria-hidden="true" />}
           <span className="session-line"><strong>{row.title}</strong><small>{row.detail}</small></span>
           <em>{formatTime(row.updatedAt)}</em>
         </button>
@@ -1258,22 +1552,8 @@ export function App() {
   return (
     <main className="app-shell">
       <aside className="session-sidebar">
-        <div className="brand-row">
-          <div className="brand-mark"><img src={brandIconUrl} alt="" /></div>
-          <div>
-            <strong>EcoreX</strong>
-            <span>亦芯广告 AI Agent</span>
-          </div>
-          <button className="icon-button" title={theme === "dark" ? "切换到明亮模式" : "切换到深色模式"} onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
-            {theme === "dark" ? <SunMedium aria-hidden="true" /> : <Moon aria-hidden="true" />}
-          </button>
-          <button className="icon-button" title="通知与运行状态" onClick={() => setNotificationsOpen((open) => !open)}>
-            <Bell aria-hidden="true" />
-          </button>
-        </div>
-
         <div className="sidebar-actions">
-          <button onClick={() => startNewSession(null)} title="创建不绑定项目的通用会话"><Plus aria-hidden="true" />新对话</button>
+          <button onClick={() => startNewSession(null)} title="创建不绑定项目的通用会话" data-tooltip="创建不绑定项目的通用会话"><Plus aria-hidden="true" />新对话</button>
           <label className="search-box" title="搜索会话标题和摘要">
             <Search aria-hidden="true" />
             <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="搜索会话" />
@@ -1327,14 +1607,6 @@ export function App() {
           )}
         </section>
 
-        {notificationsOpen && (
-          <section className="popover-panel">
-            <strong>运行状态</strong>
-            <span>{sidecarStatus.message}</span>
-            <span>{runtimeSnapshot.message}</span>
-          </section>
-        )}
-
         <div className="session-list" aria-label="会话列表">
           <div className="sidebar-section-title"><span>通用会话</span><small>{generalSessions.length}</small></div>
           {generalSessions.length ? generalSessions.map(renderSessionRow) : <div className="session-empty">暂无通用会话</div>}
@@ -1371,10 +1643,29 @@ export function App() {
           <div className="chat-status">
             <span title={runtimeSnapshot.message}><Bot aria-hidden="true" />{runtimeSnapshot.status === "ready" ? "运行时已连接" : "等待运行时"}</span>
             <span title="当前企业账号"><CheckCircle2 aria-hidden="true" />{session.user.email}</span>
+            <button
+              className="icon-button"
+              title={theme === "dark" ? "切换到明亮模式" : "切换到深色模式"}
+              data-tooltip={theme === "dark" ? "切换到明亮模式" : "切换到深色模式"}
+              aria-label={theme === "dark" ? "切换到明亮模式" : "切换到深色模式"}
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            >
+              {theme === "dark" ? <SunMedium aria-hidden="true" /> : <Moon aria-hidden="true" />}
+            </button>
+            <button className="icon-button" title="通知与运行状态" data-tooltip="通知与运行状态" aria-label="通知与运行状态" onClick={() => setNotificationsOpen((open) => !open)}>
+              <Bell aria-hidden="true" />
+            </button>
           </div>
+          {notificationsOpen && (
+            <section className="chat-popover-panel">
+              <strong>运行状态</strong>
+              <span>{sidecarStatus.message}</span>
+              <span>{runtimeSnapshot.message}</span>
+            </section>
+          )}
         </header>
 
-        <div className="message-list">
+        <div className="message-list" ref={messageListRef} onScroll={updateJumpLatestState}>
           {messages.length === 0 ? (
             <div className="empty-chat">
               <div className="brand-mark"><img src={brandIconUrl} alt="" /></div>
@@ -1385,7 +1676,15 @@ export function App() {
             messages.map((message) => (
               <article className={`message ${message.role}`} key={message.id}>
                 <div className="message-body">
-                  <p>{message.content || (message.pending ? "正在思考..." : "")}</p>
+                  <MessageContent
+                    role={message.role}
+                    content={message.content}
+                    pending={message.pending}
+                    cancelled={message.cancelled}
+                    reasoning={message.reasoning}
+                    steps={message.steps}
+                    toolCalls={message.toolCalls}
+                  />
                   {message.attachments?.length ? (
                     <div className="message-files">
                       {message.attachments.map((file) => (
@@ -1400,6 +1699,18 @@ export function App() {
             ))
           )}
         </div>
+
+        {showJumpLatest && (
+          <button
+            type="button"
+            className="jump-latest-button"
+            onClick={() => scrollToLatest(true)}
+            title="回到最新消息"
+            aria-label="回到最新消息"
+          >
+            <ArrowDownToLine aria-hidden="true" />
+          </button>
+        )}
 
         <div className="composer-zone">
           {approval && (

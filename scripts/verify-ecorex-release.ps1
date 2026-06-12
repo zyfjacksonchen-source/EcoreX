@@ -1,6 +1,6 @@
 param(
     [string]$PublicBaseUrl = "https://www.ecoreai.cn/ecorex-agent",
-    [string]$ExpectedVersion = "0.1.10",
+    [string]$ExpectedVersion = "0.1.11",
     [string]$LocalWindowsInstaller = "",
     [string]$LocalMacArm64Dmg = "",
     [string]$LocalMacX64Dmg = "",
@@ -8,7 +8,7 @@ param(
     [string]$ClientUserToken = "",
     [string]$ClientDeviceId = "verify-device",
     [string]$GitRemoteUrl = "https://github.com/zhangyifanjackson-dotcom/EcoreX.git",
-    [string]$GitProductBranch = "codex/ecorex-v0.1.10-productization",
+    [string]$GitProductBranch = "codex/ecorex-v0.1.11-productization",
     [string]$ExpectedGitHubCommit = "",
     [switch]$SkipMacArtifacts = $true,
     [switch]$SkipGitRemoteCheck

@@ -1,5 +1,5 @@
 param(
-    [string]$InstallerPath = "$PSScriptRoot\..\release\EcoreX_0.1.10_x64-setup.exe",
+    [string]$InstallerPath = "$PSScriptRoot\..\release\EcoreX_0.1.11_x64-setup.exe",
     [string]$InstallDir = "",
     [int]$Port = 19131,
     [switch]$KeepInstall

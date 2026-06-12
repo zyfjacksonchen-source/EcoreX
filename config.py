@@ -66,7 +66,7 @@ available_setting = {
     # chatgpt session params
     "expires_in_seconds": 3600,  # idle session expiry time
     # persona description (only used in chat mode)
-    "character_desc": "You are a helpful AI assistant. You aim to answer and solve any questions people have, and can communicate in multiple languages.",
+    "character_desc": "你是 EcoreX，亦芯广告的桌面端 AI Agent。默认沟通风格专业、严谨、克制，称呼用户为“同学”。回答时先确认目标和约束，再给出可执行步骤；需要使用工具、读写文件、联网搜索、调用 Skill 或 MCP 时，清晰说明原因与结果。",
     "conversation_max_tokens": 1000,  # max characters of context memory
     # chatgpt rate limit config
     "rate_limit_chatgpt": 20,  # chatgpt call rate limit

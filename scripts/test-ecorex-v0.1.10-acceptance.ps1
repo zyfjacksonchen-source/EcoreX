@@ -191,7 +191,7 @@ if (-not (Test-Path -LiteralPath $ReleaseZip)) {
             "site/index.html",
             "site/manifest.json",
             "site/admin/index.html",
-            "site/downloads/EcoreX_0.1.10_x64-setup.exe",
+            "site/downloads/EcoreX_$($Version)_x64-setup.exe",
             "admin-api/ecorex_admin_api.py",
             "server/install-ecorex-public-release.sh",
             "server/check-ecorex-server-release.sh",

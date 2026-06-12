@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${VERSION:-0.1.10}"
+VERSION="${VERSION:-0.1.11}"
 ZIP_PATH="${1:-${ZIP_PATH:-release-artifacts/EcoreX_${VERSION}-public-release.zip}}"
 RELEASE_ROOT="${RELEASE_ROOT:-/srv/ecorex-agent-download}"
 ADMIN_ROOT="${ADMIN_ROOT:-/srv/ecorex-agent-admin}"
@@ -92,7 +92,7 @@ import sys
 
 root = pathlib.Path(sys.argv[1])
 checksums = json.loads((root / "checksums.json").read_text(encoding="utf-8-sig"))
-if checksums.get("version") != "0.1.10":
+if checksums.get("version") != "0.1.11":
     raise SystemExit(f"Unexpected release version: {checksums.get('version')}")
 windows = checksums.get("windows") or {}
 installer = root / windows.get("relativePath", "")
@@ -118,7 +118,7 @@ env_file="$ADMIN_ROOT/env/ecorex-admin-api.env"
 if [[ ! -f "$env_file" ]]; then
   cat > "$env_file" <<'EOF'
 ECOREX_ADMIN_DB=/srv/ecorex-agent-admin/data/ecorex-admin.sqlite3
-ECOREX_CLIENT_EVENT_KEY=ecorex-desktop-v0.1.10
+ECOREX_CLIENT_EVENT_KEYS=ecorex-desktop-v0.1.10,ecorex-desktop-v0.1.11
 ECOREX_ALLOWED_ORIGINS=https://www.ecoreai.cn
 ECOREX_ADMIN_USERNAME=admin
 ECOREX_ADMIN_PASSWORD=change-this-before-starting

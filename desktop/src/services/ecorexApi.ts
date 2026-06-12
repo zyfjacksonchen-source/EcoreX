@@ -2,7 +2,8 @@ export type RuntimeSession = {
   session_id?: string;
   id?: string;
   title?: string;
-  last_active?: string;
+  last_active?: string | number;
+  updatedAt?: string | number;
   msg_count?: number;
 };
 
@@ -16,8 +17,44 @@ export type RuntimeSkill = {
   display_name?: string;
   description?: string;
   source?: string;
+  path?: string;
   enabled?: boolean;
   category?: string;
+};
+
+export type RuntimeToolCall = {
+  id?: string;
+  name?: string;
+  tool?: string;
+  arguments?: unknown;
+  input?: unknown;
+  result?: unknown;
+  status?: string;
+  is_error?: boolean;
+  execution_time?: number;
+  function?: {
+    name?: string;
+    arguments?: unknown;
+  };
+};
+
+export type RuntimeStep = {
+  type?: string;
+  content?: string;
+  text?: string;
+  thinking?: string;
+  name?: string;
+  tool?: string;
+  arguments?: unknown;
+  input?: unknown;
+  result?: unknown;
+  status?: string;
+  is_error?: boolean;
+  execution_time?: number;
+  has_tool_calls?: boolean;
+  file_name?: string;
+  file_type?: string;
+  path?: string;
 };
 
 export type RuntimeMessage = {
@@ -26,7 +63,18 @@ export type RuntimeMessage = {
   created_at?: number;
   seq?: number;
   user_seq?: number;
-  tool_calls?: Array<{ name?: string; result?: string }>;
+  reasoning?: string;
+  steps?: RuntimeStep[];
+  tool_calls?: RuntimeToolCall[];
+  kind?: string;
+  request_id?: string;
+  extras?: {
+    audio?: {
+      url?: string;
+      kind?: string;
+    };
+    [key: string]: unknown;
+  };
 };
 
 export type FileAttachment = {
@@ -128,8 +176,22 @@ export type TokenUsage = {
 export type StreamItem = {
   type?: string;
   content?: string;
+  text?: string;
   message?: string;
   tool?: string;
+  name?: string;
+  arguments?: unknown;
+  input?: unknown;
+  result?: unknown;
+  status?: string;
+  execution_time?: number;
+  has_tool_calls?: boolean;
+  request_id?: string;
+  timestamp?: number;
+  file_name?: string;
+  file_type?: string;
+  url?: string;
+  path?: string;
   user_seq?: number;
   bot_seq?: number;
   usage?: TokenUsage;

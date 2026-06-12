@@ -2,6 +2,10 @@
 :root {
   --font-sans: Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --font-size-ui: 14px;
+  --font-size-code: 12px;
+  --icon-size: 14px;
+  --icon-size-sm: 12px;
 
   --radius-xs: 6px;
   --radius-sm: 10px;

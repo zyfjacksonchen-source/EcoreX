@@ -14,7 +14,7 @@ export const DEFAULT_ENTERPRISE_POLICY: EnterprisePolicy = {
   adminEventsUrl: "https://www.ecoreai.cn/ecorex-agent/client/events",
   modelConfigUrl: "https://www.ecoreai.cn/ecorex-agent/client/model-config",
   capabilityPolicyUrl: "https://www.ecoreai.cn/ecorex-agent/client/capability-policy",
-  clientEventKey: "ecorex-desktop-v0.1.10"
+  clientEventKey: "ecorex-desktop-v0.1.11"
 };
 
 export function hasEnterpriseTransport(policy: EnterprisePolicy) {

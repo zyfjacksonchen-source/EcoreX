@@ -1,8 +1,10 @@
 param(
-    [string]$Version = "0.1.10",
+    [string]$Version = "0.1.11",
     [string]$SiteRoot = "deploy/ecorex-site",
     [string]$AdminApiRoot = "deploy/ecorex-admin-api",
-    [string]$InstallerPath = "desktop/release/EcoreX_0.1.10_x64-setup.exe",
+    [string]$InstallerPath = "desktop/release/EcoreX_0.1.11_x64-setup.exe",
+    [string]$MacArm64DmgPath = "",
+    [string]$MacX64DmgPath = "",
     [string]$OutputDir = "release-artifacts",
     [switch]$KeepStaging
 )
@@ -33,7 +35,6 @@ function Resolve-UnderDirectory {
 $repoRoot = (Resolve-Path -LiteralPath ".").Path
 $siteRootResolved = Resolve-RequiredPath $SiteRoot
 $adminApiRootResolved = Resolve-RequiredPath $AdminApiRoot
-$installerResolved = Resolve-RequiredPath $InstallerPath
 
 $manifestPath = Join-Path $siteRootResolved "manifest.json"
 $manifest = Get-Content -Raw -Encoding UTF8 -LiteralPath $manifestPath | ConvertFrom-Json
@@ -41,22 +42,57 @@ if ($manifest.version -ne $Version) {
     throw "Manifest version '$($manifest.version)' does not match expected '$Version'."
 }
 
+$artifactSources = @{}
+$artifactSources["windows-x64"] = $InstallerPath
+$artifactSources["macos-arm64-dmg"] = if ($MacArm64DmgPath) { $MacArm64DmgPath } else { Join-Path "desktop/release" "EcoreX_${Version}_arm64.dmg" }
+$artifactSources["macos-x64-dmg"] = if ($MacX64DmgPath) { $MacX64DmgPath } else { Join-Path "desktop/release" "EcoreX_${Version}_x64.dmg" }
+
 $windowsArtifact = @($manifest.artifacts | Where-Object { $_.id -eq "windows-x64" }) | Select-Object -First 1
 if (-not $windowsArtifact) {
     throw "Manifest does not contain windows-x64 artifact."
 }
-if ($windowsArtifact.fileName -ne (Split-Path -Leaf $installerResolved)) {
-    throw "Installer name '$(Split-Path -Leaf $installerResolved)' does not match manifest '$($windowsArtifact.fileName)'."
+if ($windowsArtifact.status -ne "ready") {
+    throw "windows-x64 artifact must be ready before creating a public release."
 }
 
-$installerItem = Get-Item -LiteralPath $installerResolved
-$installerHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installerResolved).Hash.ToUpperInvariant()
-$manifestHash = [string]$windowsArtifact.sha256
-if ($installerHash -ne $manifestHash.ToUpperInvariant()) {
-    throw "Installer SHA256 $installerHash does not match manifest $manifestHash."
-}
-if ([int64]$installerItem.Length -ne [int64]$windowsArtifact.size) {
-    throw "Installer size $($installerItem.Length) does not match manifest $($windowsArtifact.size)."
+$readyArtifacts = @()
+foreach ($artifact in $manifest.artifacts) {
+    if ($artifact.status -ne "ready") {
+        continue
+    }
+
+    $sourceHint = $artifactSources[[string]$artifact.id]
+    if (-not $sourceHint) {
+        throw "No local source path configured for ready artifact '$($artifact.id)'."
+    }
+    $sourceResolved = Resolve-RequiredPath $sourceHint
+    $sourceName = Split-Path -Leaf $sourceResolved
+    if ($artifact.fileName -ne $sourceName) {
+        throw "Artifact '$($artifact.id)' source name '$sourceName' does not match manifest '$($artifact.fileName)'."
+    }
+
+    $sourceItem = Get-Item -LiteralPath $sourceResolved
+    $sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $sourceResolved).Hash.ToUpperInvariant()
+    $manifestHash = [string]$artifact.sha256
+    if ($sourceHash -ne $manifestHash.ToUpperInvariant()) {
+        throw "Artifact '$($artifact.id)' SHA256 $sourceHash does not match manifest $manifestHash."
+    }
+    if ([int64]$sourceItem.Length -ne [int64]$artifact.size) {
+        throw "Artifact '$($artifact.id)' size $($sourceItem.Length) does not match manifest $($artifact.size)."
+    }
+
+    $signatureStatus = ""
+    if ($sourceItem.Extension -in ".exe", ".msi") {
+        $signatureStatus = (Get-AuthenticodeSignature -LiteralPath $sourceResolved).Status.ToString()
+    }
+
+    $readyArtifacts += [pscustomobject]@{
+        Artifact = $artifact
+        Path = $sourceResolved
+        Size = $sourceItem.Length
+        Sha256 = $sourceHash
+        Signature = $signatureStatus
+    }
 }
 
 $outputResolved = [System.IO.Path]::GetFullPath((Join-Path $repoRoot $OutputDir))
@@ -83,7 +119,9 @@ Get-ChildItem -LiteralPath $siteRootResolved -Force | Where-Object { $_.Name -ne
 
 $downloadOut = Join-Path $siteOut "downloads"
 New-Item -ItemType Directory -Force -Path $downloadOut | Out-Null
-Copy-Item -LiteralPath $installerResolved -Destination (Join-Path $downloadOut $windowsArtifact.fileName) -Force
+foreach ($ready in $readyArtifacts) {
+    Copy-Item -LiteralPath $ready.Path -Destination (Join-Path $downloadOut $ready.Artifact.fileName) -Force
+}
 
 $adminFiles = @("ecorex_admin_api.py", "Dockerfile", "README.md")
 foreach ($fileName in $adminFiles) {
@@ -110,12 +148,26 @@ foreach ($entry in $serverFiles) {
     }
 }
 
-$stagedInstaller = Join-Path $downloadOut $windowsArtifact.fileName
-$stagedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $stagedInstaller).Hash.ToUpperInvariant()
-$stagedSize = (Get-Item -LiteralPath $stagedInstaller).Length
-if ($stagedHash -ne $installerHash -or $stagedSize -ne $installerItem.Length) {
-    throw "Staged installer verification failed."
+$checksumArtifacts = [ordered]@{}
+foreach ($ready in $readyArtifacts) {
+    $stagedPath = Join-Path $downloadOut $ready.Artifact.fileName
+    $stagedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $stagedPath).Hash.ToUpperInvariant()
+    $stagedSize = (Get-Item -LiteralPath $stagedPath).Length
+    if ($stagedHash -ne $ready.Sha256 -or $stagedSize -ne $ready.Size) {
+        throw "Staged artifact verification failed for $($ready.Artifact.id)."
+    }
+    $checksumArtifacts[$ready.Artifact.id] = [ordered]@{
+        fileName = $ready.Artifact.fileName
+        relativePath = "site/downloads/$($ready.Artifact.fileName)"
+        size = $ready.Size
+        sha256 = $ready.Sha256
+        status = $ready.Artifact.status
+        authenticode = $ready.Signature
+    }
 }
+
+$windowsReady = $readyArtifacts | Where-Object { $_.Artifact.id -eq "windows-x64" } | Select-Object -First 1
+$macReadyCount = @($readyArtifacts | Where-Object { $_.Artifact.id -like "macos-*" }).Count
 
 $checksums = [ordered]@{
     product = "EcoreX"
@@ -124,14 +176,15 @@ $checksums = [ordered]@{
     siteRoot = "site"
     adminApiRoot = "admin-api"
     serverHelperRoot = "server"
+    artifacts = $checksumArtifacts
     windows = [ordered]@{
-        fileName = $windowsArtifact.fileName
-        relativePath = "site/downloads/$($windowsArtifact.fileName)"
-        size = $stagedSize
-        sha256 = $stagedHash
-        authenticode = (Get-AuthenticodeSignature -LiteralPath $installerResolved).Status.ToString()
+        fileName = $windowsReady.Artifact.fileName
+        relativePath = "site/downloads/$($windowsReady.Artifact.fileName)"
+        size = $windowsReady.Size
+        sha256 = $windowsReady.Sha256
+        authenticode = $windowsReady.Signature
     }
-    macos = "deferred to Mac validation"
+    macos = if ($macReadyCount -gt 0) { "included $macReadyCount dmg artifact(s); signing/notarization evidence is external" } else { "deferred to Mac validation" }
 }
 $checksums | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $stagingRoot "checksums.json") -Encoding UTF8
 
@@ -166,9 +219,5 @@ if (-not $KeepStaging) {
     zipPath = $zipPath
     zipSize = $zipItem.Length
     zipSha256 = $zipHash
-    windowsInstaller = [ordered]@{
-        size = $installerItem.Length
-        sha256 = $installerHash
-        signature = (Get-AuthenticodeSignature -LiteralPath $installerResolved).Status.ToString()
-    }
+    artifacts = $checksumArtifacts
 } | ConvertTo-Json -Depth 8

@@ -16,10 +16,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 
-VERSION = "0.1.10"
+VERSION = "0.1.11"
 PASSWORD_ITERATIONS = 180000
 SESSION_DAYS = 7
-DEFAULT_CLIENT_EVENT_KEY = "ecorex-desktop-v0.1.10"
+DEFAULT_CLIENT_EVENT_KEY = "ecorex-desktop-v0.1.11"
+DEFAULT_COMPAT_CLIENT_EVENT_KEYS = ("ecorex-desktop-v0.1.10", "ecorex-desktop-v0.1.11")
 DEFAULT_ADMIN_USERNAME = "admin"
 
 DEFAULT_USERS = [
@@ -39,7 +40,7 @@ DEFAULT_LOGS = [
     ("error", "Skill", "外部 Skill 鉴权未完成，已要求用户确认权限。", "unread"),
     ("warn", "MCP", "一个远端 MCP 通道超时，桌面端已保持会话可继续。", "unread"),
     ("warn", "Capability", "Playwright 能力包建议通过管理员预置，避免用户首次下载 Chromium 失败。", "unread"),
-    ("info", "Desktop", "EcoreX desktop runtime bridge is ready for v0.1.10 validation.", "read"),
+    ("info", "Desktop", "EcoreX desktop runtime bridge is ready for v0.1.11 validation.", "read"),
 ]
 
 DEFAULT_CAPABILITIES = [
@@ -129,6 +130,15 @@ def constant_equal(left, right):
     if not left or not right:
         return False
     return hmac.compare_digest(str(left), str(right))
+
+
+def client_event_keys():
+    raw = os.environ.get("ECOREX_CLIENT_EVENT_KEYS") or os.environ.get("ECOREX_CLIENT_EVENT_KEY", DEFAULT_CLIENT_EVENT_KEY)
+    keys = [item.strip() for item in str(raw or "").split(",") if item.strip()]
+    for key in DEFAULT_COMPAT_CLIENT_EVENT_KEYS:
+        if key not in keys:
+            keys.append(key)
+    return keys
 
 
 def hash_password(password):
@@ -919,7 +929,7 @@ class AdminStore:
         return self.upsert_global_model(payload)
 
     def delete_model_credential(self, credential_id, payload):
-        raise ValueError("global model cannot be deleted in v0.1.10")
+        raise ValueError("global model cannot be deleted in v0.1.11")
 
     def resolve_client_model_config(self, user_email="", device_id="", token=""):
         user = self.require_session(token, device_id)
@@ -1329,9 +1339,8 @@ class AdminHandler(BaseHTTPRequestHandler):
         return json.loads(raw.decode("utf-8-sig"))
 
     def _client_key_valid(self):
-        expected = os.environ.get("ECOREX_CLIENT_EVENT_KEY", DEFAULT_CLIENT_EVENT_KEY)
         provided = self.headers.get("X-EcoreX-Client-Key", "")
-        return bool(expected) and hmac.compare_digest(expected, provided)
+        return any(hmac.compare_digest(expected, provided) for expected in client_event_keys())
 
     def _admin_authorized(self):
         token = os.environ.get("ECOREX_ADMIN_TOKEN") or os.environ.get("ECOREX_ADMIN_API_KEY")

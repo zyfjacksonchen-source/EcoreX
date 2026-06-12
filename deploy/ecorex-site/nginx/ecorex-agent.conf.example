@@ -1,4 +1,4 @@
-# Example Nginx locations for EcoreX v0.1.10.
+# Example Nginx locations for EcoreX v0.1.11.
 # Place these inside the existing https server block for www.ecoreai.cn.
 
 set $ecorex_admin_api http://127.0.0.1:18084;

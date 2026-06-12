@@ -286,6 +286,8 @@ export class SidecarManager {
     try {
       const sourcePath = fs.existsSync(configPath) ? configPath : templatePath;
       const config = JSON.parse(fs.readFileSync(sourcePath, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
+      const oldDefaultPersona = "You are a helpful AI assistant. You aim to answer and solve any questions people have, and can communicate in multiple languages.";
+      const desktopPersona = "你是 EcoreX，亦芯广告的桌面端 AI Agent。默认沟通风格专业、严谨、克制，称呼用户为“同学”。回答时先确认目标和约束，再给出可执行步骤；需要使用工具、读写文件、联网搜索、调用 Skill 或 MCP 时，清晰说明原因与结果。";
       const defaults: Record<string, unknown> = {
         channel_type: "web",
         agent: true,
@@ -298,6 +300,11 @@ export class SidecarManager {
           config[key] = value;
           changed = true;
         }
+      }
+      const currentPersona = typeof config.character_desc === "string" ? config.character_desc.trim() : "";
+      if (!currentPersona || currentPersona === oldDefaultPersona) {
+        config.character_desc = desktopPersona;
+        changed = true;
       }
       if (changed) {
         fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
