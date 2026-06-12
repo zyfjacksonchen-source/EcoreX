@@ -8,16 +8,16 @@
 - The production Admin API container was rebuilt from the v0.1.10 source and must keep `ECOREX_CLIENT_EVENT_KEY=ecorex-desktop-v0.1.10` so the packaged desktop client can fetch capability/model policy.
 - Windows installer is signed and locally smoke-tested:
   - `desktop/release/EcoreX_0.1.10_x64-setup.exe`
-  - size `117,529,360`
-  - SHA256 `ACA52B7ACF7D73FBCA62F3F5AB92C057AB50B8FBD188C3AD7105B665569D482B`
+  - size `117,529,640`
+  - SHA256 `C90C944E09CD5BB629ED60EAB33792D7948F5BAFABD71402948478486EC79FA7`
 
 ## Files To Publish
 
 Preferred handoff artifact:
 
 - `release-artifacts/EcoreX_0.1.10-public-release.zip`
-- size `120,277,051`
-- SHA256 `EAD857656A7399DCCC7D5052049DF889D22BA0C4B38D25658DA04CB7D76571F1`
+- size `120,277,255`
+- SHA256 `DE7941408D79D663CF58057AFB97158C84FC40EF5558EB79385635236B9FCEB6`
 
 Generate or refresh it with:
 
@@ -129,7 +129,7 @@ Do not enable default demo users in production. `ECOREX_SEED_DEFAULT_USERS` and 
 Preferred scripted deployment on the Linux server:
 
 ```bash
-export EXPECTED_SHA256=EAD857656A7399DCCC7D5052049DF889D22BA0C4B38D25658DA04CB7D76571F1
+export EXPECTED_SHA256=DE7941408D79D663CF58057AFB97158C84FC40EF5558EB79385635236B9FCEB6
 bash scripts/install-ecorex-public-release.sh /path/to/EcoreX_0.1.10-public-release.zip
 ```
 
@@ -147,7 +147,7 @@ If only the zip is present on the server, extract the helper first:
 
 ```bash
 unzip -j EcoreX_0.1.10-public-release.zip server/install-ecorex-public-release.sh -d /tmp/ecorex-release
-export EXPECTED_SHA256=EAD857656A7399DCCC7D5052049DF889D22BA0C4B38D25658DA04CB7D76571F1
+export EXPECTED_SHA256=DE7941408D79D663CF58057AFB97158C84FC40EF5558EB79385635236B9FCEB6
 bash /tmp/ecorex-release/install-ecorex-public-release.sh EcoreX_0.1.10-public-release.zip
 ```
 

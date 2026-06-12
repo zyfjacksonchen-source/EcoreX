@@ -5,7 +5,7 @@ import type { SidecarStatus } from "./sidecar.js";
 
 contextBridge.exposeInMainWorld("ecorexDesktop", {
   platform: process.platform,
-  shouldUseDarkColors: nativeTheme.shouldUseDarkColors,
+  shouldUseDarkColors: nativeTheme?.shouldUseDarkColors ?? false,
   getSidecarStatus: () => ipcRenderer.invoke("ecorex:get-sidecar-status") as Promise<SidecarStatus>,
   listCapabilityPacks: () => ipcRenderer.invoke("ecorex:list-capability-packs") as Promise<CapabilityPack[]>,
   installCapabilityPack: (packId: string) =>
@@ -54,6 +54,14 @@ contextBridge.exposeInMainWorld("ecorexDesktop", {
     ipcRenderer.invoke("ecorex:choose-files") as Promise<
       Array<{ file_path: string; file_name: string; file_type: "image" | "video" | "file" }>
     >,
+  chooseProjectFolder: () => ipcRenderer.invoke("ecorex:choose-project-folder") as Promise<{
+    id: string;
+    name: string;
+    path: string;
+    memoryPath?: string;
+    dreamsPath?: string;
+    updatedAt: string;
+  } | null>,
   savePastedFile: (input: { fileName?: string; mimeType?: string; dataBase64: string }) =>
     ipcRenderer.invoke("ecorex:save-pasted-file", input) as Promise<{
       file_path: string;

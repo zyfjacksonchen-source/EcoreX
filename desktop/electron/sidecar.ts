@@ -3,6 +3,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolveEnterprisePolicy, type EnterprisePolicy } from "./enterprisePolicy.js";
 
 export type SidecarState = "starting" | "running" | "stopped" | "failed" | "skipped";
 
@@ -11,15 +12,6 @@ export type SidecarStatus = {
   message: string;
   pid?: number;
   webPort: number;
-};
-
-type EnterprisePolicy = {
-  adminEventsUrl?: string;
-  modelConfigUrl?: string;
-  clientEventKey?: string;
-  userEmail?: string;
-  deviceId?: string;
-  orgId?: string;
 };
 
 type EnterpriseSession = {
@@ -96,6 +88,7 @@ export class SidecarManager {
       return;
     }
     const webPort = this.getWebPort();
+    this.ensureDesktopRuntimeDefaults();
 
     this.updateStatus({
       state: "starting",
@@ -287,6 +280,33 @@ export class SidecarManager {
     return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_WEB_PORT;
   }
 
+  private ensureDesktopRuntimeDefaults() {
+    const configPath = path.join(this.repoRoot, "config.json");
+    const templatePath = path.join(this.repoRoot, "config-template.json");
+    try {
+      const sourcePath = fs.existsSync(configPath) ? configPath : templatePath;
+      const config = JSON.parse(fs.readFileSync(sourcePath, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
+      const defaults: Record<string, unknown> = {
+        channel_type: "web",
+        agent: true,
+        knowledge: true,
+        self_evolution_enabled: true
+      };
+      let changed = !fs.existsSync(configPath);
+      for (const [key, value] of Object.entries(defaults)) {
+        if (config[key] !== value) {
+          config[key] = value;
+          changed = true;
+        }
+      }
+      if (changed) {
+        fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+      }
+    } catch (error) {
+      console.warn("[EcoreX] Failed to ensure desktop runtime defaults", error);
+    }
+  }
+
   private resolvePython() {
     if (process.env.ECOREX_PYTHON) {
       return process.env.ECOREX_PYTHON;
@@ -317,30 +337,12 @@ export class SidecarManager {
     if (this.policy) {
       return this.policy;
     }
-    const envPolicy: EnterprisePolicy = {
-      adminEventsUrl: process.env.ECOREX_ADMIN_EVENTS_URL,
-      modelConfigUrl: process.env.ECOREX_MODEL_CONFIG_URL,
-      clientEventKey: process.env.ECOREX_CLIENT_EVENT_KEY,
-      userEmail: process.env.ECOREX_USER_EMAIL,
-      deviceId: process.env.ECOREX_DEVICE_ID,
-      orgId: process.env.ECOREX_ORG_ID
-    };
     const candidates = [
       path.join(app.getPath("userData"), "enterprise-policy.json"),
       path.join(this.repoRoot, "enterprise-policy.json"),
       process.resourcesPath ? path.join(process.resourcesPath, "enterprise-policy.json") : ""
     ].filter(Boolean);
-    const filePolicy = candidates.map((candidate) => {
-      try {
-        return JSON.parse(fs.readFileSync(candidate, "utf8")) as EnterprisePolicy;
-      } catch {
-        return null;
-      }
-    }).find(Boolean) || {};
-    this.policy = {
-      ...filePolicy,
-      ...Object.fromEntries(Object.entries(envPolicy).filter(([, value]) => Boolean(value)))
-    };
+    this.policy = resolveEnterprisePolicy(candidates);
     return this.policy;
   }
 

@@ -4,6 +4,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveEnterprisePolicy, type EnterprisePolicy } from "./enterprisePolicy.js";
 
 export type CapabilityState =
   | "installed"
@@ -57,16 +58,6 @@ type ProcessResult = {
   stderr: string;
 };
 
-type EnterprisePolicy = {
-  adminEventsUrl?: string;
-  modelConfigUrl?: string;
-  capabilityPolicyUrl?: string;
-  clientEventKey?: string;
-  userEmail?: string;
-  deviceId?: string;
-  orgId?: string;
-};
-
 type EnterpriseSession = {
   token: string;
   expiresAt: string;
@@ -108,7 +99,8 @@ async function fileExists(filePath: string) {
 
 function readJson<T>(filePath: string): T | null {
   try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8")) as T;
+    const raw = fs.readFileSync(filePath, "utf8").replace(/^\uFEFF/, "");
+    return JSON.parse(raw) as T;
   } catch {
     return null;
   }
@@ -186,12 +178,13 @@ export class CapabilityManager {
         const missingModules = check?.missingModules || status.missingModules || [];
         const state: CapabilityState = installed ? "installed" : status.state || "not-installed";
         const policyPack = policyPacks.get(pack.id);
+        const packPolicyMode = (policyPack?.mode as CapabilityPolicyMode | undefined) || policy.mode || "ask";
         const message =
-          policy.mode === "disabled" && !installed
-            ? `${pack.name} installation is disabled by the enterprise policy.`
+          packPolicyMode === "disabled" && !installed
+            ? `管理员已禁用 ${pack.name} 的自助安装。`
             : installed
-              ? `${pack.name} is ready.`
-              : status.message || `${pack.name} is not installed. EcoreX can guide installation on first use.`;
+              ? `${pack.name} 已就绪。`
+              : status.message || `${pack.name} 尚未安装，EcoreX 会在首次使用时引导安装。`;
         return {
           ...pack,
           state,
@@ -200,7 +193,7 @@ export class CapabilityManager {
           logPath: status.logPath,
           missingModules,
           updatedAt: status.updatedAt,
-          policyMode: policy.mode || "ask",
+          policyMode: packPolicyMode,
           policyStatus: policyPack?.status,
           policyUpdatedAt: policyPack?.updatedAt || policy.updatedAt
         };
@@ -215,10 +208,10 @@ export class CapabilityManager {
       return {
         id: packId,
         name: packId,
-        summary: "Unknown capability pack.",
+        summary: "未知能力包。",
         installMode: "user-or-admin",
         state: "failed",
-        message: `Capability pack not found: ${packId}`,
+        message: `未找到能力包：${packId}`,
         installed: false
       };
     }
@@ -228,11 +221,11 @@ export class CapabilityManager {
 
     const enterprisePolicy = await this.refreshEnterpriseCapabilityPolicy();
     const installPolicy = enterprisePolicy.policy || {};
-    if (installPolicy.mode === "disabled") {
+    if (target.policyMode === "disabled" || installPolicy.mode === "disabled") {
       return {
         ...target,
         state: "failed",
-        message: "The enterprise administrator has disabled optional capability installation.",
+        message: "管理员已禁用可选能力包的自助安装。",
         installed: false
       };
     }
@@ -245,7 +238,7 @@ export class CapabilityManager {
       return {
         ...target,
         state: "failed",
-        message: "EcoreX runtime Python was not found. Reinstall the full desktop app or ask an administrator to preinstall this pack.",
+        message: "未找到 EcoreX 内置 Python。请重新安装完整桌面端，或联系管理员预置该能力包。",
         installed: false
       };
     }
@@ -253,7 +246,7 @@ export class CapabilityManager {
       return {
         ...target,
         state: "failed",
-        message: "Capability installer was not found. Reinstall the full desktop app and try again.",
+        message: "未找到能力包安装器。请重新安装完整桌面端后再试。",
         installed: false
       };
     }
@@ -308,6 +301,16 @@ export class CapabilityManager {
     return refreshed.find((pack) => pack.id === packId) || target;
   }
 
+  async preinstallPolicyPacks(): Promise<CapabilityPack[]> {
+    const packs = await this.listPacks();
+    const targets = packs.filter((pack) => !pack.installed && pack.policyMode === "preinstall");
+    const installed: CapabilityPack[] = [];
+    for (const pack of targets) {
+      installed.push(await this.installPack(pack.id));
+    }
+    return installed;
+  }
+
   private resolvePython() {
     if (process.env.ECOREX_PYTHON) {
       return process.env.ECOREX_PYTHON;
@@ -340,7 +343,7 @@ export class CapabilityManager {
         return candidate;
       }
     }
-    throw new Error("EcoreX capability manifest not found");
+    throw new Error("未找到 EcoreX 能力包清单。");
   }
 
   private async resolveInstallScript() {
@@ -406,7 +409,7 @@ export class CapabilityManager {
         let stderr = "";
         const timer = setTimeout(() => {
           child.kill();
-          reject(new Error("Capability module check timed out"));
+          reject(new Error("能力包模块检查超时。"));
         }, 8000);
         child.stdout.on("data", (chunk: Buffer) => {
           stdout += chunk.toString("utf8");
@@ -423,7 +426,7 @@ export class CapabilityManager {
           if (exitCode === 0) {
             resolve(stdout);
           } else {
-            reject(new Error(stderr || `Module check exited with ${exitCode}`));
+            reject(new Error(stderr || `能力包模块检查异常退出：${exitCode}`));
           }
         });
       });
@@ -558,27 +561,13 @@ export class CapabilityManager {
       return this.enterprisePolicy;
     }
 
-    const envPolicy: EnterprisePolicy = {
-      adminEventsUrl: process.env.ECOREX_ADMIN_EVENTS_URL,
-      modelConfigUrl: process.env.ECOREX_MODEL_CONFIG_URL,
-      capabilityPolicyUrl: process.env.ECOREX_CAPABILITY_POLICY_URL,
-      clientEventKey: process.env.ECOREX_CLIENT_EVENT_KEY,
-      userEmail: process.env.ECOREX_USER_EMAIL,
-      deviceId: process.env.ECOREX_DEVICE_ID,
-      orgId: process.env.ECOREX_ORG_ID
-    };
-
     const candidates = [
       path.join(app.getPath("userData"), "enterprise-policy.json"),
       path.join(this.runtimeRoot, "enterprise-policy.json"),
       process.resourcesPath ? path.join(process.resourcesPath, "enterprise-policy.json") : ""
     ].filter(Boolean);
 
-    const filePolicy = candidates.map((candidate) => readJson<EnterprisePolicy>(candidate)).find(Boolean) || {};
-    this.enterprisePolicy = {
-      ...filePolicy,
-      ...Object.fromEntries(Object.entries(envPolicy).filter(([, value]) => Boolean(value)))
-    };
+    this.enterprisePolicy = resolveEnterprisePolicy(candidates);
     return this.enterprisePolicy;
   }
 

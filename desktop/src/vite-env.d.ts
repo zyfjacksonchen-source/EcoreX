@@ -147,6 +147,14 @@ interface Window {
     chooseFiles: () => Promise<
       Array<{ file_path: string; file_name: string; file_type: "image" | "video" | "file" }>
     >;
+    chooseProjectFolder: () => Promise<{
+      id: string;
+      name: string;
+      path: string;
+      memoryPath?: string;
+      dreamsPath?: string;
+      updatedAt: string;
+    } | null>;
     savePastedFile: (input: { fileName?: string; mimeType?: string; dataBase64: string }) => Promise<{
       file_path: string;
       file_name: string;

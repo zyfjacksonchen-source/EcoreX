@@ -1,30 +1,54 @@
 import {
+  AtSign,
   Bell,
   Bot,
+  BookOpen,
+  Brain,
   CheckCircle2,
   ChevronDown,
+  Database,
   FileText,
+  FolderInput,
+  FolderPlus,
   FolderOpen,
+  FolderX,
+  Globe2,
+  HardDrive,
+  Image as ImageIcon,
+  KeyRound,
+  LoaderCircle,
   LogOut,
   Moon,
+  MoreHorizontal,
   Paperclip,
+  Pencil,
+  Pin,
+  PinOff,
   Plus,
   Search,
+  SendHorizontal,
   Settings,
+  ShieldCheck,
   Sparkles,
   Square,
+  SquareTerminal,
   SunMedium,
+  Trash2,
   Upload,
   UserRound,
+  WandSparkles,
   X
 } from "lucide-react";
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import type { ClipboardEvent, MouseEvent, ReactNode } from "react";
 import {
   cancelChatRequest,
   enterpriseChangePassword,
   checkEnterpriseQuota,
+  chooseProjectFolder,
   chooseLocalFiles,
   deleteMessagePair,
+  enableDefaultSkills,
   enterpriseLogin,
   enterpriseLogout,
   filePreviewUrl,
@@ -33,20 +57,28 @@ import {
   installCapabilityPack,
   listCapabilityPacks,
   loadPermissionState,
+  loadMemoryFiles,
   loadRuntimeSnapshot,
   loadSessionHistory,
   openLocalPath,
   openMessageStream,
   reportDesktopEvent,
   resetPermissionGrants,
+  deleteRuntimeSession,
+  renameRuntimeSession,
   savePastedFile,
   sendChatMessage,
+  setSkillEnabled,
   updatePermissionMode,
   type CapabilityPack,
   type EnterpriseSession,
   type FileAttachment,
+  type MemoryFile,
   type PermissionMode,
   type PermissionState,
+  type ProjectFolder,
+  type RuntimeSkill,
+  type RuntimeTool,
   type RuntimeSnapshot,
   type TokenUsage
 } from "./services/ecorexApi";
@@ -64,6 +96,9 @@ type SessionRow = {
   detail: string;
   updatedAt: string;
   status: "active" | "waiting" | "ready" | "failed";
+  pinned?: boolean;
+  projectId?: string;
+  projectName?: string;
 };
 type ChatItem = {
   id: string;
@@ -94,6 +129,24 @@ type ApprovalState =
       message: string;
       actions?: Array<{ label: string; primary?: boolean; onClick: () => void }>;
     };
+type SettingsSection = "account" | "projects" | "abilities" | "permissions" | "memory" | "diagnostics";
+type SessionProjectMap = Record<string, string>;
+type StringBoolMap = Record<string, boolean>;
+type StringMap = Record<string, string>;
+type SessionUiState = {
+  title: string;
+  projectId: string | null;
+  messages: ChatItem[];
+  composerText: string;
+  attachments: FileAttachment[];
+};
+type ProjectContextMenu = {
+  projectId: string;
+  x: number;
+  y: number;
+} | null;
+
+const brandIconUrl = new URL("../build/icon.png", import.meta.url).href;
 
 const initialRuntime: RuntimeSnapshot = {
   status: "offline",
@@ -109,6 +162,56 @@ const initialSidecar: SidecarStatus = {
   message: "正在启动本地运行时",
   webPort: 9899
 };
+const PROJECTS_STORAGE_KEY = "ecorex-projects";
+const SESSION_PROJECTS_STORAGE_KEY = "ecorex-session-projects";
+const SESSION_TITLES_STORAGE_KEY = "ecorex-session-titles";
+const PINNED_SESSIONS_STORAGE_KEY = "ecorex-pinned-sessions";
+const PINNED_PROJECTS_STORAGE_KEY = "ecorex-pinned-projects";
+const SESSION_UI_STORAGE_KEY = "ecorex-session-ui-state";
+const CAPABILITY_ENABLED_STORAGE_KEY = "ecorex-capability-enabled";
+const SKILL_DEFAULTS_STORAGE_KEY = "ecorex-skill-defaults-v1";
+
+const coreAbilityNames = new Set([
+  "bash",
+  "read",
+  "write",
+  "edit",
+  "ls",
+  "vision",
+  "web_search",
+  "web_fetch",
+  "browser",
+  "memory_search",
+  "memory_get"
+]);
+
+const skillAbilityNames = new Set(["image-generation", "knowledge-wiki", "skill-creator"]);
+
+function readStorage<T>(key: string, fallback: T): T {
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStorage<T>(key: string, value: T) {
+  window.localStorage.setItem(key, JSON.stringify(value));
+}
+
+function pruneSessionUiState(state: Record<string, SessionUiState>) {
+  return Object.fromEntries(
+    Object.entries(state).slice(-24).map(([sessionId, value]) => [
+      sessionId,
+      {
+        ...value,
+        messages: value.messages.slice(-60),
+        attachments: value.attachments.slice(0, 12)
+      }
+    ])
+  );
+}
 
 function initialTheme(): ThemeMode {
   const saved = window.localStorage.getItem("ecorex-theme");
@@ -132,27 +235,44 @@ function shortTitle(text: string) {
   return clean ? clean.slice(0, 22) : "新对话";
 }
 
-function mapSessions(snapshot: RuntimeSnapshot, activeSessionId: string, localTitle: string): SessionRow[] {
+function mapSessions(
+  snapshot: RuntimeSnapshot,
+  activeSessionId: string,
+  localTitle: string,
+  sessionProjects: SessionProjectMap,
+  sessionTitles: StringMap,
+  pinnedSessions: StringBoolMap,
+  projects: ProjectFolder[],
+  activeProjectId: string | null
+): SessionRow[] {
+  const projectById = new Map(projects.map((project) => [project.id, project]));
   const rows = snapshot.sessions.map((session, index) => {
     const id = session.session_id || session.id || `runtime-${index}`;
+    const projectId = sessionProjects[id];
+    const project = projectId ? projectById.get(projectId) : undefined;
     return {
       id,
-      title: session.title || session.session_id || "未命名会话",
-      detail: `${session.msg_count ?? 0} 条消息`,
+      title: sessionTitles[id] || session.title || session.session_id || "未命名会话",
+      detail: project ? `${project.name} · ${session.msg_count ?? 0} 条` : `${session.msg_count ?? 0} 条`,
       updatedAt: session.last_active || "最近",
-      status: id === activeSessionId ? "active" : "ready"
+      status: id === activeSessionId ? "active" : "ready",
+      pinned: Boolean(pinnedSessions[id]),
+      ...(project ? { projectId: project.id, projectName: project.name } : {})
     } satisfies SessionRow;
   });
   if (!rows.some((row) => row.id === activeSessionId)) {
+    const project = activeProjectId ? projectById.get(activeProjectId) : undefined;
     rows.unshift({
       id: activeSessionId,
-      title: localTitle || "新对话",
-      detail: "当前会话",
+      title: sessionTitles[activeSessionId] || localTitle || "新对话",
+      detail: project ? `${project.name} · 草稿` : "草稿",
       updatedAt: "刚刚",
-      status: "active"
+      status: "active",
+      pinned: Boolean(pinnedSessions[activeSessionId]),
+      ...(project ? { projectId: project.id, projectName: project.name } : {})
     });
   }
-  return rows;
+  return rows.sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)));
 }
 
 function estimateTokens(text: string, files: FileAttachment[]) {
@@ -207,6 +327,34 @@ function permissionModeLabel(mode?: PermissionMode) {
           : "未设置";
 }
 
+function projectContextPrompt(project: ProjectFolder) {
+  return [
+    "【EcoreX 项目上下文】",
+    `项目名称：${project.name}`,
+    `项目文件夹：${project.path}`,
+    `项目记忆：${project.memoryPath || `${project.path}/.ecorex/project-memory.md`}`,
+    `项目梦境蒸馏：${project.dreamsPath || `${project.path}/.ecorex/dreams`}`,
+    "请优先围绕该项目文件夹读取、分析、写入文件。需要总结或沉淀时，只写入项目记忆，不写入全局 MEMORY.md。"
+  ].join("\n");
+}
+
+function toolEnabled(tools: RuntimeTool[] | undefined, name: string) {
+  return Boolean((tools || []).some((tool) => tool.name === name));
+}
+
+function skillEnabled(skills: RuntimeSkill[] | undefined, name: string) {
+  const skill = (skills || []).find((item) => item.name === name);
+  return Boolean(skill && skill.enabled !== false);
+}
+
+function memoryFileName(file: MemoryFile) {
+  return file.filename || file.name || "未命名记忆";
+}
+
+function memoryFileTime(file: MemoryFile) {
+  return file.updated_at || file.updatedAt || "";
+}
+
 function AuthGate(props: { onLogin: (session: EnterpriseSession) => void }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -229,7 +377,7 @@ function AuthGate(props: { onLogin: (session: EnterpriseSession) => void }) {
   return (
     <main className="auth-shell">
       <section className="auth-panel">
-        <div className="brand-mark"><Sparkles aria-hidden="true" /></div>
+        <div className="brand-mark"><img src={brandIconUrl} alt="" /></div>
         <h1>EcoreX</h1>
         <p>亦芯广告 AI Agent</p>
         <form onSubmit={submit}>
@@ -268,16 +416,83 @@ export function App() {
   const [previewFile, setPreviewFile] = useState<FileAttachment | null>(null);
   const [packs, setPacks] = useState<CapabilityPack[]>([]);
   const [permissionState, setPermissionState] = useState<PermissionState | null>(null);
+  const [projects, setProjects] = useState<ProjectFolder[]>(() => readStorage<ProjectFolder[]>(PROJECTS_STORAGE_KEY, []));
+  const [sessionProjects, setSessionProjects] = useState<SessionProjectMap>(() => readStorage<SessionProjectMap>(SESSION_PROJECTS_STORAGE_KEY, {}));
+  const [sessionTitles, setSessionTitles] = useState<StringMap>(() => readStorage<StringMap>(SESSION_TITLES_STORAGE_KEY, {}));
+  const [pinnedSessions, setPinnedSessions] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(PINNED_SESSIONS_STORAGE_KEY, {}));
+  const [pinnedProjects, setPinnedProjects] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(PINNED_PROJECTS_STORAGE_KEY, {}));
+  const [sessionUiState, setSessionUiState] = useState<Record<string, SessionUiState>>(() => readStorage<Record<string, SessionUiState>>(SESSION_UI_STORAGE_KEY, {}));
+  const [enabledCapabilityPacks, setEnabledCapabilityPacks] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(CAPABILITY_ENABLED_STORAGE_KEY, {}));
+  const [sessionRequestIds, setSessionRequestIds] = useState<StringMap>({});
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("account");
+  const [projectMenu, setProjectMenu] = useState<ProjectContextMenu>(null);
+  const [installingPackIds, setInstallingPackIds] = useState<StringBoolMap>({});
+  const [memoryFiles, setMemoryFiles] = useState<MemoryFile[]>([]);
+  const [dreamFiles, setDreamFiles] = useState<MemoryFile[]>([]);
   const [toast, setToast] = useState("");
   const [passwordDraft, setPasswordDraft] = useState({ oldPassword: "", newPassword: "", confirmPassword: "" });
   const [passwordBusy, setPasswordBusy] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const streamCleanup = useRef<null | (() => void)>(null);
+  const streamCleanups = useRef<Record<string, () => void>>({});
+  const activeSessionIdRef = useRef(activeSessionId);
+  const preloadDone = useRef(false);
 
   useEffect(() => {
     applyTheme(theme);
     window.localStorage.setItem("ecorex-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    writeStorage(PROJECTS_STORAGE_KEY, projects);
+  }, [projects]);
+
+  useEffect(() => {
+    writeStorage(SESSION_PROJECTS_STORAGE_KEY, sessionProjects);
+  }, [sessionProjects]);
+
+  useEffect(() => {
+    writeStorage(SESSION_TITLES_STORAGE_KEY, sessionTitles);
+  }, [sessionTitles]);
+
+  useEffect(() => {
+    writeStorage(PINNED_SESSIONS_STORAGE_KEY, pinnedSessions);
+  }, [pinnedSessions]);
+
+  useEffect(() => {
+    writeStorage(PINNED_PROJECTS_STORAGE_KEY, pinnedProjects);
+  }, [pinnedProjects]);
+
+  useEffect(() => {
+    writeStorage(CAPABILITY_ENABLED_STORAGE_KEY, enabledCapabilityPacks);
+  }, [enabledCapabilityPacks]);
+
+  useEffect(() => {
+    writeStorage(SESSION_UI_STORAGE_KEY, pruneSessionUiState(sessionUiState));
+  }, [sessionUiState]);
+
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    setSessionUiState((current) => ({
+      ...current,
+      [activeSessionId]: {
+        title: activeSessionTitle,
+        projectId: activeProjectId,
+        messages,
+        composerText,
+        attachments
+      }
+    }));
+  }, [activeSessionId, activeSessionTitle, activeProjectId, messages, composerText, attachments]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(syncComposerHeight);
+    return () => window.cancelAnimationFrame(frame);
+  }, [composerText, activeSessionId]);
 
   useEffect(() => {
     getEnterpriseSession()
@@ -291,23 +506,64 @@ export function App() {
     window.ecorexDesktop?.getSidecarStatus?.().then((status) => setSidecarStatus(status)).catch(() => undefined);
     return () => {
       streamCleanup.current?.();
+      Object.values(streamCleanups.current).forEach((cleanup) => cleanup());
       unsubscribe?.();
     };
   }, []);
 
   useEffect(() => {
+    if (preloadDone.current) return;
+    if (sidecarStatus.state !== "running") return;
+    preloadDone.current = true;
+    void (async () => {
+      const nextPacks = await listCapabilityPacks().catch(() => []);
+      setPacks(nextPacks);
+      const preinstallTargets = nextPacks.filter((pack) => !pack.installed && pack.policyMode === "preinstall");
+      if (preinstallTargets.length) {
+        setInstallingPackIds((current) => ({
+          ...current,
+          ...Object.fromEntries(preinstallTargets.map((pack) => [pack.id, true]))
+        }));
+        await Promise.all(preinstallTargets.map((pack) => installCapabilityPack(pack.id).catch(() => null)));
+        setInstallingPackIds((current) => {
+          const next = { ...current };
+          preinstallTargets.forEach((pack) => delete next[pack.id]);
+          return next;
+        });
+        setPacks(await listCapabilityPacks().catch(() => nextPacks));
+      }
+      const snapshot = await loadRuntimeSnapshot().catch(() => null);
+      if (snapshot) {
+        let nextSnapshot = snapshot;
+        if (!window.localStorage.getItem(SKILL_DEFAULTS_STORAGE_KEY)) {
+          const changed = await enableDefaultSkills(snapshot.skills || []).catch(() => 0);
+          window.localStorage.setItem(SKILL_DEFAULTS_STORAGE_KEY, "1");
+          if (changed) {
+            nextSnapshot = await loadRuntimeSnapshot().catch(() => snapshot);
+          }
+        }
+        setRuntimeSnapshot(nextSnapshot);
+      }
+    })();
+  }, [sidecarStatus.state]);
+
+  useEffect(() => {
     if (!session) return;
     let cancelled = false;
     async function refresh() {
-      const [snapshot, nextPacks, nextPermissions] = await Promise.all([
+      const [snapshot, nextPacks, nextPermissions, nextMemoryFiles, nextDreamFiles] = await Promise.all([
         loadRuntimeSnapshot(),
         listCapabilityPacks(),
-        loadPermissionState()
+        loadPermissionState(),
+        loadMemoryFiles("memory"),
+        loadMemoryFiles("dream")
       ]);
       if (!cancelled) {
         setRuntimeSnapshot(snapshot);
         setPacks(nextPacks);
         setPermissionState(nextPermissions);
+        setMemoryFiles(nextMemoryFiles);
+        setDreamFiles(nextDreamFiles);
       }
     }
     void refresh();
@@ -319,15 +575,99 @@ export function App() {
   }, [session]);
 
   const visibleSessions = useMemo(() => {
-    const rows = mapSessions(runtimeSnapshot, activeSessionId, activeSessionTitle);
+    const rows = mapSessions(runtimeSnapshot, activeSessionId, activeSessionTitle, sessionProjects, sessionTitles, pinnedSessions, projects, activeProjectId);
     const needle = searchQuery.trim().toLowerCase();
     return needle ? rows.filter((row) => `${row.title} ${row.detail}`.toLowerCase().includes(needle)) : rows;
-  }, [runtimeSnapshot, activeSessionId, activeSessionTitle, searchQuery]);
+  }, [runtimeSnapshot, activeSessionId, activeSessionTitle, sessionProjects, sessionTitles, pinnedSessions, projects, activeProjectId, searchQuery]);
+
+  const activeProject = useMemo(
+    () => projects.find((project) => project.id === activeProjectId) || null,
+    [projects, activeProjectId]
+  );
+  const sortedProjects = useMemo(
+    () => [...projects].sort((a, b) => Number(Boolean(pinnedProjects[b.id] || b.pinned)) - Number(Boolean(pinnedProjects[a.id] || a.pinned))),
+    [projects, pinnedProjects]
+  );
+  const projectSessions = visibleSessions.filter((row) => Boolean(row.projectId));
+  const generalSessions = visibleSessions.filter((row) => !row.projectId);
+  const projectSessionGroups = useMemo(
+    () => sortedProjects.map((project) => ({
+      project,
+      sessions: projectSessions.filter((row) => row.projectId === project.id)
+    })),
+    [sortedProjects, projectSessions]
+  );
+  const currentModelName = runtimeSnapshot.currentModel || runtimeSnapshot.version || "EcoreX";
+  const mentionMatch = /@([\w\u4e00-\u9fa5-]*)$/.exec(composerText);
+  const skillMentions = mentionMatch
+    ? (runtimeSnapshot.skills || []).filter((skill) => {
+        const label = skill.display_name || skill.name || "";
+        return label && label.toLowerCase().includes(mentionMatch[1].toLowerCase());
+      }).slice(0, 6)
+    : [];
+  const activeSessionRequestId = sessionRequestIds[activeSessionId] || "";
+
+  function capabilityPackEnabled(packId: string) {
+    return enabledCapabilityPacks[packId] !== false;
+  }
+
+  function toggleCapabilityPack(pack: CapabilityPack, enabled: boolean) {
+    setEnabledCapabilityPacks((current) => ({ ...current, [pack.id]: enabled }));
+    setToast(enabled ? `${pack.name} 已启用` : `${pack.name} 已关闭`);
+  }
+
+  async function toggleRuntimeSkill(skill: RuntimeSkill, enabled: boolean) {
+    const name = skill.name || "";
+    if (!name) return;
+    try {
+      await setSkillEnabled(name, enabled);
+      setRuntimeSnapshot(await loadRuntimeSnapshot());
+      setToast(enabled ? `${skill.display_name || name} 已启用` : `${skill.display_name || name} 已关闭`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Skill 开关失败");
+    }
+  }
+
+  function insertSkillMention(skill: RuntimeSkill) {
+    const label = skill.display_name || skill.name || "";
+    if (!label) return;
+    setComposerText((current) => current.replace(/@([\w\u4e00-\u9fa5-]*)$/, `@${label} `));
+    window.setTimeout(() => composerRef.current?.focus(), 0);
+  }
+
+  function syncComposerHeight() {
+    const textarea = composerRef.current;
+    if (!textarea) return;
+    const maxHeight = Number.parseFloat(window.getComputedStyle(textarea).maxHeight) || 168;
+    textarea.style.height = "auto";
+    const nextHeight = Math.min(textarea.scrollHeight, maxHeight);
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+  }
+
+  function restoreCachedSession(sessionId: string) {
+    const cached = sessionUiState[sessionId];
+    if (!cached) return false;
+    setMessages(cached.messages);
+    setComposerText(cached.composerText);
+    setAttachments(cached.attachments);
+    setActiveSessionTitle(sessionTitles[sessionId] || cached.title || "新对话");
+    setActiveProjectId(cached.projectId || sessionProjects[sessionId] || null);
+    return true;
+  }
 
   async function selectSession(row: SessionRow) {
     setActiveSessionId(row.id);
     setActiveSessionTitle(row.title);
+    setActiveProjectId(row.projectId || null);
     setPreviewFile(null);
+    setApproval(null);
+    if (restoreCachedSession(row.id)) {
+      return;
+    }
+    setMessages([]);
+    setComposerText("");
+    setAttachments([]);
     try {
       const history = await loadSessionHistory(row.id);
       setMessages(
@@ -344,15 +684,134 @@ export function App() {
     }
   }
 
-  function startNewSession() {
-    const id = `ecorex-${Date.now()}`;
+  function startNewSession(project?: ProjectFolder | null) {
+    const id = project ? `ecorex-project-${project.id}-${Date.now()}` : `ecorex-${Date.now()}`;
     setActiveSessionId(id);
-    setActiveSessionTitle("新对话");
+    setActiveProjectId(project?.id || null);
+    setActiveSessionTitle(project ? `${project.name} · 新会话` : "新对话");
+    setSessionTitles((current) => ({ ...current, [id]: project ? `${project.name} · 新会话` : "新对话" }));
+    if (project) {
+      setSessionProjects((current) => ({ ...current, [id]: project.id }));
+    }
     setMessages([]);
     setAttachments([]);
     setComposerText("");
     setApproval(null);
     composerRef.current?.focus();
+  }
+
+  async function renameSession(row: SessionRow) {
+    const nextTitle = window.prompt("重命名会话", row.title)?.trim();
+    if (!nextTitle || nextTitle === row.title) return;
+    try {
+      setSessionTitles((current) => ({ ...current, [row.id]: nextTitle }));
+      const result = await renameRuntimeSession({ sessionId: row.id, title: nextTitle });
+      if (result.status === "error") {
+        throw new Error(result.message || "重命名失败");
+      }
+      if (row.id === activeSessionId) {
+        setActiveSessionTitle(nextTitle);
+      }
+      setRuntimeSnapshot(await loadRuntimeSnapshot());
+      setToast("会话已重命名");
+    } catch (error) {
+      if (row.id === activeSessionId) {
+        setActiveSessionTitle(nextTitle);
+      }
+      setToast(error instanceof Error ? `仅更新本地标题：${error.message}` : "仅更新本地标题");
+    }
+  }
+
+  async function removeSession(row: SessionRow) {
+    if (!window.confirm(`删除会话「${row.title}」？该操作会清除这条会话记录。`)) return;
+    try {
+      const result = await deleteRuntimeSession(row.id);
+      if (result.status === "error") {
+        throw new Error(result.message || "删除失败");
+      }
+      setSessionProjects((current) => {
+        const next = { ...current };
+        delete next[row.id];
+        return next;
+      });
+      if (row.id === activeSessionId) {
+        startNewSession(null);
+      }
+      setRuntimeSnapshot(await loadRuntimeSnapshot());
+      setToast("会话已删除");
+    } catch (error) {
+      setApproval({ type: "error", title: "会话删除失败", message: error instanceof Error ? error.message : "请稍后重试。" });
+    }
+  }
+
+  async function addProject() {
+    try {
+      const project = await chooseProjectFolder();
+      if (!project) return;
+      let nextProject = project;
+      setProjects((current) => {
+        const existing = current.find((item) => item.path === project.path);
+        if (existing) {
+          setActiveProjectId(existing.id);
+          nextProject = { ...existing, updatedAt: project.updatedAt };
+          return current.map((item) => item.path === project.path ? nextProject : item);
+        }
+        setActiveProjectId(project.id);
+        return [project, ...current];
+      });
+      window.setTimeout(() => startNewSession(nextProject), 0);
+      setToast("项目已添加");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "添加项目失败");
+    }
+  }
+
+  function togglePinSession(row: SessionRow) {
+    setPinnedSessions((current) => ({ ...current, [row.id]: !current[row.id] }));
+  }
+
+  function togglePinProject(project: ProjectFolder) {
+    const nextPinned = !Boolean(pinnedProjects[project.id] || project.pinned);
+    setPinnedProjects((current) => ({ ...current, [project.id]: nextPinned }));
+    setProjects((current) => current.map((item) => item.id === project.id ? { ...item, pinned: nextPinned } : item));
+  }
+
+  function renameProject(project: ProjectFolder) {
+    const nextName = window.prompt("重命名项目", project.name)?.trim();
+    if (!nextName || nextName === project.name) return;
+    setProjects((current) => current.map((item) => item.id === project.id ? { ...item, name: nextName, updatedAt: new Date().toISOString() } : item));
+    setProjectMenu(null);
+  }
+
+  function deleteProject(project: ProjectFolder) {
+    if (!window.confirm(`删除项目「${project.name}」？项目文件夹不会被删除，已有项目会话会变成通用会话。`)) return;
+    setProjects((current) => current.filter((item) => item.id !== project.id));
+    setPinnedProjects((current) => {
+      const next = { ...current };
+      delete next[project.id];
+      return next;
+    });
+    setSessionProjects((current) => {
+      const next = { ...current };
+      Object.entries(next).forEach(([sessionId, projectId]) => {
+        if (projectId === project.id) delete next[sessionId];
+      });
+      return next;
+    });
+    if (activeProjectId === project.id) {
+      setActiveProjectId(null);
+    }
+    setProjectMenu(null);
+  }
+
+  function openProjectInExplorer(project: ProjectFolder) {
+    void openLocalPath(project.path);
+    setProjectMenu(null);
+  }
+
+  function showProjectMenu(event: MouseEvent, project: ProjectFolder) {
+    event.preventDefault();
+    setProjectMenu({ projectId: project.id, x: event.clientX, y: event.clientY });
   }
 
   async function chooseFiles() {
@@ -364,7 +823,7 @@ export function App() {
     }
   }
 
-  async function handlePaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
+  async function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
     const files = Array.from(event.clipboardData.files || []);
     if (!files.length) return;
     event.preventDefault();
@@ -382,24 +841,68 @@ export function App() {
     }
   }
 
+  function updateSessionMessages(sessionId: string, updater: (messages: ChatItem[]) => ChatItem[]) {
+    setSessionUiState((current) => {
+      const existing = current[sessionId] || {
+        title: sessionTitles[sessionId] || activeSessionTitle,
+        projectId: sessionProjects[sessionId] || null,
+        messages: sessionId === activeSessionIdRef.current ? messages : [],
+        composerText: "",
+        attachments: []
+      };
+      return {
+        ...current,
+        [sessionId]: {
+          ...existing,
+          messages: updater(existing.messages)
+        }
+      };
+    });
+    if (activeSessionIdRef.current === sessionId) {
+      setMessages(updater);
+    }
+  }
+
+  function finishSessionRequest(sessionId: string) {
+    setActiveRequestId("");
+    setSessionRequestIds((current) => {
+      const next = { ...current };
+      delete next[sessionId];
+      return next;
+    });
+    streamCleanups.current[sessionId]?.();
+    delete streamCleanups.current[sessionId];
+  }
+
   async function sendNow(skipCapabilityCheck = false) {
     const text = composerText.trim();
     if (!text && !attachments.length) return;
-    if (activeRequestId) return;
+    if (activeSessionRequestId) return;
 
-    const neededPack = skipCapabilityCheck ? null : detectNeededPack(text, attachments, packs);
+    const enabledPacks = packs.filter((pack) => capabilityPackEnabled(pack.id));
+    const neededPack = skipCapabilityCheck ? null : detectNeededPack(text, attachments, enabledPacks);
     if (neededPack) {
-      setApproval({
-        type: "capability",
-        title: `需要安装 ${neededPack.name}`,
-        message: neededPack.policyMode === "disabled" ? "管理员已禁用普通用户安装，请联系管理员预置。" : neededPack.message,
-        pack: neededPack,
-        resume: () => void sendNow(true)
-      });
+      setSettingsSection("abilities");
+      setSettingsOpen(true);
+      void handleInstallPack(neededPack, () => void sendNow(true));
       return;
     }
 
-    const estimatedTokens = estimateTokens(text, attachments);
+    const projectAttachment: FileAttachment | null = activeProject
+      ? {
+          file_path: activeProject.path,
+          file_name: activeProject.name,
+          file_type: "directory"
+        }
+      : null;
+    const outboundAttachments = projectAttachment
+      ? [projectAttachment, ...attachments.filter((file) => file.file_path !== projectAttachment.file_path)]
+      : attachments;
+    const outboundText = activeProject
+      ? `${projectContextPrompt(activeProject)}\n\n用户需求：${text || "请处理这些附件"}`
+      : text;
+
+    const estimatedTokens = estimateTokens(outboundText || text, outboundAttachments);
     const quota = await checkEnterpriseQuota(estimatedTokens);
     if (quota.quota && quota.quota.allowed === false) {
       setApproval({ type: "quota", title: "额度已达到上限", message: quota.quota.reason || "当前账号暂时不能继续发送。" });
@@ -414,8 +917,16 @@ export function App() {
       createdAt: new Date().toISOString()
     };
     const assistantId = `a-${Date.now()}`;
-    setMessages((current) => [...current, userMessage, { id: assistantId, role: "assistant", content: "", pending: true, createdAt: new Date().toISOString() }]);
-    setActiveSessionTitle((current) => (current === "新对话" ? shortTitle(text) : current));
+    const requestSessionId = activeSessionId;
+    updateSessionMessages(requestSessionId, (current) => [...current, userMessage, { id: assistantId, role: "assistant", content: "", pending: true, createdAt: new Date().toISOString() }]);
+    setActiveSessionTitle((current) => {
+      const nextTitle = current === "新对话" ? shortTitle(text) : current;
+      setSessionTitles((titles) => ({ ...titles, [requestSessionId]: nextTitle }));
+      return nextTitle;
+    });
+    if (activeProject) {
+      setSessionProjects((current) => ({ ...current, [requestSessionId]: activeProject.id }));
+    }
     setComposerText("");
     setAttachments([]);
     setApproval(null);
@@ -431,7 +942,7 @@ export function App() {
         category: "chat",
         label: "message",
         amount: totalTokens,
-        sessionId: activeSessionId,
+        sessionId: requestSessionId,
         detail: {
           inputTokens: usage?.inputTokens || 0,
           outputTokens: usage?.outputTokens || 0,
@@ -445,26 +956,26 @@ export function App() {
     };
 
     try {
-      const result = await sendChatMessage({ sessionId: activeSessionId, message: text, attachments });
+      const result = await sendChatMessage({ sessionId: requestSessionId, message: outboundText, attachments: outboundAttachments });
       if (result.status === "error") throw new Error(result.message || "发送失败");
       if (result.inline_reply) {
-        setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, content: result.inline_reply || "", pending: false } : item));
+        updateSessionMessages(requestSessionId, (current) => current.map((item) => item.id === assistantId ? { ...item, content: result.inline_reply || "", pending: false } : item));
         reportChatUsage(result.usage, usageTotal(result.usage) ? "provider" : "estimated");
       }
       if (result.request_id && result.stream) {
         setActiveRequestId(result.request_id);
-        streamCleanup.current = openMessageStream({
+        setSessionRequestIds((current) => ({ ...current, [requestSessionId]: result.request_id || "" }));
+        const cleanup = openMessageStream({
           requestId: result.request_id,
           webPort: sidecarStatus.webPort,
           onItem: (item) => {
             if (item.type === "cancelled") {
-              setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: message.content || "已停止", pending: false } : message));
-              setActiveRequestId("");
-              streamCleanup.current?.();
+              updateSessionMessages(requestSessionId, (current) => current.map((message) => message.id === assistantId ? { ...message, content: message.content || "已停止", pending: false } : message));
+              finishSessionRequest(requestSessionId);
               return;
             }
             if (item.type === "done") {
-              setMessages((current) => current.map((message) => {
+              updateSessionMessages(requestSessionId, (current) => current.map((message) => {
                 if (message.id === userMessage.id && typeof item.user_seq === "number") {
                   return { ...message, userSeq: item.user_seq };
                 }
@@ -478,52 +989,70 @@ export function App() {
                 }
                 return message;
               }));
-              setActiveRequestId("");
+              finishSessionRequest(requestSessionId);
               reportChatUsage(item.usage, usageTotal(item.usage) ? "provider" : "estimated");
               return;
             }
             if (item.type === "error") {
               const message = item.content || item.message || "运行时返回错误";
-              setMessages((current) => current.map((entry) => entry.id === assistantId ? {
+              updateSessionMessages(requestSessionId, (current) => current.map((entry) => entry.id === assistantId ? {
                 ...entry,
                 content: message,
                 pending: false
               } : entry));
-              setActiveRequestId("");
-              streamCleanup.current?.();
+              finishSessionRequest(requestSessionId);
               reportChatUsage(item.usage, usageTotal(item.usage) ? "provider" : "estimated");
-              void reportDesktopEvent({ type: "error", source: "Desktop", message, sessionId: activeSessionId });
+              void reportDesktopEvent({ type: "error", source: "Desktop", message, sessionId: requestSessionId });
               return;
             }
             if ((item.type === "message_update" || item.type === "delta") && item.content) {
-              setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, content: `${message.content}${item.content}`, pending: false } : message));
+              updateSessionMessages(requestSessionId, (current) => current.map((message) => message.id === assistantId ? { ...message, content: `${message.content}${item.content}`, pending: false } : message));
             }
           },
           onError: () => {
-            setActiveRequestId("");
-            setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, pending: false } : message));
+            finishSessionRequest(requestSessionId);
+            updateSessionMessages(requestSessionId, (current) => current.map((message) => message.id === assistantId ? { ...message, pending: false } : message));
             reportChatUsage(undefined, "estimated");
           }
         });
+        streamCleanup.current = cleanup;
+        streamCleanups.current[requestSessionId] = cleanup;
       } else if (!result.inline_reply) {
         reportChatUsage(result.usage, usageTotal(result.usage) ? "provider" : "estimated");
       }
-      generateSessionTitle({ sessionId: activeSessionId, userMessage: text }).then((title) => {
-        if (title) setActiveSessionTitle(title);
+      generateSessionTitle({ sessionId: requestSessionId, userMessage: text || activeProject?.name || "项目会话" }).then((title) => {
+        if (!title) return;
+        setSessionTitles((current) => ({ ...current, [requestSessionId]: title }));
+        setSessionUiState((current) => ({
+          ...current,
+          [requestSessionId]: {
+            ...(current[requestSessionId] || {
+              projectId: sessionProjects[requestSessionId] || null,
+              messages: [],
+              composerText: "",
+              attachments: []
+            }),
+            title
+          }
+        }));
+        if (activeSessionIdRef.current === requestSessionId) {
+          setActiveSessionTitle(title);
+        }
       }).catch(() => undefined);
     } catch (error) {
       const message = error instanceof Error ? error.message : "发送失败";
-      setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, content: message, pending: false } : item));
-      void reportDesktopEvent({ type: "error", source: "Desktop", message, sessionId: activeSessionId });
+        updateSessionMessages(requestSessionId, (current) => current.map((item) => item.id === assistantId ? { ...item, content: message, pending: false } : item));
+      finishSessionRequest(requestSessionId);
+      void reportDesktopEvent({ type: "error", source: "Desktop", message, sessionId: requestSessionId });
     }
   }
 
   async function stopActiveRequest() {
-    if (!activeRequestId) return;
-    await cancelChatRequest({ requestId: activeRequestId, sessionId: activeSessionId });
-    setActiveRequestId("");
-    streamCleanup.current?.();
-    setMessages((current) => current.map((message) => message.pending ? { ...message, content: message.content || "已停止", pending: false } : message));
+    const requestId = activeSessionRequestId;
+    if (!requestId) return;
+    await cancelChatRequest({ requestId, sessionId: activeSessionId });
+    finishSessionRequest(activeSessionId);
+    updateSessionMessages(activeSessionId, (current) => current.map((message) => message.pending ? { ...message, content: message.content || "已停止", pending: false } : message));
   }
 
   async function undoLastTurn() {
@@ -549,24 +1078,32 @@ export function App() {
     }
   }
 
-  async function handleInstallPack(pack: CapabilityPack) {
+  async function handleInstallPack(pack: CapabilityPack, onInstalled?: () => void) {
     if (pack.policyMode === "disabled") {
-      setApproval({ type: "error", title: "管理员已禁用安装", message: "请联系管理员预置该能力包。" });
+      setSettingsSection("abilities");
+      setSettingsOpen(true);
+      setToast("管理员已禁用安装，请联系管理员预置能力包");
       return;
     }
-    setApproval({ type: "info", title: `正在安装 ${pack.name}`, message: "安装过程中可以继续查看当前会话，请勿关闭应用。" });
-    const result = await installCapabilityPack(pack.id);
-    const nextPacks = await listCapabilityPacks();
-    setPacks(nextPacks);
-    if (result?.installed) {
-      setApproval({
-        type: "info",
-        title: "能力包已安装",
-        message: result.message,
-        actions: [{ label: "继续发送", primary: true, onClick: () => { setApproval(null); void sendNow(true); } }]
+    setSettingsSection("abilities");
+    setSettingsOpen(true);
+    setInstallingPackIds((current) => ({ ...current, [pack.id]: true }));
+    try {
+      const result = await installCapabilityPack(pack.id);
+      const nextPacks = await listCapabilityPacks();
+      setPacks(nextPacks);
+      if (result?.installed) {
+        setToast(`${pack.name} 已安装`);
+        onInstalled?.();
+      } else {
+        setToast(result?.message || `${pack.name} 安装失败`);
+      }
+    } finally {
+      setInstallingPackIds((current) => {
+        const next = { ...current };
+        delete next[pack.id];
+        return next;
       });
-    } else {
-      setApproval({ type: "error", title: "安装失败", message: result?.message || "请稍后重试或联系管理员。" });
     }
   }
 
@@ -620,6 +1157,96 @@ export function App() {
     }
   }
 
+  const browserPack = packs.find((pack) => pack.id === "browser-automation");
+  const abilityRows = [
+    {
+      id: "web_search",
+      name: "联网搜索",
+      detail: toolEnabled(runtimeSnapshot.tools, "web_search") ? "搜索工具已加载" : "已启用入口，等待搜索服务凭据",
+      enabled: toolEnabled(runtimeSnapshot.tools, "web_search"),
+      icon: <Globe2 aria-hidden="true" />
+    },
+    {
+      id: "bash",
+      name: "Bash / Shell",
+      detail: toolEnabled(runtimeSnapshot.tools, "bash") ? "可在项目上下文中执行命令" : "运行时尚未返回 shell 工具",
+      enabled: toolEnabled(runtimeSnapshot.tools, "bash"),
+      icon: <SquareTerminal aria-hidden="true" />
+    },
+    {
+      id: "files",
+      name: "本地文件读写",
+      detail: ["read", "write", "edit", "ls"].every((name) => toolEnabled(runtimeSnapshot.tools, name))
+        ? "读取、写入、编辑、目录浏览已就绪"
+        : "基础文件工具未全部加载",
+      enabled: ["read", "write", "edit", "ls"].every((name) => toolEnabled(runtimeSnapshot.tools, name)),
+      icon: <HardDrive aria-hidden="true" />
+    },
+    {
+      id: "vision",
+      name: "OCR / 图像理解",
+      detail: toolEnabled(runtimeSnapshot.tools, "vision") ? "图像理解工具已开启，模型凭据由企业策略决定" : "等待视觉模型或工具加载",
+      enabled: toolEnabled(runtimeSnapshot.tools, "vision"),
+      icon: <ImageIcon aria-hidden="true" />
+    },
+    {
+      id: "image-generation",
+      name: "Image Gen",
+      detail: skillEnabled(runtimeSnapshot.skills, "image-generation") ? "图像生成 Skill 已开启" : "等待开启图像生成 Skill",
+      enabled: skillEnabled(runtimeSnapshot.skills, "image-generation"),
+      icon: <WandSparkles aria-hidden="true" />
+    },
+    {
+      id: "browser",
+      name: "Playwright 浏览器",
+      detail: toolEnabled(runtimeSnapshot.tools, "browser")
+        ? "浏览器工具已加载"
+        : browserPack?.installed
+          ? "能力包已安装，等待运行时刷新"
+          : "首次使用会安装 Playwright 与 Chromium",
+      enabled: toolEnabled(runtimeSnapshot.tools, "browser") || Boolean(browserPack?.installed),
+      icon: <Globe2 aria-hidden="true" />,
+      pack: browserPack
+    },
+    {
+      id: "memory",
+      name: "项目记忆",
+      detail: activeProject ? `写入 ${activeProject.name} 的 .ecorex/project-memory.md` : "通用会话保留原项目内置记忆入口",
+      enabled: true,
+      icon: <Brain aria-hidden="true" />
+    }
+  ];
+  const activeProjectMemoryPath = activeProject?.memoryPath || (activeProject ? `${activeProject.path}\\.ecorex\\project-memory.md` : "");
+  const settingsNav: Array<{ id: SettingsSection; label: string; icon: ReactNode }> = [
+    { id: "account", label: "账号", icon: <UserRound aria-hidden="true" /> },
+    { id: "projects", label: "项目", icon: <FolderOpen aria-hidden="true" /> },
+    { id: "abilities", label: "能力", icon: <Sparkles aria-hidden="true" /> },
+    { id: "permissions", label: "权限", icon: <ShieldCheck aria-hidden="true" /> },
+    { id: "memory", label: "记忆", icon: <Brain aria-hidden="true" /> },
+    { id: "diagnostics", label: "诊断", icon: <Database aria-hidden="true" /> }
+  ];
+  const renderSessionRow = (row: SessionRow) => {
+    const cachedMessages = sessionUiState[row.id]?.messages || [];
+    const isRunning = Boolean(sessionRequestIds[row.id]) || cachedMessages.some((message) => message.pending);
+    const rowTitle = `${row.title}\n${row.detail}\n${formatTime(row.updatedAt)}`;
+    return (
+      <article className={`session-row is-${isRunning ? "waiting" : row.status}`} key={row.id}>
+        <button className="session-main" type="button" onClick={() => void selectSession(row)} title={rowTitle}>
+          {isRunning ? <LoaderCircle className="spin-icon" aria-hidden="true" /> : row.projectId ? <FolderOpen aria-hidden="true" /> : <Bot aria-hidden="true" />}
+          <span className="session-line"><strong>{row.title}</strong><small>{row.detail}</small></span>
+          <em>{formatTime(row.updatedAt)}</em>
+        </button>
+        <div className="session-actions">
+          <button type="button" onClick={() => togglePinSession(row)} title={row.pinned ? "取消置顶" : "置顶会话"} aria-label={row.pinned ? "取消置顶" : "置顶会话"}>
+            {row.pinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
+          </button>
+          <button type="button" onClick={() => void renameSession(row)} title="重命名会话" aria-label="重命名会话"><Pencil aria-hidden="true" /></button>
+          <button type="button" onClick={() => void removeSession(row)} title="删除会话" aria-label="删除会话"><Trash2 aria-hidden="true" /></button>
+        </div>
+      </article>
+    );
+  };
+
   if (!authChecked) {
     return <main className="auth-shell"><section className="auth-panel"><p>正在检查登录状态</p></section></main>;
   }
@@ -632,7 +1259,7 @@ export function App() {
     <main className="app-shell">
       <aside className="session-sidebar">
         <div className="brand-row">
-          <div className="brand-mark"><Sparkles aria-hidden="true" /></div>
+          <div className="brand-mark"><img src={brandIconUrl} alt="" /></div>
           <div>
             <strong>EcoreX</strong>
             <span>亦芯广告 AI Agent</span>
@@ -646,12 +1273,59 @@ export function App() {
         </div>
 
         <div className="sidebar-actions">
-          <button onClick={startNewSession} title="创建一段新会话"><Plus aria-hidden="true" />新对话</button>
+          <button onClick={() => startNewSession(null)} title="创建不绑定项目的通用会话"><Plus aria-hidden="true" />新对话</button>
           <label className="search-box" title="搜索会话标题和摘要">
             <Search aria-hidden="true" />
             <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="搜索会话" />
           </label>
         </div>
+
+        <section className="project-panel" aria-label="项目">
+          <div className="sidebar-section-title">
+            <span>项目</span>
+            <button className="icon-button" type="button" onClick={() => void addProject()} title="添加项目文件夹">
+              <FolderPlus aria-hidden="true" />
+            </button>
+          </div>
+          {projectSessionGroups.length === 0 ? (
+            <button className="project-empty" type="button" onClick={() => void addProject()} title="选择一个本地文件夹作为项目">
+              <FolderOpen aria-hidden="true" />
+              <span>添加项目文件夹</span>
+            </button>
+          ) : (
+            <div className="project-list">
+              {projectSessionGroups.slice(0, 8).map(({ project, sessions }) => (
+                <article className={`project-group ${project.id === activeProjectId ? "is-active" : ""}`} key={project.id}>
+                  <div
+                    className="project-row"
+                    onContextMenu={(event) => showProjectMenu(event, project)}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setActiveProjectId(project.id)}
+                      title={`${project.name}\n${project.path}\n项目记忆：${project.memoryPath || ".ecorex/project-memory.md"}`}
+                    >
+                      <FolderOpen aria-hidden="true" />
+                      <span>{project.name}</span>
+                    </button>
+                    <button className="project-menu-button" type="button" title="项目操作" aria-label="项目操作" onClick={(event) => showProjectMenu(event, project)}>
+                      <MoreHorizontal aria-hidden="true" />
+                    </button>
+                  </div>
+                  <div className="project-session-list" aria-label={`${project.name} 的会话`}>
+                    {sessions.length ? (
+                      sessions.map(renderSessionRow)
+                    ) : (
+                      <button className="project-session-empty" type="button" onClick={() => startNewSession(project)} title={`为 ${project.name} 创建项目会话`}>
+                        新建项目会话
+                      </button>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
 
         {notificationsOpen && (
           <section className="popover-panel">
@@ -662,26 +1336,37 @@ export function App() {
         )}
 
         <div className="session-list" aria-label="会话列表">
-          {visibleSessions.map((row) => (
-            <button className={`session-row is-${row.status}`} key={row.id} onClick={() => void selectSession(row)} title={`${row.title}\n${row.detail}\n${formatTime(row.updatedAt)}`}>
-              <FolderOpen aria-hidden="true" />
-              <span><strong>{row.title}</strong><small>{row.detail}</small></span>
-              <em>{formatTime(row.updatedAt)}</em>
-            </button>
-          ))}
+          <div className="sidebar-section-title"><span>通用会话</span><small>{generalSessions.length}</small></div>
+          {generalSessions.length ? generalSessions.map(renderSessionRow) : <div className="session-empty">暂无通用会话</div>}
         </div>
 
         <div className="sidebar-footer">
-          <button onClick={() => setSettingsOpen(true)} title="设置、能力包、权限和诊断"><Settings aria-hidden="true" />设置</button>
-          <button onClick={() => setSettingsOpen(true)} title={`${session.user.name} / ${session.user.email}`}><UserRound aria-hidden="true" />{session.user.name}</button>
+          <button onClick={() => { setSettingsSection("account"); setSettingsOpen(true); }} title="设置、能力包、权限和诊断"><Settings aria-hidden="true" />设置</button>
+          <button onClick={() => { setSettingsSection("account"); setSettingsOpen(true); }} title={`${session.user.name} / ${session.user.email}`}><UserRound aria-hidden="true" />{session.user.name}</button>
         </div>
       </aside>
+
+      {projectMenu && (() => {
+        const project = projects.find((item) => item.id === projectMenu.projectId);
+        if (!project) return null;
+        const isPinned = Boolean(pinnedProjects[project.id] || project.pinned);
+        return (
+          <div className="context-menu" style={{ left: projectMenu.x, top: projectMenu.y }} onMouseLeave={() => setProjectMenu(null)}>
+            <button type="button" onClick={() => openProjectInExplorer(project)}><FolderInput aria-hidden="true" />在资源管理器打开</button>
+            <button type="button" onClick={() => { togglePinProject(project); setProjectMenu(null); }}>
+              {isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}{isPinned ? "取消置顶项目" : "置顶项目"}
+            </button>
+            <button type="button" onClick={() => renameProject(project)}><Pencil aria-hidden="true" />重命名项目</button>
+            <button type="button" onClick={() => deleteProject(project)}><FolderX aria-hidden="true" />删除项目</button>
+          </div>
+        );
+      })()}
 
       <section className="chat-pane">
         <header className="chat-header">
           <div>
-            <span>当前会话</span>
             <h1>{activeSessionTitle}</h1>
+            {activeProject && <small className="project-path" title={activeProject.path}>{activeProject.path}</small>}
           </div>
           <div className="chat-status">
             <span title={runtimeSnapshot.message}><Bot aria-hidden="true" />{runtimeSnapshot.status === "ready" ? "运行时已连接" : "等待运行时"}</span>
@@ -692,9 +1377,9 @@ export function App() {
         <div className="message-list">
           {messages.length === 0 ? (
             <div className="empty-chat">
-              <Sparkles aria-hidden="true" />
-              <strong>可以直接开始</strong>
-              <span>粘贴图片或文件，输入需求，EcoreX 会在需要能力包或权限时先确认。</span>
+              <div className="brand-mark"><img src={brandIconUrl} alt="" /></div>
+              <strong>{activeProject ? activeProject.name : "可以直接开始"}</strong>
+              <span>{activeProject ? "你可以把任何文件/图片/视频 参考扔到项目文件夹内 我会基于项目文件夹上下文回答你。" : "粘贴图片或文件，输入需求，EcoreX 会在需要能力包或权限时先确认。"}</span>
             </div>
           ) : (
             messages.map((message) => (
@@ -748,29 +1433,39 @@ export function App() {
             </section>
           )}
 
-          {attachments.length > 0 && (
-            <div className="attachment-tray">
-              {attachments.map((file) => (
-                <article key={file.file_path}>
-                  <button className="attachment-preview" type="button" onClick={() => setPreviewFile(file)} title="点击预览，右侧弹层会显示文件">
-                    {file.previewDataUrl ? <img src={file.previewDataUrl} alt="" /> : fileIcon(file)}
-                    <span>{file.file_name}</span>
-                  </button>
-                  <button
-                    className="attachment-remove"
-                    type="button"
-                    aria-label={`移除 ${file.file_name}`}
-                    title="移除附件"
-                    onClick={() => setAttachments((current) => current.filter((item) => item.file_path !== file.file_path))}
-                  >
-                    <X aria-hidden="true" />
-                  </button>
-                </article>
-              ))}
-            </div>
-          )}
-
           <form className="composer" onSubmit={(event) => { event.preventDefault(); void sendNow(); }}>
+            {attachments.length > 0 && (
+              <div className="attachment-tray">
+                {attachments.map((file) => (
+                  <article key={file.file_path}>
+                    <button className="attachment-preview" type="button" onClick={() => setPreviewFile(file)} title="点击预览，右侧弹层会显示文件">
+                      {file.previewDataUrl ? <img src={file.previewDataUrl} alt="" /> : fileIcon(file)}
+                      <span>{file.file_name}</span>
+                    </button>
+                    <button
+                      className="attachment-remove"
+                      type="button"
+                      aria-label={`移除 ${file.file_name}`}
+                      title="移除附件"
+                      onClick={() => setAttachments((current) => current.filter((item) => item.file_path !== file.file_path))}
+                    >
+                      <X aria-hidden="true" />
+                    </button>
+                  </article>
+                ))}
+              </div>
+            )}
+            {skillMentions.length > 0 && (
+              <div className="skill-mention-popover" role="listbox" aria-label="可提及的 Skill">
+                {skillMentions.map((skill) => (
+                  <button key={skill.name || skill.display_name} type="button" onClick={() => insertSkillMention(skill)} title={skill.path || skill.source || "Skill"}>
+                    <AtSign aria-hidden="true" />
+                    <span>{skill.display_name || skill.name}</span>
+                    <em>{skill.enabled === false ? "未启用" : "已启用"}</em>
+                  </button>
+                ))}
+              </div>
+            )}
             <button type="button" className="round-button" onClick={chooseFiles} title="添加本地文件"><Paperclip aria-hidden="true" /></button>
             <textarea
               ref={composerRef}
@@ -781,14 +1476,14 @@ export function App() {
               onPaste={(event) => void handlePaste(event)}
               rows={1}
             />
-            <button type="button" className="mode-button" onClick={() => setSettingsOpen(true)} title="自定义模型、权限和能力包">
-              <Settings aria-hidden="true" />自定义<ChevronDown aria-hidden="true" />
+            <button type="button" className="mode-button" onClick={() => setSettingsOpen(true)} title={`当前模型：${currentModelName}`}>
+              <Settings aria-hidden="true" />{currentModelName}<ChevronDown aria-hidden="true" />
             </button>
-            {activeRequestId ? (
+            {activeSessionRequestId ? (
               <button type="button" className="send-button stop" onClick={stopActiveRequest} title="停止当前回复"><Square aria-hidden="true" /></button>
             ) : (
               <button type="submit" className="send-button" disabled={!composerText.trim() && attachments.length === 0} title="发送，Enter 也可以发送">
-                <Upload aria-hidden="true" />
+                <SendHorizontal aria-hidden="true" />
               </button>
             )}
           </form>
@@ -798,62 +1493,188 @@ export function App() {
       {settingsOpen && (
         <div className="modal-backdrop" onClick={() => setSettingsOpen(false)}>
           <section className="settings-sheet" onClick={(event) => event.stopPropagation()}>
-            <header><h2>设置</h2><button className="icon-button" title="关闭设置" aria-label="关闭设置" onClick={() => setSettingsOpen(false)}><X aria-hidden="true" /></button></header>
-            <div className="settings-grid">
-              <article><strong>账号</strong><span>{session.user.name} / {session.user.email}</span><button onClick={logout}><LogOut aria-hidden="true" />退出登录</button></article>
-              <article><strong>主题</strong><span>当前为 {theme === "dark" ? "深色" : "明亮"} 模式</span><button onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <SunMedium aria-hidden="true" /> : <Moon aria-hidden="true" />}切换主题</button></article>
-              <article><strong>权限</strong><span>{permissionState ? `模式 ${permissionModeLabel(permissionState.mode)}，已保存 ${permissionState.grantsCount} 条授权` : "权限状态暂不可用"}</span><button onClick={() => resetPermissionGrants().then(setPermissionState)}>清空授权</button></article>
-              <article><strong>Skill / MCP</strong><span>{runtimeSnapshot.skillsCount} 个 Skill，{runtimeSnapshot.toolsCount} 个工具通道</span><button onClick={() => loadRuntimeSnapshot().then(setRuntimeSnapshot)}>重新检查</button></article>
-              <article><strong>模型策略</strong><span>{runtimeSnapshot.modelsCount} 个企业模型映射，{runtimeSnapshot.status === "ready" ? "已同步" : "等待同步"}</span><button onClick={() => loadRuntimeSnapshot().then(setRuntimeSnapshot)}>刷新策略</button></article>
-              <article><strong>文件预览</strong><span>点击附件后再显示预览；系统打开前会进行权限确认。</span><button onClick={() => setPreviewFile(null)}>关闭预览</button></article>
-              <article><strong>诊断</strong><span>{sidecarStatus.message}</span><button onClick={() => loadRuntimeSnapshot().then(setRuntimeSnapshot)}>重新检查</button></article>
-            </div>
-            <form className="password-form" onSubmit={submitPasswordChange}>
-              <strong>修改登录密码</strong>
-              <input
-                value={passwordDraft.oldPassword}
-                onChange={(event) => setPasswordDraft((current) => ({ ...current, oldPassword: event.target.value }))}
-                type="password"
-                placeholder="当前密码"
-                autoComplete="current-password"
-                required
-              />
-              <input
-                value={passwordDraft.newPassword}
-                onChange={(event) => setPasswordDraft((current) => ({ ...current, newPassword: event.target.value }))}
-                type="password"
-                placeholder="新密码，至少 8 位"
-                autoComplete="new-password"
-                minLength={8}
-                required
-              />
-              <input
-                value={passwordDraft.confirmPassword}
-                onChange={(event) => setPasswordDraft((current) => ({ ...current, confirmPassword: event.target.value }))}
-                type="password"
-                placeholder="确认新密码"
-                autoComplete="new-password"
-                minLength={8}
-                required
-              />
-              <button type="submit" disabled={passwordBusy}>{passwordBusy ? "正在保存" : "更新密码"}</button>
-            </form>
-            <div className="permission-modes">
-              {(["smart-ask", "always-ask", "read-only", "custom"] as PermissionMode[]).map((mode) => (
-                <button key={mode} className={permissionState?.mode === mode ? "is-active" : ""} onClick={() => updatePermissionMode(mode).then(setPermissionState)}>
-                  {mode === "smart-ask" ? "智能确认" : mode === "always-ask" ? "每次询问" : mode === "read-only" ? "只读优先" : "自定义"}
-                </button>
-              ))}
-            </div>
-            <div className="pack-list">
-              {packs.map((pack) => (
-                <article key={pack.id}>
-                  <div><strong>{pack.name}</strong><span>{pack.message}</span></div>
-                  <button disabled={pack.installed || pack.policyMode === "disabled"} onClick={() => void handleInstallPack(pack)}>
-                    {pack.installed ? "已安装" : pack.policyMode === "disabled" ? "管理员禁用" : "安装"}
+            <header>
+              <div>
+                <h2>设置</h2>
+                <span>账号、项目、能力、权限、记忆和诊断</span>
+              </div>
+              <button className="icon-button" title="关闭设置" aria-label="关闭设置" onClick={() => setSettingsOpen(false)}><X aria-hidden="true" /></button>
+            </header>
+            <div className="settings-layout">
+              <nav className="settings-nav" aria-label="设置分区">
+                {settingsNav.map((item) => (
+                  <button
+                    key={item.id}
+                    className={settingsSection === item.id ? "is-active" : ""}
+                    onClick={() => setSettingsSection(item.id)}
+                    title={item.label}
+                  >
+                    {item.icon}
+                    <span>{item.label}</span>
                   </button>
-                </article>
-              ))}
+                ))}
+              </nav>
+              <div className="settings-content">
+                {settingsSection === "account" && (
+                  <section className="settings-section">
+                    <div className="settings-section-head">
+                      <strong>账号与外观</strong>
+                      <span>{session.user.name} / {session.user.email}</span>
+                    </div>
+                    <div className="settings-list">
+                      <article>
+                        <div><strong>主题</strong><span>当前为 {theme === "dark" ? "深色" : "明亮"} 模式</span></div>
+                        <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>{theme === "dark" ? <SunMedium aria-hidden="true" /> : <Moon aria-hidden="true" />}切换</button>
+                      </article>
+                      <article>
+                        <div><strong>登录账号</strong><span>{session.user.email}</span></div>
+                        <button onClick={logout}><LogOut aria-hidden="true" />退出</button>
+                      </article>
+                    </div>
+                    <form className="password-form" onSubmit={submitPasswordChange}>
+                      <strong>修改登录密码</strong>
+                      <input value={passwordDraft.oldPassword} onChange={(event) => setPasswordDraft((current) => ({ ...current, oldPassword: event.target.value }))} type="password" placeholder="当前密码" autoComplete="current-password" required />
+                      <input value={passwordDraft.newPassword} onChange={(event) => setPasswordDraft((current) => ({ ...current, newPassword: event.target.value }))} type="password" placeholder="新密码，至少 8 位" autoComplete="new-password" minLength={8} required />
+                      <input value={passwordDraft.confirmPassword} onChange={(event) => setPasswordDraft((current) => ({ ...current, confirmPassword: event.target.value }))} type="password" placeholder="确认新密码" autoComplete="new-password" minLength={8} required />
+                      <button type="submit" disabled={passwordBusy}>{passwordBusy ? "保存中" : "更新密码"}</button>
+                    </form>
+                  </section>
+                )}
+
+                {settingsSection === "projects" && (
+                  <section className="settings-section">
+                    <div className="settings-section-head">
+                      <strong>项目</strong>
+                      <span>项目会话会自动引用项目文件夹，并把总结沉淀到项目记忆</span>
+                    </div>
+                    <div className="settings-list">
+                      <article>
+                        <div><strong>添加项目</strong><span>选择一个本地文件夹作为项目工作区</span></div>
+                        <button onClick={() => void addProject()}><FolderPlus aria-hidden="true" />添加</button>
+                      </article>
+                      {projects.map((project) => (
+                        <article key={project.id}>
+                          <div><strong>{project.name}</strong><span title={project.path}>{project.path}</span></div>
+                          <button onClick={() => startNewSession(project)}><Plus aria-hidden="true" />开始会话</button>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                )}
+
+                {settingsSection === "abilities" && (
+                  <section className="settings-section">
+                    <div className="settings-section-head">
+                      <strong>能力</strong>
+                      <span>登录前预加载/预安装；登录后在这里逐个勾选生效，默认全开</span>
+                    </div>
+                    <div className="ability-grid">
+                      {abilityRows.map((ability) => (
+                        <article key={ability.id} className={ability.enabled ? "is-ready" : "is-waiting"}>
+                          {ability.icon}
+                          <div><strong>{ability.name}</strong><span>{ability.detail}</span></div>
+                          {"pack" in ability && ability.pack && !ability.enabled ? (
+                            <button disabled={Boolean(installingPackIds[ability.pack.id])} onClick={() => void handleInstallPack(ability.pack!)}>
+                              {installingPackIds[ability.pack.id] ? "正在安装" : "安装"}
+                            </button>
+                          ) : <em>{ability.enabled ? "已开启" : "待配置"}</em>}
+                        </article>
+                      ))}
+                    </div>
+                    <div className="skill-toggle-list">
+                      <div className="toggle-list-head"><strong>Skill 生效开关</strong><span>可在聊天框用 @ 提及，关闭后不参与调用</span></div>
+                      {(runtimeSnapshot.skills || []).map((skill) => {
+                        const name = skill.name || skill.display_name || "";
+                        const enabled = skill.enabled !== false;
+                        return (
+                          <label key={name || skill.path} className="toggle-row" title={skill.path || skill.source || name}>
+                            <input type="checkbox" checked={enabled} onChange={(event) => void toggleRuntimeSkill(skill, event.currentTarget.checked)} />
+                            <span><strong>{skill.display_name || name || "未命名 Skill"}</strong><small>{skill.source || "skill"}</small></span>
+                            <em>{enabled ? "已启用" : "已关闭"}</em>
+                          </label>
+                        );
+                      })}
+                      {!(runtimeSnapshot.skills || []).length && <div className="session-empty">运行时暂未返回 Skill 列表</div>}
+                    </div>
+                    <div className="pack-list">
+                      {packs.map((pack) => (
+                        <article key={pack.id}>
+                          <label className="pack-toggle" title="控制该能力包是否参与自动触发；安装状态不会被删除">
+                            <input type="checkbox" checked={capabilityPackEnabled(pack.id)} onChange={(event) => toggleCapabilityPack(pack, event.currentTarget.checked)} />
+                            <span>生效</span>
+                          </label>
+                          <div><strong>{pack.name}</strong><span>{installingPackIds[pack.id] ? "正在安装，请稍候" : pack.message}</span></div>
+                          <button disabled={pack.installed || pack.policyMode === "disabled" || Boolean(installingPackIds[pack.id])} onClick={() => void handleInstallPack(pack)}>
+                            {installingPackIds[pack.id] ? "正在安装" : pack.installed ? "已安装" : pack.policyMode === "disabled" ? "管理员禁用" : "安装"}
+                          </button>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                )}
+
+                {settingsSection === "permissions" && (
+                  <section className="settings-section">
+                    <div className="settings-section-head">
+                      <strong>权限</strong>
+                      <span>{permissionState ? `当前 ${permissionModeLabel(permissionState.mode)}，保存 ${permissionState.grantsCount} 条授权` : "权限状态暂不可用"}</span>
+                    </div>
+                    <div className="permission-modes">
+                      {(["smart-ask", "always-ask", "read-only", "custom"] as PermissionMode[]).map((mode) => (
+                        <button key={mode} className={permissionState?.mode === mode ? "is-active" : ""} onClick={() => updatePermissionMode(mode).then(setPermissionState)}>
+                          {mode === "smart-ask" ? "智能确认" : mode === "always-ask" ? "每次询问" : mode === "read-only" ? "只读优先" : "自定义"}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="settings-list">
+                      <article><div><strong>授权记录</strong><span>{permissionState?.auditPath || "暂无记录"}</span></div><button onClick={() => resetPermissionGrants().then(setPermissionState)}>清空授权</button></article>
+                      <article><div><strong>文件预览</strong><span>点击附件才显示预览，系统打开前会进行权限确认</span></div><button onClick={() => setPreviewFile(null)}>关闭预览</button></article>
+                    </div>
+                  </section>
+                )}
+
+                {settingsSection === "memory" && (
+                  <section className="settings-section">
+                    <div className="settings-section-head">
+                      <strong>记忆</strong>
+                      <span>{activeProject ? `项目记忆：${activeProject.name}` : "原项目记忆入口"}</span>
+                    </div>
+                    <div className="settings-list">
+                      <article>
+                        <div><strong>项目记忆</strong><span title={activeProjectMemoryPath}>{activeProjectMemoryPath || "选择项目后自动创建 .ecorex/project-memory.md"}</span></div>
+                        <button disabled={!activeProject} onClick={() => activeProject?.memoryPath && requestOpenFile({ file_path: activeProject.memoryPath, file_name: "project-memory.md", file_type: "file" })}><BookOpen aria-hidden="true" />打开</button>
+                      </article>
+                      <article>
+                        <div><strong>梦境蒸馏</strong><span>{activeProject ? "项目会话只写入项目梦境目录" : "通用会话保留原项目记忆入口"}</span></div>
+                        <em>已开启</em>
+                      </article>
+                    </div>
+                    <div className="memory-list">
+                      {[...memoryFiles, ...dreamFiles].slice(0, 8).map((file) => (
+                        <article key={`${file.category || ""}-${memoryFileName(file)}`}>
+                          <Brain aria-hidden="true" />
+                          <div><strong>{memoryFileName(file)}</strong><span>{memoryFileTime(file)}</span></div>
+                        </article>
+                      ))}
+                      {!memoryFiles.length && !dreamFiles.length && <div className="session-empty">暂无可展示的原项目记忆文件</div>}
+                    </div>
+                  </section>
+                )}
+
+                {settingsSection === "diagnostics" && (
+                  <section className="settings-section">
+                    <div className="settings-section-head">
+                      <strong>诊断</strong>
+                      <span>{sidecarStatus.message}</span>
+                    </div>
+                    <div className="settings-list">
+                      <article><div><strong>运行时</strong><span>{runtimeSnapshot.message}</span></div><button onClick={() => loadRuntimeSnapshot().then(setRuntimeSnapshot)}>重新检查</button></article>
+                      <article><div><strong>模型策略</strong><span>{runtimeSnapshot.modelsCount} 个企业模型映射</span></div><button onClick={() => loadRuntimeSnapshot().then(setRuntimeSnapshot)}>刷新</button></article>
+                      <article><div><strong>Skill / MCP</strong><span>{runtimeSnapshot.skillsCount} 个 Skill，{runtimeSnapshot.toolsCount} 个工具通道</span></div><button onClick={() => loadRuntimeSnapshot().then(setRuntimeSnapshot)}>重新检查</button></article>
+                    </div>
+                  </section>
+                )}
+              </div>
             </div>
           </section>
         </div>

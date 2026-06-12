@@ -1,7 +1,7 @@
 {
   "product": "EcoreX",
   "version": "0.1.10",
-  "updatedAt": "2026-06-11",
+  "updatedAt": "2026-06-12",
   "notes": "EcoreX v0.1.10 productization release. Windows is the validation target for this round. macOS arm64/x64 packaging metadata is retained, but signing, notarization, and Gatekeeper verification are intentionally skipped and will be completed on a Mac.",
   "artifacts": [
     {
@@ -10,10 +10,10 @@
       "variant": "x64 installer",
       "fileName": "EcoreX_0.1.10_x64-setup.exe",
       "href": "downloads/EcoreX_0.1.10_x64-setup.exe",
-      "size": 117529360,
-      "sha256": "ACA52B7ACF7D73FBCA62F3F5AB92C057AB50B8FBD188C3AD7105B665569D482B",
+      "size": 117442400,
+      "sha256": "BE89ADCEAE56D8097D54B1394B2CA47E752F3BD93D51F3F8374D2E0B9F14A308",
       "status": "ready",
-      "source": "local-v0.1.10-productization; signed Windows installer; installed runtime smoke passed"
+      "source": "local-v0.1.10-productization; signed Windows installer; desktop UX correction and renderer visual smoke passed"
     },
     {
       "id": "macos-arm64-dmg",

@@ -21,6 +21,9 @@ function isAllowedPath(pathname: string, method: string) {
     "POST /api/messages/delete",
     "GET /api/tools",
     "GET /api/skills",
+    "POST /api/skills",
+    "GET /api/memory",
+    "GET /api/memory/content",
     "GET /api/models",
     "GET /api/channels",
     "GET /api/scheduler",
@@ -31,6 +34,9 @@ function isAllowedPath(pathname: string, method: string) {
     return true;
   }
   if (upperMethod === "POST" && /^\/api\/sessions\/[^/]+\/generate_title$/.test(cleanPath)) {
+    return true;
+  }
+  if ((upperMethod === "PUT" || upperMethod === "DELETE") && /^\/api\/sessions\/[^/]+$/.test(cleanPath)) {
     return true;
   }
   if (upperMethod === "POST" && /^\/api\/sessions\/[^/]+\/clear_context$/.test(cleanPath)) {

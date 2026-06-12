@@ -176,7 +176,10 @@ if ($env:ECOREX_DISABLE_ENTERPRISE_POLICY -ne "1") {
     foreach ($key in $emptyPolicyKeys) {
         $policy.Remove($key)
     }
-    $policy | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $runtimeResolved "enterprise-policy.json") -Encoding UTF8
+    $policyPath = Join-Path $runtimeResolved "enterprise-policy.json"
+    $policyJson = $policy | ConvertTo-Json -Depth 4
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($policyPath, $policyJson + [Environment]::NewLine, $utf8NoBom)
     Write-Host "Enterprise policy staged for EcoreX desktop."
 }
 

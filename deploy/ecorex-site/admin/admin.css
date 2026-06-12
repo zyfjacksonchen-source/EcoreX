@@ -402,6 +402,64 @@ select {
   padding: 18px;
 }
 
+.model-test-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.model-test-actions button {
+  min-height: 36px;
+  padding: 0 13px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  color: var(--ink);
+  background: var(--surface-strong);
+  font-weight: 720;
+}
+
+.model-test-actions button:hover {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+}
+
+.model-test-result {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--rule);
+  border-radius: 14px;
+  background: var(--surface-strong);
+}
+
+.model-test-result[data-tone="running"] {
+  border-color: color-mix(in srgb, var(--brand) 40%, var(--rule));
+  background: var(--brand-soft);
+}
+
+.model-test-result[data-tone="ok"] {
+  border-color: color-mix(in srgb, var(--good) 42%, var(--rule));
+  background: color-mix(in srgb, var(--good) 10%, var(--surface-strong));
+}
+
+.model-test-result[data-tone="error"] {
+  border-color: color-mix(in srgb, var(--bad) 42%, var(--rule));
+  background: color-mix(in srgb, var(--bad) 10%, var(--surface-strong));
+}
+
+.model-test-result span,
+.model-test-result small {
+  color: var(--muted);
+}
+
+.model-test-result code {
+  padding: 8px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .capability-policy {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   margin-bottom: 10px;

@@ -184,7 +184,28 @@
         </select></label>
         <label>模型名称<input name="model" autocomplete="off" required /></label>
         <label>Base URL<input name="baseUrl" autocomplete="off" required /></label>
+        <label>调用类型<select name="botType">
+          <option value="custom">custom（自定义兼容）</option>
+          <option value="openai">openai（OpenAI 兼容层）</option>
+          <option value="deepseek">deepseek</option>
+          <option value="zhipuai">zhipuai</option>
+          <option value="moonshot">moonshot</option>
+          <option value="doubao">doubao</option>
+          <option value="qianfan">qianfan</option>
+          <option value="gemini">gemini</option>
+          <option value="claudeapi">claudeapi</option>
+        </select></label>
         <label>API Key<input name="apiKey" autocomplete="off" placeholder="留空则保留原密钥" /></label>
+        <label>生图模型（可选）<input name="imageModel" autocomplete="off" placeholder="不填则使用上面的模型名称" /></label>
+        <div class="model-test-actions" aria-label="模型测试">
+          <button type="button" data-model-test="connectivity">测试联通</button>
+          <button type="button" data-model-test="chat">测试会话</button>
+          <button type="button" data-model-test="image">测试生图</button>
+        </div>
+        <div class="model-test-result" data-model-test-result>
+          <strong>尚未测试</strong>
+          <span>保存前可以先测试当前填写的 Base URL、API Key 和模型名。</span>
+        </div>
         <button type="submit">保存全局模型</button>
       </form>
     </template>

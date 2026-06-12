@@ -6,6 +6,20 @@ export type RuntimeSession = {
   msg_count?: number;
 };
 
+export type RuntimeTool = {
+  name?: string;
+  description?: string;
+};
+
+export type RuntimeSkill = {
+  name?: string;
+  display_name?: string;
+  description?: string;
+  source?: string;
+  enabled?: boolean;
+  category?: string;
+};
+
 export type RuntimeMessage = {
   role?: "user" | "assistant";
   content?: string;
@@ -26,11 +40,15 @@ export type RuntimeSnapshot = {
   status: "ready" | "offline" | "error";
   message: string;
   version?: string;
+  currentModel?: string;
   sessions: RuntimeSession[];
   totalSessions: number;
   toolsCount: number;
   skillsCount: number;
   modelsCount: number;
+  tools?: RuntimeTool[];
+  skills?: RuntimeSkill[];
+  modelCapabilities?: Record<string, unknown>;
 };
 
 export type CapabilityState =
@@ -57,6 +75,26 @@ export type CapabilityPack = {
   policyMode?: "ask" | "preinstall" | "disabled";
   policyStatus?: string;
   policyUpdatedAt?: string;
+};
+
+export type ProjectFolder = {
+  id: string;
+  name: string;
+  path: string;
+  pinned?: boolean;
+  memoryPath?: string;
+  dreamsPath?: string;
+  updatedAt: string;
+};
+
+export type MemoryFile = {
+  filename?: string;
+  name?: string;
+  category?: string;
+  updated_at?: string;
+  updatedAt?: string;
+  size?: number;
+  preview?: string;
 };
 
 export type PermissionMode = "smart-ask" | "always-ask" | "read-only" | "custom";
@@ -157,21 +195,32 @@ export async function loadRuntimeSnapshot(): Promise<RuntimeSnapshot> {
     const [version, sessions, tools, skills, models] = await Promise.all([
       apiJson<{ version?: string }>("/api/version"),
       apiJson<{ sessions?: RuntimeSession[]; total?: number; message?: string }>("/api/sessions?page=1&page_size=40"),
-      apiJson<{ tools?: unknown[] }>("/api/tools"),
-      apiJson<{ skills?: unknown[] }>("/api/skills"),
-      apiJson<{ providers?: unknown[]; capabilities?: unknown[] }>("/api/models")
+      apiJson<{ tools?: RuntimeTool[] }>("/api/tools"),
+      apiJson<{ skills?: RuntimeSkill[] }>("/api/skills"),
+      apiJson<{ providers?: unknown[]; capabilities?: Record<string, unknown> | unknown[] }>("/api/models")
     ]);
 
     const runtimeSessions = Array.isArray(sessions.sessions) ? sessions.sessions : [];
+    const runtimeTools = Array.isArray(tools.tools) ? tools.tools : [];
+    const runtimeSkills = Array.isArray(skills.skills) ? skills.skills : [];
+    const capabilityCount = Array.isArray(models.capabilities)
+      ? models.capabilities.length
+      : models.capabilities && typeof models.capabilities === "object"
+        ? Object.keys(models.capabilities).length
+        : 0;
     return {
       status: "ready",
       message: "已连接本地 EcoreX 运行时",
       version: version.version,
       sessions: runtimeSessions,
       totalSessions: typeof sessions.total === "number" ? sessions.total : runtimeSessions.length,
-      toolsCount: countArray(tools.tools),
-      skillsCount: countArray(skills.skills),
-      modelsCount: countArray(models.providers) || countArray(models.capabilities)
+      toolsCount: runtimeTools.length,
+      skillsCount: runtimeSkills.length,
+      modelsCount: countArray(models.providers) || capabilityCount,
+      currentModel: inferCurrentModel(models),
+      tools: runtimeTools,
+      skills: runtimeSkills,
+      modelCapabilities: models.capabilities && typeof models.capabilities === "object" ? models.capabilities as Record<string, unknown> : {}
     };
   } catch (error) {
     return {
@@ -181,9 +230,33 @@ export async function loadRuntimeSnapshot(): Promise<RuntimeSnapshot> {
       totalSessions: 0,
       toolsCount: 0,
       skillsCount: 0,
-      modelsCount: 0
+      modelsCount: 0,
+      tools: [],
+      skills: [],
+      modelCapabilities: {}
     };
   }
+}
+
+function inferCurrentModel(models: { providers?: unknown[]; capabilities?: Record<string, unknown> | unknown[] }) {
+  const providers = Array.isArray(models.providers) ? models.providers : [];
+  for (const provider of providers) {
+    if (provider && typeof provider === "object") {
+      const data = provider as Record<string, unknown>;
+      const direct = data.model || data.name || data.id;
+      if (typeof direct === "string" && direct) return direct;
+      const nested = data.models;
+      if (Array.isArray(nested) && nested.length > 0) {
+        const first = nested[0];
+        if (typeof first === "string") return first;
+        if (first && typeof first === "object") {
+          const model = (first as Record<string, unknown>).model || (first as Record<string, unknown>).name || (first as Record<string, unknown>).id;
+          if (typeof model === "string" && model) return model;
+        }
+      }
+    }
+  }
+  return "";
 }
 
 export async function sendChatMessage(input: {
@@ -256,6 +329,21 @@ export async function generateSessionTitle(input: { sessionId: string; userMessa
   return result.title || "";
 }
 
+export async function renameRuntimeSession(input: { sessionId: string; title: string }) {
+  const title = input.title.trim();
+  if (!input.sessionId || !title) {
+    throw new Error("会话名称不能为空");
+  }
+  return apiJson<{ status?: string; message?: string }>(`/api/sessions/${encodeURIComponent(input.sessionId)}`, "PUT", { title });
+}
+
+export async function deleteRuntimeSession(sessionId: string) {
+  if (!sessionId) {
+    throw new Error("会话不存在");
+  }
+  return apiJson<{ status?: string; message?: string }>(`/api/sessions/${encodeURIComponent(sessionId)}`, "DELETE", {});
+}
+
 export async function deleteMessagePair(input: { sessionId: string; userSeq: number }) {
   return apiJson<{ status?: string; deleted?: number }>("/api/messages/delete", "POST", {
     session_id: input.sessionId,
@@ -274,6 +362,13 @@ export async function chooseLocalFiles(webPort = 9899): Promise<FileAttachment[]
     ...file,
     previewDataUrl: file.file_type === "image" ? filePreviewUrl(file.file_path, webPort) : undefined
   }));
+}
+
+export async function chooseProjectFolder(): Promise<ProjectFolder | null> {
+  if (!window.ecorexDesktop?.chooseProjectFolder) {
+    return null;
+  }
+  return window.ecorexDesktop.chooseProjectFolder();
 }
 
 export async function savePastedFile(file: File): Promise<FileAttachment | null> {
@@ -357,6 +452,36 @@ export async function installCapabilityPack(packId: string): Promise<CapabilityP
     }
   });
   return result;
+}
+
+export async function setSkillEnabled(name: string, enabled: boolean) {
+  return apiJson<{ status?: string }>("/api/skills", "POST", {
+    action: enabled ? "open" : "close",
+    name
+  });
+}
+
+export async function enableDefaultSkills(skills: RuntimeSkill[]) {
+  const disabledBuiltIns = skills.filter((skill) => {
+    if (!skill.name || skill.enabled !== false) return false;
+    return skill.source === "builtin" || skill.source === "custom";
+  });
+  await Promise.all(disabledBuiltIns.map((skill) => setSkillEnabled(skill.name || "", true).catch(() => undefined)));
+  return disabledBuiltIns.length;
+}
+
+export async function loadMemoryFiles(category = "memory"): Promise<MemoryFile[]> {
+  try {
+    const result = await apiJson<{ files?: MemoryFile[]; items?: MemoryFile[]; list?: MemoryFile[] }>(
+      `/api/memory?page=1&page_size=12&category=${encodeURIComponent(category)}`
+    );
+    if (Array.isArray(result.files)) return result.files;
+    if (Array.isArray(result.items)) return result.items;
+    if (Array.isArray(result.list)) return result.list;
+  } catch {
+    // Memory listing is best-effort for the desktop settings panel.
+  }
+  return [];
 }
 
 export async function reportDesktopEvent(event: {

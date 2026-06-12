@@ -3,6 +3,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveEnterprisePolicy, type EnterprisePolicy } from "./enterprisePolicy.js";
 
 export type TelemetryEvent = {
   type: "usage" | "error" | "warn" | "info";
@@ -14,14 +15,6 @@ export type TelemetryEvent = {
   sessionId?: string;
   tool?: string;
   detail?: Record<string, unknown>;
-};
-
-type EnterprisePolicy = {
-  adminEventsUrl?: string;
-  clientEventKey?: string;
-  userEmail?: string;
-  deviceId?: string;
-  orgId?: string;
 };
 
 type EnterpriseSession = {
@@ -41,14 +34,6 @@ type TelemetryState = {
   orgId?: string;
   lastError?: string;
 };
-
-function readJson(filePath: string): EnterprisePolicy | null {
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8")) as EnterprisePolicy;
-  } catch {
-    return null;
-  }
-}
 
 function compactText(value: unknown, limit = 500) {
   if (value === undefined || value === null) {
@@ -127,25 +112,13 @@ export class TelemetryReporter {
       return this.policy;
     }
 
-    const envPolicy: EnterprisePolicy = {
-      adminEventsUrl: process.env.ECOREX_ADMIN_EVENTS_URL,
-      clientEventKey: process.env.ECOREX_CLIENT_EVENT_KEY,
-      userEmail: process.env.ECOREX_USER_EMAIL,
-      deviceId: process.env.ECOREX_DEVICE_ID,
-      orgId: process.env.ECOREX_ORG_ID
-    };
-
     const candidates = [
       path.join(app.getPath("userData"), "enterprise-policy.json"),
       path.join(this.runtimeRoot, "enterprise-policy.json"),
       process.resourcesPath ? path.join(process.resourcesPath, "enterprise-policy.json") : ""
     ].filter(Boolean);
 
-    const filePolicy = candidates.map(readJson).find(Boolean) || {};
-    this.policy = {
-      ...filePolicy,
-      ...Object.fromEntries(Object.entries(envPolicy).filter(([, value]) => Boolean(value)))
-    };
+    this.policy = resolveEnterprisePolicy(candidates);
     return this.policy;
   }
 

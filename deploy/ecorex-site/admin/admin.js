@@ -314,6 +314,28 @@ function showModal(title, templateName, setup) {
   backdrop.hidden = false;
 }
 
+function renderModelTestResult(target, result, runningLabel = "") {
+  if (!target) return;
+  if (runningLabel) {
+    target.dataset.tone = "running";
+    target.innerHTML = `<strong>${escapeHtml(runningLabel)}</strong><span>正在向上游模型发送测试请求，请稍候。</span>`;
+    return;
+  }
+  const ok = Boolean(result?.ok);
+  target.dataset.tone = ok ? "ok" : "error";
+  const meta = [
+    result?.endpoint ? `端点：${result.endpoint}` : "",
+    result?.statusCode ? `HTTP ${result.statusCode}` : "",
+    result?.latencyMs ? `${result.latencyMs} ms` : "",
+  ].filter(Boolean).join(" / ");
+  target.innerHTML = `
+    <strong>${ok ? "测试通过" : "测试失败"}</strong>
+    <span>${escapeHtml(result?.message || "没有返回测试结果")}</span>
+    ${result?.replyPreview ? `<code>${escapeHtml(result.replyPreview)}</code>` : ""}
+    ${meta ? `<small>${escapeHtml(meta)}</small>` : ""}
+  `;
+}
+
 function closeModal() {
   const backdrop = $("[data-modal]");
   if (backdrop) backdrop.hidden = true;
@@ -434,10 +456,30 @@ $("[data-model-edit]")?.addEventListener("click", () => {
   const model = state.data.globalModel || {};
   showModal("编辑企业全局模型", "edit-model", (body) => {
     const form = $("[data-model-form]", body);
+    const resultTarget = $("[data-model-test-result]", body);
     form.elements.name.value = model.name || "EcoreX 企业模型";
     form.elements.provider.value = model.provider || "custom";
     form.elements.model.value = model.model || "";
     form.elements.baseUrl.value = model.baseUrl || "";
+    if (form.elements.botType) {
+      form.elements.botType.value = model.botType || (model.provider === "openai" ? "openai" : "custom");
+    }
+    $all("[data-model-test]", body).forEach((button) => {
+      button.addEventListener("click", async () => {
+        const payload = Object.fromEntries(new FormData(form).entries());
+        payload.action = button.dataset.modelTest;
+        renderModelTestResult(resultTarget, null, button.textContent.trim());
+        button.disabled = true;
+        try {
+          const result = await request("/model-credentials/global/test", { method: "POST", body: JSON.stringify(payload) });
+          renderModelTestResult(resultTarget, result);
+        } catch (error) {
+          renderModelTestResult(resultTarget, { ok: false, message: error.message || "模型测试失败" });
+        } finally {
+          button.disabled = false;
+        }
+      });
+    });
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const payload = Object.fromEntries(new FormData(form).entries());

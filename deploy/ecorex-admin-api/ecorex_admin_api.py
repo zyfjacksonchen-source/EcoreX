@@ -7,6 +7,9 @@ import json
 import os
 import secrets
 import sqlite3
+import time
+import urllib.error
+import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -966,6 +969,184 @@ class AdminStore:
             "version": VERSION,
         }
 
+    def test_model_credential(self, payload):
+        action = compact_text(payload.get("action") or payload.get("test") or "connectivity", 32)
+        if action not in ("connectivity", "chat", "image"):
+            raise ValueError("unsupported model test action")
+
+        with self.connect() as conn:
+            current = self.get_global_model(conn, masked=False)
+
+        merged = {
+            "name": payload.get("name") or (current or {}).get("name") or "EcoreX 企业模型",
+            "provider": payload.get("provider") or (current or {}).get("provider") or "custom",
+            "model": payload.get("model") or (current or {}).get("model") or "",
+            "baseUrl": payload.get("baseUrl") or payload.get("api_base") or (current or {}).get("baseUrl") or "",
+            "apiKey": payload.get("apiKey") or payload.get("api_key") or (current or {}).get("apiKey") or "",
+            "botType": payload.get("botType") or payload.get("bot_type") or (current or {}).get("botType") or "",
+        }
+        prepared = self._prepare_model_credential(merged, require_api_key=True)
+
+        if action == "connectivity":
+            result = self._test_openai_models(prepared)
+            if not result["ok"]:
+                fallback = self._test_openai_chat(prepared, prompt="只回复 OK，用于 EcoreX 连通性测试。", purpose="connectivity")
+                if fallback["ok"]:
+                    return {
+                        **fallback,
+                        "test": "connectivity",
+                        "message": "模型列表端点不可用，但聊天端点已连通。",
+                    }
+            return result
+        if action == "chat":
+            return self._test_openai_chat(prepared, prompt="请用一句中文回复：EcoreX 会话测试通过。", purpose="chat")
+        return self._test_openai_image(prepared, payload)
+
+    def _endpoint_candidates(self, base_url, endpoint):
+        base = compact_text(base_url, 500).rstrip("/")
+        if not base:
+            return []
+        lower = base.lower()
+        if lower.endswith("/" + endpoint.lower()):
+            candidates = [base]
+        elif lower.endswith("/v1"):
+            candidates = [f"{base}/{endpoint}"]
+        else:
+            candidates = [f"{base}/v1/{endpoint}", f"{base}/{endpoint}"]
+        unique = []
+        for item in candidates:
+            if item not in unique:
+                unique.append(item)
+        return unique
+
+    def _request_json(self, method, url, api_key, body=None, timeout=25):
+        started = time.monotonic()
+        data = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            "User-Agent": f"EcoreX-Admin/{VERSION}",
+        }
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                raw = response.read(512_000).decode("utf-8", errors="replace")
+                payload = json_loads(raw, {})
+                return {
+                    "ok": 200 <= response.status < 300,
+                    "statusCode": response.status,
+                    "latencyMs": int((time.monotonic() - started) * 1000),
+                    "payload": payload,
+                    "raw": raw[:1200],
+                }
+        except urllib.error.HTTPError as exc:
+            raw = exc.read(120_000).decode("utf-8", errors="replace")
+            payload = json_loads(raw, {})
+            return {
+                "ok": False,
+                "statusCode": exc.code,
+                "latencyMs": int((time.monotonic() - started) * 1000),
+                "payload": payload,
+                "raw": raw[:1200],
+                "error": payload.get("error", {}).get("message") if isinstance(payload.get("error"), dict) else raw[:300],
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "statusCode": 0,
+                "latencyMs": int((time.monotonic() - started) * 1000),
+                "payload": {},
+                "raw": "",
+                "error": str(exc),
+            }
+
+    def _test_openai_models(self, prepared):
+        last = None
+        for url in self._endpoint_candidates(prepared["api_base"], "models"):
+            result = self._request_json("GET", url, prepared["api_key"], timeout=18)
+            last = result
+            if result["ok"]:
+                data = result.get("payload") or {}
+                count = len(data.get("data") or []) if isinstance(data.get("data"), list) else 0
+                return {
+                    "ok": True,
+                    "test": "connectivity",
+                    "message": f"连通性测试通过，模型列表端点可访问{f'，返回 {count} 个模型' if count else ''}。",
+                    "endpoint": url,
+                    "statusCode": result["statusCode"],
+                    "latencyMs": result["latencyMs"],
+                }
+        return self._model_test_failure("connectivity", "模型列表端点不可用。", last)
+
+    def _test_openai_chat(self, prepared, prompt, purpose="chat"):
+        body = {
+            "model": prepared["model"],
+            "messages": [
+                {"role": "system", "content": "你是 EcoreX 管理后台的连通性测试助手。"},
+                {"role": "user", "content": prompt},
+            ],
+            "stream": False,
+            "max_tokens": 32,
+            "temperature": 0,
+        }
+        last = None
+        for url in self._endpoint_candidates(prepared["api_base"], "chat/completions"):
+            result = self._request_json("POST", url, prepared["api_key"], body=body, timeout=35)
+            last = result
+            if result["ok"]:
+                payload = result.get("payload") or {}
+                choices = payload.get("choices") if isinstance(payload, dict) else []
+                preview = ""
+                if choices:
+                    message = (choices[0] or {}).get("message") or {}
+                    preview = compact_text(message.get("content"), 120)
+                return {
+                    "ok": True,
+                    "test": purpose,
+                    "message": "会话测试通过，模型已返回响应。",
+                    "endpoint": url,
+                    "statusCode": result["statusCode"],
+                    "latencyMs": result["latencyMs"],
+                    "replyPreview": preview,
+                }
+        return self._model_test_failure(purpose, "会话端点不可用或模型名不可用。", last)
+
+    def _test_openai_image(self, prepared, payload):
+        image_model = compact_text(payload.get("imageModel") or payload.get("image_model") or prepared["model"], 120)
+        body = {
+            "model": image_model,
+            "prompt": "EcoreX image generation connectivity test, simple orange brand icon on white background.",
+            "size": compact_text(payload.get("imageSize") or "512x512", 32),
+            "n": 1,
+        }
+        last = None
+        for url in self._endpoint_candidates(prepared["api_base"], "images/generations"):
+            result = self._request_json("POST", url, prepared["api_key"], body=body, timeout=60)
+            last = result
+            if result["ok"]:
+                return {
+                    "ok": True,
+                    "test": "image",
+                    "message": "生图测试通过，图像生成端点已返回结果。",
+                    "endpoint": url,
+                    "statusCode": result["statusCode"],
+                    "latencyMs": result["latencyMs"],
+                }
+        return self._model_test_failure("image", "生图端点不可用，或当前模型/上游不支持图像生成。", last)
+
+    def _model_test_failure(self, test, prefix, result):
+        result = result or {}
+        raw_error = result.get("error") or result.get("raw") or "无返回内容"
+        return {
+            "ok": False,
+            "test": test,
+            "message": f"{prefix} {compact_text(raw_error, 220)}",
+            "endpoint": "",
+            "statusCode": result.get("statusCode", 0),
+            "latencyMs": result.get("latencyMs", 0),
+        }
+
     def _prepare_model_credential(self, payload, require_api_key):
         provider = compact_text(payload.get("provider") or "openai", 32).lower()
         if provider not in PROVIDER_CONFIG_KEYS:
@@ -1280,6 +1461,10 @@ class AdminHandler(BaseHTTPRequestHandler):
                 if not self._require_admin():
                     return
                 self._json(200, self.store.update_policy(payload))
+            elif path == "/model-credentials/global/test":
+                if not self._require_admin():
+                    return
+                self._json(200, self.store.test_model_credential(payload))
             elif path in ("/model-credentials", "/model-credentials/global"):
                 if not self._require_admin():
                     return

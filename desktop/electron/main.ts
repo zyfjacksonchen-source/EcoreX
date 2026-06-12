@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import fsp from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -43,9 +43,10 @@ function createMainWindow() {
     minWidth: 960,
     minHeight: 660,
     title: "EcoreX",
+    autoHideMenuBar: process.platform !== "darwin",
     show: false,
     webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
+      preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true
@@ -68,8 +69,91 @@ function createMainWindow() {
   }
 }
 
+function installApplicationMenu() {
+  const isMac = process.platform === "darwin";
+  const template: Electron.MenuItemConstructorOptions[] = [
+    ...(isMac
+      ? [{
+          label: "EcoreX",
+          submenu: [
+            { role: "about", label: "关于 EcoreX" },
+            { type: "separator" },
+            { role: "services", label: "服务" },
+            { type: "separator" },
+            { role: "hide", label: "隐藏 EcoreX" },
+            { role: "hideOthers", label: "隐藏其他" },
+            { role: "unhide", label: "全部显示" },
+            { type: "separator" },
+            { role: "quit", label: "退出 EcoreX" }
+          ]
+        } satisfies Electron.MenuItemConstructorOptions]
+      : []),
+    {
+      label: "文件",
+      submenu: [
+        { role: "close", label: isMac ? "关闭窗口" : "退出" }
+      ]
+    },
+    {
+      label: "编辑",
+      submenu: [
+        { role: "undo", label: "撤销" },
+        { role: "redo", label: "重做" },
+        { type: "separator" },
+        { role: "cut", label: "剪切" },
+        { role: "copy", label: "复制" },
+        { role: "paste", label: "粘贴" },
+        { role: "selectAll", label: "全选" }
+      ]
+    },
+    {
+      label: "视图",
+      submenu: [
+        { role: "reload", label: "重新载入" },
+        { role: "forceReload", label: "强制重新载入" },
+        { role: "toggleDevTools", label: "开发者工具" },
+        { type: "separator" },
+        { role: "resetZoom", label: "实际大小" },
+        { role: "zoomIn", label: "放大" },
+        { role: "zoomOut", label: "缩小" },
+        { type: "separator" },
+        { role: "togglefullscreen", label: "进入/退出全屏" }
+      ]
+    },
+    {
+      label: "窗口",
+      submenu: [
+        { role: "minimize", label: "最小化" },
+        { role: "zoom", label: "缩放" },
+        ...(isMac
+          ? [
+              { type: "separator" as const },
+              { role: "front" as const, label: "前置所有窗口" }
+            ]
+          : [
+              { role: "close" as const, label: "关闭" }
+            ])
+      ]
+    },
+    {
+      label: "帮助",
+      submenu: [
+        {
+          label: "EcoreX 官网",
+          click: () => {
+            void shell.openExternal("https://www.ecoreai.cn/ecorex-agent/");
+          }
+        }
+      ]
+    }
+  ];
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 app.whenReady().then(async () => {
   app.setName("EcoreX");
+  installApplicationMenu();
   ipcMain.handle("ecorex:get-sidecar-status", () => sidecar.getStatus());
   ipcMain.handle("ecorex:sidecar-json", (_event, request) => fetchSidecarJson(sidecar, request));
   ipcMain.handle("ecorex:list-capability-packs", () => capabilities.listPacks());
@@ -109,6 +193,34 @@ app.whenReady().then(async () => {
     await permissions.rememberSelectedPaths(result.filePaths);
     return result.filePaths.map(toAttachment);
   });
+  ipcMain.handle("ecorex:choose-project-folder", async () => {
+    const result = await dialog.showOpenDialog({
+      title: "选择项目文件夹",
+      properties: ["openDirectory", "createDirectory"]
+    });
+    if (result.canceled || !result.filePaths[0]) {
+      return null;
+    }
+    const folderPath = result.filePaths[0];
+    const projectStateDir = path.join(folderPath, ".ecorex");
+    const projectMemoryPath = path.join(projectStateDir, "project-memory.md");
+    const projectDreamsPath = path.join(projectStateDir, "dreams");
+    await fsp.mkdir(projectDreamsPath, { recursive: true });
+    await fsp.writeFile(
+      projectMemoryPath,
+      `# Project Memory\n\nEcoreX stores project-specific summaries here. Keep this file concise and do not duplicate global user memory.\n`,
+      { encoding: "utf8", flag: "wx" }
+    ).catch(() => undefined);
+    await permissions.rememberSelectedPaths([folderPath]);
+    return {
+      id: `project-${Date.now()}`,
+      name: path.basename(folderPath) || folderPath,
+      path: folderPath,
+      memoryPath: projectMemoryPath,
+      dreamsPath: projectDreamsPath,
+      updatedAt: new Date().toISOString()
+    };
+  });
   ipcMain.handle("ecorex:save-pasted-file", async (_event, input: { fileName?: string; mimeType?: string; dataBase64: string }) => {
     const approxBytes = Math.ceil((input.dataBase64.length * 3) / 4);
     if (approxBytes > 50 * 1024 * 1024) {
@@ -137,6 +249,7 @@ app.whenReady().then(async () => {
 
   await sidecar.refreshEnterpriseModelConfig();
   sidecar.start();
+  void capabilities.preinstallPolicyPacks().catch(() => undefined);
   createMainWindow();
 
   app.on("activate", () => {
