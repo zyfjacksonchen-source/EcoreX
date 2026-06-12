@@ -74,13 +74,13 @@
 - Live route diagnosis shows Caddy is the active server: Admin/API paths are reachable, but static `/ecorex-agent/*` is not. Added `deploy/ecorex-site/caddy/Caddyfile.example` and release-zip inclusion for the Caddy route template.
 - Added `scripts/check-ecorex-server-release.sh`, copied by the install script into `$ADMIN_ROOT/server`, to verify release/current files, Admin API files, server helpers, and public route status from the server.
 - Added import-safe Caddy route snippet `deploy/ecorex-site/caddy/ecorex-agent.routes.caddy` and release-zip inclusion, so existing Caddy site blocks can import only the EcoreX routes.
-- The acceptance-log verification note was first synced to GitHub snapshot commit `66139aebfaa6e613d3295aa427665f56af1c8e59` on both `main` and `codex/ecorex-v0.1.10-productization`; strict release verification still fails at public `manifest.json` with HTTP 404 until server static release/Caddy `file_server` wiring is applied.
+- The acceptance-log verification note was first synced to GitHub snapshot commit `66139aebfaa6e613d3295aa427665f56af1c8e59` on both `main` and `codex/ecorex-v0.1.10-productization`; that note captured the earlier public `manifest.json` HTTP 404 before the 2026-06-12 server repair.
 - Fixed the GitHub API fallback used by the release and acceptance verifiers so refs such as `codex/ecorex-v0.1.10-productization` are requested through singular slash-preserving `git/ref/{ref}` paths instead of `%2F`-encoded paths or plural `git/refs`; when env tokens are unset, the fallback can use Git credential helper tokens for private repository checks.
+- Production `www.ecoreai.cn/ecorex-agent` was repaired on 2026-06-12. The server now serves v0.1.10 from `/srv/ecorex-agent-download/releases/20260612014244-v0.1.10`; Docker Caddy has the static read-only mount, and the Docker Admin API service was rebuilt with the v0.1.10 source and the packaged `ecorex-desktop-v0.1.10` client key.
+- Public verification after the repair passed with 0 blockers: release verifier, consolidated acceptance harness, server-side `check-ecorex-server-release.sh`, capability policy key check, and a temporary public user create/login/model-config/quota/delete smoke all passed.
 
 ## Pending Release Steps
 
-- Upload or sync the final Windows artifact to the public release/download host when ready. The local `deploy/ecorex-site/downloads/` directory is intentionally ignored by git.
-- Use `docs/ecorex/v0.1.10/public-deployment-runbook.md` for the public host sync and post-deploy verification sequence.
 - Run a human visual pass on the installed desktop UI for login, first chat, stop, paste attachment, quota block, and error telemetry.
 - Run macOS arm64/x64 signing, notarization, Gatekeeper, and installed-app smoke later on a Mac.
-- Public live model chat still needs to be checked after the production host serves v0.1.10.
+- Public live model chat should be checked from the installed desktop app with a real retained enterprise user; temporary public API login/model-config/quota smoke already passed.

@@ -2,8 +2,10 @@
 
 ## Current State
 
-- Local release is ready.
-- Public release is not yet updated: `https://www.ecoreai.cn/ecorex-agent/manifest.json` returned HTTP 404 during the latest 2026-06-11 verification retry after proxy was enabled. Earlier verification had seen v0.1.7.
+- Local release is ready and the public host has been repaired.
+- Public release is live as of 2026-06-12: `https://www.ecoreai.cn/ecorex-agent/manifest.json` returns `EcoreX 0.1.10`, the root page returns HTTP 200, and the Windows installer download returns HTTP 200 with the manifest size.
+- The production host uses Docker Caddy from `/opt/xhs-report/docker-compose.yml`, not host-level `/etc/caddy`. Caddy must keep the bind mount `/srv/ecorex-agent-download:/srv/ecorex-agent-download:ro`; without that mount, the Caddyfile `file_server` routes return 404 even when `/srv/ecorex-agent-download/current` exists on the host.
+- The production Admin API container was rebuilt from the v0.1.10 source and must keep `ECOREX_CLIENT_EVENT_KEY=ecorex-desktop-v0.1.10` so the packaged desktop client can fetch capability/model policy.
 - Windows installer is signed and locally smoke-tested:
   - `desktop/release/EcoreX_0.1.10_x64-setup.exe`
   - size `117,529,360`

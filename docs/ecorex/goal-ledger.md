@@ -57,9 +57,11 @@
 - 2026-06-11: Added import-safe Caddy route snippet `deploy/ecorex-site/caddy/ecorex-agent.routes.caddy`. The complete `Caddyfile.example` now imports the snippet, so existing `www.ecoreai.cn` site blocks can add only the EcoreX routes without duplicating the site block.
 - 2026-06-11: Retried strict public release verification after proxy was enabled. `https://www.ecoreai.cn/ecorex-agent/manifest.json` still returns HTTP 404 while Admin/API routes remain reachable, so the only open blocker is server-side static release/Caddy `file_server` wiring. The acceptance-log verification note was first synced to GitHub snapshot commit `66139aebfaa6e613d3295aa427665f56af1c8e59` on both `main` and `codex/ecorex-v0.1.10-productization`.
 - 2026-06-11: Fixed the GitHub API fallback in `scripts/test-ecorex-v0.1.10-acceptance.ps1` and `scripts/verify-ecorex-release.ps1`; GitHub's singular `git/ref/{ref}` endpoint needs branch names with slashes as path segments, not `%2F` encoded or plural `git/refs`, and the fallback now reads Git credential helper tokens when env tokens are unset so private repos do not masquerade as 404.
+- 2026-06-12: Production server repair completed. Installed `release-artifacts/EcoreX_0.1.10-public-release.zip` on `www.ecoreai.cn`, updated `/srv/ecorex-agent-download/current` to `/srv/ecorex-agent-download/releases/20260612014244-v0.1.10`, added Docker Caddy mount `/srv/ecorex-agent-download:/srv/ecorex-agent-download:ro`, rebuilt `xhs-report-ecorex-admin-api-1` with the v0.1.10 Admin API source, and aligned `ECOREX_CLIENT_EVENT_KEY=ecorex-desktop-v0.1.10`.
+- 2026-06-12: Final public verification passed: `scripts/test-ecorex-v0.1.10-acceptance.ps1 -ExpectedGitHubCommit a3ba9be0a5050295226c9681b044d1200fc4cfea` returned 10 checks, 0 blockers, 0 blocked, 0 warnings. `scripts/verify-ecorex-release.ps1` also returned 0 blockers; a temporary public user smoke verified create/login/model-config/quota/delete.
 
 ## Known Follow-Up
 
-- Deploy or point the product build at the production Admin API before final live enterprise login/model chat acceptance.
+- Run a final human visual pass on the installed Windows app against the production Admin API, including login, first chat, stop, attachment paste, quota block, and error telemetry.
 - Provider usage is now normalized when upstream returns a standard usage envelope; estimated tokens remain as fallback for providers that omit usage in streaming responses.
 - Run the skipped macOS signing/notarization/Gatekeeper pass on Mac hardware.
