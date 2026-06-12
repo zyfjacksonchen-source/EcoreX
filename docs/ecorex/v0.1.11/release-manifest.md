@@ -16,6 +16,7 @@
 - Public release zip SHA256: `71D2196AEEF4A331F321D996839E09D8D9A03B70DB113C959B4048F48B6C9DE7`
 - Git handoff bundle: `release-artifacts/EcoreX_0.1.11-productization.bundle`
 - Git handoff bundle: regenerate from final `HEAD` after release-note commits, then verify with `git bundle verify` and `Get-FileHash`.
+- GitHub source snapshot: `main` and `codex/ecorex-v0.1.11-productization` both point to API snapshot commit `71c5578a889708aa8f652116084af055de61f2d9`, created from local source commit `692aa5ea83b43b871d955395d47e3badd4d63320`.
 
 ## Public Manifest State
 - Product: `EcoreX`
@@ -51,4 +52,4 @@
 - The public release zip was structure-validated locally: static site, Admin API, server helpers, strict JSON `checksums.json`, `site/downloads/EcoreX_0.1.11-web-linux-service.tar.gz`, `site/downloads/EcoreX_0.1.11_arm64.dmg`, and `site/downloads/EcoreX_0.1.11_x64.dmg` are present; all staged artifact hashes/sizes match `checksums.json`.
 - Production `install-ecorex-public-release.sh` deployed `/srv/ecorex-agent-download/releases/20260612115714-v0.1.11`; `check-ecorex-server-release.sh` passed local artifact validation and public HTTP checks, including manifest payload version/status validation.
 - Production `install-ecorex-web.sh` deployed `/opt/ecorex-web/releases/20260612115734-v0.1.11`; `check-ecorex-web-release.sh` passed both host-side service checks and public proxy checks for login, `/app/`, `/auth/check`, `/api/version`, and SSE.
-- Direct `git push ecorex HEAD:codex/ecorex-v0.1.11-productization` is blocked on this machine by GitHub SSH `Permission denied (publickey)`, so use the verified final bundle handoff until HTTPS/token push is available.
+- Direct `git push ecorex HEAD:codex/ecorex-v0.1.11-productization` is blocked on this machine by GitHub SSH `Permission denied (publickey)`. GitHub Git Data API was used instead to update `main` and `codex/ecorex-v0.1.11-productization` to source snapshot `71c5578a889708aa8f652116084af055de61f2d9`.
