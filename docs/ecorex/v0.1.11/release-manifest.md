@@ -12,8 +12,8 @@
 - macOS arm64 DMG: `desktop/release/EcoreX_0.1.11_arm64.dmg`, size `150,067,486`, SHA256 `3A93E7F10E59E52D99C69C8AB9590B98D3BB7E5BBC7C1E54894F41472EDECB4D`, status `ready-unsigned`
 - macOS x64 DMG: `desktop/release/EcoreX_0.1.11_x64.dmg`, size `156,273,299`, SHA256 `3D00CD7A5BE63E1BD33ED9A6F8CD2213A988F30267A5A2A5412C09D83B9318A5`, status `ready-unsigned`
 - Public release zip: `release-artifacts/EcoreX_0.1.11-public-release.zip`
-- Public release zip size: `311,225,935`
-- Public release zip SHA256: `71D2196AEEF4A331F321D996839E09D8D9A03B70DB113C959B4048F48B6C9DE7`
+- Public release zip size: `311,225,938`
+- Public release zip SHA256: `92A344CA721ABE73703FC75418A94BB18E033C813D2B9860390CB7DBDDD49A05`
 - Git handoff bundle: `release-artifacts/EcoreX_0.1.11-productization.bundle`
 - Git handoff bundle: regenerate from final `HEAD` after release-note commits, then verify with `git bundle verify` and `Get-FileHash`.
 - GitHub source snapshot: the tool-permission source fix was synced through GitHub Git Data API as snapshot commit `71c5578a889708aa8f652116084af055de61f2d9`, created from local source commit `692aa5ea83b43b871d955395d47e3badd4d63320`. Follow-up release-note commits are synced through the same API path.

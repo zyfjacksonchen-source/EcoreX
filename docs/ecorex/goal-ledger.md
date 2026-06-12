@@ -81,10 +81,11 @@
 - 2026-06-12: Diagnosed the missing bash/shell/browser permission prompt. Electron's permission layer only gated local file opening, while Python tools executed directly in sidecar. Added an optional desktop-only sidecar permission broker, `/api/tool-permissions`, SSE `tool_permission_request`, and renderer approval actions. `bash`, `shell`, `terminal`, and `browser` now require Allow once / Always allow / Deny before execution in desktop mode; denial, timeout, and Stop return explicit tool errors instead of silent unavailable states.
 - 2026-06-12: Rebuilt the Windows package after the desktop tool-permission fix. Current unsigned installer `EcoreX_0.1.11_x64-setup.exe` is `117,572,805` bytes with SHA256 `CF0C5FFAFDF8A0C7FC0991BDFCBE5609917375D232AA419AAFCAE6329321CD18`; manual unsigned install smoke passed with app launch, sidecar ready, and `bash`, `web_fetch`, `browser` listed. Authenticode signing remains blocked because the SimplySign private key provider is not exposed and Smart Card services still need admin/UAC approval.
 - 2026-06-12: Synced the desktop tool-permission source fix to GitHub through the GitHub Git Data API after SSH push failed. The source-fix snapshot commit is `71c5578a889708aa8f652116084af055de61f2d9`, based on local source commit `692aa5ea83b43b871d955395d47e3badd4d63320`; follow-up release-note commits use the same API sync path.
+- 2026-06-12: Uploaded the latest unsigned Windows installer to the production download directory but kept it disabled in `manifest.json` as `pending-signature`. Public HEAD for the Windows artifact returns `Content-Length: 117572805`, server release check passes by skipping Windows pending-signature and validating Web/macOS ready artifacts, and regenerated public release zip SHA256 is `92A344CA721ABE73703FC75418A94BB18E033C813D2B9860390CB7DBDDD49A05`, size `311,225,938`.
 
 ## Known Follow-Up
 
 - Run a final human visual pass on the installed Windows app against the production Admin API, including login, first chat, stop, attachment paste, quota block, and error telemetry.
-- Install and smoke the latest rebuilt Windows package before promoting it to the public download page.
+- Sign the latest rebuilt Windows package and repeat installed-app smoke before enabling Windows public download.
 - Provider usage is now normalized when upstream returns a standard usage envelope; estimated tokens remain as fallback for providers that omit usage in streaming responses.
 - Run the skipped macOS signing/notarization/Gatekeeper pass on Mac hardware.
