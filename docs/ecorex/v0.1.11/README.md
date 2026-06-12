@@ -21,7 +21,7 @@
 - Public release zip: `release-artifacts/EcoreX_0.1.11-public-release.zip`, size `311,225,935`, SHA256 `71D2196AEEF4A331F321D996839E09D8D9A03B70DB113C959B4048F48B6C9DE7`; generated with the ready Web artifact and both macOS unsigned DMGs while Windows remains pending signature.
 - Production download page: `https://www.ecoreai.cn/ecorex-agent/manifest.json` is live as v0.1.11; Windows is `pending-signature`, macOS is `ready-unsigned`, WebUI is `ready`.
 - Production WebUI: `ecorex-web.service` is active on the server, bound to Docker bridge `172.18.0.1:9909`, and public `https://www.ecoreai.cn/ecorex-agent/app/` passes login, app, auth-check, version, and SSE checks.
-- GitHub source sync: SSH push is still blocked by local public-key access, but GitHub Git Data API synced `main` and `codex/ecorex-v0.1.11-productization` to snapshot commit `71c5578a889708aa8f652116084af055de61f2d9`.
+- GitHub source sync: SSH push is still blocked by local public-key access, but GitHub Git Data API synced the tool-permission source fix as snapshot `71c5578a889708aa8f652116084af055de61f2d9`; follow-up release notes are synced through the same API path.
 
 ## macOS Boundary
 - The repository contains a GitHub Actions macOS DMG workflow for arm64 and x64.
@@ -31,7 +31,7 @@
 ## Remaining Release Steps
 - Complete Authenticode signing for the current rebuilt Windows installer; update final signed size/hash in docs and `deploy/ecorex-site/manifest.json`.
 - Repeat signed installed smoke after signing.
-- Keep GitHub refs current through GitHub API or a configured SSH key; latest API source snapshot is `71c5578a889708aa8f652116084af055de61f2d9`.
+- Keep GitHub refs current through GitHub API or a configured SSH key; direct SSH push is still not available on this Windows machine.
 - Keep macOS unsigned DMGs clearly marked as signing/notarization/Gatekeeper deferred on the download page.
 - Regenerate `release-artifacts/EcoreX_0.1.11-public-release.zip` after Windows signing is completed so the signed Windows installer can be included.
 - Re-run public deployment only after Windows signing changes `windows-x64` from `pending-signature` to `ready`.
