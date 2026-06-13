@@ -455,13 +455,16 @@ class AdminStore:
         ]
 
     def usage_by_user(self, conn):
+        default_emails = [email.lower() for _, email, _, _ in DEFAULT_USERS]
+        placeholders = ",".join("?" for _ in default_emails)
         users = conn.execute(
-            """
+            f"""
             SELECT id, name, email, daily_token_limit, weekly_token_limit, deleted_at
             FROM users
-            WHERE deleted_at IS NULL AND status='active'
+            WHERE deleted_at IS NULL AND status='active' AND lower(email) NOT IN ({placeholders})
             ORDER BY created_at DESC
-            """
+            """,
+            default_emails,
         ).fetchall()
         result = []
         for user in users:
@@ -933,7 +936,7 @@ class AdminStore:
         return self.upsert_global_model(payload)
 
     def delete_model_credential(self, credential_id, payload):
-        raise ValueError("global model cannot be deleted in v0.1.11")
+        raise ValueError("global model cannot be deleted in v0.1.12")
 
     def resolve_client_model_config(self, user_email="", device_id="", token=""):
         user = self.require_session(token, device_id)

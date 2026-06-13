@@ -20,10 +20,16 @@ Date: 2026-06-13
 ## Windows Artifact
 
 - Artifact: `desktop/release/EcoreX_0.1.12_x64-setup.exe`
-- Size: `165,733,781` bytes
-- SHA256: `74B7E07771F139C4F308527AE9C6C15397C68ACD7CF9B911D311BC1F25545DD3`
+- Size: `165,733,775` bytes
+- SHA256: `90A215B05390183D3FC3169F5DFB0110AD37BFF6D17A24F81FBDE6AFCB2905BA`
+- Blockmap: `desktop/release/EcoreX_0.1.12_x64-setup.exe.blockmap`
+- Blockmap size: `172,970` bytes
+- Blockmap SHA256: `9C740E5C38397099492CD554EB273C6F5A147EF071A7B6E3DA53D2998FA87746`
 - Authenticode status: `NotSigned`
 - Build note: packaged from the short `X:` subst path to avoid Windows long-path failures during runtime staging. Runtime staging reused the locally installed EcoreX Python runtime with `-SkipDependencyInstall`, while source/config files were copied fresh from this checkout.
+- GitHub source commit: `b3d1bbf292f00c775e051ea6f5e0657c06cc0957` initially published v0.1.12. A follow-up v0.1.12 hardening sync updates the same tag/release assets after the sub-agent review fixes.
+- GitHub Release: `https://github.com/zhangyifanjackson-dotcom/EcoreX/releases/tag/v0.1.12`
+- Note: the repository/release may require an authenticated GitHub session; anonymous API checks can return 404 if the repo is private.
 
 ## Verification
 
@@ -40,4 +46,3 @@ Date: 2026-06-13
 - Deploy the Admin Web/API as v0.1.12 first.
 - Do not advance `/srv/ecorex-agent-download/current` or the public download page to v0.1.12 until the user explicitly asks for the download page rollout.
 - GitHub source sync and release upload should include this manifest so a fresh clone can resume from the same state.
-

@@ -1565,17 +1565,22 @@ export function App() {
 
   async function stopActiveRequest() {
     const requestId = activeSessionRequestId;
-    if (requestId) {
-      await cancelChatRequest({ requestId, sessionId: activeSessionId });
+    try {
+      if (requestId) {
+        await cancelChatRequest({ requestId, sessionId: activeSessionId });
+      }
+    } catch (error) {
+      console.warn("[EcoreX] Failed to cancel active request", error);
+    } finally {
+      setApproval(null);
+      clearSessionRequestState(activeSessionId);
+      updateSessionMessages(activeSessionId, (current) => current.map((message) => message.pending ? {
+        ...finishRunningSteps(message),
+        content: message.content || "已停止",
+        pending: false,
+        cancelled: true
+      } : message));
     }
-    setApproval(null);
-    clearSessionRequestState(activeSessionId);
-    updateSessionMessages(activeSessionId, (current) => current.map((message) => message.pending ? {
-      ...finishRunningSteps(message),
-      content: message.content || "已停止",
-      pending: false,
-      cancelled: true
-    } : message));
   }
 
   async function undoLastTurn() {

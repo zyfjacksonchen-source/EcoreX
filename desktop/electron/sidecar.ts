@@ -338,16 +338,23 @@ export class SidecarManager {
         config.tools = tools;
         changed = true;
       }
-      if (!Array.isArray(config.mcp_servers) || config.mcp_servers.length === 0) {
-        config.mcp_servers = [
-          {
-            name: "chrome-devtools",
-            type: "stdio",
-            command: process.platform === "win32" ? "npx.cmd" : "npx",
-            args: ["chrome-devtools-mcp@latest", "--autoConnect"],
-            timeout: 30
-          }
-        ];
+      const chromeDevtoolsMcp = {
+        name: "chrome-devtools",
+        type: "stdio",
+        command: process.platform === "win32" ? "npx.cmd" : "npx",
+        args: ["chrome-devtools-mcp@latest", "--autoConnect"],
+        timeout: 30
+      };
+      const mcpServers = Array.isArray(config.mcp_servers) ? config.mcp_servers : [];
+      const hasChromeDevtoolsMcp = mcpServers.some((server) => (
+        typeof server === "object" &&
+        server !== null &&
+        !Array.isArray(server) &&
+        ((server as Record<string, unknown>).name === "chrome-devtools" ||
+          String((server as Record<string, unknown>).command || "").includes("chrome-devtools-mcp"))
+      ));
+      if (!hasChromeDevtoolsMcp) {
+        config.mcp_servers = [...mcpServers, chromeDevtoolsMcp];
         changed = true;
       }
       if (changed) {
