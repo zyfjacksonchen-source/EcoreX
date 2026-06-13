@@ -4,6 +4,7 @@ interface Window {
   ecorexDesktop?: {
     platform: string;
     shouldUseDarkColors: boolean;
+    setWindowTheme?: (theme: "light" | "dark") => Promise<unknown>;
     getSidecarStatus: () => Promise<{
       state: "starting" | "running" | "stopped" | "failed" | "skipped";
       message: string;

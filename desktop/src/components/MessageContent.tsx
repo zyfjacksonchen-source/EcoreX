@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 export type ToolCallDisclosure = {
   name?: string;
@@ -248,7 +248,7 @@ function ToolStep({ step }: { step: ToolCallDisclosure }) {
   const isError = step.is_error === true || step.status === "error" || step.status === "failed";
   const running = step.running === true || step.status === "running";
   return (
-    <details className={`agent-step agent-tool-step${isError ? " tool-failed" : ""}`} open={running || isError || undefined}>
+    <details className={`agent-step agent-tool-step${isError ? " tool-failed" : ""}`} open={running || undefined}>
       <summary title={running ? "工具正在执行，完成后可查看输入和结果" : "展开查看工具输入和结果"}>
         <span className={`tool-status-dot${running ? " is-running" : isError ? " is-error" : " is-done"}`} aria-hidden="true" />
         <span className="tool-name">{step.name || "工具调用"}</span>
@@ -373,23 +373,32 @@ function splitSteps(steps: AgentStepDisclosure[], content: string) {
 }
 
 function MainAnswer({ content, pending, collapsible }: { content: string; pending?: boolean; collapsible?: boolean }) {
+  const [expanded, setExpanded] = useState(false);
   if (!content) return null;
   if (!collapsible || pending || content.length <= LONG_REPLY_COLLAPSE_CHARS) {
     return <MarkdownBlock content={content} />;
   }
+  if (expanded) {
+    return (
+      <div className="long-answer-disclosure is-expanded">
+        <div className="long-answer-full">
+          <MarkdownBlock content={content} />
+        </div>
+        <button className="long-answer-toggle long-answer-collapse-bottom" type="button" onClick={() => setExpanded(false)}>
+          收起完整回复
+        </button>
+      </div>
+    );
+  }
   return (
-    <details className="long-answer-disclosure">
-      <summary title="长回复已默认收起，点击展开或收起">
-        <span className="summary-expand">展开完整回复</span>
-        <span className="summary-collapse">收起完整回复</span>
-      </summary>
+    <div className="long-answer-disclosure">
+      <button className="long-answer-toggle" type="button" onClick={() => setExpanded(true)} title="长回复已默认收起，点击展开完整内容">
+        展开完整回复
+      </button>
       <div className="long-answer-preview">
         <MarkdownBlock content={`${content.slice(0, LONG_REPLY_PREVIEW_CHARS).trimEnd()}...`} />
       </div>
-      <div className="long-answer-full">
-        <MarkdownBlock content={content} />
-      </div>
-    </details>
+    </div>
   );
 }
 

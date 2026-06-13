@@ -30,9 +30,9 @@ _SCAN_INTERVAL_SECONDS = 60
 # Context-pressure trigger: evolve once the live context exceeds this fraction
 # of the agent's token budget, even if min_turns hasn't been reached. Kept as a
 # module constant (not user config) for now. Fallback budget matches
-# agent_initializer / config.py (agent_max_context_tokens default = 50000).
+# agent_initializer / config.py (agent_max_context_tokens default = 258000).
 _CONTEXT_RATIO = 0.8
-_FALLBACK_CONTEXT_BUDGET = 50000
+_FALLBACK_CONTEXT_BUDGET = 258000
 
 
 def _context_pressure_reached(agent) -> bool:

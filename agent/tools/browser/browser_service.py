@@ -11,7 +11,12 @@ import os
 import sys
 import uuid
 import queue
+import json
+import subprocess
 import threading
+import time
+import urllib.error
+import urllib.request
 from typing import Optional, Dict, Any, List, Callable
 
 from common.log import logger
@@ -19,6 +24,8 @@ from common.utils import expand_path, is_cloud_deployment
 
 
 _DEFAULT_USER_DATA_DIR = "~/.cow/browser_profile"
+_DEFAULT_CDP_USER_DATA_DIR = "~/.cow/chrome_cdp_profile"
+_DEFAULT_CDP_ENDPOINT = "http://127.0.0.1:9222"
 
 try:
     from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page, Playwright
@@ -333,9 +340,13 @@ class BrowserService:
             user_data_dir_cfg = _DEFAULT_USER_DATA_DIR
 
         self._cdp_endpoint: str = cdp_endpoint.strip() if isinstance(cdp_endpoint, str) else ""
+        self._cdp_fallback: bool = self._config.get("cdp_fallback", True) is not False
+        self._cdp_auto_launch: bool = self._config.get("cdp_auto_launch", True) is not False
+        self._cdp_user_data_dir: str = expand_path(str(self._config.get("cdp_user_data_dir") or _DEFAULT_CDP_USER_DATA_DIR))
+        self._cdp_process: Optional[subprocess.Popen] = None
         if self._cdp_endpoint:
             self._launch_mode = "cdp"
-            self._user_data_dir: str = ""
+            self._user_data_dir = expand_path(str(user_data_dir_cfg)) if user_data_dir_cfg else ""
         elif persistent_flag and user_data_dir_cfg:
             self._launch_mode = "persistent"
             self._user_data_dir = expand_path(str(user_data_dir_cfg))
@@ -428,6 +439,8 @@ class BrowserService:
 
     def _launch_browser(self):
         """Launch / connect Chromium on the background thread."""
+        if not _HAS_PLAYWRIGHT:
+            raise RuntimeError("Playwright Python package is not installed; install browser-automation capability first")
         if self._headless is None:
             headless_cfg = self._config.get("headless")
             self._headless = headless_cfg if headless_cfg is not None else _should_use_headless()
@@ -466,7 +479,19 @@ class BrowserService:
         self._playwright = sync_playwright().start()
 
         if self._launch_mode == "cdp":
-            self._connect_cdp(viewport)
+            try:
+                self._connect_cdp(viewport)
+            except Exception as e:
+                if not self._cdp_fallback:
+                    raise
+                logger.warning(f"[Browser] CDP unavailable ({e}); falling back to Playwright persistent browser")
+                self._launch_mode = "persistent" if self._user_data_dir else "fresh"
+                self._shutdown_browser()
+                self._playwright = sync_playwright().start()
+                if self._launch_mode == "persistent":
+                    self._launch_persistent(launch_args, viewport, user_agent)
+                else:
+                    self._launch_fresh(launch_args, viewport, user_agent)
         elif self._launch_mode == "persistent":
             self._launch_persistent(launch_args, viewport, user_agent)
         else:
@@ -520,10 +545,85 @@ class BrowserService:
         self._page = pages[0] if pages else self._context.new_page()
         self._wire_close_listeners()
 
+    def _cdp_version_url(self, endpoint: str) -> str:
+        return endpoint.rstrip("/") + "/json/version"
+
+    def _cdp_is_reachable(self, endpoint: str) -> bool:
+        try:
+            with urllib.request.urlopen(self._cdp_version_url(endpoint), timeout=1.5) as response:
+                payload = json.loads(response.read().decode("utf-8", errors="replace") or "{}")
+                return bool(payload.get("webSocketDebuggerUrl") or payload.get("Browser"))
+        except Exception:
+            return False
+
+    def _find_chrome_executable(self) -> str:
+        configured = str(self._config.get("chrome_executable") or "").strip()
+        candidates: List[str] = [configured] if configured else []
+        if sys.platform.startswith("win"):
+            local_app = os.environ.get("LOCALAPPDATA", "")
+            candidates.extend([
+                os.path.join(os.environ.get("PROGRAMFILES", r"C:\Program Files"), "Google", "Chrome", "Application", "chrome.exe"),
+                os.path.join(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"), "Google", "Chrome", "Application", "chrome.exe"),
+                os.path.join(local_app, "Google", "Chrome", "Application", "chrome.exe"),
+                os.path.join(os.environ.get("PROGRAMFILES", r"C:\Program Files"), "Microsoft", "Edge", "Application", "msedge.exe"),
+                os.path.join(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"), "Microsoft", "Edge", "Application", "msedge.exe"),
+            ])
+        elif sys.platform == "darwin":
+            candidates.extend([
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+                "/Applications/Chromium.app/Contents/MacOS/Chromium",
+            ])
+        else:
+            candidates.extend(["google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "microsoft-edge"])
+
+        for candidate in candidates:
+            if not candidate:
+                continue
+            if os.path.isabs(candidate):
+                if os.path.exists(candidate):
+                    return candidate
+            else:
+                return candidate
+        return ""
+
+    def _ensure_cdp_browser(self, endpoint: str) -> None:
+        if self._cdp_is_reachable(endpoint) or not self._cdp_auto_launch:
+            return
+        chrome = self._find_chrome_executable()
+        if not chrome:
+            raise RuntimeError("No Chrome/Edge executable found for CDP auto-launch")
+
+        port = endpoint.rsplit(":", 1)[-1].split("/", 1)[0]
+        if not port.isdigit():
+            port = "9222"
+        os.makedirs(self._cdp_user_data_dir, exist_ok=True)
+        args = [
+            chrome,
+            f"--remote-debugging-port={port}",
+            f"--user-data-dir={self._cdp_user_data_dir}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "about:blank",
+        ]
+        logger.info(f"[Browser] Auto-launching Chrome for CDP on port {port}")
+        self._cdp_process = subprocess.Popen(
+            args,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            if self._cdp_is_reachable(endpoint):
+                return
+            time.sleep(0.25)
+        raise RuntimeError(f"Chrome CDP did not become ready at {endpoint}")
+
     def _connect_cdp(self, viewport: Dict[str, int]):
         """Attach to an existing Chrome started with --remote-debugging-port."""
         endpoint = self._cdp_endpoint
         logger.info(f"[Browser] Connecting to existing Chrome via CDP: {endpoint}")
+        self._ensure_cdp_browser(endpoint)
         try:
             self._browser = self._playwright.chromium.connect_over_cdp(endpoint)
         except Exception as e:
@@ -581,6 +681,12 @@ class BrowserService:
                     self._browser.close()
             except Exception as e:
                 logger.debug(f"[Browser] cdp disconnect error: {e}")
+            if self._cdp_process:
+                try:
+                    self._cdp_process.terminate()
+                except Exception as e:
+                    logger.debug(f"[Browser] cdp auto-launched Chrome terminate error: {e}")
+                self._cdp_process = None
         else:
             for obj, label in [
                 (self._context, "context"),

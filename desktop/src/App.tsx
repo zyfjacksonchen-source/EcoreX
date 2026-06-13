@@ -86,7 +86,8 @@ import {
   type RuntimeTool,
   type RuntimeSnapshot,
   type StreamItem,
-  type TokenUsage
+  type TokenUsage,
+  type UsageQuota
 } from "./services/ecorexApi";
 import { CHAT_SCROLL_THRESHOLD_PX, getChatScrollState, scrollElementToBottom } from "./utils/chatUx";
 
@@ -183,6 +184,7 @@ const PINNED_PROJECTS_STORAGE_KEY = "ecorex-pinned-projects";
 const SESSION_UI_STORAGE_KEY = "ecorex-session-ui-state";
 const CAPABILITY_ENABLED_STORAGE_KEY = "ecorex-capability-enabled";
 const SKILL_DEFAULTS_STORAGE_KEY = "ecorex-skill-defaults-v1";
+const CONTEXT_THRESHOLD_TOKENS = 258_000;
 
 const coreAbilityNames = new Set([
   "bash",
@@ -234,6 +236,16 @@ function initialTheme(): ThemeMode {
 
 function applyTheme(theme: ThemeMode) {
   document.documentElement.dataset.theme = theme;
+  void window.ecorexDesktop?.setWindowTheme?.(theme).catch(() => undefined);
+}
+
+function BrandMark() {
+  const [failed, setFailed] = useState(false);
+  return (
+    <div className="brand-mark" aria-hidden="true">
+      {failed ? <Sparkles aria-hidden="true" /> : <img src={brandIconUrl} alt="" onError={() => setFailed(true)} />}
+    </div>
+  );
 }
 
 function formatTime(value?: string | number) {
@@ -289,8 +301,12 @@ function mapSessions(
   return rows.sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)));
 }
 
+function estimateTokenCount(text: string, files: FileAttachment[]) {
+  return Math.max(0, Math.ceil(text.length / 2) + files.length * 120);
+}
+
 function estimateTokens(text: string, files: FileAttachment[]) {
-  return Math.max(1, Math.ceil(text.length / 2) + files.length * 120);
+  return Math.max(1, estimateTokenCount(text, files));
 }
 
 function usageTotal(usage?: TokenUsage | null) {
@@ -300,6 +316,41 @@ function usageTotal(usage?: TokenUsage | null) {
   const input = Number(usage.inputTokens || 0);
   const output = Number(usage.outputTokens || 0);
   return Math.max(0, (Number.isFinite(input) ? input : 0) + (Number.isFinite(output) ? output : 0));
+}
+
+function compactTokenCount(value: number) {
+  const safe = Math.max(0, Math.round(Number.isFinite(value) ? value : 0));
+  if (safe >= 1_000_000) {
+    const amount = safe / 1_000_000;
+    return `${amount >= 10 ? amount.toFixed(0) : amount.toFixed(1)}m`;
+  }
+  if (safe >= 1_000) {
+    const amount = safe / 1_000;
+    return `${amount >= 10 ? amount.toFixed(0) : amount.toFixed(1)}k`;
+  }
+  return String(safe);
+}
+
+function quotaNumber(quota: UsageQuota | null | undefined, key: keyof UsageQuota) {
+  const value = Number(quota?.[key]);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function percentOf(used: number, limit: number) {
+  if (!limit) return 0;
+  return Math.min(100, Math.max(0, (used / limit) * 100));
+}
+
+function meterTitle(label: string, used: number, limit?: number) {
+  const usedDetail = `${Math.round(used).toLocaleString("zh-CN")} tokens`;
+  if (!limit) return `${label}：${usedDetail}，暂无上限数据`;
+  const limitDetail = `${Math.round(limit).toLocaleString("zh-CN")} tokens`;
+  return `${label}：${usedDetail} / ${limitDetail}，${Math.round(percentOf(used, limit))}%`;
+}
+
+function estimateContextTokens(messages: ChatItem[], draft: string, files: FileAttachment[]) {
+  const history = messages.reduce((total, message) => total + estimateTokenCount(message.content || "", message.attachments || []), 0);
+  return history + estimateTokenCount(draft, files);
 }
 
 function detectNeededPack(text: string, files: FileAttachment[], packs: CapabilityPack[]) {
@@ -462,7 +513,7 @@ function AuthGate(props: { onLogin: (session: EnterpriseSession) => void }) {
   return (
     <main className="auth-shell">
       <section className="auth-panel">
-        <div className="brand-mark"><img src={brandIconUrl} alt="" /></div>
+        <BrandMark />
         <h1>EcoreX</h1>
         <p>亦芯广告 AI Agent</p>
         <form onSubmit={submit}>
@@ -488,6 +539,7 @@ export function App() {
   const [authChecked, setAuthChecked] = useState(false);
   const [runtimeSnapshot, setRuntimeSnapshot] = useState(initialRuntime);
   const [sidecarStatus, setSidecarStatus] = useState(initialSidecar);
+  const [quotaSnapshot, setQuotaSnapshot] = useState<UsageQuota | null>(null);
   const [activeSessionId, setActiveSessionId] = useState(`ecorex-${Date.now()}`);
   const [activeSessionTitle, setActiveSessionTitle] = useState("新对话");
   const [searchQuery, setSearchQuery] = useState("");
@@ -651,12 +703,13 @@ export function App() {
     if (!session) return;
     let cancelled = false;
     async function refresh() {
-      const [snapshot, nextPacks, nextPermissions, nextMemoryFiles, nextDreamFiles] = await Promise.all([
+      const [snapshot, nextPacks, nextPermissions, nextMemoryFiles, nextDreamFiles, quota] = await Promise.all([
         loadRuntimeSnapshot(),
         listCapabilityPacks(),
         loadPermissionState(),
         loadMemoryFiles("memory"),
-        loadMemoryFiles("dream")
+        loadMemoryFiles("dream"),
+        checkEnterpriseQuota(0).catch(() => null)
       ]);
       if (!cancelled) {
         setRuntimeSnapshot(snapshot);
@@ -664,6 +717,7 @@ export function App() {
         setPermissionState(nextPermissions);
         setMemoryFiles(nextMemoryFiles);
         setDreamFiles(nextDreamFiles);
+        if (quota?.quota) setQuotaSnapshot(quota.quota);
       }
     }
     void refresh();
@@ -706,6 +760,35 @@ export function App() {
       }).slice(0, 6)
     : [];
   const activeSessionRequestId = sessionRequestIds[activeSessionId] || "";
+  const dailyUsed = quotaNumber(quotaSnapshot, "dailyUsed");
+  const weeklyUsed = quotaNumber(quotaSnapshot, "weeklyUsed");
+  const dailyLimit = quotaNumber(quotaSnapshot, "dailyLimit");
+  const weeklyLimit = quotaNumber(quotaSnapshot, "weeklyLimit");
+  const contextUsed = estimateContextTokens(messages, composerText, attachments);
+  const contextPercent = percentOf(contextUsed, CONTEXT_THRESHOLD_TOKENS);
+  const composerMeters = [
+    {
+      key: "daily",
+      label: "今日",
+      value: dailyLimit ? `${compactTokenCount(dailyUsed)}/${compactTokenCount(dailyLimit)}` : compactTokenCount(dailyUsed),
+      percent: percentOf(dailyUsed, dailyLimit),
+      title: meterTitle("今日 token 用量", dailyUsed, dailyLimit)
+    },
+    {
+      key: "weekly",
+      label: "本周",
+      value: weeklyLimit ? `${compactTokenCount(weeklyUsed)}/${compactTokenCount(weeklyLimit)}` : compactTokenCount(weeklyUsed),
+      percent: percentOf(weeklyUsed, weeklyLimit),
+      title: meterTitle("本周 token 用量", weeklyUsed, weeklyLimit)
+    },
+    {
+      key: "context",
+      label: "上下文",
+      value: `${compactTokenCount(contextUsed)}/${compactTokenCount(CONTEXT_THRESHOLD_TOKENS)} · ${Math.round(contextPercent)}%`,
+      percent: contextPercent,
+      title: meterTitle("当前会话上下文估算", contextUsed, CONTEXT_THRESHOLD_TOKENS)
+    }
+  ];
 
   function capabilityPackEnabled(packId: string) {
     return enabledCapabilityPacks[packId] !== false;
@@ -757,8 +840,20 @@ export function App() {
     const list = messageListRef.current;
     if (!list) return;
     if (forceAuto) autoScrollRef.current = true;
-    scrollElementToBottom(list, forceAuto ? "smooth" : "auto");
+    if (forceAuto) {
+      const targetTop = Math.max(0, list.scrollHeight - list.clientHeight);
+      list.scrollTo({ top: targetTop, behavior: "smooth" });
+    } else {
+      scrollElementToBottom(list, "auto");
+    }
     setShowJumpLatest(false);
+  }
+
+  function focusComposerSoon() {
+    window.requestAnimationFrame(() => {
+      composerRef.current?.focus();
+      syncComposerHeight();
+    });
   }
 
   function restoreCachedSession(sessionId: string) {
@@ -773,22 +868,52 @@ export function App() {
   }
 
   async function selectSession(row: SessionRow) {
+    const nextProjectId = row.projectId || null;
     autoScrollRef.current = true;
     setShowJumpLatest(false);
     setActiveSessionId(row.id);
     setActiveSessionTitle(row.title);
-    setActiveProjectId(row.projectId || null);
+    setActiveProjectId(nextProjectId);
     setPreviewFile(null);
     setApproval(null);
     if (restoreCachedSession(row.id)) {
+      focusComposerSoon();
       return;
     }
+    updateSessionMessages(row.id, () => []);
+    setSessionUiState((current) => ({
+      ...current,
+      [row.id]: {
+        title: row.title,
+        projectId: nextProjectId,
+        messages: [],
+        composerText: "",
+        attachments: []
+      }
+    }));
     setMessages([]);
     setComposerText("");
     setAttachments([]);
+    focusComposerSoon();
     try {
       const history = await loadSessionHistory(row.id);
-      setMessages(history.map((item, index) => mapRuntimeMessage(item, row.id, index)));
+      const mapped = history.map((item, index) => mapRuntimeMessage(item, row.id, index));
+      setSessionUiState((current) => ({
+        ...current,
+        [row.id]: {
+          ...(current[row.id] || {
+            title: row.title,
+            projectId: nextProjectId,
+            composerText: "",
+            attachments: []
+          }),
+          messages: mapped
+        }
+      }));
+      if (activeSessionIdRef.current === row.id) {
+        setMessages(mapped);
+        focusComposerSoon();
+      }
     } catch (error) {
       setToast(error instanceof Error ? error.message : "加载会话失败");
     }
@@ -796,10 +921,11 @@ export function App() {
 
   function startNewSession(project?: ProjectFolder | null) {
     const id = project ? `ecorex-project-${project.id}-${Date.now()}` : `ecorex-${Date.now()}`;
+    const title = project ? `${project.name} · 新会话` : "新对话";
     setActiveSessionId(id);
     setActiveProjectId(project?.id || null);
-    setActiveSessionTitle(project ? `${project.name} · 新会话` : "新对话");
-    setSessionTitles((current) => ({ ...current, [id]: project ? `${project.name} · 新会话` : "新对话" }));
+    setActiveSessionTitle(title);
+    setSessionTitles((current) => ({ ...current, [id]: title }));
     if (project) {
       setSessionProjects((current) => ({ ...current, [id]: project.id }));
     }
@@ -807,7 +933,17 @@ export function App() {
     setAttachments([]);
     setComposerText("");
     setApproval(null);
-    composerRef.current?.focus();
+    setSessionUiState((current) => ({
+      ...current,
+      [id]: {
+        title,
+        projectId: project?.id || null,
+        messages: [],
+        composerText: "",
+        attachments: []
+      }
+    }));
+    focusComposerSoon();
   }
 
   async function renameSession(row: SessionRow) {
@@ -1174,6 +1310,9 @@ export function App() {
     };
     const liveEstimatedTokens = () => estimatedTokens + Math.ceil(streamTextChars / 2) + Math.ceil(streamToolChars / 3);
     const quota = await checkEnterpriseQuota(estimatedTokens);
+    if (quota.quota) {
+      setQuotaSnapshot(quota.quota);
+    }
     if (quota.quota && quota.quota.allowed === false) {
       setApproval({ type: "quota", title: "额度已达到上限", message: quota.quota.reason || "当前账号暂时不能继续发送。" });
       return;
@@ -1228,6 +1367,16 @@ export function App() {
           usageSource
         }
       });
+      setQuotaSnapshot((current) => current ? {
+        ...current,
+        dailyUsed: quotaNumber(current, "dailyUsed") + totalTokens,
+        weeklyUsed: quotaNumber(current, "weeklyUsed") + totalTokens
+      } : current);
+      void checkEnterpriseQuota(0)
+        .then((next) => {
+          if (next.quota) setQuotaSnapshot(next.quota);
+        })
+        .catch(() => undefined);
     };
 
     try {
@@ -1416,8 +1565,9 @@ export function App() {
 
   async function stopActiveRequest() {
     const requestId = activeSessionRequestId;
-    if (!requestId) return;
-    await cancelChatRequest({ requestId, sessionId: activeSessionId });
+    if (requestId) {
+      await cancelChatRequest({ requestId, sessionId: activeSessionId });
+    }
     setApproval(null);
     clearSessionRequestState(activeSessionId);
     updateSessionMessages(activeSessionId, (current) => current.map((message) => message.pending ? {
@@ -1524,6 +1674,7 @@ export function App() {
   async function logout() {
     await enterpriseLogout();
     setSession(null);
+    setQuotaSnapshot(null);
     setMessages([]);
     setApproval(null);
   }
@@ -1614,6 +1765,7 @@ export function App() {
     }
   ];
   const activeProjectMemoryPath = activeProject?.memoryPath || (activeProject ? `${activeProject.path}\\.ecorex\\project-memory.md` : "");
+  const hasPendingAssistantMessage = messages.some((message) => message.pending);
   const settingsNav: Array<{ id: SettingsSection; label: string; icon: ReactNode }> = [
     { id: "account", label: "账号", icon: <UserRound aria-hidden="true" /> },
     { id: "projects", label: "项目", icon: <FolderOpen aria-hidden="true" /> },
@@ -1624,7 +1776,7 @@ export function App() {
   ];
   const renderSessionRow = (row: SessionRow) => {
     const cachedMessages = sessionUiState[row.id]?.messages || [];
-    const isRunning = Boolean(sessionRequestIds[row.id]) || cachedMessages.some((message) => message.pending);
+    const isRunning = Boolean(sessionRequestIds[row.id]) || cachedMessages.some((message) => message.pending) || (row.id === activeSessionId && hasPendingAssistantMessage);
     const isActive = row.id === activeSessionId;
     const rowTitle = `${row.title}\n${row.detail}\n${formatTime(row.updatedAt)}`;
     return (
@@ -1645,8 +1797,8 @@ export function App() {
           <button type="button" onClick={() => togglePinSession(row)} title={row.pinned ? "取消置顶" : "置顶会话"} aria-label={row.pinned ? "取消置顶" : "置顶会话"}>
             {row.pinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
           </button>
-          <button type="button" onClick={() => void renameSession(row)} title="重命名会话" aria-label="重命名会话"><Pencil aria-hidden="true" /></button>
-          <button type="button" onClick={() => void removeSession(row)} title="删除会话" aria-label="删除会话"><Trash2 aria-hidden="true" /></button>
+            <button type="button" onClick={() => void renameSession(row)} title="重命名会话" aria-label="重命名会话"><Pencil aria-hidden="true" /></button>
+            <button type="button" onClick={() => void removeSession(row)} title="删除会话" aria-label="删除会话"><Trash2 aria-hidden="true" /></button>
         </div>
       </article>
     );
@@ -1657,7 +1809,11 @@ export function App() {
   }
 
   if (!session) {
-    return <AuthGate onLogin={(next) => setSession(next)} />;
+    return <AuthGate onLogin={(next) => {
+      if (!next) return;
+      setSession(next);
+      setQuotaSnapshot((next.quota || null) as UsageQuota | null);
+    }} />;
   }
 
   return (
@@ -1779,7 +1935,7 @@ export function App() {
         <div className="message-list" ref={messageListRef} onScroll={updateJumpLatestState}>
           {messages.length === 0 ? (
             <div className="empty-chat">
-              <div className="brand-mark"><img src={brandIconUrl} alt="" /></div>
+              <BrandMark />
               <strong>{activeProject ? activeProject.name : "可以直接开始"}</strong>
               <span>{activeProject ? "你可以把任何文件/图片/视频 参考扔到项目文件夹内 我会基于项目文件夹上下文回答你。" : "粘贴图片或文件，输入需求，EcoreX 会在需要能力包或权限时先确认。"}</span>
             </div>
@@ -1900,16 +2056,27 @@ export function App() {
               onPaste={(event) => void handlePaste(event)}
               rows={1}
             />
-            <button type="button" className="mode-button" onClick={() => setSettingsOpen(true)} title={`当前模型：${currentModelName}`}>
-              <Settings aria-hidden="true" />{currentModelName}<ChevronDown aria-hidden="true" />
+            <button type="button" className="mode-button" onClick={() => void loadRuntimeSnapshot().then(setRuntimeSnapshot).catch(() => undefined)} title={`当前模型：${currentModelName}`}>
+              <Bot aria-hidden="true" />{currentModelName}<ChevronDown aria-hidden="true" />
             </button>
-            {activeSessionRequestId ? (
+            {activeSessionRequestId || hasPendingAssistantMessage ? (
               <button type="button" className="send-button stop" onClick={stopActiveRequest} title="停止当前回复"><Square aria-hidden="true" /></button>
             ) : (
               <button type="submit" className="send-button" disabled={!composerText.trim() && attachments.length === 0} title="发送，Enter 也可以发送">
                 <SendHorizontal aria-hidden="true" />
               </button>
             )}
+            <div className="composer-metrics" aria-label="Token 和上下文用量">
+              {composerMeters.map((meter) => (
+                <div className={`composer-meter composer-meter-${meter.key}`} key={meter.key} title={meter.title}>
+                  <span>{meter.label}</span>
+                  <div className="composer-meter-track" aria-hidden="true">
+                    <i style={{ width: `${meter.percent}%` }} />
+                  </div>
+                  <b>{meter.value}</b>
+                </div>
+              ))}
+            </div>
           </form>
         </div>
       </section>

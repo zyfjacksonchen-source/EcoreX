@@ -6,6 +6,7 @@ import type { SidecarStatus } from "./sidecar.js";
 contextBridge.exposeInMainWorld("ecorexDesktop", {
   platform: process.platform,
   shouldUseDarkColors: nativeTheme?.shouldUseDarkColors ?? false,
+  setWindowTheme: (theme: "light" | "dark") => ipcRenderer.invoke("ecorex:set-window-theme", theme) as Promise<unknown>,
   getSidecarStatus: () => ipcRenderer.invoke("ecorex:get-sidecar-status") as Promise<SidecarStatus>,
   listCapabilityPacks: () => ipcRenderer.invoke("ecorex:list-capability-packs") as Promise<CapabilityPack[]>,
   installCapabilityPack: (packId: string) =>

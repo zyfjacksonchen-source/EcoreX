@@ -121,6 +121,17 @@ class BrowserTool(BaseTool):
         BrowserTool._shared_service = self._service
         return self._service
 
+    def _snapshot_suffix(self, service: BrowserService, limit: int = 6000) -> str:
+        """Return a compact page snapshot after state-changing actions."""
+        try:
+            snapshot = service.snapshot()
+            if len(snapshot) > limit:
+                snapshot = snapshot[:limit] + f"\n... [snapshot truncated, {len(snapshot)} chars total] ..."
+            return f"\n\n--- Page Snapshot After Action ---\n{snapshot}"
+        except Exception as e:
+            logger.debug(f"[Browser] Snapshot after action failed: {e}")
+            return "\n\n--- Page Snapshot After Action ---\n(snapshot unavailable; call snapshot if needed)"
+
     def execute(self, args: Dict[str, Any]) -> ToolResult:
         action = args.get("action", "").strip().lower()
         if not action:
@@ -169,10 +180,11 @@ class BrowserTool(BaseTool):
         ref = args.get("ref")
         selector = args.get("selector")
         timeout = args.get("timeout", 5000)
-        result = self._get_service().click(ref=ref, selector=selector, timeout=timeout)
+        service = self._get_service()
+        result = service.click(ref=ref, selector=selector, timeout=timeout)
         if "error" in result:
             return ToolResult.fail(result["error"])
-        return ToolResult.success(f"Clicked successfully. Use 'snapshot' to see updated page.")
+        return ToolResult.success(f"Clicked successfully.{self._snapshot_suffix(service)}")
 
     def _do_fill(self, args: Dict[str, Any]) -> ToolResult:
         text = args.get("text", "")
@@ -217,10 +229,11 @@ class BrowserTool(BaseTool):
     def _do_wait(self, args: Dict[str, Any]) -> ToolResult:
         selector = args.get("selector")
         timeout = args.get("timeout", 5000)
-        result = self._get_service().wait(selector=selector, timeout=timeout)
+        service = self._get_service()
+        result = service.wait(selector=selector, timeout=timeout)
         if "error" in result:
             return ToolResult.fail(result["error"])
-        return ToolResult.success(f"Wait completed.")
+        return ToolResult.success(f"Wait completed.{self._snapshot_suffix(service)}")
 
     def _do_back(self, args: Dict[str, Any]) -> ToolResult:
         result = self._get_service().go_back()
@@ -247,10 +260,11 @@ class BrowserTool(BaseTool):
         key = args.get("key", "").strip()
         if not key:
             return ToolResult.fail("Error: 'key' is required for press action")
-        result = self._get_service().press(key)
+        service = self._get_service()
+        result = service.press(key)
         if "error" in result:
             return ToolResult.fail(result["error"])
-        return ToolResult.success(f"Pressed key: {key}")
+        return ToolResult.success(f"Pressed key: {key}.{self._snapshot_suffix(service)}")
 
     def _do_evaluate(self, args: Dict[str, Any]) -> ToolResult:
         script = args.get("script", "").strip()

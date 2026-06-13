@@ -16,13 +16,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 
-VERSION = "0.1.11"
+VERSION = "0.1.12"
 PASSWORD_ITERATIONS = 180000
 SESSION_DAYS = 7
-DEFAULT_CLIENT_EVENT_KEY = "ecorex-desktop-v0.1.11"
+DEFAULT_CLIENT_EVENT_KEY = "ecorex-desktop-v0.1.12"
 DEFAULT_COMPAT_CLIENT_EVENT_KEYS = (
     "ecorex-desktop-v0.1.10",
     "ecorex-desktop-v0.1.11",
+    "ecorex-desktop-v0.1.12",
     "ecorex-web-v0.1.11-web.1",
 )
 DEFAULT_ADMIN_USERNAME = "admin"
@@ -41,10 +42,7 @@ DEFAULT_USAGE = [
 ]
 
 DEFAULT_LOGS = [
-    ("error", "Skill", "外部 Skill 鉴权未完成，已要求用户确认权限。", "unread"),
-    ("warn", "MCP", "一个远端 MCP 通道超时，桌面端已保持会话可继续。", "unread"),
-    ("warn", "Capability", "Playwright 能力包建议通过管理员预置，避免用户首次下载 Chromium 失败。", "unread"),
-    ("info", "Desktop", "EcoreX desktop runtime bridge is ready for v0.1.11 validation.", "read"),
+    ("error", "Desktop", "EcoreX desktop failure collection is ready for v0.1.12 validation.", "unread"),
 ]
 
 DEFAULT_CAPABILITIES = [
@@ -461,6 +459,7 @@ class AdminStore:
             """
             SELECT id, name, email, daily_token_limit, weekly_token_limit, deleted_at
             FROM users
+            WHERE deleted_at IS NULL AND status='active'
             ORDER BY created_at DESC
             """
         ).fetchall()
@@ -521,9 +520,10 @@ class AdminStore:
         if filters.get("deviceId"):
             where.append("device_id=?")
             values.append(compact_text(filters["deviceId"], 180))
-        if filters.get("level"):
+        level = compact_text(filters.get("level") or "error", 32)
+        if level and level != "all":
             where.append("level=?")
-            values.append(compact_text(filters["level"], 32))
+            values.append(level)
         if filters.get("from"):
             where.append("created_at>=?")
             values.append(compact_text(filters["from"], 40))
@@ -1247,7 +1247,7 @@ class AdminStore:
                         stamp,
                     ),
                 )
-            elif kind in ("error", "warn", "info"):
+            elif kind == "error":
                 conn.execute(
                     """
                     INSERT INTO error_logs
@@ -1256,10 +1256,10 @@ class AdminStore:
                     """,
                     (
                         str(uuid.uuid4()),
-                        "warn" if kind == "warn" else kind,
+                        "error",
                         compact_text(payload.get("source") or "Desktop", 80),
                         compact_text(payload.get("message") or "客户端事件", 1000),
-                        "unread" if kind == "error" else "read",
+                        "unread",
                         user_email,
                         resolved_device_id,
                         compact_text(payload.get("sessionId") or payload.get("session_id"), 180),
@@ -1269,6 +1269,8 @@ class AdminStore:
                         stamp,
                     ),
                 )
+            elif kind in ("warn", "info", "success"):
+                pass
             else:
                 raise ValueError("unsupported event type")
             self.audit(conn, "event.ingest", payload.get("actor", "desktop"), kind, payload)

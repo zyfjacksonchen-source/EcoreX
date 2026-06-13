@@ -2,8 +2,8 @@
 
 ## Active Goal
 
-- Version: v0.1.11 / 0.1.11-web.1
-- Objective: productize the parallel EcoreX WebUI release alongside the desktop app, keeping the full Agent core, shared records, unchanged Admin management, and clean public deployment handoff.
+- Version: v0.1.12
+- Objective: fix the desktop chat/session/tool UX regressions, make CDP the default browser automation path, add composer token/context meters, tighten Admin token/log views, build an unsigned Windows package, sync source/package to GitHub, and deploy only the Admin v0.1.12 surface before the download page rollout.
 - Current branch/worktree note: `deploy/`, `desktop/`, Admin API, and EcoreX docs are active product files. Generated release/runtime folders remain ignored and should not be hand-edited as source of truth.
 
 ## Work Ownership
@@ -14,7 +14,7 @@
 | Admin Web | Main agent | `deploy/ecorex-site/admin/` | Implemented | User management, usage by user, error filters, model edit modal. |
 | Desktop Renderer | Main agent + review agent | `desktop/src/` | Implemented | One-screen Codex-style layout, login, Chinese settings, composer UX, fixed approval bar. |
 | Electron Runtime | Main agent + review agent | `desktop/electron/`, `desktop/scripts/` | Implemented | Login context, sanitized renderer session, policy cache, capability install feedback, Windows installed smoke. |
-| Release/Docs | Main agent | `docs/ecorex/`, manifest/package metadata | Implemented | v0.1.11 Web-first release records, artifact hash/size, Windows signing boundary, macOS unsigned boundary. |
+| Release/Docs | Main agent | `docs/ecorex/`, manifest/package metadata | Implemented | v0.1.12 records, unsigned Windows artifact hash/size, Admin-only deployment boundary, GitHub/API handoff path. |
 | Parallel WebUI | Main agent | `channel/web/`, `common/ecorex_workspace.py`, Web release scripts | Production deployed | Linux Web service package, desktop visual shell under `/app/`, shared `.ecorex` workspace state, concurrent install guard, public proxy checks. |
 
 ## Guardrails
@@ -82,6 +82,11 @@
 - 2026-06-12: Rebuilt the Windows package after the desktop tool-permission fix. Current unsigned installer `EcoreX_0.1.11_x64-setup.exe` is `117,572,805` bytes with SHA256 `CF0C5FFAFDF8A0C7FC0991BDFCBE5609917375D232AA419AAFCAE6329321CD18`; manual unsigned install smoke passed with app launch, sidecar ready, and `bash`, `web_fetch`, `browser` listed. Authenticode signing remains blocked because the SimplySign private key provider is not exposed and Smart Card services still need admin/UAC approval.
 - 2026-06-12: Synced the desktop tool-permission source fix to GitHub through the GitHub Git Data API after SSH push failed. The source-fix snapshot commit is `71c5578a889708aa8f652116084af055de61f2d9`, based on local source commit `692aa5ea83b43b871d955395d47e3badd4d63320`; follow-up release-note commits use the same API sync path.
 - 2026-06-12: Uploaded the latest unsigned Windows installer to the production download directory but kept it disabled in `manifest.json` as `pending-signature`. Public HEAD for the Windows artifact returns `Content-Length: 117572805`, server release check passes by skipping Windows pending-signature and validating Web/macOS ready artifacts, and regenerated public release zip SHA256 is `92A344CA721ABE73703FC75418A94BB18E033C813D2B9860390CB7DBDDD49A05`, size `311,225,938`.
+- 2026-06-13: Started and implemented the v0.1.12 desktop/admin correction pass. Desktop fixes cover stale session switching, composer focus/pause behavior, model label display, hover-only session actions, failed tool collapse, dark Windows title bar, larger centered jump-to-latest, long-answer collapse placement, daily/weekly token meters, and a 258k context meter/threshold. Browser automation now prefers CDP with auto-launched Chrome/Edge and Playwright fallback; default config also registers `chrome-devtools-mcp@latest --autoConnect`.
+- 2026-06-13: Fixed the "browser keeps thinking after page already answered" path by appending bounded post-action snapshots to browser click/wait/press tool results, so the agent can observe refreshed page state without requiring a separate snapshot turn.
+- 2026-06-13: Admin v0.1.12 now formats token usage in compact `k/m` units, keeps exact token counts in hover titles, limits token statistics to active non-deleted users, defaults error traceback to failures only, ignores warn/info/success client events for `error_logs`, and replaces the potentially broken Admin logo image with a CSS brand mark.
+- 2026-06-13: Built unsigned Windows installer `desktop/release/EcoreX_0.1.12_x64-setup.exe`, size `165,733,781`, SHA256 `74B7E07771F139C4F308527AE9C6C15397C68ACD7CF9B911D311BC1F25545DD3`, Authenticode `NotSigned`. Verification passed: Admin Python `py_compile`, Admin JS `node --check`, desktop `npm run typecheck`, desktop `npm run build`, runtime staging, and `electron-builder --win --publish never`. Runtime staging was run through a short `X:` subst path to avoid Windows long-path copy failures.
+- 2026-06-13: Deployment boundary for this round is Admin-only v0.1.12. Do not advance the public download page/current static release to v0.1.12 until the user explicitly asks for download page deployment.
 
 ## Known Follow-Up
 

@@ -99,6 +99,21 @@ export type RuntimeSnapshot = {
   modelCapabilities?: Record<string, unknown>;
 };
 
+export type UsageQuota = {
+  allowed?: boolean;
+  reason?: string;
+  dailyUsed?: number;
+  weeklyUsed?: number;
+  dailyLimit?: number;
+  weeklyLimit?: number;
+  [key: string]: unknown;
+};
+
+export type EnterpriseQuotaCheckResult = {
+  ok: boolean;
+  quota?: UsageQuota;
+};
+
 export type CapabilityState =
   | "installed"
   | "not-installed"
@@ -252,11 +267,11 @@ export async function enterpriseChangePassword(input: { oldPassword: string; new
   return window.ecorexDesktop.enterpriseChangePassword(input);
 }
 
-export async function checkEnterpriseQuota(estimatedTokens: number) {
+export async function checkEnterpriseQuota(estimatedTokens: number): Promise<EnterpriseQuotaCheckResult> {
   if (!window.ecorexDesktop?.checkEnterpriseQuota) {
     return { ok: true, quota: { allowed: true } };
   }
-  return window.ecorexDesktop.checkEnterpriseQuota(estimatedTokens);
+  return window.ecorexDesktop.checkEnterpriseQuota(estimatedTokens) as Promise<EnterpriseQuotaCheckResult>;
 }
 
 export async function loadRuntimeSnapshot(): Promise<RuntimeSnapshot> {
@@ -307,20 +322,34 @@ export async function loadRuntimeSnapshot(): Promise<RuntimeSnapshot> {
   }
 }
 
+function pickString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
 function inferCurrentModel(models: { providers?: unknown[]; capabilities?: Record<string, unknown> | unknown[] }) {
+  if (models.capabilities && !Array.isArray(models.capabilities) && typeof models.capabilities === "object") {
+    const capabilities = models.capabilities as Record<string, unknown>;
+    const chat = capabilities.chat;
+    if (chat && typeof chat === "object") {
+      const data = chat as Record<string, unknown>;
+      const current = pickString(data.current_model) || pickString(data.model) || pickString(data.default_model);
+      if (current) return current;
+    }
+  }
   const providers = Array.isArray(models.providers) ? models.providers : [];
   for (const provider of providers) {
     if (provider && typeof provider === "object") {
       const data = provider as Record<string, unknown>;
-      const direct = data.model || data.name || data.id;
-      if (typeof direct === "string" && direct) return direct;
+      const direct = pickString(data.current_model) || pickString(data.model) || pickString(data.default_model);
+      if (direct) return direct;
       const nested = data.models;
       if (Array.isArray(nested) && nested.length > 0) {
         const first = nested[0];
         if (typeof first === "string") return first;
         if (first && typeof first === "object") {
-          const model = (first as Record<string, unknown>).model || (first as Record<string, unknown>).name || (first as Record<string, unknown>).id;
-          if (typeof model === "string" && model) return model;
+          const modelData = first as Record<string, unknown>;
+          const model = pickString(modelData.current_model) || pickString(modelData.model) || pickString(modelData.name) || pickString(modelData.id);
+          if (model) return model;
         }
       }
     }

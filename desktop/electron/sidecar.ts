@@ -293,7 +293,8 @@ export class SidecarManager {
         channel_type: "web",
         agent: true,
         knowledge: true,
-        self_evolution_enabled: true
+        self_evolution_enabled: true,
+        agent_max_context_tokens: 258000
       };
       let changed = !fs.existsSync(configPath);
       for (const [key, value] of Object.entries(defaults)) {
@@ -305,6 +306,48 @@ export class SidecarManager {
       const currentPersona = typeof config.character_desc === "string" ? config.character_desc.trim() : "";
       if (!currentPersona || currentPersona === oldDefaultPersona) {
         config.character_desc = desktopPersona;
+        changed = true;
+      }
+      if (config.agent_max_context_tokens === 50000) {
+        config.agent_max_context_tokens = 258000;
+        changed = true;
+      }
+      const tools = typeof config.tools === "object" && config.tools !== null && !Array.isArray(config.tools)
+        ? config.tools as Record<string, unknown>
+        : {};
+      const browser = typeof tools.browser === "object" && tools.browser !== null && !Array.isArray(tools.browser)
+        ? tools.browser as Record<string, unknown>
+        : {};
+      const browserDefaults: Record<string, unknown> = {
+        cdp_endpoint: "http://127.0.0.1:9222",
+        cdp_auto_launch: true,
+        cdp_fallback: true,
+        persistent: true
+      };
+      for (const [key, value] of Object.entries(browserDefaults)) {
+        if (browser[key] === undefined || browser[key] === "") {
+          browser[key] = value;
+          changed = true;
+        }
+      }
+      if (tools.browser !== browser) {
+        tools.browser = browser;
+        changed = true;
+      }
+      if (config.tools !== tools) {
+        config.tools = tools;
+        changed = true;
+      }
+      if (!Array.isArray(config.mcp_servers) || config.mcp_servers.length === 0) {
+        config.mcp_servers = [
+          {
+            name: "chrome-devtools",
+            type: "stdio",
+            command: process.platform === "win32" ? "npx.cmd" : "npx",
+            args: ["chrome-devtools-mcp@latest", "--autoConnect"],
+            timeout: 30
+          }
+        ];
         changed = true;
       }
       if (changed) {

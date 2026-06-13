@@ -245,7 +245,7 @@ available_setting = {
     "web_file_serve_root": "~",  # Root dir the /api/file endpoint may serve; "/" allows the whole filesystem
     "agent": True,  # whether to enable Agent mode
     "agent_workspace": "~/cow",  # agent workspace path, used to store skills, memory, etc.
-    "agent_max_context_tokens": 50000,  # max context tokens in Agent mode
+    "agent_max_context_tokens": 258000,  # max context tokens in Agent mode
     "agent_max_context_turns": 20,  # max context memory turns in Agent mode
     "agent_max_steps": 20,  # max decision steps per run in Agent mode
     "enable_thinking": False,  # Enable deep-thinking mode for thinking-capable models
@@ -256,7 +256,23 @@ available_setting = {
     "self_evolution_idle_minutes": 10,      # idle time before a session is reviewed
     "self_evolution_min_turns": 6,          # min user turns (or context pressure) to trigger
     "skill": {},  # Per-skill runtime config; nested keys flatten to SKILL_<NAME>_<KEY> env vars at startup
-    "mcp_servers": [],  # MCP server list; each entry supports type "stdio" (local process) or "sse" (remote URL)
+    "tools": {
+        "browser": {
+            "cdp_endpoint": "http://127.0.0.1:9222",
+            "cdp_auto_launch": True,
+            "cdp_fallback": True,
+            "persistent": True
+        }
+    },
+    "mcp_servers": [
+        {
+            "name": "chrome-devtools",
+            "type": "stdio",
+            "command": "npx",
+            "args": ["chrome-devtools-mcp@latest", "--autoConnect"],
+            "timeout": 30
+        }
+    ],  # MCP server list; each entry supports type "stdio" (local process) or "sse" (remote URL)
 }
 
 

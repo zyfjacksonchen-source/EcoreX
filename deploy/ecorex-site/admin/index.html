@@ -11,7 +11,7 @@
   <body>
     <aside class="sidebar">
       <a class="brand" href="../" aria-label="返回 EcoreX 下载中心">
-        <img src="../assets/icon.png" alt="" />
+        <span class="brand-mark" aria-hidden="true">E</span>
         <span>EcoreX</span>
       </a>
       <nav aria-label="管理导航">
@@ -44,7 +44,7 @@
         <article><span>未读错误</span><strong data-metric="errors">0</strong></article>
         <article><span>能力包</span><strong data-metric="capabilities">0</strong></article>
         <article><span>模型</span><strong data-metric="modelCredentials">0</strong></article>
-        <article><span>客户端版本</span><strong data-metric="version">0.1.11</strong></article>
+        <article><span>客户端版本</span><strong data-metric="version">0.1.12</strong></article>
       </section>
 
       <section class="panel active" data-panel-view="users">
@@ -87,7 +87,7 @@
         </div>
         <form class="filter-bar" data-log-filter>
           <label>用户<select name="userEmail" data-log-user-filter><option value="">全部用户</option></select></label>
-          <label>级别<select name="level"><option value="">全部级别</option><option value="error">错误</option><option value="warn">警告</option><option value="info">信息</option></select></label>
+          <label>级别<select name="level"><option value="error" selected>失败</option></select></label>
           <label>设备<input name="deviceId" placeholder="设备 ID" autocomplete="off" /></label>
           <label>开始<input name="from" type="date" /></label>
           <label>结束<input name="to" type="date" /></label>

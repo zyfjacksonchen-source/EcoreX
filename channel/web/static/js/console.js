@@ -4027,7 +4027,7 @@ function initConfigView(data) {
     onProviderChange(cfgProviderValue);
     syncModelSelection(configCurrentModel);
 
-    document.getElementById('cfg-max-tokens').value = data.agent_max_context_tokens || 50000;
+    document.getElementById('cfg-max-tokens').value = data.agent_max_context_tokens || 258000;
     document.getElementById('cfg-max-turns').value = data.agent_max_context_turns || 20;
     document.getElementById('cfg-max-steps').value = data.agent_max_steps || 20;
     document.getElementById('cfg-enable-thinking').checked = data.enable_thinking === true;
@@ -4283,7 +4283,7 @@ function saveModelConfig() {
 
 function saveAgentConfig() {
     const updates = {
-        agent_max_context_tokens: parseInt(document.getElementById('cfg-max-tokens').value) || 50000,
+        agent_max_context_tokens: parseInt(document.getElementById('cfg-max-tokens').value) || 258000,
         agent_max_context_turns: parseInt(document.getElementById('cfg-max-turns').value) || 20,
         agent_max_steps: parseInt(document.getElementById('cfg-max-steps').value) || 20,
         enable_thinking: document.getElementById('cfg-enable-thinking').checked,

@@ -11,7 +11,7 @@ const state = {
     globalModel: null,
     modelCredentials: [],
     summary: {},
-    version: "0.1.11",
+    version: "0.1.12",
   },
   connected: false,
 };
@@ -38,6 +38,26 @@ function escapeHtml(value) {
 
 function formatNumber(value) {
   return new Intl.NumberFormat("zh-CN").format(Number(value) || 0);
+}
+
+function trimUnitDecimal(value) {
+  return value.replace(/\.0+$/, "").replace(/(\.\d*[1-9])0+$/, "$1");
+}
+
+function formatToken(value) {
+  const number = Number(value) || 0;
+  const abs = Math.abs(number);
+  if (abs >= 1_000_000) return `${trimUnitDecimal((number / 1_000_000).toFixed(abs >= 10_000_000 ? 1 : 2))}m`;
+  if (abs >= 1_000) return `${trimUnitDecimal((number / 1_000).toFixed(abs >= 10_000 ? 1 : 2))}k`;
+  return formatNumber(number);
+}
+
+function tokenTitle(value) {
+  return `${formatNumber(value)} Token`;
+}
+
+function formatTokenLimit(value) {
+  return value ? formatToken(value) : "不限";
 }
 
 function formatTime(value) {
@@ -117,7 +137,7 @@ function renderUsers() {
           <div><strong>${escapeHtml(user.name)}</strong><span>${escapeHtml(user.email)}</span></div>
           <span>${roleLabel(user.role)}</span>
           <span class="pill" data-status="${escapeHtml(user.status)}">${statusLabel(user.status)}</span>
-          <span>日 ${formatNumber(user.dailyTokenLimit)} / 周 ${formatNumber(user.weeklyTokenLimit)}</span>
+          <span title="日 ${tokenTitle(user.dailyTokenLimit)} / 周 ${tokenTitle(user.weeklyTokenLimit)}">日 ${formatTokenLimit(user.dailyTokenLimit)} / 周 ${formatTokenLimit(user.weeklyTokenLimit)}</span>
           <span>${formatTime(user.lastLoginAt)}</span>
           <div class="row-actions">
             <button type="button" data-user-edit="${escapeHtml(user.id)}">编辑</button>
@@ -140,9 +160,9 @@ function renderUsage() {
       return `
         <article class="usage-card">
           <header><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.email)}</span></header>
-          <div class="quota-line"><span>今日</span><div class="bar"><i style="width:${dailyPct}%"></i></div><b>${formatNumber(item.dailyTokens)} / ${item.dailyTokenLimit ? formatNumber(item.dailyTokenLimit) : "不限"}</b></div>
-          <div class="quota-line"><span>本周</span><div class="bar"><i style="width:${weeklyPct}%"></i></div><b>${formatNumber(item.weeklyTokens)} / ${item.weeklyTokenLimit ? formatNumber(item.weeklyTokenLimit) : "不限"}</b></div>
-          <footer><span>累计 ${formatNumber(item.totalTokens)} Token</span><span class="pill" data-status="${item.overDaily || item.overWeekly ? "disabled" : "active"}">${item.overDaily || item.overWeekly ? "已超限" : "正常"}</span></footer>
+          <div class="quota-line"><span>今日</span><div class="bar"><i style="width:${dailyPct}%"></i></div><b title="${escapeHtml(tokenTitle(item.dailyTokens))} / ${item.dailyTokenLimit ? escapeHtml(tokenTitle(item.dailyTokenLimit)) : "不限"}">${formatToken(item.dailyTokens)} / ${formatTokenLimit(item.dailyTokenLimit)}</b></div>
+          <div class="quota-line"><span>本周</span><div class="bar"><i style="width:${weeklyPct}%"></i></div><b title="${escapeHtml(tokenTitle(item.weeklyTokens))} / ${item.weeklyTokenLimit ? escapeHtml(tokenTitle(item.weeklyTokenLimit)) : "不限"}">${formatToken(item.weeklyTokens)} / ${formatTokenLimit(item.weeklyTokenLimit)}</b></div>
+          <footer><span title="${escapeHtml(tokenTitle(item.totalTokens))}">累计 ${formatToken(item.totalTokens)} Token</span><span class="pill" data-status="${item.overDaily || item.overWeekly ? "disabled" : "active"}">${item.overDaily || item.overWeekly ? "已超限" : "正常"}</span></footer>
         </article>
       `;
     })
@@ -234,7 +254,7 @@ function renderRelease() {
   fetch("../manifest.json", { cache: "no-store" })
     .then((response) => response.json())
     .then((manifest) => {
-      setMetric("version", manifest.version || "0.1.11");
+      setMetric("version", manifest.version || "0.1.12");
       const target = $("[data-release]");
       target.innerHTML = manifest.artifacts
         .map(
@@ -256,12 +276,15 @@ function renderRelease() {
 
 function renderMetrics() {
   const summary = state.data.summary || {};
+  const totalTokens = summary.tokens ?? summary.monthlyCalls ?? 0;
   setMetric("users", formatNumber(summary.users ?? state.data.users.length));
-  setMetric("tokens", formatNumber(summary.tokens ?? summary.monthlyCalls ?? 0));
+  setMetric("tokens", formatToken(totalTokens));
+  const tokenMetric = $(`[data-metric="tokens"]`);
+  if (tokenMetric) tokenMetric.title = tokenTitle(totalTokens);
   setMetric("errors", formatNumber(summary.errors ?? 0));
   setMetric("capabilities", formatNumber(summary.capabilities ?? 0));
   setMetric("modelCredentials", formatNumber(summary.modelCredentials ?? (state.data.globalModel ? 1 : 0)));
-  setMetric("version", state.data.version || summary.version || "0.1.11");
+  setMetric("version", state.data.version || summary.version || "0.1.12");
 }
 
 function render() {

@@ -2212,7 +2212,7 @@ class ConfigHandler:
                 "bot_type": "openai" if local_config.get("bot_type") == "chatGPT" else local_config.get("bot_type", ""),
                 "use_linkai": bool(local_config.get("use_linkai", False)),
                 "channel_type": local_config.get("channel_type", ""),
-                "agent_max_context_tokens": local_config.get("agent_max_context_tokens", 50000),
+                "agent_max_context_tokens": local_config.get("agent_max_context_tokens", 258000),
                 "agent_max_context_turns": local_config.get("agent_max_context_turns", 20),
                 "agent_max_steps": local_config.get("agent_max_steps", 20),
                 "enable_thinking": bool(local_config.get("enable_thinking", False)),

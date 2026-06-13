@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } from "electron";
 import fsp from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -36,6 +36,22 @@ function safeFileName(name: string, fallback: string) {
   return cleaned || fallback;
 }
 
+function applyWindowTheme(theme: "light" | "dark") {
+  nativeTheme.themeSource = theme;
+  const color = theme === "dark" ? "#17110d" : "#fff9f2";
+  const symbolColor = theme === "dark" ? "#f8efe7" : "#1d140e";
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.setBackgroundColor(color);
+    if (process.platform === "win32") {
+      try {
+        win.setTitleBarOverlay({ color, symbolColor, height: 32 });
+      } catch {
+        // Older Electron/window modes may not support overlay updates.
+      }
+    }
+  }
+}
+
 function createMainWindow() {
   const win = new BrowserWindow({
     width: 1200,
@@ -45,6 +61,13 @@ function createMainWindow() {
     title: "EcoreX",
     autoHideMenuBar: process.platform !== "darwin",
     show: false,
+    backgroundColor: "#fff9f2",
+    ...(process.platform === "win32"
+      ? {
+          titleBarStyle: "hidden" as const,
+          titleBarOverlay: { color: "#fff9f2", symbolColor: "#1d140e", height: 32 }
+        }
+      : {}),
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -155,6 +178,10 @@ app.whenReady().then(async () => {
   app.setName("EcoreX");
   installApplicationMenu();
   ipcMain.handle("ecorex:get-sidecar-status", () => sidecar.getStatus());
+  ipcMain.handle("ecorex:set-window-theme", (_event, theme: "light" | "dark") => {
+    applyWindowTheme(theme === "dark" ? "dark" : "light");
+    return { ok: true };
+  });
   ipcMain.handle("ecorex:sidecar-json", (_event, request) => fetchSidecarJson(sidecar, request));
   ipcMain.handle("ecorex:list-capability-packs", () => capabilities.listPacks());
   ipcMain.handle("ecorex:install-capability-pack", (_event, packId: string) => capabilities.installPack(packId));
