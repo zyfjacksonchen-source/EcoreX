@@ -185,6 +185,7 @@ const SESSION_UI_STORAGE_KEY = "ecorex-session-ui-state";
 const CAPABILITY_ENABLED_STORAGE_KEY = "ecorex-capability-enabled";
 const SKILL_DEFAULTS_STORAGE_KEY = "ecorex-skill-defaults-v1";
 const CONTEXT_THRESHOLD_TOKENS = 258_000;
+const EFFECTIVE_MODEL_FALLBACK = "gpt-5.5";
 
 const coreAbilityNames = new Set([
   "bash",
@@ -237,6 +238,12 @@ function initialTheme(): ThemeMode {
 function applyTheme(theme: ThemeMode) {
   document.documentElement.dataset.theme = theme;
   void window.ecorexDesktop?.setWindowTheme?.(theme).catch(() => undefined);
+}
+
+function displayModelName(value?: string) {
+  const model = (value || "").trim();
+  if (!model || /^ecorex$/i.test(model) || /^openai$/i.test(model)) return EFFECTIVE_MODEL_FALLBACK;
+  return model;
 }
 
 function BrandMark() {
@@ -751,7 +758,7 @@ export function App() {
     })),
     [sortedProjects, projectSessions]
   );
-  const currentModelName = runtimeSnapshot.currentModel || runtimeSnapshot.version || "EcoreX";
+  const currentModelName = displayModelName(runtimeSnapshot.currentModel);
   const mentionMatch = /@([\w\u4e00-\u9fa5-]*)$/.exec(composerText);
   const skillMentions = mentionMatch
     ? (runtimeSnapshot.skills || []).filter((skill) => {
@@ -1359,7 +1366,7 @@ export function App() {
           inputTokens: usage?.inputTokens || estimatedTokens,
           outputTokens: usage?.outputTokens || Math.max(0, totalTokens - estimatedTokens),
           totalTokens,
-          model: usage?.model || runtimeSnapshot.version,
+          model: usage?.model || currentModelName,
           provider: usage?.provider || "",
           estimatedTokens,
           streamEstimatedTokens: localEstimate,
