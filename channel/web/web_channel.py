@@ -37,7 +37,7 @@ def _web_app_bridge_script() -> str:
 (function () {
   if (window.ecorexDesktop) return;
 
-  var WEB_CLIENT_KEY = "ecorex-web-v0.1.11-web.1";
+  var WEB_CLIENT_KEY = "ecorex-web-v0.1.12-web.1";
   var WEB_SESSION_KEY = "ecorex-web-enterprise-session";
   var WEB_DEVICE_KEY = "ecorex-web-device-id";
   var webPort = Number(window.location.port || (window.location.protocol === "https:" ? 443 : 80));
@@ -277,6 +277,7 @@ def _web_app_bridge_script() -> str:
   }
 
   window.ecorexDesktop = {
+    platform: "web",
     apiJson: apiJson,
     getSidecarStatus: async function () { return status; },
     onSidecarStatus: function (callback) {
@@ -314,7 +315,7 @@ def _web_app_bridge_script() -> str:
           email: input.email,
           password: input.password,
           deviceId: deviceId(),
-          appVersion: "0.1.11-web.1"
+          appVersion: "0.1.12-web.1"
         }, false);
       } catch (error) {}
       if (adminPayload && adminPayload.token && adminPayload.user) {
@@ -2177,7 +2178,7 @@ class ConfigHandler:
         try:
             local_config = conf()
             use_agent = local_config.get("agent", True)
-            title = "CowAgent" if use_agent else "AI Assistant"
+            title = "EcoreX" if use_agent else "AI Assistant"
 
             api_bases = {}
             api_keys_masked = {}
@@ -4154,7 +4155,7 @@ class FeishuRegisterHandler:
                 result = lark.register_app(
                     on_qr_code=_on_qr,
                     on_status_change=_on_status,
-                    source="cowagent",
+                    source="ecorex",
                     cancel_event=cancel_event,
                 )
                 with cls._lock:

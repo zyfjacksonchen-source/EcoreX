@@ -1,5 +1,5 @@
 /* =====================================================================
-   CowAgent Console - Main Application Script
+   EcoreX Console - Main Application Script
    ===================================================================== */
 
 // =====================================================================
@@ -470,9 +470,9 @@ function applyI18n() {
     installCfgTipPortal();
     const langLabel = document.getElementById('lang-label');
     if (langLabel) langLabel.textContent = currentLang === 'zh' ? '中文' : 'EN';
-    // Point the docs link to the locale-specific documentation site.
+    // Point the docs link to the project page until dedicated docs are published.
     const docsLink = document.getElementById('docs-link');
-    if (docsLink) docsLink.href = currentLang === 'zh' ? 'https://docs.cowagent.ai/zh' : 'https://docs.cowagent.ai';
+    if (docsLink) docsLink.href = 'https://github.com/zhangyifanjackson-dotcom/EcoreX';
 }
 
 // Single entry point for switching language. Updates the in-memory language,
@@ -567,7 +567,9 @@ function installCfgTipPortal() {
         let left = rect.left + rect.width / 2 - tipRect.width / 2;
         // Clamp horizontally to the viewport with an 8px gutter.
         left = Math.max(8, Math.min(left, window.innerWidth - tipRect.width - 8));
-        const top = rect.top - tipRect.height - 6;
+        let top = rect.top - tipRect.height - 6;
+        if (top < 8) top = rect.bottom + 6;
+        top = Math.max(8, Math.min(top, window.innerHeight - tipRect.height - 8));
         _cfgTipPortalEl.style.left = left + 'px';
         _cfgTipPortalEl.style.top = top + 'px';
     };
@@ -891,7 +893,7 @@ let activeStreams = {};   // request_id -> EventSource
 let sessionActiveRequest = {};   // session_id -> request_id (in-flight stream per session)
 let streamBuffers = {};   // request_id -> { items: [event...], timestamp } for re-attach replay
 let isComposing = false;
-let appConfig = { use_agent: false, title: 'CowAgent', subtitle: '', providers: {}, api_bases: {} };
+let appConfig = { use_agent: false, title: 'EcoreX', subtitle: '', providers: {}, api_bases: {} };
 
 const SESSION_ID_KEY = 'cow_session_id';
 
@@ -921,7 +923,7 @@ let historyLoading = false;
 fetch('/config').then(r => r.json()).then(data => {
     if (data.status === 'success') {
         appConfig = data;
-        const title = data.title || 'CowAgent';
+        const title = data.title || 'EcoreX';
         document.getElementById('welcome-title').textContent = title;
         initConfigView(data);
     }
@@ -1142,6 +1144,20 @@ messagesDiv.addEventListener('scroll', () => {
 
 // Intercept internal navigation links in chat messages
 messagesDiv.addEventListener('click', (e) => {
+    const longAnswerBtn = e.target.closest('[data-long-answer-toggle]');
+    if (longAnswerBtn) {
+        e.preventDefault();
+        const answerEl = longAnswerBtn.closest('.answer-content');
+        const rawMd = answerEl && answerEl.dataset.rawMd;
+        if (answerEl && rawMd) {
+            const expanded = longAnswerBtn.dataset.longAnswerToggle === 'expand';
+            answerEl.innerHTML = renderAnswerHtml(rawMd, expanded);
+            applyHighlighting(answerEl);
+            bindChatKnowledgeLinks(answerEl);
+        }
+        return;
+    }
+
     // Code block copy button
     const codeCopyBtn = e.target.closest('.code-copy-btn');
     if (codeCopyBtn) {
@@ -2288,7 +2304,7 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
         // Regenerate button starts hidden; it's revealed in the "done"
         // event handler once seq metadata arrives from the backend.
         botEl.innerHTML = `
-            <img src="assets/logo.jpg" alt="CowAgent" class="w-8 h-8 rounded-lg flex-shrink-0">
+            <img src="assets/icon.png" alt="EcoreX" class="w-8 h-8 rounded-lg flex-shrink-0">
             <div class="min-w-0 flex-1 max-w-[85%]">
                 <div class="bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-2xl px-4 py-3 text-sm leading-relaxed msg-content text-slate-700 dark:text-slate-200">
                     <div class="agent-steps"></div>
@@ -2547,8 +2563,8 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                     addBotMessage(finalText, new Date((item.timestamp || Date.now() / 1000) * 1000), requestId);
                 } else if (botEl) {
                     contentEl.classList.remove('sse-streaming');
-                    if (finalText) contentEl.innerHTML = renderMarkdown(finalText);
-                    contentEl.dataset.rawMd = finalTextRaw || '';
+                    if (finalText) contentEl.innerHTML = renderAnswerHtml(finalText);
+                    contentEl.dataset.rawMd = finalText || finalTextRaw || '';
                     const copyBtn = botEl.querySelector('.copy-msg-btn');
                     if (copyBtn && finalText) copyBtn.style.display = '';
                     applyHighlighting(botEl);
@@ -2672,7 +2688,9 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                 addBotMessage(t('error_send'), new Date());
             } else if (accumulatedText) {
                 contentEl.classList.remove('sse-streaming');
-                contentEl.innerHTML = renderMarkdown(accumulatedText);
+                const displayText = localizeCancelMarker(accumulatedText);
+                contentEl.innerHTML = renderAnswerHtml(displayText);
+                contentEl.dataset.rawMd = displayText;
                 applyHighlighting(botEl);
                 bindChatKnowledgeLinks(botEl);
             }
@@ -2965,6 +2983,34 @@ function localizeCancelMarker(text) {
         .replace(/_\(Cancelled\)_/g, '_(已中止)_');
 }
 
+const LONG_REPLY_COLLAPSE_CHARS = 1800;
+const LONG_REPLY_PREVIEW_CHARS = 900;
+
+function longAnswerLabel(expanded) {
+    if (currentLang === 'zh') {
+        return expanded ? '收起完整回复' : '展开完整回复';
+    }
+    return expanded ? 'Collapse full reply' : 'Expand full reply';
+}
+
+function renderAnswerHtml(content, expanded) {
+    const text = content || '';
+    if (text.length <= LONG_REPLY_COLLAPSE_CHARS) return renderMarkdown(text);
+    if (expanded) {
+        return `
+            <div class="long-answer-disclosure is-expanded">
+                <div class="long-answer-full">${renderMarkdown(text)}</div>
+                <button type="button" class="long-answer-toggle long-answer-collapse-bottom" data-long-answer-toggle="collapse" aria-expanded="true">${longAnswerLabel(true)}</button>
+            </div>`;
+    }
+    const preview = text.slice(0, LONG_REPLY_PREVIEW_CHARS).trimEnd() + '...';
+    return `
+        <div class="long-answer-disclosure">
+            <div class="long-answer-preview">${renderMarkdown(preview)}</div>
+            <button type="button" class="long-answer-toggle long-answer-expand-bottom" data-long-answer-toggle="expand" aria-expanded="false">${longAnswerLabel(false)}</button>
+        </div>`;
+}
+
 function createBotMessageEl(content, timestamp, requestId, msg) {
     const el = document.createElement('div');
     el.className = 'flex gap-3 px-4 sm:px-6 py-3 bot-message-group';
@@ -2999,12 +3045,12 @@ function createBotMessageEl(content, timestamp, requestId, msg) {
         : '';
 
     el.innerHTML = `
-        <img src="assets/logo.jpg" alt="CowAgent" class="w-8 h-8 rounded-lg flex-shrink-0">
+        <img src="assets/icon.png" alt="EcoreX" class="w-8 h-8 rounded-lg flex-shrink-0">
         <div class="min-w-0 flex-1 max-w-[85%]">
             <div class="bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-2xl px-4 py-3 text-sm leading-relaxed msg-content text-slate-700 dark:text-slate-200">
                 ${evolutionBadge}
                 ${stepsHtml ? `<div class="agent-steps">${stepsHtml}</div>` : ''}
-                <div class="answer-content">${renderMarkdown(displayContent)}</div>
+                <div class="answer-content">${renderAnswerHtml(displayContent)}</div>
                 <div class="bot-audio-slot"></div>
             </div>
             <div class="flex items-center gap-2 mt-1.5">
@@ -3294,7 +3340,7 @@ function addLoadingIndicator() {
     const el = document.createElement('div');
     el.className = 'flex gap-3 px-4 sm:px-6 py-3';
     el.innerHTML = `
-        <img src="assets/logo.jpg" alt="CowAgent" class="w-8 h-8 rounded-lg flex-shrink-0">
+        <img src="assets/icon.png" alt="EcoreX" class="w-8 h-8 rounded-lg flex-shrink-0">
         <div class="bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-2xl px-4 py-3">
             <div class="flex items-center gap-1.5">
                 <span class="w-2 h-2 rounded-full bg-primary-400 animate-pulse-dot" style="animation-delay: 0s"></span>
@@ -3324,8 +3370,8 @@ function newChat(optimistic = true) {
     ws.className = 'flex flex-col items-center justify-center h-full px-6 pb-16';
     ws.style.paddingTop = '6vh';
     ws.innerHTML = `
-        <img src="assets/logo.jpg" alt="CowAgent" class="w-16 h-16 rounded-2xl mb-6 shadow-lg shadow-primary-500/20">
-        <h1 class="text-2xl font-bold text-slate-800 dark:text-slate-100 mb-3">${appConfig.title || 'CowAgent'}</h1>
+        <img src="assets/icon.png" alt="EcoreX" class="w-16 h-16 rounded-2xl mb-6 shadow-lg shadow-primary-500/20">
+        <h1 class="text-2xl font-bold text-slate-800 dark:text-slate-100 mb-3">${appConfig.title || 'EcoreX'}</h1>
         <p class="text-slate-500 dark:text-slate-400 text-center max-w-lg mb-10 leading-relaxed" data-i18n="welcome_subtitle">${t('welcome_subtitle')}</p>
         <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 w-full max-w-2xl">
             <div class="example-card group bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-xl p-4 cursor-pointer hover:border-primary-300 dark:hover:border-primary-600 hover:shadow-md transition-all duration-200">
@@ -3504,7 +3550,7 @@ function _applyInputTooltips() {
         el.removeAttribute('title');
         if (pos) el.setAttribute('data-tooltip-pos', pos);
     };
-    set('new-chat-btn', 'tip_new_chat');
+    set('new-chat-btn', 'tip_new_chat', 'bottom-left');
     set('clear-context-btn', 'tip_clear_context');
     set('attach-btn', 'tip_attach');
     set('session-toggle-btn', 'session_history', 'bottom');
@@ -6687,7 +6733,7 @@ function connectWeixinAfterQr() {
 // "WeCom Bot" channel QR-login flow, so the rest of the console works
 // fully offline.
 const WECOM_BOT_SDK_URL = 'https://wwcdn.weixin.qq.com/node/wework/js/wecom-aibot-sdk@0.1.0.min.js';
-const WECOM_BOT_SOURCE = 'cowagent';
+const WECOM_BOT_SOURCE = 'ecorex';
 let _wecomSdkLoaded = false;
 
 function ensureWecomSdkLoaded() {
@@ -7849,9 +7895,9 @@ function initApp() {
 
     fetch('/api/version').then(r => r.json()).then(data => {
         APP_VERSION = `v${data.version}`;
-        document.getElementById('sidebar-version').textContent = `CowAgent ${APP_VERSION}`;
+        document.getElementById('sidebar-version').textContent = `EcoreX ${APP_VERSION}`;
     }).catch(() => {
-        document.getElementById('sidebar-version').textContent = 'CowAgent';
+        document.getElementById('sidebar-version').textContent = 'EcoreX';
     });
     chatInput.focus();
 }

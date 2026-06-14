@@ -392,12 +392,12 @@ function MainAnswer({ content, pending, collapsible }: { content: string; pendin
   }
   return (
     <div className="long-answer-disclosure">
-      <button className="long-answer-toggle" type="button" onClick={() => setExpanded(true)} title="长回复已默认收起，点击展开完整内容">
-        展开完整回复
-      </button>
       <div className="long-answer-preview">
         <MarkdownBlock content={`${content.slice(0, LONG_REPLY_PREVIEW_CHARS).trimEnd()}...`} />
       </div>
+      <button className="long-answer-toggle long-answer-expand-bottom" type="button" onClick={() => setExpanded(true)} title="长回复已默认收起，点击展开完整内容">
+        展开完整回复
+      </button>
     </div>
   );
 }

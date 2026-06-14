@@ -67,7 +67,12 @@ function createMainWindow() {
           titleBarStyle: "hidden" as const,
           titleBarOverlay: { color: "#fff9f2", symbolColor: "#1d140e", height: 32 }
         }
-      : {}),
+      : process.platform === "darwin"
+        ? {
+            titleBarStyle: "hiddenInset" as const,
+            trafficLightPosition: { x: 14, y: 10 }
+          }
+        : {}),
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,

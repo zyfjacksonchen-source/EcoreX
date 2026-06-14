@@ -40,7 +40,7 @@ import {
   X
 } from "lucide-react";
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
-import type { ClipboardEvent, MouseEvent, ReactNode } from "react";
+import type { ClipboardEvent, CSSProperties, MouseEvent, ReactNode } from "react";
 import { MessageContent, type AgentStepDisclosure, type ToolCallDisclosure } from "./components/MessageContent";
 import {
   cancelChatRequest,
@@ -161,6 +161,7 @@ type ProjectContextMenu = {
 } | null;
 
 const brandIconUrl = new URL("../build/icon.png", import.meta.url).href;
+document.documentElement.dataset.platform = window.ecorexDesktop?.platform || "web";
 
 const initialRuntime: RuntimeSnapshot = {
   status: "offline",
@@ -186,6 +187,7 @@ const CAPABILITY_ENABLED_STORAGE_KEY = "ecorex-capability-enabled";
 const SKILL_DEFAULTS_STORAGE_KEY = "ecorex-skill-defaults-v1";
 const CONTEXT_THRESHOLD_TOKENS = 258_000;
 const EFFECTIVE_MODEL_FALLBACK = "gpt-5.5";
+const EFFECTIVE_MODEL_ALIAS_PREFIXES = ["deepseek-"];
 
 const coreAbilityNames = new Set([
   "bash",
@@ -243,6 +245,8 @@ function applyTheme(theme: ThemeMode) {
 function displayModelName(value?: string) {
   const model = (value || "").trim();
   if (!model || /^ecorex$/i.test(model) || /^openai$/i.test(model)) return EFFECTIVE_MODEL_FALLBACK;
+  const normalized = model.toLowerCase();
+  if (EFFECTIVE_MODEL_ALIAS_PREFIXES.some((prefix) => normalized.startsWith(prefix))) return EFFECTIVE_MODEL_FALLBACK;
   return model;
 }
 
@@ -251,6 +255,15 @@ function BrandMark() {
   return (
     <div className="brand-mark" aria-hidden="true">
       {failed ? <Sparkles aria-hidden="true" /> : <img src={brandIconUrl} alt="" onError={() => setFailed(true)} />}
+    </div>
+  );
+}
+
+function WindowBrand() {
+  return (
+    <div className="window-brand" aria-hidden="true">
+      <img src={brandIconUrl} alt="" />
+      <span>EcoreX</span>
     </div>
   );
 }
@@ -519,6 +532,7 @@ function AuthGate(props: { onLogin: (session: EnterpriseSession) => void }) {
 
   return (
     <main className="auth-shell">
+      <WindowBrand />
       <section className="auth-panel">
         <BrandMark />
         <h1>EcoreX</h1>
@@ -773,29 +787,26 @@ export function App() {
   const weeklyLimit = quotaNumber(quotaSnapshot, "weeklyLimit");
   const contextUsed = estimateContextTokens(messages, composerText, attachments);
   const contextPercent = percentOf(contextUsed, CONTEXT_THRESHOLD_TOKENS);
-  const composerMeters = [
+  const tokenMeters = [
     {
       key: "daily",
       label: "今日",
-      value: dailyLimit ? `${compactTokenCount(dailyUsed)}/${compactTokenCount(dailyLimit)}` : compactTokenCount(dailyUsed),
       percent: percentOf(dailyUsed, dailyLimit),
       title: meterTitle("今日 token 用量", dailyUsed, dailyLimit)
     },
     {
       key: "weekly",
       label: "本周",
-      value: weeklyLimit ? `${compactTokenCount(weeklyUsed)}/${compactTokenCount(weeklyLimit)}` : compactTokenCount(weeklyUsed),
       percent: percentOf(weeklyUsed, weeklyLimit),
       title: meterTitle("本周 token 用量", weeklyUsed, weeklyLimit)
-    },
-    {
-      key: "context",
-      label: "上下文",
-      value: `${compactTokenCount(contextUsed)}/${compactTokenCount(CONTEXT_THRESHOLD_TOKENS)} · ${Math.round(contextPercent)}%`,
-      percent: contextPercent,
-      title: meterTitle("当前会话上下文估算", contextUsed, CONTEXT_THRESHOLD_TOKENS)
     }
   ];
+  const contextMeter = {
+    key: "context",
+    label: "上下文",
+    percent: contextPercent,
+    title: meterTitle("当前会话上下文估算", contextUsed, CONTEXT_THRESHOLD_TOKENS)
+  };
 
   function capabilityPackEnabled(packId: string) {
     return enabledCapabilityPacks[packId] !== false;
@@ -1817,7 +1828,7 @@ export function App() {
   };
 
   if (!authChecked) {
-    return <main className="auth-shell"><section className="auth-panel"><p>正在检查登录状态</p></section></main>;
+    return <main className="auth-shell"><WindowBrand /><section className="auth-panel"><p>正在检查登录状态</p></section></main>;
   }
 
   if (!session) {
@@ -1830,9 +1841,10 @@ export function App() {
 
   return (
     <main className="app-shell">
+      <WindowBrand />
       <aside className="session-sidebar">
         <div className="sidebar-actions">
-          <button onClick={() => startNewSession(null)} title="创建不绑定项目的通用会话" data-tooltip="创建不绑定项目的通用会话"><Plus aria-hidden="true" />新对话</button>
+          <button onClick={() => startNewSession(null)} title="创建不绑定项目的通用会话" data-tooltip="创建不绑定项目的通用会话" data-tooltip-position="bottom-left"><Plus aria-hidden="true" />新对话</button>
           <label className="search-box" title="搜索会话标题和摘要">
             <Search aria-hidden="true" />
             <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="搜索会话" />
@@ -1926,12 +1938,13 @@ export function App() {
               className="icon-button"
               title={theme === "dark" ? "切换到明亮模式" : "切换到深色模式"}
               data-tooltip={theme === "dark" ? "切换到明亮模式" : "切换到深色模式"}
+              data-tooltip-position="bottom-right"
               aria-label={theme === "dark" ? "切换到明亮模式" : "切换到深色模式"}
               onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
             >
               {theme === "dark" ? <SunMedium aria-hidden="true" /> : <Moon aria-hidden="true" />}
             </button>
-            <button className="icon-button" title="通知与运行状态" data-tooltip="通知与运行状态" aria-label="通知与运行状态" onClick={() => setNotificationsOpen((open) => !open)}>
+            <button className="icon-button" title="通知与运行状态" data-tooltip="通知与运行状态" data-tooltip-position="bottom-right" aria-label="通知与运行状态" onClick={() => setNotificationsOpen((open) => !open)}>
               <Bell aria-hidden="true" />
             </button>
           </div>
@@ -2079,15 +2092,26 @@ export function App() {
               </button>
             )}
             <div className="composer-metrics" aria-label="Token 和上下文用量">
-              {composerMeters.map((meter) => (
-                <div className={`composer-meter composer-meter-${meter.key}`} key={meter.key} title={meter.title}>
-                  <span>{meter.label}</span>
-                  <div className="composer-meter-track" aria-hidden="true">
-                    <i style={{ width: `${meter.percent}%` }} />
+              <div className="composer-token-meters" aria-label="Token 用量">
+                {tokenMeters.map((meter) => (
+                  <div className={`composer-meter composer-meter-${meter.key}`} key={meter.key} title={meter.title} data-tooltip={meter.title} data-tooltip-position="top-right">
+                    <span>{meter.label}</span>
+                    <div className="composer-meter-track" aria-hidden="true">
+                      <i style={{ width: `${meter.percent}%` }} />
+                    </div>
                   </div>
-                  <b>{meter.value}</b>
-                </div>
-              ))}
+                ))}
+              </div>
+              <div
+                className="composer-context-meter"
+                title={contextMeter.title}
+                data-tooltip={contextMeter.title}
+                data-tooltip-position="top-right"
+                style={{ "--context-meter-percent": `${contextMeter.percent}%` } as CSSProperties}
+              >
+                <span>{contextMeter.label}</span>
+                <i aria-hidden="true" />
+              </div>
             </div>
           </form>
         </div>

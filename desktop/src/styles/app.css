@@ -2,6 +2,16 @@
   box-sizing: border-box;
 }
 
+:root {
+  --titlebar-height: env(titlebar-area-height, 0px);
+  --window-brand-left: 0px;
+}
+
+html[data-platform="darwin"] {
+  --titlebar-height: 38px;
+  --window-brand-left: 78px;
+}
+
 html,
 body,
 #root {
@@ -31,7 +41,7 @@ body::before {
   left: 0;
   right: 0;
   z-index: 100;
-  height: env(titlebar-area-height, 0px);
+  height: var(--titlebar-height);
   background: var(--color-bg);
   -webkit-app-region: drag;
 }
@@ -64,7 +74,7 @@ svg {
   bottom: calc(100% + 8px);
   z-index: 50;
   width: max-content;
-  max-width: min(280px, 72vw);
+  max-width: min(280px, calc(100vw - 24px));
   padding: 7px 9px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
@@ -78,10 +88,26 @@ svg {
   pointer-events: none;
 }
 
+[data-tooltip-position="top-right"]:hover::after,
+[data-tooltip-position="top-right"]:focus-visible::after,
 .icon-button[data-tooltip]:hover::after,
 .icon-button[data-tooltip]:focus-visible::after {
   left: auto;
   right: 0;
+}
+
+[data-tooltip-position="bottom-left"]:hover::after,
+[data-tooltip-position="bottom-left"]:focus-visible::after {
+  top: calc(100% + 8px);
+  bottom: auto;
+}
+
+[data-tooltip-position="bottom-right"]:hover::after,
+[data-tooltip-position="bottom-right"]:focus-visible::after {
+  top: calc(100% + 8px);
+  right: 0;
+  bottom: auto;
+  left: auto;
 }
 
 button:disabled {
@@ -201,10 +227,40 @@ button:disabled {
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
-  padding-top: env(titlebar-area-height, 0px);
+  padding-top: var(--titlebar-height);
   overflow: hidden;
   background: var(--color-bg);
   font-size: var(--font-size-ui);
+}
+
+.window-brand {
+  position: fixed;
+  top: 0;
+  left: var(--window-brand-left);
+  z-index: 120;
+  height: var(--titlebar-height);
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  padding: 0 12px;
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0;
+  pointer-events: none;
+  -webkit-app-region: drag;
+}
+
+html[data-platform="web"] .window-brand {
+  display: none;
+}
+
+.window-brand img {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
 }
 
 .session-sidebar {
@@ -1080,7 +1136,7 @@ button:disabled {
   padding: 0 10px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-pill);
-  color: var(--color-muted);
+  color: var(--color-brand-strong);
   background: var(--color-surface-raised);
   cursor: pointer;
 }
@@ -1092,6 +1148,7 @@ button:disabled {
   outline: 0;
 }
 
+.long-answer-expand-bottom,
 .long-answer-collapse-bottom {
   margin-top: 2px;
   justify-self: start;
@@ -1341,39 +1398,43 @@ button:disabled {
 
 .composer-metrics {
   grid-column: 2 / -1;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 7px;
+  justify-self: end;
+  width: fit-content;
+  max-width: 100%;
+  display: inline-flex;
+  gap: 10px;
   align-items: center;
   min-width: 0;
-  padding: 0 6px 2px 2px;
+  padding: 0 6px 1px 2px;
+}
+
+.composer-token-meters {
+  display: grid;
+  grid-template-columns: repeat(2, 64px);
+  gap: 6px;
+  min-width: 0;
 }
 
 .composer-meter {
+  position: relative;
   min-width: 0;
   display: grid;
-  grid-template-columns: auto minmax(28px, 1fr) auto;
+  grid-template-columns: auto minmax(24px, 1fr);
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   color: var(--color-muted);
   font-size: 11px;
   line-height: 1.2;
 }
 
-.composer-meter span,
-.composer-meter b {
+.composer-meter span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.composer-meter b {
-  color: var(--color-text);
-  font-weight: 650;
-}
-
 .composer-meter-track {
-  height: 4px;
+  height: 3px;
   overflow: hidden;
   border-radius: 999px;
   background: color-mix(in srgb, var(--color-muted) 16%, transparent);
@@ -1393,6 +1454,40 @@ button:disabled {
 
 .composer-meter-context .composer-meter-track i {
   background: color-mix(in srgb, var(--color-brand) 64%, var(--color-danger));
+}
+
+.composer-context-meter {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--color-muted);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.composer-context-meter span {
+  white-space: nowrap;
+}
+
+.composer-context-meter i {
+  position: relative;
+  width: 15px;
+  height: 15px;
+  display: inline-block;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background:
+    conic-gradient(var(--color-brand) var(--context-meter-percent), color-mix(in srgb, var(--color-muted) 18%, transparent) 0);
+}
+
+.composer-context-meter i::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: inherit;
+  background: var(--color-surface);
 }
 
 .modal-backdrop {

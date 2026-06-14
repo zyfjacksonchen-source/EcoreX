@@ -1,5 +1,5 @@
 /* =====================================================================
-   CowAgent Console Styles
+   EcoreX Console Styles
    ===================================================================== */
 
 /* Animations */
@@ -32,7 +32,9 @@
     font-size: 12px;
     font-weight: 400;
     line-height: 1.4;
-    white-space: nowrap;
+    max-width: min(280px, calc(100vw - 16px));
+    white-space: normal;
+    text-align: center;
     background: #1e293b;
     color: #e2e8f0;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
@@ -44,6 +46,24 @@
 [data-tooltip-pos="bottom"]::after {
     bottom: auto;
     top: calc(100% + 8px);
+}
+[data-tooltip-pos="top-right"]::after {
+    left: auto;
+    right: 0;
+    transform: none;
+}
+[data-tooltip-pos="bottom-left"]::after {
+    left: 0;
+    bottom: auto;
+    top: calc(100% + 8px);
+    transform: none;
+}
+[data-tooltip-pos="bottom-right"]::after {
+    left: auto;
+    right: 0;
+    bottom: auto;
+    top: calc(100% + 8px);
+    transform: none;
 }
 .dark [data-tooltip]::after {
     background: #334155;
@@ -435,6 +455,48 @@
 .msg-content hr { border: none; height: 1px; background: #e2e8f0; margin: 1.2em 0; }
 .dark .msg-content hr { background: rgba(255,255,255,0.1); }
 
+.long-answer-disclosure {
+    display: grid;
+    gap: 0.5rem;
+}
+.long-answer-toggle {
+    width: max-content;
+    min-height: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 11px;
+    border: 1px solid #fed7aa;
+    border-radius: 999px;
+    background: #fff7ed;
+    color: #ea580c;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+}
+.long-answer-toggle:hover,
+.long-answer-toggle:focus-visible {
+    border-color: #fb923c;
+    color: #c2410c;
+    outline: none;
+}
+.dark .long-answer-toggle {
+    border-color: rgba(251, 146, 60, 0.32);
+    background: rgba(251, 146, 60, 0.08);
+    color: #fb923c;
+}
+.dark .long-answer-toggle:hover,
+.dark .long-answer-toggle:focus-visible {
+    border-color: rgba(251, 146, 60, 0.56);
+    color: #fdba74;
+}
+.long-answer-expand-bottom,
+.long-answer-collapse-bottom {
+    margin-top: 2px;
+    justify-self: start;
+}
+
 /* SSE Streaming cursor */
 @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 .sse-streaming::after {
@@ -709,7 +771,8 @@
     color: #334155;
     cursor: pointer;
     transition: background 0.15s ease;
-    white-space: nowrap;
+    max-width: min(280px, calc(100vw - 16px));
+    white-space: normal;
     overflow: hidden;
     text-overflow: ellipsis;
 }
