@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.1.11",
+    [string]$Version = "0.1.12",
     [string]$RuntimeRoot = ".",
     [string]$SiteRoot = "deploy/ecorex-site",
     [string]$WebBuildRoot = "",
@@ -81,14 +81,18 @@ $outputResolved = [System.IO.Path]::GetFullPath((Join-Path $repoRoot $OutputDir)
 New-Item -ItemType Directory -Force -Path $outputResolved | Out-Null
 
 $desktopRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "desktop"))
+$webBuildKindOverride = ""
 if ($WebBuildRoot) {
     $webBuildResolved = Resolve-RequiredPath $WebBuildRoot
     $webBuildFull = [System.IO.Path]::GetFullPath($webBuildResolved)
-    if ($webBuildFull.StartsWith($desktopRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "WebBuildRoot must not point under desktop/ for this Web-only release path: $webBuildFull"
-    }
 } else {
-    $webBuildResolved = ""
+    $desktopDist = Join-Path $desktopRoot "dist"
+    if (Test-Path -LiteralPath (Join-Path $desktopDist "index.html")) {
+        $webBuildResolved = Resolve-RequiredPath $desktopDist
+        $webBuildKindOverride = "desktop-renderer-build"
+    } else {
+        $webBuildResolved = ""
+    }
 }
 
 $stagingRoot = Resolve-UnderDirectory -Path (Join-Path $outputResolved "ecorex-web-linux-service-$Version") -Base $outputResolved
@@ -149,7 +153,7 @@ New-Item -ItemType Directory -Force -Path $appDir | Out-Null
 
 $webBuildKind = "legacy-webui-fallback"
 if ($webBuildResolved) {
-    $webBuildKind = "provided-web-build"
+    $webBuildKind = if ($webBuildKindOverride) { $webBuildKindOverride } else { "provided-web-build" }
     Copy-DirectoryIfExists -Source $webBuildResolved -Destination (Join-Path $webBuildOut "app")
     Copy-DirectoryIfExists -Source $webBuildResolved -Destination $appDir
 } elseif (Test-Path -LiteralPath (Join-Path $appDir "index.html")) {

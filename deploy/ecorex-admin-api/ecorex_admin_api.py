@@ -25,6 +25,7 @@ DEFAULT_COMPAT_CLIENT_EVENT_KEYS = (
     "ecorex-desktop-v0.1.11",
     "ecorex-desktop-v0.1.12",
     "ecorex-web-v0.1.11-web.1",
+    "ecorex-web-v0.1.12-web.1",
 )
 DEFAULT_ADMIN_USERNAME = "admin"
 

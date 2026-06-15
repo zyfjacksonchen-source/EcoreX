@@ -22,6 +22,22 @@ const platformCopy = {
     icon: "Win",
     body: "适用于 Windows 10/11，安装完成后从开始菜单启动 EcoreX。",
   },
+  "webui-win-mac": {
+    icon: "Web",
+    body: "Windows 和 macOS 共用一份 WebUI 一键安装包，按系统运行对应入口，安装后自动打开 EcoreX。",
+  },
+  "webui-windows-x64": {
+    icon: "Web",
+    body: "Windows 本地 WebUI 一键包，双击安装后会自动打开浏览器进入 EcoreX。",
+  },
+  "webui-macos-universal": {
+    icon: "Web",
+    body: "macOS 本地 WebUI 一键包，支持 Apple Silicon 与 Intel，安装后自动打开 EcoreX。",
+  },
+  "web-linux-service": {
+    icon: "Web",
+    body: "网页版，在网页内直接部署启动。",
+  },
   "macos-arm64-dmg": {
     icon: "M",
     body: "适用于 Apple Silicon Mac，下载 DMG 后拖入 Applications。",
@@ -65,7 +81,7 @@ function renderDownloads(manifest) {
   const grid = document.querySelector("[data-downloads]");
   grid.innerHTML = "";
 
-  manifest.artifacts.forEach((artifact) => {
+  manifest.artifacts.filter((artifact) => artifact.visible !== false).forEach((artifact) => {
     const copy = platformCopy[artifact.id] || { icon: "EX", body: "选择适合你的系统版本。" };
     const card = document.createElement("article");
     card.className = "download-card";

@@ -1,8 +1,8 @@
 param(
-    [string]$Version = "0.1.11",
+    [string]$Version = "0.1.12",
     [string]$SiteRoot = "deploy/ecorex-site",
     [string]$AdminApiRoot = "deploy/ecorex-admin-api",
-    [string]$InstallerPath = "desktop/release/EcoreX_0.1.11_x64-setup.exe",
+    [string]$InstallerPath = "desktop/release/EcoreX_0.1.12_x64-setup.exe",
     [string]$MacArm64DmgPath = "",
     [string]$MacX64DmgPath = "",
     [string]$WebTarballPath = "",
@@ -45,6 +45,9 @@ if ($manifest.version -ne $Version) {
 
 $artifactSources = @{}
 $artifactSources["windows-x64"] = $InstallerPath
+$artifactSources["webui-win-mac"] = Join-Path "release-artifacts" "EcoreX_${Version}-webui-win-mac.zip"
+$artifactSources["webui-windows-x64"] = Join-Path "release-artifacts" "EcoreX_${Version}-webui-windows-x64.zip"
+$artifactSources["webui-macos-universal"] = Join-Path "release-artifacts" "EcoreX_${Version}-webui-macos-universal.tar.gz"
 $artifactSources["macos-arm64-dmg"] = if ($MacArm64DmgPath) { $MacArm64DmgPath } else { Join-Path "desktop/release" "EcoreX_${Version}_arm64.dmg" }
 $artifactSources["macos-x64-dmg"] = if ($MacX64DmgPath) { $MacX64DmgPath } else { Join-Path "desktop/release" "EcoreX_${Version}_x64.dmg" }
 $artifactSources["web-linux-service"] = if ($WebTarballPath) { $WebTarballPath } else { Join-Path "release-artifacts" "EcoreX_${Version}-web-linux-service.tar.gz" }

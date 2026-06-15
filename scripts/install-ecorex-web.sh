@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${VERSION:-0.1.11}"
+VERSION="${VERSION:-0.1.12}"
 SERVICE_NAME="${SERVICE_NAME:-ecorex-web}"
 SERVICE_USER="${SERVICE_USER:-ecorex}"
 SERVICE_GROUP="${SERVICE_GROUP:-$SERVICE_USER}"
@@ -19,6 +19,7 @@ RELEASE_BASE_URL="${RELEASE_BASE_URL:-https://www.ecoreai.cn/ecorex-agent/downlo
 RELEASE_URL="${RELEASE_URL:-$RELEASE_BASE_URL/EcoreX_${VERSION}-web-linux-service.tar.gz}"
 EXPECTED_SHA256="${EXPECTED_SHA256:-}"
 START_SERVICE="${START_SERVICE:-1}"
+OPEN_BROWSER="${OPEN_BROWSER:-1}"
 INSTALL_PY_DEPS="${INSTALL_PY_DEPS:-1}"
 INSTALL_LOCK_DIR="${INSTALL_LOCK_DIR:-/var/lock/ecorex-web-install.lock}"
 INSTALL_LOCK_TIMEOUT_SECONDS="${INSTALL_LOCK_TIMEOUT_SECONDS:-900}"
@@ -395,6 +396,78 @@ WantedBy=multi-user.target
 EOF
 }
 
+wait_for_webui() {
+  local url="$1"
+  if [[ "$START_SERVICE" != "1" ]]; then
+    return
+  fi
+
+  local attempt
+  for attempt in $(seq 1 30); do
+    if python3 - "$url" <<'PY'
+import sys
+import urllib.error
+import urllib.request
+
+request = urllib.request.Request(sys.argv[1], method="GET")
+try:
+    with urllib.request.urlopen(request, timeout=2) as response:
+        raise SystemExit(0 if response.status < 500 else 1)
+except urllib.error.HTTPError as exc:
+    raise SystemExit(0 if exc.code < 500 else 1)
+except Exception:
+    raise SystemExit(1)
+PY
+    then
+      return
+    fi
+    sleep 1
+  done
+
+  log "WebUI did not respond before browser auto-open; continuing with $url"
+}
+
+open_browser() {
+  local url="$1"
+  if [[ "$OPEN_BROWSER" != "1" ]]; then
+    log "Browser auto-open disabled. Open $url"
+    return
+  fi
+
+  if [[ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}${BROWSER:-}" && "$(uname -s)" != "Darwin" ]]; then
+    log "Browser auto-open skipped because no graphical session was detected. Open $url"
+    return
+  fi
+
+  local opener=()
+  if [[ -n "${BROWSER:-}" ]]; then
+    opener=("$BROWSER" "$url")
+  elif command -v xdg-open >/dev/null 2>&1; then
+    opener=(xdg-open "$url")
+  elif command -v gio >/dev/null 2>&1; then
+    opener=(gio open "$url")
+  elif command -v open >/dev/null 2>&1; then
+    opener=(open "$url")
+  elif command -v python3 >/dev/null 2>&1; then
+    opener=(python3 -m webbrowser "$url")
+  else
+    log "Browser auto-open skipped because no opener was found. Open $url"
+    return
+  fi
+
+  if [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != "root" ]] && id "$SUDO_USER" >/dev/null 2>&1 && command -v runuser >/dev/null 2>&1; then
+    runuser -u "$SUDO_USER" -- env \
+      DISPLAY="${DISPLAY:-}" \
+      WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-}" \
+      XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-}" \
+      XAUTHORITY="${XAUTHORITY:-}" \
+      "${opener[@]}" >/dev/null 2>&1 &
+  else
+    "${opener[@]}" >/dev/null 2>&1 &
+  fi
+  log "Opening EcoreX WebUI: $url"
+}
+
 tmp_dir="$(mktemp -d)"
 
 ensure_user
@@ -465,12 +538,27 @@ write_systemd_service
 if command -v systemctl >/dev/null 2>&1; then
   systemctl daemon-reload
   systemctl enable "$SERVICE_NAME.service" >/dev/null
-  if [[ "$START_SERVICE" == "1" ]]; then
+if [[ "$START_SERVICE" == "1" ]]; then
     systemctl restart "$SERVICE_NAME.service"
   fi
 else
   log "systemctl not found; service file written to $SERVICE_FILE but not started."
 fi
+
+final_port="$(read_env_value WEB_PORT "$WEB_PORT")"
+final_password="$(read_env_value WEB_PASSWORD "")"
+if [[ -n "$PUBLIC_BASE_URL" ]]; then
+  final_url="${PUBLIC_BASE_URL%/}/app/"
+else
+  final_host="$(read_env_value WEB_HOST "$WEB_HOST")"
+  if [[ "$final_host" == "0.0.0.0" || "$final_host" == "::" ]]; then
+    final_host="127.0.0.1"
+  fi
+  final_url="http://${final_host}:${final_port}/app/"
+fi
+
+wait_for_webui "$final_url"
+open_browser "$final_url"
 
 cat <<EOF
 EcoreX WebUI service installed.
@@ -482,6 +570,6 @@ workspace: $WORKSPACE_ROOT
 stateConfig: $STATE_DIR/config.json
 envFile: $ENV_FILE
 service: $SERVICE_NAME.service
-localUrl: http://127.0.0.1:$(read_env_value WEB_PORT "$WEB_PORT")/app/
-webPassword: $(read_env_value WEB_PASSWORD "")
+localUrl: $final_url
+webPassword: $final_password
 EOF

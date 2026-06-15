@@ -12,6 +12,11 @@ html[data-platform="darwin"] {
   --window-brand-left: 78px;
 }
 
+html[data-platform="win32"] {
+  --titlebar-height: 32px;
+  --window-brand-left: 12px;
+}
+
 html,
 body,
 #root {

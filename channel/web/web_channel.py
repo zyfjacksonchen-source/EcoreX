@@ -9,6 +9,8 @@ import random
 import shutil
 import threading
 import time
+import urllib.error
+import urllib.request
 import uuid
 from queue import Queue, Empty
 from typing import List, Tuple
@@ -39,14 +41,27 @@ def _web_app_bridge_script() -> str:
 
   var WEB_CLIENT_KEY = "ecorex-web-v0.1.12-web.1";
   var WEB_SESSION_KEY = "ecorex-web-enterprise-session";
+  var WEB_LOCAL_SESSION_KEY = "ecorex-web-local-session";
   var WEB_DEVICE_KEY = "ecorex-web-device-id";
   var webPort = Number(window.location.port || (window.location.protocol === "https:" ? 443 : 80));
+  var desktopPlatform = detectDesktopPlatform();
   var status = {
     state: "running",
-    message: "Connected to EcoreX Web runtime",
+    message: "EcoreX 兼容运行时已启动",
     webPort: webPort
   };
   var listeners = new Set();
+
+  function detectDesktopPlatform() {
+    var platform = "";
+    try {
+      platform = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || navigator.userAgent || "";
+    } catch (error) {}
+    if (/mac|iphone|ipad|ipod/i.test(platform)) return "darwin";
+    if (/win/i.test(platform)) return "win32";
+    if (/linux|x11|cros/i.test(platform)) return "linux";
+    return "win32";
+  }
 
   function parseJson(text) {
     try {
@@ -81,22 +96,60 @@ def _web_app_bridge_script() -> str:
     } catch (error) {}
   }
 
-  function webSession(authRequired) {
-    var admin = readAdminSession();
-    if (admin && admin.user && admin.token) return admin;
+  function readLocalSession() {
+    try {
+      var raw = window.localStorage.getItem(WEB_LOCAL_SESSION_KEY);
+      var session = raw ? JSON.parse(raw) : null;
+      return session && session.user && session.user.email ? session : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function writeLocalSession(session) {
+    try {
+      if (session) window.localStorage.setItem(WEB_LOCAL_SESSION_KEY, JSON.stringify(session));
+      else window.localStorage.removeItem(WEB_LOCAL_SESSION_KEY);
+    } catch (error) {}
+  }
+
+  function makeLocalSession(authRequired, identity) {
+    identity = identity || {};
+    var email = String(identity.email || "").trim().toLowerCase();
+    if (!email) email = authRequired ? "ecorex@ecorex.local" : "local@ecorex.local";
+    var name = String(identity.name || "").trim();
+    if (!name) name = email.indexOf("@") > 0 ? email.split("@")[0] : "EcoreX";
+    if (email === "ecorex@ecorex.local" || email === "local@ecorex.local") name = "EcoreX";
     return {
       authenticated: true,
+      localFallback: true,
       deviceId: deviceId(),
       expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
       user: {
-        id: authRequired ? "web-password" : "web-local",
-        name: "EcoreX WebUI",
-        email: authRequired ? "webui@ecorex.local" : "local-webui@ecorex.local",
+        id: authRequired ? "ecorex-password" : "ecorex-local",
+        name: name,
+        email: email,
         role: "user",
         status: "active"
       },
-      quota: { allowed: true, runtime: "webui" }
+      quota: { allowed: true }
     };
+  }
+
+  function webSession(authRequired, allowLocalFallback, identity, persistLocal) {
+    var admin = readAdminSession();
+    if (admin && admin.user && admin.token) return admin;
+    if (!allowLocalFallback) return null;
+    if (identity && identity.email) {
+      var next = makeLocalSession(authRequired, identity);
+      if (persistLocal) writeLocalSession(next);
+      return next;
+    }
+    var local = readLocalSession();
+    if (local) return local;
+    var fallback = makeLocalSession(authRequired, {});
+    if (persistLocal) writeLocalSession(fallback);
+    return fallback;
   }
 
   function clientBase() {
@@ -139,6 +192,15 @@ def _web_app_bridge_script() -> str:
 
   async function apiJson(request) {
     request = request || {};
+    if (String(request.path || "") === "/message") {
+      var modelReady = await ensureModelReady();
+      if (!modelReady.ready) {
+        return {
+          status: "error",
+          message: modelReady.message || "请先登录企业账号，或在设置 > 模型中配置可用的 API Key 后再发送。"
+        };
+      }
+    }
     var method = request.method || "GET";
     var headers = { "Accept": "application/json" };
     var init = {
@@ -276,8 +338,83 @@ def _web_app_bridge_script() -> str:
     return payload;
   }
 
+  function isMissingClientBridge(error) {
+    return /not found|404|failed to fetch|networkerror|load failed/i.test(String((error && error.message) || error || ""));
+  }
+
+  async function applyModelPolicy(payload) {
+    if (!payload || !payload.configured || !payload.settings) {
+      return {
+        configured: false,
+        changed: false,
+        restarted: false,
+        message: "enterprise model policy is empty"
+      };
+    }
+    await apiJson({
+      path: "/config",
+      method: "POST",
+      body: { updates: payload.settings }
+    });
+    return {
+      configured: true,
+      changed: true,
+      restarted: false,
+      message: "enterprise model policy refreshed",
+      model: payload.model,
+      provider: payload.provider,
+      updatedAt: payload.updatedAt
+    };
+  }
+
+  async function refreshModelPolicy() {
+    var payload = await clientJson("/model-config", "GET", undefined, true);
+    if (!payload) {
+      return {
+        configured: false,
+        changed: false,
+        restarted: false,
+        message: "enterprise login required"
+      };
+    }
+    return applyModelPolicy(payload);
+  }
+
+  async function localModelReady() {
+    try {
+      var overview = await apiJson({ path: "/api/models", method: "GET" });
+      var providers = Array.isArray(overview.providers) ? overview.providers : [];
+      var configured = providers.some(function (provider) { return provider && provider.configured; });
+      var chat = overview.capabilities && overview.capabilities.chat ? overview.capabilities.chat : {};
+      return Boolean(configured && (chat.current_provider || chat.current_model));
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async function ensureModelReady() {
+    if (await localModelReady()) {
+      return { ready: true };
+    }
+    try {
+      var result = await refreshModelPolicy();
+      if (result && result.configured && await localModelReady()) {
+        return { ready: true };
+      }
+    } catch (error) {
+      return {
+        ready: false,
+        message: "企业模型配置同步失败，请先登录企业账号或联系管理员检查后台模型配置。"
+      };
+    }
+    return {
+      ready: false,
+      message: "当前网页版没有可用模型配置。请先登录企业账号，或在设置 > 模型中配置可用的 API Key。"
+    };
+  }
+
   window.ecorexDesktop = {
-    platform: "web",
+    platform: desktopPlatform,
     apiJson: apiJson,
     getSidecarStatus: async function () { return status; },
     onSidecarStatus: function (callback) {
@@ -303,13 +440,21 @@ def _web_app_bridge_script() -> str:
       try { await clientJson("/events", "POST", event || {}, true); } catch (error) {}
     },
     getEnterpriseSession: async function () {
+      var admin = readAdminSession();
+      if (admin && admin.user && admin.token) return admin;
       var auth = await apiJson({ path: "/auth/check", method: "GET" });
       if (auth.auth_required && !auth.authenticated) return null;
-      return webSession(auth.auth_required);
+      try {
+        await clientJson("/model-config", "GET", undefined, false);
+      } catch (error) {
+        if (isMissingClientBridge(error)) return webSession(Boolean(auth.auth_required), true);
+      }
+      return null;
     },
     enterpriseLogin: async function (input) {
       input = input || {};
       var adminPayload = null;
+      var adminError = null;
       try {
         adminPayload = await clientJson("/auth/login", "POST", {
           email: input.email,
@@ -317,7 +462,9 @@ def _web_app_bridge_script() -> str:
           deviceId: deviceId(),
           appVersion: "0.1.12-web.1"
         }, false);
-      } catch (error) {}
+      } catch (error) {
+        adminError = error;
+      }
       if (adminPayload && adminPayload.token && adminPayload.user) {
         var adminSession = {
           authenticated: true,
@@ -329,13 +476,18 @@ def _web_app_bridge_script() -> str:
         };
         writeAdminSession(adminSession);
         try { await apiJson({ path: "/auth/login", method: "POST", body: { password: input.password } }); } catch (error) {}
+        try { await refreshModelPolicy(); } catch (error) {}
         return adminSession;
       }
+      if (adminError && !isMissingClientBridge(adminError)) {
+        throw adminError;
+      }
       await apiJson({ path: "/auth/login", method: "POST", body: { password: input.password } });
-      return webSession(true);
+      return webSession(true, true, { email: input.email }, true);
     },
     enterpriseLogout: async function () {
       writeAdminSession(null);
+      writeLocalSession(null);
       return apiJson({ path: "/auth/logout", method: "POST", body: {} });
     },
     enterpriseChangePassword: async function (input) {
@@ -348,7 +500,7 @@ def _web_app_bridge_script() -> str:
       } catch (error) {}
       return { ok: true, quota: { allowed: true } };
     },
-    refreshEnterprisePolicy: async function () { return { restarted: false }; }
+    refreshEnterprisePolicy: refreshModelPolicy
   };
 })();
 </script>
@@ -400,7 +552,7 @@ def _default_web_app_html() -> str:
       <h1>EcoreX Web App</h1>
       <p>The parallel Web entry is active. Drop a built app into channel/web/static/app to replace this shell; backend APIs are shared with the existing WebUI.</p>
       <nav>
-        <a href="../chat">Open classic chat</a>
+        <a href="../app/">Open EcoreX</a>
         <a class="secondary" href="../api/installations">Installations API</a>
         <a class="secondary" href="../api/ui-state">UI state API</a>
       </nav>
@@ -1621,6 +1773,8 @@ class WebChannel(ChatChannel):
             '/stream', 'StreamHandler',
             '/cancel', 'CancelHandler',
             '/api/tool-permissions', 'ToolPermissionHandler',
+            '/client', 'ClientProxyHandler',
+            '/client/(.*)', 'ClientProxyHandler',
             '/chat', 'ChatHandler',
             '/config', 'ConfigHandler',
             '/api/models', 'ModelsHandler',
@@ -1693,7 +1847,7 @@ class WebChannel(ChatChannel):
 
 class RootHandler:
     def GET(self):
-        raise web.seeother('/chat')
+        return _serve_web_app_asset("")
 
 
 def _serve_web_app_asset(file_path: str = ""):
@@ -2003,17 +2157,118 @@ class StreamHandler:
 
 class ChatHandler:
     def GET(self):
-        web.header('Cache-Control', 'no-cache, no-store, must-revalidate')
-        web.header('Pragma', 'no-cache')
-        file_path = os.path.join(os.path.dirname(__file__), 'chat.html')
-        with open(file_path, 'r', encoding='utf-8') as f:
-            html = f.read()
-        cache_bust = str(int(time.time()))
-        html = html.replace('assets/js/console.js', f'assets/js/console.js?v={cache_bust}')
-        html = html.replace('assets/css/console.css', f'assets/css/console.css?v={cache_bust}')
-        # Inject the backend-resolved default language for first-load fallback.
-        html = html.replace("{{COW_DEFAULT_LANG}}", i18n.get_language())
-        return html
+        return _serve_web_app_asset("")
+
+
+class ClientProxyHandler:
+    """Proxy WebUI enterprise-client requests to the Admin API.
+
+    Local one-click WebUI runs from 127.0.0.1, so browser-side cross-origin
+    requests to the public admin host would be blocked by CORS. Keeping the
+    proxy inside the local runtime also lets the same React bridge work for
+    public deployments and local installs.
+    """
+
+    DEFAULT_CLIENT_BASE = "https://www.ecoreai.cn/ecorex-agent/client"
+    FORWARD_HEADERS = {
+        "accept",
+        "authorization",
+        "content-type",
+        "x-ecorex-client-key",
+        "x-ecorex-device-id",
+        "x-ecorex-user-email",
+        "x-ecorex-user-token",
+        "x-ecorex-org-id",
+    }
+
+    def _client_base(self) -> str:
+        configured = (
+            os.environ.get("ECOREX_WEB_CLIENT_BASE")
+            or conf().get("web_client_base")
+            or conf().get("admin_client_base")
+            or self.DEFAULT_CLIENT_BASE
+        )
+        return str(configured).strip().rstrip("/")
+
+    def _target_url(self, path: str = "") -> str:
+        clean_path = (path or "").strip("/")
+        target = self._client_base()
+        if clean_path:
+            target = f"{target}/{clean_path}"
+        query = web.ctx.env.get("QUERY_STRING", "")
+        if query:
+            target = f"{target}?{query}"
+        return target
+
+    def _forward_headers(self) -> dict:
+        headers = {"User-Agent": "EcoreX-WebUI/0.1.12"}
+        for key, value in web.ctx.env.items():
+            if key == "CONTENT_TYPE":
+                name = "Content-Type"
+            elif key == "HTTP_ACCEPT":
+                name = "Accept"
+            elif key.startswith("HTTP_"):
+                name = key[5:].replace("_", "-").title()
+            else:
+                continue
+            if name.lower() in self.FORWARD_HEADERS and value:
+                headers[name] = value
+        return headers
+
+    @staticmethod
+    def _json_response(status: int, payload: dict) -> str:
+        web.ctx.status = f"{status} {'OK' if status < 400 else 'Error'}"
+        web.header("Content-Type", "application/json; charset=utf-8")
+        web.header("Cache-Control", "no-store")
+        return json.dumps(payload, ensure_ascii=False)
+
+    def _proxy(self, path: str = ""):
+        method = web.ctx.method.upper()
+        body = web.data() if method not in ("GET", "HEAD") else None
+        request = urllib.request.Request(
+            self._target_url(path),
+            data=body,
+            headers=self._forward_headers(),
+            method=method,
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=25) as response:
+                raw = response.read()
+                web.ctx.status = f"{response.status} {response.reason}"
+                web.header("Content-Type", response.headers.get("Content-Type", "application/json; charset=utf-8"))
+                web.header("Cache-Control", "no-store")
+                return raw
+        except urllib.error.HTTPError as exc:
+            raw = exc.read()
+            web.ctx.status = f"{exc.code} {exc.reason}"
+            web.header("Content-Type", exc.headers.get("Content-Type", "application/json; charset=utf-8"))
+            web.header("Cache-Control", "no-store")
+            return raw
+        except Exception as exc:
+            logger.warning(f"[WebChannel] Admin client proxy failed: {exc}")
+            return self._json_response(502, {
+                "ok": False,
+                "error": "admin client proxy failed",
+                "detail": str(exc),
+            })
+
+    def GET(self, path: str = ""):
+        return self._proxy(path)
+
+    def POST(self, path: str = ""):
+        return self._proxy(path)
+
+    def PATCH(self, path: str = ""):
+        return self._proxy(path)
+
+    def DELETE(self, path: str = ""):
+        return self._proxy(path)
+
+    def OPTIONS(self, path: str = ""):
+        web.ctx.status = "204 No Content"
+        web.header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-EcoreX-Client-Key, X-EcoreX-User-Token, X-EcoreX-Device-Id")
+        web.header("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
+        return ""
 
 
 class ConfigHandler:
