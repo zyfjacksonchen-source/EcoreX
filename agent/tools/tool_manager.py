@@ -250,7 +250,7 @@ class ToolManager:
                             f"[ToolManager] Browser tool is configured but not loaded.\n"
                             f"  To enable browser tool, run:\n"
                             f"    pip install playwright\n"
-                            f"    playwright install chromium"
+                            f"  Only run `playwright install chromium` when CDP fallback is required."
                         )
                     elif tool_name == "google_search":
                         logger.warning(

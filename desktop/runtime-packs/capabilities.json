@@ -25,7 +25,7 @@
     {
       "id": "browser-automation",
       "name": "浏览器自动化",
-      "summary": "用于网页操作、复杂网页抓取和浏览器型工具。",
+      "summary": "补齐 Playwright 自带 Chromium；默认 CDP 控制 Chrome/Edge 已随核心运行时提供。",
       "installMode": "admin-recommended",
       "estimatedSizeMb": 180,
       "requirements": ["playwright"],

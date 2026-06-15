@@ -4,6 +4,7 @@ Bash tool - Execute bash commands
 
 import os
 import re
+import signal
 import sys
 import subprocess
 import tempfile
@@ -55,6 +56,65 @@ SAFETY:
         self.default_timeout = self.config.get("timeout", 30)
         # Enable safety mode by default (can be disabled in config)
         self.safety_mode = self.config.get("safety_mode", True)
+
+    def _kill_process_tree(self, process: subprocess.Popen):
+        if process.poll() is not None:
+            return
+        if self._IS_WIN:
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                )
+                return
+            except Exception as e:
+                logger.debug(f"[Bash] taskkill failed for pid {process.pid}: {e}")
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+                return
+            except Exception as e:
+                logger.debug(f"[Bash] killpg failed for pid {process.pid}: {e}")
+        try:
+            process.kill()
+        except Exception:
+            pass
+
+    def _run_command(self, command, timeout: int, env: dict, shell: bool = True):
+        kwargs = {
+            "shell": shell,
+            "cwd": self.cwd,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
+            "env": env,
+        }
+        if self._IS_WIN:
+            kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        else:
+            kwargs["start_new_session"] = True
+
+        process = subprocess.Popen(command, **kwargs)
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            self._kill_process_tree(process)
+            try:
+                stdout, stderr = process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+                stdout, stderr = process.communicate()
+            exc.output = stdout
+            exc.stderr = stderr
+            raise exc
+        return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
     def execute(self, args: Dict[str, Any]) -> ToolResult:
         """
@@ -113,18 +173,7 @@ SAFETY:
                 if command and not command.strip().lower().startswith("chcp"):
                     command = f"chcp 65001 >nul 2>&1 && {command}"
 
-            result = subprocess.run(
-                command,
-                shell=True,
-                cwd=self.cwd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=timeout,
-                env=env,
-            )
+            result = self._run_command(command, timeout, env, shell=True)
             
             logger.debug(f"[Bash] Exit code: {result.returncode}")
             logger.debug(f"[Bash] Stdout length: {len(result.stdout)}")
@@ -139,16 +188,11 @@ SAFETY:
                     parts = shlex.split(command)
                     if len(parts) > 0:
                         logger.info(f"[Bash] Retrying with argument list: {parts[:3]}...")
-                        retry_result = subprocess.run(
+                        retry_result = self._run_command(
                             parts,
-                            cwd=self.cwd,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,
-                            text=True,
-                            encoding="utf-8",
-                            errors="replace",
                             timeout=timeout,
-                            env=env
+                            env=env,
+                            shell=False,
                         )
                         logger.debug(f"[Bash] Retry exit code: {retry_result.returncode}, stdout: {len(retry_result.stdout)}, stderr: {len(retry_result.stderr)}")
                         

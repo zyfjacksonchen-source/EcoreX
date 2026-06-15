@@ -46,19 +46,19 @@ interface Window {
       policyUpdatedAt?: string;
     }>;
     getPermissionState: () => Promise<{
-      mode: "smart-ask" | "always-ask" | "read-only" | "custom";
+      mode: "full-access" | "smart-ask" | "always-ask" | "read-only" | "custom";
       grantsCount: number;
       auditPath: string;
       updatedAt?: string;
     }>;
-    setPermissionMode: (mode: "smart-ask" | "always-ask" | "read-only" | "custom") => Promise<{
-      mode: "smart-ask" | "always-ask" | "read-only" | "custom";
+    setPermissionMode: (mode: "full-access" | "smart-ask" | "always-ask" | "read-only" | "custom") => Promise<{
+      mode: "full-access" | "smart-ask" | "always-ask" | "read-only" | "custom";
       grantsCount: number;
       auditPath: string;
       updatedAt?: string;
     }>;
     resetPermissionGrants: () => Promise<{
-      mode: "smart-ask" | "always-ask" | "read-only" | "custom";
+      mode: "full-access" | "smart-ask" | "always-ask" | "read-only" | "custom";
       grantsCount: number;
       auditPath: string;
       updatedAt?: string;

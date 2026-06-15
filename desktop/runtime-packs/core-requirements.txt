@@ -8,6 +8,7 @@ croniter>=2.0.0
 click>=8.0
 qrcode
 json-repair
+playwright
 web.py; python_version < "3.13"
 web.py @ git+https://github.com/webpy/webpy.git ; python_version >= "3.13"
 legacy-cgi; python_version >= "3.13"

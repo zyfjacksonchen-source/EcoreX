@@ -5,6 +5,8 @@ import json
 import logging
 import os
 import pickle
+import shutil
+import sqlite3
 
 from common.log import logger
 from common import i18n
@@ -361,6 +363,161 @@ def drag_sensitive(config):
     return config
 
 
+def _ensure_ecorex_runtime_defaults(cfg: dict):
+    """Fill runtime defaults that are required even when config.json is minimal."""
+    if not isinstance(cfg, dict):
+        return
+
+    tools = cfg.get("tools")
+    if not isinstance(tools, dict):
+        tools = {}
+        cfg["tools"] = tools
+
+    browser = tools.get("browser")
+    if not isinstance(browser, dict):
+        browser = {}
+        tools["browser"] = browser
+
+    browser_defaults = {
+        "cdp_endpoint": "http://127.0.0.1:9222",
+        "cdp_auto_launch": True,
+        "cdp_fallback": True,
+        "persistent": True,
+    }
+    for key, value in browser_defaults.items():
+        if browser.get(key) in (None, ""):
+            browser[key] = value
+
+    mcp_servers = cfg.get("mcp_servers")
+    if not isinstance(mcp_servers, list):
+        mcp_servers = []
+        cfg["mcp_servers"] = mcp_servers
+    has_chrome_devtools = any(
+        isinstance(server, dict)
+        and (
+            server.get("name") == "chrome-devtools"
+            or "chrome-devtools-mcp" in str(server.get("command") or "")
+        )
+        for server in mcp_servers
+    )
+    if not has_chrome_devtools:
+        command = "npx.cmd" if os.name == "nt" else "npx"
+        mcp_servers.append({
+            "name": "chrome-devtools",
+            "type": "stdio",
+            "command": command,
+            "args": ["chrome-devtools-mcp@latest", "--autoConnect"],
+            "timeout": 30,
+        })
+
+
+def _sync_memory_workspace(cfg: dict):
+    """Keep the memory/conversation store workspace aligned with config."""
+    try:
+        from agent.memory.config import MemoryConfig, set_global_memory_config
+        from common.utils import expand_path
+
+        workspace = expand_path(cfg.get("agent_workspace", "~/cow"))
+        _copy_missing_legacy_workspace_data(workspace, expand_path("~/cow"))
+        set_global_memory_config(MemoryConfig(workspace_root=workspace))
+    except Exception as e:
+        logger.debug(f"[INIT] memory workspace sync skipped: {e}")
+
+
+def _copy_missing_legacy_workspace_data(workspace: str, legacy_workspace: str):
+    """Migrate default legacy workspace data without overwriting new files."""
+    try:
+        target = os.path.realpath(os.path.abspath(workspace))
+        legacy = os.path.realpath(os.path.abspath(legacy_workspace))
+        if not target or target == legacy or not os.path.exists(legacy):
+            return
+
+        os.makedirs(target, exist_ok=True)
+        for name in ("memory", "skills", "knowledge", "scheduler", "websites"):
+            src = os.path.join(legacy, name)
+            dst = os.path.join(target, name)
+            if os.path.isdir(src) and not os.path.exists(dst):
+                shutil.copytree(src, dst)
+
+        for name in ("MEMORY.md", "RULE.md", "USER.md", "AGENT.md"):
+            src = os.path.join(legacy, name)
+            dst = os.path.join(target, name)
+            if os.path.isfile(src) and not os.path.exists(dst):
+                shutil.copy2(src, dst)
+
+        legacy_db = os.path.join(legacy, "memory", "long-term", "index.db")
+        target_db = os.path.join(target, "memory", "long-term", "index.db")
+        if os.path.isfile(legacy_db) and not os.path.exists(target_db):
+            os.makedirs(os.path.dirname(target_db), exist_ok=True)
+            for suffix in ("", "-wal", "-shm"):
+                src = legacy_db + suffix
+                dst = target_db + suffix
+                if os.path.isfile(src) and not os.path.exists(dst):
+                    shutil.copy2(src, dst)
+        elif os.path.isfile(legacy_db) and os.path.isfile(target_db):
+            _merge_legacy_conversations(target_db, legacy_db)
+    except Exception as e:
+        logger.debug(f"[INIT] legacy workspace migration skipped: {e}")
+
+
+def _merge_legacy_conversations(target_db: str, legacy_db: str):
+    """Copy missing legacy conversation rows into the new workspace DB."""
+    if os.path.realpath(os.path.abspath(target_db)) == os.path.realpath(os.path.abspath(legacy_db)):
+        return
+    conn = None
+    attached = False
+    try:
+        conn = sqlite3.connect(target_db, timeout=5)
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("ATTACH DATABASE ? AS legacy", (legacy_db,))
+        attached = True
+        with conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO sessions
+                    (session_id, channel_type, title, context_start_seq, created_at, last_active, msg_count)
+                SELECT session_id, channel_type, title, context_start_seq, created_at, last_active, msg_count
+                FROM legacy.sessions
+                """
+            )
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO messages
+                    (session_id, seq, role, content, created_at, extras)
+                SELECT session_id, seq, role, content, created_at, extras
+                FROM legacy.messages
+                """
+            )
+            conn.execute(
+                """
+                UPDATE sessions
+                SET
+                    msg_count = (
+                        SELECT COUNT(*) FROM messages
+                        WHERE messages.session_id = sessions.session_id
+                    ),
+                    last_active = MAX(
+                        last_active,
+                        COALESCE((
+                            SELECT MAX(created_at) FROM messages
+                            WHERE messages.session_id = sessions.session_id
+                        ), last_active)
+                    )
+                WHERE session_id IN (SELECT session_id FROM legacy.sessions)
+                """
+            )
+    except sqlite3.Error as e:
+        logger.debug(f"[INIT] legacy conversation merge skipped: {e}")
+    finally:
+        if conn is not None:
+            try:
+                if attached:
+                    conn.execute("DETACH DATABASE legacy")
+            except sqlite3.Error:
+                pass
+            conn.close()
+
+
 def load_config():
     global config
 
@@ -392,6 +549,7 @@ def load_config():
     # only missing namespaces are filled in from the legacy section.
     _merge_legacy_namespace(config, legacy="tool",  canonical="tools")
     _merge_legacy_namespace(config, legacy="skill", canonical="skills")
+    _ensure_ecorex_runtime_defaults(config)
 
     # override config with environment variables.
     # Some online deployment platforms (e.g. Railway) deploy project from github directly. So you shouldn't put your secrets like api key in a config file, instead use environment variables to override the default config.
@@ -415,6 +573,8 @@ def load_config():
     if config.get("debug", False):
         logger.setLevel(logging.DEBUG)
         logger.debug("[INIT] set log level to DEBUG")
+
+    _sync_memory_workspace(config)
 
     # Resolve the global UI language as early as possible so that every
     # downstream layer (logs, CLI, agent prompts, channel replies) shares it.

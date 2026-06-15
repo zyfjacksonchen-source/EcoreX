@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, type IpcMainInvokeEvent, type MessageBoxOpt
 import fsp from "node:fs/promises";
 import path from "node:path";
 
-export type PermissionMode = "smart-ask" | "always-ask" | "read-only" | "custom";
+export type PermissionMode = "full-access" | "smart-ask" | "always-ask" | "read-only" | "custom";
 
 export type PermissionState = {
   mode: PermissionMode;
@@ -23,7 +23,7 @@ type PermissionDecision = {
   remember?: boolean;
 };
 
-const allowedModes = new Set<PermissionMode>(["smart-ask", "always-ask", "read-only", "custom"]);
+const allowedModes = new Set<PermissionMode>(["full-access", "smart-ask", "always-ask", "read-only", "custom"]);
 const dangerousExtensions = new Set([
   ".app",
   ".bat",
@@ -56,6 +56,7 @@ function isInside(parent: string, child: string) {
 function defaultOpenRoots() {
   const roots = [
     app.getPath("userData"),
+    path.join(app.getPath("home"), "EcoreX"),
     path.join(app.getPath("home"), "cow"),
     path.join(app.getPath("home"), ".cow"),
     path.join(app.getPath("appData"), "ecorex-agent"),
@@ -135,6 +136,16 @@ export class PermissionManager {
     if (!path.isAbsolute(filePath)) {
       await this.writeAudit("open-local-path", "deny", { reason: "relative-path" });
       return { allowed: false, reason: "EcoreX only opens absolute local paths." };
+    }
+
+    if (settings.mode === "full-access") {
+      await this.writeAudit("open-local-path", "allow", {
+        mode: settings.mode,
+        pathClass,
+        target,
+        reason: "full-access"
+      });
+      return { allowed: true, reason: "full-access" };
     }
 
     if (settings.mode === "read-only" && pathClass === "dangerous") {

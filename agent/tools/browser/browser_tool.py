@@ -1,17 +1,17 @@
 """
 Browser tool - Control a Chromium browser for web navigation and interaction.
 
-Uses Playwright under the hood. Browser instance is lazily started on first
+Uses Playwright as the CDP client. Browser instance is lazily started on first
 use, reused across tool calls within the same session, and cleaned up via
 close().
 
 Launch modes (configured under `tools.browser` in config.json):
-  - persistent (default): Chromium runs with a persistent user_data_dir
+  - cdp (default for EcoreX): attach to or auto-launch Chrome/Edge through
+    the Chrome DevTools Protocol. This is the first priority so real browser
+    behavior is used before Playwright-managed Chromium fallback.
+  - persistent: Chromium runs with a persistent user_data_dir
     (default `~/.cow/browser_profile`), so cookies and login state survive
     across runs. The user only needs to log in once.
-  - cdp: When `cdp_endpoint` is set, attach to an externally launched Chrome
-    via the Chrome DevTools Protocol. Lets the agent reuse the user's real
-    browser (with all logins / extensions / true fingerprints).
   - fresh: Set `persistent` to false to fall back to a clean context every run.
 """
 
@@ -30,6 +30,8 @@ class BrowserTool(BaseTool):
     name: str = "browser"
     description: str = (
         "Control a browser to navigate web pages, interact with elements, and extract content. "
+        "EcoreX uses CDP first: it attaches to or auto-launches the user's Chrome/Edge at "
+        "http://127.0.0.1:9222, then falls back to a Playwright-managed browser if configured. "
         "Actions: navigate, snapshot, click, fill, select, scroll, screenshot, wait, back, forward, "
         "get_text, press, evaluate.\n\n"
         "Workflow: navigate (auto-includes snapshot with element refs) → click/fill/select by ref → snapshot to verify.\n\n"

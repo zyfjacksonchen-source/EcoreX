@@ -273,6 +273,23 @@ $config = [ordered]@{
     appdata_dir = (Join-Path $stateDir "appdata")
     use_linkai = $false
     debug = $false
+    tools = [ordered]@{
+        browser = [ordered]@{
+            cdp_endpoint = "http://127.0.0.1:9222"
+            cdp_auto_launch = $true
+            cdp_fallback = $true
+            persistent = $true
+        }
+    }
+    mcp_servers = @(
+        [ordered]@{
+            name = "chrome-devtools"
+            type = "stdio"
+            command = "npx.cmd"
+            args = @("chrome-devtools-mcp@latest", "--autoConnect")
+            timeout = 30
+        }
+    )
 }
 $configJson = $config | ConvertTo-Json -Depth 8
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
@@ -447,6 +464,23 @@ payload = {
     "appdata_dir": str(state / "appdata"),
     "use_linkai": False,
     "debug": False,
+    "tools": {
+        "browser": {
+            "cdp_endpoint": "http://127.0.0.1:9222",
+            "cdp_auto_launch": True,
+            "cdp_fallback": True,
+            "persistent": True,
+        }
+    },
+    "mcp_servers": [
+        {
+            "name": "chrome-devtools",
+            "type": "stdio",
+            "command": "npx",
+            "args": ["chrome-devtools-mcp@latest", "--autoConnect"],
+            "timeout": 30,
+        }
+    ],
 }
 config_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 PY

@@ -101,7 +101,7 @@ def _import_browser_tool():
             f"[Tools] BrowserTool not loaded - missing dependency: {e}\n"
             f"  To enable browser tool, run:\n"
             f"    pip install playwright\n"
-            f"    playwright install chromium"
+            f"  Only run `playwright install chromium` when CDP fallback is required."
         )
         return None
     except Exception as e:

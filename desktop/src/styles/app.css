@@ -5,6 +5,9 @@
 :root {
   --titlebar-height: env(titlebar-area-height, 0px);
   --window-brand-left: 0px;
+  --scrollbar-track: color-mix(in srgb, var(--color-bg) 92%, var(--color-border));
+  --scrollbar-thumb: color-mix(in srgb, var(--color-muted) 58%, var(--color-surface));
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--color-muted) 76%, var(--color-text));
 }
 
 html[data-platform="darwin"] {
@@ -37,6 +40,42 @@ body {
   background: var(--color-bg);
   font-family: var(--font-sans);
   letter-spacing: 0;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+*::-webkit-scrollbar-button {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+*::-webkit-scrollbar-thumb {
+  min-height: 42px;
+  border: 3px solid var(--scrollbar-track);
+  border-radius: 999px;
+  background: var(--scrollbar-thumb);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+*::-webkit-scrollbar-corner {
+  background: var(--scrollbar-track);
 }
 
 body::before {
@@ -867,8 +906,9 @@ html[data-platform="web"] .window-brand {
 }
 
 .message-body {
+  position: relative;
   max-width: min(720px, 84%);
-  padding: 10px 12px;
+  padding: 10px 42px 10px 12px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-surface);
@@ -877,6 +917,35 @@ html[data-platform="web"] .window-brand {
 .message.user .message-body {
   border-color: color-mix(in srgb, var(--color-brand) 42%, var(--color-border));
   background: var(--color-brand-soft);
+}
+
+.message-copy-button {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 26px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-muted);
+  opacity: 1;
+  transition: opacity 0.16s ease, color 0.16s ease, background 0.16s ease, border-color 0.16s ease;
+}
+
+.message-copy-button svg {
+  width: 15px;
+  height: 15px;
+}
+
+.message-copy-button:hover,
+.message-copy-button:focus-visible {
+  opacity: 1;
+  color: var(--color-text);
+  border-color: var(--color-border);
+  background: var(--color-surface-raised);
 }
 
 .message-body p {
@@ -1203,7 +1272,6 @@ html[data-platform="web"] .window-brand {
   display: grid;
   gap: 8px;
   padding: 8px min(7vw, 72px) 12px;
-  border-top: 1px solid var(--color-border);
   background: var(--color-bg);
 }
 
@@ -1401,16 +1469,147 @@ html[data-platform="web"] .window-brand {
   padding: 0 11px;
 }
 
-.composer-metrics {
+.composer-footer {
   grid-column: 2 / -1;
-  justify-self: end;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 0 6px 1px 2px;
+}
+
+.composer-metrics {
   width: fit-content;
   max-width: 100%;
   display: inline-flex;
   gap: 10px;
   align-items: center;
   min-width: 0;
-  padding: 0 6px 1px 2px;
+  margin-left: auto;
+}
+
+.composer-permission-row {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  flex: 0 0 auto;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.composer-permission-menu {
+  position: relative;
+}
+
+.composer-permission-trigger {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  color: var(--color-muted);
+  background: transparent;
+}
+
+.composer-permission-trigger:hover,
+.composer-permission-trigger:focus-visible,
+.composer-permission-trigger[aria-expanded="true"] {
+  color: var(--color-text);
+  border-color: color-mix(in srgb, var(--color-brand) 62%, var(--color-border));
+  background: color-mix(in srgb, var(--color-brand) 12%, transparent);
+  outline: 0;
+}
+
+.composer-permission-row svg,
+.composer-permission-trigger svg,
+.composer-permission-popover svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.composer-permission-popover {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 25;
+  width: min(390px, calc(100vw - 44px));
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-popover);
+}
+
+.composer-permission-help {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 4px 6px 6px;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.composer-permission-help button {
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: var(--color-muted);
+  background: transparent;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.composer-permission-popover > button {
+  width: 100%;
+  min-height: 54px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  background: transparent;
+  text-align: left;
+}
+
+.composer-permission-popover > button:hover,
+.composer-permission-popover > button:focus-visible,
+.composer-permission-popover > button.is-active {
+  color: var(--color-text);
+  border-color: color-mix(in srgb, var(--color-brand) 62%, var(--color-border));
+  background: color-mix(in srgb, var(--color-brand) 16%, transparent);
+  outline: 0;
+}
+
+.composer-permission-popover > button > span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.composer-permission-popover strong,
+.composer-permission-popover small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-permission-popover small {
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .composer-token-meters {

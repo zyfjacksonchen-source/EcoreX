@@ -17,6 +17,7 @@ const capabilities = new CapabilityManager(runtimeRoot, __dirname);
 const telemetry = new TelemetryReporter(runtimeRoot);
 const permissions = new PermissionManager();
 const enterpriseAuth = new EnterpriseAuthManager(runtimeRoot);
+nativeTheme.themeSource = "dark";
 
 const imageExtensions = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"]);
 const videoExtensions = new Set([".mp4", ".webm", ".avi", ".mov", ".mkv"]);
@@ -61,11 +62,11 @@ function createMainWindow() {
     title: "EcoreX",
     autoHideMenuBar: process.platform !== "darwin",
     show: false,
-    backgroundColor: "#fff9f2",
+    backgroundColor: "#17110d",
     ...(process.platform === "win32"
       ? {
           titleBarStyle: "hidden" as const,
-          titleBarOverlay: { color: "#fff9f2", symbolColor: "#1d140e", height: 32 }
+          titleBarOverlay: { color: "#17110d", symbolColor: "#f8efe7", height: 32 }
         }
       : process.platform === "darwin"
         ? {

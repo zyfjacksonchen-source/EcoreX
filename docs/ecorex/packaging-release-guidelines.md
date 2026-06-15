@@ -15,11 +15,43 @@
 ## WebUI 必查项
 
 - `/app/` 是新桌面同款 WebUI 入口，`/chat` 和 `/` 必须兼容返回同一套新 Web App，不能再读旧 `chat.html`。旧入口仍会被用户书签、快捷方式和浏览器历史命中。
+- 每次改 `desktop/src/**` 后必须重新执行桌面渲染端构建，并把 `desktop/dist` 同步到 `channel/web/static/app`。否则用户安装 WebUI 后仍会打开旧页面。
 - WebUI 浏览器桥接层必须在 `POST /message` 前检查模型配置：本地没有可用模型时应提示用户登录企业账号或配置模型，不能继续让 runtime 用空 API Key 请求 OpenAI。
 - WebUI 必须通过本地 `/client/*` 代理连接管理员后台，默认目标为 `https://www.ecoreai.cn/ecorex-agent/client`。不要让浏览器直接跨域请求后台，否则会遇到 CORS 和部署域名差异问题。
 - 本地 fallback 登录只能用于无后台代理的离线本地场景。接入管理员后台后，登录失败必须显示失败，不能静默退回 `ecorex@ecorex.local` 或 `local@ecorex.local` 占位账号。
 - 退出登录必须同时清理企业 session 和本地 fallback session；否则用户退出再登录新账号后，设置页可能仍显示旧账号。
 - 刷新后若没有有效用户 token，页面应回到企业登录表单；`/client/model-config` 返回 `401 missing user token` 是正确未登录状态。
+- 会话列表摘要不要展示 `N 条` 这类消息数量；它会让卡住的旧 pending 会话看起来仍在运行。旧缓存里的 pending 消息必须有过期归一化逻辑。
+- 新安装默认必须是暗色模式。`desktop/index.html`、Electron 初始窗口背景、WebUI 注入的桌面桥和构建后的 `channel/web/static/app/index.html` 都要一起检查，不能只改 React state。
+- 暗色模式正文主字体必须保持接近白色的高对比度；不要把主要消息文字降成 muted 灰。
+- 聊天框下方必须保留本机访问权限选择，但 UI 形态必须是 Codex 同款的单个向上展开菜单；权限图标、当前权限和 token/上下文用量必须在同一水平 footer 内，不要回退成三枚横排按钮。
+- 聊天输入区上方不要再加横向分隔线。`composer-zone` 只保留背景和内边距，WebUI 与桌面端都不能恢复 `border-top`。
+- 切换会话、刷新页面或短暂断开 SSE 时，运行中任务必须继续跑；前端要保留 `request_id` 并用同一个 `/stream?request_id=...` 重连。只有用户点停止，或同一会话发送新消息进行插队时，才允许调用 `/cancel` 中断旧任务。
+- 如果整个本地运行时已经退出导致旧 `request_id` 失效，再次进入时必须把旧 pending 气泡归一成“已暂停，输入新消息后继续”，不能残留“思考中”或直接暴露 `invalid request_id`。
+- 上下文窗口估算必须包含工具输入/输出、推理/阶段内容、文件和图片引用；不要只对用户/助手纯文本长度做粗略估算。
+- WebUI 与桌面端必须共用消息渲染能力：Markdown 富文本、工具折叠、文件链接、图片预览都要一致。Markdown 内的本地 `file://`、Windows 盘符路径和 macOS 绝对路径必须转换到 `/api/file?path=...`，不能让浏览器直接打开本地文件路径。
+- WebUI 同一会话运行中再次发送时，应按桌面端行为先中断当前 request，再等待 session lock 释放并提交新消息；不要直接把 `session_busy` 暴露给用户。
+- WebUI 和桌面端聊天气泡都必须保留一键复制文本入口，复制按钮用图标和 tooltip，不要只依赖用户手动选中文本。
+- 桌面端和 WebUI 同机同时运行时必须使用不同端口、同一默认 workspace。桌面端默认 workspace 不应回退到 `~/cow`；EcoreX 默认统一为 `~/EcoreX`，否则安装登记、会话锁和文件查看会出现端间不一致。
+- 运行时安装登记 surface 必须区分 `desktop` 和 `webui`；不要让桌面端 sidecar 把自己登记成 `webui` 覆盖本地 WebUI 的记录。
+- 暗色/亮色模式的滚动条必须跟随主题变量；不要保留浏览器默认浅色滚动条或上下箭头。
+
+## 浏览器控制和 CDP
+
+- CDP 是 EcoreX 的第一优先级浏览器控制方式，默认端点为 `http://127.0.0.1:9222`，应优先连接或自动拉起 Chrome/Edge，再按配置回退到 Playwright 托管 Chromium。
+- 安装版 WebUI 的 `config.json` 可能是极简配置。`config.py` 必须在加载配置后补齐 `tools.browser` 和 `chrome-devtools` MCP 默认值，不能只依赖 `config-template.json`。
+- WebUI/桌面端的本地发布脚本生成 `config.json` 时也要写入相同 CDP 默认值，避免首次启动时行为和源码默认不一致。
+- Python `playwright` 包是 CDP 客户端依赖，必须进入 core runtime requirements。`playwright install chromium` 只属于 Chromium fallback 能力包，不要在基础 WebUI 安装里强制下载浏览器内核。
+- `chrome-devtools-mcp@latest --autoConnect` 作为 MCP 补充能力注册；Windows 命令使用 `npx.cmd`，macOS/Linux 使用 `npx`。
+
+## Runtime 任务卡死排查
+
+- WebUI 出现“思考中”时先看 `%LOCALAPPDATA%\EcoreX WebUI\state\ecorex-webui.log`，区分前端缓存状态、后端真实执行中、工具超时未释放三类问题。
+- Windows 下 `subprocess.run(shell=True, timeout=...)` 可能只超时外层 `cmd.exe`，子 PowerShell 仍继续运行并持有 stdout/stderr pipe。Shell 工具必须用可杀进程组启动，并在超时时 `taskkill /PID <pid> /T /F`。
+- 打包前必须验证一个超时 shell 命令能在接近设定超时时间返回，并且没有残留子 `powershell.exe` 继续扫描磁盘或占用 CPU。
+- 工具流事件必须携带并优先使用 `tool_call_id`。如果只按 `bash`/`browser` 名称匹配，多次同名调用会把结束事件写到错误卡片，导致某个工具行永久 running。
+- SSE 断开不等于任务终止。后端 `stream_response` 必须保留未完成请求的队列和 `request_to_session` 映射，前端缓存必须带 `requestId` 以便重连；只有 terminal event、显式 cancel、或运行时彻底退出后，才把本地 pending 收敛到 `done/cancelled/error/paused`。
+- 权限等待不是普通卡顿。`tool_permission_request` 必须能被 UI 看见，`full-access` 必须能让本机 shell/browser 工具直接通过，`read-only` 必须仍然挡住危险执行。
 
 ## 管理员后台与 Client Key
 
@@ -126,6 +158,11 @@ Invoke-WebRequest -UseBasicParsing `
 
 - 打开 `http://127.0.0.1:<port>/app/`，显示桌面同款 WebUI。
 - 打开 `http://127.0.0.1:<port>/chat`，也显示同一套新 WebUI。
+- 首次打开默认暗色模式，滚动条、标题栏、正文文字都匹配暗色主题。
+- 聊天框下方的单个权限菜单可切换“完全访问”，刷新 `/api/tool-permissions` 后 mode 仍是 `full-access`。
+- 运行中输入新消息并按 Enter，旧气泡变为已暂停/已中止，新消息开始执行；不能出现“该会话正在执行中，请稍后再试”。
+- 切换会话、刷新页面或重新打开 WebUI 页面后，仍在运行的任务能用原 `request_id` 继续接收结果；如果运行时已退出导致请求失效，旧运行气泡显示已暂停而不是继续生成中。
+- 消息气泡右上角复制按钮可复制富文本对应的纯文本内容。
 - 退出登录后刷新页面，出现企业登录表单。
 - 使用管理员后台创建的用户登录后，顶部和设置页显示真实邮箱。
 - 发送消息前，如果后台没有模型配置，显示清晰的“没有可用模型配置”提示；如果后台有模型配置，应自动同步后发送。

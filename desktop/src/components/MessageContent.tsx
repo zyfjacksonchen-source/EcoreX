@@ -25,6 +25,7 @@ export type AgentStepDisclosure =
     }
   | {
       type: "tool";
+      id?: string;
       name?: string;
       arguments?: unknown;
       result?: unknown;
@@ -63,7 +64,11 @@ function escapeHtml(value: unknown) {
     .replace(/'/g, "&#39;");
 }
 
-function safeUrl(value: string) {
+function safeUrl(value: string, localFilePreviewUrl?: (filePath: string) => string) {
+  const localPath = localPathFromSource(value);
+  if (localPath && localFilePreviewUrl) {
+    return localFilePreviewUrl(localPath);
+  }
   try {
     const url = new URL(value, window.location.href);
     return ["http:", "https:", "mailto:"].includes(url.protocol) ? url.href : "#";
@@ -72,7 +77,11 @@ function safeUrl(value: string) {
   }
 }
 
-function safeImageUrl(value: string) {
+function safeImageUrl(value: string, localFilePreviewUrl?: (filePath: string) => string) {
+  const localPath = localPathFromSource(value);
+  if (localPath && localFilePreviewUrl) {
+    return localFilePreviewUrl(localPath);
+  }
   try {
     const url = new URL(value, window.location.href);
     return ["http:", "https:"].includes(url.protocol) || url.href.startsWith("data:image/") ? url.href : "";
@@ -86,9 +95,21 @@ function localPathFromSource(value?: string) {
   if (!source) return "";
   if (/^file:\/\//i.test(source)) {
     try {
-      return decodeURIComponent(source.replace(/^file:\/+/i, ""));
+      const url = new URL(source);
+      const decodedPath = decodeURIComponent(url.pathname || "");
+      if (/^\/[a-zA-Z]:\//.test(decodedPath)) {
+        return decodedPath.slice(1);
+      }
+      if (url.hostname) {
+        return `//${url.hostname}${decodedPath}`;
+      }
+      return decodedPath;
     } catch {
-      return source.replace(/^file:\/+/i, "");
+      const stripped = source.replace(/^file:\/+/i, "");
+      if (/^[a-zA-Z]:[\\/]/.test(stripped) || stripped.startsWith("/")) {
+        return stripped;
+      }
+      return `/${stripped}`;
     }
   }
   if (/^[a-zA-Z]:[\\/]/.test(source) || source.startsWith("\\\\") || source.startsWith("/")) {
@@ -102,36 +123,36 @@ function basenameFromPath(value: string) {
   return normalized.split("/").filter(Boolean).pop() || value;
 }
 
-function renderInline(value: string) {
+function renderInline(value: string, localFilePreviewUrl?: (filePath: string) => string) {
   let html = escapeHtml(value);
   html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
   html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
   html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt: string, href: string) => {
-    const src = safeImageUrl(href);
+    const src = safeImageUrl(href, localFilePreviewUrl);
     if (!src) return escapeHtml(alt);
     return `<img class="markdown-image" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}" loading="lazy" />`;
   });
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label: string, href: string) => {
-    return `<a href="${escapeHtml(safeUrl(href))}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`;
+    return `<a href="${escapeHtml(safeUrl(href, localFilePreviewUrl))}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`;
   });
   return html;
 }
 
-function flushParagraph(lines: string[], out: string[]) {
+function flushParagraph(lines: string[], out: string[], localFilePreviewUrl?: (filePath: string) => string) {
   if (!lines.length) return;
-  out.push(`<p>${renderInline(lines.join(" "))}</p>`);
+  out.push(`<p>${renderInline(lines.join(" "), localFilePreviewUrl)}</p>`);
   lines.length = 0;
 }
 
-function renderList(items: string[], ordered: boolean, out: string[]) {
+function renderList(items: string[], ordered: boolean, out: string[], localFilePreviewUrl?: (filePath: string) => string) {
   if (!items.length) return;
   const tag = ordered ? "ol" : "ul";
-  out.push(`<${tag}>${items.map((item) => `<li>${renderInline(item)}</li>`).join("")}</${tag}>`);
+  out.push(`<${tag}>${items.map((item) => `<li>${renderInline(item, localFilePreviewUrl)}</li>`).join("")}</${tag}>`);
   items.length = 0;
 }
 
-function renderMarkdown(markdown: string) {
+function renderMarkdown(markdown: string, localFilePreviewUrl?: (filePath: string) => string) {
   const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
   const out: string[] = [];
   const paragraph: string[] = [];
@@ -140,9 +161,9 @@ function renderMarkdown(markdown: string) {
   let code: string[] | null = null;
 
   const flushAll = () => {
-    flushParagraph(paragraph, out);
-    renderList(bullets, false, out);
-    renderList(numbers, true, out);
+    flushParagraph(paragraph, out, localFilePreviewUrl);
+    renderList(bullets, false, out, localFilePreviewUrl);
+    renderList(numbers, true, out, localFilePreviewUrl);
   };
 
   for (const raw of lines) {
@@ -172,28 +193,28 @@ function renderMarkdown(markdown: string) {
     if (heading) {
       flushAll();
       const level = Math.min(heading[1].length + 2, 5);
-      out.push(`<h${level}>${renderInline(heading[2])}</h${level}>`);
+      out.push(`<h${level}>${renderInline(heading[2], localFilePreviewUrl)}</h${level}>`);
       continue;
     }
 
     const bullet = raw.match(/^\s*[-*]\s+(.+)$/);
     if (bullet) {
-      flushParagraph(paragraph, out);
-      renderList(numbers, true, out);
+      flushParagraph(paragraph, out, localFilePreviewUrl);
+      renderList(numbers, true, out, localFilePreviewUrl);
       bullets.push(bullet[1]);
       continue;
     }
 
     const numbered = raw.match(/^\s*\d+\.\s+(.+)$/);
     if (numbered) {
-      flushParagraph(paragraph, out);
-      renderList(bullets, false, out);
+      flushParagraph(paragraph, out, localFilePreviewUrl);
+      renderList(bullets, false, out, localFilePreviewUrl);
       numbers.push(numbered[1]);
       continue;
     }
 
-    renderList(bullets, false, out);
-    renderList(numbers, true, out);
+    renderList(bullets, false, out, localFilePreviewUrl);
+    renderList(numbers, true, out, localFilePreviewUrl);
     paragraph.push(raw.trim());
   }
 
@@ -224,8 +245,8 @@ function formatToolValue(value: unknown) {
   }
 }
 
-function MarkdownBlock({ content }: { content: string }) {
-  return <div className="markdown-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }} />;
+function MarkdownBlock({ content, localFilePreviewUrl }: { content: string; localFilePreviewUrl?: (filePath: string) => string }) {
+  return <div className="markdown-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(content, localFilePreviewUrl) }} />;
 }
 
 function ThinkingStep({ content = "", running }: { content?: string; running?: boolean }) {
@@ -353,7 +374,7 @@ function renderStep(
   if (step.type === "content") {
     return (
       <div className="agent-step agent-content-step" key={index}>
-        <MarkdownBlock content={step.content || ""} />
+        <MarkdownBlock content={step.content || ""} localFilePreviewUrl={localFilePreviewUrl} />
       </div>
     );
   }
@@ -372,17 +393,22 @@ function splitSteps(steps: AgentStepDisclosure[], content: string) {
   return { mainContent, visibleSteps };
 }
 
-function MainAnswer({ content, pending, collapsible }: { content: string; pending?: boolean; collapsible?: boolean }) {
+function MainAnswer({ content, pending, collapsible, localFilePreviewUrl }: {
+  content: string;
+  pending?: boolean;
+  collapsible?: boolean;
+  localFilePreviewUrl?: (filePath: string) => string;
+}) {
   const [expanded, setExpanded] = useState(false);
   if (!content) return null;
   if (!collapsible || pending || content.length <= LONG_REPLY_COLLAPSE_CHARS) {
-    return <MarkdownBlock content={content} />;
+    return <MarkdownBlock content={content} localFilePreviewUrl={localFilePreviewUrl} />;
   }
   if (expanded) {
     return (
       <div className="long-answer-disclosure is-expanded">
         <div className="long-answer-full">
-          <MarkdownBlock content={content} />
+          <MarkdownBlock content={content} localFilePreviewUrl={localFilePreviewUrl} />
         </div>
         <button className="long-answer-toggle long-answer-collapse-bottom" type="button" onClick={() => setExpanded(false)}>
           收起完整回复
@@ -393,7 +419,7 @@ function MainAnswer({ content, pending, collapsible }: { content: string; pendin
   return (
     <div className="long-answer-disclosure">
       <div className="long-answer-preview">
-        <MarkdownBlock content={`${content.slice(0, LONG_REPLY_PREVIEW_CHARS).trimEnd()}...`} />
+        <MarkdownBlock content={`${content.slice(0, LONG_REPLY_PREVIEW_CHARS).trimEnd()}...`} localFilePreviewUrl={localFilePreviewUrl} />
       </div>
       <button className="long-answer-toggle long-answer-expand-bottom" type="button" onClick={() => setExpanded(true)} title="长回复已默认收起，点击展开完整内容">
         展开完整回复
@@ -406,6 +432,7 @@ export function MessageContent(props: {
   role: "user" | "assistant" | "system";
   content: string;
   pending?: boolean;
+  paused?: boolean;
   cancelled?: boolean;
   reasoning?: string;
   steps?: AgentStepDisclosure[];
@@ -431,9 +458,14 @@ export function MessageContent(props: {
           {legacySteps}
         </div>
       )}
-      <MainAnswer content={mainContent} pending={props.pending} collapsible={props.role !== "user"} />
-      {props.cancelled && <div className="agent-cancelled-tag">已中止</div>}
-      {props.pending && <span className="thinking-indicator"><span className="thinking-ring" aria-hidden="true" /><span>{mainContent ? "继续生成中" : "思考中"}</span></span>}
+      <MainAnswer content={mainContent} pending={props.pending} collapsible={props.role !== "user"} localFilePreviewUrl={props.localFilePreviewUrl} />
+      {props.cancelled ? (
+        <div className="agent-cancelled-tag">已中止</div>
+      ) : props.paused ? (
+        <div className="agent-cancelled-tag">已暂停，输入新消息后继续</div>
+      ) : props.pending ? (
+        <span className="thinking-indicator"><span className="thinking-ring" aria-hidden="true" /><span>{mainContent ? "继续生成中" : "思考中"}</span></span>
+      ) : null}
     </div>
   );
 }

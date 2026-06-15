@@ -160,7 +160,7 @@ export type MemoryFile = {
   preview?: string;
 };
 
-export type PermissionMode = "smart-ask" | "always-ask" | "read-only" | "custom";
+export type PermissionMode = "full-access" | "smart-ask" | "always-ask" | "read-only" | "custom";
 
 export type PermissionState = {
   mode: PermissionMode;
@@ -205,6 +205,7 @@ export type StreamItem = {
   execution_time?: number;
   has_tool_calls?: boolean;
   permission_request_id?: string;
+  tool_call_id?: string;
   summary?: string;
   mode?: string;
   created_at?: string;
@@ -516,24 +517,24 @@ export async function openLocalPath(filePath: string) {
 }
 
 export async function loadPermissionState(): Promise<PermissionState | null> {
-  if (!window.ecorexDesktop?.getPermissionState) {
-    return null;
+  if (window.ecorexDesktop?.getPermissionState) {
+    return window.ecorexDesktop.getPermissionState();
   }
-  return window.ecorexDesktop.getPermissionState();
+  return apiJson<PermissionState & { status?: string }>("/api/tool-permissions");
 }
 
 export async function updatePermissionMode(mode: PermissionMode): Promise<PermissionState | null> {
-  if (!window.ecorexDesktop?.setPermissionMode) {
-    return null;
+  if (window.ecorexDesktop?.setPermissionMode) {
+    return window.ecorexDesktop.setPermissionMode(mode);
   }
-  return window.ecorexDesktop.setPermissionMode(mode);
+  return apiJson<PermissionState & { status?: string }>("/api/tool-permissions", "POST", { action: "set_mode", mode });
 }
 
 export async function resetPermissionGrants(): Promise<PermissionState | null> {
-  if (!window.ecorexDesktop?.resetPermissionGrants) {
-    return null;
+  if (window.ecorexDesktop?.resetPermissionGrants) {
+    return window.ecorexDesktop.resetPermissionGrants();
   }
-  return window.ecorexDesktop.resetPermissionGrants();
+  return apiJson<PermissionState & { status?: string }>("/api/tool-permissions", "POST", { action: "reset_grants" });
 }
 
 export async function listCapabilityPacks(): Promise<CapabilityPack[]> {

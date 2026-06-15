@@ -1,11 +1,21 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>EcoreX</title>
-    <script type="module" crossorigin src="./assets/index-DrKyNPnN.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-DqwiyKa0.css">
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem("ecorex-theme");
+          document.documentElement.dataset.theme = saved === "light" || saved === "dark" ? saved : "dark";
+        } catch (error) {
+          document.documentElement.dataset.theme = "dark";
+        }
+      })();
+    </script>
+    <script type="module" crossorigin src="./assets/index-dSHNqlZq.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-DBjPv6j0.css">
   </head>
   <body>
     <div id="root"></div>

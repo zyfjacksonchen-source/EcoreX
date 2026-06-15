@@ -10,8 +10,8 @@
       "variant": "Desktop x64 signed installer",
       "fileName": "EcoreX_0.1.12_x64-setup.exe",
       "href": "downloads/EcoreX_0.1.12_x64-setup.exe",
-      "size": 117665632,
-      "sha256": "626C5FA5C16F1C0EFB4DB884C57FE186D1310DF5D635E0D0FE836294F8472271",
+      "size": 143800520,
+      "sha256": "6349F70749B1DD8F15010749F70BB02D32F2C5B25B3C19209A5FB469098B7EEF",
       "status": "ready",
       "source": "Signed locally with Authenticode certificate 0F678477DFC0A2BDAAB88307126EF657FAF8674F and DigiCert timestamp."
     },
@@ -21,8 +21,8 @@
       "variant": "WebUI dual-platform one-click package",
       "fileName": "EcoreX_0.1.12-webui-win-mac.zip",
       "href": "downloads/EcoreX_0.1.12-webui-win-mac.zip",
-      "size": 99710949,
-      "sha256": "8E8DA035A72EFC4DF7CB9C12A311355189743D85B83596C59611D08C8976578D",
+      "size": 137970277,
+      "sha256": "A947911955A2EA7493F4581CFA50D98208800DDF352F542D8CE0E1001A7C99B5",
       "status": "ready",
       "source": "Contains both Windows x64 and macOS arm64/x64 local WebUI installers; users run the .cmd on Windows or the .command on macOS, and the installer opens /app/ in the default browser."
     },
@@ -32,8 +32,8 @@
       "variant": "WebUI one-click local package",
       "fileName": "EcoreX_0.1.12-webui-windows-x64.zip",
       "href": "downloads/EcoreX_0.1.12-webui-windows-x64.zip",
-      "size": 27118190,
-      "sha256": "D62A406EE64A3EDE7C2DDAEEEA7631FBE332EB3307B668BD542967992ABE6B12",
+      "size": 65350125,
+      "sha256": "3ECBBF4A943D0E0A1C41D0B2ACDC4F010AAA5280201BBC34031CC9106210C043",
       "status": "ready",
       "visible": false,
       "source": "Contains embedded Windows Python runtime and Install EcoreX WebUI.cmd; copies to local app data, starts the WebUI, and opens /app/ in the default browser."
@@ -44,8 +44,8 @@
       "variant": "WebUI one-click local package",
       "fileName": "EcoreX_0.1.12-webui-macos-universal.tar.gz",
       "href": "downloads/EcoreX_0.1.12-webui-macos-universal.tar.gz",
-      "size": 72264443,
-      "sha256": "B736EB6854193AF854193748A72A55F3AA972A45581A8F3EAF2B9A0E06429EDF",
+      "size": 72270648,
+      "sha256": "CD21953E78C2D1E00D42A572B52B4E3CFF65FFE449B811C207AA91E51B7FCA71",
       "status": "ready",
       "visible": false,
       "source": "Contains macOS arm64/x64 Python standalone archives, offline wheels, and Install EcoreX WebUI.command; installs locally, starts the WebUI, and opens /app/ in the default browser."

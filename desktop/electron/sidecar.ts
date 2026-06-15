@@ -294,7 +294,8 @@ export class SidecarManager {
         agent: true,
         knowledge: true,
         self_evolution_enabled: true,
-        agent_max_context_tokens: 258000
+        agent_max_context_tokens: 258000,
+        appdata_dir: path.join(app.getPath("userData"), "runtime-appdata")
       };
       let changed = !fs.existsSync(configPath);
       for (const [key, value] of Object.entries(defaults)) {
@@ -310,6 +311,11 @@ export class SidecarManager {
       }
       if (config.agent_max_context_tokens === 50000) {
         config.agent_max_context_tokens = 258000;
+        changed = true;
+      }
+      const currentWorkspace = typeof config.agent_workspace === "string" ? config.agent_workspace.trim() : "";
+      if (!currentWorkspace || currentWorkspace === "~/cow" || currentWorkspace === "~\\cow") {
+        config.agent_workspace = "~/EcoreX";
         changed = true;
       }
       const tools = typeof config.tools === "object" && config.tools !== null && !Array.isArray(config.tools)
@@ -372,10 +378,18 @@ export class SidecarManager {
 
     const candidates =
       process.platform === "win32"
-        ? [path.join(this.repoRoot, "python", "python.exe")]
+        ? [
+            path.join(this.repoRoot, "python", "python.exe"),
+            path.join(this.repoRoot, "desktop", "runtime", "ecorex-runtime", "python", "python.exe"),
+            path.join(this.repoRoot, "desktop", "release", "win-unpacked", "resources", "ecorex-runtime", "python", "python.exe")
+          ]
         : [
             path.join(this.repoRoot, "python", "bin", "python3"),
-            path.join(this.repoRoot, "python", "bin", "python")
+            path.join(this.repoRoot, "python", "bin", "python"),
+            path.join(this.repoRoot, "desktop", "runtime", "ecorex-runtime", "python", "bin", "python3"),
+            path.join(this.repoRoot, "desktop", "runtime", "ecorex-runtime", "python", "bin", "python"),
+            path.join(this.repoRoot, "desktop", "release", "mac", "EcoreX.app", "Contents", "Resources", "ecorex-runtime", "python", "bin", "python3"),
+            path.join(this.repoRoot, "desktop", "release", "mac", "EcoreX.app", "Contents", "Resources", "ecorex-runtime", "python", "bin", "python")
           ];
 
     for (const candidate of candidates) {

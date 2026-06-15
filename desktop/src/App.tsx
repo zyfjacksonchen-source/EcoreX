@@ -7,6 +7,7 @@ import {
   Brain,
   CheckCircle2,
   ChevronDown,
+  Copy,
   Database,
   FileText,
   FolderInput,
@@ -115,6 +116,7 @@ type ChatItem = {
   createdAt: string;
   attachments?: FileAttachment[];
   pending?: boolean;
+  paused?: boolean;
   reasoning?: string;
   steps?: AgentStepDisclosure[];
   toolCalls?: ToolCallDisclosure[];
@@ -188,6 +190,8 @@ const SKILL_DEFAULTS_STORAGE_KEY = "ecorex-skill-defaults-v1";
 const CONTEXT_THRESHOLD_TOKENS = 258_000;
 const EFFECTIVE_MODEL_FALLBACK = "gpt-5.5";
 const EFFECTIVE_MODEL_ALIAS_PREFIXES = ["deepseek-"];
+const COMPOSER_PERMISSION_MENU_MODES: PermissionMode[] = ["always-ask", "smart-ask", "full-access", "read-only", "custom"];
+const SETTINGS_PERMISSION_MODES: PermissionMode[] = ["full-access", "smart-ask", "always-ask", "read-only", "custom"];
 
 const coreAbilityNames = new Set([
   "bash",
@@ -234,7 +238,7 @@ function pruneSessionUiState(state: Record<string, SessionUiState>) {
 function initialTheme(): ThemeMode {
   const saved = window.localStorage.getItem("ecorex-theme");
   if (saved === "dark" || saved === "light") return saved;
-  return window.ecorexDesktop?.shouldUseDarkColors ? "dark" : "light";
+  return "dark";
 }
 
 function applyTheme(theme: ThemeMode) {
@@ -299,7 +303,7 @@ function mapSessions(
     return {
       id,
       title: sessionTitles[id] || session.title || session.session_id || "未命名会话",
-      detail: project ? `${project.name} · ${session.msg_count ?? 0} 条` : `${session.msg_count ?? 0} 条`,
+      detail: project ? project.name : "最近对话",
       updatedAt: session.last_active || "最近",
       status: id === activeSessionId ? "active" : "ready",
       pinned: Boolean(pinnedSessions[id]),
@@ -321,8 +325,43 @@ function mapSessions(
   return rows.sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)));
 }
 
+function estimateTextTokens(text: string) {
+  let latin = 0;
+  let wide = 0;
+  let symbols = 0;
+  for (const char of text || "") {
+    if (/\s/.test(char)) continue;
+    if (/[\u3400-\u9fff\uf900-\ufaff]/.test(char)) {
+      wide += 1;
+    } else if (/[\x00-\x7f]/.test(char)) {
+      latin += 1;
+    } else {
+      symbols += 1;
+    }
+  }
+  return Math.ceil(latin / 4) + Math.ceil(wide * 1.25) + Math.ceil(symbols / 2);
+}
+
+function estimateStructuredTokens(value: unknown) {
+  if (value === undefined || value === null || value === "") return 0;
+  if (typeof value === "string") return estimateTextTokens(value);
+  try {
+    return estimateTextTokens(JSON.stringify(value));
+  } catch {
+    return estimateTextTokens(String(value));
+  }
+}
+
+function estimateFileTokens(files: FileAttachment[]) {
+  return files.reduce((total, file) => {
+    const nameTokens = estimateTextTokens(file.file_name || file.file_path || "");
+    const mediaCost = file.file_type === "image" ? 420 : file.file_type === "video" ? 900 : file.file_type === "directory" ? 220 : 160;
+    return total + nameTokens + mediaCost;
+  }, 0);
+}
+
 function estimateTokenCount(text: string, files: FileAttachment[]) {
-  return Math.max(0, Math.ceil(text.length / 2) + files.length * 120);
+  return Math.max(0, estimateTextTokens(text) + estimateFileTokens(files));
 }
 
 function estimateTokens(text: string, files: FileAttachment[]) {
@@ -369,7 +408,30 @@ function meterTitle(label: string, used: number, limit?: number) {
 }
 
 function estimateContextTokens(messages: ChatItem[], draft: string, files: FileAttachment[]) {
-  const history = messages.reduce((total, message) => total + estimateTokenCount(message.content || "", message.attachments || []), 0);
+  const history = messages.reduce((total, message) => {
+    const messageTokens = estimateTokenCount(message.content || "", message.attachments || []);
+    const stepTokens = (message.steps || []).reduce((stepTotal, step) => {
+      if (step.type === "thinking" || step.type === "content" || step.type === "phase") {
+        return stepTotal + estimateStructuredTokens(step.content);
+      }
+      if (step.type === "tool") {
+        return stepTotal
+          + estimateStructuredTokens(step.name)
+          + estimateStructuredTokens(step.arguments)
+          + estimateStructuredTokens(step.result)
+          + 80;
+      }
+      return stepTotal + estimateStructuredTokens(step.fileName || step.url) + 120;
+    }, 0);
+    const legacyToolTokens = (message.toolCalls || []).reduce((toolTotal, tool) => (
+      toolTotal
+      + estimateStructuredTokens(tool.name)
+      + estimateStructuredTokens(tool.arguments)
+      + estimateStructuredTokens(tool.result)
+      + 80
+    ), 0);
+    return total + messageTokens + stepTokens + legacyToolTokens;
+  }, 0);
   return history + estimateTokenCount(draft, files);
 }
 
@@ -410,7 +472,9 @@ function ThinkingIndicator({ label = "思考中", compact = false }: { label?: s
 }
 
 function permissionModeLabel(mode?: PermissionMode) {
-  return mode === "smart-ask"
+  return mode === "full-access"
+    ? "完全访问"
+    : mode === "smart-ask"
     ? "智能确认"
     : mode === "always-ask"
       ? "每次询问"
@@ -419,6 +483,101 @@ function permissionModeLabel(mode?: PermissionMode) {
         : mode === "custom"
           ? "自定义"
           : "未设置";
+}
+
+function composerPermissionTitle(mode?: PermissionMode) {
+  return mode === "always-ask"
+    ? "请求批准"
+    : mode === "smart-ask"
+      ? "替我批准"
+      : mode === "full-access"
+        ? "完全访问权限"
+        : mode === "read-only"
+          ? "只读优先"
+          : mode === "custom"
+            ? "自定义 (config.toml)"
+            : "权限";
+}
+
+function composerPermissionDetail(mode?: PermissionMode) {
+  return mode === "always-ask"
+    ? "编辑外部文件和使用互联网时始终询问"
+    : mode === "smart-ask"
+      ? "仅对检测到的风险操作请求批准"
+      : mode === "full-access"
+        ? "可不受限制地访问互联网和电脑上的任何文件"
+        : mode === "read-only"
+          ? "读取和查看优先，阻止高风险写入和执行"
+          : mode === "custom"
+            ? "使用 config.toml 中定义的权限"
+            : "";
+}
+
+function composerPermissionIcon(mode?: PermissionMode) {
+  if (mode === "full-access") return <KeyRound aria-hidden="true" />;
+  if (mode === "custom") return <Settings aria-hidden="true" />;
+  if (mode === "always-ask") return <ShieldCheck aria-hidden="true" />;
+  if (mode === "smart-ask") return <CheckCircle2 aria-hidden="true" />;
+  return <ShieldCheck aria-hidden="true" />;
+}
+
+function pausedMessageContent(content: string) {
+  return content || "已暂停，输入新消息后继续";
+}
+
+function finishAgentSteps(steps: AgentStepDisclosure[] | undefined) {
+  return (steps || []).map((step) => {
+    if (step.type === "thinking" && step.running) {
+      return { ...step, running: false };
+    }
+    if (step.type === "tool" && step.running) {
+      return { ...step, running: false, status: step.status === "running" ? "done" : step.status };
+    }
+    return step;
+  });
+}
+
+function normalizePausedMessages(items: ChatItem[]) {
+  return items.map((item) => (
+    item.pending && !item.requestId
+      ? {
+          ...item,
+          content: pausedMessageContent(item.content),
+          pending: false,
+          paused: true,
+          steps: finishAgentSteps(item.steps),
+          toolCalls: item.toolCalls?.map((tool) => ({ ...tool, running: false }))
+        }
+      : item
+  ));
+}
+
+function plainTextForMessage(message: ChatItem) {
+  const parts = [message.content];
+  for (const step of message.steps || []) {
+    if (step.type === "thinking" || step.type === "content" || step.type === "phase") {
+      if (step.content) parts.push(step.content);
+    } else if (step.type === "tool") {
+      parts.push(`[${step.name || "tool"}]`);
+      if (step.result !== undefined && step.result !== "") {
+        try {
+          parts.push(typeof step.result === "string" ? step.result : JSON.stringify(step.result, null, 2));
+        } catch {
+          parts.push(String(step.result));
+        }
+      }
+    } else if (step.url) {
+      parts.push(step.fileName ? `${step.fileName}: ${step.url}` : step.url);
+    }
+  }
+  for (const file of message.attachments || []) {
+    parts.push(`${file.file_name}: ${file.file_path}`);
+  }
+  return parts.filter(Boolean).join("\n\n").trim();
+}
+
+function isLiveAssistantMessage(message: ChatItem) {
+  return message.role === "assistant" && message.pending === true && !message.paused && !message.cancelled;
 }
 
 function projectContextPrompt(project: ProjectFolder) {
@@ -571,6 +730,7 @@ export function App() {
   const [approval, setApproval] = useState<ApprovalState | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
   const [showJumpLatest, setShowJumpLatest] = useState(false);
   const [previewFile, setPreviewFile] = useState<FileAttachment | null>(null);
   const [packs, setPacks] = useState<CapabilityPack[]>([]);
@@ -590,6 +750,7 @@ export function App() {
   const [memoryFiles, setMemoryFiles] = useState<MemoryFile[]>([]);
   const [dreamFiles, setDreamFiles] = useState<MemoryFile[]>([]);
   const [toast, setToast] = useState("");
+  const [copiedMessageId, setCopiedMessageId] = useState("");
   const [passwordDraft, setPasswordDraft] = useState({ oldPassword: "", newPassword: "", confirmPassword: "" });
   const [passwordBusy, setPasswordBusy] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -597,6 +758,7 @@ export function App() {
   const streamCleanup = useRef<null | (() => void)>(null);
   const streamCleanups = useRef<Record<string, () => void>>({});
   const activeSessionIdRef = useRef(activeSessionId);
+  const messagesRef = useRef(messages);
   const autoScrollRef = useRef(true);
   const completedRequestIds = useRef<StringBoolMap>({});
   const preloadDone = useRef(false);
@@ -637,6 +799,10 @@ export function App() {
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   useEffect(() => {
     setSessionUiState((current) => ({
@@ -877,11 +1043,26 @@ export function App() {
   function restoreCachedSession(sessionId: string) {
     const cached = sessionUiState[sessionId];
     if (!cached) return false;
-    setMessages(cached.messages);
+    const nextMessages = normalizePausedMessages(cached.messages);
+    setMessages(nextMessages);
     setComposerText(cached.composerText);
     setAttachments(cached.attachments);
     setActiveSessionTitle(sessionTitles[sessionId] || cached.title || "新对话");
     setActiveProjectId(cached.projectId || sessionProjects[sessionId] || null);
+    const liveMessage = nextMessages.find((message) => isLiveAssistantMessage(message) && message.requestId);
+    if (liveMessage?.requestId) {
+      setSessionRequestIds((current) => ({ ...current, [sessionId]: liveMessage.requestId || "" }));
+      window.setTimeout(() => attachMessageStream(sessionId, liveMessage.id, liveMessage.requestId || ""), 0);
+    }
+    if (nextMessages !== cached.messages) {
+      setSessionUiState((current) => ({
+        ...current,
+        [sessionId]: {
+          ...cached,
+          messages: nextMessages
+        }
+      }));
+    }
     return true;
   }
 
@@ -915,7 +1096,7 @@ export function App() {
     focusComposerSoon();
     try {
       const history = await loadSessionHistory(row.id);
-      const mapped = history.map((item, index) => mapRuntimeMessage(item, row.id, index));
+      const mapped = normalizePausedMessages(history.map((item, index) => mapRuntimeMessage(item, row.id, index)));
       setSessionUiState((current) => ({
         ...current,
         [row.id]: {
@@ -1132,16 +1313,17 @@ export function App() {
   }
 
   function finishRunningSteps(message: ChatItem): ChatItem {
-    const steps = (message.steps || []).map((step) => {
-      if (step.type === "thinking" && step.running) {
-        return { ...step, running: false };
-      }
-      if (step.type === "tool" && step.running) {
-        return { ...step, running: false, status: step.status === "running" ? "done" : step.status };
-      }
-      return step;
-    });
-    return { ...message, steps };
+    return { ...message, steps: finishAgentSteps(message.steps), toolCalls: message.toolCalls?.map((tool) => ({ ...tool, running: false })) };
+  }
+
+  function markSessionRequestsPaused(sessionId: string) {
+    updateSessionMessages(sessionId, (current) => current.map((message) => message.pending ? {
+      ...finishRunningSteps(message),
+      content: pausedMessageContent(message.content),
+      pending: false,
+      paused: true,
+      cancelled: false
+    } : message));
   }
 
   function appendReasoningStep(message: ChatItem, chunk: string): ChatItem {
@@ -1168,10 +1350,12 @@ export function App() {
   function appendToolStart(message: ChatItem, item: StreamItem): ChatItem {
     const next = flushIntermediateContent(finishRunningSteps(message));
     const toolName = item.tool || item.name || "tool";
+    const toolId = item.tool_call_id || `${toolName}-${Date.now()}`;
     const steps = [...(next.steps || [])];
-    const toolIndex = steps.findIndex((step) => step.type === "tool" && step.name === toolName);
+    const toolIndex = steps.findIndex((step) => step.type === "tool" && ((toolId && step.id === toolId) || (!toolId && step.name === toolName)));
     const runningTool: Extract<AgentStepDisclosure, { type: "tool" }> = {
       type: "tool",
+      id: toolId,
       name: toolName,
       arguments: item.arguments ?? item.input,
       status: "running",
@@ -1192,10 +1376,11 @@ export function App() {
   function appendToolEnd(message: ChatItem, item: StreamItem): ChatItem {
     const steps = [...(message.steps || [])];
     const toolName = item.tool || item.name;
+    const toolId = item.tool_call_id || "";
     let targetIndex = -1;
     for (let index = steps.length - 1; index >= 0; index -= 1) {
       const step = steps[index];
-      if (step.type === "tool" && step.running && (!toolName || step.name === toolName)) {
+      if (step.type === "tool" && step.running && ((toolId && step.id === toolId) || (!toolId && (!toolName || step.name === toolName)))) {
         targetIndex = index;
         break;
       }
@@ -1211,6 +1396,7 @@ export function App() {
     }
     const completedTool: Extract<AgentStepDisclosure, { type: "tool" }> = {
       type: "tool",
+      id: toolId || undefined,
       name: toolName,
       arguments: item.arguments ?? item.input,
       result: item.result ?? item.content ?? item.message,
@@ -1271,10 +1457,169 @@ export function App() {
     delete streamCleanups.current[sessionId];
   }
 
+  function attachMessageStream(sessionId: string, assistantId: string, requestId: string) {
+    if (!requestId || streamCleanups.current[sessionId]) return;
+    setActiveRequestId(requestId);
+    setSessionRequestIds((current) => ({ ...current, [sessionId]: requestId }));
+    const cleanup = openMessageStream({
+      requestId,
+      webPort: sidecarStatus.webPort,
+      onItem: (item) => {
+        if (item.request_id && item.request_id !== requestId) return;
+        if (item.type === "cancelled") {
+          updateAssistantMessage(sessionId, assistantId, (message) => ({
+            ...finishRunningSteps(message),
+            content: message.content || "已停止",
+            pending: false,
+            cancelled: true
+          }));
+          clearSessionRequestState(sessionId);
+          return;
+        }
+        if (item.type === "done") {
+          updateAssistantMessage(sessionId, assistantId, (message) => ({
+            ...finishRunningSteps(message),
+            content: item.content || message.content,
+            pending: false,
+            userSeq: typeof item.user_seq === "number" ? item.user_seq : message.userSeq,
+            botSeq: typeof item.bot_seq === "number" ? item.bot_seq : message.botSeq
+          }));
+          completedRequestIds.current[requestId] = true;
+          clearSessionRequestState(sessionId);
+          return;
+        }
+        if (item.type === "error") {
+          const message = item.content || item.message || "运行时返回错误";
+          const staleRequest = /invalid request_id/i.test(message);
+          updateAssistantMessage(sessionId, assistantId, (entry) => ({
+            ...finishRunningSteps(entry),
+            content: staleRequest ? pausedMessageContent(entry.content) : message,
+            pending: false,
+            paused: staleRequest
+          }));
+          finishSessionRequest(sessionId);
+          void reportDesktopEvent({ type: "error", source: "Desktop", message, sessionId });
+          return;
+        }
+        if (item.type === "reasoning" || item.type === "thinking") {
+          const chunk = item.content || item.text || "";
+          if (chunk) {
+            updateAssistantMessage(sessionId, assistantId, (message) => appendReasoningStep(message, chunk));
+          }
+          return;
+        }
+        if (item.type === "message_end") {
+          if (item.has_tool_calls) {
+            updateAssistantMessage(sessionId, assistantId, (message) => flushIntermediateContent(finishRunningSteps(message)));
+          }
+          return;
+        }
+        if (item.type === "tool_permission_request") {
+          const permissionRequestId = item.permission_request_id || "";
+          if (!permissionRequestId) return;
+          setApproval({
+            type: "permission",
+            title: item.title || "本机工具执行前确认",
+            message: item.message || `EcoreX 将执行 ${item.tool || "tool"}，请确认是否允许。`,
+            actions: [
+              {
+                label: "允许本次",
+                primary: true,
+                onClick: () => void answerToolPermission(permissionRequestId, "allow_once")
+              },
+              {
+                label: "始终允许",
+                onClick: () => void answerToolPermission(permissionRequestId, "always_allow")
+              },
+              {
+                label: "拒绝",
+                onClick: () => void answerToolPermission(permissionRequestId, "deny")
+              }
+            ]
+          });
+          updateAssistantMessage(sessionId, assistantId, (message) => ({
+            ...message,
+            pending: true,
+            paused: false,
+            steps: [
+              ...(message.steps || []),
+              {
+                type: "phase",
+                content: `等待本机工具授权：${item.tool || "tool"}`
+              }
+            ]
+          }));
+          return;
+        }
+        if (item.type === "tool_start") {
+          updateAssistantMessage(sessionId, assistantId, (message) => appendToolStart(message, item));
+          return;
+        }
+        if (item.type === "tool_end") {
+          updateAssistantMessage(sessionId, assistantId, (message) => appendToolEnd(message, item));
+          return;
+        }
+        if (item.type === "image" || item.type === "video" || item.type === "file" || item.type === "voice_attach") {
+          updateAssistantMessage(sessionId, assistantId, (message) => appendMediaStep(message, item));
+          if (item.type === "voice_attach") {
+            finishSessionRequest(sessionId);
+            delete completedRequestIds.current[requestId];
+          }
+          return;
+        }
+        if (item.type === "phase" && (item.content || item.message)) {
+          updateAssistantMessage(sessionId, assistantId, (message) => ({
+            ...message,
+            pending: true,
+            paused: false,
+            steps: [...(message.steps || []), { type: "phase", content: item.content || item.message }]
+          }));
+          return;
+        }
+        if ((item.type === "message_update" || item.type === "delta") && item.content) {
+          updateAssistantMessage(sessionId, assistantId, (message) => ({
+            ...finishRunningSteps(message),
+            content: `${message.content}${item.content}`,
+            pending: true,
+            paused: false
+          }));
+        }
+      },
+      onError: () => {
+        if (completedRequestIds.current[requestId]) {
+          delete completedRequestIds.current[requestId];
+          finishSessionRequest(sessionId);
+          return;
+        }
+        const notice = "连接已断开，后台任务仍在执行";
+        updateAssistantMessage(sessionId, assistantId, (message) => ({
+          ...message,
+          requestId,
+          pending: true,
+          paused: false,
+          cancelled: false,
+          steps: (message.steps || []).some((step) => step.type === "phase" && step.content === notice)
+            ? message.steps
+            : [...(message.steps || []), { type: "phase", content: notice }]
+        }));
+        delete streamCleanups.current[sessionId];
+      }
+    });
+    streamCleanup.current = cleanup;
+    streamCleanups.current[sessionId] = cleanup;
+  }
+
   async function sendNow(skipCapabilityCheck = false) {
     const text = composerText.trim();
     if (!text && !attachments.length) return;
-    if (activeSessionRequestId) return;
+    if (activeSessionRequestId) {
+      await cancelChatRequest({ requestId: activeSessionRequestId, sessionId: activeSessionId }).catch(() => null);
+      markSessionRequestsPaused(activeSessionId);
+      clearSessionRequestState(activeSessionId);
+      setApproval(null);
+    } else if (messagesRef.current.some((message) => message.pending)) {
+      markSessionRequestsPaused(activeSessionId);
+    }
 
     const enabledPacks = packs.filter((pack) => capabilityPackEnabled(pack.id));
     const neededPack = skipCapabilityCheck ? null : detectNeededPack(text, attachments, enabledPacks);
@@ -1408,6 +1753,10 @@ export function App() {
       if (result.request_id && result.stream) {
         setActiveRequestId(result.request_id);
         setSessionRequestIds((current) => ({ ...current, [requestSessionId]: result.request_id || "" }));
+        updateAssistantMessage(requestSessionId, assistantId, (message) => ({
+          ...message,
+          requestId: result.request_id
+        }));
         const cleanup = openMessageStream({
           requestId: result.request_id,
           webPort: sidecarStatus.webPort,
@@ -1544,9 +1893,16 @@ export function App() {
               finishSessionRequest(requestSessionId);
               return;
             }
-            finishSessionRequest(requestSessionId);
-            updateAssistantMessage(requestSessionId, assistantId, (message) => ({ ...finishRunningSteps(message), pending: false }));
-            reportChatUsage(undefined, "estimated");
+            const notice = "连接已断开，后台任务仍在执行";
+            updateAssistantMessage(requestSessionId, assistantId, (message) => ({
+              ...message,
+              pending: true,
+              paused: false,
+              cancelled: false,
+              steps: (message.steps || []).some((step) => step.type === "phase" && step.content === notice)
+                ? message.steps
+                : [...(message.steps || []), { type: "phase", content: notice }]
+            }));
           }
         });
         streamCleanup.current = cleanup;
@@ -1687,6 +2043,26 @@ export function App() {
     }
   }
 
+  async function copyMessageText(message: ChatItem) {
+    const text = plainTextForMessage(message);
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "true");
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      textarea.remove();
+    }
+    setCopiedMessageId(message.id);
+    window.setTimeout(() => setCopiedMessageId((current) => current === message.id ? "" : current), 1400);
+  }
+
   async function openArtifactFile(file: { file_path: string; file_name: string; file_type?: FileAttachment["file_type"] }) {
     const result = await openLocalPath(file.file_path);
     if (result) {
@@ -1788,7 +2164,9 @@ export function App() {
     }
   ];
   const activeProjectMemoryPath = activeProject?.memoryPath || (activeProject ? `${activeProject.path}\\.ecorex\\project-memory.md` : "");
-  const hasPendingAssistantMessage = messages.some((message) => message.pending);
+  const hasPendingAssistantMessage = messages.some(isLiveAssistantMessage);
+  const composerHasPayload = Boolean(composerText.trim() || attachments.length);
+  const currentComposerPermissionMode: PermissionMode = permissionState?.mode || "smart-ask";
   const settingsNav: Array<{ id: SettingsSection; label: string; icon: ReactNode }> = [
     { id: "account", label: "账号", icon: <UserRound aria-hidden="true" /> },
     { id: "projects", label: "项目", icon: <FolderOpen aria-hidden="true" /> },
@@ -1799,7 +2177,7 @@ export function App() {
   ];
   const renderSessionRow = (row: SessionRow) => {
     const cachedMessages = sessionUiState[row.id]?.messages || [];
-    const isRunning = Boolean(sessionRequestIds[row.id]) || cachedMessages.some((message) => message.pending) || (row.id === activeSessionId && hasPendingAssistantMessage);
+    const isRunning = Boolean(sessionRequestIds[row.id]) || cachedMessages.some(isLiveAssistantMessage) || (row.id === activeSessionId && hasPendingAssistantMessage);
     const isActive = row.id === activeSessionId;
     const rowTitle = `${row.title}\n${row.detail}\n${formatTime(row.updatedAt)}`;
     return (
@@ -1968,10 +2346,20 @@ export function App() {
             messages.map((message) => (
               <article className={`message ${message.role}`} key={message.id}>
                 <div className="message-body">
+                  <button
+                    type="button"
+                    className="message-copy-button"
+                    onClick={() => void copyMessageText(message)}
+                    title={copiedMessageId === message.id ? "已复制" : "复制文本"}
+                    aria-label={copiedMessageId === message.id ? "已复制" : "复制文本"}
+                  >
+                    <Copy aria-hidden="true" />
+                  </button>
                   <MessageContent
                     role={message.role}
                     content={message.content}
                     pending={message.pending}
+                    paused={message.paused}
                     cancelled={message.cancelled}
                     reasoning={message.reasoning}
                     steps={message.steps}
@@ -2084,33 +2472,81 @@ export function App() {
             <button type="button" className="mode-button" onClick={() => void loadRuntimeSnapshot().then(setRuntimeSnapshot).catch(() => undefined)} title={`当前模型：${currentModelName}`}>
               <Bot aria-hidden="true" />{currentModelName}<ChevronDown aria-hidden="true" />
             </button>
-            {activeSessionRequestId || hasPendingAssistantMessage ? (
+            {(activeSessionRequestId || hasPendingAssistantMessage) && !composerHasPayload ? (
               <button type="button" className="send-button stop" onClick={stopActiveRequest} title="停止当前回复"><Square aria-hidden="true" /></button>
             ) : (
-              <button type="submit" className="send-button" disabled={!composerText.trim() && attachments.length === 0} title="发送，Enter 也可以发送">
+              <button type="submit" className="send-button" disabled={!composerHasPayload} title={activeSessionRequestId || hasPendingAssistantMessage ? "发送并暂停上一条回复" : "发送，Enter 也可以发送"}>
                 <SendHorizontal aria-hidden="true" />
               </button>
             )}
-            <div className="composer-metrics" aria-label="Token 和上下文用量">
-              <div className="composer-token-meters" aria-label="Token 用量">
-                {tokenMeters.map((meter) => (
-                  <div className={`composer-meter composer-meter-${meter.key}`} key={meter.key} title={meter.title} data-tooltip={meter.title} data-tooltip-position="top-right">
-                    <span>{meter.label}</span>
-                    <div className="composer-meter-track" aria-hidden="true">
-                      <i style={{ width: `${meter.percent}%` }} />
+            <div className="composer-footer">
+              <div className="composer-permission-row" aria-label="本机访问权限">
+                <div className="composer-permission-menu">
+                  <button
+                    type="button"
+                    className="composer-permission-trigger"
+                    aria-haspopup="menu"
+                    aria-expanded={permissionMenuOpen}
+                    title={`本机访问权限：${composerPermissionTitle(currentComposerPermissionMode)}`}
+                    onClick={() => setPermissionMenuOpen((open) => !open)}
+                  >
+                    {composerPermissionIcon(currentComposerPermissionMode)}
+                    <span>{composerPermissionTitle(currentComposerPermissionMode)}</span>
+                    <ChevronDown aria-hidden="true" />
+                  </button>
+                  {permissionMenuOpen && (
+                    <div className="composer-permission-popover" role="menu">
+                      <div className="composer-permission-help">
+                        <span>应如何批准 EcoreX 操作?</span>
+                        <button type="button" onClick={() => { setSettingsSection("permissions"); setSettingsOpen(true); setPermissionMenuOpen(false); }}>
+                          了解更多
+                        </button>
+                      </div>
+                      {COMPOSER_PERMISSION_MENU_MODES.map((mode) => (
+                        <button
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={currentComposerPermissionMode === mode}
+                          key={mode}
+                          className={currentComposerPermissionMode === mode ? "is-active" : ""}
+                          onClick={() => updatePermissionMode(mode).then((next) => {
+                            setPermissionState(next);
+                            setPermissionMenuOpen(false);
+                          }).catch(() => setToast("权限模式切换失败"))}
+                        >
+                          {composerPermissionIcon(mode)}
+                          <span>
+                            <strong>{composerPermissionTitle(mode)}</strong>
+                            <small>{composerPermissionDetail(mode)}</small>
+                          </span>
+                          {currentComposerPermissionMode === mode && <CheckCircle2 aria-hidden="true" />}
+                        </button>
+                      ))}
                     </div>
-                  </div>
-                ))}
+                  )}
+                </div>
               </div>
-              <div
-                className="composer-context-meter"
-                title={contextMeter.title}
-                data-tooltip={contextMeter.title}
-                data-tooltip-position="top-right"
-                style={{ "--context-meter-percent": `${contextMeter.percent}%` } as CSSProperties}
-              >
-                <span>{contextMeter.label}</span>
-                <i aria-hidden="true" />
+              <div className="composer-metrics" aria-label="Token 和上下文用量">
+                <div className="composer-token-meters" aria-label="Token 用量">
+                  {tokenMeters.map((meter) => (
+                    <div className={`composer-meter composer-meter-${meter.key}`} key={meter.key} title={meter.title} data-tooltip={meter.title} data-tooltip-position="top-right">
+                      <span>{meter.label}</span>
+                      <div className="composer-meter-track" aria-hidden="true">
+                        <i style={{ width: `${meter.percent}%` }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div
+                  className="composer-context-meter"
+                  title={contextMeter.title}
+                  data-tooltip={contextMeter.title}
+                  data-tooltip-position="top-right"
+                  style={{ "--context-meter-percent": `${contextMeter.percent}%` } as CSSProperties}
+                >
+                  <span>{contextMeter.label}</span>
+                  <i aria-hidden="true" />
+                </div>
               </div>
             </div>
           </form>
@@ -2247,9 +2683,9 @@ export function App() {
                       <span>{permissionState ? `当前 ${permissionModeLabel(permissionState.mode)}，保存 ${permissionState.grantsCount} 条授权` : "权限状态暂不可用"}</span>
                     </div>
                     <div className="permission-modes">
-                      {(["smart-ask", "always-ask", "read-only", "custom"] as PermissionMode[]).map((mode) => (
+                      {SETTINGS_PERMISSION_MODES.map((mode) => (
                         <button key={mode} className={permissionState?.mode === mode ? "is-active" : ""} onClick={() => updatePermissionMode(mode).then(setPermissionState)}>
-                          {mode === "smart-ask" ? "智能确认" : mode === "always-ask" ? "每次询问" : mode === "read-only" ? "只读优先" : "自定义"}
+                          {permissionModeLabel(mode)}
                         </button>
                       ))}
                     </div>

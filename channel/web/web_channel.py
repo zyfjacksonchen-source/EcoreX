@@ -422,7 +422,7 @@ def _web_app_bridge_script() -> str:
       listeners.add(callback);
       return function () { listeners.delete(callback); };
     },
-    shouldUseDarkColors: !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches),
+    shouldUseDarkColors: true,
     chooseFiles: chooseFiles,
     chooseProjectFolder: async function () { return null; },
     savePastedFile: savePastedFile,
@@ -431,9 +431,15 @@ def _web_app_bridge_script() -> str:
       window.open(url, "_blank", "noopener,noreferrer");
       return "";
     },
-    getPermissionState: async function () { return null; },
-    setPermissionMode: async function () { return null; },
-    resetPermissionGrants: async function () { return null; },
+    getPermissionState: async function () {
+      return apiJson({ path: "/api/tool-permissions", method: "GET" });
+    },
+    setPermissionMode: async function (mode) {
+      return apiJson({ path: "/api/tool-permissions", method: "POST", body: { action: "set_mode", mode: mode } });
+    },
+    resetPermissionGrants: async function () {
+      return apiJson({ path: "/api/tool-permissions", method: "POST", body: { action: "reset_grants" } });
+    },
     listCapabilityPacks: async function () { return []; },
     installCapabilityPack: async function () { return null; },
     reportTelemetry: async function (event) {
@@ -783,6 +789,69 @@ class WebChannel(ChatChannel):
         """生成唯一的请求ID"""
         return str(uuid.uuid4())
 
+    def _active_request_ids_for_session(self, session_id: str) -> List[str]:
+        if not session_id:
+            return []
+        try:
+            from agent.protocol import get_cancel_registry
+            registry = get_cancel_registry()
+            return [
+                request_id
+                for request_id, mapped_session_id in list(self.request_to_session.items())
+                if mapped_session_id == session_id and registry.get_event(request_id) is not None
+            ]
+        except Exception as e:
+            logger.debug(f"[WebChannel] active request lookup failed for session {session_id}: {e}")
+            return []
+
+    def _push_cancelled_events_for_session(self, session_id: str, request_ids: List[str], lang: str = "zh") -> None:
+        content = "Interrupted by a new message." if str(lang).lower().startswith("en") else "已被新消息中断"
+        for request_id in request_ids:
+            q = self.sse_queues.get(request_id)
+            if not q:
+                continue
+            q.put({
+                "type": "cancelled",
+                "content": content,
+                "request_id": request_id,
+                "timestamp": time.time(),
+            })
+
+    def _interrupt_and_wait_for_session_lock(self, session_id: str, lang: str = "zh"):
+        """Cancel the active request for a busy session and wait briefly for its lock."""
+        from agent.protocol import get_cancel_registry
+        from common.ecorex_workspace import SessionBusyError, SessionLock
+
+        active_request_ids = []
+        active_deadline = time.time() + 1.5
+        while time.time() < active_deadline:
+            active_request_ids = self._active_request_ids_for_session(session_id)
+            if active_request_ids:
+                break
+            time.sleep(0.1)
+        if not active_request_ids:
+            raise SessionBusyError(f"session is busy: {session_id}")
+
+        cancelled = get_cancel_registry().cancel_session(session_id)
+        if cancelled <= 0:
+            raise SessionBusyError(f"session is busy: {session_id}")
+
+        self._push_cancelled_events_for_session(session_id, active_request_ids, lang=lang)
+        logger.info(
+            f"[WebChannel] interrupting busy session before new message: "
+            f"session={session_id}, cancelled={cancelled}, requests={active_request_ids}"
+        )
+
+        deadline = time.time() + 12
+        last_error = None
+        while time.time() < deadline:
+            try:
+                return SessionLock(_get_workspace_root(), session_id).acquire()
+            except SessionBusyError as e:
+                last_error = e
+                time.sleep(0.2)
+        raise last_error or SessionBusyError(f"session is busy: {session_id}")
+
     def _fetch_latest_pair_seqs(self, session_id: str):
         """Query the conversation store for the latest user/bot message seqs.
 
@@ -1010,7 +1079,12 @@ class WebChannel(ChatChannel):
             elif event_type == "tool_execution_start":
                 tool_name = data.get("tool_name", "tool")
                 arguments = data.get("arguments", {})
-                q.put({"type": "tool_start", "tool": tool_name, "arguments": arguments})
+                q.put({
+                    "type": "tool_start",
+                    "tool": tool_name,
+                    "tool_call_id": data.get("tool_call_id", ""),
+                    "arguments": arguments,
+                })
 
             elif event_type == "tool_permission_request":
                 q.put({
@@ -1036,6 +1110,7 @@ class WebChannel(ChatChannel):
                 q.put({
                     "type": "tool_end",
                     "tool": tool_name,
+                    "tool_call_id": data.get("tool_call_id", ""),
                     "status": status,
                     "result": result_str,
                     "execution_time": round(exec_time, 2)
@@ -1400,6 +1475,7 @@ class WebChannel(ChatChannel):
             prompt = json_data.get('message', '')
             use_sse = json_data.get('stream', True)
             attachments = json_data.get('attachments', [])
+            lang = (json_data.get('lang') or 'zh').lower()
             # Tag the message as originating from voice input so the post-reply
             # TTS hook can honour the `voice_if_voice` policy (mirrors the
             # desire_rtype concept used by other channels).
@@ -1411,8 +1487,9 @@ class WebChannel(ChatChannel):
             stripped_prompt = (prompt or "").strip().lower()
             if stripped_prompt == "/cancel":
                 from agent.protocol import get_cancel_registry
+                active_request_ids = self._active_request_ids_for_session(session_id)
                 cancelled = get_cancel_registry().cancel_session(session_id)
-                lang = (json_data.get('lang') or 'zh').lower()
+                self._push_cancelled_events_for_session(session_id, active_request_ids, lang=lang)
                 msg_text = _cancel_reply_text(cancelled, lang)
                 logger.info(
                     f"[WebChannel] /cancel fast-path: session={session_id}, cancelled={cancelled}, lang={lang}"
@@ -1428,11 +1505,14 @@ class WebChannel(ChatChannel):
                 from common.ecorex_workspace import SessionBusyError, SessionLock
                 session_lock = SessionLock(_get_workspace_root(), session_id).acquire()
             except SessionBusyError:
-                return json.dumps({
-                    "status": "error",
-                    "code": "session_busy",
-                    "message": i18n.t("该会话正在执行中，请稍后再试", "This session is already running. Please try again shortly."),
-                }, ensure_ascii=False)
+                try:
+                    session_lock = self._interrupt_and_wait_for_session_lock(session_id, lang=lang)
+                except SessionBusyError:
+                    return json.dumps({
+                        "status": "error",
+                        "code": "session_busy",
+                        "message": i18n.t("该会话正在执行中，请稍后再试", "This session is already running. Please try again shortly."),
+                    }, ensure_ascii=False)
 
             # Append file references to the prompt (same format as QQ channel)
             if attachments:
@@ -1572,12 +1652,16 @@ class WebChannel(ChatChannel):
                     post_done = True
                     post_deadline = time.time() + 2  # 2s post-attach tail
         finally:
+            disconnected_early = not post_done and time.time() < deadline
+            if disconnected_early:
+                logger.info(f"[WebChannel] SSE client detached; request keeps running: {request_id}")
             # Only drop the queue once the reply is actually complete. If the
             # client disconnected early (e.g. switched sessions and will
             # re-attach with the same request_id), keep the queue so the new
             # connection can resume reading the remaining events.
             if post_done or time.time() >= deadline:
                 self.sse_queues.pop(request_id, None)
+                self.request_to_session.pop(request_id, None)
 
     def cancel_request(self):
         """
@@ -1600,6 +1684,7 @@ class WebChannel(ChatChannel):
             request_id = (json_data.get("request_id") or "").strip()
             session_id = (json_data.get("session_id") or "").strip()
             lang = (json_data.get("lang") or "zh").lower()
+            active_request_ids = self._active_request_ids_for_session(session_id) if session_id else []
 
             registry = get_cancel_registry()
             cancelled = 0
@@ -1618,6 +1703,8 @@ class WebChannel(ChatChannel):
                     "request_id": request_id,
                     "timestamp": time.time(),
                 })
+            elif active_request_ids:
+                self._push_cancelled_events_for_session(session_id, active_request_ids, lang=lang)
 
             logger.info(
                 f"[WebChannel] cancel request: request_id={request_id!r}, "
@@ -1747,7 +1834,8 @@ class WebChannel(ChatChannel):
         try:
             from cli import __version__
             from common.ecorex_workspace import register_installation
-            register_installation(_get_workspace_root(), "webui", {
+            surface = "desktop" if os.environ.get("ECOREX_DESKTOP") == "1" else "webui"
+            register_installation(_get_workspace_root(), surface, {
                 "version": __version__,
                 "bindHost": host,
                 "port": port,
@@ -2122,16 +2210,24 @@ class ToolPermissionHandler:
         _require_auth()
         try:
             payload = json.loads(web.data() or b"{}")
+            action = (payload.get("action") or "").strip()
+            mode = (payload.get("mode") or "").strip()
+            from common.ecorex_tool_permissions import get_tool_permission_broker
+
+            broker = get_tool_permission_broker()
+            if action == "set_mode":
+                return json.dumps(broker.set_mode(mode), ensure_ascii=False)
+            if action == "reset_grants":
+                return json.dumps(broker.reset_grants(), ensure_ascii=False)
+
             request_id = (payload.get("request_id") or payload.get("permission_request_id") or "").strip()
             decision = (payload.get("decision") or "").strip()
             remember = bool(payload.get("remember"))
             if not request_id:
                 return json.dumps({"status": "error", "message": "missing request_id"}, ensure_ascii=False)
 
-            from common.ecorex_tool_permissions import get_tool_permission_broker
-
             return json.dumps(
-                get_tool_permission_broker().decide(request_id, decision, remember),
+                broker.decide(request_id, decision, remember),
                 ensure_ascii=False,
             )
         except Exception as e:
