@@ -85,6 +85,12 @@
 - Admin API keeps v0.1.10-v0.1.12 client keys as rollout compatibility keys and adds `ecorex-desktop-v0.1.13` / `ecorex-web-v0.1.13-web.1`.
 - `deploy/ecorex-site/manifest.json` is intentionally not bumped in this source pass. It must remain v0.1.12 until real v0.1.13 release artifacts exist.
 
+### Windows Signing Boundary
+
+- Certum/SimplySign private key containers can be visible only from an elevated administrator process.
+- A normal PowerShell may show the certificate with `HasPrivateKey=True` while signing preflight still fails with `SimplySign CSP key containers: none visible`.
+- Run `npm run sign:win:preflight` and the final `package:win:signed` flow from an elevated/admin shell after unlocking SimplySign/proCertum.
+
 ## Release Update Policy
 
 - Windows: signed builds may be pushed as one-click updates after the current v0.1.13 NSIS installer is signed and smoke-tested.

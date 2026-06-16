@@ -354,6 +354,13 @@ Invoke-WebRequest -UseBasicParsing `
   services from an elevated shell:
   - `Start-Service SCardSvr`
   - `Start-Service CertPropSvc`
+- Certum/SimplySign private key containers may be visible only from an
+  administrator/elevated process. A normal PowerShell can show the certificate
+  with `HasPrivateKey=True` while `signtool` and `certutil -user -key -csp
+  "SimplySign CSP"` still see no usable key containers. Run signing preflight
+  and the final signing commands from an elevated/admin shell after unlocking
+  SimplySign, otherwise the release will repeatedly fail at
+  `SimplySign CSP key containers: none visible`.
 - Do not reuse an older signed `EcoreX_0.1.12_x64-setup.exe` after runtime
   source changes. Mark `windows-x64` as `pending-signature` until the current
   runtime is signed and the NSIS setup is regenerated.
