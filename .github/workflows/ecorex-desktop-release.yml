@@ -65,6 +65,20 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Require macOS signing and notarization secrets
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.notarize }}
+        run: |
+          missing=0
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Missing required macOS notarization secret: $name" >&2
+              missing=1
+            fi
+          done
+          if [[ "$missing" != "0" ]]; then
+            echo "Refusing to build a public macOS DMG without Developer ID signing and Apple notarization credentials." >&2
+            exit 1
+          fi
       - name: Build DMG
         run: |
           if [[ -z "${CSC_LINK:-}" ]]; then
@@ -78,8 +92,8 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.notarize }}
         run: |
           if [[ -z "${CSC_LINK}" || -z "${APPLE_ID}" || -z "${APPLE_APP_SPECIFIC_PASSWORD}" || -z "${APPLE_TEAM_ID}" ]]; then
-            echo "Code signing or Apple notarization secrets are not configured; skipping notarization."
-            exit 0
+            echo "Code signing or Apple notarization secrets are not configured; refusing unsigned public DMG." >&2
+            exit 1
           fi
           for dmg in release/EcoreX_*_${{ matrix.arch }}.dmg; do
             echo "Submitting $dmg for notarization"
@@ -95,8 +109,8 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.notarize }}
         run: |
           if [[ -z "${APPLE_ID}" || -z "${APPLE_APP_SPECIFIC_PASSWORD}" || -z "${APPLE_TEAM_ID}" || -z "${CSC_LINK}" ]]; then
-            echo "Skipping strict validation because signing/notarization secrets are incomplete."
-            exit 0
+            echo "Signing/notarization secrets are incomplete; strict validation cannot be skipped for a public DMG." >&2
+            exit 1
           fi
           npm run validate:mac
 
