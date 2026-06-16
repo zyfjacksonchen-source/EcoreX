@@ -19,8 +19,14 @@ current investigation state.
 - WebUI Windows and macOS packages were built and published.
 - Production Web runtime was deployed, including the Node/npx fix required for
   `chrome-devtools` MCP/CDP startup.
-- macOS Desktop DMG remains pending a GitHub Actions macos runner build. Do not
-  present or reuse the old v0.1.11 DMG as a v0.1.12 artifact.
+- macOS Desktop DMGs were built on GitHub Actions `macos-15` via
+  workflow_dispatch after the workflow was changed to publish directly to
+  GitHub Release `v0.1.12` instead of `actions/upload-artifact`, which was
+  blocked by artifact storage quota recalculation.
+- Final production download page now serves the signed Windows installer, the
+  macOS Apple Silicon and Intel desktop DMGs, and separate Windows/macOS WebUI
+  packages. The final public release zip is size `694,836,215`, SHA256
+  `230B028E70A5B8E6CDF39F1D14CB7ACC752D9A1D7DA1E0E2544975A345B6FC70`.
 
 ## 2026-06-16 Rebuild 0023 Current Candidate
 
@@ -772,11 +778,11 @@ current investigation state.
 
 ## Active Goal
 
-- Remove session-list filler summaries such as "最近对话".
+- Remove session-list filler summaries such as "????".
 - Keep active tasks running across session switches, page refreshes, and short
   SSE disconnects; reconnect by persisted `request_id`.
 - Convert stale cached requests from a fully stopped runtime into a paused
-  assistant bubble instead of leaving `思考中`.
+  assistant bubble instead of leaving `???`.
 - Fix dead shared session locks whose owner PID no longer exists.
 - Investigate the then-latest Xiaohongshu note skill loop and decide whether the
   root cause is performance, tool-call chaining, permission/lock/SSE state, or
@@ -810,7 +816,7 @@ current investigation state.
 - `mapSessions()` merges local cached sessions, including live pending sessions
   not yet present in runtime history.
 - Session row details are blank unless there is meaningful project context; do
-  not show "最近对话" or other generic filler.
+  not show "????" or other generic filler.
 - Stream attachment now retries the same `request_id` after non-terminal
   EventSource errors. Stale cleanup handles are removed before retry.
 - `SessionLock` removes locks whose recorded PID is not alive on the same host,
@@ -911,9 +917,9 @@ current investigation state.
   - Both ports expose the browser tool with CDP/Chrome DevTools as the first
     control path.
 - Real stuck-task sample regression:
-  - Weak brief `系统盘优化 家庭` returns selected records but
+  - Weak brief `????? ??` returns selected records but
     `should_continue_pagination=true`, because keyword coverage is weak.
-  - Relevant brief `北京装修 家居家装 业主` returns
+  - Relevant brief `???? ???? ??` returns
     `should_continue_pagination=false`.
   - Weak brief with `--page-count 3 --max-pages 3` returns
     `should_continue_pagination=false`, closing the loop with a gap report
@@ -1058,8 +1064,8 @@ current investigation state.
     change desktop; both were restored to `full-access`.
   - WebUI log shows chrome-devtools MCP ready with 29 tools.
 - `deploy/ecorex-site/manifest.json` stores the Chinese Web artifact labels as
-  JSON Unicode escapes. Browser/UTF-8 readers still display `缃戦〉鐗坄 and
-  `鍦ㄧ綉椤靛唴鐩存帴閮ㄧ讲鍚姩`, while Windows PowerShell 5 default `Get-Content |
+  JSON Unicode escapes. Browser/UTF-8 readers still display `????? and
+  `???????????????`, while Windows PowerShell 5 default `Get-Content |
   ConvertFrom-Json` remains valid.
 - Config/log masking now fully replaces sensitive string values with `***`
   instead of preserving the first/last characters. This removed API-key suffix
@@ -1485,7 +1491,7 @@ previous local hand-test package is stale until the next formal build.
     local installs;
   - public bind with a configured password can start but still requires login.
 - Frontend reconnect polish from Web/Desktop parity review:
-  - React no longer displays `"最近"` as the missing-time fallback in session
+  - React no longer displays `"??"` as the missing-time fallback in session
     rows.
   - When a stale stream returns `invalid request_id`, React now loads
     `/api/history` for that session and replaces the cached pending bubble if a
