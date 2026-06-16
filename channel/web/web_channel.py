@@ -41,7 +41,7 @@ def _web_app_bridge_script() -> str:
 (function () {
   if (window.ecorexDesktop) return;
 
-  var WEB_CLIENT_KEY = "ecorex-web-v0.1.12-web.1";
+  var WEB_CLIENT_KEY = "ecorex-web-v0.1.13-web.1";
   var WEB_SESSION_KEY = "ecorex-web-enterprise-session";
   var WEB_LOCAL_SESSION_KEY = "ecorex-web-local-session";
   var WEB_DEVICE_KEY = "ecorex-web-device-id";
@@ -468,7 +468,7 @@ def _web_app_bridge_script() -> str:
           email: input.email,
           password: input.password,
           deviceId: deviceId(),
-          appVersion: "0.1.12-web.1"
+          appVersion: "0.1.13-web.1"
         }, false);
       } catch (error) {
         adminError = error;
@@ -2507,7 +2507,7 @@ class ClientProxyHandler:
         return target
 
     def _forward_headers(self) -> dict:
-        headers = {"User-Agent": "EcoreX-WebUI/0.1.12"}
+        headers = {"User-Agent": "EcoreX-WebUI/0.1.13"}
         for key, value in web.ctx.env.items():
             if key == "CONTENT_TYPE":
                 name = "Content-Type"
@@ -5361,4 +5361,9 @@ class VersionHandler:
     def GET(self):
         web.header('Content-Type', 'application/json; charset=utf-8')
         from cli import __version__
-        return json.dumps({"version": __version__})
+        from common.ecorex_release_notes import get_current_release_notes
+
+        return json.dumps({
+            "version": __version__,
+            "releaseNotes": get_current_release_notes(),
+        }, ensure_ascii=False)

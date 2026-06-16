@@ -48,6 +48,20 @@ export type RuntimeToolCall = {
   };
 };
 
+export type RuntimeReleaseNotes = {
+  version: string;
+  title?: string;
+  summary?: string;
+  highlights?: string[];
+  fixes?: string[];
+  howTo?: string[];
+  updatePolicy?: {
+    windows?: string;
+    macos?: string;
+    webui?: string;
+  };
+};
+
 export type RuntimeStep = {
   type?: string;
   content?: string;
@@ -98,6 +112,7 @@ export type RuntimeSnapshot = {
   status: "ready" | "offline" | "error";
   message: string;
   version?: string;
+  releaseNotes?: RuntimeReleaseNotes;
   currentModel?: string;
   sessions: RuntimeSession[];
   activeRequests?: RuntimeActiveRequest[];
@@ -291,7 +306,7 @@ export async function loadRuntimeSnapshot(): Promise<RuntimeSnapshot> {
     const activeRequestsPromise = apiJson<{ requests?: RuntimeActiveRequest[] }>("/api/active-requests")
       .catch(() => ({ requests: [] }));
     const [version, sessions, tools, skills, models, activeRequests] = await Promise.all([
-      apiJson<{ version?: string }>("/api/version"),
+      apiJson<{ version?: string; releaseNotes?: RuntimeReleaseNotes }>("/api/version"),
       apiJson<{ sessions?: RuntimeSession[]; total?: number; message?: string }>("/api/sessions?page=1&page_size=40"),
       apiJson<{ tools?: RuntimeTool[] }>("/api/tools"),
       apiJson<{ skills?: RuntimeSkill[] }>("/api/skills"),
@@ -312,6 +327,7 @@ export async function loadRuntimeSnapshot(): Promise<RuntimeSnapshot> {
       status: "ready",
       message: "已连接本地 EcoreX 运行时",
       version: version.version,
+      releaseNotes: version.releaseNotes,
       sessions: runtimeSessions,
       activeRequests: runtimeActiveRequests,
       totalSessions: typeof sessions.total === "number" ? sessions.total : runtimeSessions.length,

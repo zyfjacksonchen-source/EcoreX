@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.1.12",
+    [string]$Version = "0.1.13",
     [string]$RuntimeRoot = "desktop/runtime/ecorex-runtime",
     [string]$OutputDir = "release-artifacts",
     [switch]$KeepStaging
@@ -109,6 +109,69 @@ function New-ReleaseJson {
         bindHost = "127.0.0.1"
         auth = "disabled for local-only install"
     } | ConvertTo-Json -Depth 6) + "`n"
+}
+
+function New-MacInstallerApp {
+    param(
+        [Parameter(Mandatory = $true)][string]$AppRoot,
+        [Parameter(Mandatory = $true)][string]$InstallScriptRelative
+    )
+
+    $contentsDir = Join-Path $AppRoot "Contents"
+    $macOsDir = Join-Path $contentsDir "MacOS"
+    New-Item -ItemType Directory -Force -Path $macOsDir | Out-Null
+
+    $plist = @'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key>
+  <string>Install EcoreX WebUI</string>
+  <key>CFBundleIdentifier</key>
+  <string>cn.ecoreai.ecorex.webui.installer</string>
+  <key>CFBundleName</key>
+  <string>Install EcoreX WebUI</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>1.0</string>
+  <key>LSUIElement</key>
+  <true/>
+</dict>
+</plist>
+'@
+    Write-Utf8NoBom -Path (Join-Path $contentsDir "Info.plist") -Value $plist
+
+    $launcher = @'
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_EXEC_DIR="$(cd "$(dirname "$0")" && pwd)"
+PACKAGE_ROOT="$(cd "$APP_EXEC_DIR/../../.." && pwd)"
+INSTALL_SCRIPT="$PACKAGE_ROOT/__INSTALL_SCRIPT_RELATIVE__"
+STATE_DIR="$HOME/Library/Application Support/EcoreX WebUI/state"
+LOG_FILE="$STATE_DIR/install.log"
+ERR_FILE="$STATE_DIR/install.err.log"
+
+mkdir -p "$STATE_DIR"
+/usr/bin/osascript -e 'display notification "Installing and starting the local WebUI. Your browser will open when it is ready." with title "EcoreX WebUI"' >/dev/null 2>&1 || true
+
+(
+  set -euo pipefail
+  echo "==== EcoreX WebUI install started $(date -u +%Y-%m-%dT%H:%M:%SZ) ===="
+  if command -v xattr >/dev/null 2>&1; then
+    xattr -dr com.apple.quarantine "$PACKAGE_ROOT" >/dev/null 2>&1 || true
+    xattr -dr com.apple.quarantine "$HOME/Library/Application Support/EcoreX WebUI" >/dev/null 2>&1 || true
+  fi
+  bash "$INSTALL_SCRIPT"
+  /usr/bin/osascript -e 'display notification "EcoreX WebUI is running and the browser has been opened." with title "EcoreX WebUI"' >/dev/null 2>&1 || true
+) >> "$LOG_FILE" 2>> "$ERR_FILE" || {
+  /usr/bin/osascript -e "display dialog \"EcoreX WebUI installation failed. Check the log: $ERR_FILE\" buttons {\"OK\"} default button \"OK\" with icon caution" >/dev/null 2>&1 || true
+} &
+'@
+    $launcher = $launcher.Replace("__INSTALL_SCRIPT_RELATIVE__", $InstallScriptRelative)
+    Write-Utf8NoBom -Path (Join-Path $macOsDir "Install EcoreX WebUI") -Value $launcher
 }
 
 function Compress-ZipWithUnixPermissions {
@@ -425,18 +488,11 @@ Copy-Item -LiteralPath $pyX64 -Destination (Join-Path $macStage "python/$(Split-
 Copy-Item -LiteralPath $wheelArm -Destination (Join-Path $macStage "wheelhouse/mac-arm64") -Recurse -Force
 Copy-Item -LiteralPath $wheelX64 -Destination (Join-Path $macStage "wheelhouse/mac-x64") -Recurse -Force
 
-$macCommand = @'
-#!/usr/bin/env bash
-set -euo pipefail
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-bash "$SCRIPT_DIR/scripts/install-ecorex-webui-mac.sh"
-'@
-
 $macInstall = @'
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.1.12"
+VERSION="0.1.13"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 INSTALL_ROOT="${ECOREX_WEBUI_INSTALL_ROOT:-$HOME/Library/Application Support/EcoreX WebUI}"
@@ -446,6 +502,12 @@ WORKSPACE_ROOT="${ECOREX_WORKSPACE_ROOT:-$HOME/EcoreX}"
 PORT="${ECOREX_WEB_PORT:-9909}"
 OPEN_BROWSER="${OPEN_BROWSER:-1}"
 PYTHON_HOME="$INSTALL_ROOT/python"
+
+clear_quarantine() {
+  if command -v xattr >/dev/null 2>&1 && [[ -e "$1" ]]; then
+    xattr -dr com.apple.quarantine "$1" >/dev/null 2>&1 || true
+  fi
+}
 
 case "$(uname -m)" in
   arm64|aarch64)
@@ -463,6 +525,19 @@ case "$(uname -m)" in
 esac
 
 mkdir -p "$INSTALL_ROOT" "$STATE_DIR" "$WORKSPACE_ROOT"
+
+clear_quarantine "$PACKAGE_ROOT"
+clear_quarantine "$INSTALL_ROOT"
+
+if [[ -f "$STATE_DIR/ecorex-webui.pid" ]]; then
+  old_pid="$(cat "$STATE_DIR/ecorex-webui.pid" 2>/dev/null || true)"
+  if [[ -n "$old_pid" ]] && kill -0 "$old_pid" >/dev/null 2>&1; then
+    kill "$old_pid" >/dev/null 2>&1 || true
+    sleep 1
+  fi
+fi
+pkill -f "$RUNTIME_DIR/app.py" >/dev/null 2>&1 || true
+
 rsync -a --delete --exclude python --exclude __pycache__ --exclude .pytest_cache --exclude .mypy_cache --exclude .ruff_cache --exclude config.json "$PACKAGE_ROOT/runtime/" "$RUNTIME_DIR/"
 
 if [[ ! -x "$PYTHON_HOME/bin/python3" ]]; then
@@ -482,12 +557,15 @@ if [[ ! -x "$PYTHON_HOME/bin/python3" ]]; then
   fi
   rm -rf "$PYTHON_HOME"
   mv "$source_root" "$PYTHON_HOME"
+  chmod +x "$PYTHON_HOME/bin/python3" || true
+  clear_quarantine "$PYTHON_HOME"
 fi
 
 PYTHON="$PYTHON_HOME/bin/python3"
+clear_quarantine "$PYTHON"
 DEPS_STAMP="$STATE_DIR/deps-$VERSION.ok"
 if [[ ! -f "$DEPS_STAMP" ]]; then
-  "$PYTHON" -m pip install --no-index --find-links "$WHEEL_DIR" -r "$RUNTIME_DIR/core-requirements.txt"
+  PIP_NO_CACHE_DIR=1 "$PYTHON" -m pip install --no-index --no-cache-dir --no-compile --find-links "$WHEEL_DIR" -r "$RUNTIME_DIR/core-requirements.txt"
   date -u +"%Y-%m-%dT%H:%M:%SZ" > "$DEPS_STAMP"
 fi
 
@@ -601,17 +679,17 @@ echo "EcoreX WebUI is ready: $URL"
 '@
 
 New-Item -ItemType Directory -Force -Path (Join-Path $macStage "scripts") | Out-Null
-Write-Utf8NoBom -Path (Join-Path $macStage "Install EcoreX WebUI.command") -Value $macCommand
 Write-Utf8NoBom -Path (Join-Path $macStage "scripts/install-ecorex-webui-mac.sh") -Value $macInstall
-Write-Utf8NoBom -Path (Join-Path $macStage "release.json") -Value (New-ReleaseJson -ArtifactId "webui-macos-universal" -Platform "macOS arm64/x64" -InstallEntry "Install EcoreX WebUI.command")
-Write-Utf8NoBom -Path (Join-Path $macStage "README.txt") -Value "Double-click Install EcoreX WebUI.command. The installer copies EcoreX WebUI to ~/Library/Application Support/EcoreX WebUI, uses the bundled Python and offline wheels, starts the local service, and opens http://127.0.0.1:9909/app/ in your browser.`n"
+New-MacInstallerApp -AppRoot (Join-Path $macStage "Install EcoreX WebUI.app") -InstallScriptRelative "scripts/install-ecorex-webui-mac.sh"
+Write-Utf8NoBom -Path (Join-Path $macStage "release.json") -Value (New-ReleaseJson -ArtifactId "webui-macos-universal" -Platform "macOS arm64/x64" -InstallEntry "Install EcoreX WebUI.app")
+Write-Utf8NoBom -Path (Join-Path $macStage "README.txt") -Value "Double-click Install EcoreX WebUI.app. The installer runs without opening Terminal, writes logs to ~/Library/Application Support/EcoreX WebUI/state, starts the local service, and opens http://127.0.0.1:9909/app/ in your browser.`n"
 
 $macStageParent = Split-Path -Parent $macStage
 $macTarResolved = [System.IO.Path]::GetFullPath($macTar)
 $macStageUnix = "/mnt/c/" + (($macStage -replace "^[A-Za-z]:\\", "") -replace "\\", "/")
 $macParentUnix = "/mnt/c/" + (($macStageParent -replace "^[A-Za-z]:\\", "") -replace "\\", "/")
 $macTarUnix = "/mnt/c/" + (($macTarResolved -replace "^[A-Za-z]:\\", "") -replace "\\", "/")
-$bashCmd = "cd '$macParentUnix' && chmod +x '$macLeaf/Install EcoreX WebUI.command' '$macLeaf/scripts/install-ecorex-webui-mac.sh' && if [ -f '$macLeaf/runtime/tools/bin/lark-cli' ]; then chmod +x '$macLeaf/runtime/tools/bin/lark-cli'; fi && tar -czf '$macTarUnix' '$macLeaf'"
+$bashCmd = "cd '$macParentUnix' && chmod +x '$macLeaf/Install EcoreX WebUI.app/Contents/MacOS/Install EcoreX WebUI' '$macLeaf/scripts/install-ecorex-webui-mac.sh' && if [ -f '$macLeaf/runtime/tools/bin/lark-cli' ]; then chmod +x '$macLeaf/runtime/tools/bin/lark-cli'; fi && tar -czf '$macTarUnix' '$macLeaf'"
 bash -lc $bashCmd
 if ($LASTEXITCODE -ne 0) {
     throw "macOS tar packaging failed"
@@ -634,13 +712,6 @@ if errorlevel 1 (
 )
 '@
 
-$combinedCommand = @'
-#!/usr/bin/env bash
-set -euo pipefail
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-bash "$SCRIPT_DIR/macos/scripts/install-ecorex-webui-mac.sh"
-'@
-
 $combinedReadme = @'
 EcoreX WebUI dual-platform package
 
@@ -648,23 +719,24 @@ Windows:
   Double-click "Install EcoreX WebUI.cmd".
 
 macOS:
-  Double-click "Install EcoreX WebUI.command".
-  If Gatekeeper blocks the first launch, right-click the command file and choose Open once.
+  Double-click "Install EcoreX WebUI.app".
+  The installer runs without opening Terminal. If Gatekeeper blocks the first launch,
+  right-click the app and choose Open once.
 
 The installer copies EcoreX WebUI to the user-local app data folder, starts the local service, and opens http://127.0.0.1:9909/app/ in the default browser.
 '@
 
 Write-Utf8NoBom -Path (Join-Path $combinedStage "Install EcoreX WebUI.cmd") -Value $combinedCmd
-Write-Utf8NoBom -Path (Join-Path $combinedStage "Install EcoreX WebUI.command") -Value $combinedCommand
+New-MacInstallerApp -AppRoot (Join-Path $combinedStage "Install EcoreX WebUI.app") -InstallScriptRelative "macos/scripts/install-ecorex-webui-mac.sh"
 Write-Utf8NoBom -Path (Join-Path $combinedStage "README.txt") -Value $combinedReadme
-Write-Utf8NoBom -Path (Join-Path $combinedStage "release.json") -Value (New-ReleaseJson -ArtifactId "webui-win-mac" -Platform "Windows x64 + macOS arm64/x64" -InstallEntry "Install EcoreX WebUI.cmd / Install EcoreX WebUI.command")
+Write-Utf8NoBom -Path (Join-Path $combinedStage "release.json") -Value (New-ReleaseJson -ArtifactId "webui-win-mac" -Platform "Windows x64 + macOS arm64/x64" -InstallEntry "Install EcoreX WebUI.cmd / Install EcoreX WebUI.app")
 
 Compress-ZipWithUnixPermissions `
     -SourceRoot $combinedStage `
     -DestinationPath $combinedZip `
     -ExecutableRelativePaths @(
-        "Install EcoreX WebUI.command",
-        "macos/Install EcoreX WebUI.command",
+        "Install EcoreX WebUI.app/Contents/MacOS/Install EcoreX WebUI",
+        "macos/Install EcoreX WebUI.app/Contents/MacOS/Install EcoreX WebUI",
         "macos/scripts/install-ecorex-webui-mac.sh",
         "macos/runtime/tools/bin/lark-cli"
     )

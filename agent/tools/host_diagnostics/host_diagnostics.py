@@ -230,8 +230,8 @@ class HostDiagnostics(BaseTool):
         "Read-only EcoreX host capability diagnostics. Use before raw bash when a task "
         "appears stuck, when Feishu/Lark/Chrome/CDP/MCP availability is unclear, or when "
         "you need to decide whether to ask the user for authorization. Returns sanitized "
-        "runtime status, capability boundaries, MCP state, permission mode, Feishu CLI "
-        "status, skill load diagnostics, and recent log tails."
+        "runtime status, capability boundaries, MCP state, permission mode, Feishu CLI, "
+        "EcoreX CLI, subagent/goal boundary status, skill load diagnostics, and recent log tails."
     )
     params: dict = {
         "type": "object",
@@ -296,13 +296,19 @@ class HostDiagnostics(BaseTool):
                 "canPatchRuntimeFiles": _safe_exists(str(runtime_root / "agent")),
                 "selfEvolutionEnabled": bool(conf().get("self_evolution_enabled", True)),
                 "hasBuiltInSubagents": False,
-                "subagentNote": "EcoreX runtime is single-agent; parallel sub-agents are a Codex host feature and need a product-level coordinator.",
+                "subagentPlanRequired": True,
+                "subagentNote": "EcoreX runtime is single-agent today; parallel sub-agents require a product-level coordinator, durable child sessions, and UI/API orchestration.",
+                "hasGoalTool": False,
+                "goalPlanRequired": True,
+                "goalNote": "Goal Ledger documentation exists, but no runtime goal tool/API is currently exposed to agents.",
+                "availableStructuredCliTools": ["feishu_cli", "ecorex_cli"],
             },
             "executables": {
                 "node": _which("node"),
                 "npm": _which("npm"),
                 "npx": _which("npx"),
                 "larkCli": _which("lark-cli"),
+                "cowCli": _which("cow"),
                 "chrome": _which("chrome") or _which("google-chrome") or _which("msedge"),
             },
             "browser": {

@@ -185,7 +185,7 @@ if ($env:ECOREX_DISABLE_ENTERPRISE_POLICY -ne "1") {
     $adminBase = $adminBase.TrimEnd("/")
     $clientEventKey = $env:ECOREX_CLIENT_EVENT_KEY
     if (-not $clientEventKey) {
-        $clientEventKey = "ecorex-desktop-v0.1.12"
+        $clientEventKey = "ecorex-desktop-v0.1.13"
     }
     $policy = [ordered]@{
         adminEventsUrl = $env:ECOREX_ADMIN_EVENTS_URL

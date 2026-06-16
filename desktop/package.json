@@ -1,6 +1,6 @@
 {
   "name": "ecorex-desktop",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "private": true,
   "description": "EcoreX desktop shell for the compatible agent runtime",
   "author": "EcoreX",

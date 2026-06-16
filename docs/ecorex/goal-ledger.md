@@ -2,9 +2,9 @@
 
 ## Active Goal
 
-- Version: v0.1.12
-- Objective: fix the desktop chat/session/tool UX regressions, make CDP the default browser automation path, add composer token/context meters, tighten Admin token/log views, build an unsigned Windows package, sync source/package to GitHub, and deploy only the Admin v0.1.12 surface before the download page rollout.
-- Current branch/worktree note: `deploy/`, `desktop/`, Admin API, and EcoreX docs are active product files. Generated release/runtime folders remain ignored and should not be hand-edited as source of truth.
+- Version: v0.1.13
+- Objective: fix composer input lockups during session switching/new sessions/concurrent sessions; add Ctrl/Command+Enter multiline input; make `find` and `skill-creator` built-in out-of-box abilities; expose non-Feishu project CLI actions through a structured tool; audit subagent and goal capability boundaries; and add user-facing update notes for WebUI/Desktop reopen after update.
+- Current branch/worktree note: `codex/ecorex-v0.1.13` is based on remote v0.1.12 final commit `b76f5a0d8495c9d447078e1db56f06b56cc962d2`. Generated `.tmp-*` and `desktop/release-local-*` folders remain ignored and must not be hand-edited as source of truth.
 
 ## Work Ownership
 
@@ -28,6 +28,7 @@
 
 ## Running Notes
 
+- 2026-06-16: Started v0.1.13 source pass from remote v0.1.12 final commit `b76f5a0d8495c9d447078e1db56f06b56cc962d2`. Implemented composer focus/session-switch race hardening, Ctrl/Command+Enter multiline input, built-in `find` tool/skill, structured `ecorex_cli`, `/api/version` release notes, and one-time WebUI/Desktop update notes. Subagent and goal runtime tools are not present yet; documented product development plans in `docs/ecorex/v0.1.13/agent-capability-audit-and-plan.md`. No v0.1.13 artifact has been built, signed, uploaded, or deployed yet; public manifest remains v0.1.12 until real release artifacts exist.
 - 2026-06-11: Plan converted to implementation. Initial inspection found version sources still at `0.1.5`/`0.1.4`, Admin API without password/quota/login, and desktop UI concentrated in a large `App.tsx`.
 - 2026-06-11: Admin API/Web, Desktop UI, Electron runtime bridge, capability feedback, and v0.1.10 metadata implemented.
 - 2026-06-11: Blocking review findings fixed: model config now requires a user token, renderer no longer receives enterprise token, API bridge uses an exact route whitelist, file-open confirmation is fixed above the composer, local image thumbnails render, and disabled capability packs no longer show install actions.

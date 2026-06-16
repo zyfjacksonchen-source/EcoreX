@@ -192,6 +192,7 @@ const SESSION_UI_STORAGE_KEY = "ecorex-session-ui-state";
 const LAST_ACTIVE_SESSION_STORAGE_KEY = "ecorex-last-active-session-id";
 const CAPABILITY_ENABLED_STORAGE_KEY = "ecorex-capability-enabled";
 const SKILL_DEFAULTS_STORAGE_KEY = "ecorex-skill-defaults-v1";
+const RELEASE_NOTES_SEEN_STORAGE_KEY = "ecorex-release-notes-seen-version";
 const CONTEXT_THRESHOLD_TOKENS = 258_000;
 const EFFECTIVE_MODEL_FALLBACK = "gpt-5.5";
 const EFFECTIVE_MODEL_ALIAS_PREFIXES = ["deepseek-"];
@@ -204,15 +205,17 @@ const coreAbilityNames = new Set([
   "write",
   "edit",
   "ls",
+  "find",
   "vision",
   "web_search",
   "web_fetch",
   "browser",
+  "ecorex_cli",
   "memory_search",
   "memory_get"
 ]);
 
-const skillAbilityNames = new Set(["image-generation", "knowledge-wiki", "skill-creator"]);
+const skillAbilityNames = new Set(["find", "image-generation", "knowledge-wiki", "skill-creator"]);
 
 function readStorage<T>(key: string, fallback: T): T {
   try {
@@ -844,6 +847,7 @@ export function App() {
   const [, setActiveRequestId] = useState("");
   const [approval, setApproval] = useState<ApprovalState | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
   const [showJumpLatest, setShowJumpLatest] = useState(false);
@@ -876,11 +880,13 @@ export function App() {
   const sessionRequestIdsRef = useRef<StringMap>({});
   const activeSessionIdRef = useRef(activeSessionId);
   const messagesRef = useRef(messages);
+  const sessionSwitchSeq = useRef(0);
   const autoScrollRef = useRef(true);
   const completedRequestIds = useRef<StringBoolMap>({});
   const streamRetryCounts = useRef<Record<string, number>>({});
   const preloadDone = useRef(false);
   const bootHistoryRefreshDone = useRef(false);
+  const releaseNotesDismissedVersion = useRef("");
 
   useEffect(() => {
     applyTheme(theme);
@@ -927,6 +933,18 @@ export function App() {
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  useEffect(() => {
+    const notes = runtimeSnapshot.releaseNotes;
+    if (runtimeSnapshot.status !== "ready" || !notes?.version) return;
+    if (releaseNotesDismissedVersion.current === notes.version) return;
+    try {
+      if (window.localStorage.getItem(RELEASE_NOTES_SEEN_STORAGE_KEY) === notes.version) return;
+    } catch {
+      // Showing the notes is still useful when storage is unavailable.
+    }
+    setReleaseNotesOpen(true);
+  }, [runtimeSnapshot.status, runtimeSnapshot.releaseNotes?.version]);
 
   useEffect(() => {
     setSessionUiState((current) => ({
@@ -1178,8 +1196,29 @@ export function App() {
   }
 
   function focusComposerSoon() {
+    const focus = () => {
+      const textarea = composerRef.current;
+      if (!textarea) return;
+      textarea.focus({ preventScroll: true });
+      syncComposerHeight();
+    };
+    focus();
+    window.requestAnimationFrame(focus);
+    window.setTimeout(focus, 40);
+  }
+
+  function insertComposerNewline(textarea: HTMLTextAreaElement) {
+    const start = textarea.selectionStart ?? composerText.length;
+    const end = textarea.selectionEnd ?? start;
+    const value = textarea.value;
+    const next = `${value.slice(0, start)}\n${value.slice(end)}`;
+    const nextCursor = start + 1;
+    setComposerText(next);
     window.requestAnimationFrame(() => {
-      composerRef.current?.focus();
+      const current = composerRef.current;
+      if (!current) return;
+      current.focus({ preventScroll: true });
+      current.setSelectionRange(nextCursor, nextCursor);
       syncComposerHeight();
     });
   }
@@ -1265,9 +1304,11 @@ export function App() {
   }
 
   async function selectSession(row: SessionRow) {
+    const switchSeq = ++sessionSwitchSeq.current;
     const nextProjectId = row.projectId || null;
     autoScrollRef.current = true;
     setShowJumpLatest(false);
+    activeSessionIdRef.current = row.id;
     setActiveSessionId(row.id);
     setActiveSessionTitle(row.title);
     setActiveProjectId(nextProjectId);
@@ -1294,6 +1335,9 @@ export function App() {
     focusComposerSoon();
     try {
       const history = await loadSessionHistory(row.id);
+      if (sessionSwitchSeq.current !== switchSeq || activeSessionIdRef.current !== row.id) {
+        return;
+      }
       const mapped = normalizePausedMessages(history.map((item, index) => mapRuntimeMessage(item, row.id, index)));
       setSessionUiState((current) => ({
         ...current,
@@ -1320,8 +1364,10 @@ export function App() {
   }
 
   function startNewSession(project?: ProjectFolder | null) {
+    sessionSwitchSeq.current += 1;
     const id = project ? `ecorex-project-${project.id}-${Date.now()}` : `ecorex-${Date.now()}`;
     const title = project ? `${project.name} · 新会话` : "新对话";
+    activeSessionIdRef.current = id;
     setActiveSessionId(id);
     setActiveProjectId(project?.id || null);
     setActiveSessionTitle(title);
@@ -2355,6 +2401,11 @@ export function App() {
 
   function handleComposerKey(event: KeyboardEvent<HTMLTextAreaElement>) {
     const isMeta = event.metaKey || event.ctrlKey;
+    if (event.key === "Enter" && isMeta) {
+      event.preventDefault();
+      insertComposerNewline(event.currentTarget);
+      return;
+    }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       void sendNow();
@@ -2490,6 +2541,19 @@ export function App() {
     }
   }
 
+  function closeReleaseNotes() {
+    const seenVersion = runtimeSnapshot.releaseNotes?.version || runtimeSnapshot.version;
+    if (seenVersion) {
+      releaseNotesDismissedVersion.current = seenVersion;
+      try {
+        window.localStorage.setItem(RELEASE_NOTES_SEEN_STORAGE_KEY, seenVersion);
+      } catch {
+        // Ignore storage failures; closing should still work.
+      }
+    }
+    setReleaseNotesOpen(false);
+  }
+
   const browserPack = packs.find((pack) => pack.id === "browser-automation");
   const abilityRows = [
     {
@@ -2553,6 +2617,7 @@ export function App() {
   const hasPendingAssistantMessage = messages.some(isLiveAssistantMessage);
   const composerHasPayload = Boolean(composerText.trim() || attachments.length);
   const currentComposerPermissionMode: PermissionMode = permissionState?.mode || "smart-ask";
+  const releaseNotes = runtimeSnapshot.releaseNotes;
   const settingsNav: Array<{ id: SettingsSection; label: string; icon: ReactNode }> = [
     { id: "account", label: "账号", icon: <UserRound aria-hidden="true" /> },
     { id: "projects", label: "项目", icon: <FolderOpen aria-hidden="true" /> },
@@ -3125,6 +3190,58 @@ export function App() {
                 )}
               </div>
             </div>
+          </section>
+        </div>
+      )}
+
+      {releaseNotesOpen && releaseNotes && (
+        <div className="modal-backdrop release-notes-backdrop" onClick={closeReleaseNotes}>
+          <section className="release-notes-sheet" role="dialog" aria-modal="true" aria-labelledby="release-notes-title" onClick={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <span>EcoreX {releaseNotes.version}</span>
+                <h2 id="release-notes-title">{releaseNotes.title || "更新说明"}</h2>
+                {releaseNotes.summary && <p>{releaseNotes.summary}</p>}
+              </div>
+              <button className="icon-button" title="关闭更新说明" aria-label="关闭更新说明" onClick={closeReleaseNotes}><X aria-hidden="true" /></button>
+            </header>
+            <div className="release-notes-content">
+              {!!releaseNotes.highlights?.length && (
+                <section>
+                  <strong>新增和改进</strong>
+                  <ul>
+                    {releaseNotes.highlights.map((item) => <li key={item}>{item}</li>)}
+                  </ul>
+                </section>
+              )}
+              {!!releaseNotes.fixes?.length && (
+                <section>
+                  <strong>修复的问题</strong>
+                  <ul>
+                    {releaseNotes.fixes.map((item) => <li key={item}>{item}</li>)}
+                  </ul>
+                </section>
+              )}
+              {!!releaseNotes.howTo?.length && (
+                <section>
+                  <strong>怎么用</strong>
+                  <ul>
+                    {releaseNotes.howTo.map((item) => <li key={item}>{item}</li>)}
+                  </ul>
+                </section>
+              )}
+              {releaseNotes.updatePolicy && (
+                <section className="release-notes-update-policy">
+                  <strong>更新方式</strong>
+                  {releaseNotes.updatePolicy.windows && <p>{releaseNotes.updatePolicy.windows}</p>}
+                  {releaseNotes.updatePolicy.macos && <p>{releaseNotes.updatePolicy.macos}</p>}
+                  {releaseNotes.updatePolicy.webui && <p>{releaseNotes.updatePolicy.webui}</p>}
+                </section>
+              )}
+            </div>
+            <footer>
+              <button type="button" onClick={closeReleaseNotes}>知道了</button>
+            </footer>
           </section>
         </div>
       )}

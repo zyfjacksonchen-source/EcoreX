@@ -136,6 +136,21 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertIn("window.ecorexDesktop", html)
         self.assertNotIn("desktop/dist", html)
 
+    def test_version_handler_returns_user_facing_release_notes(self):
+        from channel.web import web_channel
+
+        payload = json.loads(web_channel.VersionHandler().GET())
+
+        self.assertEqual(payload["version"], "0.1.13")
+        notes = payload["releaseNotes"]
+        self.assertEqual(notes["version"], "0.1.13")
+        self.assertIn("highlights", notes)
+        self.assertIn("fixes", notes)
+        self.assertIn("howTo", notes)
+        self.assertIn("windows", notes["updatePolicy"])
+        self.assertIn("macos", notes["updatePolicy"])
+        self.assertIn("webui", notes["updatePolicy"])
+
     def test_public_web_bind_requires_password(self):
         from channel.web import web_channel
 
@@ -1034,6 +1049,24 @@ class TestAgentHostBoundary(unittest.TestCase):
         finally:
             manager.tool_configs = old_configs
 
+    def test_tool_manager_loads_find_and_ecorex_cli_tools(self):
+        from agent.tools.tool_manager import ToolManager
+
+        manager = ToolManager()
+        manager.load_tools()
+
+        self.assertIsNotNone(manager.create_tool("find"))
+        self.assertIsNotNone(manager.create_tool("ecorex_cli"))
+
+    def test_ecorex_cli_version_action_uses_bundled_cli(self):
+        from agent.tools.ecorex_cli.ecorex_cli import EcoreXCli
+
+        result = EcoreXCli().execute({"action": "version"})
+
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.result["exit_code"], 0)
+        self.assertIn("cow", result.result["stdout"])
+
     def test_agent_initializer_load_tools_applies_cached_tool_config(self):
         from bridge.agent_initializer import AgentInitializer
 
@@ -1537,6 +1570,7 @@ class TestAgentHostBoundary(unittest.TestCase):
                     os.environ["ECOREX_DESKTOP_USER_DATA"] = old_user_data
 
     def test_custom_filesystem_profile_limits_file_tools_to_workspace(self):
+        from agent.tools.find.find import Find
         from agent.tools.ls.ls import Ls
         from agent.tools.read.read import Read
         from agent.tools.send.send import Send
@@ -1578,6 +1612,7 @@ class TestAgentHostBoundary(unittest.TestCase):
                 }, handle)
             try:
                 read_ok = Read({"cwd": workspace}).execute({"path": "safe.txt"})
+                find_ok = Find({"cwd": workspace}).execute({"pattern": "*.txt"})
                 ls_ok = Ls({"cwd": workspace}).execute({"path": "."})
                 write_ok = Write({"cwd": workspace}).execute({"path": "new.txt", "content": "new"})
                 send_ok = Send({"cwd": workspace}).execute({"path": "safe.txt"})
@@ -1588,6 +1623,7 @@ class TestAgentHostBoundary(unittest.TestCase):
                     "content": "blocked",
                 })
                 read_env = Read({"cwd": workspace}).execute({"path": os.path.join("config", ".env")})
+                find_env = Find({"cwd": workspace}).execute({"pattern": "*.env", "include_hidden": True})
             finally:
                 if old_desktop is None:
                     os.environ.pop("ECOREX_DESKTOP", None)
@@ -1603,6 +1639,9 @@ class TestAgentHostBoundary(unittest.TestCase):
                     os.environ["ECOREX_DESKTOP_USER_DATA"] = old_desktop_user_data
 
         self.assertEqual(read_ok.status, "success")
+        self.assertEqual(find_ok.status, "success")
+        self.assertIn("safe.txt", find_ok.result["output"])
+        self.assertNotIn(".env", find_ok.result["output"])
         self.assertEqual(ls_ok.status, "success")
         self.assertEqual(write_ok.status, "success")
         self.assertEqual(send_ok.status, "success")
@@ -1615,6 +1654,8 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(root, "blocked.txt")))
         self.assertEqual(read_env.status, "error")
         self.assertIn("Filesystem profile blocks read", str(read_env.result))
+        self.assertEqual(find_env.status, "success")
+        self.assertNotIn(".env", find_env.result["output"])
 
     def test_default_filesystem_profile_limits_unprofiled_file_access_to_workspace(self):
         from agent.tools.read.read import Read

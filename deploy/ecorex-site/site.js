@@ -62,6 +62,7 @@ const cardCopy = {
     icon: "Mac",
     title: "macOS",
     body: "桌面端 DMG 安装版。点击下载后选择 Apple Silicon 或 Intel 版本。",
+    note: "如果 macOS 提示无法验证开发者，请打开“系统设置 → 隐私与安全性”，在 EcoreX 提示下点“仍要打开”。",
   },
   "webui-windows-x64": {
     icon: "Web",
@@ -140,6 +141,10 @@ function architectureSelector(cardId, artifacts) {
   `;
 }
 
+function cardNote(copy) {
+  return copy.note ? `<p class="download-note">${copy.note}</p>` : "";
+}
+
 function collectCards(artifacts) {
   const byId = Object.fromEntries(artifacts.map((artifact) => [artifact.id, artifact]));
   return {
@@ -178,6 +183,7 @@ function renderDownloads(manifest) {
       <span class="platform-icon">${copy.icon}</span>
       <h3>${copy.title}</h3>
       <p>${copy.body}</p>
+      ${cardNote(copy)}
       ${architectureSelector(cardId, grouped[cardId] || [])}
     `;
     grid.appendChild(card);

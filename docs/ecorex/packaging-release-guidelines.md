@@ -1,5 +1,22 @@
 # EcoreX 打包发布准则
 
+## 2026-06-16 v0.1.13 Release Gate Addendum
+
+- v0.1.13 source starts from remote `main`/tag v0.1.12 at `b76f5a0d8495c9d447078e1db56f06b56cc962d2`. Do not publish from an older local HEAD.
+- `cli/VERSION`, `desktop/package.json`, and `desktop/package-lock.json` are source version gates for v0.1.13. `deploy/ecorex-site/manifest.json` must not be bumped until real v0.1.13 artifacts have been built, signed, hashed, and staged.
+- Runtime/client defaults must use `ecorex-desktop-v0.1.13` and `ecorex-web-v0.1.13-web.1`. Admin rollout must keep older accepted keys for compatibility while adding the v0.1.13 keys.
+- Any v0.1.12 installer, DMG, WebUI package, Linux service tarball, or public release zip is stale for v0.1.13. Do not rename or reuse old artifacts as a new version.
+- WebUI/Desktop update notes are a required release feature. `/api/version` must return `releaseNotes`, and reopening after an update must show the user-facing notes once per version. Notes must explain user-visible features, how to use them, fixed bugs, and update path without internal release jargon.
+- Windows update policy: because Windows packages are signed, the current signed v0.1.13 installer may be offered as a one-click update after Authenticode validation and installed-app smoke pass.
+- macOS update policy: the app should prompt users to download the latest DMG from the public download page. Do not imply notarization unless notarization has actually passed for that DMG.
+- macOS DMG download cards must explain the Gatekeeper recovery path in user language: open "系统设置 → 隐私与安全性" and click "仍要打开" for EcoreX when macOS blocks first launch.
+- WebUI update policy: after package/server update, reopening `/app/` must show the new update notes. Verify local storage only suppresses the modal after the user closes the notes for that same version.
+- Composer regression gate: session switching, creating a new session, and returning to a concurrent running session must leave the textarea focusable/typeable. `Ctrl + Enter` and macOS `Command + Enter` must insert a newline; plain `Enter` still sends.
+- Built-in ability gate: packaged runtime must include `agent/tools/find/find.py`, `skills/find/SKILL.md`, `agent/tools/ecorex_cli/ecorex_cli.py`, and existing `skills/skill-creator/SKILL.md`.
+- Capability claim gate: v0.1.13 may claim built-in `find`, `skill-creator`, and structured `ecorex_cli`; it must not claim product-level subagents or Codex-style runtime goal tools. Host diagnostics must report those as planned/missing until real tools and UI exist.
+- Frontend static hash gate: after the v0.1.13 renderer build, update `REQUIRED_WEB_ASSETS` and release docs with the new `index-*.js` hash. Current v0.1.13 source-pass assets are `index-CcCofcc7.js` and `index-D7oCsug3.css`; the v0.1.12 `index-B_LYG2V7.js` is stale once the release-notes UI is built.
+- Release validator must retain sentinels for release notes, `find`, `ecorex_cli`, host diagnostics goal/subagent boundary fields, and WebUI message/rendering files.
+
 ## 2026-06-16 v0.1.12 Release Gate Addendum 0023
 
 - Current v0.1.12 hand-test source of truth is `release-local-0023`. Anything

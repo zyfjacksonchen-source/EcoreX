@@ -337,6 +337,18 @@ h3 {
   line-height: 1.55;
 }
 
+.download-card .download-note {
+  min-height: 0;
+  margin: -2px 0 10px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--brand) 32%, var(--rule));
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  background: var(--brand-soft);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .download-card .meta {
   display: grid;
   gap: 6px;

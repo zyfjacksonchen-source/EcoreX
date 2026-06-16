@@ -1,8 +1,8 @@
 param(
-    [string]$Version = "0.1.12",
+    [string]$Version = "0.1.13",
     [string]$SiteRoot = "deploy/ecorex-site",
     [string]$AdminApiRoot = "deploy/ecorex-admin-api",
-    [string]$InstallerPath = "desktop/release/EcoreX_0.1.12_x64-setup.exe",
+    [string]$InstallerPath = "desktop/release/EcoreX_0.1.13_x64-setup.exe",
     [string]$MacArm64DmgPath = "",
     [string]$MacX64DmgPath = "",
     [string]$WebTarballPath = "",

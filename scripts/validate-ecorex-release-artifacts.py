@@ -25,10 +25,11 @@ FORBIDDEN_WEB_ASSETS = (
     "index-DntImxX6.js",
     "index-DMhz52Zy.js",
     "index-CjBkNLMl.js",
+    "index-B_LYG2V7.js",
 )
 REQUIRED_WEB_ASSETS = (
-    "index-B_LYG2V7.js",
-    "index-BG_69rJD.css",
+    "index-CcCofcc7.js",
+    "index-D7oCsug3.css",
 )
 REQUIRED_SITE_ASSETS = (
     "site/assets/icon.png",
@@ -44,12 +45,15 @@ REQUIRED_RUNTIME_SUFFIXES = (
     "runtime/agent/skills/manager.py",
     "runtime/agent/tools/base_tool.py",
     "runtime/agent/tools/tool_manager.py",
+    "runtime/common/ecorex_release_notes.py",
     "runtime/common/ecorex_tool_permissions.py",
     "runtime/agent/tools/read/read.py",
+    "runtime/agent/tools/find/find.py",
     "runtime/agent/tools/ls/ls.py",
     "runtime/agent/tools/write/write.py",
     "runtime/agent/tools/edit/edit.py",
     "runtime/agent/tools/send/send.py",
+    "runtime/agent/tools/ecorex_cli/ecorex_cli.py",
     "runtime/agent/tools/feishu_cli/feishu_cli.py",
     "runtime/agent/tools/host_diagnostics/host_diagnostics.py",
     "runtime/agent/tools/mcp/mcp_client.py",
@@ -60,6 +64,7 @@ REQUIRED_RUNTIME_SUFFIXES = (
     "runtime/agent/memory/summarizer.py",
     "runtime/agent/knowledge/service.py",
     "runtime/skills/image-generation/scripts/generate.py",
+    "runtime/skills/find/SKILL.md",
     "runtime/skills/create-xiaohongshu-note/SKILL.md",
     "runtime/skills/create-xiaohongshu-note/scripts/generate_cover_image.py",
 )
@@ -72,12 +77,15 @@ REQUIRED_DESKTOP_RUNTIME_FILES = (
     "agent/skills/manager.py",
     "agent/tools/base_tool.py",
     "agent/tools/tool_manager.py",
+    "common/ecorex_release_notes.py",
     "common/ecorex_tool_permissions.py",
     "agent/tools/read/read.py",
+    "agent/tools/find/find.py",
     "agent/tools/ls/ls.py",
     "agent/tools/write/write.py",
     "agent/tools/edit/edit.py",
     "agent/tools/send/send.py",
+    "agent/tools/ecorex_cli/ecorex_cli.py",
     "agent/tools/feishu_cli/feishu_cli.py",
     "agent/tools/host_diagnostics/host_diagnostics.py",
     "agent/tools/mcp/mcp_client.py",
@@ -88,6 +96,7 @@ REQUIRED_DESKTOP_RUNTIME_FILES = (
     "agent/memory/summarizer.py",
     "agent/knowledge/service.py",
     "skills/image-generation/scripts/generate.py",
+    "skills/find/SKILL.md",
     "skills/create-xiaohongshu-note/SKILL.md",
     "skills/create-xiaohongshu-note/scripts/generate_cover_image.py",
 )
@@ -157,6 +166,15 @@ def validate_manifest_artifacts(manifest: dict, artifact_dir: pathlib.Path) -> l
 def validate_zip_assets(path: pathlib.Path, label: str) -> None:
     with zipfile.ZipFile(path) as archive:
         names = archive.namelist()
+        if label == "webui-win-mac":
+            require(
+                any(name.endswith("Install EcoreX WebUI.app/Contents/MacOS/Install EcoreX WebUI") for name in names),
+                f"{label} missing macOS .app installer entrypoint",
+            )
+            require(
+                not any(name.endswith("Install EcoreX WebUI.command") for name in names),
+                f"{label} contains terminal-opening macOS .command installer",
+            )
         for required in REQUIRED_WEB_ASSETS:
             require(any(name.endswith(required) for name in names), f"{label} missing {required}")
         for required in REQUIRED_RUNTIME_SUFFIXES:
@@ -171,6 +189,15 @@ def validate_zip_assets(path: pathlib.Path, label: str) -> None:
 def validate_tar_assets(path: pathlib.Path, label: str) -> None:
     with tarfile.open(path, "r:gz") as archive:
         names = archive.getnames()
+        if label == "webui-macos-universal":
+            require(
+                any(name.endswith("Install EcoreX WebUI.app/Contents/MacOS/Install EcoreX WebUI") for name in names),
+                f"{label} missing macOS .app installer entrypoint",
+            )
+            require(
+                not any(name.endswith("Install EcoreX WebUI.command") for name in names),
+                f"{label} contains terminal-opening macOS .command installer",
+            )
         for required in REQUIRED_WEB_ASSETS:
             require(any(name.endswith(required) for name in names), f"{label} missing {required}")
         for required in REQUIRED_RUNTIME_SUFFIXES:
@@ -326,6 +353,7 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
 
     web_channel = read_text_by_suffix("channel/web/web_channel.py")
     require_contains(web_channel, "def _finalize_request_after_worker", f"{label} web channel")
+    require_contains(web_channel, "\"releaseNotes\": get_current_release_notes()", f"{label} web channel")
     require_contains(web_channel, "produce failed before worker start", f"{label} web channel")
     require_contains(web_channel, "get_cancel_registry().unregister(request_id)", f"{label} web channel")
     require_contains(web_channel, "def active_requests_snapshot", f"{label} web channel")
@@ -365,8 +393,17 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
     require_contains(broker, "get_appdata_dir", f"{label} permission broker")
     require_contains(broker, "\"filesystem-access\"", f"{label} permission broker")
 
+    release_notes = read_text_by_suffix("common/ecorex_release_notes.py")
+    require_contains(release_notes, "\"version\": \"0.1.13\"", f"{label} release notes")
+    require_contains(release_notes, "\"updatePolicy\"", f"{label} release notes")
+    require_contains(release_notes, "\"webui\"", f"{label} release notes")
+
     read_tool = read_text_by_suffix("agent/tools/read/read.py")
     require_contains(read_tool, "authorize_file_access(\"read\"", f"{label} read tool")
+    find_tool = read_text_by_suffix("agent/tools/find/find.py")
+    require_contains(find_tool, "class Find", f"{label} find tool")
+    require_contains(find_tool, "authorize_file_access(\"read\"", f"{label} find tool")
+    require_contains(find_tool, "fnmatch.fnmatchcase", f"{label} find tool")
     ls_tool = read_text_by_suffix("agent/tools/ls/ls.py")
     require_contains(ls_tool, "authorize_file_access(\"read\"", f"{label} ls tool")
     write_tool = read_text_by_suffix("agent/tools/write/write.py")
@@ -398,6 +435,12 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
     require_contains(feishu_cli, "def apply_config", f"{label} feishu cli")
     require_contains(feishu_cli, "self.package = str(self.config.get(\"package\")", f"{label} feishu cli")
 
+    ecorex_cli = read_text_by_suffix("agent/tools/ecorex_cli/ecorex_cli.py")
+    require_contains(ecorex_cli, "class EcoreXCli", f"{label} ecorex cli")
+    require_contains(ecorex_cli, "\"skill_list\"", f"{label} ecorex cli")
+    require_contains(ecorex_cli, "\"install_browser\"", f"{label} ecorex cli")
+    require_contains(ecorex_cli, "authorize_noninteractive(\"skill_write\"", f"{label} ecorex cli")
+
     skill_formatter = read_text_by_suffix("agent/skills/formatter.py")
     require_contains(skill_formatter, "format_skill_diagnostics_for_prompt", f"{label} skill formatter")
     require_contains(skill_formatter, "<skill_load_diagnostics>", f"{label} skill formatter")
@@ -418,6 +461,8 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
     require_contains(host_diagnostics, "authorize_file_access(\n                \"read\"", f"{label} host diagnostics")
     require_contains(host_diagnostics, "\"blocked\": True", f"{label} host diagnostics")
     require_contains(host_diagnostics, "\"skills\": _skill_status(self.cwd)", f"{label} host diagnostics")
+    require_contains(host_diagnostics, "\"hasGoalTool\": False", f"{label} host diagnostics")
+    require_contains(host_diagnostics, "\"availableStructuredCliTools\": [\"feishu_cli\", \"ecorex_cli\"]", f"{label} host diagnostics")
 
     mcp_tool = read_text_by_suffix("agent/tools/mcp/mcp_tool.py")
     require_contains(mcp_tool, "self.remote_name", f"{label} mcp tool")
@@ -437,6 +482,9 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
         "\"response_format\"",
         f"{label} OpenAI image-generation skill",
     )
+    find_skill = read_text_by_suffix("skills/find/SKILL.md")
+    require_contains(find_skill, "name: find", f"{label} find skill")
+    require_contains(find_skill, "Use the `find` tool", f"{label} find skill")
 
     xhs_image = read_text_by_suffix("skills/create-xiaohongshu-note/scripts/generate_cover_image.py")
     require_contains(xhs_image, "\"output_format\"", f"{label} xhs image generation")
@@ -463,6 +511,8 @@ def validate_frontend_bundle_texts(read_text_by_suffix, label: str) -> None:
     require_contains(renderer, "extras?.audio", f"{label} renderer bundle")
     require_contains(renderer, "/api/active-requests", f"{label} renderer bundle")
     require_contains(renderer, "activeRequests", f"{label} renderer bundle")
+    require_contains(renderer, "releaseNotes", f"{label} renderer bundle")
+    require_contains(renderer, "ecorex-release-notes-seen-version", f"{label} renderer bundle")
 
 
 def zip_text_by_suffix(archive: zipfile.ZipFile, suffix: str) -> str:
@@ -539,7 +589,7 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", default="deploy/ecorex-site/manifest.json")
     parser.add_argument("--artifact-dir", default="release-artifacts")
-    parser.add_argument("--version", default="0.1.12")
+    parser.add_argument("--version", default="0.1.13")
     parser.add_argument("--public-zip", default="")
     parser.add_argument("--desktop-dir", default="")
     parser.add_argument("--desktop-node-modules", default="desktop/node_modules")

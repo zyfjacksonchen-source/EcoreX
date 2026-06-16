@@ -217,7 +217,7 @@ policy = {
     "adminEventsUrl": os.environ.get("ECOREX_ADMIN_EVENTS_URL") or os.environ.get("ECOREX_ADMIN_BASE_URL", "https://www.ecoreai.cn/ecorex-agent").rstrip("/") + "/client/events",
     "modelConfigUrl": os.environ.get("ECOREX_MODEL_CONFIG_URL") or os.environ.get("ECOREX_ADMIN_BASE_URL", "https://www.ecoreai.cn/ecorex-agent").rstrip("/") + "/client/model-config",
     "capabilityPolicyUrl": os.environ.get("ECOREX_CAPABILITY_POLICY_URL") or os.environ.get("ECOREX_ADMIN_BASE_URL", "https://www.ecoreai.cn/ecorex-agent").rstrip("/") + "/client/capability-policy",
-    "clientEventKey": os.environ.get("ECOREX_CLIENT_EVENT_KEY") or "ecorex-desktop-v0.1.12",
+    "clientEventKey": os.environ.get("ECOREX_CLIENT_EVENT_KEY") or "ecorex-desktop-v0.1.13",
     "userEmail": os.environ.get("ECOREX_USER_EMAIL"),
     "deviceId": os.environ.get("ECOREX_DEVICE_ID"),
     "orgId": os.environ.get("ECOREX_ORG_ID"),
