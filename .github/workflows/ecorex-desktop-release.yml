@@ -120,7 +120,7 @@ jobs:
           cat "release/EcoreX_${{ matrix.arch }}.sha256"
 
       - name: Publish workflow-dispatched DMG to GitHub Release
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.notarize }}
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
