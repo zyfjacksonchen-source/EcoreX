@@ -21,9 +21,9 @@
 | Artifact | Status | Size | SHA256 |
 | --- | --- | ---: | --- |
 | `EcoreX_0.1.13_x64-setup.exe` | `pending-validation`, post-hotfix rebuild not signed yet | 149,193,112 | `D44E562E9874CAF7E9F2519FCDDE8A9EAC6A8E4D401956AB9672B4A051D4634B` |
-| `EcoreX_0.1.13-webui-windows-x64.zip` | `ready` | 72,884,103 | `755B54FAEF42A0C45C3B6BC247880FCA4BE0A29EF45E60FC370725BDD2CDC1E9` |
-| `EcoreX_0.1.13-webui-macos-universal.zip` | `ready` | 165,307,941 | `6C89BDBE4855E9F6A4BD29C60CA9C38E50CB672AB2EF52C0B4FFB5299556CC6E` |
-| `EcoreX_0.1.13-webui-win-mac.zip` | `archived` | 238,354,518 | `CEAFCC3FFE5681BAA6F3FAFC1D4203C00C12B43DDA02A0355D6C22D430DA7D88` |
+| `EcoreX_0.1.13-webui-windows-x64.zip` | `ready` | 72,884,909 | `88F37BCD6C65C194398FF2248837F3BB0D3D6AE095859929558A813EFB40C61F` |
+| `EcoreX_0.1.13-webui-macos-universal.zip` | `ready` | 165,308,769 | `3E4EA259222133E4AA7B08B99CFB4FC2E016B29612DC7C1488D0CC7E228DD3AE` |
+| `EcoreX_0.1.13-webui-win-mac.zip` | `archived` | 238,356,152 | `7CFA6F123F96CCF94E2565E9CCA4F2CBE5871E1F054ECEB20265E4B9A3FD5AD4` |
 | `EcoreX_0.1.13-web-linux-service.tar.gz` | `archived` | 3,129,472 | `84C24E9EC7AAD64313254610AABAAE336284CE28CD0FB4AFBACCE096AD55989E` |
 | `EcoreX_0.1.13_arm64.dmg` | `ready-unsigned` | 192,665,255 | `CC3B7EE4FB48E8A4739E210BCC621F7F60D635D71183E78B1DEBB24F37AA0AFB` |
 | `EcoreX_0.1.13_x64.dmg` | `ready-unsigned` | 200,039,732 | `B93957C3B0C662E63529B503BA29B9123C66584A2C87E2CAA68B7E29A1A7F8BC` |
@@ -49,3 +49,4 @@
 - It ships `Install EcoreX WebUI.app`, which starts the local runtime in the background and opens the browser after the service is ready.
 - Logs go under `~/Library/Application Support/EcoreX WebUI/state/`.
 - The package validator rejects terminal-opening `.command` entrypoints for the macOS WebUI package.
+- The installer must start `app.py` with working directory set to the installed `runtime` directory. A macos-15 smoke run caught the previous bug where `config.json` was written under `runtime/` but the process launched from another cwd, so the WebUI ignored the selected port and fell back to `9899`.

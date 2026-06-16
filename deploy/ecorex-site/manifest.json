@@ -21,8 +21,8 @@
       "variant": "WebUI dual-platform one-click package",
       "fileName": "EcoreX_0.1.13-webui-win-mac.zip",
       "href": "downloads/EcoreX_0.1.13-webui-win-mac.zip",
-      "size": 238354518,
-      "sha256": "CEAFCC3FFE5681BAA6F3FAFC1D4203C00C12B43DDA02A0355D6C22D430DA7D88",
+      "size": 238356152,
+      "sha256": "7CFA6F123F96CCF94E2565E9CCA4F2CBE5871E1F054ECEB20265E4B9A3FD5AD4",
       "status": "archived",
       "visible": false,
       "source": "Archived dual-platform package. The public download page exposes the separate Windows and macOS WebUI packages."
@@ -33,8 +33,8 @@
       "variant": "WebUI one-click local package",
       "fileName": "EcoreX_0.1.13-webui-windows-x64.zip",
       "href": "downloads/EcoreX_0.1.13-webui-windows-x64.zip",
-      "size": 72884103,
-      "sha256": "755B54FAEF42A0C45C3B6BC247880FCA4BE0A29EF45E60FC370725BDD2CDC1E9",
+      "size": 72884909,
+      "sha256": "88F37BCD6C65C194398FF2248837F3BB0D3D6AE095859929558A813EFB40C61F",
       "status": "ready",
       "source": "Contains embedded Windows Python runtime and Install EcoreX WebUI.cmd; copies to local app data, starts the WebUI, and opens /app/ in the default browser."
     },
@@ -44,8 +44,8 @@
       "variant": "WebUI one-click local package",
       "fileName": "EcoreX_0.1.13-webui-macos-universal.zip",
       "href": "downloads/EcoreX_0.1.13-webui-macos-universal.zip",
-      "size": 165307941,
-      "sha256": "6C89BDBE4855E9F6A4BD29C60CA9C38E50CB672AB2EF52C0B4FFB5299556CC6E",
+      "size": 165308769,
+      "sha256": "3E4EA259222133E4AA7B08B99CFB4FC2E016B29612DC7C1488D0CC7E228DD3AE",
       "status": "ready",
       "source": "Downloads as a macOS zip containing a self-contained Install EcoreX WebUI.app. The app bundles the runtime, arm64/x64 Python standalone archives, offline wheels including Playwright, and the background installer. It starts the WebUI without exposing the Agent CLI/runtime terminal and opens /app/ in the default browser."
     },

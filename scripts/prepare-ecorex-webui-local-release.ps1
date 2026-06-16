@@ -665,8 +665,11 @@ config_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
 PY
 
 if ! pgrep -f "$RUNTIME_DIR/app.py" >/dev/null 2>&1; then
-  nohup "$PYTHON" "$RUNTIME_DIR/app.py" > "$STATE_DIR/ecorex-webui.log" 2> "$STATE_DIR/ecorex-webui.err.log" &
-  echo $! > "$STATE_DIR/ecorex-webui.pid"
+  (
+    cd "$RUNTIME_DIR"
+    PYTHONPATH="$RUNTIME_DIR:${PYTHONPATH:-}" nohup "$PYTHON" app.py > "$STATE_DIR/ecorex-webui.log" 2> "$STATE_DIR/ecorex-webui.err.log" &
+    echo $! > "$STATE_DIR/ecorex-webui.pid"
+  )
 fi
 
 URL="http://127.0.0.1:$EFFECTIVE_PORT/app/"

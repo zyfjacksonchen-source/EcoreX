@@ -138,9 +138,10 @@ This log records source changes for v0.1.13. It does not mark a public release c
 - Fix: Desktop sends the visible user request separately from `hidden_context`; WebChannel combines hidden context only for the agent input and stores `visible_message` for history. Conversation history display also strips legacy project-context messages that were already persisted by older v0.1.13 builds.
 - User-reported macOS WebUI package issue: the public macOS WebUI download was a `.tar.gz`; after extraction the visible `.app` launcher was only about 2 KB and was not self-contained.
 - Fix: the standalone macOS WebUI artifact is now `EcoreX_0.1.13-webui-macos-universal.zip` containing a self-contained `Install EcoreX WebUI.app`. The app includes `Contents/Resources/package/runtime`, `python`, `wheelhouse`, and `scripts`, so users can unzip and double-click the app without managing sibling package directories.
+- Follow-up macos-15 smoke caught a launch cwd bug: the installer wrote `runtime/config.json` with the selected local port, but launched `app.py` from the wrapper cwd, so runtime fell back to `config-template.json` and port `9899`. The macOS installer now starts `app.py` from the installed `runtime` directory with `PYTHONPATH` set to that runtime.
 - WebUI package hashes after this hotfix:
-  - `EcoreX_0.1.13-webui-win-mac.zip`, size `238354518`, SHA256 `CEAFCC3FFE5681BAA6F3FAFC1D4203C00C12B43DDA02A0355D6C22D430DA7D88`
-  - `EcoreX_0.1.13-webui-windows-x64.zip`, size `72884103`, SHA256 `755B54FAEF42A0C45C3B6BC247880FCA4BE0A29EF45E60FC370725BDD2CDC1E9`
-  - `EcoreX_0.1.13-webui-macos-universal.zip`, size `165307941`, SHA256 `6C89BDBE4855E9F6A4BD29C60CA9C38E50CB672AB2EF52C0B4FFB5299556CC6E`
+  - `EcoreX_0.1.13-webui-win-mac.zip`, size `238356152`, SHA256 `7CFA6F123F96CCF94E2565E9CCA4F2CBE5871E1F054ECEB20265E4B9A3FD5AD4`
+  - `EcoreX_0.1.13-webui-windows-x64.zip`, size `72884909`, SHA256 `88F37BCD6C65C194398FF2248837F3BB0D3D6AE095859929558A813EFB40C61F`
+  - `EcoreX_0.1.13-webui-macos-universal.zip`, size `165308769`, SHA256 `3E4EA259222133E4AA7B08B99CFB4FC2E016B29612DC7C1488D0CC7E228DD3AE`
 - Validation passed for this source state: `npm run typecheck`, `python -m py_compile app.py channel\web\web_channel.py bridge\agent_bridge.py agent\memory\conversation_store.py scripts\validate-ecorex-release-artifacts.py`, and targeted zip structure checks for the self-contained macOS WebUI app plus Playwright wheels.
 - Staleness boundary: the previously recorded signed Windows setup, macOS DMGs, and public release zip are stale after this hotfix. Rebuild/sign Windows, rebuild macOS DMGs via macos-15, regenerate public zip, run full validator, smoke, and redeploy before calling v0.1.13 final.
