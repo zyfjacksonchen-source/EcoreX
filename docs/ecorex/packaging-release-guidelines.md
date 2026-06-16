@@ -362,6 +362,11 @@ Invoke-WebRequest -UseBasicParsing `
   and the final signing commands from an elevated/admin shell after unlocking
   SimplySign, otherwise the release will repeatedly fail at
   `SimplySign CSP key containers: none visible`.
+- Treat `certutil -user -key -csp "SimplySign CSP"` as a diagnostic, not the
+  final release gate. In the v0.1.13 pass, elevated `signtool` successfully
+  signed and timestamped the installer even while `certutil` listed no key
+  containers. The release gate is the final file's `Get-AuthenticodeSignature`
+  status `Valid`.
 - Do not reuse an older signed `EcoreX_0.1.12_x64-setup.exe` after runtime
   source changes. Mark `windows-x64` as `pending-signature` until the current
   runtime is signed and the NSIS setup is regenerated.

@@ -8,35 +8,34 @@
 - macOS workflow: `.github/workflows/ecorex-desktop-release.yml`
 - Build macOS Apps validation: GitHub Actions `macos-15` workflow_dispatch run `27604509625`
 - macOS workflow inputs: `mac_arch=all`, `notarize=false`, `release_tag=v0.1.13`
-- Result: `macOS DMG (arm64)` success and `macOS DMG (x64)` success
+- Result: `macOS DMG (arm64)` success and `macOS DMG (x64)` success; both DMGs were later materialized under the public download host after SHA256 verification.
 
 ## Artifact Status
 
 | Artifact | Status | Size | SHA256 |
 | --- | --- | ---: | --- |
-| `EcoreX_0.1.13_x64-setup.exe` | `pending-signature` | 149,173,291 | `2C7140AD0E8A50663F7AE70607FF39F8B08E7D0D5F67C45991EF6B8288A854A9` |
+| `EcoreX_0.1.13_x64-setup.exe` | `ready`, Authenticode `Valid` | 149,193,112 | `D44E562E9874CAF7E9F2519FCDDE8A9EAC6A8E4D401956AB9672B4A051D4634B` |
 | `EcoreX_0.1.13-webui-windows-x64.zip` | `ready` | 72,884,116 | `CEDD28AA0033031F7B70865D88CF7D5174F6B0D504D69AD27918854EFAF02675` |
 | `EcoreX_0.1.13-webui-macos-universal.tar.gz` | `ready` | 79,808,141 | `21311D4BA1BC7F213D54BFBBF4431616B28EC19E228031CFD93CA3F14A9BAD67` |
 | `EcoreX_0.1.13-webui-win-mac.zip` | `archived` | 153,045,004 | `8E91B8D3B667CD49E07F3C579FA630DEC4616E2D67A6766A5C7D1C016C1E59EC` |
 | `EcoreX_0.1.13-web-linux-service.tar.gz` | `archived` | 3,129,472 | `84C24E9EC7AAD64313254610AABAAE336284CE28CD0FB4AFBACCE096AD55989E` |
-| `EcoreX_0.1.13_arm64.dmg` | `ready-unsigned`, external | 192,665,001 | `EE1826474FBC99D0D54FF7FD09923BF82042C7816E9EE1864DD9532AFCD8549A` |
-| `EcoreX_0.1.13_x64.dmg` | `ready-unsigned`, external | 200,043,508 | `517029EC4E716A92FF0F3BE98095AE2B892BF763070A4582520692551D114B86` |
-| `EcoreX_0.1.13-public-release.zip` | deployment bundle | 154,788,854 | `4D58CBB0662A5D24908FB57315E349A0FBDC084F8919D5EE3E395D04BFA0504C` |
+| `EcoreX_0.1.13_arm64.dmg` | `ready-unsigned` | 192,665,001 | `EE1826474FBC99D0D54FF7FD09923BF82042C7816E9EE1864DD9532AFCD8549A` |
+| `EcoreX_0.1.13_x64.dmg` | `ready-unsigned` | 200,043,508 | `517029EC4E716A92FF0F3BE98095AE2B892BF763070A4582520692551D114B86` |
+| `EcoreX_0.1.13-public-release.zip` | deployment bundle | 694,958,669 | `F1DF81E07945AC5EFA1F2FAEB2C2A49C33F7D186FDC1EA04F640906A06CE0305` |
 
 ## macOS DMG Notes
 
 - The v0.1.13 DMGs are complete GitHub Actions build outputs, not locally renamed artifacts.
 - They are intentionally unsigned/unnotarized for this release pass by user decision.
 - The download page must show the Gatekeeper recovery hint: open System Settings, go to Privacy & Security, and click Still Open for EcoreX.
-- The public release zip references these DMGs through GitHub Release URLs instead of embedding 390+ MiB of DMG payload.
-- The release validator and server checker must treat `external=true` HTTP(S) artifacts as ready metadata targets, not local `site/downloads` files.
+- The final public release zip embeds these DMGs under `site/downloads/`, so the download page does not depend on private GitHub Release asset URLs.
 
-## Windows Signing Boundary
+## Windows Signing Result
 
-- The current Windows NSIS setup is not public-ready because Authenticode is `NotSigned`.
-- SimplySign/proCertum private key access must be checked from an elevated administrator process.
-- A normal user shell may show `HasPrivateKey=True` while `signtool` still cannot see the CSP private-key container.
-- Do not mark `windows-x64` as `ready` until the final v0.1.13 installer is signed and `Get-AuthenticodeSignature` reports `Valid`.
+- The final Windows NSIS setup was rebuilt from the signed `release/win-unpacked` directory and signed with Certum SimplySign through elevated `signtool`.
+- `Get-AuthenticodeSignature desktop/release/EcoreX_0.1.13_x64-setup.exe` reports `Valid`.
+- The timestamp certificate is DigiCert SHA256 RSA4096 Timestamp Responder 2025 1.
+- `certutil -user -key -csp "SimplySign CSP"` can still report no key containers even when elevated `signtool` works, so use direct elevated signtool signing as the release truth and keep the preflight as a diagnostic only.
 
 ## WebUI macOS Boundary
 

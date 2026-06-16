@@ -118,11 +118,11 @@ This log records source changes for v0.1.13. It does not mark a public release c
 
 - Rebuilt and validated the v0.1.13 WebUI packages after replacing the macOS `.command` launcher with `Install EcoreX WebUI.app`. The validator now rejects macOS WebUI packages that expose the Agent CLI/runtime terminal through `Install EcoreX WebUI.command`.
 - Rebuilt the Linux/Web service package and validated the current renderer hash: `index-CcCofcc7.js` plus `index-D7oCsug3.css`.
-- Built a Windows NSIS candidate, but Authenticode remains `NotSigned`; `windows-x64` is therefore `pending-signature`, not public ready.
-- Added external release-artifact support so the public download manifest can point macOS DMG buttons at GitHub Release URLs without embedding the large DMG payloads inside the public release zip.
+- Rebuilt and signed the Windows NSIS setup after a direct elevated `signtool` retry. The final `desktop/release/EcoreX_0.1.13_x64-setup.exe` is Authenticode `Valid`, size `149193112`, SHA256 `D44E562E9874CAF7E9F2519FCDDE8A9EAC6A8E4D401956AB9672B4A051D4634B`.
+- Added external release-artifact support as a fallback for large release payloads. The final v0.1.13 publication embeds the SHA256-verified macOS DMGs under `site/downloads/` so the public download page does not depend on private GitHub Release asset URLs.
 - Re-ran the Build macOS Apps path on GitHub Actions `macos-15` with workflow_dispatch run `27604509625`, `mac_arch=all`, `notarize=false`, and `release_tag=v0.1.13`. Both `macOS DMG (arm64)` and `macOS DMG (x64)` completed successfully.
 - Latest macOS desktop DMGs are intentionally unsigned/unnotarized but complete installable DMG outputs:
   - `EcoreX_0.1.13_arm64.dmg`, size `192665001`, SHA256 `EE1826474FBC99D0D54FF7FD09923BF82042C7816E9EE1864DD9532AFCD8549A`
   - `EcoreX_0.1.13_x64.dmg`, size `200043508`, SHA256 `517029EC4E716A92FF0F3BE98095AE2B892BF763070A4582520692551D114B86`
-- `deploy/ecorex-site/manifest.json` is now v0.1.13 and marks macOS DMGs as `ready-unsigned` external artifacts. The Windows desktop installer remains `pending-signature`.
-- Final generated public release zip is `release-artifacts/EcoreX_0.1.13-public-release.zip`, size `154788854`, SHA256 `4D58CBB0662A5D24908FB57315E349A0FBDC084F8919D5EE3E395D04BFA0504C`. Full validator passed with `--desktop-dir desktop\release-local-0026\win-unpacked`.
+- `deploy/ecorex-site/manifest.json` is now v0.1.13 and marks the Windows desktop installer as `ready`; macOS DMGs are `ready-unsigned` and served from the public download host.
+- Final generated public release zip is `release-artifacts/EcoreX_0.1.13-public-release.zip`, size `694958669`, SHA256 `F1DF81E07945AC5EFA1F2FAEB2C2A49C33F7D186FDC1EA04F640906A06CE0305`. Full validator passed with `--desktop-dir desktop\release\win-unpacked`.

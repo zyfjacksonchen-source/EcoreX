@@ -192,6 +192,7 @@ function renderDownloads(manifest) {
     card.innerHTML = `
       <span class="platform-icon">${copy.icon}</span>
       <h3>${copy.title}</h3>
+      <small class="card-version">v${manifest.version}</small>
       <p>${copy.body}</p>
       ${cardNote(copy)}
       ${architectureSelector(cardId, grouped[cardId] || [])}
