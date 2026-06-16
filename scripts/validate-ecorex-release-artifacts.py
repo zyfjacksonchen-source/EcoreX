@@ -306,6 +306,7 @@ def validate_public_zip(
         require(download_files == expected_download_files, "public zip download file set mismatch")
 
         for artifact_id, artifact in ready_by_id.items():
+            public_artifact = public_ready_by_id[artifact_id]
             checksum = checksum_artifacts[artifact_id]
             expected_size = int(artifact.get("size") or 0)
             expected_digest = str(artifact.get("sha256") or "").upper()

@@ -113,3 +113,16 @@ Required before a v0.1.13 release candidate:
 ## Current Release Boundary
 
 This log records source changes for v0.1.13. It does not mark a public release complete. Any existing v0.1.12 installer, DMG, WebUI package, or public zip is stale for v0.1.13 and must not be renamed or reused as a new version.
+
+## Release Candidate Update
+
+- Rebuilt and validated the v0.1.13 WebUI packages after replacing the macOS `.command` launcher with `Install EcoreX WebUI.app`. The validator now rejects macOS WebUI packages that expose the Agent CLI/runtime terminal through `Install EcoreX WebUI.command`.
+- Rebuilt the Linux/Web service package and validated the current renderer hash: `index-CcCofcc7.js` plus `index-D7oCsug3.css`.
+- Built a Windows NSIS candidate, but Authenticode remains `NotSigned`; `windows-x64` is therefore `pending-signature`, not public ready.
+- Added external release-artifact support so the public download manifest can point macOS DMG buttons at GitHub Release URLs without embedding the large DMG payloads inside the public release zip.
+- Re-ran the Build macOS Apps path on GitHub Actions `macos-15` with workflow_dispatch run `27604509625`, `mac_arch=all`, `notarize=false`, and `release_tag=v0.1.13`. Both `macOS DMG (arm64)` and `macOS DMG (x64)` completed successfully.
+- Latest macOS desktop DMGs are intentionally unsigned/unnotarized but complete installable DMG outputs:
+  - `EcoreX_0.1.13_arm64.dmg`, size `192665001`, SHA256 `EE1826474FBC99D0D54FF7FD09923BF82042C7816E9EE1864DD9532AFCD8549A`
+  - `EcoreX_0.1.13_x64.dmg`, size `200043508`, SHA256 `517029EC4E716A92FF0F3BE98095AE2B892BF763070A4582520692551D114B86`
+- `deploy/ecorex-site/manifest.json` is now v0.1.13 and marks macOS DMGs as `ready-unsigned` external artifacts. The Windows desktop installer remains `pending-signature`.
+- Final generated public release zip is `release-artifacts/EcoreX_0.1.13-public-release.zip`, size `154788854`, SHA256 `4D58CBB0662A5D24908FB57315E349A0FBDC084F8919D5EE3E395D04BFA0504C`. Full validator passed with `--desktop-dir desktop\release-local-0026\win-unpacked`.
