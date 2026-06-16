@@ -11,6 +11,8 @@ FAKE_BIN="$WORK_ROOT/bin"
 INSTALL_ROOT="$WORK_ROOT/install"
 WORKSPACE_ROOT="$WORK_ROOT/workspace"
 OPEN_CAPTURE="$WORK_ROOT/open-calls.log"
+SMOKE_HOME="$WORK_ROOT/home"
+WRAPPER_STATE_DIR="$SMOKE_HOME/Library/Application Support/EcoreX WebUI/state"
 
 log() {
   printf '[ecorex-webui-macos-smoke] %s\n' "$*"
@@ -18,6 +20,8 @@ log() {
 
 dump_logs() {
   for file in \
+    "$WRAPPER_STATE_DIR/install.log" \
+    "$WRAPPER_STATE_DIR/install.err.log" \
     "$INSTALL_ROOT/state/install.log" \
     "$INSTALL_ROOT/state/install.err.log" \
     "$INSTALL_ROOT/state/ecorex-webui.log" \
@@ -48,7 +52,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'dump_logs' ERR
 
-mkdir -p "$DOWNLOAD_DIR" "$EXTRACT_DIR" "$FAKE_BIN" "$INSTALL_ROOT" "$WORKSPACE_ROOT"
+mkdir -p "$DOWNLOAD_DIR" "$EXTRACT_DIR" "$FAKE_BIN" "$INSTALL_ROOT" "$WORKSPACE_ROOT" "$SMOKE_HOME" "$WRAPPER_STATE_DIR"
 
 log "Downloading $ARTIFACT_URL"
 curl --fail --location --retry 3 --retry-delay 2 \
@@ -99,23 +103,27 @@ export ECOREX_WORKSPACE_ROOT="$WORKSPACE_ROOT"
 export ECOREX_WEB_PORT="$PORT"
 export ECOREX_WEBUI_OPEN_CAPTURE="$OPEN_CAPTURE"
 export OPEN_BROWSER=1
+export HOME="$SMOKE_HOME"
 export PATH="$FAKE_BIN:$PATH"
 
 log "Launching installer app executable"
 "$APP_EXEC"
 
 URL=""
-for _ in $(seq 1 360); do
+for i in $(seq 1 900); do
   if [[ -f "$OPEN_CAPTURE" ]]; then
     URL="$(grep -Eo 'http://127\.0\.0\.1:[0-9]+/app/' "$OPEN_CAPTURE" | tail -n 1 || true)"
     if [[ -n "$URL" ]]; then
       break
     fi
   fi
-  if [[ -f "$INSTALL_ROOT/state/install.err.log" ]] && grep -q "EcoreX WebUI did not become ready" "$INSTALL_ROOT/state/install.err.log"; then
+  if [[ -f "$WRAPPER_STATE_DIR/install.err.log" ]] && grep -Eq "EcoreX WebUI did not become ready|installation failed|Missing bundled Python archive|Unsupported macOS architecture|Could not locate python3" "$WRAPPER_STATE_DIR/install.err.log"; then
     log "Installer reported readiness failure"
     dump_logs
     exit 1
+  fi
+  if [[ "$((i % 60))" == "0" ]]; then
+    log "Still waiting for installer to open the browser URL (${i}s elapsed)"
   fi
   sleep 1
 done
