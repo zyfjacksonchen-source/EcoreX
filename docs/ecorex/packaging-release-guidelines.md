@@ -620,3 +620,18 @@ Invoke-WebRequest -UseBasicParsing `
   reference-image requests, local input images, or `image_url` use
   `/images/edits` with multipart `image` / `image[]`. The OpenAI branch must
   not send legacy `response_format`.
+
+## GitHub Actions macOS DMG Gate
+
+- macOS desktop DMGs must be built on a GitHub-hosted macOS runner or a real
+  macOS host. Do not relabel older DMGs as a new version when the Windows host
+  cannot build them locally.
+- `actions/upload-artifact` can fail even after old artifacts are deleted
+  because GitHub recalculates artifact storage usage every 6-12 hours. When a
+  same-day release is blocked by artifact quota, use the workflow-dispatched
+  GitHub Release upload path for DMG and SHA256 assets instead of waiting for
+  artifact storage to recalculate.
+- The workflow-dispatched release upload must use `contents: write`,
+  `gh release create` if the target tag does not exist, and
+  `gh release upload --clobber` for both `EcoreX_*_<arch>.dmg` and
+  `EcoreX_<arch>.sha256`.

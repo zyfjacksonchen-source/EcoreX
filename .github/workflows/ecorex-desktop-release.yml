@@ -21,9 +21,13 @@ on:
         description: "Submit macOS DMG to Apple notarization when secrets are present"
         type: boolean
         default: true
+      release_tag:
+        description: "GitHub release tag for workflow-dispatched DMG assets"
+        type: string
+        default: v0.1.12
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   macos-dmg:
@@ -101,11 +105,19 @@ jobs:
           shasum -a 256 release/EcoreX_*_${{ matrix.arch }}.dmg > "release/EcoreX_${{ matrix.arch }}.sha256"
           cat "release/EcoreX_${{ matrix.arch }}.sha256"
 
-      - name: Upload DMG artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ecorex-macos-${{ matrix.arch }}
-          path: |
-            desktop/release/EcoreX_*_${{ matrix.arch }}.dmg
-            desktop/release/EcoreX_${{ matrix.arch }}.sha256
-          if-no-files-found: error
+      - name: Publish workflow-dispatched DMG to GitHub Release
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if ! gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release create "${RELEASE_TAG}" \
+              --title "EcoreX ${RELEASE_TAG}" \
+              --notes "EcoreX ${RELEASE_TAG} release artifacts." \
+              --target "${GITHUB_SHA}"
+          fi
+          gh release upload "${RELEASE_TAG}" \
+            release/EcoreX_*_${{ matrix.arch }}.dmg \
+            release/EcoreX_${{ matrix.arch }}.sha256 \
+            --clobber
