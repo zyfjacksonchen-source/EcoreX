@@ -3,6 +3,8 @@ set -euo pipefail
 
 VERSION="${VERSION:-0.1.13}"
 ARTIFACT_URL="${ARTIFACT_URL:-https://www.ecoreai.cn/ecorex-agent/downloads/EcoreX_${VERSION}-webui-macos-universal.zip}"
+RELEASE_TAG="${RELEASE_TAG:-v${VERSION}}"
+RELEASE_ASSET_NAME="${RELEASE_ASSET_NAME:-}"
 PORT="${ECOREX_WEB_PORT:-19090}"
 WORK_ROOT="${RUNNER_TEMP:-/tmp}/ecorex-webui-macos-smoke-${VERSION}-$$"
 DOWNLOAD_DIR="$WORK_ROOT/download"
@@ -54,10 +56,48 @@ trap 'dump_logs' ERR
 
 mkdir -p "$DOWNLOAD_DIR" "$EXTRACT_DIR" "$FAKE_BIN" "$INSTALL_ROOT" "$WORKSPACE_ROOT" "$SMOKE_HOME" "$WRAPPER_STATE_DIR"
 
-log "Downloading $ARTIFACT_URL"
-curl --fail --location --retry 3 --retry-delay 2 \
-  --output "$DOWNLOAD_DIR/webui-macos.zip" \
-  "$ARTIFACT_URL"
+if [[ -n "$RELEASE_ASSET_NAME" ]]; then
+  : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required when RELEASE_ASSET_NAME is set}"
+  : "${GITHUB_TOKEN:?GITHUB_TOKEN is required when RELEASE_ASSET_NAME is set}"
+  log "Downloading GitHub Release asset ${RELEASE_TAG}/${RELEASE_ASSET_NAME}"
+  python3 - "$GITHUB_REPOSITORY" "$RELEASE_TAG" "$RELEASE_ASSET_NAME" "$DOWNLOAD_DIR/webui-macos.zip" <<'PY'
+import json
+import os
+import sys
+import urllib.request
+
+repo, tag, asset_name, output = sys.argv[1:5]
+token = os.environ["GITHUB_TOKEN"]
+api_headers = {
+    "Authorization": f"Bearer {token}",
+    "Accept": "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+}
+release_req = urllib.request.Request(
+    f"https://api.github.com/repos/{repo}/releases/tags/{tag}",
+    headers=api_headers,
+)
+with urllib.request.urlopen(release_req, timeout=30) as response:
+    release = json.loads(response.read().decode("utf-8"))
+asset = next((item for item in release.get("assets", []) if item.get("name") == asset_name), None)
+if not asset:
+    raise SystemExit(f"Release asset not found: {tag}/{asset_name}")
+download_headers = dict(api_headers)
+download_headers["Accept"] = "application/octet-stream"
+asset_req = urllib.request.Request(asset["url"], headers=download_headers)
+with urllib.request.urlopen(asset_req, timeout=60) as response, open(output, "wb") as handle:
+    while True:
+        chunk = response.read(1024 * 1024)
+        if not chunk:
+            break
+        handle.write(chunk)
+PY
+else
+  log "Downloading $ARTIFACT_URL"
+  curl --fail --location --retry 3 --retry-delay 2 \
+    --output "$DOWNLOAD_DIR/webui-macos.zip" \
+    "$ARTIFACT_URL"
+fi
 
 log "Extracting package"
 unzip -q "$DOWNLOAD_DIR/webui-macos.zip" -d "$EXTRACT_DIR"

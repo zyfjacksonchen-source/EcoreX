@@ -12,8 +12,8 @@
       "href": "downloads/EcoreX_0.1.13_x64-setup.exe",
       "size": 149193112,
       "sha256": "D44E562E9874CAF7E9F2519FCDDE8A9EAC6A8E4D401956AB9672B4A051D4634B",
-      "status": "ready",
-      "source": "Signed on Windows with Certum SimplySign via elevated signtool after the v0.1.13 rebuild. Authenticode status verified as Valid and timestamped by DigiCert."
+      "status": "pending-validation",
+      "source": "Stale after the post-RC sidecar readiness and hidden-context hotfix. Rebuild and re-sign from the current source before publishing the Windows desktop installer."
     },
     {
       "id": "webui-win-mac",
@@ -67,10 +67,10 @@
       "variant": "Desktop Apple Silicon DMG",
       "fileName": "EcoreX_0.1.13_arm64.dmg",
       "href": "downloads/EcoreX_0.1.13_arm64.dmg",
-      "size": 192665001,
-      "sha256": "EE1826474FBC99D0D54FF7FD09923BF82042C7816E9EE1864DD9532AFCD8549A",
+      "size": 192665255,
+      "sha256": "CC3B7EE4FB48E8A4739E210BCC621F7F60D635D71183E78B1DEBB24F37AA0AFB",
       "status": "ready-unsigned",
-      "source": "Built by GitHub Actions macos-15 workflow_dispatch run 27604509625 at remote commit 92ce74cd828a95d5dace1a9c1bff1470092116cd. Unsigned/unnotarized by release decision; materialized to the public download host after SHA256 verification. The download page includes macOS Privacy & Security Still Open guidance."
+      "source": "Built by GitHub Actions macos-15 workflow_dispatch run 27611830980 at remote commit a9a97bc7a95265a63d69d5f93047683a52dd60a1. Unsigned/unnotarized by release decision; materialized to the public download host after SHA256 verification. The download page includes macOS Privacy & Security Still Open guidance."
     },
     {
       "id": "macos-x64-dmg",
@@ -78,10 +78,10 @@
       "variant": "Desktop Intel DMG",
       "fileName": "EcoreX_0.1.13_x64.dmg",
       "href": "downloads/EcoreX_0.1.13_x64.dmg",
-      "size": 200043508,
-      "sha256": "517029EC4E716A92FF0F3BE98095AE2B892BF763070A4582520692551D114B86",
+      "size": 200039732,
+      "sha256": "B93957C3B0C662E63529B503BA29B9123C66584A2C87E2CAA68B7E29A1A7F8BC",
       "status": "ready-unsigned",
-      "source": "Built by GitHub Actions macos-15 workflow_dispatch run 27604509625 at remote commit 92ce74cd828a95d5dace1a9c1bff1470092116cd. Unsigned/unnotarized by release decision; materialized to the public download host after SHA256 verification. The download page includes macOS Privacy & Security Still Open guidance."
+      "source": "Built by GitHub Actions macos-15 workflow_dispatch run 27611830980 at remote commit a9a97bc7a95265a63d69d5f93047683a52dd60a1. Unsigned/unnotarized by release decision; materialized to the public download host after SHA256 verification. The download page includes macOS Privacy & Security Still Open guidance."
     }
   ],
   "admin": {
