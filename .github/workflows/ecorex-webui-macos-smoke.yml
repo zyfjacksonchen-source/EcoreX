@@ -1,0 +1,46 @@
+name: EcoreX WebUI macOS Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "EcoreX version to verify"
+        type: string
+        default: "0.1.13"
+      artifact_url:
+        description: "macOS WebUI tar.gz URL; leave empty to use the public download URL"
+        type: string
+        default: ""
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/ecorex-webui-macos-smoke.yml"
+      - "scripts/smoke-ecorex-webui-macos.sh"
+      - "scripts/prepare-ecorex-webui-local-release.ps1"
+
+permissions:
+  contents: read
+
+jobs:
+  macos-webui-install:
+    name: macOS WebUI install smoke
+    runs-on: macos-15
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run macOS WebUI install smoke
+        env:
+          VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || '0.1.13' }}
+          ARTIFACT_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.artifact_url || '' }}
+          ECOREX_WEB_PORT: "19090"
+        run: |
+          set -euo pipefail
+          chmod +x scripts/smoke-ecorex-webui-macos.sh
+          if [[ -z "${ARTIFACT_URL}" ]]; then
+            unset ARTIFACT_URL
+          fi
+          scripts/smoke-ecorex-webui-macos.sh
