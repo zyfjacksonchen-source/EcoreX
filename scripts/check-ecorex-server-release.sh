@@ -101,6 +101,10 @@ def hash_file(path):
             digest.update(chunk)
     return digest.hexdigest().upper()
 
+def is_external(artifact):
+    href = str(artifact.get("href") or "").lower()
+    return bool(artifact.get("external")) or href.startswith(("http://", "https://"))
+
 if not manifest.is_file():
     raise SystemExit(0)
 payload = json.loads(manifest.read_text(encoding="utf-8-sig"))
@@ -118,6 +122,19 @@ for artifact in payload.get("artifacts") or []:
         print(f"SKIP artifact {artifact_id} status={status}")
         continue
     ready_count += 1
+    if is_external(artifact):
+        href = artifact.get("href") or ""
+        expected_size = int(artifact.get("size") or 0)
+        expected_sha = str(artifact.get("sha256") or "").upper()
+        if not str(href).lower().startswith(("http://", "https://")):
+            fail(f"external artifact {artifact_id} href is not HTTP(S)")
+        elif expected_size <= 0:
+            fail(f"external artifact {artifact_id} has no positive size")
+        elif len(expected_sha) != 64:
+            fail(f"external artifact {artifact_id} has no SHA256")
+        else:
+            print(f"PASS external artifact {artifact_id} {href}")
+        continue
     path = downloads / file_name
     if not file_name or not path.is_file():
         fail(f"missing artifact {artifact_id} file={file_name}")
@@ -197,7 +214,10 @@ for artifact in payload.get("artifacts") or []:
         print(f"SKIP public artifact {artifact_id} status={status}")
         continue
     href = artifact.get("href") or f"downloads/{artifact.get('fileName', '')}"
-    url = f"{base_url}/{href.lstrip('/')}"
+    if str(href).lower().startswith(("http://", "https://")):
+        url = href
+    else:
+        url = f"{base_url}/{href.lstrip('/')}"
     status_code = status_for(url)
     if status_code in (200, 206):
         print(f"PASS http artifact {artifact_id} {url} -> {status_code}")

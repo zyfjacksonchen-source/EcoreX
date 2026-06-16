@@ -43,6 +43,37 @@ function Write-Utf8NoBom {
     [System.IO.File]::WriteAllText($Path, $Value, $encoding)
 }
 
+function Test-ExternalArtifact {
+    param([Parameter(Mandatory = $true)][object]$Artifact)
+    $href = [string]$Artifact.href
+    return ([bool]$Artifact.external) -or
+        $href.StartsWith("https://", [System.StringComparison]::OrdinalIgnoreCase) -or
+        $href.StartsWith("http://", [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Assert-ExternalArtifactMetadata {
+    param([Parameter(Mandatory = $true)][object]$Artifact)
+    $href = [string]$Artifact.href
+    $fileName = [string]$Artifact.fileName
+    $sha256 = [string]$Artifact.sha256
+    $size = [int64]$Artifact.size
+    if (-not $fileName) {
+        throw "External artifact '$($Artifact.id)' has no fileName."
+    }
+    if (-not (
+        $href.StartsWith("https://", [System.StringComparison]::OrdinalIgnoreCase) -or
+        $href.StartsWith("http://", [System.StringComparison]::OrdinalIgnoreCase)
+    )) {
+        throw "External artifact '$($Artifact.id)' href must be an absolute HTTP(S) URL."
+    }
+    if ($size -le 0) {
+        throw "External artifact '$($Artifact.id)' must have a positive size."
+    }
+    if (-not ($sha256 -match '^[A-Fa-f0-9]{64}$')) {
+        throw "External artifact '$($Artifact.id)' must have a 64-character SHA256."
+    }
+}
+
 $repoRoot = (Resolve-Path -LiteralPath ".").Path
 $siteRootResolved = Resolve-RequiredPath $SiteRoot
 $adminApiRootResolved = Resolve-RequiredPath $AdminApiRoot
@@ -66,6 +97,19 @@ $publishableStatuses = @("ready", "ready-unsigned")
 $readyArtifacts = @()
 foreach ($artifact in $manifest.artifacts) {
     if ([string]$artifact.status -notin $publishableStatuses) {
+        continue
+    }
+
+    if (Test-ExternalArtifact $artifact) {
+        Assert-ExternalArtifactMetadata $artifact
+        $readyArtifacts += [pscustomobject]@{
+            Artifact = $artifact
+            Path = $null
+            Size = [int64]$artifact.size
+            Sha256 = ([string]$artifact.sha256).ToUpperInvariant()
+            Signature = ""
+            External = $true
+        }
         continue
     }
 
@@ -100,6 +144,7 @@ foreach ($artifact in $manifest.artifacts) {
         Size = $sourceItem.Length
         Sha256 = $sourceHash
         Signature = $signatureStatus
+        External = $false
     }
 }
 if ($readyArtifacts.Count -eq 0) {
@@ -131,6 +176,9 @@ Get-ChildItem -LiteralPath $siteRootResolved -Force | Where-Object { $_.Name -ne
 $downloadOut = Join-Path $siteOut "downloads"
 New-Item -ItemType Directory -Force -Path $downloadOut | Out-Null
 foreach ($ready in $readyArtifacts) {
+    if ($ready.External) {
+        continue
+    }
     Copy-Item -LiteralPath $ready.Path -Destination (Join-Path $downloadOut $ready.Artifact.fileName) -Force
 }
 
@@ -161,6 +209,20 @@ foreach ($entry in $serverFiles) {
 
 $checksumArtifacts = [ordered]@{}
 foreach ($ready in $readyArtifacts) {
+    if ($ready.External) {
+        $checksumArtifacts[$ready.Artifact.id] = [ordered]@{
+            fileName = $ready.Artifact.fileName
+            relativePath = [string]$ready.Artifact.href
+            href = [string]$ready.Artifact.href
+            size = $ready.Size
+            sha256 = $ready.Sha256
+            status = $ready.Artifact.status
+            authenticode = $ready.Signature
+            external = $true
+        }
+        continue
+    }
+
     $stagedPath = Join-Path $downloadOut $ready.Artifact.fileName
     $stagedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $stagedPath).Hash.ToUpperInvariant()
     $stagedSize = (Get-Item -LiteralPath $stagedPath).Length

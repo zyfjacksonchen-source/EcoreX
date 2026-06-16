@@ -141,6 +141,25 @@ def artifact_path(artifact_dir: pathlib.Path, artifact: dict) -> pathlib.Path:
     return artifact_dir / str(artifact["fileName"])
 
 
+def artifact_href(artifact: dict) -> str:
+    return str(artifact.get("href") or "")
+
+
+def is_external_artifact(artifact: dict) -> bool:
+    href = artifact_href(artifact).lower()
+    return bool(artifact.get("external")) or href.startswith(("http://", "https://"))
+
+
+def validate_external_artifact_metadata(artifact_id: str, artifact: dict) -> None:
+    href = artifact_href(artifact)
+    expected_size = int(artifact.get("size") or 0)
+    expected_digest = str(artifact.get("sha256") or "").upper()
+    require(href.lower().startswith(("http://", "https://")), f"external artifact {artifact_id} href is not HTTP(S)")
+    require(str(artifact.get("fileName") or ""), f"external artifact {artifact_id} missing fileName")
+    require(expected_size > 0, f"external artifact {artifact_id} missing positive size")
+    require(bool(re.fullmatch(r"[A-F0-9]{64}", expected_digest)), f"external artifact {artifact_id} missing SHA256")
+
+
 def validate_manifest_artifacts(manifest: dict, artifact_dir: pathlib.Path) -> list[dict]:
     ready = []
     for artifact in manifest.get("artifacts") or []:
@@ -148,6 +167,11 @@ def validate_manifest_artifacts(manifest: dict, artifact_dir: pathlib.Path) -> l
         status = str(artifact.get("status") or "")
         if status not in PUBLISHABLE_STATUSES:
             print(f"SKIP artifact {artifact_id} status={status}")
+            continue
+        if is_external_artifact(artifact):
+            validate_external_artifact_metadata(artifact_id, artifact)
+            ready.append(artifact)
+            print(f"PASS external artifact {artifact_id} {artifact_href(artifact)}")
             continue
         path = artifact_path(artifact_dir, artifact)
         require(path.is_file(), f"ready artifact {artifact_id} missing: {path}")
@@ -211,6 +235,8 @@ def validate_tar_assets(path: pathlib.Path, label: str) -> None:
 
 def validate_nested_web_assets(artifact_dir: pathlib.Path, ready: list[dict]) -> None:
     for artifact in ready:
+        if is_external_artifact(artifact):
+            continue
         artifact_id = str(artifact.get("id") or "")
         path = artifact_path(artifact_dir, artifact)
         if artifact_id in {"webui-win-mac", "webui-windows-x64"}:
@@ -276,20 +302,36 @@ def validate_public_zip(
             for name in names
             if name.startswith("site/downloads/") and not name.endswith("/")
         }
-        expected_download_files = {str(item.get("fileName")) for item in ready}
+        expected_download_files = {str(item.get("fileName")) for item in ready if not is_external_artifact(item)}
         require(download_files == expected_download_files, "public zip download file set mismatch")
 
         for artifact_id, artifact in ready_by_id.items():
+            checksum = checksum_artifacts[artifact_id]
+            expected_size = int(artifact.get("size") or 0)
+            expected_digest = str(artifact.get("sha256") or "").upper()
+            if is_external_artifact(artifact):
+                validate_external_artifact_metadata(artifact_id, artifact)
+                href = artifact_href(artifact)
+                require(
+                    str(public_artifact.get("href") or "") == href,
+                    f"public manifest {artifact_id} href mismatch",
+                )
+                require(
+                    bool(checksum.get("external")) or str(checksum.get("relativePath") or "").lower().startswith(("http://", "https://")),
+                    f"checksums external marker missing for {artifact_id}",
+                )
+                require(str(checksum.get("relativePath") or "") == href, f"checksums href mismatch for {artifact_id}")
+                require(int(checksum.get("size") or 0) == expected_size, f"checksums size mismatch for {artifact_id}")
+                require(str(checksum.get("sha256") or "").upper() == expected_digest, f"checksums sha mismatch for {artifact_id}")
+                continue
+
             file_name = str(artifact["fileName"])
             rel = f"site/downloads/{file_name}"
             require(rel in names, f"public zip missing ready download {rel}")
             payload = archive.read(rel)
-            expected_size = int(artifact.get("size") or 0)
-            expected_digest = str(artifact.get("sha256") or "").upper()
             require(len(payload) == expected_size, f"public zip {artifact_id} size mismatch")
             require(sha256_bytes(payload) == expected_digest, f"public zip {artifact_id} sha256 mismatch")
 
-            checksum = checksum_artifacts[artifact_id]
             require(int(checksum.get("size") or 0) == expected_size, f"checksums size mismatch for {artifact_id}")
             require(str(checksum.get("sha256") or "").upper() == expected_digest, f"checksums sha mismatch for {artifact_id}")
     print(f"PASS public zip {public_zip.name}")

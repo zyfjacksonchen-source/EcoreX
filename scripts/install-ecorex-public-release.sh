@@ -103,6 +103,12 @@ for artifact_id, artifact in artifacts.items():
     rel = artifact.get("relativePath", "")
     if not rel:
         raise SystemExit(f"Artifact {artifact_id} has no relativePath")
+    if artifact.get("external") or rel.lower().startswith(("http://", "https://")):
+        if int(artifact.get("size") or 0) <= 0:
+            raise SystemExit(f"External artifact {artifact_id} has no positive size")
+        if len(str(artifact.get("sha256") or "")) != 64:
+            raise SystemExit(f"External artifact {artifact_id} has no SHA256")
+        continue
     path = root / rel
     if not path.is_file():
         raise SystemExit(f"Artifact {artifact_id} missing from release zip: {path}")

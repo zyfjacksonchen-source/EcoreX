@@ -93,6 +93,15 @@ function ready(artifact) {
   return artifact?.status === "ready" || artifact?.status === "ready-unsigned";
 }
 
+function isExternalHref(href) {
+  return /^https?:\/\//i.test(String(href || ""));
+}
+
+function artifactHref(artifact) {
+  const href = artifact?.href || "";
+  return isExternalHref(href) ? href : `./${href}`;
+}
+
 function artifactMeta(artifact) {
   if (!artifact) return "";
   return `
@@ -110,7 +119,8 @@ function buttonForArtifact(artifact, label = "下载") {
   }
   if (ready(artifact)) {
     const suffix = artifact.status === "ready-unsigned" ? "（未公证）" : "";
-    return `<a class="download-link" href="./${artifact.href}" download title="${artifact.source || ""}">${label}${suffix}</a>`;
+    const downloadAttr = isExternalHref(artifact.href) ? "" : " download";
+    return `<a class="download-link" href="${artifactHref(artifact)}"${downloadAttr} title="${artifact.source || ""}">${label}${suffix}</a>`;
   }
   const pendingText = artifact.status === "pending-signature" ? "待签名" : "待验证";
   return `<span class="download-link is-disabled" title="${artifact.source || ""}">${pendingText}</span>`;
