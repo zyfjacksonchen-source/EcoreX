@@ -50,3 +50,4 @@
 - Logs go under `~/Library/Application Support/EcoreX WebUI/state/`.
 - The package validator rejects terminal-opening `.command` entrypoints for the macOS WebUI package.
 - The installer must start `app.py` with working directory set to the installed `runtime` directory. A macos-15 smoke run caught the previous bug where `config.json` was written under `runtime/` but the process launched from another cwd, so the WebUI ignored the selected port and fell back to `9899`.
+- GitHub Actions macos-15 WebUI install smoke run `27614943747` passed against private Release asset `EcoreX_0.1.13-webui-macos-universal.zip` at branch commit `77dc7acb80b009a4f93d58dc8695a784043afba1`.

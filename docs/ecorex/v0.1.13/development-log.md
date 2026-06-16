@@ -139,6 +139,7 @@ This log records source changes for v0.1.13. It does not mark a public release c
 - User-reported macOS WebUI package issue: the public macOS WebUI download was a `.tar.gz`; after extraction the visible `.app` launcher was only about 2 KB and was not self-contained.
 - Fix: the standalone macOS WebUI artifact is now `EcoreX_0.1.13-webui-macos-universal.zip` containing a self-contained `Install EcoreX WebUI.app`. The app includes `Contents/Resources/package/runtime`, `python`, `wheelhouse`, and `scripts`, so users can unzip and double-click the app without managing sibling package directories.
 - Follow-up macos-15 smoke caught a launch cwd bug: the installer wrote `runtime/config.json` with the selected local port, but launched `app.py` from the wrapper cwd, so runtime fell back to `config-template.json` and port `9899`. The macOS installer now starts `app.py` from the installed `runtime` directory with `PYTHONPATH` set to that runtime.
+- GitHub Actions macos-15 WebUI install smoke run `27614943747` passed after the cwd fix. It authenticated to the private `v0.1.13` Release asset, extracted the ZIP, rejected `.command` launchers, ran `Install EcoreX WebUI.app`, captured the browser open URL, and confirmed `/app/` responded.
 - WebUI package hashes after this hotfix:
   - `EcoreX_0.1.13-webui-win-mac.zip`, size `238356152`, SHA256 `7CFA6F123F96CCF94E2565E9CCA4F2CBE5871E1F054ECEB20265E4B9A3FD5AD4`
   - `EcoreX_0.1.13-webui-windows-x64.zip`, size `72884909`, SHA256 `88F37BCD6C65C194398FF2248837F3BB0D3D6AE095859929558A813EFB40C61F`
