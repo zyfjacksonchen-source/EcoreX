@@ -259,6 +259,10 @@ async function apiJson<T extends ApiSuccess>(path: string, method: "GET" | "POST
   if (!result || typeof result !== "object") {
     throw new Error("Invalid sidecar response");
   }
+  const payload = result as ApiSuccess;
+  if (payload.status === "error") {
+    throw new Error(payload.message || "EcoreX local runtime is unavailable");
+  }
   return result as T;
 }
 
@@ -394,6 +398,7 @@ function inferCurrentModel(models: { providers?: unknown[]; capabilities?: Recor
 export async function sendChatMessage(input: {
   sessionId: string;
   message: string;
+  hiddenContext?: string;
   attachments?: FileAttachment[];
   lang?: string;
 }): Promise<ChatSendResult> {
@@ -421,6 +426,7 @@ export async function sendChatMessage(input: {
     body: {
       session_id: input.sessionId,
       message: input.message,
+      hidden_context: input.hiddenContext || "",
       stream: true,
       timestamp: new Date().toISOString(),
       attachments: input.attachments || [],

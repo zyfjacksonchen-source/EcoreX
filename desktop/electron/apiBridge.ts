@@ -62,13 +62,39 @@ export async function fetchSidecarJson(sidecar: SidecarManager, request: ApiRequ
     };
   }
 
-  const response = await fetch(`${sidecar.getBaseUrl()}${path}`, {
-    method,
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: method === "GET" ? undefined : JSON.stringify(request.body ?? {})
-  });
+  const ready = await sidecar.waitUntilReady(30000);
+  if (!ready) {
+    const status = sidecar.getStatus();
+    return {
+      status: "error",
+      message: status.state === "starting"
+        ? "EcoreX local runtime is still starting. Please try again in a moment."
+        : status.message || "EcoreX local runtime is unavailable.",
+      sidecarState: status.state,
+      webPort: status.webPort
+    };
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(`${sidecar.getBaseUrl()}${path}`, {
+      method,
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: method === "GET" ? undefined : JSON.stringify(request.body ?? {})
+    });
+  } catch (error) {
+    const status = sidecar.getStatus();
+    return {
+      status: "error",
+      message: status.state === "starting"
+        ? "EcoreX local runtime is still starting. Please try again in a moment."
+        : `EcoreX local runtime request failed: ${error instanceof Error ? error.message : String(error)}`,
+      sidecarState: status.state,
+      webPort: status.webPort
+    };
+  }
 
   const text = await response.text();
   if (!text) {

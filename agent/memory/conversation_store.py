@@ -93,20 +93,35 @@ def _is_visible_user_message(content: Any) -> bool:
     return False
 
 
+def _strip_project_context_display(text: str) -> str:
+    """Hide legacy project-context prefixes that were stored as user text."""
+    if not text:
+        return text
+    marker = "【EcoreX 项目上下文】"
+    if marker not in text[:1000]:
+        return text.strip()
+    for request_marker in ("用户需求：", "User request:"):
+        idx = text.rfind(request_marker)
+        if idx >= 0:
+            visible = text[idx + len(request_marker):].strip()
+            return visible or "请处理这些附件"
+    return "请处理这些附件"
+
+
 def _extract_display_text(content: Any) -> str:
     """
     Extract the human-readable text portion from a message content value.
     Returns an empty string for tool_use / tool_result blocks.
     """
     if isinstance(content, str):
-        return content.strip()
+        return _strip_project_context_display(content)
     if isinstance(content, list):
         parts = [
             b.get("text", "")
             for b in content
             if isinstance(b, dict) and b.get("type") == "text"
         ]
-        return "\n".join(p for p in parts if p).strip()
+        return _strip_project_context_display("\n".join(p for p in parts if p))
     return ""
 
 

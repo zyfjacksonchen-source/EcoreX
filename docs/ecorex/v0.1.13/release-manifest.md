@@ -10,6 +10,11 @@
 - macOS workflow inputs: `mac_arch=all`, `notarize=false`, `release_tag=v0.1.13`
 - Result: `macOS DMG (arm64)` success and `macOS DMG (x64)` success; both DMGs were later materialized under the public download host after SHA256 verification.
 
+> 2026-06-16 post-RC hotfix note: this manifest section is stale until the
+> sidecar-readiness/context-leak/macOS-WebUI-zip fixes are rebuilt. Do not
+> publish the Windows setup, macOS DMGs, or public release zip recorded below
+> as final v0.1.13 artifacts after commit `4899f96`.
+
 ## Artifact Status
 
 | Artifact | Status | Size | SHA256 |

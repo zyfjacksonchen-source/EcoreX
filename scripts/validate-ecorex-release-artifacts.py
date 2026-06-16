@@ -190,7 +190,7 @@ def validate_manifest_artifacts(manifest: dict, artifact_dir: pathlib.Path) -> l
 def validate_zip_assets(path: pathlib.Path, label: str) -> None:
     with zipfile.ZipFile(path) as archive:
         names = archive.namelist()
-        if label == "webui-win-mac":
+        if label in {"webui-win-mac", "webui-macos-universal"}:
             require(
                 any(name.endswith("Install EcoreX WebUI.app/Contents/MacOS/Install EcoreX WebUI") for name in names),
                 f"{label} missing macOS .app installer entrypoint",
@@ -198,6 +198,14 @@ def validate_zip_assets(path: pathlib.Path, label: str) -> None:
             require(
                 not any(name.endswith("Install EcoreX WebUI.command") for name in names),
                 f"{label} contains terminal-opening macOS .command installer",
+            )
+            require(
+                any("/wheelhouse/mac-arm64/playwright-" in name for name in names),
+                f"{label} missing macOS arm64 Playwright wheel",
+            )
+            require(
+                any("/wheelhouse/mac-x64/playwright-" in name for name in names),
+                f"{label} missing macOS x64 Playwright wheel",
             )
         for required in REQUIRED_WEB_ASSETS:
             require(any(name.endswith(required) for name in names), f"{label} missing {required}")
@@ -222,6 +230,14 @@ def validate_tar_assets(path: pathlib.Path, label: str) -> None:
                 not any(name.endswith("Install EcoreX WebUI.command") for name in names),
                 f"{label} contains terminal-opening macOS .command installer",
             )
+            require(
+                any("/wheelhouse/mac-arm64/playwright-" in name for name in names),
+                f"{label} missing macOS arm64 Playwright wheel",
+            )
+            require(
+                any("/wheelhouse/mac-x64/playwright-" in name for name in names),
+                f"{label} missing macOS x64 Playwright wheel",
+            )
         for required in REQUIRED_WEB_ASSETS:
             require(any(name.endswith(required) for name in names), f"{label} missing {required}")
         for required in REQUIRED_RUNTIME_SUFFIXES:
@@ -239,9 +255,9 @@ def validate_nested_web_assets(artifact_dir: pathlib.Path, ready: list[dict]) ->
             continue
         artifact_id = str(artifact.get("id") or "")
         path = artifact_path(artifact_dir, artifact)
-        if artifact_id in {"webui-win-mac", "webui-windows-x64"}:
+        if artifact_id in {"webui-win-mac", "webui-windows-x64", "webui-macos-universal"}:
             validate_zip_assets(path, artifact_id)
-        elif artifact_id in {"webui-macos-universal", "web-linux-service"}:
+        elif artifact_id in {"web-linux-service"}:
             validate_tar_assets(path, artifact_id)
 
 

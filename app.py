@@ -302,6 +302,17 @@ def _warmup_scheduler():
         logger.warning(f"[App] Scheduler warmup failed: {e}")
 
 
+def _warmup_agent_runtime():
+    """Warm optional agent subsystems after channels are already starting.
+
+    v0.1.13 enables more built-in skills/tools. Keep those capabilities, but
+    do not let MCP or scheduler/evolution startup delay the local Web API that
+    the desktop shell probes for readiness.
+    """
+    _warmup_mcp_tools()
+    _warmup_scheduler()
+
+
 def _sync_builtin_skills():
     """Initialize missing builtin skills in the workspace without overwriting overlays."""
     import shutil
@@ -366,16 +377,16 @@ def run():
         # Sync builtin skills to workspace before channels start
         _sync_builtin_skills()
 
-        # Kick off MCP server loading in the background so first-message
-        # latency isn't dominated by npx package downloads.
-        _warmup_mcp_tools()
-
-        _warmup_scheduler()
-
         logger.info(f"[App] Starting channels: {channel_names}")
 
         _channel_mgr = ChannelManager()
         _channel_mgr.start(channel_names, first_start=True)
+
+        threading.Thread(
+            target=_warmup_agent_runtime,
+            daemon=True,
+            name="agent-runtime-warmup",
+        ).start()
 
         while True:
             time.sleep(1)

@@ -2053,11 +2053,10 @@ export function App() {
     const outboundAttachments = projectAttachment
       ? [projectAttachment, ...attachments.filter((file) => file.file_path !== projectAttachment.file_path)]
       : attachments;
-    const outboundText = activeProject
-      ? `${projectContextPrompt(activeProject)}\n\n用户需求：${text || "请处理这些附件"}`
-      : text;
+    const displayText = text || "请处理这些附件";
+    const hiddenContext = activeProject ? projectContextPrompt(activeProject) : "";
 
-    const estimatedTokens = estimateTokens(outboundText || text, outboundAttachments);
+    const estimatedTokens = estimateTokens(`${hiddenContext}\n\n${displayText}`.trim(), outboundAttachments);
     let streamTextChars = 0;
     let streamToolChars = 0;
     let streamSawDelta = false;
@@ -2156,7 +2155,12 @@ export function App() {
     };
 
     try {
-      const result = await sendChatMessage({ sessionId: requestSessionId, message: outboundText, attachments: outboundAttachments });
+      const result = await sendChatMessage({
+        sessionId: requestSessionId,
+        message: displayText,
+        hiddenContext,
+        attachments: outboundAttachments
+      });
       if (result.status === "error") throw new Error(result.message || "发送失败");
       if (result.inline_reply) {
         streamTextChars += result.inline_reply.length;

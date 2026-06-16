@@ -60,8 +60,42 @@ export class SidecarManager {
     return this.status;
   }
 
+  private getState(): SidecarState {
+    return this.status.state;
+  }
+
   getBaseUrl() {
     return `http://127.0.0.1:${this.getWebPort()}`;
+  }
+
+  async waitUntilReady(timeoutMs = 30000) {
+    if (this.getState() === "running") {
+      return true;
+    }
+    if (this.getState() === "failed" || this.getState() === "stopped" || this.getState() === "skipped") {
+      return false;
+    }
+
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (this.getState() === "running") {
+        return true;
+      }
+      if (this.getState() === "failed" || this.getState() === "stopped" || this.getState() === "skipped") {
+        return false;
+      }
+      if (await this.probeHttpReady(this.getWebPort())) {
+        this.updateStatus({
+          state: "running",
+          message: "EcoreX local runtime is ready",
+          pid: this.child?.pid,
+          webPort: this.getWebPort()
+        });
+        return true;
+      }
+      await this.delay(300);
+    }
+    return this.getState() === "running";
   }
 
   start() {
@@ -117,11 +151,12 @@ export class SidecarManager {
 
     this.child.once("spawn", () => {
       this.updateStatus({
-        state: "running",
+        state: "starting",
         message: "EcoreX 兼容运行时已启动",
         pid: this.child?.pid,
         webPort
       });
+      void this.markReadyWhenAvailable(webPort, this.child?.pid);
     });
 
     this.child.once("error", (error) => {
@@ -280,6 +315,53 @@ export class SidecarManager {
   private getWebPort() {
     const raw = Number(process.env.ECOREX_WEB_PORT || process.env.WEB_PORT || DEFAULT_WEB_PORT);
     return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_WEB_PORT;
+  }
+
+  private async markReadyWhenAvailable(webPort: number, pid?: number) {
+    const deadline = Date.now() + 60000;
+    while (Date.now() < deadline) {
+      if (!this.child || (pid && this.child.pid !== pid)) {
+        return;
+      }
+      if (await this.probeHttpReady(webPort)) {
+        this.updateStatus({
+          state: "running",
+          message: "EcoreX local runtime is ready",
+          pid,
+          webPort
+        });
+        return;
+      }
+      await this.delay(500);
+    }
+
+    if (this.child && (!pid || this.child.pid === pid)) {
+      this.updateStatus({
+        state: "starting",
+        message: "EcoreX local runtime is still starting",
+        pid,
+        webPort
+      });
+    }
+  }
+
+  private async probeHttpReady(webPort: number) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1200);
+    try {
+      const response = await fetch(`http://127.0.0.1:${webPort}/api/version`, {
+        signal: controller.signal
+      });
+      return response.ok;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private delay(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   private ensureDesktopRuntimeDefaults() {

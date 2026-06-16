@@ -1625,7 +1625,9 @@ class WebChannel(ChatChannel):
             data = web.data()
             json_data = json.loads(data)
             session_id = json_data.get('session_id', f'session_{int(time.time())}')
-            prompt = json_data.get('message', '')
+            visible_prompt = str(json_data.get('message') or '')
+            prompt = visible_prompt
+            hidden_context = json_data.get('hidden_context') or json_data.get('project_context') or ''
             use_sse = json_data.get('stream', True)
             attachments = json_data.get('attachments', [])
             lang = (json_data.get('lang') or 'zh').lower()
@@ -1687,6 +1689,9 @@ class WebChannel(ChatChannel):
                     prompt = prompt + "\n" + "\n".join(file_refs)
                     logger.info(f"[WebChannel] Attached {len(file_refs)} file(s) to message")
 
+            if isinstance(hidden_context, str) and hidden_context.strip():
+                prompt = hidden_context.strip() + "\n\nUser request:\n" + (prompt or "Please handle these attachments.")
+
             request_id = self._generate_request_id()
             self.request_to_session[request_id] = session_id
             try:
@@ -1729,6 +1734,7 @@ class WebChannel(ChatChannel):
             context["receiver"] = session_id
             context["request_id"] = request_id
             context["session_lock"] = session_lock
+            context["visible_message"] = (visible_prompt or "Please handle these attachments.").strip()
             if is_voice_input:
                 # Web channel runs its own TTS post-pipeline via
                 # _maybe_dispatch_auto_tts; don't set desire_rtype here or

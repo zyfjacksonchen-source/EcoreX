@@ -114,7 +114,8 @@ function New-ReleaseJson {
 function New-MacInstallerApp {
     param(
         [Parameter(Mandatory = $true)][string]$AppRoot,
-        [Parameter(Mandatory = $true)][string]$InstallScriptRelative
+        [Parameter(Mandatory = $true)][string]$InstallScriptRelative,
+        [switch]$SelfContainedResources
     )
 
     $contentsDir = Join-Path $AppRoot "Contents"
@@ -148,7 +149,7 @@ function New-MacInstallerApp {
 set -euo pipefail
 
 APP_EXEC_DIR="$(cd "$(dirname "$0")" && pwd)"
-PACKAGE_ROOT="$(cd "$APP_EXEC_DIR/../../.." && pwd)"
+PACKAGE_ROOT="$(__PACKAGE_ROOT_COMMAND__)"
 INSTALL_SCRIPT="$PACKAGE_ROOT/__INSTALL_SCRIPT_RELATIVE__"
 STATE_DIR="$HOME/Library/Application Support/EcoreX WebUI/state"
 LOG_FILE="$STATE_DIR/install.log"
@@ -170,6 +171,12 @@ mkdir -p "$STATE_DIR"
   /usr/bin/osascript -e "display dialog \"EcoreX WebUI installation failed. Check the log: $ERR_FILE\" buttons {\"OK\"} default button \"OK\" with icon caution" >/dev/null 2>&1 || true
 } &
 '@
+    $packageRootCommand = if ($SelfContainedResources) {
+        'cd "$APP_EXEC_DIR/../Resources/package" && pwd'
+    } else {
+        'cd "$APP_EXEC_DIR/../../.." && pwd'
+    }
+    $launcher = $launcher.Replace("__PACKAGE_ROOT_COMMAND__", $packageRootCommand)
     $launcher = $launcher.Replace("__INSTALL_SCRIPT_RELATIVE__", $InstallScriptRelative)
     Write-Utf8NoBom -Path (Join-Path $macOsDir "Install EcoreX WebUI") -Value $launcher
 }
@@ -234,12 +241,23 @@ function Invoke-PipDownload {
         [string]$Platform,
         [string]$Destination
     )
-    if ((Test-Path -LiteralPath $Destination) -and @(Get-ChildItem -LiteralPath $Destination -Filter "*.whl" -ErrorAction SilentlyContinue).Count -gt 0) {
+    $requirementsPath = Resolve-RequiredPath "desktop/runtime-packs/core-requirements.txt"
+    $requirementsHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $requirementsPath).Hash.ToUpperInvariant()
+    $stampPath = Join-Path $Destination ".requirements-$Platform.sha256"
+    $expectedStamp = "$Platform $requirementsHash"
+    if (
+        (Test-Path -LiteralPath $stampPath) -and
+        ((Get-Content -Raw -LiteralPath $stampPath).Trim() -eq $expectedStamp) -and
+        @(Get-ChildItem -LiteralPath $Destination -Filter "*.whl" -ErrorAction SilentlyContinue).Count -gt 0
+    ) {
         return
+    }
+    if (Test-Path -LiteralPath $Destination) {
+        Remove-Item -LiteralPath $Destination -Recurse -Force
     }
     New-Item -ItemType Directory -Force -Path $Destination | Out-Null
     & python -m pip download `
-        -r "desktop/runtime-packs/core-requirements.txt" `
+        -r $requirementsPath `
         --platform $Platform `
         --python-version 311 `
         --implementation cp `
@@ -249,6 +267,7 @@ function Invoke-PipDownload {
     if ($LASTEXITCODE -ne 0) {
         throw "pip download failed for $Platform"
     }
+    Write-Utf8NoBom -Path $stampPath -Value ($expectedStamp + "`n")
 }
 
 $repoRoot = (Resolve-Path -LiteralPath ".").Path
@@ -263,11 +282,11 @@ $windowsStage = Join-Path $stagingRoot $windowsLeaf
 $macStage = Join-Path $stagingRoot $macLeaf
 $combinedStage = Join-Path $stagingRoot $combinedLeaf
 $windowsZip = Join-Path $outputResolved "EcoreX_${Version}-webui-windows-x64.zip"
-$macTar = Join-Path $outputResolved "EcoreX_${Version}-webui-macos-universal.tar.gz"
+$macZip = Join-Path $outputResolved "EcoreX_${Version}-webui-macos-universal.zip"
 $combinedZip = Join-Path $outputResolved "EcoreX_${Version}-webui-win-mac.zip"
 
 New-Item -ItemType Directory -Force -Path $outputResolved, $cacheRoot | Out-Null
-foreach ($path in @($stagingRoot, $windowsZip, $macTar, $combinedZip)) {
+foreach ($path in @($stagingRoot, $windowsZip, $macZip, $combinedZip)) {
     if (Test-Path -LiteralPath $path) {
         Remove-Item -LiteralPath $path -Recurse -Force
     }
@@ -684,16 +703,25 @@ New-MacInstallerApp -AppRoot (Join-Path $macStage "Install EcoreX WebUI.app") -I
 Write-Utf8NoBom -Path (Join-Path $macStage "release.json") -Value (New-ReleaseJson -ArtifactId "webui-macos-universal" -Platform "macOS arm64/x64" -InstallEntry "Install EcoreX WebUI.app")
 Write-Utf8NoBom -Path (Join-Path $macStage "README.txt") -Value "Double-click Install EcoreX WebUI.app. The installer runs without opening Terminal, writes logs to ~/Library/Application Support/EcoreX WebUI/state, starts the local service, and opens http://127.0.0.1:9909/app/ in your browser.`n"
 
-$macStageParent = Split-Path -Parent $macStage
-$macTarResolved = [System.IO.Path]::GetFullPath($macTar)
-$macStageUnix = "/mnt/c/" + (($macStage -replace "^[A-Za-z]:\\", "") -replace "\\", "/")
-$macParentUnix = "/mnt/c/" + (($macStageParent -replace "^[A-Za-z]:\\", "") -replace "\\", "/")
-$macTarUnix = "/mnt/c/" + (($macTarResolved -replace "^[A-Za-z]:\\", "") -replace "\\", "/")
-$bashCmd = "cd '$macParentUnix' && chmod +x '$macLeaf/Install EcoreX WebUI.app/Contents/MacOS/Install EcoreX WebUI' '$macLeaf/scripts/install-ecorex-webui-mac.sh' && if [ -f '$macLeaf/runtime/tools/bin/lark-cli' ]; then chmod +x '$macLeaf/runtime/tools/bin/lark-cli'; fi && tar -czf '$macTarUnix' '$macLeaf'"
-bash -lc $bashCmd
-if ($LASTEXITCODE -ne 0) {
-    throw "macOS tar packaging failed"
+$macStandaloneStage = Join-Path $stagingRoot "$macLeaf-standalone"
+$macStandaloneApp = Join-Path $macStandaloneStage "Install EcoreX WebUI.app"
+$macStandalonePackage = Join-Path $macStandaloneApp "Contents/Resources/package"
+New-MacInstallerApp -AppRoot $macStandaloneApp -InstallScriptRelative "scripts/install-ecorex-webui-mac.sh" -SelfContainedResources
+New-Item -ItemType Directory -Force -Path $macStandalonePackage | Out-Null
+foreach ($entry in @("runtime", "python", "wheelhouse", "scripts")) {
+    Copy-Item -LiteralPath (Join-Path $macStage $entry) -Destination (Join-Path $macStandalonePackage $entry) -Recurse -Force
 }
+Copy-Item -LiteralPath (Join-Path $macStage "release.json") -Destination (Join-Path $macStandalonePackage "release.json") -Force
+Copy-Item -LiteralPath (Join-Path $macStage "README.txt") -Destination (Join-Path $macStandalonePackage "README.txt") -Force
+
+Compress-ZipWithUnixPermissions `
+    -SourceRoot $macStandaloneApp `
+    -DestinationPath $macZip `
+    -ExecutableRelativePaths @(
+        "Install EcoreX WebUI.app/Contents/MacOS/Install EcoreX WebUI",
+        "Install EcoreX WebUI.app/Contents/Resources/package/scripts/install-ecorex-webui-mac.sh",
+        "Install EcoreX WebUI.app/Contents/Resources/package/runtime/tools/bin/lark-cli"
+    )
 
 $combinedWindows = Join-Path $combinedStage "windows"
 $combinedMac = Join-Path $combinedStage "macos"
@@ -745,7 +773,7 @@ $artifacts = [ordered]@{}
 foreach ($entry in @(
     @{ id = "webui-win-mac"; path = $combinedZip },
     @{ id = "webui-windows-x64"; path = $windowsZip },
-    @{ id = "webui-macos-universal"; path = $macTar }
+    @{ id = "webui-macos-universal"; path = $macZip }
 )) {
     $item = Get-Item -LiteralPath $entry.path
     $artifacts[$entry.id] = [ordered]@{

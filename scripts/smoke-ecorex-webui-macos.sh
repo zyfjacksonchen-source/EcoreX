@@ -2,7 +2,7 @@
 set -euo pipefail
 
 VERSION="${VERSION:-0.1.13}"
-ARTIFACT_URL="${ARTIFACT_URL:-https://www.ecoreai.cn/ecorex-agent/downloads/EcoreX_${VERSION}-webui-macos-universal.tar.gz}"
+ARTIFACT_URL="${ARTIFACT_URL:-https://www.ecoreai.cn/ecorex-agent/downloads/EcoreX_${VERSION}-webui-macos-universal.zip}"
 PORT="${ECOREX_WEB_PORT:-19090}"
 WORK_ROOT="${RUNNER_TEMP:-/tmp}/ecorex-webui-macos-smoke-${VERSION}-$$"
 DOWNLOAD_DIR="$WORK_ROOT/download"
@@ -56,28 +56,27 @@ mkdir -p "$DOWNLOAD_DIR" "$EXTRACT_DIR" "$FAKE_BIN" "$INSTALL_ROOT" "$WORKSPACE_
 
 log "Downloading $ARTIFACT_URL"
 curl --fail --location --retry 3 --retry-delay 2 \
-  --output "$DOWNLOAD_DIR/webui-macos.tar.gz" \
+  --output "$DOWNLOAD_DIR/webui-macos.zip" \
   "$ARTIFACT_URL"
 
 log "Extracting package"
-tar -xzf "$DOWNLOAD_DIR/webui-macos.tar.gz" -C "$EXTRACT_DIR"
-PACKAGE_DIR="$(find "$EXTRACT_DIR" -maxdepth 1 -type d -name "ecorex-webui-macos-universal-*" | head -n 1)"
-if [[ -z "$PACKAGE_DIR" ]]; then
-  log "Package root not found under $EXTRACT_DIR"
+unzip -q "$DOWNLOAD_DIR/webui-macos.zip" -d "$EXTRACT_DIR"
+APP_DIR="$(find "$EXTRACT_DIR" -maxdepth 3 -type d -name "Install EcoreX WebUI.app" | head -n 1)"
+if [[ -z "$APP_DIR" ]]; then
+  log "Installer app not found under $EXTRACT_DIR"
   find "$EXTRACT_DIR" -maxdepth 2 -print
   exit 1
 fi
 
-APP_DIR="$PACKAGE_DIR/Install EcoreX WebUI.app"
 APP_EXEC="$APP_DIR/Contents/MacOS/Install EcoreX WebUI"
-INSTALL_SCRIPT="$PACKAGE_DIR/scripts/install-ecorex-webui-mac.sh"
+INSTALL_SCRIPT="$APP_DIR/Contents/Resources/package/scripts/install-ecorex-webui-mac.sh"
 
 [[ -d "$APP_DIR" ]] || { log "Missing installer app: $APP_DIR"; exit 1; }
 [[ -f "$APP_EXEC" ]] || { log "Missing installer executable: $APP_EXEC"; exit 1; }
 [[ -f "$INSTALL_SCRIPT" ]] || { log "Missing install script: $INSTALL_SCRIPT"; exit 1; }
 chmod +x "$APP_EXEC" "$INSTALL_SCRIPT"
 
-if find "$PACKAGE_DIR" -name "Install EcoreX WebUI.command" -print -quit | grep -q .; then
+if find "$EXTRACT_DIR" -name "Install EcoreX WebUI.command" -print -quit | grep -q .; then
   log "Unexpected Terminal-opening .command launcher found"
   exit 1
 fi

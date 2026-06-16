@@ -126,3 +126,21 @@ This log records source changes for v0.1.13. It does not mark a public release c
   - `EcoreX_0.1.13_x64.dmg`, size `200043508`, SHA256 `517029EC4E716A92FF0F3BE98095AE2B892BF763070A4582520692551D114B86`
 - `deploy/ecorex-site/manifest.json` is now v0.1.13 and marks the Windows desktop installer as `ready`; macOS DMGs are `ready-unsigned` and served from the public download host.
 - Final generated public release zip is `release-artifacts/EcoreX_0.1.13-public-release.zip`, size `694958669`, SHA256 `F1DF81E07945AC5EFA1F2FAEB2C2A49C33F7D186FDC1EA04F640906A06CE0305`. Full validator passed with `--desktop-dir desktop\release\win-unpacked`.
+
+## Post-RC Hotfix: Runtime Ready, Hidden Context, macOS WebUI Zip
+
+- User-reported desktop error: `Error invoking remote method 'ecorex:sidecar-json': TypeError: fetch failed`.
+- Root cause: the Electron sidecar marked the runtime `running` as soon as the Python child process spawned. In v0.1.13 more built-in abilities and warmups made the window between process spawn and HTTP `/api/version` readiness longer, so renderer API calls could hit a port that was not listening yet.
+- Fix: Electron now treats spawn as `starting`, polls `http://127.0.0.1:<port>/api/version`, and only marks `running` after the local Web API is reachable. `fetchSidecarJson` waits for readiness and returns a structured local-runtime error instead of throwing the raw IPC/fetch exception.
+- Startup mitigation: MCP and scheduler/evolution warmups are now launched after channels start, in a daemon `agent-runtime-warmup` thread. This keeps v0.1.13 abilities enabled but lets `/api/version` become available before heavy optional warmups finish.
+- User-reported context leak: project prompt text (`【EcoreX 项目上下文】`, project path, project memory path, and prior user request wording) appeared as a visible user chat bubble.
+- Root cause: Desktop appended project context directly into the `/message.message` field, so the conversation store persisted it as ordinary user text.
+- Fix: Desktop sends the visible user request separately from `hidden_context`; WebChannel combines hidden context only for the agent input and stores `visible_message` for history. Conversation history display also strips legacy project-context messages that were already persisted by older v0.1.13 builds.
+- User-reported macOS WebUI package issue: the public macOS WebUI download was a `.tar.gz`; after extraction the visible `.app` launcher was only about 2 KB and was not self-contained.
+- Fix: the standalone macOS WebUI artifact is now `EcoreX_0.1.13-webui-macos-universal.zip` containing a self-contained `Install EcoreX WebUI.app`. The app includes `Contents/Resources/package/runtime`, `python`, `wheelhouse`, and `scripts`, so users can unzip and double-click the app without managing sibling package directories.
+- WebUI package hashes after this hotfix:
+  - `EcoreX_0.1.13-webui-win-mac.zip`, size `238354518`, SHA256 `CEAFCC3FFE5681BAA6F3FAFC1D4203C00C12B43DDA02A0355D6C22D430DA7D88`
+  - `EcoreX_0.1.13-webui-windows-x64.zip`, size `72884103`, SHA256 `755B54FAEF42A0C45C3B6BC247880FCA4BE0A29EF45E60FC370725BDD2CDC1E9`
+  - `EcoreX_0.1.13-webui-macos-universal.zip`, size `165307941`, SHA256 `6C89BDBE4855E9F6A4BD29C60CA9C38E50CB672AB2EF52C0B4FFB5299556CC6E`
+- Validation passed for this source state: `npm run typecheck`, `python -m py_compile app.py channel\web\web_channel.py bridge\agent_bridge.py agent\memory\conversation_store.py scripts\validate-ecorex-release-artifacts.py`, and targeted zip structure checks for the self-contained macOS WebUI app plus Playwright wheels.
+- Staleness boundary: the previously recorded signed Windows setup, macOS DMGs, and public release zip are stale after this hotfix. Rebuild/sign Windows, rebuild macOS DMGs via macos-15, regenerate public zip, run full validator, smoke, and redeploy before calling v0.1.13 final.

@@ -72,7 +72,7 @@ const cardCopy = {
   "webui-macos-universal": {
     icon: "Web",
     title: "macOS 网页版",
-    body: "网页版，在本机一键安装并在网页内直接部署启动，完成后自动打开 EcoreX。",
+    body: "下载 ZIP 后解压，双击 Install EcoreX WebUI.app。安装器会在后台启动本地 WebUI，完成后自动打开 EcoreX。",
   },
 };
 

@@ -555,6 +555,15 @@ class AgentBridge:
                 # drop it here so it isn't stored twice.
                 if pre_persisted and new_messages and new_messages[0].get("role") == "user":
                     new_messages = new_messages[1:]
+                elif (not pre_persisted and new_messages and new_messages[0].get("role") == "user"
+                      and context and context.get("visible_message")):
+                    new_messages[0] = {
+                        **new_messages[0],
+                        "content": [{
+                            "type": "text",
+                            "text": str(context.get("visible_message") or "").strip()
+                        }]
+                    }
                 if new_messages:
                     self._persist_messages(session_id, list(new_messages), channel_type)
                 else:
@@ -800,9 +809,14 @@ class AgentBridge:
             if clear_history:
                 store.clear_session(session_id)
             channel_type = (context.get("channel_type") or "") if context else ""
+            visible_query = ""
+            if context and context.get("visible_message"):
+                visible_query = str(context.get("visible_message") or "").strip()
+            if not visible_query:
+                visible_query = query
             user_msg = {
                 "role": "user",
-                "content": [{"type": "text", "text": query}],
+                "content": [{"type": "text", "text": visible_query}],
             }
             store.append_messages(session_id, [user_msg], channel_type=channel_type)
             return True
