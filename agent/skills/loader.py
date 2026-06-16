@@ -14,7 +14,7 @@ class SkillLoader:
     """Loads skills from various directories."""
 
     def __init__(self):
-        pass
+        self.last_diagnostics: List[str] = []
     
     def load_skills_from_dir(self, dir_path: str, source: str) -> LoadSkillsResult:
         """
@@ -255,6 +255,7 @@ class SkillLoader:
                 skill_map[skill.name] = entry
 
         # Log diagnostics
+        self.last_diagnostics = list(all_diagnostics)
         if all_diagnostics:
             logger.debug(f"Skill loading diagnostics: {len(all_diagnostics)} issues")
             for diag in all_diagnostics[:5]:
@@ -263,6 +264,12 @@ class SkillLoader:
         logger.debug(f"Loaded {len(skill_map)} skills total")
 
         return skill_map
+
+    def get_last_diagnostics(self, limit: Optional[int] = None) -> List[str]:
+        diagnostics = list(self.last_diagnostics or [])
+        if limit is None:
+            return diagnostics
+        return diagnostics[:max(0, limit)]
     
     def _create_skill_entry(self, skill: Skill) -> SkillEntry:
         """

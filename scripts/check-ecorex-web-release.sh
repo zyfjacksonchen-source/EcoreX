@@ -113,7 +113,7 @@ check_package() {
   )
 
   for suffix in "${required_suffixes[@]}"; do
-    if printf '%s\n' "$listing" | grep -q "${suffix}$"; then
+    if grep -Fq -- "$suffix" <<<"$listing"; then
       pass "package contains *$suffix"
     else
       fail "package missing *$suffix"

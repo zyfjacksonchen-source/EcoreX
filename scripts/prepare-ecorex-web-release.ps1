@@ -52,6 +52,17 @@ function Copy-DirectoryIfExists {
     }
 }
 
+function Copy-DirectoryContentsIfExists {
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$Destination
+    )
+    if (Test-Path -LiteralPath $Source) {
+        New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+        Copy-Item -Path (Join-Path $Source "*") -Destination $Destination -Recurse -Force
+    }
+}
+
 function Remove-GeneratedNoise {
     param([Parameter(Mandatory = $true)][string]$Root)
     if (-not (Test-Path -LiteralPath $Root)) {
@@ -155,7 +166,11 @@ $webBuildKind = "legacy-webui-fallback"
 if ($webBuildResolved) {
     $webBuildKind = if ($webBuildKindOverride) { $webBuildKindOverride } else { "provided-web-build" }
     Copy-DirectoryIfExists -Source $webBuildResolved -Destination (Join-Path $webBuildOut "app")
-    Copy-DirectoryIfExists -Source $webBuildResolved -Destination $appDir
+    if (Test-Path -LiteralPath $appDir) {
+        Remove-Item -LiteralPath $appDir -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path $appDir | Out-Null
+    Copy-DirectoryContentsIfExists -Source $webBuildResolved -Destination $appDir
 } elseif (Test-Path -LiteralPath (Join-Path $appDir "index.html")) {
     $webBuildKind = "source-static-app"
     Copy-DirectoryIfExists -Source $appDir -Destination (Join-Path $webBuildOut "app")

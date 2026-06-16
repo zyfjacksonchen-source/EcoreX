@@ -303,7 +303,7 @@ def _warmup_scheduler():
 
 
 def _sync_builtin_skills():
-    """Sync builtin skills from project skills/ to workspace skills/ on startup."""
+    """Initialize missing builtin skills in the workspace without overwriting overlays."""
     import shutil
     try:
         workspace = conf().get("agent_workspace", "~/cow")
@@ -324,7 +324,10 @@ def _sync_builtin_skills():
             dst = os.path.join(custom_dir, name)
             try:
                 if os.path.isdir(dst):
-                    shutil.rmtree(dst)
+                    # Workspace skills are intentional overlays. Never delete
+                    # them at startup, otherwise a runtime skill repair would be
+                    # lost on the next launch.
+                    continue
                 shutil.copytree(src, dst)
                 synced += 1
             except Exception as e:

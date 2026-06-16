@@ -21,6 +21,7 @@ nativeTheme.themeSource = "dark";
 
 const imageExtensions = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"]);
 const videoExtensions = new Set([".mp4", ".webm", ".avi", ".mov", ".mkv"]);
+const externalUrlProtocols = new Set(["http:", "https:", "mailto:"]);
 
 function toAttachment(filePath: string) {
   const ext = path.extname(filePath).toLowerCase();
@@ -50,6 +51,21 @@ function applyWindowTheme(theme: "light" | "dark") {
         // Older Electron/window modes may not support overlay updates.
       }
     }
+  }
+}
+
+function safeOpenExternal(rawUrl: string) {
+  try {
+    const parsed = new URL(String(rawUrl || ""));
+    if (!externalUrlProtocols.has(parsed.protocol)) {
+      console.warn(`[EcoreX] blocked external URL protocol: ${parsed.protocol}`);
+      return false;
+    }
+    void shell.openExternal(parsed.toString());
+    return true;
+  } catch {
+    console.warn("[EcoreX] blocked malformed external URL");
+    return false;
   }
 }
 
@@ -87,7 +103,7 @@ function createMainWindow() {
   });
 
   win.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+    safeOpenExternal(url);
     return { action: "deny" };
   });
 
@@ -170,7 +186,7 @@ function installApplicationMenu() {
         {
           label: "EcoreX 官网",
           click: () => {
-            void shell.openExternal("https://www.ecoreai.cn/ecorex-agent/");
+            safeOpenExternal("https://www.ecoreai.cn/ecorex-agent/");
           }
         }
       ]
@@ -190,7 +206,13 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("ecorex:sidecar-json", (_event, request) => fetchSidecarJson(sidecar, request));
   ipcMain.handle("ecorex:list-capability-packs", () => capabilities.listPacks());
-  ipcMain.handle("ecorex:install-capability-pack", (_event, packId: string) => capabilities.installPack(packId));
+  ipcMain.handle("ecorex:install-capability-pack", async (event, packId: string) => {
+    const decision = await permissions.authorizeHostCapability(event, "capability-install", { id: packId });
+    if (!decision.allowed) {
+      return capabilities.blockedPack(packId, decision.reason);
+    }
+    return capabilities.installPack(packId);
+  });
   ipcMain.handle("ecorex:get-telemetry-state", () => telemetry.getState());
   ipcMain.handle("ecorex:report-telemetry", (_event, event) => telemetry.report(event));
   ipcMain.handle("ecorex:refresh-enterprise-policy", () => sidecar.refreshEnterpriseModelConfig());
@@ -282,7 +304,14 @@ app.whenReady().then(async () => {
 
   await sidecar.refreshEnterpriseModelConfig();
   sidecar.start();
-  void capabilities.preinstallPolicyPacks().catch(() => undefined);
+  void capabilities.preinstallPolicyPacks(async (pack) => {
+    const decision = await permissions.authorizeHostCapability(undefined, "capability-preinstall", {
+      id: pack.id,
+      name: pack.name,
+      summary: pack.summary
+    });
+    return decision.allowed;
+  }).catch(() => undefined);
   createMainWindow();
 
   app.on("activate", () => {

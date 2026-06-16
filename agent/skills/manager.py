@@ -4,14 +4,35 @@ Skill manager for managing skill lifecycle and operations.
 
 import os
 import json
+import shutil
+import time
 from typing import Dict, List, Optional
 from pathlib import Path
 from common.log import logger
 from agent.skills.types import Skill, SkillEntry, SkillSnapshot
 from agent.skills.loader import SkillLoader
-from agent.skills.formatter import format_skill_entries_for_prompt
+from agent.skills.formatter import format_skill_diagnostics_for_prompt, format_skill_entries_for_prompt
 
 SKILLS_CONFIG_FILE = "skills_config.json"
+CUSTOM_OVERRIDE_MARKER = ".ecorex-custom-override"
+
+MANAGED_BUILTIN_REFRESH_MARKERS: Dict[str, List[str]] = {
+    # These are official EcoreX built-ins that may have been copied into
+    # ~/EcoreX/skills by older releases. If that stale copy is left in place it
+    # silently overrides the fixed built-in version.
+    "image-generation": [
+        'DEFAULT_MODEL = "gpt-image-2-pro"',
+        "OpenAI model {model} unavailable",
+        '"output_format"',
+        "/images/edits",
+        "requests with `image_url` use",
+    ],
+    "create-xiaohongshu-note": [
+        'parser.add_argument("--model", default="gpt-image-2-pro")',
+        "/images/generations",
+        '"output_format"',
+    ],
+}
 
 
 class SkillManager:
@@ -42,18 +63,127 @@ class SkillManager:
 
         self.loader = SkillLoader()
         self.skills: Dict[str, SkillEntry] = {}
+        self.last_load_diagnostics: List[str] = []
 
         # Load skills on initialization
         self.refresh_skills()
 
     def refresh_skills(self):
         """Reload all skills from builtin and custom directories, then sync config."""
+        self._refresh_managed_builtin_overlays()
         self.skills = self.loader.load_all_skills(
             builtin_dir=self.builtin_dir,
             custom_dir=self.custom_dir,
         )
+        self.last_load_diagnostics = self.loader.get_last_diagnostics()
         self._sync_skills_config()
         logger.debug(f"SkillManager: Loaded {len(self.skills)} skills")
+
+    def _refresh_managed_builtin_overlays(self) -> None:
+        """
+        Replace stale workspace copies of official built-in skills.
+
+        Same-name workspace skills normally override built-ins. That remains
+        useful for explicit user overrides, but older EcoreX builds also copied
+        selected built-ins into the workspace. Those stale managed copies then
+        mask release fixes forever. For a small allowlist of official skills we
+        refresh the workspace copy when it misses release-critical markers.
+        """
+        if not self.builtin_dir or not self.custom_dir:
+            return
+
+        builtin_root = Path(self.builtin_dir)
+        custom_root = Path(self.custom_dir)
+        if not builtin_root.exists() or not custom_root.exists():
+            return
+
+        for skill_name, markers in MANAGED_BUILTIN_REFRESH_MARKERS.items():
+            builtin_skill_dir = builtin_root / skill_name
+            custom_skill_dir = custom_root / skill_name
+            if not builtin_skill_dir.is_dir() or not custom_skill_dir.exists():
+                continue
+            if (custom_skill_dir / CUSTOM_OVERRIDE_MARKER).exists():
+                continue
+
+            try:
+                builtin_text = self._read_skill_tree_text(builtin_skill_dir)
+                custom_text = self._read_skill_tree_text(custom_skill_dir)
+            except Exception as exc:
+                logger.warning(
+                    f"[SkillManager] Failed checking managed skill '{skill_name}': {exc}"
+                )
+                continue
+
+            if not all(marker in builtin_text for marker in markers):
+                logger.warning(
+                    f"[SkillManager] Built-in skill '{skill_name}' is missing managed refresh markers"
+                )
+                continue
+            if all(marker in custom_text for marker in markers):
+                continue
+
+            try:
+                self._replace_workspace_skill_from_builtin(
+                    skill_name,
+                    builtin_skill_dir,
+                    custom_skill_dir,
+                    custom_root,
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"[SkillManager] Failed refreshing managed built-in skill '{skill_name}': {exc}"
+                )
+
+    @staticmethod
+    def _read_skill_tree_text(skill_dir: Path) -> str:
+        parts: List[str] = []
+        for path in sorted(skill_dir.rglob("*")):
+            if not path.is_file():
+                continue
+            if path.name == CUSTOM_OVERRIDE_MARKER:
+                continue
+            if path.suffix.lower() not in {".md", ".py", ".json", ".yml", ".yaml", ".txt"}:
+                continue
+            try:
+                parts.append(path.read_text(encoding="utf-8", errors="replace"))
+            except Exception:
+                continue
+        return "\n".join(parts)
+
+    @staticmethod
+    def _replace_workspace_skill_from_builtin(
+        skill_name: str,
+        builtin_skill_dir: Path,
+        custom_skill_dir: Path,
+        custom_root: Path,
+    ) -> None:
+        custom_root.mkdir(parents=True, exist_ok=True)
+        backup_root = custom_root / ".ecorex-backups"
+        backup_root.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d%H%M%S")
+        backup_dir = backup_root / f"{skill_name}-{stamp}"
+        tmp_dir = custom_root / f".{skill_name}.refresh-{stamp}.tmp"
+
+        if tmp_dir.exists():
+            shutil.rmtree(tmp_dir)
+        shutil.copytree(builtin_skill_dir, tmp_dir)
+
+        if custom_skill_dir.exists():
+            if backup_dir.exists():
+                shutil.rmtree(backup_dir)
+            shutil.move(str(custom_skill_dir), str(backup_dir))
+
+        shutil.move(str(tmp_dir), str(custom_skill_dir))
+        logger.info(
+            f"[SkillManager] Refreshed managed built-in skill '{skill_name}' "
+            f"from {builtin_skill_dir}; backup saved to {backup_dir}"
+        )
+
+    def get_load_diagnostics(self, limit: Optional[int] = None) -> List[str]:
+        diagnostics = list(self.last_load_diagnostics or [])
+        if limit is None:
+            return diagnostics
+        return diagnostics[:max(0, limit)]
 
     # ------------------------------------------------------------------
     # skills_config.json management
@@ -278,6 +408,8 @@ class SkillManager:
             logger.debug(f"[SkillManager] Unavailable skills (setup needed): {unavailable_names}")
             result += format_unavailable_skills_for_prompt(unavailable, missing_map)
 
+        result += format_skill_diagnostics_for_prompt(self.get_load_diagnostics())
+
         logger.debug(f"[SkillManager] Generated prompt length: {len(result)}")
         return result
     
@@ -295,6 +427,7 @@ class SkillManager:
         """
         entries = self.filter_skills(skill_filter=skill_filter, include_disabled=False)
         prompt = format_skill_entries_for_prompt(entries)
+        prompt += format_skill_diagnostics_for_prompt(self.get_load_diagnostics())
         
         skills_info = []
         resolved_skills = []

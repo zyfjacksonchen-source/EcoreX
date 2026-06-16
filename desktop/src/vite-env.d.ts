@@ -146,7 +146,7 @@ interface Window {
       detail?: Record<string, unknown>;
     }) => Promise<unknown>;
     chooseFiles: () => Promise<
-      Array<{ file_path: string; file_name: string; file_type: "image" | "video" | "file" }>
+      Array<{ file_path: string; file_name: string; file_type: "image" | "video" | "audio" | "file" }>
     >;
     chooseProjectFolder: () => Promise<{
       id: string;
@@ -159,7 +159,7 @@ interface Window {
     savePastedFile: (input: { fileName?: string; mimeType?: string; dataBase64: string }) => Promise<{
       file_path: string;
       file_name: string;
-      file_type: "image" | "video" | "file" | "directory";
+      file_type: "image" | "video" | "audio" | "file" | "directory";
     }>;
     openPath: (filePath: string) => Promise<string>;
     apiJson: (request: {

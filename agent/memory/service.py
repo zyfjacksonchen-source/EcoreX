@@ -29,6 +29,31 @@ class MemoryService:
         self.workspace_root = workspace_root
         self.memory_dir = os.path.join(workspace_root, "memory")
 
+    def _can_read(self, path: str) -> bool:
+        try:
+            from common.ecorex_tool_permissions import get_tool_permission_broker
+
+            decision = get_tool_permission_broker().authorize_file_access(
+                "read",
+                path,
+                cwd=self.workspace_root,
+            )
+            if decision.get("allowed"):
+                return True
+            logger.warning(
+                "[MemoryService] read blocked by permissions: %s (%s)",
+                path,
+                decision.get("reason") or "denied",
+            )
+            return False
+        except Exception as exc:
+            logger.warning(
+                "[MemoryService] read blocked because permission broker is unavailable: %s (%s)",
+                path,
+                exc,
+            )
+            return False
+
     # ------------------------------------------------------------------
     # list — paginated file metadata
     # ------------------------------------------------------------------
@@ -66,14 +91,14 @@ class MemoryService:
         files: List[dict] = []
 
         global_path = os.path.join(self.workspace_root, "MEMORY.md")
-        if os.path.isfile(global_path):
+        if os.path.isfile(global_path) and self._can_read(global_path):
             files.append(self._file_info(global_path, "MEMORY.md", "global"))
 
         if os.path.isdir(self.memory_dir):
             daily_files = []
             for name in os.listdir(self.memory_dir):
                 full = os.path.join(self.memory_dir, name)
-                if os.path.isfile(full) and name.endswith(".md"):
+                if os.path.isfile(full) and name.endswith(".md") and self._can_read(full):
                     daily_files.append((name, full))
             daily_files.sort(key=lambda x: x[0], reverse=True)
             for name, full in daily_files:
@@ -90,7 +115,7 @@ class MemoryService:
             entries = []
             for name in os.listdir(dreams_dir):
                 full = os.path.join(dreams_dir, name)
-                if os.path.isfile(full) and name.endswith(".md"):
+                if os.path.isfile(full) and name.endswith(".md") and self._can_read(full):
                     entries.append((name, full))
             entries.sort(key=lambda x: x[0], reverse=True)
             for name, full in entries:
@@ -112,7 +137,7 @@ class MemoryService:
                 continue
             for name in os.listdir(sub_dir):
                 full = os.path.join(sub_dir, name)
-                if os.path.isfile(full) and name.endswith(".md"):
+                if os.path.isfile(full) and name.endswith(".md") and self._can_read(full):
                     files.append(self._file_info(full, name, ftype))
         # Sort newest first by filename (date-named); ties favor evolution.
         files.sort(key=lambda f: (f["filename"], f["type"] != "evolution"), reverse=True)
@@ -133,6 +158,8 @@ class MemoryService:
         path = self._resolve_path(filename, category)
         if not os.path.isfile(path):
             raise FileNotFoundError(f"Memory file not found: {filename}")
+        if not self._can_read(path):
+            raise PermissionError(f"Memory file read blocked by permissions: {filename}")
 
         with open(path, "r", encoding="utf-8") as f:
             content = f.read()
@@ -175,6 +202,8 @@ class MemoryService:
 
         except ValueError as e:
             return {"action": action, "code": 403, "message": "invalid filename", "payload": None}
+        except PermissionError as e:
+            return {"action": action, "code": 403, "message": str(e), "payload": None}
         except FileNotFoundError as e:
             return {"action": action, "code": 404, "message": str(e), "payload": None}
         except Exception as e:

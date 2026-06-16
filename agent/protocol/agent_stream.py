@@ -4,6 +4,7 @@ Agent Stream Execution Module - Multi-turn reasoning based on tool-call
 Provides streaming output, event system, and complete tool-call loop
 """
 import json
+import shlex
 import time
 from typing import List, Dict, Any, Optional, Callable, Tuple
 
@@ -171,6 +172,12 @@ class AgentStreamExecutor:
         
         # Tool failure tracking for retry protection
         self.tool_failure_history = []  # List of (tool_name, args_hash, success) tuples
+        # Tool-chain tracking catches loops where the model changes arguments but
+        # keeps probing the same external system (for example bash -> lark-cli).
+        self.tool_chain_history = []  # List of (chain_key, tool_name, success) tuples
+        self._last_convergence_hint_key = ""
+        self._force_text_response_next_turn = False
+        self._force_text_response_reason = ""
         
         # Track files to send (populated by read tool)
         self.files_to_send = []  # List of file metadata dicts
@@ -268,7 +275,29 @@ class AgentStreamExecutor:
             )
         except Exception as e:
             logger.warning(f"[Agent] desktop tool permission check skipped: {e}")
+            risky = (tool_name or "").strip().lower() in {
+                "bash", "shell", "terminal", "browser", "feishu_cli",
+                "mcp", "mcp_server", "write", "edit", "fs_write", "skill_write",
+                "env_config", "send", "scheduler", "evolution_undo",
+                "web_fetch", "web_search", "vision",
+            }
+            if risky:
+                return {"allowed": False, "reason": "Permission broker failed; local external tool execution was blocked."}
             return {"allowed": True, "reason": "permission-check-error"}
+
+    @staticmethod
+    def _permission_proxy_for_tool(tool, tool_name: str, arguments: dict) -> Tuple[str, dict]:
+        """Map MCP tools onto the same permission categories as first-party tools."""
+        server_name = str(getattr(tool, "server_name", "") or "")
+        if server_name:
+            proxy_name = "browser" if server_name == "chrome-devtools" else "mcp"
+            proxy_args = {
+                "server": server_name,
+                "tool": tool_name,
+                "arguments": arguments if isinstance(arguments, dict) else {},
+            }
+            return proxy_name, proxy_args
+        return tool_name, arguments
     
     def _is_thinking_enabled(self) -> bool:
         """Whether deep-thinking mode is on at the model layer.
@@ -391,6 +420,295 @@ class AgentStreamExecutor:
         # Keep only last 50 records to avoid memory bloat
         if len(self.tool_failure_history) > 50:
             self.tool_failure_history = self.tool_failure_history[-50:]
+
+        chain_key = self._tool_chain_key(tool_name, args)
+        self.tool_chain_history.append((chain_key, tool_name, success))
+        if len(self.tool_chain_history) > 50:
+            self.tool_chain_history = self.tool_chain_history[-50:]
+
+    def _tool_chain_key(self, tool_name: str, args: dict) -> str:
+        """Group related tool calls so cross-argument loops can be detected."""
+        name = (tool_name or "").strip().lower()
+        args = args if isinstance(args, dict) else {}
+        if name == "feishu_cli":
+            cli_args = args.get("args")
+            domain = ""
+            if isinstance(cli_args, list) and cli_args:
+                domain = str(cli_args[0]).strip().lower()
+            domain = domain or str(args.get("domain") or args.get("scope") or "").strip().lower()
+            action = str(args.get("action") or "").strip().lower()
+            return f"feishu_cli:{action}:{domain}"
+        if name in {"bash", "shell", "terminal"}:
+            command = str(args.get("command") or args.get("cmd") or "").strip().lower()
+            if self._looks_like_feishu_cli_command(command):
+                return "feishu_cli:bash"
+            if "chrome-devtools" in command or "remote-debugging-port" in command or "cdp" in command:
+                return "browser:cdp"
+            for prefix in ("python", "powershell", "pwsh", "node", "npm", "npx", "git", "curl"):
+                if command.startswith(prefix) or f" {prefix} " in command:
+                    return f"bash:{prefix}"
+            return "bash:generic"
+        if name == "browser":
+            return f"browser:{str(args.get('action') or '').strip().lower()}"
+        if name.startswith("mcp__chrome-devtools__") or name.startswith("mcp__chrome_devtools__"):
+            return "browser:cdp"
+        if name.startswith("mcp__"):
+            parts = name.split("__", 2)
+            server = parts[1] if len(parts) > 1 and parts[1] else "server"
+            return f"mcp:{server}"
+        if name in {"read", "ls", "web_fetch", "web_search"}:
+            return f"{name}:read"
+        return name or "unknown"
+
+    def _count_recent_chain(self, chain_key: str) -> int:
+        count = 0
+        for key, _name, _success in reversed(self.tool_chain_history):
+            if key == chain_key:
+                count += 1
+            else:
+                break
+        return count
+
+    def _check_tool_chain_budget(self, tool_name: str, args: dict) -> Tuple[bool, str]:
+        chain_key = self._tool_chain_key(tool_name, args)
+        recent_count = self._count_recent_chain(chain_key)
+        if chain_key.startswith("feishu_cli") and recent_count >= 6:
+            return True, (
+                "Feishu/Lark tool chain has been used repeatedly without converging. "
+                "Stop calling Feishu commands now: summarize what is known, state the exact blocker "
+                "(auth, empty attachment output, slow page, missing field, or unsupported command), "
+                "and ask the user for the next authorization or input if needed."
+            )
+        if chain_key.startswith("browser:") and recent_count >= 8:
+            return True, (
+                "Browser/CDP tool chain has been used repeatedly without converging. "
+                "Stop browser calls now, summarize the current page state and the blocker, "
+                "then ask the user to log in, authorize, or clarify the target."
+            )
+        if chain_key.startswith("bash:") and recent_count >= 10:
+            return True, (
+                "Shell tool chain has been used repeatedly without converging. "
+                "Stop running more shell commands now, summarize progress and choose a different approach "
+                "or ask the user for confirmation."
+            )
+        return False, ""
+
+    def _build_convergence_hint(self) -> str:
+        if not self.tool_chain_history:
+            return ""
+        chain_key = self.tool_chain_history[-1][0]
+        recent_count = self._count_recent_chain(chain_key)
+        if recent_count < 4 or self._last_convergence_hint_key == f"{chain_key}:{recent_count}":
+            return ""
+        if not (
+            chain_key.startswith("feishu_cli")
+            or chain_key.startswith("browser:")
+            or chain_key.startswith("bash:")
+        ):
+            return ""
+        self._last_convergence_hint_key = f"{chain_key}:{recent_count}"
+        return (
+            f"You have used the same external capability chain '{chain_key}' {recent_count} times in a row. "
+            "If enough information has been collected, provide the final answer now. "
+            "If it is blocked, name the blocker precisely and ask the user for the required authorization/input. "
+            "Do not continue probing the same chain unless the next call is clearly new and necessary."
+        )
+
+    def _force_text_response_once(self, reason: str) -> None:
+        """Disable tool schemas for the next model turn so loops close in text."""
+        self._force_text_response_next_turn = True
+        self._force_text_response_reason = reason or "external-capability-loop"
+
+    def _tool_result_user_action_blocker(self, tool_name: str, payload: Any) -> str:
+        """Return a convergence blocker that should force a text-only turn."""
+        name = (tool_name or "").strip().lower()
+        if name != "feishu_cli" or not isinstance(payload, dict):
+            return ""
+        if payload.get("authRequired") is True:
+            return (
+                "Feishu authorization has been started and requires user action. "
+                "Stop calling tools now, show the authorization instruction/link already returned by feishu_cli, "
+                "and ask the user to continue after authorization is complete."
+            )
+        if payload.get("available") is False:
+            return (
+                "Feishu CLI is unavailable in this runtime. Stop probing through bash; explain the missing CLI/setup "
+                "state and ask the user to install, enable, or authorize the packaged Feishu CLI path."
+            )
+        return ""
+
+    def _sleep_cancelable(self, seconds: float) -> None:
+        """Sleep in short slices so user cancel interrupts retry backoff."""
+        deadline = time.time() + max(0, seconds)
+        while time.time() < deadline:
+            if self.cancel_event is not None and self.cancel_event.is_set():
+                raise AgentCancelledError("Agent execution cancelled")
+            time.sleep(min(0.25, max(0, deadline - time.time())))
+
+    def _external_capability_reroute(self, tool_name: str, args: dict) -> str:
+        """Return a hard-stop message when the model is using the wrong host path."""
+        name = (tool_name or "").strip().lower()
+        if name not in {"bash", "shell", "terminal"}:
+            return ""
+        command = str((args or {}).get("command") or (args or {}).get("cmd") or "").strip().lower()
+        if not command:
+            return ""
+        if self._looks_like_feishu_cli_command(command):
+            if "feishu_cli" in self.tools:
+                return (
+                    "Do not call Feishu/Lark CLI through raw bash. Use the `feishu_cli` tool first "
+                    "so EcoreX can handle packaged CLI resolution, auth, timeouts, and safe output. "
+                    "If authorization is missing, call `feishu_cli` with action `auth_login` and ask "
+                    "the user to finish the displayed Feishu authorization flow."
+                )
+            if "host_diagnostics" in self.tools:
+                return (
+                    "Do not keep probing Feishu/Lark CLI through raw bash. Call `host_diagnostics` with "
+                    "action `status` first to inspect whether Feishu CLI is packaged and authorized."
+                )
+        if (
+            "chrome-devtools-mcp" in command
+            or "remote-debugging-port" in command
+            or "http://127.0.0.1:9222" in command
+            or "localhost:9222" in command
+        ):
+            if "host_diagnostics" in self.tools:
+                return (
+                    "Do not probe or launch CDP through raw bash as the first browser path. "
+                    "Call `host_diagnostics` first to inspect CDP/MCP readiness, then use the "
+                    "configured browser/CDP tool path. Use shell only after the host diagnostics "
+                    "show a concrete setup blocker."
+                )
+        return ""
+
+    @staticmethod
+    def _shell_token_basename(token: str) -> str:
+        text = str(token or "").strip().strip("\"'")
+        return text.replace("\\", "/").rsplit("/", 1)[-1].lower()
+
+    @staticmethod
+    def _is_lark_cli_package(token: str) -> bool:
+        text = str(token or "").strip().strip("\"'").lower()
+        return (
+            text == "@larksuite/cli"
+            or text.startswith("@larksuite/cli@")
+            or text == "lark-cli"
+            or text.startswith("lark-cli@")
+        )
+
+    @classmethod
+    def _is_lark_cli_runner(cls, token: str) -> bool:
+        text = str(token or "").strip().strip("\"'").replace("\\", "/").lower()
+        name = cls._shell_token_basename(text)
+        return (
+            name in {"lark-cli", "lark-cli.cmd", "lark-cli.exe"}
+            or (
+                text.endswith("/scripts/run.js")
+                and ("cli-main/" in text or "@larksuite/cli/" in text or "lark-cli/" in text)
+            )
+        )
+
+    @staticmethod
+    def _looks_like_feishu_cli_command(command: str) -> bool:
+        text = str(command or "").strip().lower().replace("\\", "/")
+        if "lark-cli" in text or "@larksuite/cli" in text:
+            return True
+        if "scripts/run.js" in text and (
+            "cli-main/" in text
+            or "/@larksuite/cli/" in text
+            or "/lark-cli/" in text
+        ):
+            return True
+        return False
+
+    @staticmethod
+    def _has_shell_control_operator(command: str) -> bool:
+        """Reject complex shell commands before automatic host-tool rerouting."""
+        if not command:
+            return False
+        if "\n" in command or "\r" in command:
+            return True
+        for marker in ("&&", "||", "|", ";", ">", "<"):
+            if marker in command:
+                return True
+        # Windows also treats a standalone ampersand as a command separator.
+        return " & " in command
+
+    @classmethod
+    def _extract_simple_lark_cli_args(cls, command: str) -> Optional[List[str]]:
+        """Extract args from simple raw Feishu CLI shell invocations.
+
+        Complex shell constructs deliberately return None so the normal
+        hard-stop guidance still applies instead of reinterpreting arbitrary
+        shell syntax as trusted Feishu CLI arguments.
+        """
+        raw = str(command or "").strip()
+        if not raw or cls._has_shell_control_operator(raw):
+            return None
+        try:
+            tokens = shlex.split(raw, posix=False)
+        except ValueError:
+            return None
+        tokens = [str(token).strip().strip("\"'") for token in tokens if str(token).strip()]
+        if not tokens:
+            return None
+
+        for index, token in enumerate(tokens):
+            if cls._is_lark_cli_runner(token):
+                if index == 0:
+                    return tokens[1:]
+                if index == 1 and cls._shell_token_basename(tokens[0]) in {"npx", "npx.cmd", "npx.exe", "node", "node.exe"}:
+                    return tokens[2:]
+                return None
+            if cls._shell_token_basename(token) in {"npx", "npx.cmd", "npx.exe"}:
+                for pkg_index in range(index + 1, len(tokens)):
+                    candidate = tokens[pkg_index]
+                    if str(candidate).startswith("-"):
+                        continue
+                    if cls._is_lark_cli_package(candidate):
+                        return tokens[pkg_index + 1:]
+                    return None
+            if cls._shell_token_basename(token) in {"node", "node.exe"} and index + 1 < len(tokens):
+                runner = tokens[index + 1]
+                if cls._is_lark_cli_runner(runner):
+                    return tokens[index + 2:]
+                return None
+        return None
+
+    @staticmethod
+    def _feishu_autoroute_args(lark_args: List[str], original_args: dict) -> dict:
+        lowered = [str(item).strip().lower() for item in lark_args]
+        routed: Dict[str, Any]
+        if lowered[:2] == ["auth", "status"]:
+            routed = {"action": "status"}
+        elif lowered[:2] == ["auth", "login"]:
+            routed = {"action": "auth_login"}
+            for idx, value in enumerate(lowered):
+                if value == "--scope" and idx + 1 < len(lark_args):
+                    routed["scope"] = str(lark_args[idx + 1])
+                if value == "--domain" and idx + 1 < len(lark_args):
+                    routed["domain"] = str(lark_args[idx + 1])
+            routed.setdefault("domain", "base")
+        else:
+            routed = {"action": "run", "args": lark_args}
+        if isinstance(original_args, dict) and original_args.get("timeout") is not None:
+            routed["timeout"] = original_args.get("timeout")
+        return routed
+
+    def _external_capability_autoroute(self, tool_name: str, args: dict) -> Tuple[str, dict, str]:
+        """Map a simple wrong host path to the safer first-party host tool."""
+        name = (tool_name or "").strip().lower()
+        if name not in {"bash", "shell", "terminal"} or "feishu_cli" not in self.tools:
+            return "", {}, ""
+        command = str((args or {}).get("command") or (args or {}).get("cmd") or "").strip()
+        lark_args = self._extract_simple_lark_cli_args(command)
+        if lark_args is None:
+            return "", {}, ""
+        return (
+            "feishu_cli",
+            self._feishu_autoroute_args(lark_args, args or {}),
+            "raw bash lark-cli",
+        )
 
     def run_stream(self, user_message: str) -> str:
         """
@@ -657,6 +975,7 @@ class AgentStreamExecutor:
                                     f"⚠️  Detected potential loop: '{tool_name}' called {recent_success_count} times "
                                     f"with same args. Adding hint to LLM to provide final response."
                                 )
+                                self._force_text_response_once("repeated-successful-tool-call")
                                 # Add a gentle hint message to guide LLM to respond
                                 self.messages.append({
                                     "role": "user",
@@ -665,6 +984,16 @@ class AgentStreamExecutor:
                                         "text": "工具已成功执行并返回结果。请基于这些信息向用户做出回复，不要重复调用相同的工具。"
                                     }]
                                 })
+                        convergence_hint = self._build_convergence_hint()
+                        if convergence_hint:
+                            logger.warning(f"[Agent] Adding convergence hint: {convergence_hint}")
+                            self.messages.append({
+                                "role": "user",
+                                "content": [{
+                                    "type": "text",
+                                    "text": convergence_hint
+                                }]
+                            })
                     elif tool_calls:
                         # If we have tool_calls but no tool_result_blocks (unexpected error),
                         # create error results for all tool calls to maintain message integrity
@@ -708,6 +1037,7 @@ class AgentStreamExecutor:
                 
                 # Call LLM one more time to get summary (without retry to avoid loops)
                 try:
+                    self._force_text_response_once("max-turn-summary")
                     summary_response, summary_tools = self._call_llm_stream(retry_on_empty=False)
                     if summary_response:
                         final_response = summary_response
@@ -795,11 +1125,20 @@ class AgentStreamExecutor:
         except Exception as e:
             logger.debug(f"[Agent] MCP sync skipped: {e}")
 
+        force_text_response = self._force_text_response_next_turn
+        force_text_reason = self._force_text_response_reason
+        if force_text_response:
+            self._force_text_response_next_turn = False
+            self._force_text_response_reason = ""
+            logger.warning(
+                f"[Agent] Tool schemas disabled for one turn to force convergence: {force_text_reason}"
+            )
+
         # Prepare tool definitions. Prefer get_json_schema() when it yields
         # real properties (lets tools augment schema at runtime), otherwise
         # fall back to the static `tool.params` (MCP tools rely on this).
         tools_schema = None
-        if self.tools:
+        if self.tools and not force_text_response:
             tools_schema = []
             for tool in self.tools.values():
                 input_schema = tool.params
@@ -1073,7 +1412,7 @@ class AgentStreamExecutor:
                 
                 logger.warning(f"⚠️ LLM API error (attempt {retry_count + 1}/{max_retries}): {e}")
                 logger.info(f"Retrying in {wait_time}s...")
-                time.sleep(wait_time)
+                self._sleep_cancelable(wait_time)
                 return self._call_llm_stream(
                     retry_on_empty=retry_on_empty, 
                     retry_count=retry_count + 1,
@@ -1196,6 +1535,27 @@ class AgentStreamExecutor:
         tool_name = tool_call["name"]
         tool_id = tool_call["id"]
         arguments = tool_call["arguments"]
+        rerouted_from = ""
+        tool_start_emitted = False
+
+        def emit_tool_start() -> None:
+            nonlocal tool_start_emitted
+            if tool_start_emitted:
+                return
+            tool_start_emitted = True
+            self._emit_event("tool_execution_start", {
+                "tool_call_id": tool_id,
+                "tool_name": tool_name,
+                "arguments": arguments
+            })
+
+        def emit_tool_end(result_payload: Dict[str, Any]) -> None:
+            emit_tool_start()
+            self._emit_event("tool_execution_end", {
+                "tool_call_id": tool_id,
+                "tool_name": tool_name,
+                **result_payload
+            })
 
         if "_parse_error" in tool_call:
             result = {
@@ -1204,6 +1564,7 @@ class AgentStreamExecutor:
                 "execution_time": 0,
             }
             self._record_tool_result(tool_name, arguments, False)
+            emit_tool_end(result)
             return result
 
         # Check for consecutive failures (retry protection)
@@ -1221,54 +1582,118 @@ class AgentStreamExecutor:
                 }
             else:
                 # Normal failure - let LLM try different approach
+                self._force_text_response_once("consecutive-tool-failure-budget")
                 result = {
                     "status": "error",
                     "result": f"{stop_reason}\n\n当前方法行不通，请尝试完全不同的方法或向用户询问更多信息。",
                     "execution_time": 0
                 }
+            emit_tool_end(result)
             return result
 
-        permission = self._authorize_tool_execution(tool_name, tool_id, arguments)
-        if not permission.get("allowed", True):
-            reason = permission.get("reason") or "User denied local tool execution."
+        autoroute_name, autoroute_args, autoroute_reason = self._external_capability_autoroute(tool_name, arguments)
+        if autoroute_name:
+            logger.info(
+                f"[Agent] Auto-routing external capability from {tool_name} "
+                f"to {autoroute_name}: {autoroute_reason}"
+            )
+            rerouted_from = f"{tool_name}:{autoroute_reason}"
+            tool_name = autoroute_name
+            arguments = autoroute_args
+
+        reroute_reason = self._external_capability_reroute(tool_name, arguments)
+        if reroute_reason:
+            logger.warning(f"[Agent] External capability rerouted for {tool_name}: {reroute_reason}")
+            self._record_tool_result(tool_name, arguments, False)
             result = {
                 "status": "error",
-                "result": reason,
-                "execution_time": 0
+                "result": reroute_reason,
+                "execution_time": 0,
             }
-            self._record_tool_result(tool_name, arguments, False)
-            self._emit_event("tool_execution_end", {
-                "tool_call_id": tool_id,
-                "tool_name": tool_name,
-                **result
-            })
+            emit_tool_end(result)
             return result
 
-        self._emit_event("tool_execution_start", {
-            "tool_call_id": tool_id,
-            "tool_name": tool_name,
-            "arguments": arguments
-        })
+        chain_stop, chain_reason = self._check_tool_chain_budget(tool_name, arguments)
+        if chain_stop:
+            logger.warning(f"[Agent] Tool-chain budget stop for {tool_name}: {chain_reason}")
+            self._record_tool_result(tool_name, arguments, False)
+            self._force_text_response_once("external-capability-chain-budget")
+            result = {
+                "status": "error",
+                "result": chain_reason,
+                "execution_time": 0,
+            }
+            emit_tool_end(result)
+            return result
 
         try:
             tool = self.tools.get(tool_name)
             if not tool:
                 raise ValueError(self._build_tool_not_found_message(tool_name))
+        except Exception as e:
+            logger.error(f"Tool lookup error: {e}")
+            error_result = {
+                "status": "error",
+                "result": str(e),
+                "execution_time": 0
+            }
+            self._record_tool_result(tool_name, arguments, False)
+            emit_tool_end(error_result)
+            return error_result
 
+        permission_tool_name, permission_arguments = self._permission_proxy_for_tool(tool, tool_name, arguments)
+        permission = self._authorize_tool_execution(permission_tool_name, tool_id, permission_arguments)
+        if not permission.get("allowed", True):
+            reason = permission.get("reason") or "User denied local tool execution."
+            self._force_text_response_once("permission-denied")
+            result = {
+                "status": "error",
+                "result": (
+                    f"{reason}\n\n"
+                    "Permission blocked this external capability. Do not retry the same tool now; "
+                    "summarize the blocker and ask the user to change the access mode, approve the request, "
+                    "or provide the missing authorization."
+                ),
+                "execution_time": 0
+            }
+            self._record_tool_result(tool_name, arguments, False)
+            emit_tool_end(result)
+            return result
+
+        emit_tool_start()
+
+        try:
             # Set tool context
             tool.model = self.model
             tool.context = self.agent
+            tool.cancel_event = self.cancel_event
 
             # Execute tool
             start_time = time.time()
             result: ToolResult = tool.execute_tool(arguments)
             execution_time = time.time() - start_time
+            result_payload = result.result
+            if rerouted_from:
+                if isinstance(result_payload, dict):
+                    result_payload = {
+                        **result_payload,
+                        "reroutedFrom": rerouted_from,
+                    }
+                else:
+                    result_payload = {
+                        "output": result_payload,
+                        "reroutedFrom": rerouted_from,
+                    }
 
             result_dict = {
                 "status": result.status,
-                "result": result.result,
+                "result": result_payload,
                 "execution_time": execution_time
             }
+
+            blocker = self._tool_result_user_action_blocker(tool_name, result_payload)
+            if blocker:
+                self._force_text_response_once(blocker)
 
             # Record tool result for failure tracking
             success = result.status == "success"
@@ -1340,8 +1765,10 @@ class AgentStreamExecutor:
 
         return (
             f"Tool '{tool_name}' is not a built-in tool, but a matching skill "
-            f"'{skill.name}' is available. You should use existing tools (e.g. bash with curl) "
-            f"to accomplish this task following the skill instructions below:\n\n"
+            f"'{skill.name}' is available. Read and follow the skill instructions below, "
+            f"then choose the most specific available tool for each step. Do not fall back "
+            f"to raw shell probing when a dedicated host tool such as `feishu_cli`, "
+            f"`host_diagnostics`, or the configured browser/CDP path applies:\n\n"
             f"--- SKILL: {skill.name} (path: {skill_md_path}) ---\n"
             f"{skill_content}\n"
             f"--- END SKILL ---\n\n"

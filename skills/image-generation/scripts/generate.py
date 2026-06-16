@@ -10,7 +10,7 @@ OpenAI → Gemini → Seedream → Qwen → MiniMax → LinkAI; missing API keys
 are skipped, and the provider that natively owns the requested model is
 promoted to the front of the queue):
 
-    - gpt-image-2 / gpt-image-1                    → OpenAI
+    - gpt-image-2-pro / gpt-image-2 / gpt-image-1  → OpenAI
     - nano-banana / gemini-*-image-*               → Gemini
     - doubao-seedream-* / seedream-*               → Seedream (Volcengine Ark)
     - qwen-image-2.0 / qwen-image-2.0-pro / etc.   → Qwen (DashScope)
@@ -203,6 +203,10 @@ class ImageProvider(ABC):
         quality: str | None = None,
         size: str | None = None,
         aspect_ratio: str | None = None,
+        output_format: str | None = None,
+        output_compression: int | None = None,
+        background: str | None = None,
+        moderation: str | None = None,
         output_dir: str = ".",
     ) -> list[str]:
         """Generate image(s) and return list of local file paths.
@@ -220,7 +224,8 @@ class ImageProvider(ABC):
 class OpenAIProvider(ImageProvider):
     """Provider for OpenAI Image API (generations + edits)."""
 
-    DEFAULT_MODEL = "gpt-image-2"
+    DEFAULT_MODEL = "gpt-image-2-pro"
+    FALLBACK_MODEL = "gpt-image-2"
 
     def __init__(self, api_key: str, api_base: str, model: str):
         self.api_key = api_key
@@ -285,24 +290,156 @@ class OpenAIProvider(ImageProvider):
         quality: str | None = None,
         size: str | None = None,
         aspect_ratio: str | None = None,
+        output_format: str | None = None,
+        output_compression: int | None = None,
+        background: str | None = None,
+        moderation: str | None = None,
         output_dir: str = ".",
     ) -> list[str]:
         # OpenAI Images API expects pixel size like 1024x1024.
         resolved = resolve_size(size, aspect_ratio) if (size or aspect_ratio) else None
         if image_url:
-            return self._edit(prompt, image_url=image_url, quality=quality, size=resolved, output_dir=output_dir)
-        return self._create(prompt, quality=quality, size=resolved, output_dir=output_dir)
+            return self._with_model_fallback(
+                lambda model: self._edit(
+                    prompt,
+                    image_url=image_url,
+                    model=model,
+                    quality=quality,
+                    size=resolved,
+                    output_format=output_format,
+                    output_compression=output_compression,
+                    background=background,
+                    moderation=moderation,
+                    output_dir=output_dir,
+                )
+            )
+        return self._with_model_fallback(
+            lambda model: self._create(
+                prompt,
+                model=model,
+                quality=quality,
+                size=resolved,
+                output_format=output_format,
+                output_compression=output_compression,
+                background=background,
+                moderation=moderation,
+                output_dir=output_dir,
+            )
+        )
 
-    def _create(self, prompt: str, *, quality: str | None, size: str | None, output_dir: str) -> list[str]:
-        url = f"{self.api_base}/images/generations"
-        payload: dict = {
-            "model": self.model,
-            "prompt": prompt,
-        }
+    @staticmethod
+    def _is_model_unavailable_error(exc: Exception) -> bool:
+        text = str(exc).lower()
+        return any(
+            marker in text
+            for marker in (
+                "model_not_found",
+                "model not found",
+                "does not exist",
+                "do not have access",
+                "don't have access",
+                "not have access",
+                "unsupported model",
+                "invalid model",
+            )
+        )
+
+    def _model_candidates(self) -> list[str]:
+        candidates = [self.model or self.DEFAULT_MODEL]
+        if candidates[0] == self.DEFAULT_MODEL and self.FALLBACK_MODEL not in candidates:
+            candidates.append(self.FALLBACK_MODEL)
+        return candidates
+
+    def _with_model_fallback(self, run):
+        last_error: Exception | None = None
+        for model in self._model_candidates():
+            try:
+                result = run(model)
+                self.model = model
+                return result
+            except Exception as exc:
+                last_error = exc
+                if model == self.FALLBACK_MODEL or not self._is_model_unavailable_error(exc):
+                    raise
+                print(
+                    f"[image-generation] OpenAI model {model} unavailable, "
+                    f"falling back to {self.FALLBACK_MODEL}: {exc}",
+                    file=sys.stderr,
+                )
+        if last_error:
+            raise last_error
+        raise RuntimeError("OpenAI image generation produced no result")
+
+    @staticmethod
+    def _clean_output_format(value: str | None) -> str | None:
+        fmt = (value or "").strip().lower()
+        return fmt if fmt in {"png", "jpeg", "webp"} else None
+
+    @staticmethod
+    def _clean_background(value: str | None) -> str | None:
+        bg = (value or "").strip().lower()
+        return bg if bg in {"auto", "opaque", "transparent"} else None
+
+    @staticmethod
+    def _clean_moderation(value: str | None) -> str | None:
+        moderation = (value or "").strip().lower()
+        return moderation if moderation in {"auto", "low"} else None
+
+    def _apply_openai_options(
+        self,
+        payload: dict,
+        *,
+        quality: str | None,
+        size: str | None,
+        output_format: str | None,
+        output_compression: int | None,
+        background: str | None,
+        moderation: str | None,
+    ) -> None:
         if quality:
             payload["quality"] = quality
         if size:
             payload["size"] = size
+        fmt = self._clean_output_format(output_format or os.environ.get("SKILL_IMAGE_GENERATION_OUTPUT_FORMAT") or "png")
+        if fmt:
+            payload["output_format"] = fmt
+        if fmt in {"jpeg", "webp"} and output_compression is not None:
+            payload["output_compression"] = max(0, min(100, int(output_compression)))
+        bg = self._clean_background(background)
+        if bg:
+            payload["background"] = bg
+        moderation_value = self._clean_moderation(moderation)
+        if moderation_value:
+            payload["moderation"] = moderation_value
+
+    def _create(
+        self,
+        prompt: str,
+        *,
+        model: str,
+        quality: str | None,
+        size: str | None,
+        output_format: str | None,
+        output_compression: int | None,
+        background: str | None,
+        moderation: str | None,
+        output_dir: str,
+    ) -> list[str]:
+        url = f"{self.api_base}/images/generations"
+        payload: dict = {
+            "model": model,
+            "prompt": prompt,
+            "n": 1,
+        }
+        self._apply_openai_options(
+            payload,
+            quality=quality,
+            size=size,
+            output_format=output_format,
+            output_compression=output_compression,
+            background=background,
+            moderation=moderation,
+        )
         result = self._post_json(url, payload)
         return self._save_results(result, output_dir)
 
@@ -311,8 +448,13 @@ class OpenAIProvider(ImageProvider):
         prompt: str,
         *,
         image_url,
+        model: str,
         quality: str | None,
         size: str | None,
+        output_format: str | None,
+        output_compression: int | None,
+        background: str | None,
+        moderation: str | None,
         output_dir: str,
     ) -> list[str]:
         urls = image_url if isinstance(image_url, list) else [image_url]
@@ -320,11 +462,16 @@ class OpenAIProvider(ImageProvider):
 
         url = f"{self.api_base}/images/edits"
 
-        fields = {"model": self.model, "prompt": prompt}
-        if quality:
-            fields["quality"] = quality
-        if size:
-            fields["size"] = size
+        fields = {"model": model, "prompt": prompt}
+        self._apply_openai_options(
+            fields,
+            quality=quality,
+            size=size,
+            output_format=output_format,
+            output_compression=output_compression,
+            background=background,
+            moderation=moderation,
+        )
 
         files = []
         for i, img_bytes in enumerate(image_data_list):
@@ -372,6 +519,10 @@ class LinkAIProvider(ImageProvider):
         quality: str | None = None,
         size: str | None = None,
         aspect_ratio: str | None = None,
+        output_format: str | None = None,
+        output_compression: int | None = None,
+        background: str | None = None,
+        moderation: str | None = None,
         output_dir: str = ".",
     ) -> list[str]:
         url = f"{self.api_base}/v1/images/generations"
@@ -465,6 +616,10 @@ class GeminiProvider(ImageProvider):
         quality: str | None = None,  # not used; Gemini has no `quality` param
         size: str | None = None,
         aspect_ratio: str | None = None,
+        output_format: str | None = None,
+        output_compression: int | None = None,
+        background: str | None = None,
+        moderation: str | None = None,
         output_dir: str = ".",
     ) -> list[str]:
         # Build request parts: prompt text + optional inline images
@@ -672,6 +827,10 @@ class SeedreamProvider(ImageProvider):
         quality: str | None = None,  # not honoured by Seedream
         size: str | None = None,
         aspect_ratio: str | None = None,
+        output_format: str | None = None,
+        output_compression: int | None = None,
+        background: str | None = None,
+        moderation: str | None = None,
         output_dir: str = ".",
     ) -> list[str]:
         url = f"{self.api_base}/images/generations"
@@ -807,6 +966,10 @@ class QwenProvider(ImageProvider):
         quality: str | None = None,  # not supported by Qwen image API
         size: str | None = None,
         aspect_ratio: str | None = None,
+        output_format: str | None = None,
+        output_compression: int | None = None,
+        background: str | None = None,
+        moderation: str | None = None,
         output_dir: str = ".",
     ) -> list[str]:
         url = f"{self.api_base}/api/v1/services/aigc/multimodal-generation/generation"
@@ -923,6 +1086,10 @@ class MinimaxProvider(ImageProvider):
         quality: str | None = None,  # not supported by MiniMax
         size: str | None = None,
         aspect_ratio: str | None = None,
+        output_format: str | None = None,
+        output_compression: int | None = None,
+        background: str | None = None,
+        moderation: str | None = None,
         output_dir: str = ".",
     ) -> list[str]:
         url = f"{self.api_base}/v1/image_generation"
@@ -1137,6 +1304,10 @@ def main():
     quality = args.get("quality")
     size = args.get("size")
     aspect_ratio = args.get("aspect_ratio")
+    output_format = args.get("output_format")
+    output_compression = args.get("output_compression")
+    background = args.get("background")
+    moderation = args.get("moderation")
     image_url = args.get("image_url")
 
     output_dir = os.environ.get("IMAGE_OUTPUT_DIR", os.path.join(os.getcwd(), "images"))
@@ -1166,6 +1337,10 @@ def main():
                 quality=quality,
                 size=size,
                 aspect_ratio=aspect_ratio,
+                output_format=output_format,
+                output_compression=output_compression,
+                background=background,
+                moderation=moderation,
                 output_dir=output_dir,
             )
             elapsed = time.time() - t0

@@ -107,6 +107,14 @@ class WebFetch(BaseTool):
         if parsed.scheme not in ("http", "https"):
             return ToolResult.fail("Error: Invalid URL (must start with http:// or https://)")
 
+        try:
+            from common.ecorex_tool_permissions import get_tool_permission_broker
+
+            if get_tool_permission_broker().is_read_only():
+                return ToolResult.fail("Error: Current read-only mode blocks internet fetch.")
+        except Exception as exc:
+            return ToolResult.fail(f"Error: Permission broker unavailable; internet fetch was blocked. {exc}")
+
         if _is_document_url(url):
             return self._fetch_document(url)
 
@@ -152,9 +160,27 @@ class WebFetch(BaseTool):
         suffix = _get_url_suffix(url)
         parsed = urlparse(url)
         filename = self._extract_filename(url)
-        tmp_dir = self._ensure_tmp_dir()
-
+        tmp_dir = os.path.join(self.cwd, "tmp")
         local_path = os.path.join(tmp_dir, filename)
+
+        try:
+            from common.ecorex_tool_permissions import get_tool_permission_broker
+
+            decision = get_tool_permission_broker().authorize_file_access(
+                "write",
+                local_path,
+                cwd=self.cwd,
+            )
+            if not decision.get("allowed"):
+                return ToolResult.fail(
+                    f"Error: {decision.get('reason') or 'Remote document download was blocked by local file permissions.'}"
+                )
+        except Exception as exc:
+            return ToolResult.fail(
+                f"Error: Permission broker unavailable; remote document download was blocked. {exc}"
+            )
+
+        os.makedirs(tmp_dir, exist_ok=True)
         logger.info(f"[WebFetch] Downloading document: {url} -> {local_path}")
 
         try:

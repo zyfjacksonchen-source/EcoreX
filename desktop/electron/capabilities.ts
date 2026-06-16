@@ -301,11 +301,33 @@ export class CapabilityManager {
     return refreshed.find((pack) => pack.id === packId) || target;
   }
 
-  async preinstallPolicyPacks(): Promise<CapabilityPack[]> {
+  async blockedPack(packId: string, reason: string): Promise<CapabilityPack> {
+    const packs = await this.listPacks().catch(() => []);
+    const target = packs.find((pack) => pack.id === packId);
+    return {
+      ...(target || {
+        id: packId,
+        name: packId,
+        summary: "Optional capability pack.",
+        installMode: "user-or-admin" as const,
+        installed: false,
+        state: "not-installed" as const,
+        message: ""
+      }),
+      installed: false,
+      state: "failed",
+      message: `Permission blocked capability installation: ${reason}`
+    };
+  }
+
+  async preinstallPolicyPacks(authorize?: (pack: CapabilityPack) => Promise<boolean>): Promise<CapabilityPack[]> {
     const packs = await this.listPacks();
     const targets = packs.filter((pack) => !pack.installed && pack.policyMode === "preinstall");
     const installed: CapabilityPack[] = [];
     for (const pack of targets) {
+      if (authorize && !(await authorize(pack))) {
+        continue;
+      }
       installed.push(await this.installPack(pack.id));
     }
     return installed;

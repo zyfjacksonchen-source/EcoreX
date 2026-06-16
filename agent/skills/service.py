@@ -7,18 +7,30 @@ other management entry point.
 """
 
 import os
+import re
 import shutil
 import zipfile
 import tempfile
 from typing import Dict, List, Optional
 from common.log import logger
 from agent.skills.types import Skill, SkillEntry
-from agent.skills.manager import SkillManager
+from agent.skills.manager import CUSTOM_OVERRIDE_MARKER, SkillManager
 
 try:
     import requests
 except ImportError:
     requests = None
+
+
+_SAFE_SKILL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_WINDOWS_RESERVED_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
 
 
 class SkillService:
@@ -86,6 +98,18 @@ class SkillService:
         name = payload.get("name")
         if not name:
             raise ValueError("skill name is required")
+        self._validate_skill_name(name)
+        self._ensure_skill_mutation_allowed("add", payload)
+
+        skill_dir = self._skill_dir(name)
+        if os.path.exists(skill_dir) and not payload.get("replace"):
+            raise ValueError(f"skill '{name}' already exists; set replace=true to overwrite")
+
+        if self._is_builtin_skill(name) and not payload.get("allow_builtin_override"):
+            raise ValueError(
+                f"skill '{name}' is built in; explicit allow_builtin_override=true is required "
+                "to install a workspace overlay"
+            )
 
         payload_type = payload.get("type", "url")
 
@@ -93,6 +117,9 @@ class SkillService:
             self._add_package(name, payload)
         else:
             self._add_url(name, payload)
+
+        if self._is_builtin_skill(name) and payload.get("allow_builtin_override"):
+            self._write_custom_override_marker(name)
 
         self.manager.refresh_skills()
 
@@ -107,7 +134,7 @@ class SkillService:
         if not files:
             raise ValueError("skill files list is empty")
 
-        skill_dir = os.path.join(self.manager.custom_dir, name)
+        skill_dir = self._skill_dir(name)
 
         tmp_dir = skill_dir + ".tmp"
         if os.path.exists(tmp_dir):
@@ -121,7 +148,7 @@ class SkillService:
                 if not url or not rel_path:
                     logger.warning(f"[SkillService] add: skip invalid file entry {file_info}")
                     continue
-                dest = os.path.join(tmp_dir, rel_path)
+                dest = self._safe_join(tmp_dir, rel_path)
                 self._download_file(url, dest)
         except Exception:
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -146,7 +173,7 @@ class SkillService:
             raise ValueError("package url is required")
 
         url = files[0]["url"]
-        skill_dir = os.path.join(self.manager.custom_dir, name)
+        skill_dir = self._skill_dir(name)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             zip_path = os.path.join(tmp_dir, "package.zip")
@@ -157,7 +184,7 @@ class SkillService:
 
             extract_dir = os.path.join(tmp_dir, "extracted")
             with zipfile.ZipFile(zip_path, "r") as zf:
-                zf.extractall(extract_dir)
+                self._safe_extract_zip(zf, extract_dir)
 
             # Determine the actual content root.
             # If the zip has a single top-level directory, use its contents
@@ -189,6 +216,8 @@ class SkillService:
         name = payload.get("name")
         if not name:
             raise ValueError("skill name is required")
+        self._validate_skill_name(name)
+        self._ensure_skill_mutation_allowed("open", payload)
         self.manager.set_skill_enabled(name, enabled=True)
         logger.info(f"[SkillService] open: skill '{name}' enabled")
 
@@ -201,6 +230,8 @@ class SkillService:
         name = payload.get("name")
         if not name:
             raise ValueError("skill name is required")
+        self._validate_skill_name(name)
+        self._ensure_skill_mutation_allowed("close", payload)
         self.manager.set_skill_enabled(name, enabled=False)
         logger.info(f"[SkillService] close: skill '{name}' disabled")
 
@@ -216,8 +247,10 @@ class SkillService:
         name = payload.get("name")
         if not name:
             raise ValueError("skill name is required")
+        self._validate_skill_name(name)
+        self._ensure_skill_mutation_allowed("delete", payload)
 
-        skill_dir = os.path.join(self.manager.custom_dir, name)
+        skill_dir = self._skill_dir(name)
         if os.path.exists(skill_dir):
             shutil.rmtree(skill_dir)
             logger.info(f"[SkillService] delete: removed directory {skill_dir}")
@@ -263,6 +296,99 @@ class SkillService:
     # ------------------------------------------------------------------
     # internal helpers
     # ------------------------------------------------------------------
+    @staticmethod
+    def _validate_skill_name(name: str):
+        if not isinstance(name, str) or not _SAFE_SKILL_NAME.match(name):
+            raise ValueError("invalid skill name")
+        if name in {".", ".."} or os.sep in name or (os.altsep and os.altsep in name):
+            raise ValueError("invalid skill name")
+        if name.endswith((".", " ")):
+            raise ValueError("invalid skill name")
+        first_component = name.split(".", 1)[0].upper()
+        if first_component in _WINDOWS_RESERVED_NAMES:
+            raise ValueError("invalid skill name")
+
+    def _skill_dir(self, name: str) -> str:
+        self._validate_skill_name(name)
+        return self._safe_join(self.manager.custom_dir, name)
+
+    def _is_builtin_skill(self, name: str) -> bool:
+        try:
+            candidate = os.path.abspath(os.path.join(self.manager.builtin_dir, name))
+            root = os.path.abspath(self.manager.builtin_dir)
+            return os.path.commonpath([root, candidate]) == root and os.path.isdir(candidate)
+        except Exception:
+            return False
+
+    def _write_custom_override_marker(self, name: str) -> None:
+        marker_path = os.path.join(self._skill_dir(name), CUSTOM_OVERRIDE_MARKER)
+        try:
+            with open(marker_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "This workspace skill intentionally overrides an EcoreX built-in skill.\n"
+                    "Remove this file to allow managed built-in refresh on future releases.\n"
+                )
+        except Exception as exc:
+            logger.warning(f"[SkillService] Failed to write override marker for '{name}': {exc}")
+
+    def _ensure_skill_mutation_allowed(self, action: str, payload: dict) -> None:
+        try:
+            from common.ecorex_tool_permissions import get_tool_permission_broker
+
+            decision = get_tool_permission_broker().authorize_noninteractive(
+                "skill_write",
+                {
+                    "action": action,
+                    "name": payload.get("name"),
+                    "type": payload.get("type"),
+                    "category": payload.get("category"),
+                },
+            )
+            if not decision.get("allowed", False):
+                raise PermissionError(
+                    decision.get("reason")
+                    or "Current permission mode blocks skill modifications."
+                )
+        except PermissionError:
+            raise
+        except Exception as exc:
+            logger.warning(f"[SkillService] permission broker unavailable; skill mutation blocked: {exc}")
+            raise PermissionError("Permission broker unavailable; skill modification blocked.")
+
+    @staticmethod
+    def _safe_join(root: str, relative_path: str) -> str:
+        if not isinstance(relative_path, str) or not relative_path.strip():
+            raise ValueError("invalid relative path")
+        normalized = relative_path.replace("\\", os.sep).replace("/", os.sep)
+        if os.path.isabs(normalized):
+            raise ValueError("absolute paths are not allowed")
+        parts = [part for part in normalized.split(os.sep) if part]
+        if any(part in {".", ".."} for part in parts):
+            raise ValueError("path traversal is not allowed")
+
+        root_abs = os.path.abspath(root)
+        candidate = os.path.abspath(os.path.join(root_abs, *parts))
+        try:
+            common = os.path.commonpath([root_abs, candidate])
+        except ValueError:
+            raise ValueError("path escapes skill root")
+        if common != root_abs:
+            raise ValueError("path escapes skill root")
+        return candidate
+
+    def _safe_extract_zip(self, zf: zipfile.ZipFile, extract_dir: str):
+        os.makedirs(extract_dir, exist_ok=True)
+        for member in zf.infolist():
+            member_path = member.filename.replace("\\", "/")
+            if not member_path or member_path.endswith("/"):
+                continue
+            if member_path.startswith("/") or member_path.startswith("\\"):
+                raise ValueError("zip archive contains an absolute path")
+            dest = self._safe_join(extract_dir, member_path)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with zf.open(member, "r") as src, open(dest, "wb") as out:
+                shutil.copyfileobj(src, out)
+
     @staticmethod
     def _download_file(url: str, dest: str):
         """

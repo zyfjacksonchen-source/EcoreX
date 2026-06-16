@@ -79,6 +79,27 @@ function Enable-EmbeddedPythonSite {
     Set-Content -LiteralPath $pth.FullName -Value $updated -Encoding ASCII
 }
 
+function Copy-OptionalLarkCli {
+    param([Parameter(Mandatory = $true)][string]$TargetRuntime)
+
+    $candidates = @()
+    if ($env:ECOREX_LARK_CLI_EXE) {
+        $candidates += $env:ECOREX_LARK_CLI_EXE
+    }
+    $candidates += "C:\cli-main\bin\lark-cli.exe"
+
+    foreach ($candidate in $candidates) {
+        if ($candidate -and (Test-Path -LiteralPath $candidate)) {
+            $targetDir = Join-Path $TargetRuntime "tools\bin"
+            New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+            Copy-Item -LiteralPath $candidate -Destination (Join-Path $targetDir "lark-cli.exe") -Force
+            Write-Host "Bundled lark-cli for Windows runtime: $candidate"
+            return
+        }
+    }
+    Write-Host "lark-cli.exe was not found; runtime will use npm auto-install fallback."
+}
+
 $desktopRoot = Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")
 if (-not $RepoRoot) {
     $RepoRoot = Resolve-Path -LiteralPath (Join-Path $desktopRoot "..")
@@ -134,6 +155,18 @@ foreach ($file in $sourceFiles) {
         Copy-Item -LiteralPath $src -Destination (Join-Path $runtimeResolved $file) -Force
     }
 }
+
+$desktopDist = Join-Path $desktopRoot "dist"
+if (Test-Path -LiteralPath (Join-Path $desktopDist "index.html")) {
+    $appDir = Join-Path $runtimeResolved "channel/web/static/app"
+    if (Test-Path -LiteralPath $appDir) {
+        Remove-Item -LiteralPath $appDir -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path $appDir | Out-Null
+    Copy-Item -Path (Join-Path $desktopDist "*") -Destination $appDir -Recurse -Force
+}
+
+Copy-OptionalLarkCli -TargetRuntime $runtimeResolved
 
 $runtimePackRoot = Join-Path $desktopRoot "runtime-packs"
 Copy-Item -LiteralPath (Join-Path $runtimePackRoot "core-requirements.txt") -Destination (Join-Path $runtimeResolved "core-requirements.txt") -Force

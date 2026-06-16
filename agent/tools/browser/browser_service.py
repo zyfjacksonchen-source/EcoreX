@@ -377,6 +377,10 @@ class BrowserService:
             old = self._thread
             if old and old.is_alive():
                 old.join(timeout=5)
+                if old.is_alive():
+                    raise RuntimeError(
+                        "Browser worker is still shutting down after a cancelled or timed-out operation."
+                    )
             # Fresh queue to avoid stale sentinels from a previous close()
             self._task_queue = queue.Queue()
             self._alive = True
@@ -729,9 +733,17 @@ class BrowserService:
         self._task_queue.put((fn, args, kwargs, result_slot))
 
         # Timeout prevents permanent hang if the background thread crashes
-        completed = result_slot["event"].wait(timeout=120)
-        if not completed:
-            raise TimeoutError("Browser operation timed out (120s)")
+        deadline = time.time() + 120
+        cancel_event = getattr(self, "cancel_event", None)
+        while not result_slot["event"].wait(timeout=0.25):
+            if cancel_event is not None and getattr(cancel_event, "is_set", lambda: False)():
+                result_slot["error"] = RuntimeError("Browser operation cancelled by user")
+                result_slot["event"].set()
+                self._request_thread_stop(join_timeout=1)
+                raise result_slot["error"]
+            if time.time() >= deadline:
+                self._request_thread_stop(join_timeout=1)
+                raise TimeoutError("Browser operation timed out (120s)")
 
         if "error" in result_slot:
             raise result_slot["error"]
@@ -763,20 +775,27 @@ class BrowserService:
 
     def close(self):
         """Shut down browser and background thread (safe from any thread)."""
+        self._request_thread_stop(join_timeout=10, clear_restart=True)
+
+    def _request_thread_stop(self, join_timeout: int = 2, clear_restart: bool = False):
         self._cancel_idle_timer()
         with self._lock:
-            if not self._alive:
-                self._needs_restart = False
-                return
             self._alive = False
+            self._needs_restart = not clear_restart
             t = self._thread
-        if self._task_queue is not None:
-            self._task_queue.put(None)
+            q = self._task_queue
+        if q is not None:
+            try:
+                q.put(None)
+            except Exception:
+                pass
         if t is not None and t.is_alive():
-            t.join(timeout=10)
+            t.join(timeout=join_timeout)
         with self._lock:
-            self._thread = None
-            self._needs_restart = False
+            if t is None or not t.is_alive():
+                self._thread = None
+                if clear_restart:
+                    self._needs_restart = False
 
     # ------------------------------------------------------------------
     # Actions  (each method is dispatched to the background thread)

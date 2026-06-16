@@ -112,14 +112,17 @@ class BrowserTool(BaseTool):
     def _get_service(self) -> BrowserService:
         """Get or create the browser service, sharing across copies."""
         if self._service is not None:
+            self._service.cancel_event = getattr(self, "cancel_event", None)
             return self._service
 
         # Reuse shared service across tool copies within the same session
         if BrowserTool._shared_service is not None:
             self._service = BrowserTool._shared_service
+            self._service.cancel_event = getattr(self, "cancel_event", None)
             return self._service
 
         self._service = BrowserService(self.config)
+        self._service.cancel_event = getattr(self, "cancel_event", None)
         BrowserTool._shared_service = self._service
         return self._service
 

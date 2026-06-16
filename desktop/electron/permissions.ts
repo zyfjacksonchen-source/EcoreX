@@ -203,6 +203,70 @@ export class PermissionManager {
     return decision;
   }
 
+  async authorizeHostCapability(
+    event: IpcMainInvokeEvent | undefined,
+    action: string,
+    detail: Record<string, unknown>
+  ): Promise<PermissionDecision> {
+    const settings = await this.loadSettings();
+    const normalizedAction = String(action || "host-capability").trim() || "host-capability";
+    const target = String(detail.id || detail.packId || detail.name || "").trim() || "unknown";
+    const grantKey = `host-capability:${normalizedAction}:${target}`;
+
+    if (settings.mode === "full-access") {
+      await this.writeAudit(normalizedAction, "allow", {
+        mode: settings.mode,
+        target,
+        reason: "full-access"
+      });
+      return { allowed: true, reason: "full-access" };
+    }
+
+    if (settings.mode === "read-only") {
+      await this.writeAudit(normalizedAction, "deny", {
+        mode: settings.mode,
+        target,
+        reason: "read-only"
+      });
+      return { allowed: false, reason: "Read Only mode blocks optional host capability installation." };
+    }
+
+    if (settings.alwaysAllow?.[grantKey]) {
+      await this.writeAudit(normalizedAction, "allow", {
+        mode: settings.mode,
+        target,
+        reason: "remembered-grant"
+      });
+      return { allowed: true, reason: "remembered-grant" };
+    }
+
+    if (!event) {
+      await this.writeAudit(normalizedAction, "deny", {
+        mode: settings.mode,
+        target,
+        reason: "interactive-confirmation-unavailable"
+      });
+      return {
+        allowed: false,
+        reason: "Interactive permission confirmation is required before this host capability can install."
+      };
+    }
+
+    const decision = await this.promptHostCapability(event, normalizedAction, target, settings.mode, detail);
+    if (decision.remember) {
+      settings.alwaysAllow[grantKey] = true;
+      settings.updatedAt = new Date().toISOString();
+      await this.saveSettings(settings);
+    }
+    await this.writeAudit(normalizedAction, decision.allowed ? "allow" : "deny", {
+      mode: settings.mode,
+      target,
+      reason: decision.reason,
+      remember: Boolean(decision.remember)
+    });
+    return decision;
+  }
+
   async writeOpenResult(filePath: string, result: string) {
     await this.writeAudit(result ? "open-local-path.result" : "open-local-path.result", result ? "warn" : "allow", {
       target: path.resolve(filePath),
@@ -211,9 +275,6 @@ export class PermissionManager {
   }
 
   private async loadSettings(): Promise<PermissionSettings> {
-    if (this.settings) {
-      return this.settings;
-    }
     try {
       const raw = await fsp.readFile(this.settingsPath, "utf8");
       const parsed = JSON.parse(raw) as Partial<PermissionSettings>;
@@ -287,6 +348,41 @@ export class PermissionManager {
     }
     if (result.response === 1) {
       return { allowed: true, reason: "user-allowed-kind", remember: true };
+    }
+    return { allowed: false, reason: "user-denied" };
+  }
+
+  private async promptHostCapability(
+    event: IpcMainInvokeEvent,
+    action: string,
+    target: string,
+    mode: PermissionMode,
+    detail: Record<string, unknown>
+  ) {
+    const owner = BrowserWindow.fromWebContents(event.sender) || undefined;
+    const options: MessageBoxOptions = {
+      type: "warning",
+      buttons: ["Allow once", "Always allow this capability", "Deny"],
+      defaultId: 2,
+      cancelId: 2,
+      noLink: true,
+      title: "EcoreX permission check",
+      message: "EcoreX wants to install or update an optional host capability.",
+      detail: [
+        `Action: ${action}`,
+        `Capability: ${target}`,
+        `Mode: ${mode}`,
+        "",
+        "This may run package installers such as pip or Playwright browser setup.",
+        typeof detail.summary === "string" ? detail.summary : ""
+      ].filter(Boolean).join("\n")
+    };
+    const result = owner ? await dialog.showMessageBox(owner, options) : await dialog.showMessageBox(options);
+    if (result.response === 0) {
+      return { allowed: true, reason: "user-allowed-once" };
+    }
+    if (result.response === 1) {
+      return { allowed: true, reason: "user-allowed-capability", remember: true };
     }
     return { allowed: false, reason: "user-denied" };
   }

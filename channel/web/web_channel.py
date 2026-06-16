@@ -1,6 +1,7 @@
 import datetime
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import mimetypes
@@ -13,7 +14,8 @@ import urllib.error
 import urllib.request
 import uuid
 from queue import Queue, Empty
-from typing import List, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Tuple
 
 import web
 
@@ -26,7 +28,7 @@ from common import const
 from common import i18n
 from common.log import logger
 from common.singleton import singleton
-from config import conf
+from config import conf, _ensure_ecorex_runtime_defaults
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
 VIDEO_EXTENSIONS = {".mp4", ".webm", ".avi", ".mov", ".mkv"}
@@ -579,6 +581,37 @@ def _is_password_enabled():
     return bool(_get_web_password())
 
 
+def _configured_web_host() -> str:
+    return str(conf().get("web_host", "") or "").strip()
+
+
+def _effective_web_host() -> str:
+    configured_host = _configured_web_host()
+    return configured_host or ("0.0.0.0" if _is_password_enabled() else "127.0.0.1")
+
+
+def _is_loopback_bind_host(host: str) -> bool:
+    normalized = str(host or "").strip().strip("[]").lower()
+    if normalized in {"", "localhost", "127.0.0.1", "::1"}:
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
+
+
+def _is_public_bind_host(host: str) -> bool:
+    return not _is_loopback_bind_host(host)
+
+
+def _validate_web_bind_auth(host: str) -> None:
+    if _is_public_bind_host(host) and not _is_password_enabled():
+        raise RuntimeError(
+            "Refusing to start WebUI on a non-loopback address without web_password. "
+            "Set web_password in config.json, or bind web_host to 127.0.0.1/localhost."
+        )
+
+
 def _session_expire_seconds():
     return int(conf().get("web_session_expire_days", 30)) * 86400
 
@@ -620,7 +653,7 @@ def _verify_auth_token(token):
 def _check_auth():
     """Return True if request is authenticated or password not enabled."""
     if not _is_password_enabled():
-        return True
+        return not _is_public_bind_host(_effective_web_host())
     return _verify_auth_token(web.cookies().get("cow_auth_token", ""))
 
 
@@ -777,7 +810,11 @@ class WebChannel(ChatChannel):
         self.msg_id_counter = 0
         self.session_queues = {}  # session_id -> Queue (fallback polling)
         self.request_to_session = {}  # request_id -> session_id
-        self.sse_queues = {}  # request_id -> Queue (SSE streaming)
+        self.sse_queues = {}  # request_id -> Queue (legacy/test mirror for SSE events)
+        self.sse_events = {}  # request_id -> replayable SSE event list
+        self.sse_conditions = {}  # request_id -> threading.Condition
+        self.sse_subscribers = {}  # request_id -> active EventSource connection count
+        self.sse_stream_tokens = {}  # legacy field; no longer used to supersede streams
         self._http_server = None
 
     def _generate_msg_id(self):
@@ -804,13 +841,84 @@ class WebChannel(ChatChannel):
             logger.debug(f"[WebChannel] active request lookup failed for session {session_id}: {e}")
             return []
 
+    def active_requests_snapshot(self):
+        """Return backend-authoritative active request state for UI recovery.
+
+        The browser may lose local request bookkeeping on refresh or when the
+        same runtime is opened from another surface. The cancel registry is the
+        source of truth for in-flight work; this API exposes it without exposing
+        tool output or message content.
+        """
+        try:
+            from agent.protocol import get_cancel_registry
+
+            requests = []
+            sessions = {}
+            for row in get_cancel_registry().snapshot():
+                request_id = row.get("request_id", "")
+                session_id = row.get("session_id") or self.request_to_session.get(request_id, "")
+                item = {
+                    **row,
+                    "session_id": session_id,
+                    "stream_available": request_id in self.sse_queues,
+                }
+                requests.append(item)
+                if session_id and not item.get("cancelled"):
+                    sessions.setdefault(session_id, []).append(request_id)
+            return {
+                "status": "success",
+                "requests": requests,
+                "sessions": sessions,
+            }
+        except Exception as e:
+            logger.error(f"[WebChannel] active_requests_snapshot error: {e}")
+            return {"status": "error", "message": str(e), "requests": [], "sessions": {}}
+
+    def _ensure_sse_state(self, request_id: str) -> None:
+        if not request_id:
+            return
+        if request_id not in self.sse_queues:
+            self.sse_queues[request_id] = Queue()
+        if request_id not in self.sse_events:
+            self.sse_events[request_id] = []
+        if request_id not in self.sse_conditions:
+            self.sse_conditions[request_id] = threading.Condition()
+
+    def _sse_request_exists(self, request_id: str) -> bool:
+        return bool(request_id) and (
+            request_id in self.sse_queues or request_id in self.sse_events
+        )
+
+    def _push_sse_event(self, request_id: str, item: Dict[str, Any]) -> bool:
+        """Append one SSE event for every subscriber and keep legacy queue parity."""
+        if not self._sse_request_exists(request_id):
+            return False
+        self._ensure_sse_state(request_id)
+        event = dict(item or {})
+        try:
+            self.sse_queues[request_id].put(event)
+        except Exception as e:
+            logger.debug(f"[WebChannel] legacy SSE queue mirror skipped for {request_id}: {e}")
+        cond = self.sse_conditions[request_id]
+        with cond:
+            self.sse_events[request_id].append(event)
+            cond.notify_all()
+        return True
+
+    def _cleanup_sse_request(self, request_id: str) -> None:
+        self.sse_queues.pop(request_id, None)
+        self.sse_events.pop(request_id, None)
+        self.sse_conditions.pop(request_id, None)
+        self.sse_subscribers.pop(request_id, None)
+        self.sse_stream_tokens.pop(request_id, None)
+        self.request_to_session.pop(request_id, None)
+
     def _push_cancelled_events_for_session(self, session_id: str, request_ids: List[str], lang: str = "zh") -> None:
         content = "Interrupted by a new message." if str(lang).lower().startswith("en") else "已被新消息中断"
         for request_id in request_ids:
-            q = self.sse_queues.get(request_id)
-            if not q:
+            if not self._sse_request_exists(request_id):
                 continue
-            q.put({
+            self._push_sse_event(request_id, {
                 "type": "cancelled",
                 "content": content,
                 "request_id": request_id,
@@ -918,12 +1026,57 @@ class WebChannel(ChatChannel):
         context = kwargs.get("context")
 
         def callback(worker):
+            worker_exception = None
             try:
+                try:
+                    worker_exception = worker.exception()
+                except Exception as e:
+                    worker_exception = e
                 parent_callback(worker)
             finally:
+                self._finalize_request_after_worker(context, worker_exception)
                 self._release_context_session_lock(context)
 
         return callback
+
+    def _finalize_request_after_worker(self, context: Context, worker_exception=None) -> None:
+        """Release request-scoped runtime state once the worker has stopped.
+
+        The SSE queue may intentionally outlive the worker until the browser
+        consumes the final ``done`` event, but the cancel registry must not:
+        active-request checks use it to decide whether a session is still
+        running. Leaving completed request ids registered makes a finished
+        session look busy and can block or mis-route the next message.
+        """
+        if not context:
+            return
+        request_id = context.get("request_id")
+        if not request_id:
+            return
+
+        try:
+            from agent.protocol import get_cancel_registry
+
+            get_cancel_registry().unregister(request_id)
+        except Exception as e:
+            logger.debug(f"[WebChannel] cancel token unregister skipped for {request_id}: {e}")
+
+        if worker_exception is not None and self._sse_request_exists(request_id):
+            try:
+                session_id = context.get("session_id") or self.request_to_session.get(request_id, "")
+                message = str(worker_exception) or "Worker failed before producing a response."
+                self._push_sse_event(request_id, {
+                    "type": "done",
+                    "content": f"❌ {message}",
+                    "request_id": request_id,
+                    "timestamp": time.time(),
+                    "usage": self._fetch_agent_usage(session_id),
+                })
+            except Exception as e:
+                logger.debug(f"[WebChannel] worker exception SSE fallback skipped for {request_id}: {e}")
+
+        if not self._sse_request_exists(request_id):
+            self.request_to_session.pop(request_id, None)
 
     def send(self, reply: Reply, context: Context):
         try:
@@ -945,13 +1098,13 @@ class WebChannel(ChatChannel):
                 return
 
             # SSE mode: push events to SSE queue
-            if request_id in self.sse_queues:
+            if self._sse_request_exists(request_id):
                 content = reply.content if reply.content is not None else ""
 
                 # Intermediate status lines (e.g. /install-browser phases) must NOT use "done",
                 # or the frontend closes EventSource and drops subsequent events.
                 if getattr(reply, "sse_phase", False):
-                    self.sse_queues[request_id].put({
+                    self._push_sse_event(request_id, {
                         "type": "phase",
                         "content": content,
                         "request_id": request_id,
@@ -965,7 +1118,8 @@ class WebChannel(ChatChannel):
                 if reply.type in (ReplyType.IMAGE_URL, ReplyType.FILE) and content.startswith("file://"):
                     text_content = getattr(reply, 'text_content', '')
                     if text_content:
-                        self.sse_queues[request_id].put(
+                        self._push_sse_event(
+                            request_id,
                             self._build_done_event(request_id, session_id, text_content)
                         )
                     logger.debug(f"SSE skipped duplicate file for request {request_id}")
@@ -978,7 +1132,8 @@ class WebChannel(ChatChannel):
                     logger.debug(f"SSE skipped http media reply for request {request_id}")
                     return
 
-                self.sse_queues[request_id].put(
+                self._push_sse_event(
+                    request_id,
                     self._build_done_event(request_id, session_id, content)
                 )
                 logger.debug(f"SSE done sent for request {request_id}")
@@ -1047,9 +1202,8 @@ class WebChannel(ChatChannel):
         streamed_error: List[str] = []
 
         def on_event(event: dict):
-            if request_id not in self.sse_queues:
+            if not self._sse_request_exists(request_id):
                 return
-            q = self.sse_queues[request_id]
             event_type = event.get("type")
             data = event.get("data", {})
 
@@ -1061,7 +1215,7 @@ class WebChannel(ChatChannel):
                 if remaining <= 0:
                     if not reasoning_capped_notified[0]:
                         reasoning_capped_notified[0] = True
-                        q.put({
+                        self._push_sse_event(request_id, {
                             "type": "reasoning",
                             "content": "\n\n... [reasoning truncated for display] ...",
                         })
@@ -1069,17 +1223,17 @@ class WebChannel(ChatChannel):
                 if len(delta) > remaining:
                     delta = delta[:remaining]
                 reasoning_chars_sent[0] += len(delta)
-                q.put({"type": "reasoning", "content": delta})
+                self._push_sse_event(request_id, {"type": "reasoning", "content": delta})
 
             elif event_type == "message_update":
                 delta = data.get("delta", "")
                 if delta:
-                    q.put({"type": "delta", "content": delta})
+                    self._push_sse_event(request_id, {"type": "delta", "content": delta})
 
             elif event_type == "tool_execution_start":
                 tool_name = data.get("tool_name", "tool")
                 arguments = data.get("arguments", {})
-                q.put({
+                self._push_sse_event(request_id, {
                     "type": "tool_start",
                     "tool": tool_name,
                     "tool_call_id": data.get("tool_call_id", ""),
@@ -1087,7 +1241,7 @@ class WebChannel(ChatChannel):
                 })
 
             elif event_type == "tool_permission_request":
-                q.put({
+                self._push_sse_event(request_id, {
                     "type": "tool_permission_request",
                     "permission_request_id": data.get("id", ""),
                     "tool": data.get("tool", "tool"),
@@ -1107,7 +1261,7 @@ class WebChannel(ChatChannel):
                 result_str = str(result)
                 if len(result_str) > 2000:
                     result_str = result_str[:2000] + "…"
-                q.put({
+                self._push_sse_event(request_id, {
                     "type": "tool_end",
                     "tool": tool_name,
                     "tool_call_id": data.get("tool_call_id", ""),
@@ -1119,7 +1273,7 @@ class WebChannel(ChatChannel):
             elif event_type == "message_end":
                 tool_calls = data.get("tool_calls", [])
                 if tool_calls:
-                    q.put({"type": "message_end", "has_tool_calls": True})
+                    self._push_sse_event(request_id, {"type": "message_end", "has_tool_calls": True})
 
             elif event_type == "error":
                 # Agent raised an exception (LLM 401/timeout/etc). Surface the
@@ -1133,7 +1287,7 @@ class WebChannel(ChatChannel):
                 # Remember it so the agent_end handler below knows not to
                 # rewrite the message into a generic empty-response notice.
                 streamed_error.append(err_msg)
-                q.put({
+                self._push_sse_event(request_id, {
                     "type": "done",
                     "content": f"❌ {err_msg}",
                     "request_id": request_id,
@@ -1146,7 +1300,7 @@ class WebChannel(ChatChannel):
                 # marks the bubble as stopped. A trailing "done" still
                 # arrives with the partial answer.
                 final_response = data.get("final_response", "")
-                q.put({
+                self._push_sse_event(request_id, {
                     "type": "cancelled",
                     "content": final_response,
                     "request_id": request_id,
@@ -1170,7 +1324,7 @@ class WebChannel(ChatChannel):
                             f"[WebChannel] agent_end with empty final_response for "
                             f"request {request_id}, sending fallback done"
                         )
-                        q.put({
+                        self._push_sse_event(request_id, {
                             "type": "done",
                             "content": i18n.t(
                                 "(模型未返回任何内容，请重试或换一种方式描述你的需求)",
@@ -1188,7 +1342,7 @@ class WebChannel(ChatChannel):
                 from urllib.parse import quote
                 web_url = f"/api/file?path={quote(file_path)}"
                 is_image = file_type == "image"
-                q.put({
+                self._push_sse_event(request_id, {
                     "type": "image" if is_image else "file",
                     "content": web_url,
                     "url": web_url,
@@ -1285,14 +1439,13 @@ class WebChannel(ChatChannel):
                 get_conversation_store().attach_extras_to_last_assistant(session_id, payload)
             except Exception as e:
                 logger.debug(f"[WebChannel] tts persist skipped: {e}")
-            q = self.sse_queues.get(request_id)
-            if q is None:
+            if not self._sse_request_exists(request_id):
                 logger.warning(
                     f"[WebChannel] TTS ready but SSE queue already closed "
                     f"for request {request_id} (url={url})"
                 )
                 return
-            q.put({
+            self._push_sse_event(request_id, {
                 "type": "voice_attach",
                 "url": url,
                 "request_id": request_id,
@@ -1536,12 +1689,17 @@ class WebChannel(ChatChannel):
 
             request_id = self._generate_request_id()
             self.request_to_session[request_id] = session_id
+            try:
+                from agent.protocol import get_cancel_registry
+                get_cancel_registry().register(request_id, session_id=session_id)
+            except Exception as e:
+                logger.debug(f"[WebChannel] pre-register cancel token skipped: {e}")
 
             if session_id not in self.session_queues:
                 self.session_queues[session_id] = Queue()
 
             if use_sse:
-                self.sse_queues[request_id] = Queue()
+                self._ensure_sse_state(request_id)
 
             trigger_prefixs = conf().get("single_chat_prefix", [""])
             if check_prefix(prompt, trigger_prefixs) is None:
@@ -1556,8 +1714,13 @@ class WebChannel(ChatChannel):
 
             if context is None:
                 logger.warning(f"[WebChannel] Context is None for session {session_id}, message may be filtered")
-                if request_id in self.sse_queues:
-                    del self.sse_queues[request_id]
+                if self._sse_request_exists(request_id):
+                    self._cleanup_sse_request(request_id)
+                try:
+                    from agent.protocol import get_cancel_registry
+                    get_cancel_registry().unregister(request_id)
+                except Exception:
+                    pass
                 if session_lock:
                     session_lock.release()
                 return json.dumps({"status": "error", "message": "Message was filtered"})
@@ -1591,27 +1754,41 @@ class WebChannel(ChatChannel):
     def _produce_with_session_lock(self, context: Context, session_lock):
         try:
             self.produce(context)
-        except Exception:
+        except Exception as e:
+            logger.error(f"[WebChannel] produce failed before worker start: {e}", exc_info=True)
+            self._finalize_request_after_worker(context, e)
             try:
                 if session_lock:
                     session_lock.release()
             except Exception as e:
                 logger.debug(f"[WebChannel] session lock release skipped: {e}")
-            raise
 
     def stream_response(self, request_id: str):
         """
         SSE generator for a given request_id.
         Yields UTF-8 encoded bytes to avoid WSGI Latin-1 mangling.
-        Supports client reconnection: the queue is only removed after a
-        "done" event is consumed, so a new GET /stream with the same
-        request_id can resume reading remaining events.
+        Supports multiple concurrent clients and reconnection: events are
+        appended to a per-request replay log, and every EventSource connection
+        reads with its own cursor instead of consuming a shared Queue.
         """
-        if request_id not in self.sse_queues:
+        if not self._sse_request_exists(request_id):
             yield b"data: {\"type\": \"error\", \"message\": \"invalid request_id\"}\n\n"
             return
 
-        q = self.sse_queues[request_id]
+        self._ensure_sse_state(request_id)
+        cond = self.sse_conditions[request_id]
+        subscriber_count = self.sse_subscribers.get(request_id, 0) + 1
+        self.sse_subscribers[request_id] = subscriber_count
+
+        start_index = 0
+        try:
+            raw_last_id = getattr(web, "ctx", None)
+            raw_last_id = getattr(raw_last_id, "env", {}).get("HTTP_LAST_EVENT_ID", "") if raw_last_id else ""
+            if raw_last_id != "":
+                start_index = max(0, int(raw_last_id) + 1)
+        except Exception:
+            start_index = 0
+        index = start_index
         idle_timeout = 600  # 10 minutes without any real event
         deadline = time.time() + idle_timeout
         # After the main reply is done we keep the stream open for a short
@@ -1623,9 +1800,18 @@ class WebChannel(ChatChannel):
 
         try:
             while time.time() < deadline:
-                try:
-                    item = q.get(timeout=1)
-                except Empty:
+                item = None
+                event_id = None
+                with cond:
+                    events = self.sse_events.get(request_id, [])
+                    if index < len(events):
+                        event_id = index
+                        item = events[index]
+                        index += 1
+                    else:
+                        cond.wait(timeout=1)
+
+                if item is None:
                     if post_done and time.time() >= post_deadline:
                         break
                     yield b": keepalive\n\n"
@@ -1633,7 +1819,7 @@ class WebChannel(ChatChannel):
 
                 deadline = time.time() + idle_timeout
                 payload = json.dumps(item, ensure_ascii=False)
-                yield f"data: {payload}\n\n".encode("utf-8")
+                yield f"id: {event_id}\ndata: {payload}\n\n".encode("utf-8")
 
                 itype = item.get("type")
                 if itype == "done":
@@ -1655,13 +1841,17 @@ class WebChannel(ChatChannel):
             disconnected_early = not post_done and time.time() < deadline
             if disconnected_early:
                 logger.info(f"[WebChannel] SSE client detached; request keeps running: {request_id}")
+            remaining = max(0, self.sse_subscribers.get(request_id, 1) - 1)
+            if remaining:
+                self.sse_subscribers[request_id] = remaining
+            else:
+                self.sse_subscribers.pop(request_id, None)
             # Only drop the queue once the reply is actually complete. If the
             # client disconnected early (e.g. switched sessions and will
             # re-attach with the same request_id), keep the queue so the new
             # connection can resume reading the remaining events.
-            if post_done or time.time() >= deadline:
-                self.sse_queues.pop(request_id, None)
-                self.request_to_session.pop(request_id, None)
+            if remaining <= 0 and (post_done or time.time() >= deadline):
+                self._cleanup_sse_request(request_id)
 
     def cancel_request(self):
         """
@@ -1696,8 +1886,8 @@ class WebChannel(ChatChannel):
             if cancelled == 0 and session_id:
                 cancelled = registry.cancel_session(session_id)
 
-            if request_id and request_id in self.sse_queues:
-                self.sse_queues[request_id].put({
+            if request_id and self._sse_request_exists(request_id):
+                self._push_sse_event(request_id, {
                     "type": "cancelled",
                     "content": "🛑 Cancelled" if lang.startswith("en") else "🛑 已中止",
                     "request_id": request_id,
@@ -1763,10 +1953,10 @@ class WebChannel(ChatChannel):
         return html.replace("{{COW_DEFAULT_LANG}}", i18n.get_language())
 
     def startup(self):
-        configured_host = conf().get("web_host", "")
-        host = configured_host or ("0.0.0.0" if _is_password_enabled() else "127.0.0.1")
+        host = _effective_web_host()
+        _validate_web_bind_auth(host)
         port = conf().get("web_port", 9899)
-        is_public_bind = host in ("0.0.0.0", "::")
+        is_public_bind = _is_public_bind_host(host)
 
         self._cleanup_stale_voice_recordings()
 
@@ -1812,8 +2002,6 @@ class WebChannel(ChatChannel):
         logger.info(f"[WebChannel] 🌐 Local access: http://localhost:{port}")
         if is_public_bind:
             logger.info(f"[WebChannel] 🌍 Server access: http://YOUR_IP:{port} (replace YOUR_IP with your server IP)")
-            if not _is_password_enabled():
-                logger.info("[WebChannel] ⚠️  Listening on 0.0.0.0 without web_password set; set an access password in config.json for public deployment")
         else:
             logger.info(f"[WebChannel] 🔒 Listening on {host} only (local access). For public access, set web_host to 0.0.0.0 and configure web_password")
 
@@ -1860,6 +2048,7 @@ class WebChannel(ChatChannel):
             '/poll', 'PollHandler',
             '/stream', 'StreamHandler',
             '/cancel', 'CancelHandler',
+            '/api/active-requests', 'ActiveRequestsHandler',
             '/api/tool-permissions', 'ToolPermissionHandler',
             '/client', 'ClientProxyHandler',
             '/client/(.*)', 'ClientProxyHandler',
@@ -2152,19 +2341,33 @@ class FileServeHandler:
             file_path = params.path
             if not file_path or not os.path.isabs(file_path):
                 raise web.notfound()
-            # Resolve symlinks and confine access to the allowed root dirs,
-            # so this endpoint can't be abused to read arbitrary files (e.g. /etc/passwd, ~/.ssh).
-            # Defaults to the user home dir plus the agent workspace; set web_file_serve_root="/"
-            # to allow the whole filesystem.
+            # Resolve symlinks and confine access to explicit preview roots.
+            # Default preview is workspace-scoped; serving Home requires an
+            # explicit web_file_serve_root override plus the permission broker.
             file_path = os.path.realpath(file_path)
-            serve_root = conf().get("web_file_serve_root", "~") or "~"
+            workspace_root = os.path.realpath(os.path.expanduser(conf().get("agent_workspace", "~/cow")))
+            upload_root = os.path.realpath(_get_upload_dir())
+            serve_root = conf().get("web_file_serve_root")
             allowed_roots = [
-                os.path.realpath(os.path.expanduser(serve_root)),
-                os.path.realpath(os.path.expanduser(conf().get("agent_workspace", "~/cow"))),
+                workspace_root,
+                upload_root,
             ]
-            if os.sep not in allowed_roots and not any(
-                os.path.commonpath([file_path, root]) == root for root in allowed_roots
-            ):
+            if serve_root:
+                allowed_roots.append(os.path.realpath(os.path.expanduser(serve_root)))
+            if not any(_is_within_directory(root, file_path) for root in allowed_roots):
+                raise web.notfound()
+            try:
+                from common.ecorex_tool_permissions import get_tool_permission_broker
+
+                decision = get_tool_permission_broker().authorize_file_access(
+                    "read",
+                    file_path,
+                    cwd=workspace_root,
+                )
+            except Exception as exc:
+                logger.warning(f"[WebChannel] file permission check failed: {exc}")
+                raise web.notfound()
+            if not decision.get("allowed", True):
                 raise web.notfound()
             if not os.path.isfile(file_path):
                 raise web.notfound()
@@ -2193,6 +2396,13 @@ class CancelHandler:
     def POST(self):
         _require_auth()
         return WebChannel().cancel_request()
+
+
+class ActiveRequestsHandler:
+    def GET(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        return json.dumps(WebChannel().active_requests_snapshot(), ensure_ascii=False)
 
 
 class ToolPermissionHandler:
@@ -2610,6 +2820,7 @@ class ConfigHandler:
             else:
                 file_cfg = {}
             file_cfg.update(applied)
+            _ensure_ecorex_runtime_defaults(file_cfg)
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(file_cfg, f, indent=4, ensure_ascii=False)
 
@@ -3001,7 +3212,7 @@ class ModelsHandler:
     # The skill itself maps either form to the real vendor endpoint, so the
     # hint is purely cosmetic.
     _IMAGE_PROVIDER_MODELS = {
-        "openai":    ["gpt-image-2", "gpt-image-1"],
+        "openai":    ["gpt-image-2-pro", "gpt-image-2", "gpt-image-1"],
         "gemini": [
             {"value": "gemini-3.1-flash-image-preview", "hint": "Nano Banana 2"},
             {"value": "gemini-3-pro-image-preview",     "hint": "Nano Banana Pro"},
@@ -3304,7 +3515,7 @@ class ModelsHandler:
     # provider-card id to the script's per-provider DEFAULT_MODEL so the
     # hint matches what the runtime would actually request.
     _IMAGE_AUTO_ORDER = [
-        ("openai",    "gpt-image-2"),
+        ("openai",    "gpt-image-2-pro"),
         ("gemini",    "gemini-3.1-flash-image-preview"),  # nano-banana-2
         ("doubao",    "seedream-5.0-lite"),
         ("dashscope", "qwen-image-2.0"),
@@ -5010,10 +5221,22 @@ class LogsHandler:
 
             # Read last 200 lines for initial display
             try:
-                with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
-                    lines = f.readlines()
-                tail_lines = lines[-200:]
-                chunk = ''.join(tail_lines)
+                from agent.tools.host_diagnostics.host_diagnostics import _mask, _tail_text
+
+                tail = _tail_text(Path(log_path), max_lines=200, cwd=_get_workspace_root())
+                if tail.get("blocked"):
+                    payload = json.dumps({
+                        "type": "error",
+                        "message": tail.get("reason") or "run.log read blocked by permissions",
+                    }, ensure_ascii=False)
+                    yield f"data: {payload}\n\n".encode('utf-8')
+                    return
+                if not tail.get("exists"):
+                    yield b"data: {\"type\": \"error\", \"message\": \"run.log not found\"}\n\n"
+                    return
+                chunk = "\n".join(tail.get("lines") or [])
+                if chunk:
+                    chunk += "\n"
                 payload = json.dumps({"type": "init", "content": chunk}, ensure_ascii=False)
                 yield f"data: {payload}\n\n".encode('utf-8')
             except Exception as e:
@@ -5028,7 +5251,7 @@ class LogsHandler:
                     while time.time() < deadline:
                         line = f.readline()
                         if line:
-                            payload = json.dumps({"type": "line", "content": line}, ensure_ascii=False)
+                            payload = json.dumps({"type": "line", "content": _mask(line)}, ensure_ascii=False)
                             yield f"data: {payload}\n\n".encode('utf-8')
                         else:
                             yield b": keepalive\n\n"

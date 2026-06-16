@@ -80,6 +80,7 @@ import {
   type PermissionMode,
   type PermissionState,
   type ProjectFolder,
+  type RuntimeActiveRequest,
   type RuntimeMessage,
   type RuntimeSkill,
   type RuntimeStep,
@@ -104,7 +105,10 @@ type SessionRow = {
   title: string;
   detail: string;
   updatedAt: string | number;
-  status: "active" | "waiting" | "ready" | "failed";
+  status: "active" | "waiting" | "cancelling" | "ready" | "failed";
+  requestId?: string;
+  streamAvailable?: boolean;
+  cancelling?: boolean;
   pinned?: boolean;
   projectId?: string;
   projectName?: string;
@@ -185,6 +189,7 @@ const SESSION_TITLES_STORAGE_KEY = "ecorex-session-titles";
 const PINNED_SESSIONS_STORAGE_KEY = "ecorex-pinned-sessions";
 const PINNED_PROJECTS_STORAGE_KEY = "ecorex-pinned-projects";
 const SESSION_UI_STORAGE_KEY = "ecorex-session-ui-state";
+const LAST_ACTIVE_SESSION_STORAGE_KEY = "ecorex-last-active-session-id";
 const CAPABILITY_ENABLED_STORAGE_KEY = "ecorex-capability-enabled";
 const SKILL_DEFAULTS_STORAGE_KEY = "ecorex-skill-defaults-v1";
 const CONTEXT_THRESHOLD_TOKENS = 258_000;
@@ -223,8 +228,13 @@ function writeStorage<T>(key: string, value: T) {
 }
 
 function pruneSessionUiState(state: Record<string, SessionUiState>) {
+  const entries = Object.entries(state);
+  const liveEntries = entries.filter(([, value]) => (value.messages || []).some((message) => message.role === "assistant" && message.pending && message.requestId && !message.paused && !message.cancelled));
+  const retained = new Map<string, SessionUiState>();
+  for (const [sessionId, value] of entries.slice(-24)) retained.set(sessionId, value);
+  for (const [sessionId, value] of liveEntries) retained.set(sessionId, value);
   return Object.fromEntries(
-    Object.entries(state).slice(-24).map(([sessionId, value]) => [
+    [...retained.entries()].map(([sessionId, value]) => [
       sessionId,
       {
         ...value,
@@ -233,6 +243,20 @@ function pruneSessionUiState(state: Record<string, SessionUiState>) {
       }
     ])
   );
+}
+
+function pickBootSession(state: Record<string, SessionUiState>) {
+  const entries = Object.entries(state);
+  const savedId = window.localStorage.getItem(LAST_ACTIVE_SESSION_STORAGE_KEY) || "";
+  if (savedId && state[savedId]) {
+    return { id: savedId, state: state[savedId] };
+  }
+  const liveEntry = [...entries].reverse().find(([, value]) => (value.messages || []).some((message) => (
+    message.role === "assistant" && message.pending && message.requestId && !message.paused && !message.cancelled
+  )));
+  if (liveEntry) return { id: liveEntry[0], state: liveEntry[1] };
+  const latestEntry = entries[entries.length - 1];
+  return latestEntry ? { id: latestEntry[0], state: latestEntry[1] } : null;
 }
 
 function initialTheme(): ThemeMode {
@@ -293,31 +317,94 @@ function mapSessions(
   sessionTitles: StringMap,
   pinnedSessions: StringBoolMap,
   projects: ProjectFolder[],
-  activeProjectId: string | null
+  activeProjectId: string | null,
+  sessionUiState: Record<string, SessionUiState>
 ): SessionRow[] {
   const projectById = new Map(projects.map((project) => [project.id, project]));
-  const rows = snapshot.sessions.map((session, index) => {
+  const activeRequestBySession = new Map<string, RuntimeActiveRequest>(
+    (snapshot.activeRequests || [])
+      .filter((request) => request.session_id && request.request_id)
+      .map((request) => [String(request.session_id), request])
+  );
+  const rows: SessionRow[] = snapshot.sessions.map((session, index) => {
     const id = session.session_id || session.id || `runtime-${index}`;
     const projectId = sessionProjects[id];
     const project = projectId ? projectById.get(projectId) : undefined;
+    const activeRequest = activeRequestBySession.get(id);
+    const activeRequestId = activeRequest?.request_id ? String(activeRequest.request_id) : undefined;
+    const isCancelling = Boolean(activeRequest?.cancelled);
     return {
       id,
       title: sessionTitles[id] || session.title || session.session_id || "未命名会话",
-      detail: project ? project.name : "最近对话",
-      updatedAt: session.last_active || "最近",
-      status: id === activeSessionId ? "active" : "ready",
+      detail: project ? project.name : "",
+      updatedAt: activeRequestId && !session.last_active ? (isCancelling ? "正在停止" : "运行中") : session.last_active || "",
+      status: activeRequestId ? (isCancelling ? "cancelling" : "waiting") : id === activeSessionId ? "active" : "ready",
+      requestId: activeRequestId,
+      streamAvailable: activeRequest?.stream_available !== false,
+      cancelling: isCancelling,
       pinned: Boolean(pinnedSessions[id]),
       ...(project ? { projectId: project.id, projectName: project.name } : {})
     } satisfies SessionRow;
   });
+  const rowIds = new Set(rows.map((row) => row.id));
+  for (const [sessionId, cached] of Object.entries(sessionUiState)) {
+    if (rowIds.has(sessionId)) continue;
+    const hasContent = Boolean(cached.composerText || cached.attachments.length || cached.messages.length);
+    if (!hasContent) continue;
+    const projectId = cached.projectId || sessionProjects[sessionId] || null;
+    const project = projectId ? projectById.get(projectId) : undefined;
+    const live = (cached.messages || []).some(isLiveAssistantMessage);
+    const activeRequest = activeRequestBySession.get(sessionId);
+    const activeRequestId = activeRequest?.request_id ? String(activeRequest.request_id) : undefined;
+    const isCancelling = Boolean(activeRequest?.cancelled);
+    rows.push({
+      id: sessionId,
+      title: sessionTitles[sessionId] || cached.title || "未命名会话",
+      detail: project ? project.name : "",
+      updatedAt: activeRequestId ? (isCancelling ? "正在停止" : "运行中") : live ? "运行中" : "本地",
+      status: activeRequestId ? (isCancelling ? "cancelling" : "waiting") : live ? "waiting" : sessionId === activeSessionId ? "active" : "ready",
+      requestId: activeRequestId,
+      streamAvailable: activeRequest?.stream_available !== false,
+      cancelling: isCancelling,
+      pinned: Boolean(pinnedSessions[sessionId]),
+      ...(project ? { projectId: project.id, projectName: project.name } : {})
+    });
+    rowIds.add(sessionId);
+  }
+  for (const [sessionId, activeRequest] of activeRequestBySession.entries()) {
+    if (rowIds.has(sessionId)) continue;
+    const projectId = sessionProjects[sessionId] || sessionUiState[sessionId]?.projectId || null;
+    const project = projectId ? projectById.get(projectId) : undefined;
+    const requestId = activeRequest.request_id ? String(activeRequest.request_id) : undefined;
+    const isCancelling = Boolean(activeRequest.cancelled);
+    rows.push({
+      id: sessionId,
+      title: sessionTitles[sessionId] || sessionUiState[sessionId]?.title || sessionId,
+      detail: project ? project.name : "",
+      updatedAt: isCancelling ? "正在停止" : "运行中",
+      status: isCancelling ? "cancelling" : "waiting",
+      requestId,
+      streamAvailable: activeRequest.stream_available !== false,
+      cancelling: isCancelling,
+      pinned: Boolean(pinnedSessions[sessionId]),
+      ...(project ? { projectId: project.id, projectName: project.name } : {})
+    });
+    rowIds.add(sessionId);
+  }
   if (!rows.some((row) => row.id === activeSessionId)) {
     const project = activeProjectId ? projectById.get(activeProjectId) : undefined;
+    const activeRequest = activeRequestBySession.get(activeSessionId);
+    const activeRequestId = activeRequest?.request_id ? String(activeRequest.request_id) : undefined;
+    const isCancelling = Boolean(activeRequest?.cancelled);
     rows.unshift({
       id: activeSessionId,
       title: sessionTitles[activeSessionId] || localTitle || "新对话",
-      detail: project ? `${project.name} · 草稿` : "草稿",
-      updatedAt: "刚刚",
-      status: "active",
+      detail: project ? project.name : "",
+      updatedAt: activeRequestId ? (isCancelling ? "正在停止" : "运行中") : "刚刚",
+      status: activeRequestId ? (isCancelling ? "cancelling" : "waiting") : "active",
+      requestId: activeRequestId,
+      streamAvailable: activeRequest?.stream_available !== false,
+      cancelling: isCancelling,
       pinned: Boolean(pinnedSessions[activeSessionId]),
       ...(project ? { projectId: project.id, projectName: project.name } : {})
     });
@@ -525,13 +612,20 @@ function pausedMessageContent(content: string) {
   return content || "已暂停，输入新消息后继续";
 }
 
-function finishAgentSteps(steps: AgentStepDisclosure[] | undefined) {
+type AgentFinishReason = "done" | "paused" | "cancelled" | "error";
+
+function finishAgentSteps(steps: AgentStepDisclosure[] | undefined, reason: AgentFinishReason = "done") {
   return (steps || []).map((step) => {
     if (step.type === "thinking" && step.running) {
       return { ...step, running: false };
     }
     if (step.type === "tool" && step.running) {
-      return { ...step, running: false, status: step.status === "running" ? "done" : step.status };
+      const status = step.status === "running"
+        ? reason === "done"
+          ? "done"
+          : reason
+        : step.status;
+      return { ...step, running: false, status };
     }
     return step;
   });
@@ -545,7 +639,7 @@ function normalizePausedMessages(items: ChatItem[]) {
           content: pausedMessageContent(item.content),
           pending: false,
           paused: true,
-          steps: finishAgentSteps(item.steps),
+          steps: finishAgentSteps(item.steps, "paused"),
           toolCalls: item.toolCalls?.map((tool) => ({ ...tool, running: false }))
         }
       : item
@@ -626,8 +720,12 @@ function normalizeStep(step: RuntimeStep): AgentStepDisclosure {
   if (type === "phase") {
     return { type: "phase", content };
   }
-  if (type === "image" || type === "video" || type === "file" || step.file_type) {
-    const fileType = step.file_type === "image" || step.file_type === "video" ? step.file_type : type === "image" || type === "video" ? type : "file";
+  if (type === "image" || type === "video" || type === "audio" || type === "file" || step.file_type) {
+    const fileType = step.file_type === "image" || step.file_type === "video" || step.file_type === "audio"
+      ? step.file_type
+      : type === "image" || type === "video" || type === "audio"
+        ? type
+        : "file";
     return {
       type: "media",
       fileType,
@@ -638,14 +736,30 @@ function normalizeStep(step: RuntimeStep): AgentStepDisclosure {
   return { type: "content", content };
 }
 
+function runtimeExtrasMediaSteps(item: RuntimeMessage): AgentStepDisclosure[] {
+  const audio = item.extras?.audio;
+  const audioUrl = typeof audio?.url === "string" ? audio.url : "";
+  if (!audioUrl) return [];
+  return [{
+    type: "media",
+    fileType: "audio",
+    url: audioUrl,
+    fileName: typeof audio?.kind === "string" ? audio.kind : undefined
+  }];
+}
+
 function mapRuntimeMessage(item: RuntimeMessage, sessionId: string, index: number): ChatItem {
+  const steps = [
+    ...(item.steps?.map(normalizeStep) || []),
+    ...runtimeExtrasMediaSteps(item)
+  ];
   return {
     id: `${sessionId}-${index}`,
     role: item.role === "user" ? "user" : "assistant",
     content: item.content || "",
     createdAt: item.created_at ? new Date(item.created_at * 1000).toISOString() : new Date().toISOString(),
     reasoning: item.reasoning,
-    steps: item.steps?.map(normalizeStep),
+    steps: steps.length ? steps : undefined,
     toolCalls: item.tool_calls?.map(normalizeToolCall),
     requestId: item.request_id,
     userSeq: item.user_seq ?? item.seq,
@@ -714,18 +828,19 @@ function AuthGate(props: { onLogin: (session: EnterpriseSession) => void }) {
 }
 
 export function App() {
+  const bootSession = useMemo(() => pickBootSession(readStorage<Record<string, SessionUiState>>(SESSION_UI_STORAGE_KEY, {})), []);
   const [theme, setTheme] = useState<ThemeMode>(initialTheme);
   const [session, setSession] = useState<EnterpriseSession | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [runtimeSnapshot, setRuntimeSnapshot] = useState(initialRuntime);
   const [sidecarStatus, setSidecarStatus] = useState(initialSidecar);
   const [quotaSnapshot, setQuotaSnapshot] = useState<UsageQuota | null>(null);
-  const [activeSessionId, setActiveSessionId] = useState(`ecorex-${Date.now()}`);
-  const [activeSessionTitle, setActiveSessionTitle] = useState("新对话");
+  const [activeSessionId, setActiveSessionId] = useState(bootSession?.id || `ecorex-${Date.now()}`);
+  const [activeSessionTitle, setActiveSessionTitle] = useState(bootSession?.state.title || "新对话");
   const [searchQuery, setSearchQuery] = useState("");
-  const [messages, setMessages] = useState<ChatItem[]>([]);
-  const [composerText, setComposerText] = useState("");
-  const [attachments, setAttachments] = useState<FileAttachment[]>([]);
+  const [messages, setMessages] = useState<ChatItem[]>(() => normalizePausedMessages(bootSession?.state.messages || []));
+  const [composerText, setComposerText] = useState(bootSession?.state.composerText || "");
+  const [attachments, setAttachments] = useState<FileAttachment[]>(bootSession?.state.attachments || []);
   const [, setActiveRequestId] = useState("");
   const [approval, setApproval] = useState<ApprovalState | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -743,7 +858,7 @@ export function App() {
   const [sessionUiState, setSessionUiState] = useState<Record<string, SessionUiState>>(() => readStorage<Record<string, SessionUiState>>(SESSION_UI_STORAGE_KEY, {}));
   const [enabledCapabilityPacks, setEnabledCapabilityPacks] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(CAPABILITY_ENABLED_STORAGE_KEY, {}));
   const [sessionRequestIds, setSessionRequestIds] = useState<StringMap>({});
-  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(bootSession?.state.projectId || null);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("account");
   const [projectMenu, setProjectMenu] = useState<ProjectContextMenu>(null);
   const [installingPackIds, setInstallingPackIds] = useState<StringBoolMap>({});
@@ -757,11 +872,15 @@ export function App() {
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const streamCleanup = useRef<null | (() => void)>(null);
   const streamCleanups = useRef<Record<string, () => void>>({});
+  const streamCleanupRequestIds = useRef<StringMap>({});
+  const sessionRequestIdsRef = useRef<StringMap>({});
   const activeSessionIdRef = useRef(activeSessionId);
   const messagesRef = useRef(messages);
   const autoScrollRef = useRef(true);
   const completedRequestIds = useRef<StringBoolMap>({});
+  const streamRetryCounts = useRef<Record<string, number>>({});
   const preloadDone = useRef(false);
+  const bootHistoryRefreshDone = useRef(false);
 
   useEffect(() => {
     applyTheme(theme);
@@ -798,7 +917,12 @@ export function App() {
 
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
+    window.localStorage.setItem(LAST_ACTIVE_SESSION_STORAGE_KEY, activeSessionId);
   }, [activeSessionId]);
+
+  useEffect(() => {
+    sessionRequestIdsRef.current = sessionRequestIds;
+  }, [sessionRequestIds]);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -834,6 +958,23 @@ export function App() {
   }, [messages, activeSessionId]);
 
   useEffect(() => {
+    if (sidecarStatus.state !== "running") return;
+    const liveMessage = messages.find((message) => isLiveAssistantMessage(message) && message.requestId);
+    if (!liveMessage?.requestId) return;
+    attachMessageStream(activeSessionId, liveMessage.id, liveMessage.requestId);
+  }, [sidecarStatus.state, sidecarStatus.webPort, activeSessionId, messages]);
+
+  useEffect(() => {
+    if (bootHistoryRefreshDone.current) return;
+    if (sidecarStatus.state !== "running") return;
+    if (!bootSession?.id) return;
+    const liveMessage = messages.find((message) => isLiveAssistantMessage(message) && message.requestId);
+    if (liveMessage?.requestId) return;
+    bootHistoryRefreshDone.current = true;
+    void refreshSessionFromHistory(bootSession.id);
+  }, [sidecarStatus.state, bootSession?.id, messages]);
+
+  useEffect(() => {
     getEnterpriseSession()
       .then((existing) => setSession(existing))
       .catch(() => setSession(null))
@@ -846,6 +987,9 @@ export function App() {
     return () => {
       streamCleanup.current?.();
       Object.values(streamCleanups.current).forEach((cleanup) => cleanup());
+      streamCleanup.current = null;
+      streamCleanups.current = {};
+      streamCleanupRequestIds.current = {};
       unsubscribe?.();
     };
   }, []);
@@ -916,10 +1060,10 @@ export function App() {
   }, [session]);
 
   const visibleSessions = useMemo(() => {
-    const rows = mapSessions(runtimeSnapshot, activeSessionId, activeSessionTitle, sessionProjects, sessionTitles, pinnedSessions, projects, activeProjectId);
+    const rows = mapSessions(runtimeSnapshot, activeSessionId, activeSessionTitle, sessionProjects, sessionTitles, pinnedSessions, projects, activeProjectId, sessionUiState);
     const needle = searchQuery.trim().toLowerCase();
     return needle ? rows.filter((row) => `${row.title} ${row.detail}`.toLowerCase().includes(needle)) : rows;
-  }, [runtimeSnapshot, activeSessionId, activeSessionTitle, sessionProjects, sessionTitles, pinnedSessions, projects, activeProjectId, searchQuery]);
+  }, [runtimeSnapshot, activeSessionId, activeSessionTitle, sessionProjects, sessionTitles, pinnedSessions, projects, activeProjectId, sessionUiState, searchQuery]);
 
   const activeProject = useMemo(
     () => projects.find((project) => project.id === activeProjectId) || null,
@@ -1040,7 +1184,57 @@ export function App() {
     });
   }
 
-  function restoreCachedSession(sessionId: string) {
+  function resumeRuntimeRequest(sessionId: string, requestId?: string, streamAvailable = true) {
+    if (!requestId) return;
+    const cachedMessages = sessionId === activeSessionIdRef.current
+      ? messagesRef.current
+      : sessionUiState[sessionId]?.messages || [];
+    const existing = cachedMessages.find((message) => message.role === "assistant" && message.requestId === requestId);
+    const assistantId = existing?.id || `a-resume-${requestId}`;
+    updateSessionMessages(sessionId, (current) => {
+      const hasExisting = current.some((message) => message.id === assistantId || message.requestId === requestId);
+      if (hasExisting) {
+        return current.map((message) => (
+          message.id === assistantId || message.requestId === requestId
+            ? {
+                ...message,
+                id: message.id || assistantId,
+                requestId,
+                pending: true,
+                paused: false,
+                cancelled: false
+              }
+            : message
+        ));
+      }
+      return [
+        ...current,
+        {
+          id: assistantId,
+          role: "assistant",
+          content: "",
+          pending: true,
+          requestId,
+          createdAt: new Date().toISOString(),
+          steps: [{ type: "phase", content: "正在连接后台任务" }]
+        }
+      ];
+    });
+    sessionRequestIdsRef.current = { ...sessionRequestIdsRef.current, [sessionId]: requestId };
+    setSessionRequestIds((current) => ({ ...current, [sessionId]: requestId }));
+    streamRetryCounts.current[sessionId] = 0;
+    if (streamAvailable) {
+      window.setTimeout(() => attachMessageStream(sessionId, assistantId, requestId), 0);
+    } else {
+      void refreshSessionFromHistory(sessionId).then((restored) => {
+        if (!restored) {
+          window.setTimeout(() => void refreshSessionFromHistory(sessionId), 3000);
+        }
+      });
+    }
+  }
+
+  function restoreCachedSession(sessionId: string, activeRequestId?: string, streamAvailable = true) {
     const cached = sessionUiState[sessionId];
     if (!cached) return false;
     const nextMessages = normalizePausedMessages(cached.messages);
@@ -1049,11 +1243,6 @@ export function App() {
     setAttachments(cached.attachments);
     setActiveSessionTitle(sessionTitles[sessionId] || cached.title || "新对话");
     setActiveProjectId(cached.projectId || sessionProjects[sessionId] || null);
-    const liveMessage = nextMessages.find((message) => isLiveAssistantMessage(message) && message.requestId);
-    if (liveMessage?.requestId) {
-      setSessionRequestIds((current) => ({ ...current, [sessionId]: liveMessage.requestId || "" }));
-      window.setTimeout(() => attachMessageStream(sessionId, liveMessage.id, liveMessage.requestId || ""), 0);
-    }
     if (nextMessages !== cached.messages) {
       setSessionUiState((current) => ({
         ...current,
@@ -1062,6 +1251,15 @@ export function App() {
           messages: nextMessages
         }
       }));
+    }
+    const liveMessage = nextMessages.find((message) => isLiveAssistantMessage(message) && message.requestId);
+    if (liveMessage?.requestId && streamAvailable) {
+      setSessionRequestIds((current) => ({ ...current, [sessionId]: liveMessage.requestId || "" }));
+      window.setTimeout(() => attachMessageStream(sessionId, liveMessage.id, liveMessage.requestId || ""), 0);
+    } else if (activeRequestId) {
+      resumeRuntimeRequest(sessionId, activeRequestId, streamAvailable);
+    } else {
+      void refreshSessionFromHistory(sessionId);
     }
     return true;
   }
@@ -1075,7 +1273,7 @@ export function App() {
     setActiveProjectId(nextProjectId);
     setPreviewFile(null);
     setApproval(null);
-    if (restoreCachedSession(row.id)) {
+    if (restoreCachedSession(row.id, row.requestId, row.streamAvailable !== false)) {
       focusComposerSoon();
       return;
     }
@@ -1112,6 +1310,9 @@ export function App() {
       if (activeSessionIdRef.current === row.id) {
         setMessages(mapped);
         focusComposerSoon();
+      }
+      if (row.requestId) {
+        resumeRuntimeRequest(row.id, row.requestId, row.streamAvailable !== false);
       }
     } catch (error) {
       setToast(error instanceof Error ? error.message : "加载会话失败");
@@ -1312,13 +1513,52 @@ export function App() {
     updateSessionMessages(sessionId, (current) => current.map((message) => message.id === assistantId ? updater(message) : message));
   }
 
-  function finishRunningSteps(message: ChatItem): ChatItem {
-    return { ...message, steps: finishAgentSteps(message.steps), toolCalls: message.toolCalls?.map((tool) => ({ ...tool, running: false })) };
+  async function refreshSessionFromHistory(sessionId: string) {
+    try {
+      const history = await loadSessionHistory(sessionId);
+      const mapped = normalizePausedMessages(history.map((item, index) => mapRuntimeMessage(item, sessionId, index)));
+      const hasFinalAssistant = mapped.some((message) => (
+        message.role === "assistant"
+        && !message.pending
+        && (
+          Boolean(message.content.trim())
+          || Boolean(message.steps?.length)
+          || Boolean(message.toolCalls?.length)
+          || typeof message.botSeq === "number"
+        )
+      ));
+      if (!hasFinalAssistant) return false;
+      updateSessionMessages(sessionId, () => mapped);
+      if (activeSessionIdRef.current === sessionId) {
+        setMessages(mapped);
+      }
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function recoverStaleRequestFromHistory(sessionId: string, assistantId: string, requestId: string) {
+    void refreshSessionFromHistory(sessionId).then((restored) => {
+      if (restored) return;
+      updateAssistantMessage(sessionId, assistantId, (message) => ({
+        ...finishRunningSteps(message, "paused"),
+        requestId,
+        content: pausedMessageContent(message.content),
+        pending: false,
+        paused: true,
+        cancelled: false
+      }));
+    });
+  }
+
+  function finishRunningSteps(message: ChatItem, reason: AgentFinishReason = "done"): ChatItem {
+    return { ...message, steps: finishAgentSteps(message.steps, reason), toolCalls: message.toolCalls?.map((tool) => ({ ...tool, running: false })) };
   }
 
   function markSessionRequestsPaused(sessionId: string) {
     updateSessionMessages(sessionId, (current) => current.map((message) => message.pending ? {
-      ...finishRunningSteps(message),
+      ...finishRunningSteps(message, "paused"),
       content: pausedMessageContent(message.content),
       pending: false,
       paused: true,
@@ -1426,7 +1666,9 @@ export function App() {
       ? "image"
       : item.type === "video" || item.file_type === "video"
         ? "video"
-        : "file";
+        : item.type === "audio" || item.type === "voice_attach" || item.file_type === "audio"
+          ? "audio"
+          : "file";
     return {
       ...next,
       pending: true,
@@ -1442,38 +1684,152 @@ export function App() {
     };
   }
 
-  function clearSessionRequestState(sessionId: string) {
-    setActiveRequestId("");
+  function isCurrentSessionRequest(sessionId: string, requestId?: string) {
+    return !requestId || sessionRequestIdsRef.current[sessionId] === requestId;
+  }
+
+  function isPostDoneTailItem(item: StreamItem) {
+    return item.type === "voice_attach";
+  }
+
+  function shouldAcceptStreamItem(sessionId: string, requestId: string, item: StreamItem) {
+    if (isCurrentSessionRequest(sessionId, requestId)) return true;
+    return Boolean(completedRequestIds.current[requestId] && isPostDoneTailItem(item));
+  }
+
+  function closeSessionStream(sessionId: string, requestId?: string) {
+    const cleanup = streamCleanups.current[sessionId];
+    if (!cleanup) return;
+    const cleanupRequestId = streamCleanupRequestIds.current[sessionId];
+    if (requestId && cleanupRequestId && cleanupRequestId !== requestId) return;
+    cleanup();
+    delete streamCleanups.current[sessionId];
+    delete streamCleanupRequestIds.current[sessionId];
+    if (streamCleanup.current === cleanup) {
+      streamCleanup.current = null;
+    }
+  }
+
+  function clearSessionRequestState(sessionId: string, requestId?: string) {
+    const shouldClear = !requestId || sessionRequestIdsRef.current[sessionId] === requestId;
+    setActiveRequestId((current) => (!requestId || current === requestId ? "" : current));
+    if (shouldClear) {
+      const nextRef = { ...sessionRequestIdsRef.current };
+      delete nextRef[sessionId];
+      sessionRequestIdsRef.current = nextRef;
+    }
     setSessionRequestIds((current) => {
+      if (requestId && current[sessionId] !== requestId) return current;
       const next = { ...current };
       delete next[sessionId];
       return next;
     });
+    if (shouldClear) {
+      delete streamRetryCounts.current[sessionId];
+    }
   }
 
-  function finishSessionRequest(sessionId: string) {
-    clearSessionRequestState(sessionId);
-    streamCleanups.current[sessionId]?.();
-    delete streamCleanups.current[sessionId];
+  function finishSessionRequest(sessionId: string, requestId?: string) {
+    clearSessionRequestState(sessionId, requestId);
+    closeSessionStream(sessionId, requestId);
+  }
+
+  function scheduleStreamReconnect(sessionId: string, assistantId: string, requestId: string) {
+    if (!isCurrentSessionRequest(sessionId, requestId)) return;
+    const attempts = streamRetryCounts.current[sessionId] || 0;
+    if (attempts >= 5) {
+      void (async () => {
+        const snapshot = await loadRuntimeSnapshot().catch(() => null);
+        const active = (snapshot?.activeRequests || []).find((request) => (
+          String(request.session_id || "") === sessionId
+          && String(request.request_id || "") === requestId
+        ));
+        if (snapshot) setRuntimeSnapshot(snapshot);
+        if (active?.cancelled) {
+          updateAssistantMessage(sessionId, assistantId, (message) => ({
+            ...message,
+            requestId,
+            pending: true,
+            paused: false,
+            cancelled: false,
+            steps: (message.steps || []).some((step) => step.type === "phase" && step.content === "后台任务正在停止")
+              ? message.steps
+              : [...(message.steps || []), { type: "phase", content: "后台任务正在停止" }]
+          }));
+          window.setTimeout(() => scheduleStreamReconnect(sessionId, assistantId, requestId), 5000);
+          return;
+        }
+        if (active && !active.cancelled) {
+          const restored = active.stream_available === false
+            ? await refreshSessionFromHistory(sessionId)
+            : false;
+          if (restored) return;
+          updateAssistantMessage(sessionId, assistantId, (message) => ({
+            ...message,
+            requestId,
+            pending: true,
+            paused: false,
+            cancelled: false,
+            steps: (message.steps || []).some((step) => step.type === "phase" && step.content === "后台任务仍在执行，等待恢复连接")
+              ? message.steps
+              : [...(message.steps || []), { type: "phase", content: "后台任务仍在执行，等待恢复连接" }]
+          }));
+          streamRetryCounts.current[sessionId] = active.stream_available === false ? 5 : 0;
+          if (active.stream_available !== false) {
+            window.setTimeout(() => attachMessageStream(sessionId, assistantId, requestId), 3000);
+          } else {
+            window.setTimeout(() => scheduleStreamReconnect(sessionId, assistantId, requestId), 5000);
+          }
+          return;
+        }
+        const restored = await refreshSessionFromHistory(sessionId);
+        if (restored) {
+          clearSessionRequestState(sessionId, requestId);
+          return;
+        }
+        updateAssistantMessage(sessionId, assistantId, (message) => ({
+          ...finishRunningSteps(message, "paused"),
+          requestId,
+          content: pausedMessageContent(message.content),
+          pending: false,
+          paused: true,
+          cancelled: false
+        }));
+        clearSessionRequestState(sessionId, requestId);
+      })();
+      return;
+    }
+    streamRetryCounts.current[sessionId] = attempts + 1;
+    window.setTimeout(() => {
+      if (!isCurrentSessionRequest(sessionId, requestId)) return;
+      attachMessageStream(sessionId, assistantId, requestId);
+    }, Math.min(1500 * (attempts + 1), 8000));
   }
 
   function attachMessageStream(sessionId: string, assistantId: string, requestId: string) {
-    if (!requestId || streamCleanups.current[sessionId]) return;
+    if (!requestId) return;
+    const existingRequestId = streamCleanupRequestIds.current[sessionId];
+    if (existingRequestId === requestId && streamCleanups.current[sessionId]) return;
+    if (existingRequestId && existingRequestId !== requestId) {
+      closeSessionStream(sessionId, existingRequestId);
+    }
     setActiveRequestId(requestId);
+    sessionRequestIdsRef.current = { ...sessionRequestIdsRef.current, [sessionId]: requestId };
     setSessionRequestIds((current) => ({ ...current, [sessionId]: requestId }));
     const cleanup = openMessageStream({
       requestId,
       webPort: sidecarStatus.webPort,
       onItem: (item) => {
         if (item.request_id && item.request_id !== requestId) return;
+        if (!shouldAcceptStreamItem(sessionId, requestId, item)) return;
         if (item.type === "cancelled") {
           updateAssistantMessage(sessionId, assistantId, (message) => ({
-            ...finishRunningSteps(message),
-            content: message.content || "已停止",
+            ...finishRunningSteps(message, "cancelled"),
+            content: item.content || item.message || message.content || "已停止",
             pending: false,
             cancelled: true
           }));
-          clearSessionRequestState(sessionId);
+          finishSessionRequest(sessionId, requestId);
           return;
         }
         if (item.type === "done") {
@@ -1485,19 +1841,23 @@ export function App() {
             botSeq: typeof item.bot_seq === "number" ? item.bot_seq : message.botSeq
           }));
           completedRequestIds.current[requestId] = true;
-          clearSessionRequestState(sessionId);
+          clearSessionRequestState(sessionId, requestId);
           return;
         }
         if (item.type === "error") {
           const message = item.content || item.message || "运行时返回错误";
           const staleRequest = /invalid request_id/i.test(message);
-          updateAssistantMessage(sessionId, assistantId, (entry) => ({
-            ...finishRunningSteps(entry),
-            content: staleRequest ? pausedMessageContent(entry.content) : message,
-            pending: false,
-            paused: staleRequest
-          }));
-          finishSessionRequest(sessionId);
+          finishSessionRequest(sessionId, requestId);
+          if (staleRequest) {
+            recoverStaleRequestFromHistory(sessionId, assistantId, requestId);
+          } else {
+            updateAssistantMessage(sessionId, assistantId, (entry) => ({
+              ...finishRunningSteps(entry, "error"),
+              content: message,
+              pending: false,
+              paused: false
+            }));
+          }
           void reportDesktopEvent({ type: "error", source: "Desktop", message, sessionId });
           return;
         }
@@ -1560,9 +1920,12 @@ export function App() {
           return;
         }
         if (item.type === "image" || item.type === "video" || item.type === "file" || item.type === "voice_attach") {
-          updateAssistantMessage(sessionId, assistantId, (message) => appendMediaStep(message, item));
+          updateAssistantMessage(sessionId, assistantId, (message) => {
+            const next = appendMediaStep(message, item);
+            return item.type === "voice_attach" ? { ...finishRunningSteps(next), pending: false, paused: false } : next;
+          });
           if (item.type === "voice_attach") {
-            finishSessionRequest(sessionId);
+            finishSessionRequest(sessionId, requestId);
             delete completedRequestIds.current[requestId];
           }
           return;
@@ -1588,9 +1951,10 @@ export function App() {
       onError: () => {
         if (completedRequestIds.current[requestId]) {
           delete completedRequestIds.current[requestId];
-          finishSessionRequest(sessionId);
+          finishSessionRequest(sessionId, requestId);
           return;
         }
+        if (!isCurrentSessionRequest(sessionId, requestId)) return;
         const notice = "连接已断开，后台任务仍在执行";
         updateAssistantMessage(sessionId, assistantId, (message) => ({
           ...message,
@@ -1602,11 +1966,13 @@ export function App() {
             ? message.steps
             : [...(message.steps || []), { type: "phase", content: notice }]
         }));
-        delete streamCleanups.current[sessionId];
+        closeSessionStream(sessionId, requestId);
+        scheduleStreamReconnect(sessionId, assistantId, requestId);
       }
     });
     streamCleanup.current = cleanup;
     streamCleanups.current[sessionId] = cleanup;
+    streamCleanupRequestIds.current[sessionId] = requestId;
   }
 
   async function sendNow(skipCapabilityCheck = false) {
@@ -1614,8 +1980,9 @@ export function App() {
     if (!text && !attachments.length) return;
     if (activeSessionRequestId) {
       await cancelChatRequest({ requestId: activeSessionRequestId, sessionId: activeSessionId }).catch(() => null);
+      closeSessionStream(activeSessionId, activeSessionRequestId);
       markSessionRequestsPaused(activeSessionId);
-      clearSessionRequestState(activeSessionId);
+      clearSessionRequestState(activeSessionId, activeSessionRequestId);
       setApproval(null);
     } else if (messagesRef.current.some((message) => message.pending)) {
       markSessionRequestsPaused(activeSessionId);
@@ -1751,26 +2118,30 @@ export function App() {
         reportChatUsage(result.usage, usageTotal(result.usage) ? "provider" : "estimated");
       }
       if (result.request_id && result.stream) {
-        setActiveRequestId(result.request_id);
-        setSessionRequestIds((current) => ({ ...current, [requestSessionId]: result.request_id || "" }));
+        const requestId = result.request_id;
+        setActiveRequestId(requestId);
+        sessionRequestIdsRef.current = { ...sessionRequestIdsRef.current, [requestSessionId]: requestId };
+        setSessionRequestIds((current) => ({ ...current, [requestSessionId]: requestId }));
+        streamRetryCounts.current[requestSessionId] = 0;
         updateAssistantMessage(requestSessionId, assistantId, (message) => ({
           ...message,
-          requestId: result.request_id
+          requestId
         }));
         const cleanup = openMessageStream({
-          requestId: result.request_id,
+          requestId,
           webPort: sidecarStatus.webPort,
           onItem: (item) => {
-            if (item.request_id && item.request_id !== result.request_id) return;
+            if (item.request_id && item.request_id !== requestId) return;
+            if (!shouldAcceptStreamItem(requestSessionId, requestId, item)) return;
             observeStreamUsage(item);
             if (item.type === "cancelled") {
               updateAssistantMessage(requestSessionId, assistantId, (message) => ({
-                ...finishRunningSteps(message),
-                content: message.content || "已停止",
+                ...finishRunningSteps(message, "cancelled"),
+                content: item.content || item.message || message.content || "已停止",
                 pending: false,
                 cancelled: true
               }));
-              clearSessionRequestState(requestSessionId);
+              finishSessionRequest(requestSessionId, requestId);
               return;
             }
             if (item.type === "done") {
@@ -1789,19 +2160,25 @@ export function App() {
                 }
                 return message;
               }));
-              completedRequestIds.current[result.request_id || ""] = true;
-              clearSessionRequestState(requestSessionId);
+              completedRequestIds.current[requestId] = true;
+              clearSessionRequestState(requestSessionId, requestId);
               reportChatUsage(item.usage, usageTotal(item.usage) ? "provider" : "estimated");
               return;
             }
             if (item.type === "error") {
               const message = item.content || item.message || "运行时返回错误";
-              updateSessionMessages(requestSessionId, (current) => current.map((entry) => entry.id === assistantId ? {
-                ...finishRunningSteps(entry),
-                content: message,
-                pending: false
-              } : entry));
-              finishSessionRequest(requestSessionId);
+              const staleRequest = /invalid request_id/i.test(message);
+              finishSessionRequest(requestSessionId, requestId);
+              if (staleRequest) {
+                recoverStaleRequestFromHistory(requestSessionId, assistantId, requestId);
+              } else {
+                updateSessionMessages(requestSessionId, (current) => current.map((entry) => entry.id === assistantId ? {
+                  ...finishRunningSteps(entry, "error"),
+                  content: message,
+                  pending: false,
+                  paused: false
+                } : entry));
+              }
               reportChatUsage(item.usage, usageTotal(item.usage) ? "provider" : "estimated");
               void reportDesktopEvent({ type: "error", source: "Desktop", message, sessionId: requestSessionId });
               return;
@@ -1864,10 +2241,13 @@ export function App() {
               return;
             }
             if (item.type === "image" || item.type === "video" || item.type === "file" || item.type === "voice_attach") {
-              updateAssistantMessage(requestSessionId, assistantId, (message) => appendMediaStep(message, item));
+              updateAssistantMessage(requestSessionId, assistantId, (message) => {
+                const next = appendMediaStep(message, item);
+                return item.type === "voice_attach" ? { ...finishRunningSteps(next), pending: false, paused: false } : next;
+              });
               if (item.type === "voice_attach") {
-                finishSessionRequest(requestSessionId);
-                delete completedRequestIds.current[result.request_id || ""];
+                finishSessionRequest(requestSessionId, requestId);
+                delete completedRequestIds.current[requestId];
               }
               return;
             }
@@ -1888,14 +2268,16 @@ export function App() {
             }
           },
           onError: () => {
-            if (completedRequestIds.current[result.request_id || ""]) {
-              delete completedRequestIds.current[result.request_id || ""];
-              finishSessionRequest(requestSessionId);
+            if (completedRequestIds.current[requestId]) {
+              delete completedRequestIds.current[requestId];
+              finishSessionRequest(requestSessionId, requestId);
               return;
             }
+            if (!isCurrentSessionRequest(requestSessionId, requestId)) return;
             const notice = "连接已断开，后台任务仍在执行";
             updateAssistantMessage(requestSessionId, assistantId, (message) => ({
               ...message,
+              requestId,
               pending: true,
               paused: false,
               cancelled: false,
@@ -1903,10 +2285,13 @@ export function App() {
                 ? message.steps
                 : [...(message.steps || []), { type: "phase", content: notice }]
             }));
+            closeSessionStream(requestSessionId, requestId);
+            scheduleStreamReconnect(requestSessionId, assistantId, requestId);
           }
         });
         streamCleanup.current = cleanup;
         streamCleanups.current[requestSessionId] = cleanup;
+        streamCleanupRequestIds.current[requestSessionId] = requestId;
       } else if (!result.inline_reply) {
         reportChatUsage(result.usage, usageTotal(result.usage) ? "provider" : "estimated");
       }
@@ -1947,9 +2332,10 @@ export function App() {
       console.warn("[EcoreX] Failed to cancel active request", error);
     } finally {
       setApproval(null);
-      clearSessionRequestState(activeSessionId);
+      closeSessionStream(activeSessionId, requestId);
+      clearSessionRequestState(activeSessionId, requestId);
       updateSessionMessages(activeSessionId, (current) => current.map((message) => message.pending ? {
-        ...finishRunningSteps(message),
+        ...finishRunningSteps(message, "cancelled"),
         content: message.content || "已停止",
         pending: false,
         cancelled: true
@@ -2177,9 +2563,9 @@ export function App() {
   ];
   const renderSessionRow = (row: SessionRow) => {
     const cachedMessages = sessionUiState[row.id]?.messages || [];
-    const isRunning = Boolean(sessionRequestIds[row.id]) || cachedMessages.some(isLiveAssistantMessage) || (row.id === activeSessionId && hasPendingAssistantMessage);
+    const isRunning = row.status === "waiting" || row.status === "cancelling" || Boolean(row.requestId) || Boolean(sessionRequestIds[row.id]) || cachedMessages.some(isLiveAssistantMessage) || (row.id === activeSessionId && hasPendingAssistantMessage);
     const isActive = row.id === activeSessionId;
-    const rowTitle = `${row.title}\n${row.detail}\n${formatTime(row.updatedAt)}`;
+    const rowTitle = [row.title, row.detail, formatTime(row.updatedAt)].filter(Boolean).join("\n");
     return (
       <article className={`session-row is-${isRunning ? "waiting" : row.status}${isActive ? " is-active" : ""}`} key={row.id}>
         <button
@@ -2191,7 +2577,7 @@ export function App() {
           aria-current={isActive ? "page" : undefined}
         >
           {isRunning ? <ThinkingIndicator compact /> : row.projectId ? <FolderOpen aria-hidden="true" /> : <Bot aria-hidden="true" />}
-          <span className="session-line"><strong>{row.title}</strong><small>{row.detail}</small></span>
+          <span className="session-line"><strong>{row.title}</strong>{row.detail ? <small>{row.detail}</small> : null}</span>
           <em>{formatTime(row.updatedAt)}</em>
         </button>
         <div className="session-actions">

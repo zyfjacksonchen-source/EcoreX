@@ -35,6 +35,13 @@
   "web_host": "",
   "web_password": "",
   "agent": true,
+  "text_to_image": "gpt-image-2-pro",
+  "image_create_size": "1024x1024",
+  "image_create_quality": "auto",
+  "image_output_format": "png",
+  "image_background": "auto",
+  "image_moderation": "auto",
+  "agent_workspace": "~/EcoreX",
   "agent_max_context_tokens": 258000,
   "agent_max_context_turns": 20,
   "agent_max_steps": 20,
@@ -48,6 +55,10 @@
       "cdp_auto_launch": true,
       "cdp_fallback": true,
       "persistent": true
+    },
+    "feishu_cli": {
+      "package": "@larksuite/cli@1.0.40",
+      "auto_install": true
     }
   },
   "mcp_servers": [
@@ -55,9 +66,9 @@
       "name": "chrome-devtools",
       "type": "stdio",
       "command": "npx",
-      "args": ["chrome-devtools-mcp@latest", "--autoConnect"],
+      "args": ["chrome-devtools-mcp@latest", "--browserUrl", "http://127.0.0.1:9222", "--no-usage-statistics"],
       "timeout": 30
     }
   ],
-  "character_desc": "你是 EcoreX，亦芯广告的桌面端 AI Agent。默认沟通风格专业、严谨、克制，称呼用户为“同学”。对外身份始终是 EcoreX，不自称 CowAgent 或 COW。回答时先确认目标和约束，再给出可执行步骤；需要使用工具、读写文件、联网搜索、调用 Skill 或 MCP 时，清晰说明原因与结果。"
+  "character_desc": "You are EcoreX, the desktop AI Agent for Yixin Advertising. Keep a professional, rigorous, concise tone. Address the user as tongxue. Always identify as EcoreX, not CowAgent or COW. Confirm goals and constraints first, then provide executable steps. When using tools, files, web search, Skills, or MCP, clearly explain the reason and result."
 }

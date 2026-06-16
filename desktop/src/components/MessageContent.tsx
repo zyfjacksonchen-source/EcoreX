@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useState, type MouseEvent, type ReactNode } from "react";
 
 export type ToolCallDisclosure = {
   name?: string;
@@ -40,15 +40,15 @@ export type AgentStepDisclosure =
     }
   | {
       type: "media";
-      fileType?: "image" | "video" | "file";
+      fileType?: "image" | "video" | "audio" | "file";
       url?: string;
       fileName?: string;
     };
 
-type LocalFilePayload = {
+export type LocalFilePayload = {
   file_path: string;
   file_name: string;
-  file_type?: "image" | "video" | "file";
+  file_type?: "image" | "video" | "audio" | "file";
 };
 
 const REASONING_RENDER_CAP = 4 * 1024;
@@ -65,6 +65,9 @@ function escapeHtml(value: unknown) {
 }
 
 function safeUrl(value: string, localFilePreviewUrl?: (filePath: string) => string) {
+  if (isRuntimeHttpPath(value)) {
+    return runtimeHttpUrl(value);
+  }
   const localPath = localPathFromSource(value);
   if (localPath && localFilePreviewUrl) {
     return localFilePreviewUrl(localPath);
@@ -78,6 +81,9 @@ function safeUrl(value: string, localFilePreviewUrl?: (filePath: string) => stri
 }
 
 function safeImageUrl(value: string, localFilePreviewUrl?: (filePath: string) => string) {
+  if (isRuntimeHttpPath(value)) {
+    return runtimeHttpUrl(value);
+  }
   const localPath = localPathFromSource(value);
   if (localPath && localFilePreviewUrl) {
     return localFilePreviewUrl(localPath);
@@ -90,9 +96,38 @@ function safeImageUrl(value: string, localFilePreviewUrl?: (filePath: string) =>
   }
 }
 
+function safeMediaUrl(value: string, localFilePreviewUrl?: (filePath: string) => string) {
+  if (isRuntimeHttpPath(value)) {
+    return runtimeHttpUrl(value);
+  }
+  const localPath = localPathFromSource(value);
+  if (localPath && localFilePreviewUrl) {
+    return localFilePreviewUrl(localPath);
+  }
+  try {
+    const url = new URL(value, window.location.href);
+    return ["http:", "https:"].includes(url.protocol) || /^data:(image|video|audio)\//i.test(url.href) ? url.href : "";
+  } catch {
+    return "";
+  }
+}
+
+function isRuntimeHttpPath(value?: string) {
+  return /^\/(uploads|static|app)\//.test(String(value || "").trim());
+}
+
+function runtimeHttpUrl(value: string) {
+  try {
+    return new URL(value, window.location.origin).href;
+  } catch {
+    return value;
+  }
+}
+
 function localPathFromSource(value?: string) {
   const source = String(value || "").trim();
   if (!source) return "";
+  if (isRuntimeHttpPath(source)) return "";
   if (/^file:\/\//i.test(source)) {
     try {
       const url = new URL(source);
@@ -123,6 +158,72 @@ function basenameFromPath(value: string) {
   return normalized.split("/").filter(Boolean).pop() || value;
 }
 
+function decodeBasicEntities(value: string) {
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+}
+
+function linkAttributesForUrl(value: string, localFilePreviewUrl?: (filePath: string) => string) {
+  const localPath = localPathFromSource(value);
+  const href = safeUrl(value, localFilePreviewUrl);
+  const attrs = [`href="${escapeHtml(href)}"`, `target="_blank"`, `rel="noreferrer"`];
+  if (localPath) {
+    attrs.push(`class="markdown-local-file-link"`);
+    attrs.push(`data-ecorex-file-path="${escapeHtml(localPath)}"`);
+    attrs.push(`data-ecorex-file-name="${escapeHtml(basenameFromPath(localPath))}"`);
+  }
+  return attrs.join(" ");
+}
+
+function mediaTypeFromUrl(value: string): "image" | "video" | "audio" | "" {
+  const path = String(value || "").split(/[?#]/)[0].toLowerCase();
+  if (/\.(png|jpe?g|gif|webp|bmp|svg)$/.test(path)) return "image";
+  if (/\.(mp4|webm|mov|m4v|mkv|avi)$/.test(path)) return "video";
+  if (/\.(mp3|wav|ogg|m4a|aac|flac|webm)$/.test(path)) return "audio";
+  return "";
+}
+
+function splitTrailingUrlPunctuation(value: string) {
+  const match = value.match(/^(.+?)([.,!?;:)\]\u3002\uff0c\uff01\uff1f\uff1b\uff1a]*)$/);
+  return { url: match?.[1] || value, trailing: match?.[2] || "" };
+}
+
+function renderBareUrl(raw: string, localFilePreviewUrl?: (filePath: string) => string) {
+  const { url, trailing } = splitTrailingUrlPunctuation(raw);
+  const mediaType = mediaTypeFromUrl(url);
+  if (mediaType === "image") {
+    const src = safeImageUrl(url, localFilePreviewUrl);
+    if (src) return `<img class="markdown-image" src="${escapeHtml(src)}" alt="${escapeHtml(basenameFromPath(url))}" loading="lazy" />${escapeHtml(trailing)}`;
+  }
+  if (mediaType === "video" || mediaType === "audio") {
+    const src = safeMediaUrl(url, localFilePreviewUrl);
+    if (src && mediaType === "video") return `<video class="markdown-video" src="${escapeHtml(src)}" controls></video>${escapeHtml(trailing)}`;
+    if (src && mediaType === "audio") return `<audio class="markdown-audio" src="${escapeHtml(src)}" controls></audio>${escapeHtml(trailing)}`;
+  }
+  return `<a ${linkAttributesForUrl(url, localFilePreviewUrl)}>${escapeHtml(url)}</a>${escapeHtml(trailing)}`;
+}
+
+function linkifyPlainTextSegments(html: string, localFilePreviewUrl?: (filePath: string) => string) {
+  const localPathPrefix = String.raw`(?:[A-Za-z]:[\\/]|\\\\|\/(?:Users|Volumes|home|tmp|var|mnt|opt|srv|Applications)\/)`;
+  const pattern = new RegExp(
+    String.raw`(&quot;|&#39;)(${localPathPrefix}[^<>\r\n]*?)\1|((?:https?:\/\/|file:\/\/)[^\s<>"']+|${localPathPrefix}[^\s<>"']+)`,
+    "g"
+  );
+  return html.split(/(<[^>]+>)/g).map((part) => {
+    if (!part || part.startsWith("<")) return part;
+    return part.replace(pattern, (match, quote: string, quotedPath: string, rawPath: string) => {
+      if (quote && quotedPath) {
+        return `${quote}${renderBareUrl(decodeBasicEntities(quotedPath), localFilePreviewUrl)}${quote}`;
+      }
+      return renderBareUrl(rawPath || match, localFilePreviewUrl);
+    });
+  }).join("");
+}
+
 function renderInline(value: string, localFilePreviewUrl?: (filePath: string) => string) {
   let html = escapeHtml(value);
   html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
@@ -134,9 +235,9 @@ function renderInline(value: string, localFilePreviewUrl?: (filePath: string) =>
     return `<img class="markdown-image" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}" loading="lazy" />`;
   });
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label: string, href: string) => {
-    return `<a href="${escapeHtml(safeUrl(href, localFilePreviewUrl))}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`;
+    return `<a ${linkAttributesForUrl(href, localFilePreviewUrl)}>${escapeHtml(label)}</a>`;
   });
-  return html;
+  return linkifyPlainTextSegments(html, localFilePreviewUrl);
 }
 
 function flushParagraph(lines: string[], out: string[], localFilePreviewUrl?: (filePath: string) => string) {
@@ -245,8 +346,35 @@ function formatToolValue(value: unknown) {
   }
 }
 
-function MarkdownBlock({ content, localFilePreviewUrl }: { content: string; localFilePreviewUrl?: (filePath: string) => string }) {
-  return <div className="markdown-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(content, localFilePreviewUrl) }} />;
+function MarkdownBlock({
+  content,
+  localFilePreviewUrl,
+  onOpenLocalFile
+}: {
+  content: string;
+  localFilePreviewUrl?: (filePath: string) => string;
+  onOpenLocalFile?: (file: LocalFilePayload) => void;
+}) {
+  const handleClick = (event: MouseEvent<HTMLDivElement>) => {
+    if (!onOpenLocalFile) return;
+    const target = event.target instanceof Element ? event.target : null;
+    const anchor = target?.closest<HTMLAnchorElement>("a[data-ecorex-file-path]");
+    const filePath = anchor?.dataset.ecorexFilePath || "";
+    if (!anchor || !filePath) return;
+    event.preventDefault();
+    onOpenLocalFile({
+      file_path: filePath,
+      file_name: anchor.dataset.ecorexFileName || basenameFromPath(filePath),
+      file_type: mediaTypeFromUrl(filePath) || "file"
+    });
+  };
+  return (
+    <div
+      className="markdown-content"
+      onClick={handleClick}
+      dangerouslySetInnerHTML={{ __html: renderMarkdown(content, localFilePreviewUrl) }}
+    />
+  );
 }
 
 function ThinkingStep({ content = "", running }: { content?: string; running?: boolean }) {
@@ -313,6 +441,24 @@ function MediaStep({ step, onOpenLocalFile, localFilePreviewUrl }: {
       </button>
     );
   }
+  if (localPath && step.fileType === "audio" && localFilePreviewUrl) {
+    const fileName = step.fileName || basenameFromPath(localPath);
+    return (
+      <div className="agent-audio-card">
+        <audio className="agent-media-audio" src={localFilePreviewUrl(localPath)} controls />
+        {onOpenLocalFile && (
+          <button
+            type="button"
+            className="agent-file-link"
+            onClick={() => onOpenLocalFile({ file_path: localPath, file_name: fileName, file_type: "audio" })}
+        title="点击在本地打开"
+          >
+            {fileName}
+          </button>
+        )}
+      </div>
+    );
+  }
   if (localPath && onOpenLocalFile) {
     const fileName = step.fileName || basenameFromPath(localPath);
     return (
@@ -327,40 +473,30 @@ function MediaStep({ step, onOpenLocalFile, localFilePreviewUrl }: {
     );
   }
   if (step.fileType === "image") {
-    return <img className="agent-media-image" src={step.url} alt={step.fileName || "image"} />;
+    return <img className="agent-media-image" src={safeImageUrl(step.url, localFilePreviewUrl)} alt={step.fileName || "image"} />;
   }
   if (step.fileType === "video") {
-    return <video className="agent-media-video" src={step.url} controls />;
+    return <video className="agent-media-video" src={safeMediaUrl(step.url, localFilePreviewUrl)} controls />;
+  }
+  if (step.fileType === "audio") {
+    return <audio className="agent-media-audio" src={safeMediaUrl(step.url, localFilePreviewUrl)} controls />;
   }
   return (
-    <a className="agent-file-link" href={step.url} target="_blank" rel="noreferrer">
+    <a className="agent-file-link" href={safeUrl(step.url, localFilePreviewUrl)} target="_blank" rel="noreferrer">
       {step.fileName || step.url}
     </a>
   );
 }
 
 function compactToolSteps(steps: AgentStepDisclosure[]) {
-  const compacted: AgentStepDisclosure[] = [];
-  const toolIndexes = new Map<string, number>();
-  const toolCounts = new Map<string, number>();
-  for (const step of steps) {
-    if (step.type !== "tool") {
-      compacted.push(step);
-      continue;
-    }
-    const rawName = step.name || "tool";
-    const count = (toolCounts.get(rawName) || 0) + 1;
-    toolCounts.set(rawName, count);
-    const displayStep = count > 1 ? { ...step, name: `${rawName} (${count} 次)` } : step;
-    const existingIndex = toolIndexes.get(rawName);
-    if (existingIndex === undefined) {
-      toolIndexes.set(rawName, compacted.length);
-      compacted.push(displayStep);
-    } else {
-      compacted[existingIndex] = displayStep;
-    }
-  }
-  return compacted;
+  const seen = new Map<string, number>();
+  return steps.map((step) => {
+    if (step.type !== "tool") return step;
+    const baseName = step.name || "tool";
+    const nextCount = (seen.get(baseName) || 0) + 1;
+    seen.set(baseName, nextCount);
+    return nextCount > 1 ? { ...step, name: `${baseName} #${nextCount}` } : step;
+  });
 }
 
 function renderStep(
@@ -374,7 +510,7 @@ function renderStep(
   if (step.type === "content") {
     return (
       <div className="agent-step agent-content-step" key={index}>
-        <MarkdownBlock content={step.content || ""} localFilePreviewUrl={localFilePreviewUrl} />
+        <MarkdownBlock content={step.content || ""} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />
       </div>
     );
   }
@@ -393,22 +529,23 @@ function splitSteps(steps: AgentStepDisclosure[], content: string) {
   return { mainContent, visibleSteps };
 }
 
-function MainAnswer({ content, pending, collapsible, localFilePreviewUrl }: {
+function MainAnswer({ content, pending, collapsible, localFilePreviewUrl, onOpenLocalFile }: {
   content: string;
   pending?: boolean;
   collapsible?: boolean;
   localFilePreviewUrl?: (filePath: string) => string;
+  onOpenLocalFile?: (file: LocalFilePayload) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   if (!content) return null;
   if (!collapsible || pending || content.length <= LONG_REPLY_COLLAPSE_CHARS) {
-    return <MarkdownBlock content={content} localFilePreviewUrl={localFilePreviewUrl} />;
+    return <MarkdownBlock content={content} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />;
   }
   if (expanded) {
     return (
       <div className="long-answer-disclosure is-expanded">
         <div className="long-answer-full">
-          <MarkdownBlock content={content} localFilePreviewUrl={localFilePreviewUrl} />
+          <MarkdownBlock content={content} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />
         </div>
         <button className="long-answer-toggle long-answer-collapse-bottom" type="button" onClick={() => setExpanded(false)}>
           收起完整回复
@@ -419,7 +556,7 @@ function MainAnswer({ content, pending, collapsible, localFilePreviewUrl }: {
   return (
     <div className="long-answer-disclosure">
       <div className="long-answer-preview">
-        <MarkdownBlock content={`${content.slice(0, LONG_REPLY_PREVIEW_CHARS).trimEnd()}...`} localFilePreviewUrl={localFilePreviewUrl} />
+        <MarkdownBlock content={`${content.slice(0, LONG_REPLY_PREVIEW_CHARS).trimEnd()}...`} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />
       </div>
       <button className="long-answer-toggle long-answer-expand-bottom" type="button" onClick={() => setExpanded(true)} title="长回复已默认收起，点击展开完整内容">
         展开完整回复
@@ -458,7 +595,7 @@ export function MessageContent(props: {
           {legacySteps}
         </div>
       )}
-      <MainAnswer content={mainContent} pending={props.pending} collapsible={props.role !== "user"} localFilePreviewUrl={props.localFilePreviewUrl} />
+      <MainAnswer content={mainContent} pending={props.pending} collapsible={props.role !== "user"} localFilePreviewUrl={props.localFilePreviewUrl} onOpenLocalFile={props.onOpenLocalFile} />
       {props.cancelled ? (
         <div className="agent-cancelled-tag">已中止</div>
       ) : props.paused ? (

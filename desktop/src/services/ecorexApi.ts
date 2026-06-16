@@ -7,6 +7,16 @@ export type RuntimeSession = {
   msg_count?: number;
 };
 
+export type RuntimeActiveRequest = {
+  request_id?: string;
+  session_id?: string;
+  cancelled?: boolean;
+  state?: "running" | "cancelling" | string;
+  created_at?: number;
+  age_seconds?: number;
+  stream_available?: boolean;
+};
+
 export type RuntimeTool = {
   name?: string;
   description?: string;
@@ -80,7 +90,7 @@ export type RuntimeMessage = {
 export type FileAttachment = {
   file_path: string;
   file_name: string;
-  file_type: "image" | "video" | "file" | "directory";
+  file_type: "image" | "video" | "audio" | "file" | "directory";
   previewDataUrl?: string;
 };
 
@@ -90,6 +100,7 @@ export type RuntimeSnapshot = {
   version?: string;
   currentModel?: string;
   sessions: RuntimeSession[];
+  activeRequests?: RuntimeActiveRequest[];
   totalSessions: number;
   toolsCount: number;
   skillsCount: number;
@@ -277,17 +288,21 @@ export async function checkEnterpriseQuota(estimatedTokens: number): Promise<Ent
 
 export async function loadRuntimeSnapshot(): Promise<RuntimeSnapshot> {
   try {
-    const [version, sessions, tools, skills, models] = await Promise.all([
+    const activeRequestsPromise = apiJson<{ requests?: RuntimeActiveRequest[] }>("/api/active-requests")
+      .catch(() => ({ requests: [] }));
+    const [version, sessions, tools, skills, models, activeRequests] = await Promise.all([
       apiJson<{ version?: string }>("/api/version"),
       apiJson<{ sessions?: RuntimeSession[]; total?: number; message?: string }>("/api/sessions?page=1&page_size=40"),
       apiJson<{ tools?: RuntimeTool[] }>("/api/tools"),
       apiJson<{ skills?: RuntimeSkill[] }>("/api/skills"),
-      apiJson<{ providers?: unknown[]; capabilities?: Record<string, unknown> | unknown[] }>("/api/models")
+      apiJson<{ providers?: unknown[]; capabilities?: Record<string, unknown> | unknown[] }>("/api/models"),
+      activeRequestsPromise
     ]);
 
     const runtimeSessions = Array.isArray(sessions.sessions) ? sessions.sessions : [];
     const runtimeTools = Array.isArray(tools.tools) ? tools.tools : [];
     const runtimeSkills = Array.isArray(skills.skills) ? skills.skills : [];
+    const runtimeActiveRequests = Array.isArray(activeRequests.requests) ? activeRequests.requests : [];
     const capabilityCount = Array.isArray(models.capabilities)
       ? models.capabilities.length
       : models.capabilities && typeof models.capabilities === "object"
@@ -298,6 +313,7 @@ export async function loadRuntimeSnapshot(): Promise<RuntimeSnapshot> {
       message: "已连接本地 EcoreX 运行时",
       version: version.version,
       sessions: runtimeSessions,
+      activeRequests: runtimeActiveRequests,
       totalSessions: typeof sessions.total === "number" ? sessions.total : runtimeSessions.length,
       toolsCount: runtimeTools.length,
       skillsCount: runtimeSkills.length,
@@ -312,6 +328,7 @@ export async function loadRuntimeSnapshot(): Promise<RuntimeSnapshot> {
       status: "offline",
       message: error instanceof Error ? error.message : "本地运行时暂不可用",
       sessions: [],
+      activeRequests: [],
       totalSessions: 0,
       toolsCount: 0,
       skillsCount: 0,

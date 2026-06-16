@@ -9,11 +9,26 @@ Handles memory persistence when conversation context is trimmed or overflows:
 - Deep Dream: periodically distills daily memories → refined MEMORY.md + dream diary
 """
 
+import re
 import threading
 from typing import Optional, Callable, Any, List, Dict
 from pathlib import Path
 from datetime import datetime
 from common.log import logger
+
+
+_USER_SEGMENT_RE = re.compile(r"[^A-Za-z0-9_.@-]+")
+
+
+def _safe_user_segment(user_id: Optional[str]) -> Optional[str]:
+    """Convert a user id into one safe filesystem path segment."""
+    if user_id is None:
+        return None
+    raw = str(user_id).strip()
+    if not raw:
+        return None
+    segment = _USER_SEGMENT_RE.sub("_", raw).strip(" ._")
+    return (segment or "user")[:120]
 
 
 SUMMARIZE_SYSTEM_PROMPT_ZH = """你是一个对话记录助手。请将对话内容归纳为当天的日常记录。
@@ -190,6 +205,56 @@ def _is_empty_sentinel(text: str) -> bool:
     return s == "" or s == "无" or s.lower() == "none"
 
 
+def _authorize_memory_write(target_path: Path, workspace_dir: Path, purpose: str) -> bool:
+    """Apply the shared host filesystem boundary before memory writes."""
+    try:
+        from common.ecorex_tool_permissions import get_tool_permission_broker
+
+        decision = get_tool_permission_broker().authorize_file_access(
+            "write",
+            str(target_path),
+            cwd=str(workspace_dir),
+        )
+        if decision.get("allowed", True):
+            return True
+        logger.info(
+            f"[MemoryFlush] Memory write blocked by permissions "
+            f"(purpose={purpose}, path={target_path}): {decision.get('reason', 'denied')}"
+        )
+        return False
+    except Exception as exc:
+        logger.warning(
+            f"[MemoryFlush] Permission broker unavailable; memory write blocked "
+            f"(purpose={purpose}, path={target_path}): {exc}"
+        )
+        return False
+
+
+def _authorize_memory_read(target_path: Path, workspace_dir: Path, purpose: str) -> bool:
+    """Apply the shared host filesystem boundary before memory reads."""
+    try:
+        from common.ecorex_tool_permissions import get_tool_permission_broker
+
+        decision = get_tool_permission_broker().authorize_file_access(
+            "read",
+            str(target_path),
+            cwd=str(workspace_dir),
+        )
+        if decision.get("allowed", True):
+            return True
+        logger.info(
+            f"[MemoryFlush] Memory read blocked by permissions "
+            f"(purpose={purpose}, path={target_path}): {decision.get('reason', 'denied')}"
+        )
+        return False
+    except Exception as exc:
+        logger.warning(
+            f"[MemoryFlush] Permission broker unavailable; memory read blocked "
+            f"(purpose={purpose}, path={target_path}): {exc}"
+        )
+        return False
+
+
 
 class MemoryFlushManager:
     """
@@ -211,7 +276,8 @@ class MemoryFlushManager:
         self.llm_model = llm_model
         
         self.memory_dir = workspace_dir / "memory"
-        self.memory_dir.mkdir(parents=True, exist_ok=True)
+        if _authorize_memory_write(self.memory_dir, self.workspace_dir, "memory-dir-init"):
+            self.memory_dir.mkdir(parents=True, exist_ok=True)
         
         self.last_flush_timestamp: Optional[datetime] = None
         self._trim_flushed_hashes: set = set()  # Content hashes of already-flushed messages
@@ -223,15 +289,20 @@ class MemoryFlushManager:
         """Get today's memory file path: memory/YYYY-MM-DD.md"""
         today = datetime.now().strftime("%Y-%m-%d")
         
-        if user_id:
-            user_dir = self.memory_dir / "users" / user_id
+        safe_user_id = _safe_user_segment(user_id)
+        if safe_user_id:
+            user_dir = self.memory_dir / "users" / safe_user_id
             if ensure_exists:
-                user_dir.mkdir(parents=True, exist_ok=True)
+                target = user_dir / f"{today}.md"
+                if _authorize_memory_write(target, self.workspace_dir, "daily-memory-init"):
+                    user_dir.mkdir(parents=True, exist_ok=True)
             today_file = user_dir / f"{today}.md"
         else:
             today_file = self.memory_dir / f"{today}.md"
         
         if ensure_exists and not today_file.exists():
+            if not _authorize_memory_write(today_file, self.workspace_dir, "daily-memory-init"):
+                return today_file
             today_file.parent.mkdir(parents=True, exist_ok=True)
             today_file.write_text(f"# Daily Memory: {today}\n\n")
         
@@ -239,9 +310,9 @@ class MemoryFlushManager:
     
     def get_main_memory_file(self, user_id: Optional[str] = None) -> Path:
         """Get main memory file path: MEMORY.md (workspace root)"""
-        if user_id:
-            user_dir = self.memory_dir / "users" / user_id
-            user_dir.mkdir(parents=True, exist_ok=True)
+        safe_user_id = _safe_user_segment(user_id)
+        if safe_user_id:
+            user_dir = self.memory_dir / "users" / safe_user_id
             return user_dir / "MEMORY.md"
         else:
             return Path(self.workspace_dir) / "MEMORY.md"
@@ -336,6 +407,8 @@ class MemoryFlushManager:
 
             # --- Write daily memory ---
             daily_file = ensure_daily_memory_file(self.workspace_dir, user_id)
+            if not _authorize_memory_write(daily_file, self.workspace_dir, "daily-memory-append"):
+                return
 
             headers = {
                 "overflow": f"## Context Overflow Recovery ({datetime.now().strftime('%H:%M')})",
@@ -494,6 +567,9 @@ class MemoryFlushManager:
         # Overwrite MEMORY.md
         try:
             main_file = self.get_main_memory_file(user_id)
+            if not _authorize_memory_write(main_file, self.workspace_dir, "deep-dream-memory"):
+                return False
+            main_file.parent.mkdir(parents=True, exist_ok=True)
             old_size = len(memory_content)
             main_file.write_text(new_memory + "\n", encoding="utf-8")
             logger.info(
@@ -518,6 +594,8 @@ class MemoryFlushManager:
         """Read current MEMORY.md content."""
         main_file = self.get_main_memory_file(user_id)
         if main_file.exists():
+            if not _authorize_memory_read(main_file, self.workspace_dir, "deep-dream-main-memory-read"):
+                return ""
             return main_file.read_text(encoding="utf-8").strip()
         return ""
 
@@ -539,12 +617,16 @@ class MemoryFlushManager:
         for offset in range(lookback_days):
             day = today - timedelta(days=offset)
             date_str = day.strftime("%Y-%m-%d")
-            if user_id:
-                daily_file = self.memory_dir / "users" / user_id / f"{date_str}.md"
+            safe_user_id = _safe_user_segment(user_id)
+            if safe_user_id:
+                daily_file = self.memory_dir / "users" / safe_user_id / f"{date_str}.md"
             else:
                 daily_file = self.memory_dir / f"{date_str}.md"
 
             if daily_file.exists():
+                if not _authorize_memory_read(daily_file, self.workspace_dir, "deep-dream-daily-memory-read"):
+                    parts.append(f"### {date_str}\n\n(read blocked by permissions)")
+                    continue
                 content = daily_file.read_text(encoding="utf-8").strip()
                 if content:
                     parts.append(f"### {date_str}\n\n{content}")
@@ -575,12 +657,15 @@ class MemoryFlushManager:
     def _write_dream_diary(self, content: str, user_id: Optional[str] = None):
         """Write dream diary to memory/dreams/YYYY-MM-DD.md."""
         dreams_dir = self.memory_dir / "dreams"
-        if user_id:
-            dreams_dir = self.memory_dir / "users" / user_id / "dreams"
-        dreams_dir.mkdir(parents=True, exist_ok=True)
+        safe_user_id = _safe_user_segment(user_id)
+        if safe_user_id:
+            dreams_dir = self.memory_dir / "users" / safe_user_id / "dreams"
 
         today = datetime.now().strftime("%Y-%m-%d")
         diary_file = dreams_dir / f"{today}.md"
+        if not _authorize_memory_write(diary_file, self.workspace_dir, "deep-dream-diary"):
+            return
+        dreams_dir.mkdir(parents=True, exist_ok=True)
         diary_file.write_text(
             f"# Dream Diary: {today}\n\n{content}\n",
             encoding="utf-8",
@@ -801,18 +886,19 @@ def create_memory_files_if_needed(workspace_dir: Path, user_id: Optional[str] = 
         workspace_dir: Workspace directory
         user_id: Optional user ID for user-specific files
     """
-    memory_dir = workspace_dir / "memory"
-    memory_dir.mkdir(parents=True, exist_ok=True)
-    
     # Create main MEMORY.md in workspace root (always needed for bootstrap)
-    if user_id:
-        user_dir = memory_dir / "users" / user_id
-        user_dir.mkdir(parents=True, exist_ok=True)
+    memory_dir = workspace_dir / "memory"
+    safe_user_id = _safe_user_segment(user_id)
+    if safe_user_id:
+        user_dir = memory_dir / "users" / safe_user_id
         main_memory = user_dir / "MEMORY.md"
     else:
         main_memory = Path(workspace_dir) / "MEMORY.md"
     
     if not main_memory.exists():
+        if not _authorize_memory_write(main_memory, Path(workspace_dir), "main-memory-init"):
+            return
+        main_memory.parent.mkdir(parents=True, exist_ok=True)
         main_memory.write_text("")
 
 
@@ -829,17 +915,19 @@ def ensure_daily_memory_file(workspace_dir: Path, user_id: Optional[str] = None)
         Path to today's memory file
     """
     memory_dir = workspace_dir / "memory"
-    memory_dir.mkdir(parents=True, exist_ok=True)
     
     today = datetime.now().strftime("%Y-%m-%d")
-    if user_id:
-        user_dir = memory_dir / "users" / user_id
-        user_dir.mkdir(parents=True, exist_ok=True)
+    safe_user_id = _safe_user_segment(user_id)
+    if safe_user_id:
+        user_dir = memory_dir / "users" / safe_user_id
         today_memory = user_dir / f"{today}.md"
     else:
         today_memory = memory_dir / f"{today}.md"
     
     if not today_memory.exists():
+        if not _authorize_memory_write(today_memory, workspace_dir, "daily-memory-init"):
+            raise PermissionError(f"Memory write blocked by permissions: {today_memory}")
+        today_memory.parent.mkdir(parents=True, exist_ok=True)
         today_memory.write_text(
             f"# Daily Memory: {today}\n\n"
         )

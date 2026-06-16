@@ -50,6 +50,35 @@ function Sync-DesktopWebBuild {
     Copy-Item -Path (Join-Path $desktopDist "*") -Destination $appDir -Recurse -Force
 }
 
+function Copy-OptionalLarkCliWindows {
+    param([Parameter(Mandatory = $true)][string]$RuntimeDir)
+    $candidates = @()
+    if ($env:ECOREX_LARK_CLI_EXE) {
+        $candidates += $env:ECOREX_LARK_CLI_EXE
+    }
+    $candidates += "C:\cli-main\bin\lark-cli.exe"
+    foreach ($candidate in $candidates) {
+        if ($candidate -and (Test-Path -LiteralPath $candidate)) {
+            $targetDir = Join-Path $RuntimeDir "tools\bin"
+            New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+            Copy-Item -LiteralPath $candidate -Destination (Join-Path $targetDir "lark-cli.exe") -Force
+            Write-Host "Bundled lark-cli for Windows WebUI runtime: $candidate"
+            return
+        }
+    }
+    Write-Host "lark-cli.exe was not found; WebUI runtime will use npm auto-install fallback."
+}
+
+function Copy-OptionalLarkCliMac {
+    param([Parameter(Mandatory = $true)][string]$RuntimeDir)
+    if ($env:ECOREX_LARK_CLI_DARWIN -and (Test-Path -LiteralPath $env:ECOREX_LARK_CLI_DARWIN)) {
+        $targetDir = Join-Path $RuntimeDir "tools/bin"
+        New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+        Copy-Item -LiteralPath $env:ECOREX_LARK_CLI_DARWIN -Destination (Join-Path $targetDir "lark-cli") -Force
+        Write-Host "Bundled lark-cli for macOS WebUI runtime: $env:ECOREX_LARK_CLI_DARWIN"
+    }
+}
+
 function Save-Download {
     param(
         [Parameter(Mandatory = $true)][string]$Uri,
@@ -186,6 +215,7 @@ $winRuntime = Join-Path $windowsStage "runtime"
 Copy-Item -LiteralPath $runtimeRootResolved -Destination $winRuntime -Recurse -Force
 Remove-GeneratedNoise -Root $winRuntime
 Sync-DesktopWebBuild -RuntimeDir $winRuntime
+Copy-OptionalLarkCliWindows -RuntimeDir $winRuntime
 
 $windowsCmd = @'
 @echo off
@@ -243,6 +273,38 @@ function Wait-WebUi {
     throw "EcoreX WebUI did not become ready at $Url"
 }
 
+function Ensure-LarkCli {
+    param(
+        [Parameter(Mandatory = $true)][string]$RuntimeDir,
+        [Parameter(Mandatory = $true)][string]$StateDir
+    )
+    $pathCandidates = @((Join-Path $RuntimeDir "tools\bin"))
+    foreach ($base in @($env:APPDATA, $env:LOCALAPPDATA)) {
+        if ($base) { $pathCandidates += (Join-Path $base "npm") }
+    }
+    if ($env:ProgramFiles) { $pathCandidates += (Join-Path $env:ProgramFiles "nodejs") }
+    $pathParts = $pathCandidates | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+    if ($pathParts.Count -gt 0) {
+        $env:Path = ($pathParts -join [System.IO.Path]::PathSeparator) + [System.IO.Path]::PathSeparator + $env:Path
+    }
+    if (Get-Command lark-cli -ErrorAction SilentlyContinue) {
+        return
+    }
+    $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
+    if (-not $npm) {
+        $npm = Get-Command npm -ErrorAction SilentlyContinue
+    }
+    if (-not $npm) {
+        "npm not found; lark-cli will be installed by runtime fallback if possible." | Out-File -FilePath (Join-Path $StateDir "lark-cli-install.log") -Encoding utf8 -Append
+        return
+    }
+    try {
+        & $npm.Source install -g "@larksuite/cli@1.0.40" *> (Join-Path $StateDir "lark-cli-install.log")
+    } catch {
+        "lark-cli install failed: $($_.Exception.Message)" | Out-File -FilePath (Join-Path $StateDir "lark-cli-install.log") -Encoding utf8 -Append
+    }
+}
+
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $packageRoot = Split-Path -Parent $scriptDir
 $sourceRuntime = Join-Path $packageRoot "runtime"
@@ -280,13 +342,17 @@ $config = [ordered]@{
             cdp_fallback = $true
             persistent = $true
         }
+        feishu_cli = [ordered]@{
+            package = "@larksuite/cli@1.0.40"
+            auto_install = $true
+        }
     }
     mcp_servers = @(
         [ordered]@{
             name = "chrome-devtools"
             type = "stdio"
             command = "npx.cmd"
-            args = @("chrome-devtools-mcp@latest", "--autoConnect")
+            args = @("chrome-devtools-mcp@latest", "--browserUrl", "http://127.0.0.1:9222", "--no-usage-statistics")
             timeout = 30
         }
     )
@@ -294,6 +360,8 @@ $config = [ordered]@{
 $configJson = $config | ConvertTo-Json -Depth 8
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 [System.IO.File]::WriteAllText((Join-Path $runtimeDir "config.json"), $configJson + [Environment]::NewLine, $utf8NoBom)
+
+Ensure-LarkCli -RuntimeDir $runtimeDir -StateDir $stateDir
 
 $python = Join-Path $runtimeDir "python\python.exe"
 if (-not (Test-Path -LiteralPath $python)) {
@@ -337,6 +405,7 @@ Copy-Item -LiteralPath $runtimeRootResolved -Destination $macRuntime -Recurse -F
 Remove-Item -LiteralPath (Join-Path $macRuntime "python") -Recurse -Force -ErrorAction SilentlyContinue
 Remove-GeneratedNoise -Root $macRuntime
 Sync-DesktopWebBuild -RuntimeDir $macRuntime
+Copy-OptionalLarkCliMac -RuntimeDir $macRuntime
 
 $pyArmUrl = "https://github.com/astral-sh/python-build-standalone/releases/download/20260602/cpython-3.11.15%2B20260602-aarch64-apple-darwin-install_only_stripped.tar.gz"
 $pyX64Url = "https://github.com/astral-sh/python-build-standalone/releases/download/20260602/cpython-3.11.15%2B20260602-x86_64-apple-darwin-install_only_stripped.tar.gz"
@@ -422,6 +491,15 @@ if [[ ! -f "$DEPS_STAMP" ]]; then
   date -u +"%Y-%m-%dT%H:%M:%SZ" > "$DEPS_STAMP"
 fi
 
+export PATH="$RUNTIME_DIR/tools/bin:$HOME/.npm-global/bin:$HOME/.npm/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+if ! command -v lark-cli >/dev/null 2>&1; then
+  if command -v npm >/dev/null 2>&1; then
+    npm install -g "@larksuite/cli@1.0.40" >> "$STATE_DIR/lark-cli-install.log" 2>&1 || true
+  else
+    echo "npm not found; lark-cli will be installed by runtime fallback if possible." >> "$STATE_DIR/lark-cli-install.log"
+  fi
+fi
+
 EFFECTIVE_PORT="$("$PYTHON" - "$PORT" <<'PY'
 import socket
 import sys
@@ -470,6 +548,10 @@ payload = {
             "cdp_auto_launch": True,
             "cdp_fallback": True,
             "persistent": True,
+        },
+        "feishu_cli": {
+            "package": "@larksuite/cli@1.0.40",
+            "auto_install": True,
         }
     },
     "mcp_servers": [
@@ -477,7 +559,7 @@ payload = {
             "name": "chrome-devtools",
             "type": "stdio",
             "command": "npx",
-            "args": ["chrome-devtools-mcp@latest", "--autoConnect"],
+            "args": ["chrome-devtools-mcp@latest", "--browserUrl", "http://127.0.0.1:9222", "--no-usage-statistics"],
             "timeout": 30,
         }
     ],
@@ -529,7 +611,7 @@ $macTarResolved = [System.IO.Path]::GetFullPath($macTar)
 $macStageUnix = "/mnt/c/" + (($macStage -replace "^[A-Za-z]:\\", "") -replace "\\", "/")
 $macParentUnix = "/mnt/c/" + (($macStageParent -replace "^[A-Za-z]:\\", "") -replace "\\", "/")
 $macTarUnix = "/mnt/c/" + (($macTarResolved -replace "^[A-Za-z]:\\", "") -replace "\\", "/")
-$bashCmd = "cd '$macParentUnix' && chmod +x '$macLeaf/Install EcoreX WebUI.command' '$macLeaf/scripts/install-ecorex-webui-mac.sh' && tar -czf '$macTarUnix' '$macLeaf'"
+$bashCmd = "cd '$macParentUnix' && chmod +x '$macLeaf/Install EcoreX WebUI.command' '$macLeaf/scripts/install-ecorex-webui-mac.sh' && if [ -f '$macLeaf/runtime/tools/bin/lark-cli' ]; then chmod +x '$macLeaf/runtime/tools/bin/lark-cli'; fi && tar -czf '$macTarUnix' '$macLeaf'"
 bash -lc $bashCmd
 if ($LASTEXITCODE -ne 0) {
     throw "macOS tar packaging failed"
@@ -583,7 +665,8 @@ Compress-ZipWithUnixPermissions `
     -ExecutableRelativePaths @(
         "Install EcoreX WebUI.command",
         "macos/Install EcoreX WebUI.command",
-        "macos/scripts/install-ecorex-webui-mac.sh"
+        "macos/scripts/install-ecorex-webui-mac.sh",
+        "macos/runtime/tools/bin/lark-cli"
     )
 
 $artifacts = [ordered]@{}

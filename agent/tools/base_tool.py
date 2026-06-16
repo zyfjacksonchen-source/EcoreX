@@ -54,6 +54,10 @@ class BaseTool:
         except Exception as e:
             logger.error(e)
 
+    def apply_config(self, config: dict) -> None:
+        """Apply runtime configuration to this tool instance."""
+        self.config = config or {}
+
     def execute(self, params: dict) -> ToolResult:
         """Specific logic to be implemented by subclasses"""
         raise NotImplementedError

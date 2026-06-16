@@ -545,10 +545,14 @@ class AgentInitializer:
                     # config.json's `tools.<name>` section) instead of replacing
                     # it, otherwise per-tool user configs (e.g. browser.cdp_endpoint)
                     # would be silently dropped.
-                    if tool_name in ['read', 'write', 'edit', 'bash', 'grep', 'find', 'ls', 'web_fetch', 'send', 'browser']:
+                    if tool_name in ['read', 'write', 'edit', 'bash', 'grep', 'find', 'ls', 'web_fetch', 'send', 'browser', 'feishu_cli', 'host_diagnostics']:
                         merged_config = dict(getattr(tool, 'config', None) or {})
                         merged_config.update(file_config)
-                        tool.config = merged_config
+                        apply_config = getattr(tool, "apply_config", None)
+                        if callable(apply_config):
+                            apply_config(merged_config)
+                        else:
+                            tool.config = merged_config
                         tool.cwd = merged_config.get("cwd", getattr(tool, 'cwd', None))
                         if 'memory_manager' in merged_config:
                             tool.memory_manager = merged_config['memory_manager']

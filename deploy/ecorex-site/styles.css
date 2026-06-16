@@ -288,7 +288,7 @@ h3 {
 
 .download-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 16px;
 }
 
@@ -343,6 +343,25 @@ h3 {
   margin: 14px 0 18px;
   color: var(--subtle);
   font-size: 13px;
+}
+
+.arch-select {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  color: var(--subtle);
+  font-size: 13px;
+}
+
+.arch-select select {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  padding: 0 12px;
+  color: var(--ink);
+  background: var(--surface-strong);
+  font: inherit;
 }
 
 .download-card .download-link {
@@ -429,5 +448,11 @@ h3 {
   .download-grid,
   .capability-band {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (min-width: 821px) and (max-width: 1080px) {
+  .download-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

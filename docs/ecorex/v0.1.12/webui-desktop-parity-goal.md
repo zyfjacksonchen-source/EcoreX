@@ -81,7 +81,8 @@ same areas.
   backend mode and a visible WebUI/desktop setting.
 - The shared chat bubble did not expose a direct copy button for WebUI users,
   making web-side text reuse slower than desktop expectations.
-- The formal desktop sidecar could run on `9899` while WebUI ran on `9924`,
+- The formal desktop sidecar could run on `9899` while WebUI ran on the local
+  WebUI port (`9909` by default, or the next free port such as `9924`),
   but the desktop default workspace and installation surface still looked like
   legacy `~/cow`/`webui`, making same-device state harder to reason about.
 - Browser default scrollbars stayed visually light in dark mode.
@@ -104,7 +105,8 @@ same areas.
 - The browser tool description and capability text now state CDP-first behavior.
 - Windows `bash` tool execution now starts commands in a killable process group
   and uses `taskkill /T /F` on timeout to terminate child PowerShell processes.
-- Session rows show project name or "recent conversation", not message counts.
+- Session rows show only meaningful project/draft context and never generic
+  filler such as "recent conversation" or message counts.
 - Cached pending messages are normalized to a non-running paused state so old
   localStorage state cannot keep a session permanently marked as running.
 - WebUI and desktop default to dark mode at first paint. Electron uses a dark
@@ -132,6 +134,9 @@ same areas.
   file attachments, and image/video references.
 - Markdown local file/image URLs are converted through `/api/file?path=...`, so
   WebUI and desktop can display local images directly in chat.
+- Shared message rendering now also supports bare image/video/audio URLs in
+  Markdown and audio media steps such as voice attachments. Repeated same-name
+  tool calls remain separate and are numbered visually instead of being merged.
 - WebUI busy-session sends now cancel the active session request, push a
   `cancelled` SSE event to the old bubble, wait briefly for the session lock,
   and then submit the new message.
@@ -177,7 +182,7 @@ same areas.
 - Verify repeated same-name tool calls (`bash`, `browser`) do not leave stale
   running tool rows after their `tool_end` events arrive.
 - Verify message text copy works in WebUI at `http://127.0.0.1:<port>/chat`.
-- Verify formal desktop `9899` and local WebUI `9924` can run together and
+- Verify formal desktop `9899` and local WebUI `<port>` can run together and
   report separate `desktop`/`webui` installation surfaces under the same
   workspace manifest.
 - Verify dark mode scrollbars use dark track/thumb colors.

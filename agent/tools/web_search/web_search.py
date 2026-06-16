@@ -199,6 +199,14 @@ class WebSearch(BaseTool):
         if not query:
             return ToolResult.fail("Error: 'query' parameter is required")
 
+        try:
+            from common.ecorex_tool_permissions import get_tool_permission_broker
+
+            if get_tool_permission_broker().is_read_only():
+                return ToolResult.fail("Error: Current read-only mode blocks internet search.")
+        except Exception as exc:
+            return ToolResult.fail(f"Error: Permission broker unavailable; internet search was blocked. {exc}")
+
         count = args.get("count", 10)
         freshness = args.get("freshness", "noLimit")
         summary = args.get("summary", False)

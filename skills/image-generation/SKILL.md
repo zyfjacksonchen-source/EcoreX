@@ -19,7 +19,7 @@ Generate and edit images using AI models. The script automatically picks a backe
 
 Supported models (passed via `model` only when the user asks for a specific one):
 
-- **OpenAI** — `gpt-image-2`, `gpt-image-1`
+- **OpenAI** — `gpt-image-2-pro`, `gpt-image-2`, `gpt-image-1`
 - **Gemini Nano Banana** — `nano-banana-2`, `nano-banana-pro`, `nano-banana`
 - **Seedream (Volcengine Ark)** — `seedream-5.0-lite`, `seedream-4.5`
 - **Qwen (DashScope)** — `qwen-image-2.0`, `qwen-image-2.0-pro`
@@ -111,6 +111,10 @@ Each also has an optional `*_API_BASE` for custom endpoints. The script automati
 If the script returns an error after trying all configured backends, **do NOT retry with the same parameters** — the failure is almost always a configuration issue (wrong API key, unsupported API base). Tell the user to fix it via `env_config`, then retry.
 
 ### Notes
+
+- OpenAI auto mode tries `gpt-image-2-pro` first and falls back to `gpt-image-2` only when the API reports model/access unavailability.
+- For GPT Image models, use the official Images API parameters (`model`, `prompt`, `n`, `size`, `quality`, `output_format`, `background`, `moderation`). Do not send `response_format`.
+- OpenAI requests without `image_url` use `/images/generations`; requests with `image_url` use `/images/edits` with multipart `image` / `image[]`.
 
 - HTTP timeout is 300s — high-resolution generation can take over 200s.
 - Omit `quality` / `size` to let the model pick automatically (`auto`).

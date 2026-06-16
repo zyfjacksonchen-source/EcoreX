@@ -17,6 +17,7 @@ function isAllowedPath(pathname: string, method: string) {
     "POST /cancel",
     "GET /api/tool-permissions",
     "POST /api/tool-permissions",
+    "GET /api/active-requests",
     "POST /upload",
     "GET /api/sessions",
     "GET /api/history",

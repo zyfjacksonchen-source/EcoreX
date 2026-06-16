@@ -141,6 +141,7 @@ class Vision(BaseTool):
 
     def __init__(self, config: dict = None):
         self.config = config or {}
+        self.cwd = self.config.get("cwd", os.getcwd())
 
     @staticmethod
     def is_available() -> bool:
@@ -154,6 +155,16 @@ class Vision(BaseTool):
             return ToolResult.fail("Error: 'image' parameter is required")
         if not question:
             return ToolResult.fail("Error: 'question' parameter is required")
+
+        try:
+            from common.ecorex_tool_permissions import get_tool_permission_broker
+
+            if get_tool_permission_broker().is_read_only():
+                return ToolResult.fail("Error: Current read-only mode blocks image analysis and upload.")
+        except Exception as exc:
+            return ToolResult.fail(
+                f"Error: Permission broker unavailable; image analysis and upload was blocked. {exc}"
+            )
 
         providers = self._resolve_providers()
         if not providers:
@@ -663,10 +674,31 @@ class Vision(BaseTool):
         if image.startswith(("http://", "https://")):
             return self._download_to_data_url(image)
 
-        if not os.path.isfile(image):
+        image_path = image if os.path.isabs(image) else os.path.join(self.cwd, image)
+        image_path = os.path.realpath(image_path)
+        try:
+            from common.ecorex_tool_permissions import get_tool_permission_broker
+
+            decision = get_tool_permission_broker().authorize_file_access(
+                "read",
+                image_path,
+                cwd=self.cwd,
+            )
+            if not decision.get("allowed"):
+                raise PermissionError(
+                    decision.get("reason") or "Local image read blocked by permissions."
+                )
+        except PermissionError:
+            raise
+        except Exception as exc:
+            raise PermissionError(
+                f"Permission broker unavailable; local image read was blocked. {exc}"
+            ) from exc
+
+        if not os.path.isfile(image_path):
             raise FileNotFoundError(f"Image file not found: {image}")
 
-        ext = image.rsplit(".", 1)[-1].lower() if "." in image else ""
+        ext = image_path.rsplit(".", 1)[-1].lower() if "." in image_path else ""
         mime_type = SUPPORTED_EXTENSIONS.get(ext)
         if not mime_type:
             raise ValueError(
@@ -674,12 +706,14 @@ class Vision(BaseTool):
                 f"Supported: {', '.join(SUPPORTED_EXTENSIONS.keys())}"
             )
 
-        file_path = self._maybe_compress(image)
+        file_path = self._maybe_compress(image_path)
+        if file_path != image_path:
+            mime_type = "image/jpeg"
         try:
             with open(file_path, "rb") as f:
                 b64 = base64.b64encode(f.read()).decode("ascii")
         finally:
-            if file_path != image and os.path.exists(file_path):
+            if file_path != image_path and os.path.exists(file_path):
                 os.remove(file_path)
 
         data_url = f"data:{mime_type};base64,{b64}"

@@ -143,17 +143,30 @@ class EnvConfig(BaseTool):
         :param args: Contains action, key, and value parameters
         :return: Result of the operation
         """
-        # Ensure .env file exists on first use
-        self._ensure_env_file()
-        
         action = args.get("action")
         key = args.get("key")
         value = args.get("value")
+
+        if action in {"set", "delete"}:
+            try:
+                from common.ecorex_tool_permissions import get_tool_permission_broker
+
+                if get_tool_permission_broker().is_read_only():
+                    return ToolResult.fail(
+                        "Error: Current read-only mode blocks environment configuration changes."
+                    )
+            except Exception as exc:
+                logger.warning(f"[EnvConfig] permission broker unavailable; mutation blocked: {exc}")
+                return ToolResult.fail(
+                    "Error: Permission broker unavailable; environment configuration change was blocked."
+                )
         
         try:
             if action == "set":
                 if not key or not value:
                     return ToolResult.fail("Error: 'key' and 'value' are required for 'set' action.")
+
+                self._ensure_env_file()
                 
                 # Read current env vars
                 env_vars = self._read_env_file()

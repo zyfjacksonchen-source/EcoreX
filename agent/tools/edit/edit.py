@@ -65,6 +65,15 @@ class Edit(BaseTool):
         
         # Resolve path
         absolute_path = self._resolve_path(path)
+
+        try:
+            from common.ecorex_tool_permissions import get_tool_permission_broker
+
+            decision = get_tool_permission_broker().authorize_file_access("write", absolute_path, cwd=self.cwd)
+            if not decision.get("allowed", True):
+                return ToolResult.fail(f"Error: {decision.get('reason') or 'Local file edit blocked by permissions.'}")
+        except Exception as exc:
+            return ToolResult.fail(f"Error: Permission broker unavailable; local file edit blocked. {exc}")
         
         # Check if file exists
         if not os.path.exists(absolute_path):

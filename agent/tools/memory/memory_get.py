@@ -88,8 +88,27 @@ class MemoryGetTool(BaseTool):
             file_path = (workspace_dir / path).resolve()
             workspace_resolved = workspace_dir.resolve()
             
-            if not str(file_path).startswith(str(workspace_resolved) + '/') and file_path != workspace_resolved:
+            try:
+                file_path.relative_to(workspace_resolved)
+            except ValueError:
                 return ToolResult.fail(f"Error: Access denied: path outside workspace")
+
+            try:
+                from common.ecorex_tool_permissions import get_tool_permission_broker
+
+                decision = get_tool_permission_broker().authorize_file_access(
+                    "read",
+                    str(file_path),
+                    cwd=str(workspace_resolved),
+                )
+                if not decision.get("allowed"):
+                    return ToolResult.fail(
+                        f"Error: Access denied by filesystem profile: {decision.get('reason') or 'read blocked'}"
+                    )
+            except Exception as exc:
+                return ToolResult.fail(
+                    f"Error: Permission broker unavailable; memory read blocked. {exc}"
+                )
             
             if not file_path.exists():
                 return ToolResult.fail(f"Error: File not found: {path}")

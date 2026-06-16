@@ -40,6 +40,13 @@ class EvolutionUndoTool(BaseTool):
         if not backup_id:
             return ToolResult.fail("Error: backup_id is required")
         try:
+            from common.ecorex_tool_permissions import get_tool_permission_broker
+
+            if get_tool_permission_broker().is_read_only():
+                return ToolResult.fail("Error: Current read-only mode blocks self-evolution rollback.")
+        except Exception:
+            return ToolResult.fail("Error: Permission broker unavailable; self-evolution rollback was blocked.")
+        try:
             from agent.memory.config import get_default_memory_config
             from agent.evolution.backup import restore_backup
 

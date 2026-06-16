@@ -12,7 +12,8 @@ No project deps — importable from any layer without circular imports.
 from __future__ import annotations
 
 import threading
-from typing import Dict, Optional
+import time
+from typing import Dict, List, Optional
 
 
 class AgentCancelledError(Exception):
@@ -25,11 +26,12 @@ class AgentCancelledError(Exception):
 
 
 class _CancelEntry:
-    __slots__ = ("event", "session_id")
+    __slots__ = ("event", "session_id", "created_at")
 
     def __init__(self, session_id: Optional[str]):
         self.event = threading.Event()
         self.session_id = session_id
+        self.created_at = time.time()
 
 
 class CancelTokenRegistry:
@@ -111,6 +113,22 @@ class CancelTokenRegistry:
         with self._lock:
             bucket = self._by_session.get(session_id)
             return bool(bucket)
+
+    def snapshot(self) -> List[dict]:
+        """Return a stable, non-mutating snapshot of in-flight requests."""
+        now = time.time()
+        with self._lock:
+            rows = []
+            for request_id, entry in self._by_request.items():
+                rows.append({
+                    "request_id": request_id,
+                    "session_id": entry.session_id or "",
+                    "cancelled": entry.event.is_set(),
+                    "state": "cancelling" if entry.event.is_set() else "running",
+                    "created_at": entry.created_at,
+                    "age_seconds": max(0, round(now - entry.created_at, 3)),
+                })
+            return rows
 
 
 _registry = CancelTokenRegistry()

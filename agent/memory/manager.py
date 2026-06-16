@@ -17,6 +17,35 @@ from agent.memory.embedding import EmbeddingProvider, EmbeddingCache
 from agent.memory.summarizer import MemoryFlushManager, create_memory_files_if_needed
 
 
+def _authorize_memory_index_read(file_path: Path, workspace_dir: Path) -> bool:
+    """Honor the active filesystem profile before indexing memory/knowledge."""
+    try:
+        from common.ecorex_tool_permissions import get_tool_permission_broker
+
+        decision = get_tool_permission_broker().authorize_file_access(
+            "read",
+            str(file_path),
+            cwd=str(workspace_dir),
+        )
+        if decision.get("allowed"):
+            return True
+        from common.log import logger
+        logger.warning(
+            "[MemoryManager] Skipping index read blocked by permissions: %s (%s)",
+            file_path,
+            decision.get("reason") or "denied",
+        )
+        return False
+    except Exception as exc:
+        from common.log import logger
+        logger.warning(
+            "[MemoryManager] Skipping index read because permission broker is unavailable: %s (%s)",
+            file_path,
+            exc,
+        )
+        return False
+
+
 class MemoryManager:
     """
     Memory manager with hybrid search capabilities
@@ -315,6 +344,8 @@ class MemoryManager:
         pending: List[Dict[str, Any]] = []
         workspace_dir_path = self.config.get_workspace()
         for file_path, source, scope, user_id in files_to_scan:
+            if not _authorize_memory_index_read(file_path, workspace_dir_path):
+                continue
             try:
                 content = file_path.read_text(encoding='utf-8')
             except Exception:

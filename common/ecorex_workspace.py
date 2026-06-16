@@ -67,6 +67,48 @@ def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
+def _process_is_alive(pid: Any) -> Optional[bool]:
+    try:
+        normalized = int(pid)
+    except Exception:
+        return None
+    if normalized <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            process_query_limited_information = 0x1000
+            still_active = 259
+            handle = kernel32.OpenProcess(process_query_limited_information, False, normalized)
+            if not handle:
+                error = ctypes.get_last_error()
+                if error in {5}:  # Access denied means the process exists.
+                    return True
+                if error in {87, 1168}:  # Invalid parameter / not found.
+                    return False
+                return None
+            try:
+                exit_code = ctypes.c_ulong()
+                if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                    return None
+                return int(exit_code.value) == still_active
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception:
+            return None
+    try:
+        os.kill(normalized, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return None
+
+
 def load_installation_manifest(workspace: str) -> Dict[str, Any]:
     path = installation_manifest_path(workspace)
     data = _read_json(path, {})
@@ -177,7 +219,19 @@ class SessionLock(AbstractContextManager):
 
     def _remove_if_stale(self, now: int) -> bool:
         try:
-            age = now - int(self.path.stat().st_mtime)
+            stat_result = self.path.stat()
+            age = now - int(stat_result.st_mtime)
+            owner = _read_json(self.path, {})
+            owner_host = str(owner.get("host") or "").lower()
+            current_host = socket.gethostname().lower()
+            alive = _process_is_alive(owner.get("pid"))
+            if owner_host == current_host and alive is False:
+                self._unlink_lock()
+                logger.warning(
+                    f"[EcoreXWorkspace] Removed dead-pid session lock: "
+                    f"{self.path} pid={owner.get('pid')}"
+                )
+                return True
             if age < self.stale_seconds:
                 return False
             self._unlink_lock()

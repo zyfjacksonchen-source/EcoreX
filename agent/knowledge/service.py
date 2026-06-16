@@ -29,6 +29,30 @@ class KnowledgeService:
         self.workspace_root = workspace_root
         self.knowledge_dir = os.path.join(workspace_root, "knowledge")
 
+    def _authorize_read(self, path: str, purpose: str) -> bool:
+        """Apply the shared filesystem profile to knowledge reads."""
+        try:
+            from common.ecorex_tool_permissions import get_tool_permission_broker
+
+            decision = get_tool_permission_broker().authorize_file_access(
+                "read",
+                path,
+                cwd=self.workspace_root,
+            )
+            if decision.get("allowed", True):
+                return True
+            logger.info(
+                f"[KnowledgeService] read blocked by permissions "
+                f"(purpose={purpose}, path={path}): {decision.get('reason', 'denied')}"
+            )
+            return False
+        except Exception as exc:
+            logger.warning(
+                f"[KnowledgeService] permission broker unavailable; read blocked "
+                f"(purpose={purpose}, path={path}): {exc}"
+            )
+            return False
+
     # ------------------------------------------------------------------
     # list — directory tree with stats
     # ------------------------------------------------------------------
@@ -66,6 +90,8 @@ class KnowledgeService:
         """
         if not os.path.isdir(self.knowledge_dir):
             return {"tree": [], "stats": {"pages": 0, "size": 0}, "enabled": conf().get("knowledge", True)}
+        if not self._authorize_read(self.knowledge_dir, "knowledge-list"):
+            return {"tree": [], "stats": {"pages": 0, "size": 0}, "enabled": conf().get("knowledge", True)}
 
         stats = {"pages": 0, "size": 0}
         root_files, tree = self._scan_dir(self.knowledge_dir, stats, is_root=True)
@@ -91,9 +117,13 @@ class KnowledgeService:
                 continue
             full = os.path.join(dir_path, name)
             if os.path.isdir(full):
+                if not self._authorize_read(full, "knowledge-list-dir"):
+                    continue
                 sub_files, sub_children = self._scan_dir(full, stats)
                 children.append({"dir": name, "files": sub_files, "children": sub_children})
             elif name.endswith(".md"):
+                if not self._authorize_read(full, "knowledge-list-file"):
+                    continue
                 size = os.path.getsize(full)
                 if not is_root:
                     stats["pages"] += 1
@@ -131,6 +161,8 @@ class KnowledgeService:
 
         if not os.path.isfile(full_path):
             raise FileNotFoundError(f"file not found: {rel_path}")
+        if not self._authorize_read(full_path, "knowledge-read"):
+            raise PermissionError("knowledge file read blocked by permissions")
 
         with open(full_path, "r", encoding="utf-8") as f:
             content = f.read()
@@ -159,12 +191,16 @@ class KnowledgeService:
         knowledge_path = Path(self.knowledge_dir)
         if not knowledge_path.is_dir():
             return {"nodes": [], "links": []}
+        if not self._authorize_read(str(knowledge_path), "knowledge-graph"):
+            return {"nodes": [], "links": []}
 
         nodes = {}
         links = []
         link_re = re.compile(r'\[([^\]]*)\]\(([^)]+\.md)\)')
 
         for md_file in knowledge_path.rglob("*.md"):
+            if not self._authorize_read(str(md_file), "knowledge-graph-file"):
+                continue
             rel = str(md_file.relative_to(knowledge_path))
             if rel in ("index.md", "log.md"):
                 continue
@@ -232,6 +268,8 @@ class KnowledgeService:
                 return {"action": action, "code": 400, "message": f"unknown action: {action}", "payload": None}
 
         except ValueError as e:
+            return {"action": action, "code": 403, "message": str(e), "payload": None}
+        except PermissionError as e:
             return {"action": action, "code": 403, "message": str(e), "payload": None}
         except FileNotFoundError as e:
             return {"action": action, "code": 404, "message": str(e), "payload": None}

@@ -8,8 +8,11 @@ without any external MCP SDK dependency.
 import json
 import os
 import queue
+import re
+import signal
 import subprocess
 import threading
+import time
 import urllib.request
 import urllib.error
 from typing import Optional
@@ -19,6 +22,48 @@ from common.log import logger
 
 # Aliases accepted for the Streamable HTTP transport type
 _STREAMABLE_HTTP_ALIASES = {"streamable-http", "streamable_http", "streamablehttp", "http"}
+_DEFAULT_CDP_ENDPOINT = "http://127.0.0.1:9222"
+
+
+_SENSITIVE_RE = re.compile(
+    r"(?i)(api[_-]?key|token|password|secret|authorization)(\"?\s*[:=]\s*\"?)[^\",\s&}]+"
+)
+
+
+def _mask_sensitive(text: str) -> str:
+    value = text or ""
+    value = re.sub(r"sk-[A-Za-z0-9_\-]{12,}", "sk-***", value)
+    value = re.sub(r"gh[pousr]_[A-Za-z0-9_]{12,}", "ghp_***", value)
+    return _SENSITIVE_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}***", value)
+
+
+def _mcp_permission_tool_name(server_name: str) -> str:
+    return "browser" if (server_name or "").strip() == "chrome-devtools" else "mcp_server"
+
+
+def _normalize_timeout(value, default: int = 120) -> int:
+    try:
+        timeout = int(value)
+    except (TypeError, ValueError):
+        timeout = default
+    return max(1, min(timeout, 600))
+
+
+def _is_default_chrome_devtools_config(server_name: str, command, args) -> bool:
+    if (server_name or "").strip() != "chrome-devtools":
+        return False
+    command_name = os.path.basename(str(command or "").strip()).lower()
+    if command_name not in {"npx", "npx.cmd"}:
+        return False
+    if not isinstance(args, list):
+        return False
+    parts = [str(item).strip() for item in args]
+    return parts == [
+        "chrome-devtools-mcp@latest",
+        "--browserUrl",
+        _DEFAULT_CDP_ENDPOINT,
+        "--no-usage-statistics",
+    ]
 
 
 class McpClient:
@@ -35,7 +80,7 @@ class McpClient:
         self.name: str = config.get("name", "unknown")
         raw_transport: str = config.get("type", "stdio")
         # Per-server timeout for tool calls (default 120s, suitable for data queries)
-        self._timeout: int = int(config.get("timeout", 120))
+        self._timeout: int = _normalize_timeout(config.get("timeout", 120))
         # Normalize streamable-http aliases to a single internal key
         self.transport: str = (
             "streamable-http"
@@ -93,47 +138,70 @@ class McpClient:
 
         Each item is a dict: {"name": str, "description": str, "inputSchema": dict}
         """
-        try:
-            resp = self._send_request("tools/list", {})
-            tools = resp.get("result", {}).get("tools", [])
-            return [
-                {
-                    "name": t.get("name", ""),
-                    "description": t.get("description", ""),
-                    "inputSchema": t.get("inputSchema", {}),
-                }
-                for t in tools
-            ]
-        except Exception as e:
-            logger.warning(f"[MCP:{self.name}] list_tools failed: {e}")
-            return []
+        resp = self._send_request("tools/list", {})
+        self._raise_for_rpc_error(resp)
+        tools = resp.get("result", {}).get("tools", [])
+        return [
+            {
+                "name": t.get("name", ""),
+                "description": t.get("description", ""),
+                "inputSchema": t.get("inputSchema", {}),
+            }
+            for t in tools
+        ]
 
-    def call_tool(self, name: str, arguments: dict) -> str:
+    def call_tool(self, name: str, arguments: dict, cancel_event=None) -> str:
         """Call a tool and return the result as a string."""
-        try:
-            resp = self._send_request("tools/call", {"name": name, "arguments": arguments})
-            content = resp.get("result", {}).get("content", [])
-            parts = [item.get("text", "") for item in content if item.get("type") == "text"]
-            return "\n".join(parts)
-        except Exception as e:
-            logger.warning(f"[MCP:{self.name}] call_tool({name}) failed: {e}")
-            return f"Error: {e}"
+        resp = self._send_request(
+            "tools/call",
+            {"name": name, "arguments": arguments},
+            cancel_event=cancel_event,
+        )
+        self._raise_for_rpc_error(resp)
+
+        result = resp.get("result") or {}
+        content = result.get("content", [])
+        parts = [item.get("text", "") for item in content if item.get("type") == "text"]
+        text = "\n".join(parts)
+        if result.get("isError"):
+            raise RuntimeError(text or f"[MCP:{self.name}] tool returned isError=true")
+        return text
 
     def shutdown(self):
         """Close the connection / terminate the child process."""
         if self._proc is not None:
+            proc = self._proc
             try:
-                self._proc.stdin.close()
+                proc.stdin.close()
             except Exception:
                 pass
             try:
-                self._proc.terminate()
-                self._proc.wait(timeout=5)
+                if os.name == "nt":
+                    subprocess.run(
+                        ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=5,
+                    )
+                else:
+                    os.killpg(proc.pid, signal.SIGTERM)
+                proc.wait(timeout=5)
             except Exception:
                 try:
-                    self._proc.kill()
+                    if os.name == "nt":
+                        subprocess.run(
+                            ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            timeout=5,
+                        )
+                    else:
+                        os.killpg(proc.pid, signal.SIGKILL)
                 except Exception:
-                    pass
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
             self._proc = None
             logger.debug(f"[MCP:{self.name}] stdio process terminated")
 
@@ -164,8 +232,16 @@ class McpClient:
             return False
 
         args = self.config.get("args", [])
+        if not self._authorize_stdio_start(command, args):
+            return False
         extra_env = self.config.get("env", None)
         env = {**os.environ, **extra_env} if extra_env else None
+
+        popen_kwargs = {}
+        if os.name == "nt":
+            popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        else:
+            popen_kwargs["start_new_session"] = True
 
         self._proc = subprocess.Popen(
             [command] + list(args),
@@ -175,6 +251,7 @@ class McpClient:
             text=True,
             encoding="utf-8",
             env=env,
+            **popen_kwargs,
         )
         logger.debug(f"[MCP:{self.name}] stdio process started (pid={self._proc.pid})")
 
@@ -191,7 +268,35 @@ class McpClient:
         for line in self._proc.stderr:
             line = line.strip()
             if line:
-                logger.warning(f"[MCP:{self.name}] stderr: {line}")
+                logger.warning(f"[MCP:{self.name}] stderr: {_mask_sensitive(line)}")
+
+    def _authorize_stdio_start(self, command, args) -> bool:
+        try:
+            from common.ecorex_tool_permissions import get_tool_permission_broker
+
+            decision = get_tool_permission_broker().authorize_noninteractive(
+                _mcp_permission_tool_name(self.name),
+                {
+                    "server": self.name,
+                    "command": str(command),
+                    "args": [str(item) for item in list(args or [])[:12]],
+                    "trusted_default_chrome_devtools": _is_default_chrome_devtools_config(
+                        self.name,
+                        command,
+                        args,
+                    ),
+                },
+            )
+            if decision.get("allowed", True):
+                return True
+            logger.warning(
+                f"[MCP:{self.name}] stdio startup blocked by permission boundary: "
+                f"{decision.get('reason', 'not allowed')}"
+            )
+            return False
+        except Exception as exc:
+            logger.warning(f"[MCP:{self.name}] permission check failed; startup blocked: {exc}")
+            return False
 
     def _drain_stdout(self):
         """Background thread: read lines from stdout and put them into the queue."""
@@ -221,15 +326,23 @@ class McpClient:
             raise IOError(f"[MCP:{self.name}] stdio process closed unexpectedly")
         return line
 
-    def _stdio_send(self, message: dict) -> dict:
+    def _stdio_send(self, message: dict, cancel_event=None) -> dict:
         """Send a JSON-RPC message over stdio and read the response."""
         raw = json.dumps(message) + "\n"
         self._proc.stdin.write(raw)
         self._proc.stdin.flush()
 
         expected_id = message.get("id")
+        deadline = time.time() + max(1, self._timeout)
         while True:
-            line = self._readline_with_timeout()
+            self._raise_if_cancelled(cancel_event)
+            try:
+                line = self._read_queue.get(timeout=0.25)
+            except queue.Empty:
+                if time.time() >= deadline:
+                    self.shutdown()
+                    raise TimeoutError(f"[MCP:{self.name}] stdio read timed out after {self._timeout}s")
+                continue
             if not line:
                 raise IOError(f"[MCP:{self.name}] stdio process closed unexpectedly")
             line = line.strip()
@@ -260,6 +373,8 @@ class McpClient:
         url = self.config.get("url")
         if not url:
             logger.warning(f"[MCP:{self.name}] SSE config missing 'url'")
+            return False
+        if not self._authorize_remote_start(url):
             return False
 
         self._sse_url = url
@@ -296,8 +411,9 @@ class McpClient:
                     return urljoin(self._sse_url, data)
         raise ValueError(f"[MCP:{self.name}] No endpoint event received from SSE stream")
 
-    def _sse_send(self, message: dict) -> dict:
+    def _sse_send(self, message: dict, cancel_event=None) -> dict:
         """POST a JSON-RPC message to the server and return the response."""
+        self._raise_if_cancelled(cancel_event)
         body = json.dumps(message).encode("utf-8")
         req = urllib.request.Request(
             self._post_url,
@@ -306,7 +422,9 @@ class McpClient:
             headers={"Content-Type": "application/json"},
         )
         with urllib.request.urlopen(req, timeout=30) as resp:
+            self._raise_if_cancelled(cancel_event)
             raw = resp.read().decode("utf-8")
+            self._raise_if_cancelled(cancel_event)
             return json.loads(raw)
 
     # ------------------------------------------------------------------
@@ -318,6 +436,8 @@ class McpClient:
         if not url:
             logger.warning(f"[MCP:{self.name}] streamable-http config missing 'url'")
             return False
+        if not self._authorize_remote_start(url):
+            return False
 
         self._http_url = url
         # Allow user-provided headers (e.g. {"Authorization": "Bearer xxx"})
@@ -327,11 +447,33 @@ class McpClient:
 
         return self._handshake()
 
-    def _streamable_http_send(self, message: dict) -> dict:
-        """POST a JSON-RPC request and return the response (JSON or SSE-wrapped)."""
-        return self._streamable_http_post(message, expect_response=True)
+    def _authorize_remote_start(self, url) -> bool:
+        try:
+            from common.ecorex_tool_permissions import get_tool_permission_broker
 
-    def _streamable_http_post(self, message: dict, expect_response: bool) -> dict:
+            decision = get_tool_permission_broker().authorize_noninteractive(
+                _mcp_permission_tool_name(self.name),
+                {
+                    "server": self.name,
+                    "url": str(url),
+                },
+            )
+            if decision.get("allowed", True):
+                return True
+            logger.warning(
+                f"[MCP:{self.name}] remote startup blocked by permission boundary: "
+                f"{decision.get('reason', 'not allowed')}"
+            )
+            return False
+        except Exception as exc:
+            logger.warning(f"[MCP:{self.name}] permission check failed; remote startup blocked: {exc}")
+            return False
+
+    def _streamable_http_send(self, message: dict, cancel_event=None) -> dict:
+        """POST a JSON-RPC request and return the response (JSON or SSE-wrapped)."""
+        return self._streamable_http_post(message, expect_response=True, cancel_event=cancel_event)
+
+    def _streamable_http_post(self, message: dict, expect_response: bool, cancel_event=None) -> dict:
         """
         POST a JSON-RPC message over Streamable HTTP.
 
@@ -339,6 +481,7 @@ class McpClient:
           - application/json   -> single JSON-RPC response in body
           - text/event-stream  -> SSE stream; we read until we get a matching response
         """
+        self._raise_if_cancelled(cancel_event)
         body = json.dumps(message).encode("utf-8")
         headers = {
             "Content-Type": "application/json",
@@ -373,6 +516,7 @@ class McpClient:
             )
 
         with resp:
+            self._raise_if_cancelled(cancel_event)
             # Capture session id assigned by the server (if any)
             session_id = resp.headers.get("Mcp-Session-Id")
             # Double-checked lock: only the first response sets the
@@ -397,17 +541,27 @@ class McpClient:
             expected_id = message.get("id")
 
             if "text/event-stream" in content_type:
-                return self._read_sse_response(resp, expected_id)
+                return self._read_sse_response(
+                    resp,
+                    expected_id,
+                    cancel_event=cancel_event,
+                    timeout_seconds=self._timeout,
+                )
 
             raw = resp.read().decode("utf-8")
+            self._raise_if_cancelled(cancel_event)
             if not raw:
                 return {}
             return json.loads(raw)
 
-    def _read_sse_response(self, resp, expected_id) -> dict:
+    def _read_sse_response(self, resp, expected_id, cancel_event=None, timeout_seconds=None) -> dict:
         """Read an SSE stream and return the first JSON-RPC response with matching id."""
         data_buf: list = []
+        deadline = time.time() + max(1, _normalize_timeout(timeout_seconds, self._timeout))
         for raw_line in resp:
+            self._raise_if_cancelled(cancel_event)
+            if time.time() >= deadline:
+                raise TimeoutError(f"[MCP:{self.name}] streamable-http SSE timed out after {self._timeout}s")
             line = raw_line.decode("utf-8").rstrip("\n\r")
             if line == "":
                 # End of an SSE event, attempt to parse accumulated data
@@ -450,14 +604,37 @@ class McpClient:
             "params": params,
         }
 
+    @staticmethod
+    def _format_rpc_error(error) -> str:
+        if isinstance(error, dict):
+            code = error.get("code")
+            message = error.get("message", "Unknown MCP error")
+            data = error.get("data")
+            if data is not None:
+                return f"MCP error {code}: {message}; data={_mask_sensitive(str(data))[:300]}"
+            return f"MCP error {code}: {message}"
+        return f"MCP error: {error}"
+
+    def _raise_for_rpc_error(self, resp: dict) -> None:
+        if isinstance(resp, dict) and "error" in resp:
+            raise RuntimeError(self._format_rpc_error(resp["error"]))
+
+    def _raise_if_cancelled(self, cancel_event) -> None:
+        if cancel_event is not None and getattr(cancel_event, "is_set", lambda: False)():
+            try:
+                self.shutdown()
+            finally:
+                raise RuntimeError(f"[MCP:{self.name}] tool call cancelled by user")
+
     def _build_notification(self, method: str, params: dict) -> dict:
         return {"jsonrpc": "2.0", "method": method, "params": params}
 
-    def _send_request(self, method: str, params: dict) -> dict:
+    def _send_request(self, method: str, params: dict, cancel_event=None) -> dict:
         """Send a request and return the full response dict."""
         if not self._initialized and method != "initialize":
             raise RuntimeError(f"[MCP:{self.name}] Client not initialized")
 
+        self._raise_if_cancelled(cancel_event)
         message = self._build_request(method, params)
 
         # stdio transport uses a single pipe and must be serialized.
@@ -465,11 +642,11 @@ class McpClient:
         # can safely run concurrently across sessions.
         if self.transport == "stdio":
             with self._call_lock:
-                return self._stdio_send(message)
+                return self._stdio_send(message, cancel_event=cancel_event)
         elif self.transport == "sse":
-            return self._sse_send(message)
+            return self._sse_send(message, cancel_event=cancel_event)
         elif self.transport == "streamable-http":
-            return self._streamable_http_send(message)
+            return self._streamable_http_send(message, cancel_event=cancel_event)
         else:
             raise ValueError(f"[MCP:{self.name}] Unsupported transport: {self.transport}")
 

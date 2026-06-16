@@ -5,7 +5,7 @@ const themeIcon = document.querySelector("[data-theme-icon]");
 function setTheme(theme) {
   root.dataset.theme = theme;
   localStorage.setItem("ecorex-site-theme", theme);
-  if (themeIcon) themeIcon.textContent = theme === "dark" ? "☾" : "☀";
+  if (themeIcon) themeIcon.textContent = theme === "dark" ? "☀" : "☾";
 }
 
 const preferredTheme =
@@ -17,43 +17,70 @@ themeButton?.addEventListener("click", () => {
   setTheme(root.dataset.theme === "dark" ? "light" : "dark");
 });
 
-const platformCopy = {
+function svgFallback(kind) {
+  const isIcon = kind === "icon";
+  const width = isIcon ? 256 : 1600;
+  const height = isIcon ? 256 : kind === "hub" ? 900 : 980;
+  const title = isIcon ? "EX" : kind === "hub" ? "EcoreX 能力中心" : "EcoreX";
+  const subtitle = kind === "hub"
+    ? "会话 / 文件 / Skill / MCP / 管理后台"
+    : "桌面端和网页版统一体验";
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+      <defs>
+        <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+          <stop offset="0" stop-color="#15110e"/>
+          <stop offset="1" stop-color="#3a2116"/>
+        </linearGradient>
+      </defs>
+      <rect width="100%" height="100%" fill="url(#bg)"/>
+      <rect x="${isIcon ? 20 : 96}" y="${isIcon ? 20 : 86}" width="${isIcon ? 216 : width - 192}" height="${isIcon ? 216 : height - 172}" rx="${isIcon ? 44 : 34}" fill="#211a15" stroke="#5f3722" stroke-width="${isIcon ? 8 : 3}"/>
+      <text x="50%" y="${isIcon ? 150 : height * 0.45}" text-anchor="middle" font-family="Arial, sans-serif" font-size="${isIcon ? 120 : 96}" font-weight="800" fill="#ff7a2f">${isIcon ? "X" : title}</text>
+      ${isIcon ? "" : `<text x="50%" y="${height * 0.57}" text-anchor="middle" font-family="Arial, sans-serif" font-size="34" fill="#e9d9ca">${subtitle}</text>`}
+    </svg>
+  `;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+document.querySelectorAll("img[data-fallback]").forEach((image) => {
+  image.addEventListener("error", () => {
+    if (image.dataset.fallbackApplied === "true") return;
+    image.dataset.fallbackApplied = "true";
+    image.src = svgFallback(image.dataset.fallback || "preview");
+  });
+});
+
+const cardOrder = ["windows-x64", "macos-dmg", "webui-windows-x64", "webui-macos-universal"];
+
+const cardCopy = {
   "windows-x64": {
     icon: "Win",
-    body: "适用于 Windows 10/11，安装完成后从开始菜单启动 EcoreX。",
+    title: "Windows",
+    body: "桌面端正式安装版，适用于 Windows 10/11。安装完成后从开始菜单启动 EcoreX。",
   },
-  "webui-win-mac": {
-    icon: "Web",
-    body: "Windows 和 macOS 共用一份 WebUI 一键安装包，按系统运行对应入口，安装后自动打开 EcoreX。",
+  "macos-dmg": {
+    icon: "Mac",
+    title: "macOS",
+    body: "桌面端 DMG 安装版。点击下载后选择 Apple Silicon 或 Intel 版本。",
   },
   "webui-windows-x64": {
     icon: "Web",
-    body: "Windows 本地 WebUI 一键包，双击安装后会自动打开浏览器进入 EcoreX。",
+    title: "Windows 网页版",
+    body: "网页版，在本机一键安装并在网页内直接部署启动，完成后自动打开 EcoreX。",
   },
   "webui-macos-universal": {
     icon: "Web",
-    body: "macOS 本地 WebUI 一键包，支持 Apple Silicon 与 Intel，安装后自动打开 EcoreX。",
-  },
-  "web-linux-service": {
-    icon: "Web",
-    body: "网页版，在网页内直接部署启动。",
-  },
-  "macos-arm64-dmg": {
-    icon: "M",
-    body: "适用于 Apple Silicon Mac，下载 DMG 后拖入 Applications。",
-  },
-  "macos-x64-dmg": {
-    icon: "Mac",
-    body: "适用于 Intel Mac，下载 DMG 后拖入 Applications。",
+    title: "macOS 网页版",
+    body: "网页版，在本机一键安装并在网页内直接部署启动，完成后自动打开 EcoreX。",
   },
 };
 
 function formatSize(size) {
-  if (typeof size === "number" && Number.isFinite(size)) {
+  if (typeof size === "number" && Number.isFinite(size) && size > 0) {
     const mib = size / 1024 / 1024;
     return `${mib.toFixed(mib >= 100 ? 1 : 2)} MiB`;
   }
-  return size || "待发布";
+  return "待发布";
 }
 
 function shortSha(sha256) {
@@ -61,17 +88,78 @@ function shortSha(sha256) {
   return `${sha256.slice(0, 12)}...`;
 }
 
-function artifactAction(artifact) {
-  if (artifact.status === "ready") {
-    return `<a class="download-link" href="./${artifact.href}" download>下载</a>`;
+function ready(artifact) {
+  return artifact?.status === "ready" || artifact?.status === "ready-unsigned";
+}
+
+function artifactMeta(artifact) {
+  if (!artifact) return "";
+  return `
+    <div class="meta">
+      <span>${artifact.variant || artifact.platform}</span>
+      <span>${formatSize(artifact.size)}</span>
+      <span title="${artifact.sha256 || ""}">SHA256: ${shortSha(artifact.sha256)}</span>
+    </div>
+  `;
+}
+
+function buttonForArtifact(artifact, label = "下载") {
+  if (!artifact) {
+    return `<span class="download-link is-disabled">待发布</span>`;
   }
-  if (artifact.status === "ready-unsigned") {
-    return `<a class="download-link" href="./${artifact.href}" download title="${artifact.source || "未签名或未公证产物"}">下载（未公证）</a>`;
+  if (ready(artifact)) {
+    const suffix = artifact.status === "ready-unsigned" ? "（未公证）" : "";
+    return `<a class="download-link" href="./${artifact.href}" download title="${artifact.source || ""}">${label}${suffix}</a>`;
   }
-  if (artifact.status === "pending-signature") {
-    return `<span class="download-link is-disabled" title="${artifact.source || "Windows 签名待完成"}">待签名</span>`;
+  const pendingText = artifact.status === "pending-signature" ? "待签名" : "待验证";
+  return `<span class="download-link is-disabled" title="${artifact.source || ""}">${pendingText}</span>`;
+}
+
+function architectureSelector(cardId, artifacts) {
+  const options = artifacts.filter(Boolean);
+  if (options.length <= 1) {
+    return `${artifactMeta(options[0])}${buttonForArtifact(options[0])}`;
   }
-  return `<span class="download-link is-disabled" title="${artifact.source || "该平台产物仍在准备中"}">待验证</span>`;
+
+  const initial = options.find(ready) || options[0];
+  const selectId = `${cardId}-select`;
+  const encoded = encodeURIComponent(JSON.stringify(options));
+  return `
+    <label class="arch-select">
+      <span>选择版本</span>
+      <select id="${selectId}" data-arch-options="${encoded}">
+        ${options.map((item) => `
+          <option value="${item.id}" ${item.id === initial.id ? "selected" : ""}>
+            ${item.variant || item.platform}
+          </option>
+        `).join("")}
+      </select>
+    </label>
+    <div data-arch-meta>${artifactMeta(initial)}</div>
+    <div data-arch-action>${buttonForArtifact(initial)}</div>
+  `;
+}
+
+function collectCards(artifacts) {
+  const byId = Object.fromEntries(artifacts.map((artifact) => [artifact.id, artifact]));
+  return {
+    "windows-x64": [byId["windows-x64"]],
+    "macos-dmg": [byId["macos-arm64-dmg"], byId["macos-x64-dmg"]],
+    "webui-windows-x64": [byId["webui-windows-x64"]],
+    "webui-macos-universal": [byId["webui-macos-universal"]],
+  };
+}
+
+function wireSelectors(grid) {
+  grid.querySelectorAll("select[data-arch-options]").forEach((select) => {
+    const options = JSON.parse(decodeURIComponent(select.dataset.archOptions || "[]"));
+    select.addEventListener("change", () => {
+      const card = select.closest(".download-card");
+      const selected = options.find((item) => item.id === select.value) || options[0];
+      card.querySelector("[data-arch-meta]").innerHTML = artifactMeta(selected);
+      card.querySelector("[data-arch-action]").innerHTML = buttonForArtifact(selected);
+    });
+  });
 }
 
 function renderDownloads(manifest) {
@@ -81,23 +169,20 @@ function renderDownloads(manifest) {
   const grid = document.querySelector("[data-downloads]");
   grid.innerHTML = "";
 
-  manifest.artifacts.filter((artifact) => artifact.visible !== false).forEach((artifact) => {
-    const copy = platformCopy[artifact.id] || { icon: "EX", body: "选择适合你的系统版本。" };
+  const grouped = collectCards(manifest.artifacts || []);
+  cardOrder.forEach((cardId) => {
+    const copy = cardCopy[cardId];
     const card = document.createElement("article");
     card.className = "download-card";
     card.innerHTML = `
       <span class="platform-icon">${copy.icon}</span>
-      <h3>${artifact.platform}</h3>
+      <h3>${copy.title}</h3>
       <p>${copy.body}</p>
-      <div class="meta">
-        <span>${artifact.variant}</span>
-        <span>${formatSize(artifact.size)}</span>
-        <span title="${artifact.sha256}">SHA256: ${shortSha(artifact.sha256)}</span>
-      </div>
-      ${artifactAction(artifact)}
+      ${architectureSelector(cardId, grouped[cardId] || [])}
     `;
     grid.appendChild(card);
   });
+  wireSelectors(grid);
 }
 
 fetch("./manifest.json", { cache: "no-store" })

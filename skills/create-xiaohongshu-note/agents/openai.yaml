@@ -1,0 +1,4 @@
+interface:
+  display_name: "小红书笔记生产"
+  short_description: "从选题到封面、文案、标签和客户审核表"
+  default_prompt: "使用 $create-xiaohongshu-note 根据项目资料和参考链接，生成一套完整小红书笔记。"

@@ -96,6 +96,26 @@ def format_unavailable_skills_for_prompt(
     return "\n".join(lines)
 
 
+def format_skill_diagnostics_for_prompt(diagnostics: List[str], limit: int = 8) -> str:
+    """
+    Format recent skill load diagnostics so the model can self-diagnose
+    unavailable or malformed skills instead of guessing through shell retries.
+    """
+    visible = [str(item).strip() for item in (diagnostics or []) if str(item).strip()]
+    if not visible:
+        return ""
+
+    lines = [
+        "",
+        "<skill_load_diagnostics>",
+        "Some installed skill files could not be loaded. Use these diagnostics before assuming a skill is unavailable.",
+    ]
+    for diagnostic in visible[:max(1, limit)]:
+        lines.append(f"  <diagnostic>{_escape_xml(diagnostic[:500])}</diagnostic>")
+    lines.append("</skill_load_diagnostics>")
+    return "\n".join(lines)
+
+
 def _extract_setup_hint(skill: Skill) -> str:
     """
     Extract the Setup section from SKILL.md content as a brief hint.

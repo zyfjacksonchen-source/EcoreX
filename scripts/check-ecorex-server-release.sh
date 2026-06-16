@@ -154,6 +154,9 @@ fi
 if [[ "$CHECK_PUBLIC" == "1" ]]; then
   check_http "public-manifest" "$PUBLIC_BASE_URL/manifest.json" "200"
   check_http "public-root" "$PUBLIC_BASE_URL/" "200"
+  for asset in "assets/icon.png" "assets/ecorex-app-preview.png" "assets/ecorex-ecosystem-hub.png"; do
+    check_http "public-asset-$asset" "$PUBLIC_BASE_URL/$asset" "200"
+  done
   check_http "public-admin-auth" "$PUBLIC_BASE_URL/admin/" "401"
   check_http "public-client-gate" "$PUBLIC_BASE_URL/client/model-config" "403"
   if ! python3 - "$current/manifest.json" "$PUBLIC_BASE_URL" <<'PY'

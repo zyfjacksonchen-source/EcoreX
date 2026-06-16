@@ -7,6 +7,8 @@ from agent.tools.read.read import Read
 from agent.tools.write.write import Write
 from agent.tools.edit.edit import Edit
 from agent.tools.bash.bash import Bash
+from agent.tools.feishu_cli.feishu_cli import FeishuCli
+from agent.tools.host_diagnostics.host_diagnostics import HostDiagnostics
 from agent.tools.ls.ls import Ls
 from agent.tools.send.send import Send
 
@@ -134,6 +136,8 @@ __all__ = [
     'Write',
     'Edit',
     'Bash',
+    'FeishuCli',
+    'HostDiagnostics',
     'Ls',
     'Send',
     'MemorySearchTool',

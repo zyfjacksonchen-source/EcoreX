@@ -8,6 +8,7 @@ until the UI posts a permission decision.
 from __future__ import annotations
 
 import hashlib
+import fnmatch
 import json
 import os
 import re
@@ -15,7 +16,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from common.log import logger
 
@@ -23,9 +24,31 @@ from common.log import logger
 Decision = Dict[str, Any]
 Emitter = Callable[[str, Dict[str, Any]], None]
 
-_DANGEROUS_TOOLS = {"bash", "shell", "terminal", "browser"}
+_DANGEROUS_TOOLS = {
+    "bash",
+    "shell",
+    "terminal",
+    "browser",
+    "feishu_cli",
+    "mcp",
+    "mcp_server",
+    "write",
+    "edit",
+    "fs_write",
+    "skill_write",
+    "env_config",
+    "send",
+    "scheduler",
+    "evolution_undo",
+    "web_fetch",
+    "web_search",
+    "vision",
+}
 _ALLOWED_MODES = {"full-access", "smart-ask", "always-ask", "read-only", "custom"}
 _DEFAULT_TIMEOUT_SECONDS = 300
+_DEFAULT_CDP_ENDPOINT = "http://127.0.0.1:9222"
+_ACCESS_RANK = {"deny": 0, "read": 1, "write": 2}
+_ACCESS_TIEBREAK = {"deny": 3, "write": 2, "read": 1}
 
 
 def _now() -> str:
@@ -68,7 +91,223 @@ def _summarize_args(tool_name: str, arguments: Dict[str, Any]) -> str:
         target = str(arguments.get("url") or arguments.get("selector") or arguments.get("text") or "")
         summary = f"{action} {target}".strip()
         return _mask_sensitive(summary)[:500] or "browser action"
+    if normalized == "feishu_cli":
+        action = str(arguments.get("action") or "")
+        cli_args = arguments.get("args")
+        if isinstance(cli_args, list):
+            detail = " ".join(str(item) for item in cli_args[:12])
+        else:
+            detail = str(cli_args or arguments.get("scope") or arguments.get("domain") or "")
+        return _mask_sensitive(f"{action} {detail}".strip())[:500] or "Feishu CLI action"
+    if normalized in {"mcp", "mcp_server"}:
+        server = str(arguments.get("server") or arguments.get("server_name") or "")
+        tool = str(arguments.get("tool") or arguments.get("tool_name") or "")
+        command = str(arguments.get("command") or "")
+        detail = " ".join(part for part in [server, tool, command] if part)
+        return _mask_sensitive(detail).strip()[:500] or "MCP external capability"
+    if normalized in {"write", "edit", "fs_write"}:
+        path = str(arguments.get("path") or arguments.get("file") or "")
+        return _mask_sensitive(path).strip()[:500] or "file write"
+    if normalized == "skill_write":
+        action = str(arguments.get("action") or "")
+        name = str(arguments.get("name") or "")
+        detail = " ".join(part for part in [action, name] if part)
+        return _mask_sensitive(detail).strip()[:500] or "skill mutation"
+    if normalized == "env_config":
+        action = str(arguments.get("action") or "")
+        key = str(arguments.get("key") or "")
+        detail = " ".join(part for part in [action, key] if part)
+        return _mask_sensitive(detail).strip()[:500] or "environment configuration"
+    if normalized == "send":
+        path = str(arguments.get("path") or arguments.get("file") or "")
+        return _mask_sensitive(path).strip()[:500] or "file send"
+    if normalized == "scheduler":
+        action = str(arguments.get("action") or "")
+        name = str(arguments.get("name") or arguments.get("task_id") or "")
+        detail = " ".join(part for part in [action, name] if part)
+        return _mask_sensitive(detail).strip()[:500] or "scheduled task change"
+    if normalized == "evolution_undo":
+        backup_id = str(arguments.get("backup_id") or "")
+        return _mask_sensitive(backup_id).strip()[:500] or "self-evolution rollback"
+    if normalized == "web_fetch":
+        return _mask_sensitive(str(arguments.get("url") or "")).strip()[:500] or "web fetch"
+    if normalized == "web_search":
+        return _mask_sensitive(str(arguments.get("query") or "")).strip()[:500] or "web search"
+    if normalized == "vision":
+        image = str(arguments.get("image") or "")
+        question = str(arguments.get("question") or "")
+        detail = " ".join(part for part in [image, question[:120]] if part)
+        return _mask_sensitive(detail).strip()[:500] or "vision image analysis"
     return _mask_sensitive(json.dumps(arguments, ensure_ascii=False, default=str))[:500]
+
+
+def _is_trusted_default_chrome_devtools_start(args: Dict[str, Any]) -> bool:
+    """Only the built-in CDP MCP command may start without an interactive prompt."""
+    if str(args.get("server") or "").strip() != "chrome-devtools":
+        return False
+    command = os.path.basename(str(args.get("command") or "").strip()).lower()
+    if command not in {"npx", "npx.cmd"}:
+        return False
+    cli_args = args.get("args")
+    if not isinstance(cli_args, list):
+        return False
+    parts = [str(item).strip() for item in cli_args]
+    if len(parts) != 4:
+        return False
+    return (
+        parts[0] == "chrome-devtools-mcp@latest"
+        and parts[1] == "--browserUrl"
+        and parts[2] == _DEFAULT_CDP_ENDPOINT
+        and parts[3] == "--no-usage-statistics"
+        and bool(args.get("trusted_default_chrome_devtools"))
+    )
+
+
+def _normalize_access(value: Any, default: str = "deny") -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in _ACCESS_RANK else default
+
+
+def _normalize_operation(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    return "write" if normalized in {"write", "edit", "delete", "create"} else "read"
+
+
+def _norm_path(path: str) -> str:
+    return os.path.normcase(os.path.realpath(os.path.abspath(path)))
+
+
+def _safe_commonpath(paths) -> str:
+    try:
+        return os.path.commonpath(paths)
+    except Exception:
+        return ""
+
+
+def _path_is_within(child: str, parent: str) -> bool:
+    child_norm = _norm_path(child)
+    parent_norm = _norm_path(parent)
+    return _safe_commonpath([child_norm, parent_norm]) == parent_norm
+
+
+def _resolve_profile_path(value: str, cwd: Optional[str]) -> str:
+    from common.utils import expand_path
+
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    expanded = expand_path(raw)
+    if os.path.isabs(expanded):
+        return os.path.realpath(expanded)
+    base = cwd or os.getcwd()
+    return os.path.realpath(os.path.join(base, expanded))
+
+
+def _workspace_roots(profile: Dict[str, Any], cwd: Optional[str]) -> list:
+    roots = []
+    raw_roots = (
+        profile.get("workspaceRoots")
+        or profile.get("workspace_roots")
+        or profile.get("writable_roots")
+        or []
+    )
+    if isinstance(raw_roots, dict):
+        raw_roots = [path for path, enabled in raw_roots.items() if enabled]
+    if isinstance(raw_roots, (list, tuple, set)):
+        for item in raw_roots:
+            resolved = _resolve_profile_path(str(item), cwd)
+            if resolved:
+                roots.append(resolved)
+    if cwd:
+        roots.append(os.path.realpath(cwd))
+
+    deduped = []
+    seen = set()
+    for root in roots:
+        key = _norm_path(root)
+        if key not in seen:
+            seen.add(key)
+            deduped.append(root)
+    return deduped
+
+
+def _default_filesystem_profile(cwd: Optional[str]) -> Dict[str, Any]:
+    """Conservative fallback when no explicit filesystem profile is saved."""
+    roots = []
+    try:
+        from config import conf
+
+        cfg = conf()
+        value = cfg.get("agent_workspace") if hasattr(cfg, "get") else None
+        resolved = _resolve_profile_path(str(value), cwd) if value else ""
+        if resolved:
+            roots.append(resolved)
+    except Exception:
+        pass
+    return {
+        "defaultAccess": "deny",
+        "workspaceRoots": roots,
+        "rules": [
+            {"path": ":workspace_roots", "access": "write"},
+        ],
+    }
+
+
+def _glob_matches(pattern: str, target_path: str, cwd: Optional[str], roots: list) -> bool:
+    normalized_pattern = str(pattern or "").replace("\\", "/").strip()
+    if not normalized_pattern:
+        return False
+    target_abs = _norm_path(target_path).replace("\\", "/")
+    candidates = {target_abs, os.path.basename(target_abs)}
+    if cwd and _path_is_within(target_path, cwd):
+        try:
+            candidates.add(os.path.relpath(target_path, cwd).replace("\\", "/"))
+        except Exception:
+            pass
+    for root in roots:
+        if _path_is_within(target_path, root):
+            try:
+                candidates.add(os.path.relpath(target_path, root).replace("\\", "/"))
+            except Exception:
+                pass
+    return any(fnmatch.fnmatchcase(candidate, normalized_pattern) for candidate in candidates)
+
+
+def _rule_path_candidates(raw_path: str, roots: list, cwd: Optional[str]) -> list:
+    token = str(raw_path or "").strip()
+    if token in {":workspace", ":workspace_roots", ":cwd"}:
+        return list(roots) or ([cwd] if cwd else [])
+    resolved = _resolve_profile_path(token, cwd)
+    return [resolved] if resolved else []
+
+
+def _rule_matches(rule: Dict[str, Any], target_path: str, roots: list, cwd: Optional[str]) -> Tuple[bool, int]:
+    if not isinstance(rule, dict):
+        return False, 0
+    glob_pattern = rule.get("glob")
+    if glob_pattern:
+        pattern = str(glob_pattern)
+        if not _glob_matches(pattern, target_path, cwd, roots):
+            return False, 0
+        root_specificity = 0
+        for root in roots:
+            if _path_is_within(target_path, root):
+                root_specificity = max(root_specificity, len(_norm_path(root)))
+        return True, root_specificity + len(pattern)
+
+    raw_path = rule.get("path")
+    if raw_path is None:
+        return False, 0
+    best_specificity = 0
+    for candidate in _rule_path_candidates(str(raw_path), roots, cwd):
+        if candidate and _path_is_within(target_path, candidate):
+            best_specificity = max(best_specificity, len(_norm_path(candidate)))
+    return best_specificity > 0, best_specificity
+
+
+def _allowed_for_operation(access: str, operation: str) -> bool:
+    required = 2 if operation == "write" else 1
+    return _ACCESS_RANK.get(access, 0) >= required
 
 
 class ToolPermissionBroker:
@@ -106,6 +345,22 @@ class ToolPermissionBroker:
         if settings.get("alwaysAllow", {}).get(grant_key):
             self._audit("tool-execution", "allow", {"tool": normalized_tool, "reason": "remembered-grant"})
             return {"allowed": True, "reason": "remembered-grant"}
+
+        if not self._interactive_permission_available():
+            summary = _summarize_args(normalized_tool, args)
+            self._audit(
+                "tool-execution",
+                "deny",
+                {
+                    "tool": normalized_tool,
+                    "reason": "interactive-confirmation-unavailable",
+                    "summary": summary,
+                },
+            )
+            return {
+                "allowed": False,
+                "reason": "Interactive permission confirmation is unavailable in this runtime; switch to full-access explicitly or use a Web/Desktop surface.",
+            }
 
         request_id = uuid.uuid4().hex
         summary = _summarize_args(normalized_tool, args)
@@ -175,6 +430,55 @@ class ToolPermissionBroker:
             "updatedAt": settings.get("updatedAt"),
         }
 
+    def authorize_noninteractive(self, tool_name: str, arguments: Optional[Dict[str, Any]] = None) -> Decision:
+        """Authorize background startup work that cannot surface a UI prompt."""
+        normalized_tool = (tool_name or "").strip().lower()
+        args = arguments if isinstance(arguments, dict) else {}
+        if not self._requires_permission(normalized_tool):
+            return {"allowed": True, "reason": "not-required"}
+
+        settings = self._load_settings()
+        mode = str(settings.get("mode") or "smart-ask")
+        grant_key = self._grant_key(normalized_tool)
+
+        if mode == "read-only":
+            self._audit("tool-execution", "deny", {"tool": normalized_tool, "reason": "read-only"})
+            return {"allowed": False, "reason": "Current read-only mode blocks local tool execution."}
+
+        if normalized_tool == "browser" and _is_trusted_default_chrome_devtools_start(args):
+            self._audit(
+                "tool-execution",
+                "allow",
+                {
+                    "tool": normalized_tool,
+                    "reason": "default-cdp-mcp-startup",
+                    "server": "chrome-devtools",
+                },
+            )
+            return {"allowed": True, "reason": "default-cdp-mcp-startup"}
+
+        if mode == "full-access":
+            self._audit("tool-execution", "allow", {"tool": normalized_tool, "reason": "full-access"})
+            return {"allowed": True, "reason": "full-access"}
+        if settings.get("alwaysAllow", {}).get(grant_key):
+            self._audit("tool-execution", "allow", {"tool": normalized_tool, "reason": "remembered-grant"})
+            return {"allowed": True, "reason": "remembered-grant"}
+
+        summary = _summarize_args(normalized_tool, args)
+        self._audit(
+            "tool-execution",
+            "deny",
+            {
+                "tool": normalized_tool,
+                "reason": "interactive-confirmation-required",
+                "summary": summary,
+            },
+        )
+        return {
+            "allowed": False,
+            "reason": "Interactive permission confirmation is required before this external capability can start.",
+        }
+
     def set_mode(self, mode: str) -> Dict[str, Any]:
         normalized = self._normalize_mode(mode)
         settings = self._load_settings()
@@ -191,6 +495,68 @@ class ToolPermissionBroker:
         self._save_settings(settings)
         self._audit("permission.grants.reset", "allow", {"mode": settings.get("mode", "smart-ask")})
         return {"status": "success", **self.get_state()}
+
+    def is_read_only(self) -> bool:
+        return str(self._load_settings().get("mode") or "smart-ask") == "read-only"
+
+    def authorize_file_access(
+        self,
+        operation: str,
+        path: str,
+        cwd: Optional[str] = None,
+    ) -> Decision:
+        """Authorize local filesystem access using the active EcoreX profile.
+
+        This is intentionally narrower than the shell/browser approval broker:
+        file tools call it directly, and Web file serving uses the same decision
+        so local file reads are not governed by a separate ad-hoc path policy.
+        ``full-access`` keeps its explicit whole-host behavior. Other modes use
+        a conservative workspace-scoped fallback when no saved filesystem
+        profile exists; ``custom`` without a profile still fails closed.
+        """
+        op = _normalize_operation(operation)
+        if not path:
+            return {"allowed": False, "reason": "Missing local file path."}
+
+        settings = self._load_settings()
+        mode = str(settings.get("mode") or "smart-ask")
+        if mode == "read-only" and op == "write":
+            self._audit("filesystem-access", "deny", {
+                "operation": op,
+                "path": _mask_sensitive(path),
+                "reason": "read-only",
+            })
+            return {"allowed": False, "reason": "Current read-only mode blocks local file writes."}
+
+        profile = settings.get("filesystem")
+        if not isinstance(profile, dict):
+            if mode == "full-access":
+                self._audit("filesystem-access", "allow", {
+                    "operation": op,
+                    "path": _mask_sensitive(path),
+                    "reason": "full-access-no-filesystem-profile",
+                })
+                return {"allowed": True, "reason": "full-access"}
+            if mode == "custom":
+                self._audit("filesystem-access", "deny", {
+                    "operation": op,
+                    "path": _mask_sensitive(path),
+                    "reason": "missing-custom-filesystem-profile",
+                })
+                return {
+                    "allowed": False,
+                    "reason": "Custom permission mode requires a filesystem profile before local files can be accessed.",
+                }
+            profile = _default_filesystem_profile(cwd)
+
+        decision = self._evaluate_filesystem_profile(profile, path, op, cwd)
+        self._audit("filesystem-access", "allow" if decision.get("allowed") else "deny", {
+            "operation": op,
+            "path": _mask_sensitive(path),
+            "reason": decision.get("reason", ""),
+            "access": decision.get("access", ""),
+        })
+        return decision
 
     def decide(self, request_id: str, decision: str, remember: bool = False) -> Dict[str, Any]:
         normalized = (decision or "").strip().lower()
@@ -212,22 +578,83 @@ class ToolPermissionBroker:
             self._condition.notify_all()
         return {"status": "success", "request_id": request_id, "allowed": payload["allowed"]}
 
-    def _requires_permission(self, tool_name: str) -> bool:
-        if os.environ.get("ECOREX_DESKTOP") != "1":
-            try:
-                from config import conf
+    def _evaluate_filesystem_profile(
+        self,
+        profile: Dict[str, Any],
+        path: str,
+        operation: str,
+        cwd: Optional[str],
+    ) -> Decision:
+        target_path = os.path.realpath(path)
+        roots = _workspace_roots(profile, cwd)
+        default_access = _normalize_access(
+            profile.get("defaultAccess", profile.get("default", "deny")),
+            "deny",
+        )
+        best_access = default_access
+        best_specificity = -1
+        best_tiebreak = _ACCESS_TIEBREAK.get(best_access, 0)
 
-                channel_type = str(conf().get("channel_type", "") or "").lower()
-                if "web" not in channel_type:
-                    return False
-            except Exception:
-                return False
+        rules = profile.get("rules")
+        if not isinstance(rules, list):
+            rules = []
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            matched, specificity = _rule_matches(rule, target_path, roots, cwd)
+            if not matched:
+                continue
+            access = _normalize_access(rule.get("access"), "deny")
+            tiebreak = _ACCESS_TIEBREAK.get(access, 0)
+            if specificity > best_specificity or (
+                specificity == best_specificity and tiebreak > best_tiebreak
+            ):
+                best_access = access
+                best_specificity = specificity
+                best_tiebreak = tiebreak
+
+        allowed = _allowed_for_operation(best_access, operation)
+        if allowed:
+            return {
+                "allowed": True,
+                "reason": f"filesystem profile allows {operation}",
+                "access": best_access,
+            }
+        return {
+            "allowed": False,
+            "reason": (
+                f"Filesystem profile blocks {operation} access to this path "
+                f"(effective access: {best_access})."
+            ),
+            "access": best_access,
+        }
+
+    def _requires_permission(self, tool_name: str) -> bool:
         return (tool_name or "").strip().lower() in _DANGEROUS_TOOLS
+
+    @staticmethod
+    def _interactive_permission_available() -> bool:
+        if os.environ.get("ECOREX_DESKTOP") == "1":
+            return True
+        try:
+            from config import conf
+
+            channel_type = str(conf().get("channel_type", "") or "").lower()
+            return "web" in channel_type
+        except Exception:
+            return False
 
     def _user_data_dir(self) -> Path:
         configured = os.environ.get("ECOREX_DESKTOP_USER_DATA") or os.environ.get("ECOREX_USER_DATA")
         if configured:
             return Path(configured)
+        try:
+            from config import conf, get_appdata_dir
+
+            if conf().get("appdata_dir"):
+                return Path(get_appdata_dir()) / "permissions"
+        except Exception:
+            pass
         if os.name == "nt":
             base = Path(os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA", str(Path.home())))
             return base / "EcoreX" / "permissions"
@@ -279,12 +706,54 @@ class ToolPermissionBroker:
     def _title_for_tool(tool_name: str) -> str:
         if tool_name == "browser":
             return "Browser automation confirmation"
+        if tool_name == "feishu_cli":
+            return "Feishu CLI access confirmation"
+        if tool_name in {"mcp", "mcp_server"}:
+            return "MCP external capability confirmation"
+        if tool_name in {"write", "edit", "fs_write"}:
+            return "File write confirmation"
+        if tool_name == "skill_write":
+            return "Skill mutation confirmation"
+        if tool_name == "env_config":
+            return "Environment configuration confirmation"
+        if tool_name == "send":
+            return "File send confirmation"
+        if tool_name == "scheduler":
+            return "Scheduled task confirmation"
+        if tool_name == "evolution_undo":
+            return "Self-evolution rollback confirmation"
+        if tool_name in {"web_fetch", "web_search"}:
+            return "Internet access confirmation"
+        if tool_name == "vision":
+            return "Image analysis confirmation"
         return "Local command confirmation"
 
     @staticmethod
     def _message_for_tool(tool_name: str, summary: str) -> str:
         if tool_name == "browser":
             return f"EcoreX wants to control the browser: {summary}"
+        if tool_name == "feishu_cli":
+            return f"EcoreX wants to access Feishu through lark-cli: {summary}"
+        if tool_name in {"mcp", "mcp_server"}:
+            return f"EcoreX wants to start or call an MCP external capability: {summary}"
+        if tool_name in {"write", "edit", "fs_write"}:
+            return f"EcoreX wants to write a local file: {summary}"
+        if tool_name == "skill_write":
+            return f"EcoreX wants to modify installed skills: {summary}"
+        if tool_name == "env_config":
+            return f"EcoreX wants to modify or read environment configuration: {summary}"
+        if tool_name == "send":
+            return f"EcoreX wants to send a local file: {summary}"
+        if tool_name == "scheduler":
+            return f"EcoreX wants to create or modify a scheduled background task: {summary}"
+        if tool_name == "evolution_undo":
+            return f"EcoreX wants to restore memory or skill files from an evolution backup: {summary}"
+        if tool_name == "web_fetch":
+            return f"EcoreX wants to fetch content from the internet: {summary}"
+        if tool_name == "web_search":
+            return f"EcoreX wants to search the internet: {summary}"
+        if tool_name == "vision":
+            return f"EcoreX wants to analyze an image using a model API: {summary}"
         return f"EcoreX wants to run a local shell command: {summary}"
 
 

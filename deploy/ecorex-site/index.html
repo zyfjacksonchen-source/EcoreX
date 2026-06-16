@@ -6,16 +6,19 @@
     <title>EcoreX 下载中心</title>
     <meta
       name="description"
-      content="EcoreX 是面向广告团队的桌面端 AI Agent，支持 Windows 与 macOS 下载。"
+      content="EcoreX 面向广告团队的桌面端和本地 WebUI Agent，支持 Windows 与 macOS 下载。"
     />
     <link rel="icon" href="./assets/icon.png" />
+    <link rel="preload" as="image" href="./assets/icon.png" />
+    <link rel="preload" as="image" href="./assets/ecorex-app-preview.png" />
+    <link rel="preload" as="image" href="./assets/ecorex-ecosystem-hub.png" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <div class="page-shell">
       <header class="topbar">
         <a class="brand" href="./" aria-label="EcoreX 下载中心">
-          <img src="./assets/icon.png" alt="" />
+          <img src="./assets/icon.png" alt="" data-fallback="icon" />
           <span>EcoreX</span>
         </a>
         <nav class="nav-links" aria-label="页面导航">
@@ -23,19 +26,19 @@
           <a href="#capability">能力</a>
           <a href="./admin/">管理端</a>
           <button class="icon-button" type="button" data-theme-toggle aria-label="切换明暗模式">
-            <span data-theme-icon>☀</span>
+            <span data-theme-icon>☾</span>
           </button>
         </nav>
       </header>
 
       <main>
         <section class="hero" aria-label="EcoreX 下载">
-          <img class="hero-media" src="./assets/ecorex-app-preview.png" alt="EcoreX 桌面端界面预览" />
+          <img class="hero-media" src="./assets/ecorex-app-preview.png" alt="EcoreX 桌面端界面预览" data-fallback="preview" />
           <div class="hero-copy">
             <p class="eyebrow">桌面端 AI Agent</p>
             <h1>EcoreX</h1>
             <p class="lead">
-              面向广告投放、素材创意、数据复盘与客户项目协同的桌面工作区。
+              面向广告投放、素材创意、数据复盘与客户项目协同的本地工作区。
               安装完成后即可进入会话、项目和本地文件流。
             </p>
             <div class="hero-actions">
@@ -51,16 +54,16 @@
             <strong data-version>0.1.12</strong>
           </div>
           <div>
-            <span>Windows 签名</span>
-            <strong>已验证</strong>
+            <span>桌面端</span>
+            <strong>Windows / macOS</strong>
           </div>
           <div>
-            <span>macOS 包</span>
-            <strong>待 Mac 验证</strong>
+            <span>网页版</span>
+            <strong>本机一键启动</strong>
           </div>
           <div>
             <span>更新日期</span>
-            <strong data-updated>2026-06-15</strong>
+            <strong data-updated>2026-06-16</strong>
           </div>
         </section>
 
@@ -79,7 +82,7 @@
         </section>
 
         <section class="capability-band" id="capability" aria-label="能力概览">
-          <img src="./assets/ecorex-ecosystem-hub.png" alt="EcoreX 能力结构预览" />
+          <img src="./assets/ecorex-ecosystem-hub.png" alt="EcoreX 能力结构预览" data-fallback="hub" />
           <div>
             <p class="eyebrow">开箱即用</p>
             <h2>给广告团队准备的本地 Agent。</h2>
@@ -98,6 +101,6 @@
         <a href="./manifest.json">版本清单</a>
       </footer>
     </div>
-    <script src="./site.js?v=0.1.12-web3"></script>
+    <script src="./site.js?v=0.1.12-0023"></script>
   </body>
 </html>

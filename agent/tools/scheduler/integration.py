@@ -75,6 +75,9 @@ def init_scheduler(agent_bridge) -> bool:
                         )
                         return False
 
+                    if not _authorize_scheduled_execution(task):
+                        return True
+
                     if action_type == "agent_task":
                         return _execute_agent_task(task, agent_bridge)
                     elif action_type == "send_message":
@@ -144,6 +147,57 @@ def get_task_store():
 def get_scheduler_service():
     """Get the global scheduler service instance"""
     return _scheduler_service
+
+
+def _authorize_scheduled_execution(task: dict) -> bool:
+    """Fail closed for background scheduler work that cannot ask the UI."""
+    try:
+        from common.ecorex_tool_permissions import get_tool_permission_broker
+
+        action = task.get("action", {}) if isinstance(task, dict) else {}
+        decision = get_tool_permission_broker().authorize_noninteractive(
+            "scheduler",
+            {
+                "action": "execute",
+                "task_id": task.get("id") if isinstance(task, dict) else "",
+                "name": task.get("name") if isinstance(task, dict) else "",
+                "action_type": action.get("type") if isinstance(action, dict) else "",
+            },
+        )
+        if decision.get("allowed"):
+            return True
+        logger.warning(
+            f"[Scheduler] Task {task.get('id') if isinstance(task, dict) else '<unknown>'} "
+            f"blocked by permission boundary: {decision.get('reason')}"
+        )
+        return False
+    except Exception as e:
+        logger.warning(f"[Scheduler] Permission broker unavailable; scheduled execution blocked: {e}")
+        return False
+
+
+def _authorize_scheduled_tool_call(tool, tool_name: str, tool_params: dict, task: dict) -> bool:
+    """Authorize a concrete tool invoked by a scheduled task."""
+    try:
+        from agent.protocol.agent_stream import AgentStreamExecutor
+        from common.ecorex_tool_permissions import get_tool_permission_broker
+
+        proxy_name, proxy_args = AgentStreamExecutor._permission_proxy_for_tool(
+            tool,
+            tool_name,
+            tool_params if isinstance(tool_params, dict) else {},
+        )
+        decision = get_tool_permission_broker().authorize_noninteractive(proxy_name, proxy_args)
+        if decision.get("allowed"):
+            return True
+        logger.warning(
+            f"[Scheduler] Task {task.get('id') if isinstance(task, dict) else '<unknown>'} "
+            f"tool_call {tool_name!r} blocked by permission boundary: {decision.get('reason')}"
+        )
+        return False
+    except Exception as e:
+        logger.warning(f"[Scheduler] Permission broker unavailable; scheduled tool_call blocked: {e}")
+        return False
 
 
 def _remember_delivered_output(
@@ -392,6 +446,9 @@ def _execute_tool_call(task: dict, agent_bridge) -> bool:
         tool = ToolManager().create_tool(tool_name)
         if not tool:
             logger.error(f"[Scheduler] Task {task['id']}: Tool '{tool_name}' not found")
+            return True
+
+        if not _authorize_scheduled_tool_call(tool, tool_name, tool_params, task):
             return True
 
         logger.info(f"[Scheduler] Task {task['id']}: Executing tool '{tool_name}' with params {tool_params}")

@@ -1,5 +1,7 @@
+import hashlib
 import importlib
 import importlib.util
+import re
 import threading
 from pathlib import Path
 from typing import Dict, Any, Type
@@ -26,6 +28,28 @@ def _normalize_mcp_configs(raw) -> list:
             result.append(entry)
         return result
     return []
+
+
+def _sanitize_mcp_name_part(value: Any, fallback: str) -> str:
+    text = re.sub(r"[^A-Za-z0-9_-]+", "_", str(value or "").strip())
+    text = text.strip("_-")
+    return text[:48] or fallback
+
+
+def _mcp_public_tool_name(server_name: str, tool_name: str) -> str:
+    """Return the local model-visible name for a remote MCP tool.
+
+    MCP servers are untrusted host capabilities. Their tool names must not
+    collide with first-party tools like ``bash`` or ``browser`` because those
+    names carry EcoreX permission, diagnostics, and convergence semantics.
+    """
+    server_part = _sanitize_mcp_name_part(server_name, "server")
+    tool_part = _sanitize_mcp_name_part(tool_name, "tool")
+    public = f"mcp__{server_part}__{tool_part}"
+    if len(public) <= 96:
+        return public
+    digest = hashlib.sha1(f"{server_name}:{tool_name}".encode("utf-8", "ignore")).hexdigest()[:8]
+    return f"mcp__{server_part[:32]}__{tool_part[:48]}_{digest}"
 
 
 class ToolManager:
@@ -470,14 +494,15 @@ class ToolManager:
                     tool_schemas = client.list_tools()
                     added = []
                     for schema in tool_schemas:
-                        tool_name = schema.get("name", "")
-                        if not tool_name:
+                        remote_tool_name = schema.get("name", "")
+                        if not remote_tool_name:
                             continue
-                        mcp_tool = McpTool(client, schema, server_name)
+                        tool_name = _mcp_public_tool_name(server_name, remote_tool_name)
+                        mcp_tool = McpTool(client, schema, server_name, public_name=tool_name)
                         # Atomic dict assignment is GIL-safe; readers iterate
                         # over a list() snapshot to avoid concurrent mutation.
                         self._mcp_tool_instances[tool_name] = mcp_tool
-                        added.append(tool_name)
+                        added.append(f"{tool_name}->{remote_tool_name}")
 
                     # Register client into the shared registry only after its
                     # tools are visible, so callers never see a half-loaded server.
@@ -539,6 +564,13 @@ class ToolManager:
             if not (added or removed):
                 return ([], [])
             for name in added:
+                existing = agent_tools.get(name)
+                if existing is not None and not isinstance(existing, McpTool):
+                    logger.warning(
+                        f"[MCP] Refusing to replace first-party tool '{name}' "
+                        f"with MCP tool from {getattr(current[name], 'server_name', 'unknown')}"
+                    )
+                    continue
                 agent_tools[name] = current[name]
             for name in removed:
                 agent_tools.pop(name, None)
@@ -578,7 +610,11 @@ class ToolManager:
 
             # Apply configuration if available
             if hasattr(self, 'tool_configs') and name in self.tool_configs:
-                tool_instance.config = self.tool_configs[name]
+                apply_config = getattr(tool_instance, "apply_config", None)
+                if callable(apply_config):
+                    apply_config(self.tool_configs[name])
+                else:
+                    tool_instance.config = self.tool_configs[name]
 
             return tool_instance
 

@@ -50,12 +50,24 @@ class Send(BaseTool):
         """
         path = args.get("path", "").strip()
         message = args.get("message", "")
-        
+
         if not path:
             return ToolResult.fail("Error: path parameter is required")
         
         # Resolve path
         absolute_path = self._resolve_path(path)
+
+        try:
+            from common.ecorex_tool_permissions import get_tool_permission_broker
+
+            broker = get_tool_permission_broker()
+            if broker.is_read_only():
+                return ToolResult.fail("Error: Current read-only mode blocks sending local files.")
+            decision = broker.authorize_file_access("read", absolute_path, cwd=self.cwd)
+            if not decision.get("allowed", True):
+                return ToolResult.fail(f"Error: {decision.get('reason') or 'Local file send blocked by permissions.'}")
+        except Exception:
+            return ToolResult.fail("Error: Permission broker unavailable; file send was blocked.")
         
         # Check if file exists
         if not os.path.exists(absolute_path):

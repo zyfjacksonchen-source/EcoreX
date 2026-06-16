@@ -52,7 +52,7 @@ available_setting = {
     "nick_name_black_list": [],  # user nickname blacklist
     "group_welcome_msg": "",  # fixed welcome message for new group members; uses a random style when empty
     "trigger_by_self": False,  # whether the bot can be triggered by itself
-    "text_to_image": "dall-e-2",  # image generation model, options: dall-e-2, dall-e-3
+    "text_to_image": "gpt-image-2-pro",  # image generation model; gpt-image-2-pro falls back to gpt-image-2 when unavailable
     # Azure OpenAI dall-e-3 config
     "dalle3_image_style": "vivid", # dalle3 image style, options: vivid, natural
     "dalle3_image_quality": "hd", # dalle3 image quality, options: standard, hd
@@ -63,7 +63,11 @@ available_setting = {
     "image_proxy": True,  # whether an image proxy is needed; required when accessing LinkAI from mainland China
     "image_create_prefix": ["画", "看", "找"],  # prefixes that enable image replies
     "concurrency_in_session": 1,  # max number of in-flight messages per session; values >1 may cause out-of-order replies
-    "image_create_size": "256x256",  # image size, options: 256x256, 512x512, 1024x1024 (dall-e-3 defaults to 1024x1024)
+    "image_create_size": "1024x1024",  # image size, e.g. 1024x1024, 1536x1024, 1024x1536
+    "image_create_quality": "auto",  # GPT Image quality: auto, low, medium, high
+    "image_output_format": "png",  # GPT Image output format: png, jpeg, webp
+    "image_background": "auto",  # GPT Image background: auto, opaque, transparent
+    "image_moderation": "auto",  # GPT Image moderation: auto, low
     "group_chat_exit_group": False,
     # chatgpt session params
     "expires_in_seconds": 3600,  # idle session expiry time
@@ -246,7 +250,7 @@ available_setting = {
     "web_session_expire_days": 30,  # Auth session expiry in days
     "web_file_serve_root": "~",  # Root dir the /api/file endpoint may serve; "/" allows the whole filesystem
     "agent": True,  # whether to enable Agent mode
-    "agent_workspace": "~/cow",  # agent workspace path, used to store skills, memory, etc.
+    "agent_workspace": "~/EcoreX",  # agent workspace path, used to store skills, memory, etc.
     "agent_max_context_tokens": 258000,  # max context tokens in Agent mode
     "agent_max_context_turns": 20,  # max context memory turns in Agent mode
     "agent_max_steps": 20,  # max decision steps per run in Agent mode
@@ -254,7 +258,7 @@ available_setting = {
     "reasoning_effort": "high",  # Reasoning depth under thinking mode: "high" or "max"
     "knowledge": True,  # whether to enable the knowledge base feature
     # Self-evolution: review idle conversations to learn memory/skills. Flat keys.
-    "self_evolution_enabled": False,        # switch to enable/disable self-evolution
+    "self_evolution_enabled": True,         # switch to enable/disable self-evolution
     "self_evolution_idle_minutes": 10,      # idle time before a session is reviewed
     "self_evolution_min_turns": 6,          # min user turns (or context pressure) to trigger
     "skill": {},  # Per-skill runtime config; nested keys flatten to SKILL_<NAME>_<KEY> env vars at startup
@@ -271,7 +275,7 @@ available_setting = {
             "name": "chrome-devtools",
             "type": "stdio",
             "command": "npx",
-            "args": ["chrome-devtools-mcp@latest", "--autoConnect"],
+            "args": ["chrome-devtools-mcp@latest", "--browserUrl", "http://127.0.0.1:9222", "--no-usage-statistics"],
             "timeout": 30
         }
     ],  # MCP server list; each entry supports type "stdio" (local process) or "sse" (remote URL)
@@ -339,24 +343,27 @@ class Config(dict):
 config = Config()
 
 
+def _mask_sensitive_config_value(key, value):
+    lowered = str(key or "").lower()
+    is_sensitive = any(marker in lowered for marker in ("key", "secret", "token", "password", "authorization"))
+    if isinstance(value, dict):
+        return {k: _mask_sensitive_config_value(k, v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_mask_sensitive_config_value(key, item) for item in value]
+    if not is_sensitive or not isinstance(value, str):
+        return value
+    return "***"
+
+
 def drag_sensitive(config):
     try:
         if isinstance(config, str):
             conf_dict: dict = json.loads(config)
-            conf_dict_copy = copy.deepcopy(conf_dict)
-            for key in conf_dict_copy:
-                if "key" in key or "secret" in key:
-                    if isinstance(conf_dict_copy[key], str):
-                        conf_dict_copy[key] = conf_dict_copy[key][0:3] + "*" * 5 + conf_dict_copy[key][-3:]
+            conf_dict_copy = _mask_sensitive_config_value("", copy.deepcopy(conf_dict))
             return json.dumps(conf_dict_copy, indent=4)
 
         elif isinstance(config, dict):
-            config_copy = copy.deepcopy(config)
-            for key in config:
-                if "key" in key or "secret" in key:
-                    if isinstance(config_copy[key], str):
-                        config_copy[key] = config_copy[key][0:3] + "*" * 5 + config_copy[key][-3:]
-            return config_copy
+            return _mask_sensitive_config_value("", copy.deepcopy(config))
     except Exception as e:
         logger.exception(e)
         return config
@@ -367,6 +374,9 @@ def _ensure_ecorex_runtime_defaults(cfg: dict):
     """Fill runtime defaults that are required even when config.json is minimal."""
     if not isinstance(cfg, dict):
         return
+
+    if cfg.get("agent_workspace") in (None, ""):
+        cfg["agent_workspace"] = "~/EcoreX"
 
     tools = cfg.get("tools")
     if not isinstance(tools, dict):
@@ -388,6 +398,13 @@ def _ensure_ecorex_runtime_defaults(cfg: dict):
         if browser.get(key) in (None, ""):
             browser[key] = value
 
+    feishu_cli = tools.get("feishu_cli")
+    if not isinstance(feishu_cli, dict):
+        feishu_cli = {}
+        tools["feishu_cli"] = feishu_cli
+    feishu_cli.setdefault("package", "@larksuite/cli@1.0.40")
+    feishu_cli.setdefault("auto_install", True)
+
     mcp_servers = cfg.get("mcp_servers")
     if not isinstance(mcp_servers, list):
         mcp_servers = []
@@ -406,9 +423,81 @@ def _ensure_ecorex_runtime_defaults(cfg: dict):
             "name": "chrome-devtools",
             "type": "stdio",
             "command": command,
-            "args": ["chrome-devtools-mcp@latest", "--autoConnect"],
+            "args": [
+                "chrome-devtools-mcp@latest",
+                "--browserUrl",
+                str(browser.get("cdp_endpoint") or "http://127.0.0.1:9222"),
+                "--no-usage-statistics",
+            ],
             "timeout": 30,
         })
+    else:
+        for server in mcp_servers:
+            if not isinstance(server, dict):
+                continue
+            is_chrome_devtools = (
+                server.get("name") == "chrome-devtools"
+                or "chrome-devtools-mcp" in " ".join(str(item) for item in server.get("args", []) if item)
+                or "chrome-devtools-mcp" in str(server.get("command") or "")
+            )
+            if not is_chrome_devtools:
+                continue
+            if os.name == "nt" and str(server.get("command") or "").strip().lower() == "npx":
+                server["command"] = "npx.cmd"
+            args = server.get("args")
+            args_text = " ".join(str(item) for item in args) if isinstance(args, list) else ""
+            if not isinstance(args, list) or "--autoConnect" in args_text or "--auto-connect" in args_text:
+                server["args"] = [
+                    "chrome-devtools-mcp@latest",
+                    "--browserUrl",
+                    str(browser.get("cdp_endpoint") or "http://127.0.0.1:9222"),
+                    "--no-usage-statistics",
+                ]
+
+
+def _prepend_to_path(path: str):
+    if not path or not os.path.isdir(path):
+        return
+    current = os.environ.get("PATH", "")
+    parts = current.split(os.pathsep) if current else []
+    if path not in parts:
+        os.environ["PATH"] = path + (os.pathsep + current if current else "")
+
+
+def _ensure_external_cli_path():
+    """Expose common Node/npm CLI bins to packaged runtimes.
+
+    Electron and one-click launchers can start Python with a narrower PATH than
+    an interactive shell. Browser MCP (`npx`) and Feishu (`lark-cli`) should not
+    depend on the user launching from a developer terminal.
+    """
+    candidates = []
+    if os.name == "nt":
+        for base in (os.environ.get("APPDATA"), os.environ.get("LOCALAPPDATA")):
+            if base:
+                candidates.append(os.path.join(base, "npm"))
+        for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)")):
+            if base:
+                candidates.append(os.path.join(base, "nodejs"))
+    else:
+        home = os.path.expanduser("~")
+        candidates.extend([
+            os.path.join(home, ".npm-global", "bin"),
+            os.path.join(home, ".npm", "bin"),
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+        ])
+
+    runtime_root = os.path.abspath(os.path.dirname(__file__))
+    candidates.extend([
+        os.path.join(runtime_root, "bin"),
+        os.path.join(runtime_root, "tools", "bin"),
+        os.path.join(runtime_root, "node", "bin"),
+        os.path.join(runtime_root, "tools", "lark-cli", "bin"),
+    ])
+
+    for path in reversed(candidates):
+        _prepend_to_path(path)
 
 
 def _sync_memory_workspace(cfg: dict):
@@ -417,7 +506,7 @@ def _sync_memory_workspace(cfg: dict):
         from agent.memory.config import MemoryConfig, set_global_memory_config
         from common.utils import expand_path
 
-        workspace = expand_path(cfg.get("agent_workspace", "~/cow"))
+        workspace = expand_path(cfg.get("agent_workspace", "~/EcoreX"))
         _copy_missing_legacy_workspace_data(workspace, expand_path("~/cow"))
         set_global_memory_config(MemoryConfig(workspace_root=workspace))
     except Exception as e:
@@ -559,7 +648,10 @@ def load_config():
         if name.startswith("_"):
             continue
         if name in available_setting:
-            logger.info("[INIT] override config by environ args: {}={}".format(name, value))
+            logger.info("[INIT] override config by environ args: {}={}".format(
+                name,
+                _mask_sensitive_config_value(name, value),
+            ))
             try:
                 config[name] = eval(value)
             except Exception:
@@ -569,6 +661,9 @@ def load_config():
                     config[name] = True
                 else:
                     config[name] = value
+
+    _ensure_ecorex_runtime_defaults(config)
+    _ensure_external_cli_path()
 
     if config.get("debug", False):
         logger.setLevel(logging.DEBUG)
@@ -592,7 +687,7 @@ def load_config():
 
     # Agent mode info
     if config.get("agent", True):
-        workspace = config.get("agent_workspace", "~/cow")
+        workspace = config.get("agent_workspace", "~/EcoreX")
         logger.info("[INIT] Mode: Agent (workspace: {})".format(workspace))
     else:
         logger.info("[INIT] Mode: Chat (set \"agent\":true in config.json to enable Agent mode)")

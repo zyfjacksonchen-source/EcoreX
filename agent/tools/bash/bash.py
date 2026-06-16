@@ -16,6 +16,13 @@ from common.log import logger
 from common.utils import expand_path
 
 
+class _CommandCancelled(Exception):
+    def __init__(self, stdout: str = "", stderr: str = ""):
+        super().__init__("command cancelled by user")
+        self.stdout = stdout or ""
+        self.stderr = stderr or ""
+
+
 class Bash(BaseTool):
     """Tool for executing bash commands"""
 
@@ -53,9 +60,17 @@ SAFETY:
         # Ensure working directory exists
         if not os.path.exists(self.cwd):
             os.makedirs(self.cwd, exist_ok=True)
-        self.default_timeout = self.config.get("timeout", 30)
+        self.default_timeout = self._normalize_timeout(self.config.get("timeout", 30))
         # Enable safety mode by default (can be disabled in config)
         self.safety_mode = self.config.get("safety_mode", True)
+
+    @staticmethod
+    def _normalize_timeout(value, default: int = 30) -> int:
+        try:
+            timeout = int(value)
+        except (TypeError, ValueError):
+            timeout = default
+        return max(1, min(timeout, 600))
 
     def _kill_process_tree(self, process: subprocess.Popen):
         if process.poll() is not None:
@@ -82,7 +97,7 @@ SAFETY:
         except Exception:
             pass
 
-    def _run_command(self, command, timeout: int, env: dict, shell: bool = True):
+    def _run_command(self, command, timeout: int, env: dict, shell: bool = True, cancel_event=None):
         kwargs = {
             "shell": shell,
             "cwd": self.cwd,
@@ -99,21 +114,50 @@ SAFETY:
             kwargs["start_new_session"] = True
 
         process = subprocess.Popen(command, **kwargs)
-        try:
-            stdout, stderr = process.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired as exc:
-            self._kill_process_tree(process)
+        deadline = None
+        if timeout is not None:
+            import time
+            deadline = time.time() + timeout
+        stdout = ""
+        stderr = ""
+        while True:
             try:
-                stdout, stderr = process.communicate(timeout=5)
+                stdout, stderr = process.communicate(timeout=0.25)
+                break
             except subprocess.TimeoutExpired:
+                if cancel_event is not None and getattr(cancel_event, "is_set", lambda: False)():
+                    self._kill_process_tree(process)
+                    try:
+                        stdout, stderr = process.communicate(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        try:
+                            process.kill()
+                        except Exception:
+                            pass
+                        stdout, stderr = process.communicate()
+                    raise _CommandCancelled(stdout, stderr)
+                if deadline is not None:
+                    import time
+                    if time.time() >= deadline:
+                        self._kill_process_tree(process)
+                        try:
+                            stdout, stderr = process.communicate(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            try:
+                                process.kill()
+                            except Exception:
+                                pass
+                            stdout, stderr = process.communicate()
+                        exc = subprocess.TimeoutExpired(command, timeout, output=stdout, stderr=stderr)
+                        raise exc
+                continue
+            except Exception:
                 try:
-                    process.kill()
+                    if cancel_event is not None and getattr(cancel_event, "is_set", lambda: False)():
+                        self._kill_process_tree(process)
                 except Exception:
                     pass
-                stdout, stderr = process.communicate()
-            exc.output = stdout
-            exc.stderr = stderr
-            raise exc
+                raise
         return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
     def execute(self, args: Dict[str, Any]) -> ToolResult:
@@ -124,7 +168,7 @@ SAFETY:
         :return: Command output or error
         """
         command = args.get("command", "").strip()
-        timeout = args.get("timeout", self.default_timeout)
+        timeout = self._normalize_timeout(args.get("timeout", self.default_timeout), self.default_timeout)
 
         if not command:
             return ToolResult.fail("Error: command parameter is required")
@@ -173,7 +217,13 @@ SAFETY:
                 if command and not command.strip().lower().startswith("chcp"):
                     command = f"chcp 65001 >nul 2>&1 && {command}"
 
-            result = self._run_command(command, timeout, env, shell=True)
+            result = self._run_command(
+                command,
+                timeout,
+                env,
+                shell=True,
+                cancel_event=getattr(self, "cancel_event", None),
+            )
             
             logger.debug(f"[Bash] Exit code: {result.returncode}")
             logger.debug(f"[Bash] Stdout length: {len(result.stdout)}")
@@ -193,6 +243,7 @@ SAFETY:
                             timeout=timeout,
                             env=env,
                             shell=False,
+                            cancel_event=getattr(self, "cancel_event", None),
                         )
                         logger.debug(f"[Bash] Retry exit code: {retry_result.returncode}, stdout: {len(retry_result.stdout)}, stderr: {len(retry_result.stderr)}")
                         
@@ -277,6 +328,13 @@ SAFETY:
 
         except subprocess.TimeoutExpired:
             return ToolResult.fail(f"Error: Command timed out after {timeout} seconds")
+        except _CommandCancelled as exc:
+            output = (exc.stdout or "") + ("\n" + exc.stderr if exc.stderr else "")
+            output = output.strip()
+            if output:
+                output = truncate_tail(output).content
+                return ToolResult.fail(f"Error: Command cancelled by user.\n{output}")
+            return ToolResult.fail("Error: Command cancelled by user.")
         except Exception as e:
             return ToolResult.fail(f"Error executing command: {str(e)}")
 

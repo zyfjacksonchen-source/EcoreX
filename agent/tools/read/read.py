@@ -78,7 +78,16 @@ class Read(BaseTool):
         
         # Resolve path
         absolute_path = self._resolve_path(path)
-        
+
+        try:
+            from common.ecorex_tool_permissions import get_tool_permission_broker
+
+            decision = get_tool_permission_broker().authorize_file_access("read", absolute_path, cwd=self.cwd)
+            if not decision.get("allowed", True):
+                return ToolResult.fail(f"Error: {decision.get('reason') or 'Local file read blocked by permissions.'}")
+        except Exception as exc:
+            return ToolResult.fail(f"Error: Permission broker unavailable; local file read blocked. {exc}")
+
         # Security check: Prevent reading sensitive config files
         env_config_path = expand_path("~/.cow/.env")
         if os.path.abspath(absolute_path) == os.path.abspath(env_config_path):

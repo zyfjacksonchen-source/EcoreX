@@ -7,7 +7,8 @@ param(
     [string]$MacX64DmgPath = "",
     [string]$WebTarballPath = "",
     [string]$OutputDir = "release-artifacts",
-    [switch]$KeepStaging
+    [switch]$KeepStaging,
+    [switch]$SkipValidation
 )
 
 $ErrorActionPreference = "Stop"
@@ -31,6 +32,15 @@ function Resolve-UnderDirectory {
         throw "Resolved path '$resolvedPath' is outside '$resolvedBase'"
     }
     return $resolvedPath
+}
+
+function Write-Utf8NoBom {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Value
+    )
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $Value, $encoding)
 }
 
 $repoRoot = (Resolve-Path -LiteralPath ".").Path
@@ -188,7 +198,7 @@ $checksums = [ordered]@{
     }
     macos = if ($macReadyCount -gt 0) { "included $macReadyCount dmg artifact(s); signing/notarization evidence is external" } else { "deferred to Mac validation" }
 }
-$checksums | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $stagingRoot "checksums.json") -Encoding UTF8
+Write-Utf8NoBom -Path (Join-Path $stagingRoot "checksums.json") -Value (($checksums | ConvertTo-Json -Depth 8) + "`n")
 
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -213,6 +223,16 @@ $zipItem = Get-Item -LiteralPath $zipPath
 
 if (-not $KeepStaging) {
     Remove-Item -LiteralPath $stagingRoot -Recurse -Force
+}
+
+if (-not $SkipValidation) {
+    $validator = Join-Path $repoRoot "scripts\validate-ecorex-release-artifacts.py"
+    if (Test-Path -LiteralPath $validator) {
+        & python $validator --version $Version --public-zip $zipPath
+        if ($LASTEXITCODE -ne 0) {
+            throw "Release artifact validation failed."
+        }
+    }
 }
 
 [ordered]@{

@@ -5,7 +5,9 @@ param(
     [string]$Thumbprint = "0f678477dfc0a2bdaab88307126ef657faf8674f",
     [switch]$CoreAppOnly,
     [switch]$SetupOnly,
-    [switch]$LaunchSimplySign
+    [switch]$LaunchSimplySign,
+    [switch]$PreflightOnly,
+    [switch]$SkipProviderPreflight
 )
 
 $ErrorActionPreference = "Stop"
@@ -20,6 +22,97 @@ $signTool = Join-Path $SignToolDir "signtool.exe"
 
 if (-not (Test-Path -LiteralPath $signTool)) {
     throw "signtool.exe not found at $signTool"
+}
+
+function Quote-ExternalArg {
+    param([Parameter(Mandatory = $true)][string]$Value)
+    if ($Value -match '[\s"]') {
+        return '"' + ($Value -replace '"', '\"') + '"'
+    }
+    return $Value
+}
+
+function Invoke-ExternalCapture {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [string[]]$ArgumentList = @(),
+        [int]$TimeoutSeconds = 20
+    )
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $FilePath
+    $psi.Arguments = (($ArgumentList | ForEach-Object { Quote-ExternalArg $_ }) -join " ")
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $psi
+    [void]$process.Start()
+    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+        try { $process.Kill() } catch {}
+        return [pscustomobject]@{
+            ExitCode = -1
+            StdOut = ""
+            StdErr = "Timed out after $TimeoutSeconds second(s)."
+            TimedOut = $true
+        }
+    }
+    return [pscustomobject]@{
+        ExitCode = $process.ExitCode
+        StdOut = $process.StandardOutput.ReadToEnd()
+        StdErr = $process.StandardError.ReadToEnd()
+        TimedOut = $false
+    }
+}
+
+function Assert-SigningProviderReady {
+    param([Parameter(Mandatory = $true)][string]$ExpectedThumbprint)
+
+    $normalized = ($ExpectedThumbprint -replace '\s', '').ToUpperInvariant()
+    $cert = Get-ChildItem Cert:\CurrentUser\My -ErrorAction Stop |
+        Where-Object { ($_.Thumbprint -replace '\s', '').ToUpperInvariant() -eq $normalized } |
+        Select-Object -First 1
+    if (-not $cert) {
+        throw "Signing certificate $ExpectedThumbprint was not found in Cert:\CurrentUser\My."
+    }
+    if (-not $cert.HasPrivateKey) {
+        throw "Signing certificate $ExpectedThumbprint is present but HasPrivateKey is false."
+    }
+
+    $smartCard = Get-Service SCardSvr -ErrorAction SilentlyContinue
+    $certProp = Get-Service CertPropSvc -ErrorAction SilentlyContinue
+    $smartCardStatus = if ($smartCard) { $smartCard.Status.ToString() } else { "not-found" }
+    $certPropStatus = if ($certProp) { $certProp.Status.ToString() } else { "not-found" }
+
+    $keyList = Invoke-ExternalCapture -FilePath "certutil.exe" -ArgumentList @("-user", "-key", "-csp", "SimplySign CSP") -TimeoutSeconds 25
+    $combined = (($keyList.StdOut, $keyList.StdErr) -join "`n")
+    $meaningfulLines = @($combined -split "\r?\n" | Where-Object {
+        $line = $_.Trim()
+        $line -and $line -notmatch '^CertUtil:'
+    })
+    if ($keyList.TimedOut -or $meaningfulLines.Count -eq 0) {
+        throw @"
+Signing provider preflight failed.
+Certificate: $($cert.Subject)
+Thumbprint: $($cert.Thumbprint)
+Smart Card service: $smartCardStatus
+Certificate Propagation service: $certPropStatus
+SimplySign CSP key containers: none visible
+
+Recovery:
+1. Open/unlock Certum SimplySign Desktop and proCertum SmartSign, including any required PIN/login.
+2. In an elevated shell, start the services if needed:
+   Start-Service SCardSvr
+   Start-Service CertPropSvc
+3. Re-run:
+   powershell -ExecutionPolicy Bypass -File desktop\scripts\sign-win.ps1 -PreflightOnly
+
+Raw certutil output:
+$combined
+"@
+    }
+
+    Write-Host "Signing provider preflight passed for $($cert.Subject)"
+    Write-Host "Smart Card service: $smartCardStatus; Certificate Propagation service: $certPropStatus"
 }
 
 if ($LaunchSimplySign) {
@@ -59,6 +152,14 @@ if ($SetupOnly) {
 
 if (-not $targets) {
     throw "No .exe or .msi artifacts found under $resolvedArtifacts"
+}
+
+$unsignedTargets = @($targets | Where-Object { (Get-AuthenticodeSignature -LiteralPath $_.FullName).Status -ne "Valid" })
+if ($PreflightOnly -or (($unsignedTargets.Count -gt 0) -and -not $SkipProviderPreflight)) {
+    Assert-SigningProviderReady -ExpectedThumbprint $Thumbprint
+    if ($PreflightOnly) {
+        return
+    }
 }
 
 foreach ($target in $targets) {

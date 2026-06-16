@@ -103,6 +103,7 @@ export class SidecarManager {
         ...this.enterpriseEnv,
         ECOREX_DESKTOP: "1",
         ECOREX_DESKTOP_USER_DATA: app.getPath("userData"),
+        PATH: [this.resolveExternalCliPath(), process.env.PATH].filter(Boolean).join(path.delimiter),
         PYTHONPATH: [this.repoRoot, this.resolveCapabilityPythonPath(), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
         PLAYWRIGHT_BROWSERS_PATH:
           process.platform === "darwin"
@@ -340,6 +341,21 @@ export class SidecarManager {
         tools.browser = browser;
         changed = true;
       }
+      const feishuCli = typeof tools.feishu_cli === "object" && tools.feishu_cli !== null && !Array.isArray(tools.feishu_cli)
+        ? tools.feishu_cli as Record<string, unknown>
+        : {};
+      if (!feishuCli.package) {
+        feishuCli.package = "@larksuite/cli@1.0.40";
+        changed = true;
+      }
+      if (feishuCli.auto_install === undefined) {
+        feishuCli.auto_install = true;
+        changed = true;
+      }
+      if (tools.feishu_cli !== feishuCli) {
+        tools.feishu_cli = feishuCli;
+        changed = true;
+      }
       if (config.tools !== tools) {
         config.tools = tools;
         changed = true;
@@ -348,7 +364,7 @@ export class SidecarManager {
         name: "chrome-devtools",
         type: "stdio",
         command: process.platform === "win32" ? "npx.cmd" : "npx",
-        args: ["chrome-devtools-mcp@latest", "--autoConnect"],
+        args: ["chrome-devtools-mcp@latest", "--browserUrl", "http://127.0.0.1:9222", "--no-usage-statistics"],
         timeout: 30
       };
       const mcpServers = Array.isArray(config.mcp_servers) ? config.mcp_servers : [];
@@ -359,6 +375,35 @@ export class SidecarManager {
         ((server as Record<string, unknown>).name === "chrome-devtools" ||
           String((server as Record<string, unknown>).command || "").includes("chrome-devtools-mcp"))
       ));
+      if (process.platform === "win32") {
+        for (const server of mcpServers) {
+          if (
+            typeof server === "object" &&
+            server !== null &&
+            !Array.isArray(server) &&
+            String((server as Record<string, unknown>).command || "").trim().toLowerCase() === "npx"
+          ) {
+            (server as Record<string, unknown>).command = "npx.cmd";
+            changed = true;
+          }
+        }
+      }
+      for (const server of mcpServers) {
+        if (typeof server !== "object" || server === null || Array.isArray(server)) {
+          continue;
+        }
+        const item = server as Record<string, unknown>;
+        const args = Array.isArray(item.args) ? item.args.map((part) => String(part)) : [];
+        const isChromeDevtools =
+          item.name === "chrome-devtools" ||
+          String(item.command || "").includes("chrome-devtools-mcp") ||
+          args.join(" ").includes("chrome-devtools-mcp");
+        const usesAutoConnect = args.includes("--autoConnect") || args.includes("--auto-connect");
+        if (isChromeDevtools && (!args.length || usesAutoConnect)) {
+          item.args = ["chrome-devtools-mcp@latest", "--browserUrl", "http://127.0.0.1:9222", "--no-usage-statistics"];
+          changed = true;
+        }
+      }
       if (!hasChromeDevtoolsMcp) {
         config.mcp_servers = [...mcpServers, chromeDevtoolsMcp];
         changed = true;
@@ -475,6 +520,40 @@ export class SidecarManager {
       return path.join(app.getPath("userData"), "capabilities", "python-site");
     }
     return "";
+  }
+
+  private resolveExternalCliPath() {
+    const candidates: string[] = [];
+    if (process.platform === "win32") {
+      const appData = process.env.APPDATA;
+      const localAppData = process.env.LOCALAPPDATA;
+      const programFiles = process.env.ProgramFiles;
+      const programFilesX86 = process.env["ProgramFiles(x86)"];
+      if (appData) candidates.push(path.join(appData, "npm"));
+      if (localAppData) candidates.push(path.join(localAppData, "npm"));
+      if (programFiles) candidates.push(path.join(programFiles, "nodejs"));
+      if (programFilesX86) candidates.push(path.join(programFilesX86, "nodejs"));
+    } else {
+      candidates.push(
+        path.join(os.homedir(), ".npm-global", "bin"),
+        path.join(os.homedir(), ".npm", "bin"),
+        "/opt/homebrew/bin",
+        "/usr/local/bin"
+      );
+    }
+    candidates.push(
+      path.join(this.repoRoot, "bin"),
+      path.join(this.repoRoot, "tools", "bin"),
+      path.join(this.repoRoot, "node", "bin"),
+      path.join(this.repoRoot, "tools", "lark-cli", "bin")
+    );
+    return candidates.filter((candidate) => {
+      try {
+        return Boolean(candidate && fs.existsSync(candidate));
+      } catch {
+        return false;
+      }
+    }).join(path.delimiter);
   }
 
   private updateStatus(status: SidecarStatus) {
