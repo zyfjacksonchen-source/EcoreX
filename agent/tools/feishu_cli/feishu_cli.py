@@ -312,7 +312,7 @@ class FeishuCli(BaseTool):
         self.config = config or {}
         self.cwd = self.config.get("cwd", os.getcwd())
         self.package = str(self.config.get("package") or DEFAULT_LARK_CLI_PACKAGE)
-        self.auto_install = bool(self.config.get("auto_install", True))
+        self.auto_install = bool(self.config.get("auto_install", False))
 
     def execute(self, args: Dict[str, Any]) -> ToolResult:
         action = str(args.get("action") or "").strip().lower()

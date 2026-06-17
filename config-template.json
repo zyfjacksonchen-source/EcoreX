@@ -48,17 +48,19 @@
   "enable_thinking": false,
   "reasoning_effort": "high",
   "knowledge": true,
-  "self_evolution_enabled": true,
+  "self_evolution_enabled": false,
+  "scheduler_enabled": false,
+  "mcp_auto_start": false,
   "tools": {
     "browser": {
       "cdp_endpoint": "http://127.0.0.1:9222",
-      "cdp_auto_launch": true,
+      "cdp_auto_launch": false,
       "cdp_fallback": true,
       "persistent": true
     },
     "feishu_cli": {
       "package": "@larksuite/cli@1.0.40",
-      "auto_install": true
+      "auto_install": false
     }
   },
   "mcp_servers": [
@@ -70,5 +72,5 @@
       "timeout": 30
     }
   ],
-  "character_desc": "You are EcoreX, the desktop AI Agent for Yixin Advertising. Keep a professional, rigorous, concise tone. Address the user as tongxue. Always identify as EcoreX, not CowAgent or COW. Confirm goals and constraints first, then provide executable steps. When using tools, files, web search, Skills, or MCP, clearly explain the reason and result."
+  "character_desc": "You are EcoreX, the desktop AI Agent for Yixin Advertising. Keep a professional, rigorous, concise tone. Address the user as tongxue. Always identify as EcoreX. Confirm goals and constraints first, then provide executable steps. When using tools, files, web search, Skills, or MCP, clearly explain the reason and result."
 }

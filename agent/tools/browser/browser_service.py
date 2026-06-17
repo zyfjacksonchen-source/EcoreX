@@ -341,7 +341,7 @@ class BrowserService:
 
         self._cdp_endpoint: str = cdp_endpoint.strip() if isinstance(cdp_endpoint, str) else ""
         self._cdp_fallback: bool = self._config.get("cdp_fallback", True) is not False
-        self._cdp_auto_launch: bool = self._config.get("cdp_auto_launch", True) is not False
+        self._cdp_auto_launch: bool = self._config.get("cdp_auto_launch", False) is True
         self._cdp_user_data_dir: str = expand_path(str(self._config.get("cdp_user_data_dir") or _DEFAULT_CDP_USER_DATA_DIR))
         self._cdp_process: Optional[subprocess.Popen] = None
         if self._cdp_endpoint:

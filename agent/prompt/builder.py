@@ -200,6 +200,7 @@ def _build_tooling_section(tools: List[Any], language: str) -> List[str]:
             "web_fetch": "fetch URL content",
             "browser": "control the browser (screenshot key results or send to the user when help is needed)",
             "host_diagnostics": "inspect local runtime capabilities, MCP state, permissions, ports, and packaged helpers",
+            "optional_abilities": "discover, enable, disable, or install optional EcoreX abilities and capability packs",
             "feishu_cli": "preferred Feishu/Lark CLI wrapper with auth, setup, and bounded command execution",
             "memory_search": "search memory",
             "memory_get": "read memory content",
@@ -222,6 +223,7 @@ def _build_tooling_section(tools: List[Any], language: str) -> List[str]:
             "web_fetch": "获取URL内容",
             "browser": "控制浏览器（关键结果或需要协助可截图发送给用户）",
             "host_diagnostics": "inspect EcoreX host capabilities, MCP/CDP state, permissions, logs, and packaged helpers",
+            "optional_abilities": "discover, enable, disable, or install optional EcoreX abilities and capability packs",
             "feishu_cli": "preferred Feishu/Lark CLI wrapper for auth, setup, docs/base/drive commands, and bounded timeouts",
             "memory_search": "搜索记忆",
             "memory_get": "读取记忆内容",
@@ -234,7 +236,7 @@ def _build_tooling_section(tools: List[Any], language: str) -> List[str]:
     # Preferred display order
     tool_order = [
         "read", "write", "edit", "ls", "grep", "find",
-        "host_diagnostics", "feishu_cli",
+        "host_diagnostics", "optional_abilities", "feishu_cli",
         "bash", "terminal",
         "web_search", "web_fetch", "browser",
         "memory_search", "memory_get",
@@ -302,6 +304,7 @@ def _build_host_boundary_tooling_rules() -> List[str]:
         "Host capability boundary:",
         "",
         "- Use `host_diagnostics` when a task appears stuck, a tool is missing, MCP/CDP state is unclear, permissions look wrong, or a packaged helper may not be installed.",
+        "- Use `optional_abilities` to list, enable, disable, or install optional heavy abilities. Do not start MCP, CDP, browser packs, or Feishu setup through raw shell when this tool applies.",
         "- For Feishu/Lark documents, Base, Drive, Wiki, or auth flows, call `feishu_cli` first. Do not probe `lark-cli` through raw `bash` unless `feishu_cli` reports an unrecoverable setup issue.",
         "- For browser automation, prefer the configured CDP/chrome-devtools path first; use fallback browser or shell only after CDP state is known.",
         "- If the same external capability chain fails, times out, or returns no new information repeatedly, stop repeating it. Summarize what is known, name the precise blocker, then switch approach or ask the user for the required login/authorization/input.",

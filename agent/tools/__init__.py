@@ -10,6 +10,7 @@ from agent.tools.bash.bash import Bash
 from agent.tools.ecorex_cli.ecorex_cli import EcoreXCli
 from agent.tools.feishu_cli.feishu_cli import FeishuCli
 from agent.tools.host_diagnostics.host_diagnostics import HostDiagnostics
+from agent.tools.optional_abilities.optional_abilities import OptionalAbilities
 from agent.tools.find.find import Find
 from agent.tools.ls.ls import Ls
 from agent.tools.send.send import Send
@@ -141,6 +142,7 @@ __all__ = [
     'EcoreXCli',
     'FeishuCli',
     'HostDiagnostics',
+    'OptionalAbilities',
     'Find',
     'Ls',
     'Send',

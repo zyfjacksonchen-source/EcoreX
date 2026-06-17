@@ -146,3 +146,44 @@ This log records source changes for v0.1.13. It does not mark a public release c
   - `EcoreX_0.1.13-webui-macos-universal.zip`, size `165308769`, SHA256 `3E4EA259222133E4AA7B08B99CFB4FC2E016B29612DC7C1488D0CC7E228DD3AE`
 - Validation passed for this source state: `npm run typecheck`, `python -m py_compile app.py channel\web\web_channel.py bridge\agent_bridge.py agent\memory\conversation_store.py scripts\validate-ecorex-release-artifacts.py`, and targeted zip structure checks for the self-contained macOS WebUI app plus Playwright wheels.
 - Staleness boundary: the previously recorded signed Windows setup, macOS DMGs, and public release zip are stale after this hotfix. Rebuild/sign Windows, rebuild macOS DMGs via macos-15, regenerate public zip, run full validator, smoke, and redeploy before calling v0.1.13 final.
+
+## Post-Hand-Test Hotfix: On-Demand Abilities And Identity Boundary
+
+- User-reported latest desktop hand-test symptom: the app could remain on "waiting for runtime" after v0.1.13 enabled several heavy abilities.
+- Root cause: desktop/WebUI runtime defaults still auto-started or auto-installed heavy optional capabilities at boot:
+  - `chrome-devtools` MCP through `npx chrome-devtools-mcp@latest`
+  - Browser CDP auto-launch
+  - Feishu/Lark CLI auto-install
+  - Scheduler background service
+  - Self-evolution idle trigger
+- Fix: these abilities are now discoverable but disabled by default across source config, Electron sidecar defaults, runtime warmup, AgentBridge, ToolManager, BrowserService, FeishuCli, and Windows/macOS WebUI local package config generation.
+- New built-in agent tool: `optional_abilities`.
+  - `list`/`status` are read-only and let the agent discover built-in, optional, and planned capabilities.
+  - `enable`, `disable`, and `install` go through the shared tool permission broker before changing config or running capability installers.
+  - The tool can enable `chrome-devtools-mcp`, `browser-cdp`, `feishu-cli`, `scheduler`, and `self-evolution`, and can install existing capability packs such as `browser-automation`, `office-pdf`, `memory-heavy`, `model-connectors`, `voice`, and `im-channels`.
+  - `subagents` and `goals` remain documented planned capabilities, not silently enabled runtime features.
+- Root-cause identity hardening:
+  - Added `common/ecorex_identity.py` to sanitize assistant-visible output and persisted assistant messages from legacy product self-names to `EcoreX`.
+  - MCP client handshake now identifies as `EcoreX` `0.1.13`.
+  - `ecorex_cli`, host diagnostics, project hidden context, and Electron persona migration no longer prompt the model with legacy self-name instructions.
+  - Electron sidecar migrates local `character_desc` if it still contains legacy product self-names.
+- Validation after this source change:
+  - `python -m py_compile app.py config.py bridge\agent_bridge.py bridge\agent_initializer.py agent\protocol\agent_stream.py agent\tools\optional_abilities\optional_abilities.py agent\tools\__init__.py agent\tools\tool_manager.py agent\tools\browser\browser_service.py agent\tools\feishu_cli\feishu_cli.py agent\tools\host_diagnostics\host_diagnostics.py agent\tools\mcp\mcp_client.py common\ecorex_identity.py common\ecorex_tool_permissions.py scripts\validate-ecorex-release-artifacts.py`
+  - `optional_abilities list` returned 17 abilities with `chrome-devtools-mcp.enabled=false` and did not start MCP.
+  - `npm run typecheck` passed in `desktop/`.
+- Staleness boundary: all previously recorded v0.1.13 Windows installers, macOS DMGs, WebUI ZIPs, and public release ZIPs are stale after this hotfix. The next step is to rebuild and open the local desktop release for user hand-test only. Do not upload, deploy the download page, or push Git until the user confirms the new hand-test build.
+- Local hand-test desktop build opened from `desktop/release/win-unpacked/EcoreX.exe`.
+  - Renderer assets: `index-DGSZjdR_.js`, `index-D7oCsug3.css`.
+  - `EcoreX.exe` is intentionally unsigned for hand-test only, size `210896896`, SHA256 `6FA52E0D912C25C5B61D1BE2FB0051AA377DAC2A82D45ABCBEDE300C0E65A829`.
+  - Runtime `/api/version` responded with `0.1.13`.
+  - Packaged runtime config has `self_evolution_enabled=false`, `scheduler_enabled=false`, `mcp_auto_start=false`, browser `cdp_auto_launch=false`, and Feishu `auto_install=false`.
+  - Runtime log shows `MCP warmup skipped`, `Scheduler warmup skipped`, and `MCP auto-start disabled`.
+  - A stale `chrome-devtools-mcp` process tree from an older WebUI runtime dated 2026-06-16 was identified and stopped; no non-PowerShell `chrome-devtools-mcp` process remained after cleanup.
+- User-reported hand-test error after the rebuild: `Agent error: cannot access local variable 'conf' where it is not associated with a value`.
+  - Root cause: `AgentBridge.agent_reply()` still had a branch-local `from config import conf` inside the scheduler context branch. Python treated `conf` as a local variable for the whole function, so normal non-scheduler chats reached the self-evolution gate with `conf` unbound.
+  - Fix: remove the branch-local import and use the module-level `conf` imported at file load.
+  - Validation: `python -m py_compile bridge\agent_bridge.py` passed, the local directory build was relaunched, `/message` smoke on `127.0.0.1:9899` returned SSE `done` with content `OK`, and no `Agent error` event was emitted.
+- Post-fix regression evidence:
+  - `python tests\test_ecorex_web_parallel_backend.py` passed `82` tests after the `conf` scope hotfix.
+  - A temporary `/message` smoke with a unique `hidden_context` marker stored only the visible user message in `/api/history`; the hidden marker was absent from persisted history and the temporary session delete returned success.
+  - `deploy/ecorex-site/manifest.json` remains in the guarded v0.1.13 post-hotfix state: visible artifacts are `pending-signature` or `pending-validation`, hidden archives are `archived-stale`, and the notes block says artifacts are disabled until rebuild/sign/smoke/user approval.

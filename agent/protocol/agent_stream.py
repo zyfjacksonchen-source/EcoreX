@@ -12,6 +12,7 @@ from agent.protocol.cancel import AgentCancelledError
 from agent.protocol.models import LLMRequest, LLMModel
 from agent.protocol.message_utils import sanitize_claude_messages, compress_turn_to_text_only
 from agent.tools.base_tool import BaseTool, ToolResult
+from common.ecorex_identity import sanitize_assistant_identity, sanitize_message_identity
 from common.log import logger
 from common.i18n import t as _t
 
@@ -276,11 +277,13 @@ class AgentStreamExecutor:
         except Exception as e:
             logger.warning(f"[Agent] desktop tool permission check skipped: {e}")
             risky = (tool_name or "").strip().lower() in {
-                "bash", "shell", "terminal", "browser", "feishu_cli",
+                "bash", "shell", "terminal", "browser", "feishu_cli", "optional_abilities",
                 "mcp", "mcp_server", "write", "edit", "fs_write", "skill_write",
                 "env_config", "send", "scheduler", "evolution_undo",
                 "web_fetch", "web_search", "vision",
             }
+            if (tool_name or "").strip().lower() == "optional_abilities" and str((arguments or {}).get("action") or "").strip().lower() in {"list", "status"}:
+                risky = False
             if risky:
                 return {"allowed": False, "reason": "Permission broker failed; local external tool execution was blocked."}
             return {"allowed": True, "reason": "permission-check-error"}
@@ -575,8 +578,8 @@ class AgentStreamExecutor:
             if "host_diagnostics" in self.tools:
                 return (
                     "Do not probe or launch CDP through raw bash as the first browser path. "
-                    "Call `host_diagnostics` first to inspect CDP/MCP readiness, then use the "
-                    "configured browser/CDP tool path. Use shell only after the host diagnostics "
+                    "Call `host_diagnostics` first to inspect CDP/MCP readiness, then use "
+                    "`optional_abilities` to enable/install the needed browser or MCP ability. Use shell only after diagnostics "
                     "show a concrete setup blocker."
                 )
         return ""
@@ -1079,6 +1082,7 @@ class AgentStreamExecutor:
 
         finally:
             final_response = final_response.strip() if final_response else final_response
+            final_response = sanitize_assistant_identity(final_response)
             if cancelled:
                 # Emit before agent_end so channels can mark UI as cancelled
                 self._emit_event("agent_cancelled", {"final_response": final_response})
@@ -1286,7 +1290,7 @@ class AgentStreamExecutor:
                         filtered_delta = self._filter_think_tags(content_delta)
                         full_content += filtered_delta
                         if filtered_delta:  # Only emit if there's content after filtering
-                            self._emit_event("message_update", {"delta": filtered_delta})
+                            self._emit_event("message_update", {"delta": sanitize_assistant_identity(filtered_delta)})
 
                     # Handle tool calls
                     if "tool_calls" in delta and delta["tool_calls"]:
@@ -1474,7 +1478,7 @@ class AgentStreamExecutor:
             )
 
         # Filter full_content one more time (in case tags were split across chunks)
-        full_content = self._filter_think_tags(full_content)
+        full_content = sanitize_assistant_identity(self._filter_think_tags(full_content))
         
         # Add assistant message to history (Claude format uses content blocks)
         assistant_msg = {"role": "assistant", "content": []}
@@ -1512,7 +1516,7 @@ class AgentStreamExecutor:
 
         # Only append if content is not empty
         if assistant_msg["content"]:
-            self.messages.append(assistant_msg)
+            self.messages.append(sanitize_message_identity(assistant_msg))
 
         self._emit_event("message_end", {
             "content": full_content,

@@ -589,6 +589,11 @@ class AgentInitializer:
         first-time session inits cannot each create a new SchedulerService
         (which would leak background scanning threads).
         """
+        from config import conf
+
+        if not conf().get("scheduler_enabled", False):
+            return
+
         if not self.agent_bridge.scheduler_initialized:
             with _scheduler_init_lock:
                 if not self.agent_bridge.scheduler_initialized:

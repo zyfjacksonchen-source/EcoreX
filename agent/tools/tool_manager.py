@@ -109,7 +109,10 @@ class ToolManager:
             self._load_tools_from_init()
             self._configure_tools_from_config(config_dict)
 
-        self._load_mcp_tools()
+        if conf().get("mcp_auto_start", False):
+            self._load_mcp_tools()
+        else:
+            logger.info("[ToolManager] MCP auto-start disabled; configured MCP servers remain discoverable through optional_abilities")
 
     def _load_tools_from_init(self) -> bool:
         """

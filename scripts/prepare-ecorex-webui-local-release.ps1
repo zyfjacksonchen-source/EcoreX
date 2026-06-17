@@ -412,6 +412,9 @@ $config = [ordered]@{
     web_port = $effectivePort
     web_password = ""
     agent = $true
+    self_evolution_enabled = $false
+    scheduler_enabled = $false
+    mcp_auto_start = $false
     agent_workspace = $workspaceRoot
     web_file_serve_root = $workspaceRoot
     appdata_dir = (Join-Path $stateDir "appdata")
@@ -420,13 +423,13 @@ $config = [ordered]@{
     tools = [ordered]@{
         browser = [ordered]@{
             cdp_endpoint = "http://127.0.0.1:9222"
-            cdp_auto_launch = $true
+            cdp_auto_launch = $false
             cdp_fallback = $true
             persistent = $true
         }
         feishu_cli = [ordered]@{
             package = "@larksuite/cli@1.0.40"
-            auto_install = $true
+            auto_install = $false
         }
     }
     mcp_servers = @(
@@ -634,6 +637,9 @@ payload = {
     "web_port": port,
     "web_password": "",
     "agent": True,
+    "self_evolution_enabled": False,
+    "scheduler_enabled": False,
+    "mcp_auto_start": False,
     "agent_workspace": str(workspace),
     "web_file_serve_root": str(workspace),
     "appdata_dir": str(state / "appdata"),
@@ -642,13 +648,13 @@ payload = {
     "tools": {
         "browser": {
             "cdp_endpoint": "http://127.0.0.1:9222",
-            "cdp_auto_launch": True,
+            "cdp_auto_launch": False,
             "cdp_fallback": True,
             "persistent": True,
         },
         "feishu_cli": {
             "package": "@larksuite/cli@1.0.40",
-            "auto_install": True,
+            "auto_install": False,
         }
     },
     "mcp_servers": [

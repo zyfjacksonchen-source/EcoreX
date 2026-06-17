@@ -258,14 +258,16 @@ available_setting = {
     "reasoning_effort": "high",  # Reasoning depth under thinking mode: "high" or "max"
     "knowledge": True,  # whether to enable the knowledge base feature
     # Self-evolution: review idle conversations to learn memory/skills. Flat keys.
-    "self_evolution_enabled": True,         # switch to enable/disable self-evolution
+    "self_evolution_enabled": False,        # switch to enable/disable self-evolution
     "self_evolution_idle_minutes": 10,      # idle time before a session is reviewed
     "self_evolution_min_turns": 6,          # min user turns (or context pressure) to trigger
+    "scheduler_enabled": False,             # start scheduler service at runtime boot
+    "mcp_auto_start": False,                # start configured MCP servers at runtime boot/agent creation
     "skill": {},  # Per-skill runtime config; nested keys flatten to SKILL_<NAME>_<KEY> env vars at startup
     "tools": {
         "browser": {
             "cdp_endpoint": "http://127.0.0.1:9222",
-            "cdp_auto_launch": True,
+            "cdp_auto_launch": False,
             "cdp_fallback": True,
             "persistent": True
         }
@@ -278,7 +280,7 @@ available_setting = {
             "args": ["chrome-devtools-mcp@latest", "--browserUrl", "http://127.0.0.1:9222", "--no-usage-statistics"],
             "timeout": 30
         }
-    ],  # MCP server list; each entry supports type "stdio" (local process) or "sse" (remote URL)
+    ],  # MCP server list; each entry supports type "stdio" (local process) or "sse" (remote URL); loaded only when mcp_auto_start or optional_abilities enables it
 }
 
 
@@ -388,9 +390,14 @@ def _ensure_ecorex_runtime_defaults(cfg: dict):
         browser = {}
         tools["browser"] = browser
 
+    cfg.setdefault("scheduler_enabled", False)
+    cfg.setdefault("mcp_auto_start", False)
+    if cfg.get("self_evolution_enabled") in (None, ""):
+        cfg["self_evolution_enabled"] = False
+
     browser_defaults = {
         "cdp_endpoint": "http://127.0.0.1:9222",
-        "cdp_auto_launch": True,
+        "cdp_auto_launch": False,
         "cdp_fallback": True,
         "persistent": True,
     }
@@ -403,7 +410,7 @@ def _ensure_ecorex_runtime_defaults(cfg: dict):
         feishu_cli = {}
         tools["feishu_cli"] = feishu_cli
     feishu_cli.setdefault("package", "@larksuite/cli@1.0.40")
-    feishu_cli.setdefault("auto_install", True)
+    feishu_cli.setdefault("auto_install", False)
 
     mcp_servers = cfg.get("mcp_servers")
     if not isinstance(mcp_servers, list):

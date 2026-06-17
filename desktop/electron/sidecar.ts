@@ -371,12 +371,14 @@ export class SidecarManager {
       const sourcePath = fs.existsSync(configPath) ? configPath : templatePath;
       const config = JSON.parse(fs.readFileSync(sourcePath, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
       const oldDefaultPersona = "You are a helpful AI assistant. You aim to answer and solve any questions people have, and can communicate in multiple languages.";
-      const desktopPersona = "你是 EcoreX，亦芯广告的桌面端 AI Agent。默认沟通风格专业、严谨、克制，称呼用户为“同学”。回答时先确认目标和约束，再给出可执行步骤；需要使用工具、读写文件、联网搜索、调用 Skill 或 MCP 时，清晰说明原因与结果。";
+      const desktopPersona = "You are EcoreX, the desktop AI Agent for Yixin Advertising. Keep a professional, rigorous, concise tone. Address the user as tongxue. Always identify as EcoreX. Confirm goals and constraints first, then provide executable steps. When using tools, files, web search, Skills, or MCP, clearly explain the reason and result.";
       const defaults: Record<string, unknown> = {
         channel_type: "web",
         agent: true,
         knowledge: true,
-        self_evolution_enabled: true,
+        self_evolution_enabled: false,
+        scheduler_enabled: false,
+        mcp_auto_start: false,
         agent_max_context_tokens: 258000,
         appdata_dir: path.join(app.getPath("userData"), "runtime-appdata")
       };
@@ -388,7 +390,7 @@ export class SidecarManager {
         }
       }
       const currentPersona = typeof config.character_desc === "string" ? config.character_desc.trim() : "";
-      if (!currentPersona || currentPersona === oldDefaultPersona) {
+      if (!currentPersona || currentPersona === oldDefaultPersona || /CowAgent|COW/.test(currentPersona)) {
         config.character_desc = desktopPersona;
         changed = true;
       }
@@ -409,7 +411,7 @@ export class SidecarManager {
         : {};
       const browserDefaults: Record<string, unknown> = {
         cdp_endpoint: "http://127.0.0.1:9222",
-        cdp_auto_launch: true,
+        cdp_auto_launch: false,
         cdp_fallback: true,
         persistent: true
       };
@@ -430,8 +432,8 @@ export class SidecarManager {
         feishuCli.package = "@larksuite/cli@1.0.40";
         changed = true;
       }
-      if (feishuCli.auto_install === undefined) {
-        feishuCli.auto_install = true;
+      if (feishuCli.auto_install === undefined || feishuCli.auto_install === true) {
+        feishuCli.auto_install = false;
         changed = true;
       }
       if (tools.feishu_cli !== feishuCli) {

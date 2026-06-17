@@ -32,7 +32,7 @@ class EcoreXCli(BaseTool):
 
     name: str = "ecorex_cli"
     description: str = (
-        "Run selected built-in EcoreX/CowAgent CLI capabilities without raw shell. "
+        "Run selected built-in EcoreX CLI capabilities without raw shell. "
         "Actions: version, status, skill_list, skill_info, skill_search, skill_list_remote, "
         "skill_install, skill_enable, skill_disable, knowledge_status, knowledge_list, install_browser."
     )

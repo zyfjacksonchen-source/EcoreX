@@ -30,6 +30,7 @@ _DANGEROUS_TOOLS = {
     "terminal",
     "browser",
     "feishu_cli",
+    "optional_abilities",
     "mcp",
     "mcp_server",
     "write",
@@ -99,6 +100,11 @@ def _summarize_args(tool_name: str, arguments: Dict[str, Any]) -> str:
         else:
             detail = str(cli_args or arguments.get("scope") or arguments.get("domain") or "")
         return _mask_sensitive(f"{action} {detail}".strip())[:500] or "Feishu CLI action"
+    if normalized == "optional_abilities":
+        action = str(arguments.get("action") or "")
+        ability = str(arguments.get("ability") or arguments.get("pack_id") or "")
+        detail = " ".join(part for part in [action, ability] if part)
+        return _mask_sensitive(detail).strip()[:500] or "optional ability change"
     if normalized in {"mcp", "mcp_server"}:
         server = str(arguments.get("server") or arguments.get("server_name") or "")
         tool = str(arguments.get("tool") or arguments.get("tool_name") or "")
@@ -327,6 +333,8 @@ class ToolPermissionBroker:
     ) -> Decision:
         normalized_tool = (tool_name or "").strip().lower()
         args = arguments if isinstance(arguments, dict) else {}
+        if normalized_tool == "optional_abilities" and str(args.get("action") or "").strip().lower() in {"list", "status"}:
+            return {"allowed": True, "reason": "read-only-optional-ability-status"}
         if not self._requires_permission(normalized_tool):
             return {"allowed": True, "reason": "not-required"}
 
@@ -434,6 +442,8 @@ class ToolPermissionBroker:
         """Authorize background startup work that cannot surface a UI prompt."""
         normalized_tool = (tool_name or "").strip().lower()
         args = arguments if isinstance(arguments, dict) else {}
+        if normalized_tool == "optional_abilities" and str(args.get("action") or "").strip().lower() in {"list", "status"}:
+            return {"allowed": True, "reason": "read-only-optional-ability-status"}
         if not self._requires_permission(normalized_tool):
             return {"allowed": True, "reason": "not-required"}
 
@@ -708,6 +718,8 @@ class ToolPermissionBroker:
             return "Browser automation confirmation"
         if tool_name == "feishu_cli":
             return "Feishu CLI access confirmation"
+        if tool_name == "optional_abilities":
+            return "Optional ability enablement confirmation"
         if tool_name in {"mcp", "mcp_server"}:
             return "MCP external capability confirmation"
         if tool_name in {"write", "edit", "fs_write"}:
@@ -734,6 +746,8 @@ class ToolPermissionBroker:
             return f"EcoreX wants to control the browser: {summary}"
         if tool_name == "feishu_cli":
             return f"EcoreX wants to access Feishu through lark-cli: {summary}"
+        if tool_name == "optional_abilities":
+            return f"EcoreX wants to enable or install an optional ability: {summary}"
         if tool_name in {"mcp", "mcp_server"}:
             return f"EcoreX wants to start or call an MCP external capability: {summary}"
         if tool_name in {"write", "edit", "fs_write"}:

@@ -501,6 +501,11 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
     require_contains(ecorex_cli, "\"install_browser\"", f"{label} ecorex cli")
     require_contains(ecorex_cli, "authorize_noninteractive(\"skill_write\"", f"{label} ecorex cli")
 
+    optional_abilities = read_text_by_suffix("agent/tools/optional_abilities/optional_abilities.py")
+    require_contains(optional_abilities, "class OptionalAbilities", f"{label} optional abilities")
+    require_contains(optional_abilities, "\"chrome-devtools-mcp\"", f"{label} optional abilities")
+    require_contains(optional_abilities, "\"browser-automation\"", f"{label} optional abilities")
+
     skill_formatter = read_text_by_suffix("agent/skills/formatter.py")
     require_contains(skill_formatter, "format_skill_diagnostics_for_prompt", f"{label} skill formatter")
     require_contains(skill_formatter, "<skill_load_diagnostics>", f"{label} skill formatter")
@@ -522,7 +527,7 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
     require_contains(host_diagnostics, "\"blocked\": True", f"{label} host diagnostics")
     require_contains(host_diagnostics, "\"skills\": _skill_status(self.cwd)", f"{label} host diagnostics")
     require_contains(host_diagnostics, "\"hasGoalTool\": False", f"{label} host diagnostics")
-    require_contains(host_diagnostics, "\"availableStructuredCliTools\": [\"feishu_cli\", \"ecorex_cli\"]", f"{label} host diagnostics")
+    require_contains(host_diagnostics, "\"availableStructuredCliTools\": [\"feishu_cli\", \"ecorex_cli\", \"optional_abilities\"]", f"{label} host diagnostics")
 
     mcp_tool = read_text_by_suffix("agent/tools/mcp/mcp_tool.py")
     require_contains(mcp_tool, "self.remote_name", f"{label} mcp tool")

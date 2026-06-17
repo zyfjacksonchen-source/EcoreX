@@ -681,7 +681,7 @@ function projectContextPrompt(project: ProjectFolder) {
   return [
     "【EcoreX 项目上下文】",
     "默认沟通风格：专业、严谨、克制，称呼用户为“同学”。",
-    "对外身份始终是 EcoreX，不自称 CowAgent 或 COW。",
+    "对外身份始终是 EcoreX。",
     `项目名称：${project.name}`,
     `项目文件夹：${project.path}`,
     `项目记忆：${project.memoryPath || `${project.path}/.ecorex/project-memory.md`}`,

@@ -12,6 +12,7 @@ from bridge.bridge import Bridge
 from bridge.context import Context
 from bridge.reply import Reply, ReplyType
 from common import const
+from common.ecorex_identity import sanitize_assistant_identity, sanitize_messages_identity
 from common.log import logger
 from common.utils import expand_path
 from config import conf
@@ -287,21 +288,24 @@ class AgentBridge:
         # Create helper instances
         self.initializer = AgentInitializer(bridge, self)
 
-        # Eager-start the scheduler so cron tasks fire without waiting
-        # for the first user message. init_scheduler is idempotent.
-        try:
-            from agent.tools.scheduler.integration import init_scheduler
-            if init_scheduler(self):
-                self.scheduler_initialized = True
-        except Exception as e:
-            logger.warning(f"[AgentBridge] Eager scheduler init failed: {e}")
+        if conf().get("scheduler_enabled", False):
+            try:
+                from agent.tools.scheduler.integration import init_scheduler
+                if init_scheduler(self):
+                    self.scheduler_initialized = True
+            except Exception as e:
+                logger.warning(f"[AgentBridge] Eager scheduler init failed: {e}")
+        else:
+            logger.info("[AgentBridge] Scheduler startup skipped; scheduler_enabled is disabled")
 
-        # Start the self-evolution idle trigger (idempotent, daemon thread).
-        try:
-            from agent.evolution.trigger import start_evolution_trigger
-            start_evolution_trigger(self)
-        except Exception as e:
-            logger.warning(f"[AgentBridge] Evolution trigger init failed: {e}")
+        if conf().get("self_evolution_enabled", False):
+            try:
+                from agent.evolution.trigger import start_evolution_trigger
+                start_evolution_trigger(self)
+            except Exception as e:
+                logger.warning(f"[AgentBridge] Evolution trigger init failed: {e}")
+        else:
+            logger.info("[AgentBridge] Self-evolution startup skipped; self_evolution_enabled is disabled")
 
     def create_agent(self, system_prompt: str, tools: List = None, **kwargs) -> Agent:
         """
@@ -509,7 +513,6 @@ class AgentBridge:
             # blow up prompt cost. Regular user chats are not touched here —
             # the agent's own context manager handles that path.
             if session_id and session_id.startswith("scheduler_"):
-                from config import conf
                 scheduler_keep_turns = max(
                     1, int(conf().get("agent_max_context_turns", 20)) // 5
                 )
@@ -551,6 +554,7 @@ class AgentBridge:
             if session_id:
                 channel_type = (context.get("channel_type") or "") if context else ""
                 new_messages = list(getattr(agent, '_last_run_new_messages', []))
+                sanitize_messages_identity(new_messages)
                 # The leading user turn was already persisted eagerly above;
                 # drop it here so it isn't stored twice.
                 if pre_persisted and new_messages and new_messages[0].get("role") == "user":
@@ -580,7 +584,7 @@ class AgentBridge:
             # Record this user turn for the self-evolution idle trigger. Skip
             # scheduler-injected / scheduled-task sessions so internal runs do
             # not count as user activity.
-            if session_id and not session_id.startswith("scheduler_") and not (
+            if conf().get("self_evolution_enabled", False) and session_id and not session_id.startswith("scheduler_") and not (
                 context and context.get("is_scheduled_task")
             ):
                 try:
@@ -599,6 +603,8 @@ class AgentBridge:
             # background. Off the critical path so user latency is unaffected;
             # changes take effect on the user's next message.
             self._schedule_mcp_hot_reload(agent)
+
+            response = sanitize_assistant_identity(response)
 
             # Check if there are files to send (from send/read tool)
             if hasattr(agent, 'stream_executor') and hasattr(agent.stream_executor, 'files_to_send'):
@@ -645,6 +651,8 @@ class AgentBridge:
         so any cost (file stat, hash, server boot) never adds to user latency.
         Failures are isolated and never raise into the message pipeline.
         """
+        if not conf().get("mcp_auto_start", False):
+            return
         import threading
         from agent.tools import ToolManager
 

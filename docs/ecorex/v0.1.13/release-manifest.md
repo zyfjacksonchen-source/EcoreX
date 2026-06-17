@@ -10,24 +10,37 @@
 - macOS workflow inputs: `mac_arch=all`, `notarize=false`, `release_tag=v0.1.13`
 - Result: `macOS DMG (arm64)` success and `macOS DMG (x64)` success; both DMGs were later materialized under the public download host after SHA256 verification.
 
-> 2026-06-16 post-RC hotfix status: source commit `a9a97bc` contains the
-> sidecar-readiness, hidden-context, and macOS-WebUI-ZIP fixes. The macOS DMGs
-> and WebUI packages below have been rebuilt from that source. The Windows
-> installer and public release zip must still be regenerated after a successful
-> elevated SimplySign signing pass.
+> 2026-06-17 post-hand-test hotfix status: the latest source contains an
+> on-demand optional-ability boundary and runtime identity hardening after the
+> user reported a desktop startup stall. All artifact hashes below are retained
+> as historical evidence only until the next rebuild. Do not deploy the download
+> page, upload GitHub release assets, or push Git until the new local desktop
+> release build passes user hand-test.
 
 ## Artifact Status
 
 | Artifact | Status | Size | SHA256 |
 | --- | --- | ---: | --- |
-| `EcoreX_0.1.13_x64-setup.exe` | `pending-validation`, post-hotfix rebuild not signed yet | 149,193,112 | `D44E562E9874CAF7E9F2519FCDDE8A9EAC6A8E4D401956AB9672B4A051D4634B` |
-| `EcoreX_0.1.13-webui-windows-x64.zip` | `ready` | 72,884,909 | `88F37BCD6C65C194398FF2248837F3BB0D3D6AE095859929558A813EFB40C61F` |
-| `EcoreX_0.1.13-webui-macos-universal.zip` | `ready` | 165,308,769 | `3E4EA259222133E4AA7B08B99CFB4FC2E016B29612DC7C1488D0CC7E228DD3AE` |
-| `EcoreX_0.1.13-webui-win-mac.zip` | `archived` | 238,356,152 | `7CFA6F123F96CCF94E2565E9CCA4F2CBE5871E1F054ECEB20265E4B9A3FD5AD4` |
-| `EcoreX_0.1.13-web-linux-service.tar.gz` | `archived` | 3,129,472 | `84C24E9EC7AAD64313254610AABAAE336284CE28CD0FB4AFBACCE096AD55989E` |
-| `EcoreX_0.1.13_arm64.dmg` | `ready-unsigned` | 192,665,255 | `CC3B7EE4FB48E8A4739E210BCC621F7F60D635D71183E78B1DEBB24F37AA0AFB` |
-| `EcoreX_0.1.13_x64.dmg` | `ready-unsigned` | 200,039,732 | `B93957C3B0C662E63529B503BA29B9123C66584A2C87E2CAA68B7E29A1A7F8BC` |
+| `EcoreX_0.1.13_x64-setup.exe` | `stale-after-on-demand-hotfix` | 149,193,112 | `D44E562E9874CAF7E9F2519FCDDE8A9EAC6A8E4D401956AB9672B4A051D4634B` |
+| `EcoreX_0.1.13-webui-windows-x64.zip` | `stale-after-on-demand-hotfix` | 72,884,909 | `88F37BCD6C65C194398FF2248837F3BB0D3D6AE095859929558A813EFB40C61F` |
+| `EcoreX_0.1.13-webui-macos-universal.zip` | `stale-after-on-demand-hotfix` | 165,308,769 | `3E4EA259222133E4AA7B08B99CFB4FC2E016B29612DC7C1488D0CC7E228DD3AE` |
+| `EcoreX_0.1.13-webui-win-mac.zip` | `archived-stale` | 238,356,152 | `7CFA6F123F96CCF94E2565E9CCA4F2CBE5871E1F054ECEB20265E4B9A3FD5AD4` |
+| `EcoreX_0.1.13-web-linux-service.tar.gz` | `archived-stale` | 3,129,472 | `84C24E9EC7AAD64313254610AABAAE336284CE28CD0FB4AFBACCE096AD55989E` |
+| `EcoreX_0.1.13_arm64.dmg` | `stale-after-on-demand-hotfix` | 192,665,255 | `CC3B7EE4FB48E8A4739E210BCC621F7F60D635D71183E78B1DEBB24F37AA0AFB` |
+| `EcoreX_0.1.13_x64.dmg` | `stale-after-on-demand-hotfix` | 200,039,732 | `B93957C3B0C662E63529B503BA29B9123C66584A2C87E2CAA68B7E29A1A7F8BC` |
 | `EcoreX_0.1.13-public-release.zip` | pending regeneration | - | - |
+
+## Local Hand-Test Build
+
+- Opened local desktop directory build: `desktop/release/win-unpacked/EcoreX.exe`.
+- This build is intentionally `NotSigned` and must not be uploaded to the download page.
+- Size: `210896896`
+- SHA256: `6FA52E0D912C25C5B61D1BE2FB0051AA377DAC2A82D45ABCBEDE300C0E65A829`
+- Renderer assets: `index-DGSZjdR_.js`, `index-D7oCsug3.css`.
+- Runtime readiness: `http://127.0.0.1:9899/api/version` returned version `0.1.13`.
+- Optional heavy startup defaults verified in the packaged runtime: `self_evolution_enabled=false`, `scheduler_enabled=false`, `mcp_auto_start=false`, browser `cdp_auto_launch=false`, and Feishu `auto_install=false`.
+- Post-rebuild chat smoke: `POST /message` plus SSE `/stream` on `127.0.0.1:9899` returned `done` with content `OK`; this verifies the `AgentBridge.agent_reply()` `conf` scope hotfix and no longer emits `Agent error: cannot access local variable 'conf'`.
+- Release rule: wait for user hand-test confirmation before signing Windows, rebuilding macOS DMGs/WebUI packages, regenerating the public release zip, updating the download page, or pushing Git.
 
 ## macOS DMG Notes
 

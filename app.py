@@ -286,6 +286,9 @@ def _warmup_mcp_tools():
     thread inside ToolManager. Safe to call when MCP is not configured.
     """
     try:
+        if not conf().get("mcp_auto_start", False):
+            logger.info("[App] MCP warmup skipped; mcp_auto_start is disabled")
+            return
         from agent.tools import ToolManager
         ToolManager()._load_mcp_tools()
     except Exception as e:
@@ -296,6 +299,9 @@ def _warmup_scheduler():
     """Eager-init AgentBridge so the scheduler thread starts at process
     boot rather than waiting for the first user message."""
     try:
+        if not conf().get("scheduler_enabled", False):
+            logger.info("[App] Scheduler warmup skipped; scheduler_enabled is disabled")
+            return
         from bridge.bridge import Bridge
         Bridge().get_agent_bridge()
     except Exception as e:
