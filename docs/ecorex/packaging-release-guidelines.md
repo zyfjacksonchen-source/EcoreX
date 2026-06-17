@@ -1,5 +1,23 @@
 # EcoreX 打包发布准则
 
+## 2026-06-17 v0.1.13 GitHub Desktop And Signing Addendum
+
+- GitHub Desktop is the preferred future UI for interactive branch review, diff review, and routine commit management in this checkout.
+- The checkout is configured so GitHub Desktop sees `origin` as `https://github.com/zhangyifanjackson-dotcom/EcoreX.git`.
+- The legacy CowAgent remote is retained as `cowagent-origin` only for reference; do not publish EcoreX release branches to that remote.
+- Keep the `ecorex` remote as an explicit script/CLI alias for release automation. Release commands may still use `git push ecorex HEAD:main` or `git push ecorex refs/tags/vX.Y.Z`.
+- Version and artifact management must still be controlled by source files and release scripts, not by ad-hoc GitHub Desktop edits alone:
+  - `cli/VERSION`
+  - `desktop/package.json`
+  - `desktop/package-lock.json`
+  - Admin/runtime client key allowlists
+  - `deploy/ecorex-site/manifest.json`
+  - `docs/ecorex/vX.Y.Z/*`
+  - final package hashes from generated artifacts
+- GitHub Desktop can commit and push the prepared source branch, but final release publication still requires the scripted checks: Windows Authenticode validation, macOS workflow build evidence, manifest/public zip validation, production HEAD checks, Web runtime release check, GitHub Release asset upload, and tag/main alignment.
+- Signing private keys are admin/elevated-process only. A normal shell may show the certificate but fail to see usable SimplySign/CSP key containers. Do not expose private-key material, token values, or signing secrets in renderer logs, release manifests, docs, or terminal transcripts.
+- For v0.1.13, the successful Windows signing truth is the final installer `Get-AuthenticodeSignature` status `Valid`; `certutil -user -key -csp "SimplySign CSP"` remains diagnostic only.
+
 ## 2026-06-16 v0.1.13 Release Gate Addendum
 
 - v0.1.13 source starts from remote `main`/tag v0.1.12 at `b76f5a0d8495c9d447078e1db56f06b56cc962d2`. Do not publish from an older local HEAD.

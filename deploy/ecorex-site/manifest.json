@@ -2,86 +2,95 @@
   "product": "EcoreX",
   "version": "0.1.13",
   "updatedAt": "2026-06-17",
-  "notes": "EcoreX v0.1.13 is in post-hand-test-hotfix validation. Download artifacts are disabled until the on-demand ability and identity hardening build is rebuilt, signed, smoke-tested, and approved.",
+  "notes": "EcoreX v0.1.13 final release: signed Windows installer, unsigned/unnotarized macOS DMGs built by GitHub Actions macos-15, refreshed WebUI packages, and on-demand optional abilities.",
   "artifacts": [
     {
       "id": "windows-x64",
+      "version": "0.1.13",
       "platform": "Windows",
       "variant": "Desktop x64 signed installer",
       "fileName": "EcoreX_0.1.13_x64-setup.exe",
       "href": "downloads/EcoreX_0.1.13_x64-setup.exe",
-      "size": 149194568,
-      "sha256": "DA9ED91760CD78D7D6A7D5568BE58A095AD48A447816FEBAE2E3326F6E33AB11",
-      "status": "pending-signature",
-      "source": "Stale after the post-hand-test on-demand ability and identity hardening hotfix. Rebuild from current source, sign with elevated SimplySign/signtool, verify Authenticode, and smoke before publishing."
+      "size": 149139328,
+      "sha256": "85D08C28094A9818052E9156FAD81BA5E46DFD2551AB06043B5B3E0B90F53865",
+      "status": "ready",
+      "source": "Fresh v0.1.13 Windows NSIS installer rebuilt from current source and signed with the configured elevated signtool flow; Authenticode status Valid."
     },
     {
       "id": "webui-win-mac",
+      "version": "0.1.13",
       "platform": "Windows / macOS",
       "variant": "WebUI dual-platform one-click package",
       "fileName": "EcoreX_0.1.13-webui-win-mac.zip",
       "href": "downloads/EcoreX_0.1.13-webui-win-mac.zip",
-      "size": 238356152,
-      "sha256": "7CFA6F123F96CCF94E2565E9CCA4F2CBE5871E1F054ECEB20265E4B9A3FD5AD4",
+      "size": 238370611,
+      "sha256": "EE5FA93FE25F1440A56B5A727ADE6AE54E2EA990F78150D62A836E09B742D3CB",
       "status": "archived-stale",
       "visible": false,
-      "source": "Archived stale dual-platform package. Regenerate after the on-demand ability defaults are in the WebUI Windows/macOS package configs."
+      "source": "Archived dual-platform compatibility package; final download page uses separate Windows and macOS WebUI packages."
     },
     {
       "id": "webui-windows-x64",
+      "version": "0.1.13",
       "platform": "Windows",
       "variant": "WebUI one-click local package",
       "fileName": "EcoreX_0.1.13-webui-windows-x64.zip",
       "href": "downloads/EcoreX_0.1.13-webui-windows-x64.zip",
-      "size": 72884909,
-      "sha256": "88F37BCD6C65C194398FF2248837F3BB0D3D6AE095859929558A813EFB40C61F",
-      "status": "pending-validation",
-      "source": "Stale after the on-demand ability hotfix. Regenerate so WebUI Windows defaults keep heavy abilities disabled until optional_abilities enables them."
+      "size": 72892147,
+      "sha256": "6C4AACE07BD7B9F7ED4F9A7BB4EE7CDF8E46E573F0AAA6DF6201839101E60705",
+      "status": "ready",
+      "source": "Fresh v0.1.13 WebUI Windows local package rebuilt from current source with optional abilities disabled until enabled on demand."
     },
     {
       "id": "webui-macos-universal",
+      "version": "0.1.13",
       "platform": "macOS",
       "variant": "WebUI one-click local package",
       "fileName": "EcoreX_0.1.13-webui-macos-universal.zip",
       "href": "downloads/EcoreX_0.1.13-webui-macos-universal.zip",
-      "size": 165308769,
-      "sha256": "3E4EA259222133E4AA7B08B99CFB4FC2E016B29612DC7C1488D0CC7E228DD3AE",
-      "status": "pending-validation",
-      "source": "Stale after the on-demand ability hotfix. Regenerate the self-contained Install EcoreX WebUI.app package so macOS WebUI defaults keep heavy abilities disabled until optional_abilities enables them."
+      "size": 165315881,
+      "sha256": "AA1CBC3EFE876B79D872DCA73AC5926E6FE48B7EEB136914BA130839D2EFB874",
+      "status": "ready",
+      "source": "Fresh self-contained Install EcoreX WebUI.app ZIP rebuilt from current source; no terminal-opening .command entrypoint."
     },
     {
       "id": "web-linux-service",
+      "version": "0.1.13",
       "platform": "Linux",
       "variant": "Web service deployment package",
       "fileName": "EcoreX_0.1.13-web-linux-service.tar.gz",
       "href": "downloads/EcoreX_0.1.13-web-linux-service.tar.gz",
-      "size": 3129472,
-      "sha256": "84C24E9EC7AAD64313254610AABAAE336284CE28CD0FB4AFBACCE096AD55989E",
-      "status": "archived-stale",
+      "size": 3130894,
+      "sha256": "D3515AFE57407052E39D3151B9408BD39F3EB6CE65429452C3D57BDF70D27C96",
+      "status": "ready",
       "visible": false,
-      "source": "Archived stale Web deployment package; regenerate from current source before server/operator handoff."
+      "source": "Fresh v0.1.13 Linux Web service package rebuilt from current runtime and renderer assets."
     },
     {
       "id": "macos-arm64-dmg",
+      "version": "0.1.13",
       "platform": "macOS",
       "variant": "Desktop Apple Silicon DMG",
       "fileName": "EcoreX_0.1.13_arm64.dmg",
-      "href": "downloads/EcoreX_0.1.13_arm64.dmg",
-      "size": 192665255,
-      "sha256": "CC3B7EE4FB48E8A4739E210BCC621F7F60D635D71183E78B1DEBB24F37AA0AFB",
-      "status": "pending-validation",
-      "source": "Stale after the post-hand-test on-demand ability and identity hardening hotfix. Rebuild via GitHub Actions macos-15 from the current source before publishing. Unsigned/unnotarized remains allowed only after fresh run ID, size, and SHA256 are recorded."
+      "href": "https://www.ecoreai.cn/ecorex-agent/downloads/EcoreX_0.1.13_arm64.dmg",
+      "size": 192668572,
+      "sha256": "544E6385096821A993150A403199ADBE76C678C7AFF8BC9074E7F2BB28FFCE7E",
+      "status": "ready-unsigned",
+      "source": "GitHub Actions macos-15 workflow_dispatch run 27662225103, mac_arch=all, notarize=false. Unsigned/unnotarized by user decision.",
+      "external": true
     },
     {
       "id": "macos-x64-dmg",
+      "version": "0.1.13",
       "platform": "macOS",
       "variant": "Desktop Intel DMG",
       "fileName": "EcoreX_0.1.13_x64.dmg",
-      "href": "downloads/EcoreX_0.1.13_x64.dmg",
-      "size": 200039732,
-      "sha256": "B93957C3B0C662E63529B503BA29B9123C66584A2C87E2CAA68B7E29A1A7F8BC",
-      "status": "pending-validation",
-      "source": "Stale after the post-hand-test on-demand ability and identity hardening hotfix. Rebuild via GitHub Actions macos-15 from the current source before publishing. Unsigned/unnotarized remains allowed only after fresh run ID, size, and SHA256 are recorded."
+      "href": "https://www.ecoreai.cn/ecorex-agent/downloads/EcoreX_0.1.13_x64.dmg",
+      "size": 200046801,
+      "sha256": "B5BF52A5869C2EFABB2EB179D7984BE003A98DE224F397B696E86D897DBB5FAE",
+      "status": "ready-unsigned",
+      "source": "GitHub Actions macos-15 workflow_dispatch run 27662225103, mac_arch=all, notarize=false. Unsigned/unnotarized by user decision.",
+      "external": true
     }
   ],
   "admin": {

@@ -2,65 +2,58 @@
 
 ## Source And Build Basis
 
-- Working branch: `codex/ecorex-v0.1.13`
-- Local source commit for release infrastructure: `a9a97bc7a95265a63d69d5f93047683a52dd60a1`
-- Remote branch commit used for the latest macOS DMG workflow: `a9a97bc7a95265a63d69d5f93047683a52dd60a1`
-- macOS workflow: `.github/workflows/ecorex-desktop-release.yml`
-- Build macOS Apps validation: GitHub Actions `macos-15` workflow_dispatch run `27611830980`
-- macOS workflow inputs: `mac_arch=all`, `notarize=false`, `release_tag=v0.1.13`
-- Result: `macOS DMG (arm64)` success and `macOS DMG (x64)` success; both DMGs were later materialized under the public download host after SHA256 verification.
+- Working branch: `codex/ecorex-v0.1.13`.
+- Release tag: `v0.1.13`.
+- macOS desktop build: GitHub Actions `Build macOS Apps` / `macos-15` workflow_dispatch run `27662225103`.
+- macOS workflow inputs: `mac_arch=all`, `notarize=false`, `release_tag=v0.1.13`.
+- Windows signing: elevated SimplySign/signtool flow. A normal, non-admin shell may see the certificate but not the usable private key.
+- Private key visibility rule: signing private keys are admin/elevated-process only. Do not expect or expose private-key material in normal user shells, renderer logs, manifests, or release docs.
+- GitHub Desktop setup: `origin` now points to `https://github.com/zhangyifanjackson-dotcom/EcoreX.git`; the old CowAgent remote is retained as `cowagent-origin`; `ecorex` remains as an alias for scripts and explicit release pushes.
 
-> 2026-06-17 post-hand-test hotfix status: the latest source contains an
-> on-demand optional-ability boundary and runtime identity hardening after the
-> user reported a desktop startup stall. All artifact hashes below are retained
-> as historical evidence only until the next rebuild. Do not deploy the download
-> page, upload GitHub release assets, or push Git until the new local desktop
-> release build passes user hand-test.
-
-## Artifact Status
+## Final Artifacts
 
 | Artifact | Status | Size | SHA256 |
 | --- | --- | ---: | --- |
-| `EcoreX_0.1.13_x64-setup.exe` | `stale-after-on-demand-hotfix` | 149,193,112 | `D44E562E9874CAF7E9F2519FCDDE8A9EAC6A8E4D401956AB9672B4A051D4634B` |
-| `EcoreX_0.1.13-webui-windows-x64.zip` | `stale-after-on-demand-hotfix` | 72,884,909 | `88F37BCD6C65C194398FF2248837F3BB0D3D6AE095859929558A813EFB40C61F` |
-| `EcoreX_0.1.13-webui-macos-universal.zip` | `stale-after-on-demand-hotfix` | 165,308,769 | `3E4EA259222133E4AA7B08B99CFB4FC2E016B29612DC7C1488D0CC7E228DD3AE` |
-| `EcoreX_0.1.13-webui-win-mac.zip` | `archived-stale` | 238,356,152 | `7CFA6F123F96CCF94E2565E9CCA4F2CBE5871E1F054ECEB20265E4B9A3FD5AD4` |
-| `EcoreX_0.1.13-web-linux-service.tar.gz` | `archived-stale` | 3,129,472 | `84C24E9EC7AAD64313254610AABAAE336284CE28CD0FB4AFBACCE096AD55989E` |
-| `EcoreX_0.1.13_arm64.dmg` | `stale-after-on-demand-hotfix` | 192,665,255 | `CC3B7EE4FB48E8A4739E210BCC621F7F60D635D71183E78B1DEBB24F37AA0AFB` |
-| `EcoreX_0.1.13_x64.dmg` | `stale-after-on-demand-hotfix` | 200,039,732 | `B93957C3B0C662E63529B503BA29B9123C66584A2C87E2CAA68B7E29A1A7F8BC` |
-| `EcoreX_0.1.13-public-release.zip` | pending regeneration | - | - |
+| `EcoreX_0.1.13_x64-setup.exe` | ready, Authenticode `Valid` | 149,139,328 | `85D08C28094A9818052E9156FAD81BA5E46DFD2551AB06043B5B3E0B90F53865` |
+| `EcoreX_0.1.13-webui-windows-x64.zip` | ready | 72,892,147 | `6C4AACE07BD7B9F7ED4F9A7BB4EE7CDF8E46E573F0AAA6DF6201839101E60705` |
+| `EcoreX_0.1.13-webui-macos-universal.zip` | ready | 165,315,881 | `AA1CBC3EFE876B79D872DCA73AC5926E6FE48B7EEB136914BA130839D2EFB874` |
+| `EcoreX_0.1.13-webui-win-mac.zip` | archived-stale, hidden | 238,370,611 | `EE5FA93FE25F1440A56B5A727ADE6AE54E2EA990F78150D62A836E09B742D3CB` |
+| `EcoreX_0.1.13-web-linux-service.tar.gz` | ready, hidden from download cards | 3,130,894 | `D3515AFE57407052E39D3151B9408BD39F3EB6CE65429452C3D57BDF70D27C96` |
+| `EcoreX_0.1.13_arm64.dmg` | ready-unsigned, unnotarized | 192,668,572 | `544E6385096821A993150A403199ADBE76C678C7AFF8BC9074E7F2BB28FFCE7E` |
+| `EcoreX_0.1.13_x64.dmg` | ready-unsigned, unnotarized | 200,046,801 | `B5BF52A5869C2EFABB2EB179D7984BE003A98DE224F397B696E86D897DBB5FAE` |
+| `EcoreX_0.1.13-public-release.zip` | deployed | 392,424,725 | `FFC42E95DD38DDFE99249C126943946F19931F24552F5779E35520371E5DB517` |
 
-## Local Hand-Test Build
+## Production Deployment
 
-- Opened local desktop directory build: `desktop/release/win-unpacked/EcoreX.exe`.
-- This build is intentionally `NotSigned` and must not be uploaded to the download page.
-- Size: `210896896`
-- SHA256: `6FA52E0D912C25C5B61D1BE2FB0051AA377DAC2A82D45ABCBEDE300C0E65A829`
-- Renderer assets: `index-DGSZjdR_.js`, `index-D7oCsug3.css`.
-- Runtime readiness: `http://127.0.0.1:9899/api/version` returned version `0.1.13`.
-- Optional heavy startup defaults verified in the packaged runtime: `self_evolution_enabled=false`, `scheduler_enabled=false`, `mcp_auto_start=false`, browser `cdp_auto_launch=false`, and Feishu `auto_install=false`.
-- Post-rebuild chat smoke: `POST /message` plus SSE `/stream` on `127.0.0.1:9899` returned `done` with content `OK`; this verifies the `AgentBridge.agent_reply()` `conf` scope hotfix and no longer emits `Agent error: cannot access local variable 'conf'`.
-- Release rule: wait for user hand-test confirmation before signing Windows, rebuilding macOS DMGs/WebUI packages, regenerating the public release zip, updating the download page, or pushing Git.
+- Download page: `https://www.ecoreai.cn/ecorex-agent/`.
+- Production manifest version: `0.1.13`.
+- Public download HEAD checks passed for:
+  - Windows desktop installer.
+  - Windows WebUI package.
+  - macOS WebUI package.
+  - macOS Apple Silicon DMG.
+  - macOS Intel DMG.
+- Production Web runtime is deployed to `/opt/ecorex-web/releases/20260617042234-v0.1.13`.
+- `ecorex-web.service` is active and the root release check passed using `BASE_URL=http://172.18.0.1:9909`.
+- Public `/ecorex-agent/app/` returns HTTP 200.
 
-## macOS DMG Notes
+## Validation Evidence
 
-- The v0.1.13 DMGs are complete GitHub Actions build outputs, not locally renamed artifacts.
-- They are intentionally unsigned/unnotarized for this release pass by user decision.
-- The download page must show the Gatekeeper recovery hint: open System Settings, go to Privacy & Security, and click Still Open for EcoreX.
-- The final public release zip embeds these DMGs under `site/downloads/`, so the download page does not depend on private GitHub Release asset URLs.
+- `python tests\test_ecorex_web_parallel_backend.py`: 82 tests passed after the `conf` scope hotfix.
+- `npm run typecheck`: passed in `desktop/`.
+- Hidden-context smoke: `/message` stored only the visible user message; the hidden marker was absent from `/api/history`.
+- Windows installer signature: `Get-AuthenticodeSignature desktop/release/EcoreX_0.1.13_x64-setup.exe` returned `Valid`.
+- macOS DMGs: both generated by the macos-15 workflow and installed to the public download host after SHA256 verification.
+- Release validator:
+  - `python scripts\validate-ecorex-release-artifacts.py --manifest deploy\ecorex-site\manifest.json --artifact-dir release-artifacts --version 0.1.13 --public-zip release-artifacts\EcoreX_0.1.13-public-release.zip --desktop-dir desktop\release\win-unpacked`
+  - Result: all checks passed, including desktop unpacked host-boundary.
 
-## Windows Signing Result
+## macOS User Note
 
-- The post-hotfix `release/win-unpacked/EcoreX.exe` has been rebuilt and currently requires an elevated SimplySign signing pass before NSIS packaging can be finalized.
-- `Get-AuthenticodeSignature desktop/release/win-unpacked/EcoreX.exe` must report `Valid` before rebuilding `EcoreX_0.1.13_x64-setup.exe`.
-- The final setup must be timestamped by DigiCert and verified with `Get-AuthenticodeSignature desktop/release/EcoreX_0.1.13_x64-setup.exe`.
-- `certutil -user -key -csp "SimplySign CSP"` can still report no key containers even when elevated `signtool` works, so use direct elevated signtool signing as the release truth and keep the preflight as a diagnostic only.
+- The v0.1.13 desktop DMGs are intentionally unsigned and unnotarized.
+- The download page must retain the user-facing Gatekeeper instruction: if macOS blocks the app, open System Settings, go to Privacy & Security, and click Still Open for EcoreX.
 
-## WebUI macOS Boundary
+## Compatibility
 
-- The macOS WebUI package no longer ships `Install EcoreX WebUI.command`.
-- It ships `Install EcoreX WebUI.app`, which starts the local runtime in the background and opens the browser after the service is ready.
-- Logs go under `~/Library/Application Support/EcoreX WebUI/state/`.
-- The package validator rejects terminal-opening `.command` entrypoints for the macOS WebUI package.
-- The installer must start `app.py` with working directory set to the installed `runtime` directory. A macos-15 smoke run caught the previous bug where `config.json` was written under `runtime/` but the process launched from another cwd, so the WebUI ignored the selected port and fell back to `9899`.
-- GitHub Actions macos-15 WebUI install smoke run `27614943747` passed against private Release asset `EcoreX_0.1.13-webui-macos-universal.zip` at branch commit `77dc7acb80b009a4f93d58dc8695a784043afba1`.
+- Admin/runtime client keys include v0.1.13.
+- v0.1.10, v0.1.11, and v0.1.12 keys remain accepted during rollout so older installed users do not break before updating.

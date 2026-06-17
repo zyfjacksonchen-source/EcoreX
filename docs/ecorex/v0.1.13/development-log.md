@@ -187,3 +187,34 @@ This log records source changes for v0.1.13. It does not mark a public release c
   - `python tests\test_ecorex_web_parallel_backend.py` passed `82` tests after the `conf` scope hotfix.
   - A temporary `/message` smoke with a unique `hidden_context` marker stored only the visible user message in `/api/history`; the hidden marker was absent from persisted history and the temporary session delete returned success.
   - `deploy/ecorex-site/manifest.json` remains in the guarded v0.1.13 post-hotfix state: visible artifacts are `pending-signature` or `pending-validation`, hidden archives are `archived-stale`, and the notes block says artifacts are disabled until rebuild/sign/smoke/user approval.
+
+## Final v0.1.13 Release Pass
+
+- User confirmed the final local hand-test build and approved signing, packaging, GitHub push, and production deployment.
+- GitHub Desktop setup was corrected for future interactive source management:
+  - `origin` now points to `https://github.com/zhangyifanjackson-dotcom/EcoreX.git`.
+  - The previous CowAgent remote is preserved as `cowagent-origin`.
+  - The existing `ecorex` remote is retained for explicit release scripts and command-line pushes.
+  - The current branch tracks `origin/codex/ecorex-v0.1.13` so GitHub Desktop does not confuse the feature branch with `main`.
+- Rebuilt, signed, and verified the final Windows installer:
+  - `desktop/release/EcoreX_0.1.13_x64-setup.exe`
+  - Authenticode `Valid`
+  - size `149139328`
+  - SHA256 `85D08C28094A9818052E9156FAD81BA5E46DFD2551AB06043B5B3E0B90F53865`
+- Built final WebUI and Web service packages from the same runtime:
+  - Windows WebUI ZIP size `72892147`, SHA256 `6C4AACE07BD7B9F7ED4F9A7BB4EE7CDF8E46E573F0AAA6DF6201839101E60705`
+  - macOS WebUI ZIP size `165315881`, SHA256 `AA1CBC3EFE876B79D872DCA73AC5926E6FE48B7EEB136914BA130839D2EFB874`
+  - Linux Web service tarball size `3130894`, SHA256 `D3515AFE57407052E39D3151B9408BD39F3EB6CE65429452C3D57BDF70D27C96`
+- Re-ran Build macOS Apps through GitHub Actions `macos-15` workflow_dispatch run `27662225103`.
+  - `EcoreX_0.1.13_arm64.dmg` size `192668572`, SHA256 `544E6385096821A993150A403199ADBE76C678C7AFF8BC9074E7F2BB28FFCE7E`
+  - `EcoreX_0.1.13_x64.dmg` size `200046801`, SHA256 `B5BF52A5869C2EFABB2EB179D7984BE003A98DE224F397B696E86D897DBB5FAE`
+  - Both DMGs are unsigned/unnotarized by release decision and are not renamed older artifacts.
+- Regenerated and deployed `EcoreX_0.1.13-public-release.zip`, size `392424725`, SHA256 `FFC42E95DD38DDFE99249C126943946F19931F24552F5779E35520371E5DB517`.
+- Production download page now serves manifest `0.1.13`; visible artifacts include per-artifact `version: 0.1.13`.
+- Public HEAD checks passed for the download root, `/app/`, Windows installer, Windows WebUI ZIP, macOS WebUI ZIP, and both macOS desktop DMGs.
+- Production Web runtime was upgraded from v0.1.12 to `/opt/ecorex-web/releases/20260617042234-v0.1.13`.
+  - `ecorex-web.service` is active.
+  - The release check passed using the actual local bind `BASE_URL=http://172.18.0.1:9909`.
+  - Auth login, `/app/`, `/auth/check`, `/api/version`, and SSE health checks passed.
+- Final local validator passed:
+  - `python scripts\validate-ecorex-release-artifacts.py --manifest deploy\ecorex-site\manifest.json --artifact-dir release-artifacts --version 0.1.13 --public-zip release-artifacts\EcoreX_0.1.13-public-release.zip --desktop-dir desktop\release\win-unpacked`

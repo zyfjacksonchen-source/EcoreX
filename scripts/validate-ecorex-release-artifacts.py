@@ -27,9 +27,10 @@ FORBIDDEN_WEB_ASSETS = (
     "index-CjBkNLMl.js",
     "index-B_LYG2V7.js",
     "index-CcCofcc7.js",
+    "index-vjxmFxDP.js",
 )
 REQUIRED_WEB_ASSETS = (
-    "index-vjxmFxDP.js",
+    "index-DGSZjdR_.js",
     "index-D7oCsug3.css",
 )
 REQUIRED_SITE_ASSETS = (
