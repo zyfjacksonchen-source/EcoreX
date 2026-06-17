@@ -17,6 +17,20 @@ export type RuntimeActiveRequest = {
   stream_available?: boolean;
 };
 
+export type RuntimeSessionLock = {
+  path?: string;
+  session_id?: string;
+  pid?: number | string;
+  host?: string;
+  created_at?: number;
+  age_seconds?: number;
+  alive?: boolean | null;
+  dead_owner?: boolean;
+  stale?: boolean;
+  removed?: boolean;
+  removable?: boolean;
+};
+
 export type RuntimeTool = {
   name?: string;
   description?: string;
@@ -116,6 +130,8 @@ export type RuntimeSnapshot = {
   currentModel?: string;
   sessions: RuntimeSession[];
   activeRequests?: RuntimeActiveRequest[];
+  activeRequestsStatus?: string;
+  staleLocks?: RuntimeSessionLock[];
   totalSessions: number;
   toolsCount: number;
   skillsCount: number;
@@ -123,6 +139,19 @@ export type RuntimeSnapshot = {
   tools?: RuntimeTool[];
   skills?: RuntimeSkill[];
   modelCapabilities?: Record<string, unknown>;
+};
+
+export type DesktopUpdateStatus = {
+  state: "idle" | "checking" | "available" | "not-available" | "downloading" | "downloaded" | "blocked" | "installing" | "error";
+  platform: string;
+  currentVersion: string;
+  version?: string;
+  message: string;
+  downloadUrl?: string;
+  releaseDate?: string;
+  progress?: number;
+  activeRequests?: number;
+  checkedAt?: string;
 };
 
 export type UsageQuota = {
@@ -307,8 +336,13 @@ export async function checkEnterpriseQuota(estimatedTokens: number): Promise<Ent
 
 export async function loadRuntimeSnapshot(): Promise<RuntimeSnapshot> {
   try {
-    const activeRequestsPromise = apiJson<{ requests?: RuntimeActiveRequest[] }>("/api/active-requests")
-      .catch(() => ({ requests: [] }));
+    const activeRequestsPromise = apiJson<{
+      status?: string;
+      requests?: RuntimeActiveRequest[];
+      staleLocks?: RuntimeSessionLock[];
+      stale_locks?: RuntimeSessionLock[];
+    }>("/api/active-requests")
+      .catch(() => ({ status: "unavailable", requests: [], staleLocks: [], stale_locks: [] }));
     const [version, sessions, tools, skills, models, activeRequests] = await Promise.all([
       apiJson<{ version?: string; releaseNotes?: RuntimeReleaseNotes }>("/api/version"),
       apiJson<{ sessions?: RuntimeSession[]; total?: number; message?: string }>("/api/sessions?page=1&page_size=40"),
@@ -322,6 +356,11 @@ export async function loadRuntimeSnapshot(): Promise<RuntimeSnapshot> {
     const runtimeTools = Array.isArray(tools.tools) ? tools.tools : [];
     const runtimeSkills = Array.isArray(skills.skills) ? skills.skills : [];
     const runtimeActiveRequests = Array.isArray(activeRequests.requests) ? activeRequests.requests : [];
+    const staleLocks = Array.isArray(activeRequests.staleLocks)
+      ? activeRequests.staleLocks
+      : Array.isArray(activeRequests.stale_locks)
+        ? activeRequests.stale_locks
+        : [];
     const capabilityCount = Array.isArray(models.capabilities)
       ? models.capabilities.length
       : models.capabilities && typeof models.capabilities === "object"
@@ -334,6 +373,8 @@ export async function loadRuntimeSnapshot(): Promise<RuntimeSnapshot> {
       releaseNotes: version.releaseNotes,
       sessions: runtimeSessions,
       activeRequests: runtimeActiveRequests,
+      activeRequestsStatus: activeRequests.status || "success",
+      staleLocks,
       totalSessions: typeof sessions.total === "number" ? sessions.total : runtimeSessions.length,
       toolsCount: runtimeTools.length,
       skillsCount: runtimeSkills.length,
@@ -349,6 +390,8 @@ export async function loadRuntimeSnapshot(): Promise<RuntimeSnapshot> {
       message: error instanceof Error ? error.message : "本地运行时暂不可用",
       sessions: [],
       activeRequests: [],
+      activeRequestsStatus: "unavailable",
+      staleLocks: [],
       totalSessions: 0,
       toolsCount: 0,
       skillsCount: 0,
@@ -398,6 +441,7 @@ function inferCurrentModel(models: { providers?: unknown[]; capabilities?: Recor
 export async function sendChatMessage(input: {
   sessionId: string;
   message: string;
+  visibleMessage?: string;
   hiddenContext?: string;
   attachments?: FileAttachment[];
   lang?: string;
@@ -426,6 +470,7 @@ export async function sendChatMessage(input: {
     body: {
       session_id: input.sessionId,
       message: input.message,
+      visible_message: input.visibleMessage || input.message,
       hidden_context: input.hiddenContext || "",
       stream: true,
       timestamp: new Date().toISOString(),
@@ -555,11 +600,54 @@ export async function openLocalPath(filePath: string) {
   return window.ecorexDesktop.openPath(filePath);
 }
 
+export async function openRuntimePath(filePath: string) {
+  const result = await apiJson<{ status?: string; message?: string }>("/api/open-path", "POST", { path: filePath });
+  return result.message || "";
+}
+
 export async function loadPermissionState(): Promise<PermissionState | null> {
   if (window.ecorexDesktop?.getPermissionState) {
     return window.ecorexDesktop.getPermissionState();
   }
   return apiJson<PermissionState & { status?: string }>("/api/tool-permissions");
+}
+
+export async function checkForUpdates(): Promise<DesktopUpdateStatus | null> {
+  if (!window.ecorexDesktop?.checkForUpdates) return null;
+  return window.ecorexDesktop.checkForUpdates() as Promise<DesktopUpdateStatus>;
+}
+
+export async function getUpdateStatus(): Promise<DesktopUpdateStatus | null> {
+  if (!window.ecorexDesktop?.getUpdateStatus) return null;
+  return window.ecorexDesktop.getUpdateStatus() as Promise<DesktopUpdateStatus>;
+}
+
+export async function installDownloadedUpdate(): Promise<DesktopUpdateStatus | null> {
+  if (!window.ecorexDesktop?.installDownloadedUpdate) return null;
+  return window.ecorexDesktop.installDownloadedUpdate() as Promise<DesktopUpdateStatus>;
+}
+
+export async function openDownloadPage() {
+  return window.ecorexDesktop?.openDownloadPage?.();
+}
+
+export async function saveRuntimeUiState(state: unknown) {
+  return apiJson<{ status?: string; message?: string }>("/api/ui-state", "POST", state);
+}
+
+export async function requestAgentInstallRequest(input: {
+  packId: string;
+  packName?: string;
+  sessionId?: string;
+}) {
+  return apiJson<{
+    status?: string;
+    message?: string;
+    prompt?: string;
+    packId?: string;
+    packName?: string;
+    sessionId?: string;
+  }>("/api/agent-install-request", "POST", input);
 }
 
 export async function updatePermissionMode(mode: PermissionMode): Promise<PermissionState | null> {
@@ -577,31 +665,60 @@ export async function resetPermissionGrants(): Promise<PermissionState | null> {
 }
 
 export async function listCapabilityPacks(): Promise<CapabilityPack[]> {
-  if (!window.ecorexDesktop?.listCapabilityPacks) {
-    return [];
+  let bridgePacks: CapabilityPack[] = [];
+  if (window.ecorexDesktop?.listCapabilityPacks) {
+    try {
+      bridgePacks = await window.ecorexDesktop.listCapabilityPacks();
+    } catch {
+      bridgePacks = [];
+    }
   }
-  return window.ecorexDesktop.listCapabilityPacks();
+  if (bridgePacks.length) {
+    return bridgePacks;
+  }
+  try {
+    const payload = await apiJson<Record<string, unknown>>("/api/capabilities");
+    return capabilityPacksFromRuntime(payload);
+  } catch {
+    return bridgePacks;
+  }
 }
 
-export async function installCapabilityPack(packId: string): Promise<CapabilityPack | null> {
-  if (!window.ecorexDesktop?.installCapabilityPack) {
-    return null;
-  }
-  const result = await window.ecorexDesktop.installCapabilityPack(packId);
-  await reportDesktopEvent({
-    type: result.installed ? "info" : "error",
-    source: "Capability",
-    message: result.message,
-    category: "capability-install",
-    label: result.id,
-    detail: {
-      state: result.state,
-      installed: result.installed,
-      logPath: result.logPath,
-      missingModules: result.missingModules
-    }
-  });
-  return result;
+function capabilityPacksFromRuntime(payload: Record<string, unknown>): CapabilityPack[] {
+  const rawAbilities = Array.isArray(payload.abilities)
+    ? payload.abilities
+    : Array.isArray((payload.result as Record<string, unknown> | undefined)?.abilities)
+      ? ((payload.result as Record<string, unknown>).abilities as unknown[])
+      : [];
+  return rawAbilities
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+    .filter((item) => Boolean(item.agentCanInstall || item.packId || item.kind === "capability-pack"))
+    .map((item) => {
+      const state = item.capabilityState && typeof item.capabilityState === "object"
+        ? item.capabilityState as Record<string, unknown>
+        : {};
+      const id = String(item.packId || item.id || "");
+      const installed = Boolean(state.installed);
+      const rawState = String(state.state || (installed ? "installed" : "not-installed"));
+      const capabilityState = isCapabilityState(rawState) ? rawState : "unknown";
+      return {
+        id,
+        name: String(item.label || id),
+        summary: String(item.notes || item.defaultPolicy || ""),
+        installMode: "user-or-admin",
+        state: capabilityState,
+        message: String(state.message || (installed ? "能力包已安装" : "点击安装后由当前会话 agent 处理")),
+        installed,
+        logPath: typeof state.logPath === "string" ? state.logPath : undefined,
+        updatedAt: typeof state.updatedAt === "string" ? state.updatedAt : undefined,
+        policyMode: "ask"
+      } satisfies CapabilityPack;
+    })
+    .filter((pack) => Boolean(pack.id));
+}
+
+function isCapabilityState(value: string): value is CapabilityState {
+  return ["installed", "not-installed", "checking", "installing", "busy", "failed", "unknown"].includes(value);
 }
 
 export async function setSkillEnabled(name: string, enabled: boolean) {

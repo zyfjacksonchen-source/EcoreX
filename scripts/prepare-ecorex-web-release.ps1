@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.1.13",
+    [string]$Version = "0.1.14",
     [string]$RuntimeRoot = ".",
     [string]$SiteRoot = "deploy/ecorex-site",
     [string]$WebBuildRoot = "",
@@ -74,6 +74,18 @@ function Remove-GeneratedNoise {
     Get-ChildItem -LiteralPath $Root -Recurse -Force -File |
         Where-Object { $_.Name -like "*.pyc" -or $_.Name -like "*.pyo" -or $_.Name -eq ".DS_Store" } |
         ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
+}
+
+function Invoke-ReleaseRuntimeSanitizer {
+    param([Parameter(Mandatory = $true)][string]$RuntimeDir)
+    $sanitizer = Join-Path $repoRoot "scripts\sanitize-ecorex-release-runtime.py"
+    if (-not (Test-Path -LiteralPath $sanitizer)) {
+        throw "Release sanitizer missing: $sanitizer"
+    }
+    & python $sanitizer $RuntimeDir
+    if ($LASTEXITCODE -ne 0) {
+        throw "Release runtime sanitizer failed for $RuntimeDir"
+    }
 }
 
 function Write-Utf8NoBom {
@@ -158,6 +170,7 @@ foreach ($dirName in $runtimeDirs) {
 }
 
 Remove-GeneratedNoise -Root $runtimeOut
+Invoke-ReleaseRuntimeSanitizer -RuntimeDir $runtimeOut
 
 $appDir = Join-Path $runtimeOut "channel/web/static/app"
 New-Item -ItemType Directory -Force -Path $appDir | Out-Null
@@ -194,6 +207,8 @@ if ($webBuildResolved) {
 '@
     Set-Content -LiteralPath (Join-Path $appDir "index.html") -Value $fallbackIndex -Encoding UTF8
 }
+
+Invoke-ReleaseRuntimeSanitizer -RuntimeDir $runtimeOut
 
 $legacyBuildOut = Join-Path $webBuildOut "legacy-webui"
 New-Item -ItemType Directory -Force -Path $legacyBuildOut | Out-Null

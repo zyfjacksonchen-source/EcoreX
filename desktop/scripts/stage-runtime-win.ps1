@@ -100,6 +100,19 @@ function Copy-OptionalLarkCli {
     Write-Host "lark-cli.exe was not found; runtime will use npm auto-install fallback."
 }
 
+function Invoke-ReleaseRuntimeSanitizer {
+    param([Parameter(Mandatory = $true)][string]$TargetRuntime)
+
+    $sanitizer = Join-Path $repoRootResolved "scripts\sanitize-ecorex-release-runtime.py"
+    if (-not (Test-Path -LiteralPath $sanitizer)) {
+        throw "Release sanitizer missing: $sanitizer"
+    }
+    & python $sanitizer $TargetRuntime
+    if ($LASTEXITCODE -ne 0) {
+        throw "Release runtime sanitizer failed."
+    }
+}
+
 $desktopRoot = Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")
 if (-not $RepoRoot) {
     $RepoRoot = Resolve-Path -LiteralPath (Join-Path $desktopRoot "..")
@@ -185,13 +198,21 @@ if ($env:ECOREX_DISABLE_ENTERPRISE_POLICY -ne "1") {
     $adminBase = $adminBase.TrimEnd("/")
     $clientEventKey = $env:ECOREX_CLIENT_EVENT_KEY
     if (-not $clientEventKey) {
-        $clientEventKey = "ecorex-desktop-v0.1.13"
+        $clientEventKey = "ecorex-desktop-v0.1.14"
     }
+    $compatClientEventKeys = @(
+        $clientEventKey,
+        "ecorex-desktop-v0.1.13",
+        "ecorex-desktop-v0.1.12",
+        "ecorex-desktop-v0.1.11",
+        "ecorex-desktop-v0.1.10"
+    ) | Select-Object -Unique
     $policy = [ordered]@{
         adminEventsUrl = $env:ECOREX_ADMIN_EVENTS_URL
         modelConfigUrl = $env:ECOREX_MODEL_CONFIG_URL
         capabilityPolicyUrl = $env:ECOREX_CAPABILITY_POLICY_URL
         clientEventKey = $clientEventKey
+        compatClientEventKeys = $compatClientEventKeys
         userEmail = $env:ECOREX_USER_EMAIL
         deviceId = $env:ECOREX_DEVICE_ID
         orgId = $env:ECOREX_ORG_ID
@@ -286,12 +307,12 @@ $manifest = [ordered]@{
     product = "EcoreX"
     runtime = "compatible-agent-runtime"
     stagedAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-    repoRoot = [string]$repoRootResolved
-    pythonHome = [string]$pythonHomeResolved
     pythonDistribution = $pythonDistribution
     dependencyInstall = -not $SkipDependencyInstall
     preinstalledPacks = $PreinstallPacks
 }
 $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $runtimeResolved "runtime-manifest.json") -Encoding UTF8
+
+Invoke-ReleaseRuntimeSanitizer -TargetRuntime $runtimeResolved
 
 Write-Host "EcoreX runtime staged at $runtimeResolved"

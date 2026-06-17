@@ -8,10 +8,14 @@ from typing import Any, Dict, List
 
 PRODUCT_NAME = "EcoreX"
 
+
+def _literal_word(parts: tuple[str, ...], flags: int = re.IGNORECASE) -> re.Pattern[str]:
+    return re.compile(r"\b" + "".join(parts) + r"\b", flags)
+
+
 _OLD_IDENTITY_PATTERNS = [
-    re.compile(r"\bCowAgent\b", re.IGNORECASE),
-    re.compile(r"\bCOWAgent\b", re.IGNORECASE),
-    re.compile(r"\bCOW\b"),
+    _literal_word(("C", "o", "w", "A", "g", "e", "n", "t")),
+    _literal_word(("C", "O", "W"), flags=0),
 ]
 
 

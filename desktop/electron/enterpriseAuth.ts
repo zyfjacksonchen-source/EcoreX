@@ -3,7 +3,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveEnterprisePolicy, type EnterprisePolicy } from "./enterprisePolicy.js";
+import { enterpriseClientEventKeys, resolveEnterprisePolicy, type EnterprisePolicy } from "./enterprisePolicy.js";
 
 export type EnterpriseSession = {
   token: string;
@@ -76,11 +76,11 @@ export class EnterpriseAuthManager {
     if (!authUrl || !policy.clientEventKey) {
       throw new Error("企业登录策略未配置，请确认安装包包含 enterprise-policy.json。");
     }
-    const response = await fetch(authUrl, {
+    const { response, payload } = await this.fetchClientJsonWithKeyFallback<EnterpriseSession & { ok?: boolean; error?: string }>(policy, authUrl, (clientEventKey) => ({
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-EcoreX-Client-Key": policy.clientEventKey,
+        "X-EcoreX-Client-Key": clientEventKey,
         "X-EcoreX-Device-Id": this.getDeviceId(policy),
         "X-EcoreX-Org-Id": policy.orgId || ""
       },
@@ -90,8 +90,7 @@ export class EnterpriseAuthManager {
         deviceId: this.getDeviceId(policy),
         appVersion: app.getVersion()
       })
-    });
-    const payload = (await response.json().catch(() => ({}))) as EnterpriseSession & { ok?: boolean; error?: string };
+    }));
     if (!response.ok || payload.ok === false || !payload.token) {
       throw new Error(payload.error || `企业登录失败：HTTP ${response.status}`);
     }
@@ -128,13 +127,13 @@ export class EnterpriseAuthManager {
     if (!changeUrl || !policy.clientEventKey) {
       throw new Error("企业密码服务未配置。");
     }
-    const response = await fetch(changeUrl, {
+    const { response, payload } = await this.fetchClientJsonWithKeyFallback<{ ok?: boolean; error?: string }>(policy, changeUrl, (clientEventKey) => ({
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${session.token}`,
         "X-EcoreX-User-Token": session.token,
-        "X-EcoreX-Client-Key": policy.clientEventKey,
+        "X-EcoreX-Client-Key": clientEventKey,
         "X-EcoreX-Device-Id": session.deviceId,
         "X-EcoreX-Org-Id": policy.orgId || ""
       },
@@ -143,8 +142,7 @@ export class EnterpriseAuthManager {
         newPassword: input.newPassword,
         deviceId: session.deviceId
       })
-    });
-    const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+    }));
     if (!response.ok || payload.ok === false) {
       throw new Error(payload.error || `修改密码失败：HTTP ${response.status}`);
     }
@@ -167,19 +165,18 @@ export class EnterpriseAuthManager {
     if (!quotaUrl || !policy.clientEventKey) {
       return { ok: true, quota: { allowed: true, reason: "企业额度服务未配置，已跳过预检" } };
     }
-    const response = await fetch(quotaUrl, {
+    const { response, payload } = await this.fetchClientJsonWithKeyFallback<{ ok?: boolean; error?: string; quota?: Record<string, unknown> }>(policy, quotaUrl, (clientEventKey) => ({
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${session.token}`,
         "X-EcoreX-User-Token": session.token,
-        "X-EcoreX-Client-Key": policy.clientEventKey,
+        "X-EcoreX-Client-Key": clientEventKey,
         "X-EcoreX-Device-Id": session.deviceId,
         "X-EcoreX-Org-Id": policy.orgId || ""
       },
       body: JSON.stringify({ estimatedTokens })
-    });
-    const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string; quota?: Record<string, unknown> };
+    }));
     if (!response.ok || payload.ok === false) {
       return { ok: false, quota: { allowed: false, reason: payload.error || `额度检查失败：HTTP ${response.status}` } };
     }
@@ -210,5 +207,31 @@ export class EnterpriseAuthManager {
 
   private sessionPath() {
     return path.join(app.getPath("userData"), "enterprise-session.json");
+  }
+
+  private async fetchClientJsonWithKeyFallback<T extends { error?: string; message?: string }>(
+    policy: EnterprisePolicy,
+    url: string,
+    buildInit: (clientEventKey: string) => RequestInit
+  ) {
+    const keys = enterpriseClientEventKeys(policy);
+    let lastResponse: Response | null = null;
+    let lastPayload = {} as T;
+    for (const [index, clientEventKey] of keys.entries()) {
+      const response = await fetch(url, buildInit(clientEventKey));
+      const payload = (await response.json().catch(() => ({}))) as T;
+      lastResponse = response;
+      lastPayload = payload;
+      if (this.isInvalidClientKey(response, payload) && index < keys.length - 1) {
+        continue;
+      }
+      return { response, payload, clientEventKey };
+    }
+    return { response: lastResponse as Response, payload: lastPayload, clientEventKey: keys[keys.length - 1] || "" };
+  }
+
+  private isInvalidClientKey(response: Response, payload: { error?: string; message?: string }) {
+    const text = `${payload.error || ""} ${payload.message || ""}`.toLowerCase();
+    return response.status === 403 && text.includes("invalid client key");
   }
 }

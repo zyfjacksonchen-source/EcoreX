@@ -275,13 +275,6 @@ try {
     refreshEnterprisePolicy: async () => ({ configured: true, changed: false, restarted: false, message: "Model policy synced", model: "gpt-5.5", provider: "EcoreX" }),
     reportTelemetry: async () => ({ ok: true }),
     listCapabilityPacks: async () => packs,
-    installCapabilityPack: async (packId) => {
-      const pack = packs.find((item) => item.id === packId) || packs[0];
-      pack.installed = true;
-      pack.state = "installed";
-      pack.message = "Installed";
-      return pack;
-    },
     getPermissionState: async () => ({ mode: "smart-ask", grantsCount: 3, auditPath: "visual-smoke", updatedAt: new Date().toISOString() }),
     setPermissionMode: async (mode) => ({ mode, grantsCount: 3, auditPath: "visual-smoke", updatedAt: new Date().toISOString() }),
     resetPermissionGrants: async () => ({ mode: "smart-ask", grantsCount: 0, auditPath: "visual-smoke", updatedAt: new Date().toISOString() }),
@@ -298,6 +291,8 @@ try {
       if (path === "/api/tools") return { tools: [{ name: "file" }, { name: "browser" }, { name: "mcp" }] };
       if (path === "/api/skills") return { skills: [{ name: "Daily report" }, { name: "Web search" }] };
       if (path === "/api/models") return { providers: [{ id: "ecorex", model: "gpt-5.5" }], capabilities: [{ name: "chat" }] };
+      if (path === "/api/capabilities") return { status: "success", abilities: packs.map((pack) => ({ id: pack.id, packId: pack.id, label: pack.name, notes: pack.summary, kind: "capability-pack", agentCanInstall: true, capabilityState: { installed: pack.installed, state: pack.state, message: pack.message } })) };
+      if (path === "/api/agent-install-request") return { status: "success", message: "Install task was handed to the current agent session.", packId: request.body?.packId, packName: request.body?.packName, sessionId: request.body?.sessionId || "ads-growth" };
       if (path === "/message") return { status: "success", inline_reply: "Draft generated. I will wait for confirmation before sending to Feishu.", usage: { inputTokens: 38, outputTokens: 44, totalTokens: 82, model: "gpt-5.5" } };
       if (path === "/cancel") return { status: "success", cancelled: 1 };
       if (path === "/api/messages/delete") return { status: "success", deleted: 2 };

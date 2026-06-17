@@ -11,6 +11,43 @@ interface Window {
       pid?: number;
       webPort: number;
     }>;
+    checkForUpdates?: () => Promise<{
+      state: "idle" | "checking" | "available" | "not-available" | "downloading" | "downloaded" | "blocked" | "installing" | "error";
+      platform: string;
+      currentVersion: string;
+      version?: string;
+      message: string;
+      downloadUrl?: string;
+      releaseDate?: string;
+      progress?: number;
+      activeRequests?: number;
+      checkedAt?: string;
+    }>;
+    getUpdateStatus?: () => Promise<{
+      state: "idle" | "checking" | "available" | "not-available" | "downloading" | "downloaded" | "blocked" | "installing" | "error";
+      platform: string;
+      currentVersion: string;
+      version?: string;
+      message: string;
+      downloadUrl?: string;
+      releaseDate?: string;
+      progress?: number;
+      activeRequests?: number;
+      checkedAt?: string;
+    }>;
+    installDownloadedUpdate?: () => Promise<{
+      state: "idle" | "checking" | "available" | "not-available" | "downloading" | "downloaded" | "blocked" | "installing" | "error";
+      platform: string;
+      currentVersion: string;
+      version?: string;
+      message: string;
+      downloadUrl?: string;
+      releaseDate?: string;
+      progress?: number;
+      activeRequests?: number;
+      checkedAt?: string;
+    }>;
+    openDownloadPage?: () => Promise<{ ok: boolean; url: string }>;
     listCapabilityPacks: () => Promise<
       Array<{
         id: string;
@@ -29,22 +66,6 @@ interface Window {
         policyUpdatedAt?: string;
       }>
     >;
-    installCapabilityPack: (packId: string) => Promise<{
-      id: string;
-      name: string;
-      summary: string;
-      installMode: "user-or-admin" | "admin-recommended";
-      estimatedSizeMb?: number;
-      state: "installed" | "not-installed" | "checking" | "installing" | "busy" | "failed" | "unknown";
-      message: string;
-      installed: boolean;
-      logPath?: string;
-      missingModules?: string[];
-      updatedAt?: string;
-      policyMode?: "ask" | "preinstall" | "disabled";
-      policyStatus?: string;
-      policyUpdatedAt?: string;
-    }>;
     getPermissionState: () => Promise<{
       mode: "full-access" | "smart-ask" | "always-ask" | "read-only" | "custom";
       grantsCount: number;
@@ -173,6 +194,20 @@ interface Window {
         message: string;
         pid?: number;
         webPort: number;
+      }) => void
+    ) => () => void;
+    onUpdateStatus?: (
+      listener: (status: {
+        state: "idle" | "checking" | "available" | "not-available" | "downloading" | "downloaded" | "blocked" | "installing" | "error";
+        platform: string;
+        currentVersion: string;
+        version?: string;
+        message: string;
+        downloadUrl?: string;
+        releaseDate?: string;
+        progress?: number;
+        activeRequests?: number;
+        checkedAt?: string;
       }) => void
     ) => () => void;
   };

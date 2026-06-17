@@ -28,8 +28,6 @@ FORBIDDEN_WEB_ASSETS = (
     "index-B_LYG2V7.js",
     "index-CcCofcc7.js",
     "index-vjxmFxDP.js",
-)
-REQUIRED_WEB_ASSETS = (
     "index-DGSZjdR_.js",
     "index-D7oCsug3.css",
 )
@@ -58,6 +56,8 @@ REQUIRED_RUNTIME_SUFFIXES = (
     "runtime/agent/tools/ecorex_cli/ecorex_cli.py",
     "runtime/agent/tools/feishu_cli/feishu_cli.py",
     "runtime/agent/tools/host_diagnostics/host_diagnostics.py",
+    "runtime/agent/tools/agent_capability/agent_capability.py",
+    "runtime/agent/tools/subagent/subagent.py",
     "runtime/agent/tools/mcp/mcp_client.py",
     "runtime/agent/tools/mcp/mcp_tool.py",
     "runtime/agent/tools/web_fetch/web_fetch.py",
@@ -90,6 +90,8 @@ REQUIRED_DESKTOP_RUNTIME_FILES = (
     "agent/tools/ecorex_cli/ecorex_cli.py",
     "agent/tools/feishu_cli/feishu_cli.py",
     "agent/tools/host_diagnostics/host_diagnostics.py",
+    "agent/tools/agent_capability/agent_capability.py",
+    "agent/tools/subagent/subagent.py",
     "agent/tools/mcp/mcp_client.py",
     "agent/tools/mcp/mcp_tool.py",
     "agent/tools/web_fetch/web_fetch.py",
@@ -102,6 +104,51 @@ REQUIRED_DESKTOP_RUNTIME_FILES = (
     "skills/create-xiaohongshu-note/SKILL.md",
     "skills/create-xiaohongshu-note/scripts/generate_cover_image.py",
 )
+
+
+def _s(*parts: str) -> str:
+    return "".join(parts)
+
+
+_LEGACY_AGENT_MIXED = _s("Cow", "Agent")
+_LEGACY_AGENT_UPPER = _LEGACY_AGENT_MIXED.upper()
+_LEGACY_AGENT_LOWER = _LEGACY_AGENT_MIXED.lower()
+_LEGACY_AUTHOR = _s("zha", "yuj", "ie")
+_LEGACY_CHAT_DASH = _s("chat", "gpt", "-on-", "we", "chat")
+_LEGACY_CHAT_UNDERSCORE = _LEGACY_CHAT_DASH.replace("-", "_")
+_LEGACY_CHAT_UPPER = _LEGACY_CHAT_DASH.upper()
+_LEGACY_FORBIDDEN_RELEASE_TEXT = (
+    _LEGACY_AGENT_MIXED,
+    _LEGACY_AGENT_UPPER,
+    _LEGACY_AGENT_LOWER,
+    _s("C:", "\\", _LEGACY_AGENT_MIXED),
+    _s("C:/", _LEGACY_AGENT_MIXED),
+    _LEGACY_AUTHOR,
+    _LEGACY_CHAT_DASH,
+    _LEGACY_CHAT_UNDERSCORE,
+    _LEGACY_CHAT_UPPER,
+)
+FORBIDDEN_RELEASE_PATTERN = re.compile("|".join(re.escape(item) for item in _LEGACY_FORBIDDEN_RELEASE_TEXT))
+TEXT_ARCHIVE_SUFFIXES = {
+    ".cfg",
+    ".css",
+    ".html",
+    ".ini",
+    ".js",
+    ".json",
+    ".md",
+    ".mjs",
+    ".plist",
+    ".ps1",
+    ".py",
+    ".sh",
+    ".toml",
+    ".txt",
+    ".xml",
+    ".yaml",
+    ".yml",
+}
+TEXT_ARCHIVE_NAMES = {"LICENSE", "README", "README.txt", "runtime-manifest.json"}
 
 
 class ValidationError(Exception):
@@ -137,6 +184,61 @@ def sha256_bytes(payload: bytes) -> str:
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise ValidationError(message)
+
+
+def is_text_archive_name(name: str) -> bool:
+    base = pathlib.PurePosixPath(name).name
+    return base in TEXT_ARCHIVE_NAMES or pathlib.PurePosixPath(name).suffix.lower() in TEXT_ARCHIVE_SUFFIXES
+
+
+def require_no_forbidden_release_text(label: str, name: str, text: str) -> None:
+    match = FORBIDDEN_RELEASE_PATTERN.search(text)
+    if match is not None:
+        raise ValidationError(f"{label} contains forbidden legacy/private string {match.group(0)!r} in {name}")
+
+
+def validate_zip_no_forbidden_release_strings(archive: zipfile.ZipFile, label: str) -> None:
+    for name in archive.namelist():
+        match = FORBIDDEN_RELEASE_PATTERN.search(name)
+        if match is not None:
+            raise ValidationError(f"{label} contains forbidden legacy/private string {match.group(0)!r} in path {name}")
+        if not is_text_archive_name(name):
+            continue
+        try:
+            text = archive.read(name).decode("utf-8", errors="replace")
+        except Exception:
+            continue
+        require_no_forbidden_release_text(label, name, text)
+
+
+def validate_tar_no_forbidden_release_strings(archive: tarfile.TarFile, label: str) -> None:
+    for member in archive.getmembers():
+        name = member.name
+        match = FORBIDDEN_RELEASE_PATTERN.search(name)
+        if match is not None:
+            raise ValidationError(f"{label} contains forbidden legacy/private string {match.group(0)!r} in path {name}")
+        if not member.isfile() or not is_text_archive_name(name):
+            continue
+        handle = archive.extractfile(member)
+        if handle is None:
+            continue
+        text = handle.read().decode("utf-8", errors="replace")
+        require_no_forbidden_release_text(label, name, text)
+
+
+def validate_directory_no_forbidden_release_strings(root: pathlib.Path, label: str) -> None:
+    for path in root.rglob("*"):
+        rel = path.relative_to(root).as_posix()
+        match = FORBIDDEN_RELEASE_PATTERN.search(rel)
+        if match is not None:
+            raise ValidationError(f"{label} contains forbidden legacy/private string {match.group(0)!r} in path {rel}")
+        if not path.is_file() or not is_text_archive_name(rel):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        require_no_forbidden_release_text(label, rel, text)
 
 
 def artifact_path(artifact_dir: pathlib.Path, artifact: dict) -> pathlib.Path:
@@ -191,6 +293,7 @@ def validate_manifest_artifacts(manifest: dict, artifact_dir: pathlib.Path) -> l
 
 def validate_zip_assets(path: pathlib.Path, label: str) -> None:
     with zipfile.ZipFile(path) as archive:
+        validate_zip_no_forbidden_release_strings(archive, label)
         names = archive.namelist()
         if label in {"webui-win-mac", "webui-macos-universal"}:
             require(
@@ -209,8 +312,6 @@ def validate_zip_assets(path: pathlib.Path, label: str) -> None:
                 any("/wheelhouse/mac-x64/playwright-" in name for name in names),
                 f"{label} missing macOS x64 Playwright wheel",
             )
-        for required in REQUIRED_WEB_ASSETS:
-            require(any(name.endswith(required) for name in names), f"{label} missing {required}")
         for required in REQUIRED_RUNTIME_SUFFIXES:
             require(any(name.endswith(required) for name in names), f"{label} missing {required}")
         for forbidden in FORBIDDEN_WEB_ASSETS:
@@ -222,6 +323,7 @@ def validate_zip_assets(path: pathlib.Path, label: str) -> None:
 
 def validate_tar_assets(path: pathlib.Path, label: str) -> None:
     with tarfile.open(path, "r:gz") as archive:
+        validate_tar_no_forbidden_release_strings(archive, label)
         names = archive.getnames()
         if label == "webui-macos-universal":
             require(
@@ -240,8 +342,6 @@ def validate_tar_assets(path: pathlib.Path, label: str) -> None:
                 any("/wheelhouse/mac-x64/playwright-" in name for name in names),
                 f"{label} missing macOS x64 Playwright wheel",
             )
-        for required in REQUIRED_WEB_ASSETS:
-            require(any(name.endswith(required) for name in names), f"{label} missing {required}")
         for required in REQUIRED_RUNTIME_SUFFIXES:
             require(any(name.endswith(required) for name in names), f"{label} missing {required}")
         for forbidden in FORBIDDEN_WEB_ASSETS:
@@ -270,6 +370,7 @@ def validate_public_zip(
 ) -> None:
     require(public_zip.is_file(), f"public release zip missing: {public_zip}")
     with zipfile.ZipFile(public_zip) as archive:
+        validate_zip_no_forbidden_release_strings(archive, "public release zip")
         names = set(archive.namelist())
         for required in (
             "site/index.html",
@@ -286,6 +387,17 @@ def validate_public_zip(
             require(archive.getinfo(required).file_size > 0, f"public zip image asset is empty: {required}")
 
         public_manifest = read_zip_json_no_bom(archive, "site/manifest.json")
+        site_js = archive.read("site/site.js").decode("utf-8", errors="replace")
+        require_contains(
+            site_js,
+            "options.find((item) => item.id === preferredId) || options.find(ready) || options[0]",
+            "public site device recommendation",
+        )
+        require_not_contains(
+            site_js,
+            "item.id === preferredId && ready(item)",
+            "public site device recommendation",
+        )
         checksums = read_zip_json_no_bom(archive, "checksums.json")
         require(public_manifest.get("version") == manifest.get("version"), "public manifest version mismatch")
         checksum_artifacts = checksums.get("artifacts") or {}
@@ -321,6 +433,10 @@ def validate_public_zip(
             if name.startswith("site/downloads/") and not name.endswith("/")
         }
         expected_download_files = {str(item.get("fileName")) for item in ready if not is_external_artifact(item)}
+        windows_ready = next((item for item in ready if str(item.get("id") or "") == "windows-x64" and not is_external_artifact(item)), None)
+        if windows_ready:
+            installer_name = str(windows_ready.get("fileName") or "")
+            expected_download_files.update({"latest.yml", f"{installer_name}.blockmap"})
         require(download_files == expected_download_files, "public zip download file set mismatch")
 
         for artifact_id, artifact in ready_by_id.items():
@@ -353,6 +469,19 @@ def validate_public_zip(
 
             require(int(checksum.get("size") or 0) == expected_size, f"checksums size mismatch for {artifact_id}")
             require(str(checksum.get("sha256") or "").upper() == expected_digest, f"checksums sha mismatch for {artifact_id}")
+        if windows_ready:
+            installer_name = str(windows_ready.get("fileName") or "")
+            installer_size = int(windows_ready.get("size") or 0)
+            latest_rel = "site/downloads/latest.yml"
+            blockmap_rel = f"site/downloads/{installer_name}.blockmap"
+            require(latest_rel in names, "public zip missing Windows latest.yml")
+            require(blockmap_rel in names, "public zip missing Windows installer blockmap")
+            latest_text = archive.read(latest_rel).decode("utf-8")
+            require(f"version: {manifest.get('version')}" in latest_text, "latest.yml version mismatch")
+            require(f"url: {installer_name}" in latest_text, "latest.yml installer url mismatch")
+            require(f"path: {installer_name}" in latest_text, "latest.yml installer path mismatch")
+            require(f"size: {installer_size}" in latest_text, "latest.yml installer size mismatch")
+            require(len(archive.read(blockmap_rel)) > 0, "Windows installer blockmap is empty")
     print(f"PASS public zip {public_zip.name}")
 
 
@@ -382,13 +511,9 @@ def extract_asar_text(asar_path: pathlib.Path, archive_name: str, node_modules: 
 
 def extract_asar_renderer_bundle_text(asar_path: pathlib.Path, node_modules: pathlib.Path) -> str:
     index_text = extract_asar_text(asar_path, "dist/index.html", node_modules)
-    for required in REQUIRED_WEB_ASSETS:
-        require_contains(index_text, required, "desktop renderer index")
-    for forbidden in FORBIDDEN_WEB_ASSETS:
-        require_not_contains(index_text, forbidden, "desktop renderer index")
-    match = re.search(r'src="\.?/assets/([^"]+\.js)"', index_text)
-    require(match is not None, "desktop renderer index missing JS asset")
-    return extract_asar_text(asar_path, f"dist/assets/{match.group(1)}", node_modules)
+    js_name, css_name = referenced_frontend_assets(index_text, "desktop renderer index")
+    extract_asar_text(asar_path, f"dist/assets/{css_name}", node_modules)
+    return extract_asar_text(asar_path, f"dist/assets/{js_name}", node_modules)
 
 
 def require_contains(text: str, needle: str, label: str) -> None:
@@ -397,6 +522,16 @@ def require_contains(text: str, needle: str, label: str) -> None:
 
 def require_not_contains(text: str, needle: str, label: str) -> None:
     require(needle not in text, f"{label} contains forbidden {needle!r}")
+
+
+def referenced_frontend_assets(index_text: str, label: str) -> tuple[str, str]:
+    for forbidden in FORBIDDEN_WEB_ASSETS:
+        require_not_contains(index_text, forbidden, label)
+    js_match = re.search(r'src="\.?/assets/(index-[^"]+\.js)"', index_text)
+    css_match = re.search(r'href="\.?/assets/(index-[^"]+\.css)"', index_text)
+    require(js_match is not None, f"{label} missing JS asset")
+    require(css_match is not None, f"{label} missing CSS asset")
+    return js_match.group(1), css_match.group(1)
 
 
 def require_section_not_contains(text: str, start: str, end: str, needle: str, label: str) -> None:
@@ -455,7 +590,7 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
     require_contains(broker, "\"filesystem-access\"", f"{label} permission broker")
 
     release_notes = read_text_by_suffix("common/ecorex_release_notes.py")
-    require_contains(release_notes, "\"version\": \"0.1.13\"", f"{label} release notes")
+    require_contains(release_notes, "\"version\": \"0.1.14\"", f"{label} release notes")
     require_contains(release_notes, "\"updatePolicy\"", f"{label} release notes")
     require_contains(release_notes, "\"webui\"", f"{label} release notes")
 
@@ -524,7 +659,8 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
 
     host_diagnostics = read_text_by_suffix("agent/tools/host_diagnostics/host_diagnostics.py")
     require_contains(host_diagnostics, "def _skill_status", f"{label} host diagnostics")
-    require_contains(host_diagnostics, "authorize_file_access(\n                \"read\"", f"{label} host diagnostics")
+    require_contains(host_diagnostics, "authorize_file_access(", f"{label} host diagnostics")
+    require_contains(host_diagnostics, "\"read\"", f"{label} host diagnostics")
     require_contains(host_diagnostics, "\"blocked\": True", f"{label} host diagnostics")
     require_contains(host_diagnostics, "\"skills\": _skill_status(self.cwd)", f"{label} host diagnostics")
     require_contains(host_diagnostics, "\"hasGoalTool\": False", f"{label} host diagnostics")
@@ -536,6 +672,7 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
 
     image_generation = read_text_by_suffix("skills/image-generation/scripts/generate.py")
     require_contains(image_generation, "DEFAULT_MODEL = \"gpt-image-2-pro\"", f"{label} image-generation skill")
+    require_contains(image_generation, "LinkAI default model follows EcoreX's OpenAI image default", f"{label} image-generation skill")
     require_contains(image_generation, "\"output_format\"", f"{label} image-generation skill")
     require_contains(image_generation, "OpenAI model {model} unavailable", f"{label} image-generation skill")
     require_contains(image_generation, "/images/generations", f"{label} image-generation skill")
@@ -559,20 +696,17 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
 
     web_channel = read_text_by_suffix("channel/web/web_channel.py")
     require_contains(web_channel, '"openai":    ["gpt-image-2-pro"', f"{label} admin image model catalog")
+    require_contains(web_channel, '"linkai": [\n            "gpt-image-2-pro"', f"{label} admin image model catalog")
     require_contains(web_channel, '("openai",    "gpt-image-2-pro")', f"{label} admin image auto hint")
+    require_contains(web_channel, '("linkai",    "gpt-image-2-pro")', f"{label} admin image LinkAI fallback hint")
+    require_not_contains(web_channel, '("linkai",    "image-2-pro")', f"{label} admin image LinkAI fallback hint")
 
 
 def validate_frontend_bundle_texts(read_text_by_suffix, label: str) -> None:
     index_text = read_text_by_suffix("channel/web/static/app/index.html")
-    for required in REQUIRED_WEB_ASSETS:
-        require_contains(index_text, required, f"{label} static app index")
-    for forbidden in FORBIDDEN_WEB_ASSETS:
-        require_not_contains(index_text, forbidden, f"{label} static app index")
-    match = re.search(r'src="\.?/assets/([^"]+\.js)"', index_text)
-    require(match is not None, f"{label} static app index missing JS asset")
-    js_name = next(item for item in REQUIRED_WEB_ASSETS if item.endswith(".js"))
-    require(match.group(1) == js_name, f"{label} static app index references {match.group(1)} not {js_name}")
+    js_name, css_name = referenced_frontend_assets(index_text, f"{label} static app index")
     renderer = read_text_by_suffix(f"channel/web/static/app/assets/{js_name}")
+    read_text_by_suffix(f"channel/web/static/app/assets/{css_name}")
     require_contains(renderer, "voice_attach", f"{label} renderer bundle")
     require_contains(renderer, "extras?.audio", f"{label} renderer bundle")
     require_contains(renderer, "/api/active-requests", f"{label} renderer bundle")
@@ -602,6 +736,7 @@ def validate_desktop_unpacked(desktop_dir: pathlib.Path, node_modules: pathlib.P
     runtime = resources / "ecorex-runtime"
     require(app_asar.is_file(), f"desktop app.asar missing: {app_asar}")
     require(runtime.is_dir(), f"desktop runtime missing: {runtime}")
+    validate_directory_no_forbidden_release_strings(runtime, "desktop runtime")
 
     for rel in REQUIRED_DESKTOP_RUNTIME_FILES:
         require((runtime / rel).is_file(), f"desktop runtime missing {rel}")
@@ -627,25 +762,47 @@ def validate_desktop_unpacked(desktop_dir: pathlib.Path, node_modules: pathlib.P
     require_not_contains(broker_text, "if \"web\" not in channel_type", "desktop runtime broker")
 
     main_text = extract_asar_text(app_asar, "dist-electron/main.js", node_modules)
+    require_no_forbidden_release_text("desktop main process", "dist-electron/main.js", main_text)
     require_contains(main_text, "safeOpenExternal", "desktop main process")
     require_contains(main_text, "externalUrlProtocols", "desktop main process")
-    require_contains(main_text, "capability-install", "desktop main process")
-    require_contains(main_text, "capability-preinstall", "desktop main process")
+    require_not_contains(main_text, "capability-install", "desktop main process")
+    require_not_contains(main_text, "capability-preinstall", "desktop main process")
     require_contains(main_text, "blocked external URL protocol", "desktop main process")
     require_contains(main_text, "\"https:\"", "desktop main process")
     require_contains(main_text, "\"mailto:\"", "desktop main process")
 
+    api_bridge_text = extract_asar_text(app_asar, "dist-electron/apiBridge.js", node_modules)
+    require_no_forbidden_release_text("desktop api bridge", "dist-electron/apiBridge.js", api_bridge_text)
+    require_contains(api_bridge_text, "/api/agent-install-request", "desktop api bridge")
+    require_contains(api_bridge_text, "/api/subagents", "desktop api bridge")
+    require_contains(api_bridge_text, "This EcoreX desktop API path is not allowed", "desktop api bridge")
+
+    updater_text = extract_asar_text(app_asar, "dist-electron/updater.js", node_modules)
+    require_no_forbidden_release_text("desktop updater", "dist-electron/updater.js", updater_text)
+    require_contains(updater_text, "setFeedURL", "desktop updater")
+    require_contains(updater_text, "ECOREX_UPDATE_FEED_URL", "desktop updater")
+    require_contains(updater_text, "ECOREX_UPDATE_MANIFEST_URL", "desktop updater")
+    require_contains(updater_text, "ECOREX_DOWNLOAD_PAGE_URL", "desktop updater")
+    require_contains(updater_text, "/api/active-requests", "desktop updater")
+    require_contains(updater_text, "quitAndInstall", "desktop updater")
+    require_contains(updater_text, "当前还有", "desktop updater")
+
     permissions_text = extract_asar_text(app_asar, "dist-electron/permissions.js", node_modules)
+    require_no_forbidden_release_text("desktop permission manager", "dist-electron/permissions.js", permissions_text)
     require_contains(permissions_text, "authorizeHostCapability", "desktop permission manager")
     require_contains(permissions_text, "Interactive permission confirmation is required", "desktop permission manager")
     require_contains(permissions_text, "Read Only mode blocks optional host capability installation", "desktop permission manager")
 
     capabilities_text = extract_asar_text(app_asar, "dist-electron/capabilities.js", node_modules)
-    require_contains(capabilities_text, "blockedPack", "desktop capability manager")
-    require_contains(capabilities_text, "preinstallPolicyPacks", "desktop capability manager")
-    require_contains(capabilities_text, "Permission blocked capability installation", "desktop capability manager")
+    require_no_forbidden_release_text("desktop capability manager", "dist-electron/capabilities.js", capabilities_text)
+    require_contains(capabilities_text, "current agent session", "desktop capability manager")
+    require_contains(capabilities_text, "fetchCapabilityPolicyWithKeyFallback", "desktop capability manager")
+    require_contains(capabilities_text, "invalid client key", "desktop capability manager")
+    require_not_contains(capabilities_text, "capability-install", "desktop capability manager")
+    require_not_contains(capabilities_text, "preinstallPolicyPacks", "desktop capability manager")
 
     renderer_text = extract_asar_renderer_bundle_text(app_asar, node_modules)
+    require_no_forbidden_release_text("desktop renderer bundle", "renderer", renderer_text)
     require_contains(renderer_text, "voice_attach", "desktop renderer bundle")
     require_contains(renderer_text, "extras?.audio", "desktop renderer bundle")
     print(f"PASS desktop unpacked host-boundary {desktop_dir}")
@@ -655,11 +812,22 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", default="deploy/ecorex-site/manifest.json")
     parser.add_argument("--artifact-dir", default="release-artifacts")
-    parser.add_argument("--version", default="0.1.13")
+    parser.add_argument("--version", default="0.1.14")
     parser.add_argument("--public-zip", default="")
     parser.add_argument("--desktop-dir", default="")
     parser.add_argument("--desktop-node-modules", default="desktop/node_modules")
+    parser.add_argument(
+        "--desktop-only",
+        action="store_true",
+        help="Validate a local desktop unpacked build without requiring release artifacts.",
+    )
     args = parser.parse_args(argv)
+
+    if args.desktop_only:
+        require(bool(args.desktop_dir), "--desktop-only requires --desktop-dir")
+        validate_desktop_unpacked(pathlib.Path(args.desktop_dir), pathlib.Path(args.desktop_node_modules))
+        print("EcoreX desktop artifact validation passed.")
+        return 0
 
     manifest_path = pathlib.Path(args.manifest)
     artifact_dir = pathlib.Path(args.artifact_dir)

@@ -1,4 +1,4 @@
-"""CowAgent CLI - Manage your CowAgent from the command line."""
+"""EcoreX CLI - Manage the local EcoreX runtime from the command line."""
 
 import os as _os
 

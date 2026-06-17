@@ -332,6 +332,8 @@ class SkillService:
             logger.warning(f"[SkillService] Failed to write override marker for '{name}': {exc}")
 
     def _ensure_skill_mutation_allowed(self, action: str, payload: dict) -> None:
+        if payload.get("_permission_checked") is True:
+            return
         try:
             from common.ecorex_tool_permissions import get_tool_permission_broker
 

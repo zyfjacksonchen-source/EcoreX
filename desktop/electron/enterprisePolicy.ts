@@ -5,16 +5,27 @@ export type EnterprisePolicy = {
   modelConfigUrl?: string;
   capabilityPolicyUrl?: string;
   clientEventKey?: string;
+  compatClientEventKeys?: string[];
   userEmail?: string;
   deviceId?: string;
   orgId?: string;
 };
 
+export const DEFAULT_CLIENT_EVENT_KEY = "ecorex-desktop-v0.1.14";
+export const DEFAULT_COMPAT_CLIENT_EVENT_KEYS = [
+  "ecorex-desktop-v0.1.14",
+  "ecorex-desktop-v0.1.13",
+  "ecorex-desktop-v0.1.12",
+  "ecorex-desktop-v0.1.11",
+  "ecorex-desktop-v0.1.10"
+];
+
 export const DEFAULT_ENTERPRISE_POLICY: EnterprisePolicy = {
   adminEventsUrl: "https://www.ecoreai.cn/ecorex-agent/client/events",
   modelConfigUrl: "https://www.ecoreai.cn/ecorex-agent/client/model-config",
   capabilityPolicyUrl: "https://www.ecoreai.cn/ecorex-agent/client/capability-policy",
-  clientEventKey: "ecorex-desktop-v0.1.13"
+  clientEventKey: DEFAULT_CLIENT_EVENT_KEY,
+  compatClientEventKeys: DEFAULT_COMPAT_CLIENT_EVENT_KEYS
 };
 
 export function hasEnterpriseTransport(policy: EnterprisePolicy) {
@@ -42,6 +53,7 @@ export function enterpriseEnvPolicy(): EnterprisePolicy {
     modelConfigUrl: process.env.ECOREX_MODEL_CONFIG_URL,
     capabilityPolicyUrl: process.env.ECOREX_CAPABILITY_POLICY_URL,
     clientEventKey: process.env.ECOREX_CLIENT_EVENT_KEY,
+    compatClientEventKeys: splitClientEventKeys(process.env.ECOREX_CLIENT_EVENT_KEYS),
     userEmail: process.env.ECOREX_USER_EMAIL,
     deviceId: process.env.ECOREX_DEVICE_ID,
     orgId: process.env.ECOREX_ORG_ID
@@ -52,10 +64,46 @@ export function resolveEnterprisePolicy(candidates: string[], envPolicy = enterp
   const validFilePolicy = candidates
     .map((candidate) => readEnterprisePolicy(candidate))
     .find((policy): policy is EnterprisePolicy => Boolean(policy && hasEnterpriseTransport(policy)));
-  const envOverrides = Object.fromEntries(Object.entries(envPolicy).filter(([, value]) => Boolean(value)));
+  const envOverrides = Object.fromEntries(Object.entries(envPolicy).filter(([, value]) => hasPolicyOverrideValue(value)));
   return {
     ...DEFAULT_ENTERPRISE_POLICY,
     ...(validFilePolicy || {}),
     ...envOverrides
   };
+}
+
+function hasPolicyOverrideValue(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+  return Boolean(value);
+}
+
+export function splitClientEventKeys(value?: string) {
+  return String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+export function enterpriseClientEventKeys(policy: EnterprisePolicy) {
+  const keys: string[] = [];
+  const add = (value?: string) => {
+    const key = String(value || "").trim();
+    if (key && !keys.includes(key)) {
+      keys.push(key);
+    }
+  };
+  add(policy.clientEventKey);
+  for (const key of policy.compatClientEventKeys || []) {
+    add(key);
+  }
+  const primary = String(policy.clientEventKey || "");
+  const shouldUseDefaultCompat = !primary || DEFAULT_COMPAT_CLIENT_EVENT_KEYS.includes(primary);
+  if (shouldUseDefaultCompat) {
+    for (const key of DEFAULT_COMPAT_CLIENT_EVENT_KEYS) {
+      add(key);
+    }
+  }
+  return keys;
 }

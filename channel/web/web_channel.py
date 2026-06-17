@@ -8,6 +8,8 @@ import mimetypes
 import os
 import random
 import shutil
+import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -41,7 +43,14 @@ def _web_app_bridge_script() -> str:
 (function () {
   if (window.ecorexDesktop) return;
 
-  var WEB_CLIENT_KEY = "ecorex-web-v0.1.13-web.1";
+  var DEFAULT_WEB_CLIENT_KEY = "ecorex-web-v0.1.14-web.1";
+  var DEFAULT_WEB_COMPAT_CLIENT_KEYS = [
+    "ecorex-web-v0.1.14-web.1",
+    "ecorex-web-v0.1.13-web.1",
+    "ecorex-web-v0.1.12-web.1",
+    "ecorex-web-v0.1.11-web.1"
+  ];
+  var WEB_CLIENT_KEY = window.ECOREX_WEB_CLIENT_KEY || DEFAULT_WEB_CLIENT_KEY;
   var WEB_SESSION_KEY = "ecorex-web-enterprise-session";
   var WEB_LOCAL_SESSION_KEY = "ecorex-web-local-session";
   var WEB_DEVICE_KEY = "ecorex-web-device-id";
@@ -156,6 +165,29 @@ def _web_app_bridge_script() -> str:
 
   function clientBase() {
     return window.ECOREX_WEB_CLIENT_BASE || runtimePath("/client");
+  }
+
+  function webClientKeys() {
+    var configured = window.ECOREX_WEB_CLIENT_KEYS;
+    var raw = [];
+    if (Array.isArray(configured)) raw = configured;
+    else if (typeof configured === "string") raw = configured.split(",");
+    else if (WEB_CLIENT_KEY === DEFAULT_WEB_CLIENT_KEY) raw = DEFAULT_WEB_COMPAT_CLIENT_KEYS;
+    else raw = [WEB_CLIENT_KEY];
+
+    var keys = [];
+    function add(value) {
+      var key = String(value || "").trim();
+      if (key && keys.indexOf(key) < 0) keys.push(key);
+    }
+    add(WEB_CLIENT_KEY);
+    raw.forEach(add);
+    return keys;
+  }
+
+  function isInvalidClientKey(response, payload) {
+    var text = String((payload && (payload.error || payload.message)) || "").toLowerCase();
+    return response && response.status === 403 && text.indexOf("invalid client key") >= 0;
   }
 
   function runtimePrefix() {
@@ -319,25 +351,36 @@ def _web_app_bridge_script() -> str:
 
   async function clientJson(path, method, body, requireToken) {
     var session = readAdminSession();
-    var headers = {
-      "Accept": "application/json",
-      "Content-Type": "application/json",
-      "X-EcoreX-Client-Key": WEB_CLIENT_KEY,
-      "X-EcoreX-Device-Id": deviceId()
-    };
-    if (session && session.token) headers["X-EcoreX-User-Token"] = session.token;
-    if (requireToken && !headers["X-EcoreX-User-Token"]) {
+    if (requireToken && !(session && session.token)) {
       return null;
     }
-    var response = await fetch(clientBase() + path, {
-      method: method || "POST",
-      credentials: "same-origin",
-      headers: headers,
-      body: body === undefined ? undefined : JSON.stringify(body || {})
-    });
-    var payload = parseJson(await response.text());
-    if (!response.ok) throw new Error(payload.error || payload.message || "Client request failed");
-    return payload;
+    var keys = webClientKeys();
+    var lastPayload = {};
+    var lastResponse = null;
+    for (var i = 0; i < keys.length; i += 1) {
+      var headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-EcoreX-Client-Key": keys[i],
+        "X-EcoreX-Device-Id": deviceId()
+      };
+      if (session && session.token) headers["X-EcoreX-User-Token"] = session.token;
+      var response = await fetch(clientBase() + path, {
+        method: method || "POST",
+        credentials: "same-origin",
+        headers: headers,
+        body: body === undefined ? undefined : JSON.stringify(body || {})
+      });
+      var payload = parseJson(await response.text());
+      lastPayload = payload;
+      lastResponse = response;
+      if (isInvalidClientKey(response, payload) && i < keys.length - 1) {
+        continue;
+      }
+      if (!response.ok) throw new Error(payload.error || payload.message || "Client request failed");
+      return payload;
+    }
+    throw new Error((lastPayload && (lastPayload.error || lastPayload.message)) || (lastResponse && lastResponse.statusText) || "Client request failed");
   }
 
   function isMissingClientBridge(error) {
@@ -415,6 +458,38 @@ def _web_app_bridge_script() -> str:
     };
   }
 
+  var updateStatus = {
+    state: "idle",
+    platform: desktopPlatform,
+    currentVersion: "0.1.14-web.1",
+    message: "尚未检查更新"
+  };
+
+  async function checkForUpdates() {
+    try {
+      var payload = await apiJson({ path: "/api/update-check?platform=" + encodeURIComponent(desktopPlatform), method: "GET" });
+      updateStatus = {
+        state: payload.hasUpdate ? "available" : "not-available",
+        platform: desktopPlatform,
+        currentVersion: payload.currentVersion || "0.1.14-web.1",
+        version: payload.latestVersion || payload.version,
+        downloadUrl: payload.downloadUrl,
+        message: payload.message || (payload.hasUpdate ? "发现新版本，请前往下载页安装" : "当前已经是最新版本"),
+        checkedAt: new Date().toISOString()
+      };
+      return updateStatus;
+    } catch (error) {
+      updateStatus = {
+        state: "error",
+        platform: desktopPlatform,
+        currentVersion: "0.1.14-web.1",
+        message: error && error.message ? error.message : String(error),
+        checkedAt: new Date().toISOString()
+      };
+      return updateStatus;
+    }
+  }
+
   window.ecorexDesktop = {
     platform: desktopPlatform,
     apiJson: apiJson,
@@ -425,13 +500,23 @@ def _web_app_bridge_script() -> str:
       return function () { listeners.delete(callback); };
     },
     shouldUseDarkColors: true,
+    checkForUpdates: checkForUpdates,
+    getUpdateStatus: async function () { return updateStatus; },
+    installDownloadedUpdate: checkForUpdates,
+    openDownloadPage: async function () {
+      window.open("https://www.ecoreai.cn/ecorex-agent/", "_blank", "noopener,noreferrer");
+      return { ok: true, url: "https://www.ecoreai.cn/ecorex-agent/" };
+    },
+    onUpdateStatus: function (callback) {
+      try { callback(updateStatus); } catch (error) {}
+      return function () {};
+    },
     chooseFiles: chooseFiles,
     chooseProjectFolder: async function () { return null; },
     savePastedFile: savePastedFile,
     openPath: async function (filePath) {
-      var url = filePath && String(filePath).indexOf("/uploads/") === 0 ? runtimePath(filePath) : runtimePath("/api/file") + "?path=" + encodeURIComponent(filePath || "");
-      window.open(url, "_blank", "noopener,noreferrer");
-      return "";
+      var result = await apiJson({ path: "/api/open-path", method: "POST", body: { path: filePath || "" } });
+      return result.message || "";
     },
     getPermissionState: async function () {
       return apiJson({ path: "/api/tool-permissions", method: "GET" });
@@ -442,8 +527,30 @@ def _web_app_bridge_script() -> str:
     resetPermissionGrants: async function () {
       return apiJson({ path: "/api/tool-permissions", method: "POST", body: { action: "reset_grants" } });
     },
-    listCapabilityPacks: async function () { return []; },
-    installCapabilityPack: async function () { return null; },
+    listCapabilityPacks: async function () {
+      var payload = await apiJson({ path: "/api/capabilities", method: "GET" });
+      var abilities = Array.isArray(payload.abilities) ? payload.abilities : [];
+      return abilities
+        .filter(function (item) { return item && (item.agentCanInstall || item.packId || item.kind === "capability-pack"); })
+        .map(function (item) {
+          var state = item.capabilityState || {};
+          var packId = item.packId || item.id || "";
+          var installed = !!state.installed;
+          return {
+            id: String(packId),
+            name: String(item.label || packId),
+            summary: String(item.notes || item.defaultPolicy || ""),
+            installMode: "user-or-admin",
+            state: String(state.state || (installed ? "installed" : "not-installed")),
+            message: String(state.message || (installed ? "能力包已安装" : "点击安装后由当前会话 agent 处理")),
+            installed: installed,
+            logPath: state.logPath,
+            updatedAt: state.updatedAt,
+            policyMode: "ask"
+          };
+        })
+        .filter(function (item) { return !!item.id; });
+    },
     reportTelemetry: async function (event) {
       try { await clientJson("/events", "POST", event || {}, true); } catch (error) {}
     },
@@ -468,7 +575,7 @@ def _web_app_bridge_script() -> str:
           email: input.email,
           password: input.password,
           deviceId: deviceId(),
-          appVersion: "0.1.13-web.1"
+          appVersion: "0.1.14-web.1"
         }, false);
       } catch (error) {
         adminError = error;
@@ -851,6 +958,7 @@ class WebChannel(ChatChannel):
         """
         try:
             from agent.protocol import get_cancel_registry
+            from common.ecorex_workspace import cleanup_stale_session_locks
 
             requests = []
             sessions = {}
@@ -865,14 +973,20 @@ class WebChannel(ChatChannel):
                 requests.append(item)
                 if session_id and not item.get("cancelled"):
                     sessions.setdefault(session_id, []).append(request_id)
+            stale_locks = [
+                item for item in cleanup_stale_session_locks(_get_workspace_root())
+                if item.get("removed") or item.get("dead_owner") or item.get("stale")
+            ]
             return {
                 "status": "success",
                 "requests": requests,
                 "sessions": sessions,
+                "stale_locks": stale_locks,
+                "staleLocks": stale_locks,
             }
         except Exception as e:
             logger.error(f"[WebChannel] active_requests_snapshot error: {e}")
-            return {"status": "error", "message": str(e), "requests": [], "sessions": {}}
+            return {"status": "error", "message": str(e), "requests": [], "sessions": {}, "stale_locks": [], "staleLocks": []}
 
     def _ensure_sse_state(self, request_id: str) -> None:
         if not request_id:
@@ -925,6 +1039,17 @@ class WebChannel(ChatChannel):
                 "timestamp": time.time(),
             })
 
+    def _cancel_subagents_for_parent(self, session_id: str) -> Dict[str, Any]:
+        if not session_id or str(session_id).startswith("subagent-"):
+            return {"cancelledTasks": 0, "cancelledRequests": 0, "tasks": []}
+        try:
+            from agent.tools.subagent.subagent import cancel_children_for_parent
+
+            return cancel_children_for_parent(_get_workspace_root(), session_id)
+        except Exception as e:
+            logger.warning(f"[WebChannel] subagent cascade cancel skipped for {session_id}: {e}")
+            return {"cancelledTasks": 0, "cancelledRequests": 0, "tasks": [], "error": str(e)}
+
     def _interrupt_and_wait_for_session_lock(self, session_id: str, lang: str = "zh"):
         """Cancel the active request for a busy session and wait briefly for its lock."""
         from agent.protocol import get_cancel_registry
@@ -941,13 +1066,15 @@ class WebChannel(ChatChannel):
             raise SessionBusyError(f"session is busy: {session_id}")
 
         cancelled = get_cancel_registry().cancel_session(session_id)
+        subagent_cancel = self._cancel_subagents_for_parent(session_id)
         if cancelled <= 0:
             raise SessionBusyError(f"session is busy: {session_id}")
 
         self._push_cancelled_events_for_session(session_id, active_request_ids, lang=lang)
         logger.info(
             f"[WebChannel] interrupting busy session before new message: "
-            f"session={session_id}, cancelled={cancelled}, requests={active_request_ids}"
+            f"session={session_id}, cancelled={cancelled}, requests={active_request_ids}, "
+            f"subagents={subagent_cancel}"
         )
 
         deadline = time.time() + 12
@@ -1626,6 +1753,7 @@ class WebChannel(ChatChannel):
             json_data = json.loads(data)
             session_id = json_data.get('session_id', f'session_{int(time.time())}')
             visible_prompt = str(json_data.get('message') or '')
+            visible_message = str(json_data.get('visible_message') or visible_prompt or '')
             prompt = visible_prompt
             hidden_context = json_data.get('hidden_context') or json_data.get('project_context') or ''
             use_sse = json_data.get('stream', True)
@@ -1644,16 +1772,19 @@ class WebChannel(ChatChannel):
                 from agent.protocol import get_cancel_registry
                 active_request_ids = self._active_request_ids_for_session(session_id)
                 cancelled = get_cancel_registry().cancel_session(session_id)
+                subagent_cancel = self._cancel_subagents_for_parent(session_id)
                 self._push_cancelled_events_for_session(session_id, active_request_ids, lang=lang)
-                msg_text = _cancel_reply_text(cancelled, lang)
+                msg_text = _cancel_reply_text(cancelled + int(subagent_cancel.get("cancelledTasks") or 0), lang)
                 logger.info(
-                    f"[WebChannel] /cancel fast-path: session={session_id}, cancelled={cancelled}, lang={lang}"
+                    f"[WebChannel] /cancel fast-path: session={session_id}, cancelled={cancelled}, "
+                    f"subagents={subagent_cancel}, lang={lang}"
                 )
                 return json.dumps({
                     "status": "success",
                     "request_id": "",
                     "stream": False,
                     "inline_reply": msg_text,
+                    "subagents": subagent_cancel,
                 })
 
             try:
@@ -1734,7 +1865,7 @@ class WebChannel(ChatChannel):
             context["receiver"] = session_id
             context["request_id"] = request_id
             context["session_lock"] = session_lock
-            context["visible_message"] = (visible_prompt or "Please handle these attachments.").strip()
+            context["visible_message"] = (visible_message or "Please handle these attachments.").strip()
             if is_voice_input:
                 # Web channel runs its own TTS post-pipeline via
                 # _maybe_dispatch_auto_tts; don't set desire_rtype here or
@@ -1880,6 +2011,8 @@ class WebChannel(ChatChannel):
             request_id = (json_data.get("request_id") or "").strip()
             session_id = (json_data.get("session_id") or "").strip()
             lang = (json_data.get("lang") or "zh").lower()
+            if request_id and not session_id:
+                session_id = self.request_to_session.get(request_id, "")
             active_request_ids = self._active_request_ids_for_session(session_id) if session_id else []
 
             registry = get_cancel_registry()
@@ -1891,6 +2024,11 @@ class WebChannel(ChatChannel):
 
             if cancelled == 0 and session_id:
                 cancelled = registry.cancel_session(session_id)
+            subagent_cancel = self._cancel_subagents_for_parent(session_id) if session_id else {
+                "cancelledTasks": 0,
+                "cancelledRequests": 0,
+                "tasks": [],
+            }
 
             if request_id and self._sse_request_exists(request_id):
                 self._push_sse_event(request_id, {
@@ -1904,11 +2042,13 @@ class WebChannel(ChatChannel):
 
             logger.info(
                 f"[WebChannel] cancel request: request_id={request_id!r}, "
-                f"session_id={session_id!r}, cancelled={cancelled}"
+                f"session_id={session_id!r}, cancelled={cancelled}, subagents={subagent_cancel}"
             )
             return json.dumps({
                 "status": "success",
-                "cancelled": cancelled,
+                "cancelled": cancelled + int(subagent_cancel.get("cancelledTasks") or 0),
+                "parentCancelled": cancelled,
+                "subagents": subagent_cancel,
             })
 
         except Exception as e:
@@ -2056,6 +2196,12 @@ class WebChannel(ChatChannel):
             '/cancel', 'CancelHandler',
             '/api/active-requests', 'ActiveRequestsHandler',
             '/api/tool-permissions', 'ToolPermissionHandler',
+            '/api/update-check', 'UpdateCheckHandler',
+            '/api/open-path', 'OpenPathHandler',
+            '/api/capabilities', 'CapabilitiesHandler',
+            '/api/agent-install-request', 'AgentInstallRequestHandler',
+            '/api/subagents', 'SubagentsHandler',
+            '/api/subagents/([^/]+)/(cancel|collect)', 'SubagentActionHandler',
             '/client', 'ClientProxyHandler',
             '/client/(.*)', 'ClientProxyHandler',
             '/chat', 'ChatHandler',
@@ -2136,6 +2282,9 @@ class RootHandler:
 def _serve_web_app_asset(file_path: str = ""):
     app_dir = os.path.realpath(os.path.join(os.path.dirname(__file__), "static", "app"))
     requested = (file_path or "").strip("/")
+    knowledge_rel = _knowledge_rel_from_app_path(requested)
+    if knowledge_rel:
+        return _knowledge_viewer_html(knowledge_rel)
     target = os.path.realpath(os.path.join(app_dir, requested)) if requested else os.path.join(app_dir, "index.html")
     if not _is_within_directory(app_dir, target):
         raise web.notfound()
@@ -2158,6 +2307,78 @@ def _serve_web_app_asset(file_path: str = ""):
         web.header("Cache-Control", "public, max-age=31536000, immutable")
         with open(target, "rb") as f:
             return f.read()
+
+
+def _knowledge_rel_from_app_path(requested: str) -> str:
+    path_value = (requested or "").replace("\\", "/").lstrip("/")
+    if not path_value.startswith("knowledge/"):
+        return ""
+    rel_path = path_value[len("knowledge/"):].strip("/")
+    if not rel_path or ".." in rel_path or not rel_path.lower().endswith(".md"):
+        return ""
+    return rel_path
+
+
+def _html_escape(value: Any) -> str:
+    return (
+        str(value or "")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&#39;")
+    )
+
+
+def _knowledge_viewer_html(rel_path: str):
+    web.header("Content-Type", "text/html; charset=utf-8")
+    web.header("Cache-Control", "no-cache, no-store, must-revalidate")
+    encoded_path = json.dumps(rel_path, ensure_ascii=False)
+    title = _html_escape(os.path.basename(rel_path))
+    return f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{title} - EcoreX Knowledge</title>
+  <style>
+    body {{ margin:0; font-family: Inter, "Microsoft YaHei", system-ui, sans-serif; color:#1d140e; background:#fff9f2; }}
+    main {{ max-width: 920px; margin: 0 auto; padding: 28px 20px 56px; }}
+    header {{ display:grid; gap:6px; margin-bottom:18px; }}
+    h1 {{ margin:0; font-size:24px; line-height:1.25; }}
+    small {{ color:#7b6b5d; }}
+    pre {{ white-space:pre-wrap; word-break:break-word; line-height:1.68; padding:18px; border:1px solid #e2d5c8; border-radius:8px; background:#fff; }}
+    .error {{ padding:14px 16px; border:1px solid #e3a36f; border-radius:8px; color:#8f3f12; background:#fff1e5; }}
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <small>知识库</small>
+      <h1>{title}</h1>
+      <small>{_html_escape(rel_path)}</small>
+    </header>
+    <section id="content">正在读取...</section>
+  </main>
+  <script>
+    const relPath = {encoded_path};
+    const target = document.getElementById("content");
+    fetch("/api/knowledge/read?path=" + encodeURIComponent(relPath), {{ credentials: "same-origin" }})
+      .then((response) => response.json().then((payload) => {{ if (!response.ok || payload.status === "error") throw new Error(payload.message || "读取失败"); return payload; }}))
+      .then((payload) => {{
+        const pre = document.createElement("pre");
+        pre.textContent = payload.content || "";
+        target.replaceChildren(pre);
+      }})
+      .catch((error) => {{
+        const div = document.createElement("div");
+        div.className = "error";
+        div.textContent = error && error.message ? error.message : String(error);
+        target.replaceChildren(div);
+      }});
+  </script>
+</body>
+</html>"""
 
 
 class WebAppRootHandler:
@@ -2344,14 +2565,15 @@ class FileServeHandler:
         _require_auth()
         try:
             params = web.input(path="")
-            file_path = params.path
-            if not file_path or not os.path.isabs(file_path):
+            raw_path = params.path
+            if not raw_path:
                 raise web.notfound()
             # Resolve symlinks and confine access to explicit preview roots.
             # Default preview is workspace-scoped; serving Home requires an
             # explicit web_file_serve_root override plus the permission broker.
-            file_path = os.path.realpath(file_path)
             workspace_root = os.path.realpath(os.path.expanduser(conf().get("agent_workspace", "~/cow")))
+            file_path = raw_path if os.path.isabs(raw_path) else os.path.join(workspace_root, raw_path.lstrip("/\\"))
+            file_path = os.path.realpath(file_path)
             upload_root = os.path.realpath(_get_upload_dir())
             serve_root = conf().get("web_file_serve_root")
             allowed_roots = [
@@ -2451,6 +2673,250 @@ class ToolPermissionHandler:
             return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
 
 
+class UpdateCheckHandler:
+    DEFAULT_MANIFEST_URL = "https://www.ecoreai.cn/ecorex-agent/manifest.json"
+
+    def GET(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            params = web.input(platform='web')
+            platform = str(params.platform or "web").strip()
+            manifest = self._load_manifest()
+            from cli import __version__
+
+            latest_version = str(manifest.get("version") or "")
+            artifact = self._pick_artifact(manifest, platform)
+            has_update = bool(artifact and latest_version and self._compare_versions(latest_version, __version__) > 0)
+            download_url = self._absolute_download_url(artifact.get("href") if artifact else "")
+            message = f"发现新版本 {latest_version}，请前往下载页安装" if has_update else "当前已经是最新版本"
+            return json.dumps({
+                "status": "success",
+                "platform": platform,
+                "currentVersion": __version__,
+                "latestVersion": latest_version or __version__,
+                "version": latest_version or __version__,
+                "hasUpdate": has_update,
+                "message": message,
+                "downloadUrl": download_url,
+                "artifact": artifact,
+                "recommendedDownloads": manifest.get("recommendedDownloads", {}),
+                "update": manifest.get("update", {}),
+            }, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] update check error: {e}")
+            return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
+
+    def _load_manifest(self) -> Dict[str, Any]:
+        configured = (
+            os.environ.get("ECOREX_RELEASE_MANIFEST_URL")
+            or conf().get("release_manifest_url")
+            or self.DEFAULT_MANIFEST_URL
+        )
+        url = str(configured).strip()
+        if os.path.isfile(url):
+            with open(url, "r", encoding="utf-8") as handle:
+                return json.load(handle)
+        with urllib.request.urlopen(url, timeout=6) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    def _pick_artifact(self, manifest: Dict[str, Any], platform: str) -> Dict[str, Any]:
+        artifacts = [
+            artifact for artifact in (manifest.get("artifacts") if isinstance(manifest.get("artifacts"), list) else [])
+            if isinstance(artifact, dict) and artifact.get("status") in ("ready", "ready-unsigned")
+        ]
+        platform_value = platform.lower()
+        preferred_id = ""
+        if platform_value in ("win32", "windows", "win"):
+            preferred_id = "windows-x64"
+        elif platform_value in ("darwin", "mac", "macos"):
+            preferred_id = "macos-arm64-dmg"
+        elif platform_value == "web":
+            preferred_id = "webui-windows-x64"
+        for artifact in artifacts:
+            if isinstance(artifact, dict) and artifact.get("id") == preferred_id:
+                return artifact
+        return next((artifact for artifact in artifacts if isinstance(artifact, dict) and artifact.get("status") in ("ready", "ready-unsigned")), {})
+
+    def _absolute_download_url(self, href: str) -> str:
+        if not href:
+            return "https://www.ecoreai.cn/ecorex-agent/"
+        if href.startswith("http://") or href.startswith("https://"):
+            return href
+        return "https://www.ecoreai.cn/ecorex-agent/" + href.lstrip("./")
+
+    def _compare_versions(self, left: str, right: str) -> int:
+        def parts(value: str) -> List[int]:
+            return [int(part) if part.isdigit() else 0 for part in str(value or "0").replace("-", ".").split(".")]
+
+        a = parts(left)
+        b = parts(right)
+        for index in range(max(len(a), len(b))):
+            diff = (a[index] if index < len(a) else 0) - (b[index] if index < len(b) else 0)
+            if diff:
+                return 1 if diff > 0 else -1
+        return 0
+
+
+class OpenPathHandler:
+    def POST(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            raw = web.data() or b"{}"
+            if len(raw) > 64 * 1024:
+                return json.dumps({"status": "error", "message": "payload too large"}, ensure_ascii=False)
+            body = json.loads(raw)
+            path_value = str(body.get("path") or body.get("file_path") or "").strip()
+            if not path_value:
+                return json.dumps({"status": "error", "message": "path is required"}, ensure_ascii=False)
+            workspace_root = os.path.realpath(_get_workspace_root())
+            expanded_path = os.path.expanduser(path_value)
+            if not os.path.isabs(expanded_path):
+                expanded_path = os.path.join(workspace_root, expanded_path.lstrip("/\\"))
+            path_value = os.path.realpath(expanded_path)
+            if not os.path.exists(path_value):
+                return json.dumps({"status": "error", "message": f"path not found: {path_value}"}, ensure_ascii=False)
+
+            try:
+                from common.ecorex_tool_permissions import get_tool_permission_broker
+
+                decision = get_tool_permission_broker().authorize_file_access(
+                    "read",
+                    path_value,
+                    cwd=workspace_root,
+                )
+                if not decision.get("allowed", True):
+                    return json.dumps({
+                        "status": "error",
+                        "message": decision.get("reason") or "open path blocked by permissions",
+                    }, ensure_ascii=False)
+            except Exception as exc:
+                logger.warning(f"[WebChannel] open path permission check failed: {exc}")
+                return json.dumps({"status": "error", "message": "open path permission check failed"}, ensure_ascii=False)
+
+            self._open_path(path_value)
+            return json.dumps({"status": "success", "message": "", "path": path_value}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] open path error: {e}")
+            return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
+
+    def _open_path(self, path_value: str) -> None:
+        if os.name == "nt":
+            os.startfile(path_value)  # type: ignore[attr-defined]
+            return
+        command = ["open", path_value] if sys.platform == "darwin" else ["xdg-open", path_value]
+        subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _tool_result_to_payload(result) -> dict:
+    payload = getattr(result, "result", result)
+    if not isinstance(payload, dict):
+        payload = {"result": payload}
+    status = getattr(result, "status", None) or payload.get("status") or "success"
+    return {"status": status, **payload}
+
+
+class CapabilitiesHandler:
+    def GET(self):
+        _require_auth()
+        web.header("Content-Type", "application/json; charset=utf-8")
+        try:
+            from agent.tools.agent_capability.agent_capability import AgentCapabilityTool
+
+            tool = AgentCapabilityTool()
+            result = tool.execute({"action": "diagnose"})
+            return json.dumps(_tool_result_to_payload(result), ensure_ascii=False)
+        except Exception as exc:
+            logger.exception("[WebChannel] capability status failed")
+            return json.dumps({"status": "error", "message": str(exc)}, ensure_ascii=False)
+
+
+class AgentInstallRequestHandler:
+    def POST(self):
+        _require_auth()
+        web.header("Content-Type", "application/json; charset=utf-8")
+        try:
+            data = json.loads(web.data() or b"{}")
+        except Exception:
+            data = {}
+        pack_id = str(data.get("packId") or data.get("pack_id") or data.get("id") or "").strip()
+        pack_name = str(data.get("packName") or data.get("name") or pack_id or "能力包").strip()
+        session_id = str(data.get("sessionId") or data.get("session_id") or "").strip()
+        if not pack_id:
+            return json.dumps({"status": "error", "message": "packId is required"}, ensure_ascii=False)
+        prompt = (
+            f"请安装 EcoreX 能力包 `{pack_id}`（{pack_name}）。"
+            "必须使用 `agent_capability` 工具执行安装："
+            f"`{{\"action\":\"install_pack\",\"pack_id\":\"{pack_id}\"}}`。"
+            "如果安装失败，先调用 `agent_capability` 的 `diagnose`，读取 stdout/stderr、状态和日志路径，"
+            "给出修复动作并重试；如果权限或管理员策略阻止，请明确说明原因。"
+            "安装完成后请总结安装结果、启用状态、日志路径和下一步建议。"
+        )
+        return json.dumps({
+            "status": "success",
+            "type": "capability-pack",
+            "packId": pack_id,
+            "packName": pack_name,
+            "sessionId": session_id,
+            "prompt": prompt,
+        }, ensure_ascii=False)
+
+
+class _SubagentContext:
+    def __init__(self, session_id: str, workspace_dir: str):
+        self._current_session_id = session_id
+        self.workspace_dir = workspace_dir
+
+
+class SubagentsHandler:
+    def GET(self):
+        _require_auth()
+        web.header("Content-Type", "application/json; charset=utf-8")
+        try:
+            from agent.tools.subagent.subagent import SubagentTool
+
+            tool = SubagentTool()
+            tool.context = _SubagentContext("", _get_workspace_root())
+            return json.dumps(_tool_result_to_payload(tool.execute({"action": "list"})), ensure_ascii=False)
+        except Exception as exc:
+            logger.exception("[WebChannel] subagent list failed")
+            return json.dumps({"status": "error", "message": str(exc)}, ensure_ascii=False)
+
+    def POST(self):
+        _require_auth()
+        web.header("Content-Type", "application/json; charset=utf-8")
+        try:
+            data = json.loads(web.data() or b"{}")
+        except Exception:
+            data = {}
+        try:
+            from agent.tools.subagent.subagent import SubagentTool
+
+            action = str(data.get("action") or "start").strip().lower()
+            tool = SubagentTool()
+            tool.context = _SubagentContext(str(data.get("sessionId") or data.get("session_id") or ""), _get_workspace_root())
+            return json.dumps(_tool_result_to_payload(tool.execute({"action": action, **data})), ensure_ascii=False)
+        except Exception as exc:
+            logger.exception("[WebChannel] subagent action failed")
+            return json.dumps({"status": "error", "message": str(exc)}, ensure_ascii=False)
+
+
+class SubagentActionHandler:
+    def POST(self, task_id: str, action: str):
+        _require_auth()
+        web.header("Content-Type", "application/json; charset=utf-8")
+        try:
+            from agent.tools.subagent.subagent import SubagentTool
+
+            tool = SubagentTool()
+            tool.context = _SubagentContext("", _get_workspace_root())
+            return json.dumps(_tool_result_to_payload(tool.execute({"action": action, "id": task_id})), ensure_ascii=False)
+        except Exception as exc:
+            logger.exception("[WebChannel] subagent route action failed")
+            return json.dumps({"status": "error", "message": str(exc)}, ensure_ascii=False)
+
+
 class StreamHandler:
     def GET(self):
         _require_auth()
@@ -2513,7 +2979,7 @@ class ClientProxyHandler:
         return target
 
     def _forward_headers(self) -> dict:
-        headers = {"User-Agent": "EcoreX-WebUI/0.1.13"}
+        headers = {"User-Agent": "EcoreX-WebUI/0.1.14"}
         for key, value in web.ctx.env.items():
             if key == "CONTENT_TYPE":
                 name = "Content-Type"
@@ -3228,6 +3694,7 @@ class ModelsHandler:
         "dashscope": ["qwen-image-2.0-pro", "qwen-image-2.0"],
         "minimax":   ["image-01"],
         "linkai": [
+            "gpt-image-2-pro",
             "gpt-image-2",
             {"value": "gemini-3.1-flash-image-preview", "hint": "Nano Banana 2"},
             {"value": "gemini-3-pro-image-preview",     "hint": "Nano Banana Pro"},
@@ -3526,7 +3993,7 @@ class ModelsHandler:
         ("doubao",    "seedream-5.0-lite"),
         ("dashscope", "qwen-image-2.0"),
         ("minimax",   "image-01"),
-        ("linkai",    "gpt-image-2"),
+        ("linkai",    "gpt-image-2-pro"),
     ]
 
     @classmethod

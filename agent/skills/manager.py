@@ -23,6 +23,7 @@ MANAGED_BUILTIN_REFRESH_MARKERS: Dict[str, List[str]] = {
     "image-generation": [
         'DEFAULT_MODEL = "gpt-image-2-pro"',
         "OpenAI model {model} unavailable",
+        "LinkAI default model follows EcoreX's OpenAI image default",
         '"output_format"',
         "/images/edits",
         "requests with `image_url` use",

@@ -682,7 +682,7 @@ class McpClient:
         init_params = {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
-            "clientInfo": {"name": "EcoreX", "version": "0.1.13"},
+            "clientInfo": {"name": "EcoreX", "version": "0.1.14"},
         }
         # Temporarily mark as initialized so _send_request doesn't block
         self._initialized = True

@@ -31,6 +31,7 @@ _DANGEROUS_TOOLS = {
     "browser",
     "feishu_cli",
     "optional_abilities",
+    "agent_capability",
     "mcp",
     "mcp_server",
     "write",
@@ -105,6 +106,14 @@ def _summarize_args(tool_name: str, arguments: Dict[str, Any]) -> str:
         ability = str(arguments.get("ability") or arguments.get("pack_id") or "")
         detail = " ".join(part for part in [action, ability] if part)
         return _mask_sensitive(detail).strip()[:500] or "optional ability change"
+    if normalized == "agent_capability":
+        action = str(arguments.get("action") or "")
+        ability = str(arguments.get("pack_id") or arguments.get("ability") or arguments.get("skill") or "")
+        server = arguments.get("server")
+        if isinstance(server, dict) and server.get("name"):
+            ability = str(server.get("name"))
+        detail = " ".join(part for part in [action, ability] if part)
+        return _mask_sensitive(detail).strip()[:500] or "agent capability change"
     if normalized in {"mcp", "mcp_server"}:
         server = str(arguments.get("server") or arguments.get("server_name") or "")
         tool = str(arguments.get("tool") or arguments.get("tool_name") or "")
@@ -335,6 +344,8 @@ class ToolPermissionBroker:
         args = arguments if isinstance(arguments, dict) else {}
         if normalized_tool == "optional_abilities" and str(args.get("action") or "").strip().lower() in {"list", "status"}:
             return {"allowed": True, "reason": "read-only-optional-ability-status"}
+        if normalized_tool == "agent_capability" and str(args.get("action") or "").strip().lower() in {"list_packs", "diagnose"}:
+            return {"allowed": True, "reason": "read-only-agent-capability-status"}
         if not self._requires_permission(normalized_tool):
             return {"allowed": True, "reason": "not-required"}
 
@@ -444,6 +455,8 @@ class ToolPermissionBroker:
         args = arguments if isinstance(arguments, dict) else {}
         if normalized_tool == "optional_abilities" and str(args.get("action") or "").strip().lower() in {"list", "status"}:
             return {"allowed": True, "reason": "read-only-optional-ability-status"}
+        if normalized_tool == "agent_capability" and str(args.get("action") or "").strip().lower() in {"list_packs", "diagnose"}:
+            return {"allowed": True, "reason": "read-only-agent-capability-status"}
         if not self._requires_permission(normalized_tool):
             return {"allowed": True, "reason": "not-required"}
 
@@ -720,6 +733,8 @@ class ToolPermissionBroker:
             return "Feishu CLI access confirmation"
         if tool_name == "optional_abilities":
             return "Optional ability enablement confirmation"
+        if tool_name == "agent_capability":
+            return "Agent capability installation confirmation"
         if tool_name in {"mcp", "mcp_server"}:
             return "MCP external capability confirmation"
         if tool_name in {"write", "edit", "fs_write"}:
@@ -748,6 +763,8 @@ class ToolPermissionBroker:
             return f"EcoreX wants to access Feishu through lark-cli: {summary}"
         if tool_name == "optional_abilities":
             return f"EcoreX wants to enable or install an optional ability: {summary}"
+        if tool_name == "agent_capability":
+            return f"EcoreX wants the agent to install or configure a capability: {summary}"
         if tool_name in {"mcp", "mcp_server"}:
             return f"EcoreX wants to start or call an MCP external capability: {summary}"
         if tool_name in {"write", "edit", "fs_write"}:

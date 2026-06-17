@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.1.13",
+    [string]$Version = "0.1.14",
     [string]$RuntimeRoot = "desktop/runtime/ecorex-runtime",
     [string]$OutputDir = "release-artifacts",
     [switch]$KeepStaging
@@ -32,6 +32,18 @@ function Remove-GeneratedNoise {
     Get-ChildItem -LiteralPath $Root -Recurse -Force -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -like "*.pyc" -or $_.Name -like "*.pyo" -or $_.Name -eq ".DS_Store" -or $_.Name -eq "config.json" } |
         ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
+}
+
+function Invoke-ReleaseRuntimeSanitizer {
+    param([Parameter(Mandatory = $true)][string]$RuntimeDir)
+    $sanitizer = Join-Path $repoRoot "scripts\sanitize-ecorex-release-runtime.py"
+    if (-not (Test-Path -LiteralPath $sanitizer)) {
+        throw "Release sanitizer missing: $sanitizer"
+    }
+    & python $sanitizer $RuntimeDir
+    if ($LASTEXITCODE -ne 0) {
+        throw "Release runtime sanitizer failed for $RuntimeDir"
+    }
 }
 
 function Sync-DesktopWebBuild {
@@ -298,6 +310,7 @@ Copy-Item -LiteralPath $runtimeRootResolved -Destination $winRuntime -Recurse -F
 Remove-GeneratedNoise -Root $winRuntime
 Sync-DesktopWebBuild -RuntimeDir $winRuntime
 Copy-OptionalLarkCliWindows -RuntimeDir $winRuntime
+Invoke-ReleaseRuntimeSanitizer -RuntimeDir $winRuntime
 
 $windowsCmd = @'
 @echo off
@@ -491,6 +504,7 @@ Remove-Item -LiteralPath (Join-Path $macRuntime "python") -Recurse -Force -Error
 Remove-GeneratedNoise -Root $macRuntime
 Sync-DesktopWebBuild -RuntimeDir $macRuntime
 Copy-OptionalLarkCliMac -RuntimeDir $macRuntime
+Invoke-ReleaseRuntimeSanitizer -RuntimeDir $macRuntime
 
 $pyArmUrl = "https://github.com/astral-sh/python-build-standalone/releases/download/20260602/cpython-3.11.15%2B20260602-aarch64-apple-darwin-install_only_stripped.tar.gz"
 $pyX64Url = "https://github.com/astral-sh/python-build-standalone/releases/download/20260602/cpython-3.11.15%2B20260602-x86_64-apple-darwin-install_only_stripped.tar.gz"
@@ -514,7 +528,7 @@ $macInstall = @'
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.1.13"
+VERSION="0.1.14"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 INSTALL_ROOT="${ECOREX_WEBUI_INSTALL_ROOT:-$HOME/Library/Application Support/EcoreX WebUI}"

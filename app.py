@@ -311,7 +311,7 @@ def _warmup_scheduler():
 def _warmup_agent_runtime():
     """Warm optional agent subsystems after channels are already starting.
 
-    v0.1.13 enables more built-in skills/tools. Keep those capabilities, but
+    v0.1.14 enables more built-in skills/tools. Keep those capabilities, but
     do not let MCP or scheduler/evolution startup delay the local Web API that
     the desktop shell probes for readiness.
     """

@@ -95,6 +95,127 @@ class TestEcoreXWorkspaceState(unittest.TestCase):
             acquired = SessionLock(workspace, "session-dead").acquire()
             acquired.release()
 
+    def test_cleanup_stale_session_locks_reports_dead_owner(self):
+        from common.ecorex_workspace import SessionLock, cleanup_stale_session_locks
+
+        with tempfile.TemporaryDirectory() as workspace:
+            lock = SessionLock(workspace, "session-dead-snapshot")
+            lock.path.parent.mkdir(parents=True, exist_ok=True)
+            lock.path.write_text(
+                json.dumps({
+                    "sessionId": "session-dead-snapshot",
+                    "pid": 999999999,
+                    "host": socket.gethostname(),
+                    "createdAt": 1,
+                }),
+                encoding="utf-8",
+            )
+
+            locks = cleanup_stale_session_locks(workspace)
+
+            self.assertEqual(len(locks), 1)
+            self.assertEqual(locks[0]["session_id"], "session-dead-snapshot")
+            self.assertTrue(locks[0]["dead_owner"])
+            self.assertTrue(locks[0]["removed"])
+            self.assertFalse(lock.path.exists())
+
+
+class TestSubagentTool(unittest.TestCase):
+    class _Context:
+        def __init__(self, session_id: str, workspace: str):
+            self._current_session_id = session_id
+            self.workspace_dir = workspace
+
+    def _tool(self, workspace: str, session_id: str = "parent-session"):
+        from agent.tools.subagent.subagent import SubagentTool
+
+        tool = SubagentTool()
+        tool.context = self._Context(session_id, workspace)
+        return tool
+
+    def test_subagent_start_enforces_concurrency_limit_without_running_children(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            tool = self._tool(workspace)
+            with patch("agent.tools.subagent.subagent.threading.Thread.start", lambda _thread: None):
+                for index in range(6):
+                    result = tool.execute({"action": "start", "task": f"child task {index}"})
+                    self.assertEqual(result.status, "success")
+                    self.assertEqual(result.result["task"]["status"], "queued")
+
+                blocked = tool.execute({"action": "start", "task": "one too many"})
+                self.assertEqual(blocked.status, "error")
+                self.assertEqual(blocked.result["maxConcurrency"], 6)
+
+            listed = tool.execute({"action": "list"})
+            self.assertEqual(len(listed.result["tasks"]), 6)
+
+    def test_subagent_start_rejects_recursive_and_depth_overflow(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            recursive = self._tool(workspace, "subagent-existing")
+            recursive_result = recursive.execute({"action": "start", "task": "nested"})
+            self.assertEqual(recursive_result.status, "error")
+            self.assertIn("recursive", recursive_result.result["message"])
+
+            depth_result = self._tool(workspace).execute({"action": "start", "task": "nested", "depth": 1})
+            self.assertEqual(depth_result.status, "error")
+            self.assertEqual(depth_result.result["maxDepth"], 1)
+
+    def test_cancel_children_for_parent_cascades_running_and_queued_tasks(self):
+        from agent.protocol import get_cancel_registry
+        from agent.tools.subagent.subagent import cancel_children_for_parent
+
+        with tempfile.TemporaryDirectory() as workspace:
+            tool = self._tool(workspace, "parent-session")
+            with patch("agent.tools.subagent.subagent.threading.Thread.start", lambda _thread: None):
+                running = tool.execute({"action": "start", "task": "running child"})
+                queued = tool.execute({"action": "start", "task": "queued child"})
+
+            registry = get_cancel_registry()
+            running_child_session = running.result["task"]["childSessionId"]
+            registry.register(running_child_session, session_id=running_child_session)
+            try:
+                summary = cancel_children_for_parent(workspace, "parent-session")
+                self.assertEqual(summary["cancelledTasks"], 2)
+                self.assertEqual(summary["cancelledRequests"], 1)
+
+                active = [row for row in registry.snapshot() if row["request_id"] == running_child_session]
+                self.assertEqual(len(active), 1)
+                self.assertTrue(active[0]["cancelled"])
+
+                listed = tool.execute({"action": "list"}).result["tasks"]
+                statuses = {task["id"]: task["status"] for task in listed}
+                self.assertEqual(statuses[running.result["task"]["id"]], "cancelling")
+                self.assertEqual(statuses[queued.result["task"]["id"]], "cancelled")
+            finally:
+                registry.unregister(running_child_session)
+
+
+class TestAgentCapabilityPermissions(unittest.TestCase):
+    def test_agent_capability_install_pack_uses_optional_ability_permission(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        proxy_name, proxy_args = AgentStreamExecutor._permission_proxy_for_tool(
+            None,
+            "agent_capability",
+            {"action": "install_pack", "pack_id": "office-pdf"},
+        )
+
+        self.assertEqual(proxy_name, "optional_abilities")
+        self.assertEqual(proxy_args["action"], "install")
+        self.assertEqual(proxy_args["ability"], "office-pdf")
+
+    def test_agent_capability_safe_diagnostics_do_not_require_prompt(self):
+        from common.ecorex_tool_permissions import get_tool_permission_broker
+
+        decision = get_tool_permission_broker().authorize(
+            "agent_capability",
+            "tool-call-1",
+            {"action": "diagnose"},
+        )
+
+        self.assertTrue(decision["allowed"])
+        self.assertEqual(decision["reason"], "read-only-agent-capability-status")
+
 
 class TestWebParallelHandlers(unittest.TestCase):
     def test_ui_state_handler_put_and_get(self):
@@ -141,9 +262,9 @@ class TestWebParallelHandlers(unittest.TestCase):
 
         payload = json.loads(web_channel.VersionHandler().GET())
 
-        self.assertEqual(payload["version"], "0.1.13")
+        self.assertEqual(payload["version"], "0.1.14")
         notes = payload["releaseNotes"]
-        self.assertEqual(notes["version"], "0.1.13")
+        self.assertEqual(notes["version"], "0.1.14")
         self.assertIn("highlights", notes)
         self.assertIn("fixes", notes)
         self.assertIn("howTo", notes)
@@ -281,7 +402,9 @@ class TestWebParallelHandlers(unittest.TestCase):
         registry = get_cancel_registry()
         registry.register(request_id, session_id=session_id)
         try:
-            snapshot = channel.active_requests_snapshot()
+            with tempfile.TemporaryDirectory() as workspace:
+                with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                    snapshot = channel.active_requests_snapshot()
             self.assertEqual(snapshot["status"], "success")
             active = [item for item in snapshot["requests"] if item["request_id"] == request_id]
             self.assertEqual(len(active), 1)
@@ -292,6 +415,35 @@ class TestWebParallelHandlers(unittest.TestCase):
             self.assertEqual(snapshot["sessions"][session_id], [request_id])
         finally:
             registry.unregister(request_id)
+
+    def test_active_request_snapshot_cleans_dead_session_locks(self):
+        from channel.web import web_channel
+        from common.ecorex_workspace import SessionLock
+
+        channel = web_channel.WebChannel()
+        with tempfile.TemporaryDirectory() as workspace:
+            lock = SessionLock(workspace, "session-dead-active-snapshot")
+            lock.path.parent.mkdir(parents=True, exist_ok=True)
+            lock.path.write_text(
+                json.dumps({
+                    "sessionId": "session-dead-active-snapshot",
+                    "pid": 999999999,
+                    "host": socket.gethostname(),
+                    "createdAt": 1,
+                }),
+                encoding="utf-8",
+            )
+
+            with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                snapshot = channel.active_requests_snapshot()
+
+            self.assertEqual(snapshot["status"], "success")
+            self.assertEqual(snapshot["requests"], [])
+            stale = snapshot["staleLocks"]
+            self.assertEqual(len(stale), 1)
+            self.assertEqual(stale[0]["session_id"], "session-dead-active-snapshot")
+            self.assertTrue(stale[0]["removed"])
+            self.assertFalse(lock.path.exists())
 
     def test_cancel_registry_snapshot_marks_cancelled_request(self):
         from agent.protocol.cancel import CancelTokenRegistry
@@ -1065,7 +1217,7 @@ class TestAgentHostBoundary(unittest.TestCase):
 
         self.assertEqual(result.status, "success")
         self.assertEqual(result.result["exit_code"], 0)
-        self.assertIn("cow", result.result["stdout"])
+        self.assertIn("EcoreX", result.result["stdout"])
 
     def test_agent_initializer_load_tools_applies_cached_tool_config(self):
         from bridge.agent_initializer import AgentInitializer
@@ -1989,7 +2141,7 @@ class TestAgentHostBoundary(unittest.TestCase):
             self.assertNotIn("..", path.parts)
             self.assertEqual(path.name, "MEMORY.md")
 
-    def test_openai_image_provider_uses_gpt_image_payload_and_pro_fallback(self):
+    def test_openai_image_provider_uses_gpt_image_2_payload_and_pro_fallback(self):
         import importlib.util
 
         script_path = Path(__file__).resolve().parents[1] / "skills" / "image-generation" / "scripts" / "generate.py"
@@ -2029,6 +2181,10 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertEqual(payloads[0]["output_format"], "png")
         self.assertNotIn("response_format", payloads[0])
         self.assertEqual(len(paths), 1)
+        self.assertEqual(
+            module.LinkAIProvider("lk-test", "https://api.link-ai.tech", "").model,
+            "gpt-image-2-pro",
+        )
 
     def test_openai_image_provider_uses_edits_endpoint_when_image_input_exists(self):
         import importlib.util
@@ -2039,7 +2195,7 @@ class TestAgentHostBoundary(unittest.TestCase):
         spec.loader.exec_module(module)
 
         with tempfile.TemporaryDirectory() as output_dir:
-            provider = module.OpenAIProvider("sk-test", "https://api.openai.com/v1", "gpt-image-2-pro")
+            provider = module.OpenAIProvider("sk-test", "https://api.openai.com/v1", "image-2-pro")
             calls = []
             module._load_image = lambda _source: b"\x89PNG\r\n\x1a\nfake"
             module._compress_image = lambda data: data
@@ -2074,7 +2230,7 @@ class TestAgentHostBoundary(unittest.TestCase):
 
         calls.clear()
         with tempfile.TemporaryDirectory() as output_dir:
-            provider = module.OpenAIProvider("sk-test", "https://api.openai.com/v1", "gpt-image-2-pro")
+            provider = module.OpenAIProvider("sk-test", "https://api.openai.com/v1", "image-2-pro")
             provider._post_multipart = fake_post_multipart
             provider.generate(
                 "add a red border",
@@ -2094,6 +2250,74 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertEqual(capability["fallback_provider"], "openai")
         self.assertEqual(capability["fallback_model"], "gpt-image-2-pro")
         self.assertEqual(capability["provider_models"]["openai"][0], "gpt-image-2-pro")
+        self.assertEqual(capability["provider_models"]["linkai"][0], "gpt-image-2-pro")
+
+        linkai_only = ModelsHandler._image_capability({"linkai_api_key": "lk-test"})
+        self.assertEqual(linkai_only["fallback_provider"], "linkai")
+        self.assertEqual(linkai_only["fallback_model"], "gpt-image-2-pro")
+
+    def test_v014_defaults_keep_agent_install_and_image_2_pro(self):
+        root = Path(__file__).resolve().parents[1]
+        direct_install_sources = [
+            root / "desktop" / "electron" / "capabilities.ts",
+            root / "desktop" / "electron" / "main.ts",
+            root / "desktop" / "electron" / "preload.cts",
+            root / "desktop" / "src" / "services" / "ecorexApi.ts",
+            root / "desktop" / "src" / "vite-env.d.ts",
+            root / "channel" / "web" / "web_channel.py",
+        ]
+        forbidden = [
+            "installCapabilityPack",
+            "install-capability-pack",
+            "preinstallPolicyPacks",
+            "capability-preinstall",
+            "capability-install",
+            "async installPack",
+        ]
+        for source in direct_install_sources:
+            text = source.read_text(encoding="utf-8")
+            for marker in forbidden:
+                self.assertNotIn(marker, text, f"{source} still exposes app-side install marker {marker!r}")
+
+        generate_py = (root / "skills" / "image-generation" / "scripts" / "generate.py").read_text(encoding="utf-8")
+        skill_md = (root / "skills" / "image-generation" / "SKILL.md").read_text(encoding="utf-8")
+        xhs_py = (root / "skills" / "create-xiaohongshu-note" / "scripts" / "generate_cover_image.py").read_text(encoding="utf-8")
+        manager_py = (root / "agent" / "skills" / "manager.py").read_text(encoding="utf-8")
+        enterprise_policy_ts = (root / "desktop" / "electron" / "enterprisePolicy.ts").read_text(encoding="utf-8")
+        stage_runtime_win = (root / "desktop" / "scripts" / "stage-runtime-win.ps1").read_text(encoding="utf-8")
+        web_channel_py = (root / "channel" / "web" / "web_channel.py").read_text(encoding="utf-8")
+        self.assertIn('DEFAULT_MODEL = "gpt-image-2-pro"', generate_py)
+        self.assertIn('FALLBACK_MODEL = "gpt-image-2"', generate_py)
+        self.assertIn("LinkAI default model follows EcoreX's OpenAI image default", generate_py)
+        self.assertNotIn('("linkai",    "image-2-pro")', web_channel_py)
+        self.assertIn('("linkai",    "gpt-image-2-pro")', web_channel_py)
+        self.assertIn('"linkai": [\n            "gpt-image-2-pro"', web_channel_py)
+        self.assertIn('Do not create final images by coding HTML/canvas/SVG/Pillow layouts', skill_md)
+        self.assertIn("legacy `image-2-pro` input is normalized", skill_md)
+        self.assertIn('parser.add_argument("--model", default="gpt-image-2-pro")', xhs_py)
+        self.assertIn('DEFAULT_MODEL = "gpt-image-2-pro"', manager_py)
+        self.assertIn('default="gpt-image-2-pro"', manager_py)
+        self.assertIn('"ecorex-desktop-v0.1.14"', enterprise_policy_ts)
+        self.assertIn('"ecorex-desktop-v0.1.13"', enterprise_policy_ts)
+        self.assertIn("enterpriseClientEventKeys", enterprise_policy_ts)
+        self.assertIn("hasPolicyOverrideValue", enterprise_policy_ts)
+        self.assertIn("return value.length > 0", enterprise_policy_ts)
+        self.assertIn("compatClientEventKeys", stage_runtime_win)
+        self.assertIn("ecorex-web-v0.1.14-web.1", web_channel_py)
+        self.assertIn("ecorex-web-v0.1.13-web.1", web_channel_py)
+        self.assertIn("webClientKeys", web_channel_py)
+        self.assertIn("invalid client key", web_channel_py)
+
+    def test_v014_sidecar_intentional_restart_does_not_overwrite_new_status(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "desktop" / "electron" / "sidecar.ts").read_text(encoding="utf-8")
+
+        self.assertIn("const stoppedIntentionally", source)
+        self.assertRegex(
+            source,
+            r"if \(stoppedIntentionally\) \{\s*if \(!this\.child\) \{[\s\S]*?state: \"stopped\"[\s\S]*?\}\s*return;"
+        )
+        self.assertIn("this.scheduleRestart(webPort, reason)", source)
 
     def test_legacy_openai_image_payload_supports_gpt_image_base64(self):
         from models.openai.open_ai_image import OpenAIImage
@@ -2104,6 +2328,11 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertEqual(payload["n"], 1)
         self.assertEqual(payload["output_format"], "png")
         self.assertNotIn("response_format", payload)
+
+        legacy_payload = image._build_image_payload("orange x", "image-2-pro")
+        self.assertEqual(legacy_payload["model"], "gpt-image-2-pro")
+        self.assertEqual(legacy_payload["output_format"], "png")
+        self.assertNotIn("response_format", legacy_payload)
 
         with tempfile.TemporaryDirectory() as temp_root:
             with patch("models.openai.open_ai_image.tempfile.gettempdir", return_value=temp_root):
@@ -2124,7 +2353,8 @@ class TestAgentHostBoundary(unittest.TestCase):
             (builtin_skill / "SKILL.md").write_text(
                 "---\nname: image-generation\ndescription: Generate images\n---\n"
                 "OpenAI model {model} unavailable\n\"output_format\"\n"
-                "/images/edits\nrequests with `image_url` use\n",
+                "/images/edits\nrequests with `image_url` use\n"
+                "LinkAI default model follows EcoreX's OpenAI image default\n",
                 encoding="utf-8",
             )
             (builtin_skill / "scripts" / "generate.py").write_text(
@@ -2159,7 +2389,8 @@ class TestAgentHostBoundary(unittest.TestCase):
             (builtin_skill / "SKILL.md").write_text(
                 "---\nname: image-generation\ndescription: Generate images\n---\n"
                 "OpenAI model {model} unavailable\n\"output_format\"\n"
-                "/images/edits\nrequests with `image_url` use\n",
+                "/images/edits\nrequests with `image_url` use\n"
+                "LinkAI default model follows EcoreX's OpenAI image default\n",
                 encoding="utf-8",
             )
             (builtin_skill / "scripts" / "generate.py").write_text(

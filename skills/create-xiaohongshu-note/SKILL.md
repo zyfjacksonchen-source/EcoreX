@@ -59,7 +59,7 @@ Use these scripts when deterministic checks or delivery artifacts are needed:
 ## Runtime Defaults
 
 - Preferred image model: `gpt-image-2-pro`.
-- Fallback image model: `gpt-image-2`.
+- Fallback image model: `image-2`.
 - Cover size: `1080x1440`.
 - Carousel inner-page size: `1080x1440`, same design language as the cover.
 - Title limit: every title candidate and selected title must be <=20 characters.

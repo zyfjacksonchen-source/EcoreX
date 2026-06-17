@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${VERSION:-0.1.13}"
+VERSION="${VERSION:-0.1.14}"
 ZIP_PATH="${1:-${ZIP_PATH:-release-artifacts/EcoreX_${VERSION}-public-release.zip}}"
 RELEASE_ROOT="${RELEASE_ROOT:-/srv/ecorex-agent-download}"
 ADMIN_ROOT="${ADMIN_ROOT:-/srv/ecorex-agent-admin}"
@@ -133,11 +133,11 @@ fi
 
 env_file="$ADMIN_ROOT/env/ecorex-admin-api.env"
 active_env_file="$ADMIN_ROOT/ecorex-admin-api.env"
-required_client_keys="ecorex-desktop-v0.1.10,ecorex-desktop-v0.1.11,ecorex-desktop-v0.1.12,ecorex-desktop-v0.1.13,ecorex-web-v0.1.11-web.1,ecorex-web-v0.1.12-web.1,ecorex-web-v0.1.13-web.1"
+required_client_keys="ecorex-desktop-v0.1.10,ecorex-desktop-v0.1.11,ecorex-desktop-v0.1.12,ecorex-desktop-v0.1.13,ecorex-desktop-v0.1.14,ecorex-web-v0.1.11-web.1,ecorex-web-v0.1.12-web.1,ecorex-web-v0.1.13-web.1,ecorex-web-v0.1.14-web.1"
 if [[ ! -f "$env_file" ]]; then
   cat > "$env_file" <<'EOF'
 ECOREX_ADMIN_DB=/srv/ecorex-agent-admin/data/ecorex-admin.sqlite3
-ECOREX_CLIENT_EVENT_KEYS=ecorex-desktop-v0.1.10,ecorex-desktop-v0.1.11,ecorex-desktop-v0.1.12,ecorex-desktop-v0.1.13,ecorex-web-v0.1.11-web.1,ecorex-web-v0.1.12-web.1,ecorex-web-v0.1.13-web.1
+ECOREX_CLIENT_EVENT_KEYS=ecorex-desktop-v0.1.10,ecorex-desktop-v0.1.11,ecorex-desktop-v0.1.12,ecorex-desktop-v0.1.13,ecorex-desktop-v0.1.14,ecorex-web-v0.1.11-web.1,ecorex-web-v0.1.12-web.1,ecorex-web-v0.1.13-web.1,ecorex-web-v0.1.14-web.1
 ECOREX_ALLOWED_ORIGINS=https://www.ecoreai.cn
 ECOREX_ADMIN_USERNAME=admin
 ECOREX_ADMIN_PASSWORD=change-this-before-starting

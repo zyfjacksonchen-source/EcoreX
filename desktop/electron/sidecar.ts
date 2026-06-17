@@ -3,7 +3,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveEnterprisePolicy, type EnterprisePolicy } from "./enterprisePolicy.js";
+import { enterpriseClientEventKeys, resolveEnterprisePolicy, type EnterprisePolicy } from "./enterprisePolicy.js";
 
 export type SidecarState = "starting" | "running" | "stopped" | "failed" | "skipped";
 
@@ -48,6 +48,11 @@ export class SidecarManager {
   private enterpriseEnv: NodeJS.ProcessEnv = {};
   private enterpriseConfigHash = "";
   private policy: EnterprisePolicy | null = null;
+  private stoppingIntentionally = false;
+  private intentionallyStoppedChildren = new WeakSet<ChildProcessWithoutNullStreams>();
+  private restartAttempts = 0;
+  private restartTimer: NodeJS.Timeout | null = null;
+  private readonly maxRestartAttempts = 3;
   private status: SidecarStatus = {
     state: "stopped",
     message: "sidecar 未启动",
@@ -112,6 +117,12 @@ export class SidecarManager {
       return;
     }
 
+    this.stoppingIntentionally = false;
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+
     const python = this.resolvePython();
     if (!python) {
       this.updateStatus({
@@ -149,18 +160,22 @@ export class SidecarManager {
       windowsHide: true
     });
 
-    this.child.once("spawn", () => {
+    const launchedChild = this.child;
+
+    launchedChild.once("spawn", () => {
       this.updateStatus({
         state: "starting",
         message: "EcoreX 兼容运行时已启动",
-        pid: this.child?.pid,
+        pid: launchedChild.pid,
         webPort
       });
-      void this.markReadyWhenAvailable(webPort, this.child?.pid);
+      void this.markReadyWhenAvailable(webPort, launchedChild.pid);
     });
 
-    this.child.once("error", (error) => {
-      this.child = null;
+    launchedChild.once("error", (error) => {
+      if (this.child === launchedChild) {
+        this.child = null;
+      }
       this.updateStatus({
         state: "failed",
         message: `sidecar 启动失败：${error.message}`,
@@ -168,16 +183,34 @@ export class SidecarManager {
       });
     });
 
-    this.child.once("exit", (code, signal) => {
-      this.child = null;
+    launchedChild.once("exit", (code, signal) => {
+      const reason = signal ? String(signal) : String(code ?? "unknown");
+      const stoppedIntentionally = this.stoppingIntentionally || this.intentionallyStoppedChildren.has(launchedChild);
+      if (this.child === launchedChild) {
+        this.child = null;
+      }
+      if (stoppedIntentionally) {
+        if (!this.child) {
+          this.updateStatus({
+            state: "stopped",
+            message: "EcoreX local runtime stopped",
+            webPort
+          });
+        }
+        return;
+      }
+      if (this.restartAttempts < this.maxRestartAttempts) {
+        this.scheduleRestart(webPort, reason);
+        return;
+      }
       this.updateStatus({
-        state: code === 0 ? "stopped" : "failed",
+        state: "failed",
         message: signal ? `sidecar 已退出：${signal}` : `sidecar 已退出：${code ?? "unknown"}`,
         webPort
       });
     });
 
-    this.child.stderr.on("data", (chunk: Buffer) => {
+    launchedChild.stderr.on("data", (chunk: Buffer) => {
       const text = chunk.toString("utf8").trim();
       if (text) {
         this.updateStatus({
@@ -189,9 +222,15 @@ export class SidecarManager {
   }
 
   stop() {
+    this.stoppingIntentionally = true;
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
     if (!this.child) {
       return;
     }
+    this.intentionallyStoppedChildren.add(this.child);
     this.child.kill();
     this.child = null;
     this.updateStatus({
@@ -219,20 +258,7 @@ export class SidecarManager {
     }
 
     try {
-      const response = await fetch(modelConfigUrl, {
-        headers: {
-          "X-EcoreX-Client-Key": policy.clientEventKey,
-          "X-EcoreX-User-Email": session?.user?.email || policy.userEmail || "",
-          "X-EcoreX-User-Token": session?.token || "",
-          "X-EcoreX-Device-Id": session?.deviceId || this.resolveDeviceId(policy),
-          "X-EcoreX-Org-Id": policy.orgId || "",
-          ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {})
-        }
-      });
-      if (!response.ok) {
-        throw new Error(`model policy HTTP ${response.status}`);
-      }
-      const payload = (await response.json()) as ModelPolicyPayload;
+      const payload = await this.fetchModelPolicyWithKeyFallback(modelConfigUrl, policy, session);
       await this.saveCachedModelPolicy(payload);
       return this.applyModelPolicyPayload(payload, "enterprise model policy refreshed", "enterprise model policy unchanged");
     } catch (error) {
@@ -251,6 +277,35 @@ export class SidecarManager {
         message: error instanceof Error ? error.message : String(error)
       };
     }
+  }
+
+  private async fetchModelPolicyWithKeyFallback(modelConfigUrl: string, policy: EnterprisePolicy, session: EnterpriseSession) {
+    const keys = enterpriseClientEventKeys(policy);
+    for (const [index, clientEventKey] of keys.entries()) {
+      const response = await fetch(modelConfigUrl, {
+        headers: {
+          "X-EcoreX-Client-Key": clientEventKey,
+          "X-EcoreX-User-Email": session?.user?.email || policy.userEmail || "",
+          "X-EcoreX-User-Token": session?.token || "",
+          "X-EcoreX-Device-Id": session?.deviceId || this.resolveDeviceId(policy),
+          "X-EcoreX-Org-Id": policy.orgId || "",
+          ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {})
+        }
+      });
+      const payload = (await response.json().catch(() => ({}))) as ModelPolicyPayload & { error?: string; message?: string };
+      if (response.status === 403 && this.isInvalidClientKeyPayload(payload) && index < keys.length - 1) {
+        continue;
+      }
+      if (!response.ok) {
+        throw new Error(`model policy HTTP ${response.status}${payload.error ? `: ${payload.error}` : ""}`);
+      }
+      return payload;
+    }
+    throw new Error("model policy HTTP 403: invalid client key");
+  }
+
+  private isInvalidClientKeyPayload(payload: { error?: string; message?: string }) {
+    return `${payload.error || ""} ${payload.message || ""}`.toLowerCase().includes("invalid client key");
   }
 
   clearEnterpriseModelConfig(message = "enterprise model policy cleared"): EnterpriseModelRefresh {
@@ -324,6 +379,7 @@ export class SidecarManager {
         return;
       }
       if (await this.probeHttpReady(webPort)) {
+        this.restartAttempts = 0;
         this.updateStatus({
           state: "running",
           message: "EcoreX local runtime is ready",
@@ -364,6 +420,22 @@ export class SidecarManager {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  private scheduleRestart(webPort: number, reason: string) {
+    this.restartAttempts += 1;
+    this.updateStatus({
+      state: "starting",
+      message: `EcoreX local runtime exited (${reason}); restarting ${this.restartAttempts}/${this.maxRestartAttempts}`,
+      webPort
+    });
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+    }
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null;
+      this.start();
+    }, 1200);
+  }
+
   private ensureDesktopRuntimeDefaults() {
     const configPath = path.join(this.repoRoot, "config.json");
     const templatePath = path.join(this.repoRoot, "config-template.json");
@@ -390,7 +462,8 @@ export class SidecarManager {
         }
       }
       const currentPersona = typeof config.character_desc === "string" ? config.character_desc.trim() : "";
-      if (!currentPersona || currentPersona === oldDefaultPersona || /CowAgent|COW/.test(currentPersona)) {
+      const legacyPersonaMarker = currentPersona.toUpperCase().includes("COW");
+      if (!currentPersona || currentPersona === oldDefaultPersona || legacyPersonaMarker) {
         config.character_desc = desktopPersona;
         changed = true;
       }

@@ -1,10 +1,10 @@
-import { app } from "electron";
+﻿import { app } from "electron";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveEnterprisePolicy, type EnterprisePolicy } from "./enterprisePolicy.js";
+import { enterpriseClientEventKeys, resolveEnterprisePolicy, type EnterprisePolicy } from "./enterprisePolicy.js";
 
 export type CapabilityState =
   | "installed"
@@ -50,12 +50,6 @@ type StatusFile = {
   logPath?: string;
   missingModules?: string[];
   updatedAt?: string;
-};
-
-type ProcessResult = {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
 };
 
 type EnterpriseSession = {
@@ -106,52 +100,6 @@ function readJson<T>(filePath: string): T | null {
   }
 }
 
-function usableIndexUrl(value: unknown) {
-  const text = String(value || "").trim();
-  return /^https?:\/\//i.test(text) ? text : "";
-}
-
-function usableFindLinks(value: unknown) {
-  const text = String(value || "").trim();
-  if (/^https?:\/\//i.test(text) || /^file:/i.test(text) || path.isAbsolute(text)) {
-    return text;
-  }
-  return "";
-}
-
-function runProcess(command: string, args: string[], options: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number }) {
-  return new Promise<ProcessResult>((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: options.cwd,
-      env: options.env,
-      windowsHide: true
-    });
-    let stdout = "";
-    let stderr = "";
-    const timeout = options.timeoutMs
-      ? setTimeout(() => {
-          child.kill();
-          reject(new Error(`Timed out running ${command}`));
-        }, options.timeoutMs)
-      : null;
-
-    child.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
-    });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
-    });
-    child.once("error", (error) => {
-      if (timeout) clearTimeout(timeout);
-      reject(error);
-    });
-    child.once("exit", (exitCode) => {
-      if (timeout) clearTimeout(timeout);
-      resolve({ exitCode, stdout, stderr });
-    });
-  });
-}
-
 export class CapabilityManager {
   private enterprisePolicy: EnterprisePolicy | null = null;
   private capabilityPolicy: CapabilityPolicyPayload | null = null;
@@ -181,10 +129,10 @@ export class CapabilityManager {
         const packPolicyMode = (policyPack?.mode as CapabilityPolicyMode | undefined) || policy.mode || "ask";
         const message =
           packPolicyMode === "disabled" && !installed
-            ? `管理员已禁用 ${pack.name} 的自助安装。`
+            ? `Administrator disabled self-service installation for ${pack.name}.`
             : installed
-              ? `${pack.name} 已就绪。`
-              : status.message || `${pack.name} 尚未安装，EcoreX 会在首次使用时引导安装。`;
+              ? `${pack.name} is ready.`
+              : status.message || `${pack.name} is not installed. EcoreX will ask the current agent session to install it when needed.`;
         return {
           ...pack,
           state,
@@ -199,138 +147,6 @@ export class CapabilityManager {
         };
       })
     );
-  }
-
-  async installPack(packId: string): Promise<CapabilityPack> {
-    const packs = await this.listPacks();
-    const target = packs.find((pack) => pack.id === packId);
-    if (!target) {
-      return {
-        id: packId,
-        name: packId,
-        summary: "未知能力包。",
-        installMode: "user-or-admin",
-        state: "failed",
-        message: `未找到能力包：${packId}`,
-        installed: false
-      };
-    }
-    if (target.installed) {
-      return target;
-    }
-
-    const enterprisePolicy = await this.refreshEnterpriseCapabilityPolicy();
-    const installPolicy = enterprisePolicy.policy || {};
-    if (target.policyMode === "disabled" || installPolicy.mode === "disabled") {
-      return {
-        ...target,
-        state: "failed",
-        message: "管理员已禁用可选能力包的自助安装。",
-        installed: false
-      };
-    }
-
-    const python = this.resolvePython();
-    const script = await this.resolveInstallScript();
-    const manifest = await this.resolveManifestPath();
-    const layout = this.resolveInstallLayout();
-    if (!python || !(await fileExists(python))) {
-      return {
-        ...target,
-        state: "failed",
-        message: "未找到 EcoreX 内置 Python。请重新安装完整桌面端，或联系管理员预置该能力包。",
-        installed: false
-      };
-    }
-    if (!script) {
-      return {
-        ...target,
-        state: "failed",
-        message: "未找到能力包安装器。请重新安装完整桌面端后再试。",
-        installed: false
-      };
-    }
-
-    try {
-      await fsp.mkdir(layout.stateDir, { recursive: true });
-      if (layout.targetDir) {
-        await fsp.mkdir(layout.targetDir, { recursive: true });
-      }
-      if (layout.playwrightBrowsersDir) {
-        await fsp.mkdir(layout.playwrightBrowsersDir, { recursive: true });
-      }
-      const args = [
-        script,
-        "--pack-id",
-        packId,
-        "--runtime-dir",
-        this.runtimeRoot,
-        "--manifest",
-        manifest,
-        "--index-dir",
-        layout.stateDir
-      ];
-      if (layout.targetDir) {
-        args.push("--target-dir", layout.targetDir);
-      }
-      if (layout.playwrightBrowsersDir) {
-        args.push("--playwright-browsers-dir", layout.playwrightBrowsersDir);
-      }
-      const mirror = usableIndexUrl(installPolicy.mirror);
-      const offlineCache = usableFindLinks(installPolicy.offlineCache);
-      if (mirror) {
-        args.push("--index-url", mirror);
-      }
-      if (offlineCache) {
-        args.push("--find-links", offlineCache);
-      }
-      await runProcess(python, args, {
-        cwd: this.runtimeRoot,
-        env: {
-          ...process.env,
-          ...this.resolveCapabilityEnv(),
-          PYTHONNOUSERSITE: "1"
-        },
-        timeoutMs: 30 * 60 * 1000
-      });
-    } catch {
-      // The installer writes a structured failed state; read it below.
-    }
-
-    const refreshed = await this.listPacks();
-    return refreshed.find((pack) => pack.id === packId) || target;
-  }
-
-  async blockedPack(packId: string, reason: string): Promise<CapabilityPack> {
-    const packs = await this.listPacks().catch(() => []);
-    const target = packs.find((pack) => pack.id === packId);
-    return {
-      ...(target || {
-        id: packId,
-        name: packId,
-        summary: "Optional capability pack.",
-        installMode: "user-or-admin" as const,
-        installed: false,
-        state: "not-installed" as const,
-        message: ""
-      }),
-      installed: false,
-      state: "failed",
-      message: `Permission blocked capability installation: ${reason}`
-    };
-  }
-
-  async preinstallPolicyPacks(authorize?: (pack: CapabilityPack) => Promise<boolean>): Promise<CapabilityPack[]> {
-    const packs = await this.listPacks();
-    const targets = packs.filter((pack) => !pack.installed && pack.policyMode === "preinstall");
-    const installed: CapabilityPack[] = [];
-    for (const pack of targets) {
-      if (authorize && !(await authorize(pack))) {
-        continue;
-      }
-      installed.push(await this.installPack(pack.id));
-    }
-    return installed;
   }
 
   private resolvePython() {
@@ -365,20 +181,7 @@ export class CapabilityManager {
         return candidate;
       }
     }
-    throw new Error("未找到 EcoreX 能力包清单。");
-  }
-
-  private async resolveInstallScript() {
-    const candidates = [
-      path.join(this.runtimeRoot, "scripts", "install-capability.py"),
-      path.resolve(this.electronDir, "..", "scripts", "install-capability.py")
-    ];
-    for (const candidate of candidates) {
-      if (await fileExists(candidate)) {
-        return candidate;
-      }
-    }
-    return "";
+    throw new Error("EcoreX capability manifest was not found.");
   }
 
   private async readStatus(packId: string): Promise<StatusFile> {
@@ -431,7 +234,7 @@ export class CapabilityManager {
         let stderr = "";
         const timer = setTimeout(() => {
           child.kill();
-          reject(new Error("能力包模块检查超时。"));
+          reject(new Error("Capability module probe timed out."));
         }, 8000);
         child.stdout.on("data", (chunk: Buffer) => {
           stdout += chunk.toString("utf8");
@@ -448,7 +251,7 @@ export class CapabilityManager {
           if (exitCode === 0) {
             resolve(stdout);
           } else {
-            reject(new Error(stderr || `能力包模块检查异常退出：${exitCode}`));
+            reject(new Error(stderr || `Capability module probe exited with ${exitCode}`));
           }
         });
       });
@@ -505,21 +308,7 @@ export class CapabilityManager {
     const timeout = setTimeout(() => controller.abort(), 8000);
     try {
       const session = this.loadEnterpriseSession();
-      const response = await fetch(capabilityPolicyUrl, {
-        headers: {
-          "X-EcoreX-Client-Key": policy.clientEventKey,
-          "X-EcoreX-User-Email": session?.user?.email || policy.userEmail || "",
-          "X-EcoreX-User-Token": session?.token || "",
-          "X-EcoreX-Device-Id": session?.deviceId || this.resolveDeviceId(policy),
-          "X-EcoreX-Org-Id": policy.orgId || "",
-          ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {})
-        },
-        signal: controller.signal
-      });
-      if (!response.ok) {
-        throw new Error(`capability policy HTTP ${response.status}`);
-      }
-      const payload = (await response.json()) as CapabilityPolicyPayload;
+      const payload = await this.fetchCapabilityPolicyWithKeyFallback(capabilityPolicyUrl, policy, session, controller.signal);
       this.capabilityPolicy = this.normalizeCapabilityPolicy(payload);
       await this.saveCachedCapabilityPolicy(this.capabilityPolicy);
       return this.capabilityPolicy;
@@ -528,6 +317,41 @@ export class CapabilityManager {
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  private async fetchCapabilityPolicyWithKeyFallback(
+    capabilityPolicyUrl: string,
+    policy: EnterprisePolicy,
+    session: EnterpriseSession | null,
+    signal: AbortSignal
+  ) {
+    const keys = enterpriseClientEventKeys(policy);
+    for (const [index, clientEventKey] of keys.entries()) {
+      const response = await fetch(capabilityPolicyUrl, {
+        headers: {
+          "X-EcoreX-Client-Key": clientEventKey,
+          "X-EcoreX-User-Email": session?.user?.email || policy.userEmail || "",
+          "X-EcoreX-User-Token": session?.token || "",
+          "X-EcoreX-Device-Id": session?.deviceId || this.resolveDeviceId(policy),
+          "X-EcoreX-Org-Id": policy.orgId || "",
+          ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {})
+        },
+        signal
+      });
+      const payload = (await response.json().catch(() => ({}))) as CapabilityPolicyPayload & { error?: string; message?: string };
+      if (response.status === 403 && this.isInvalidClientKeyPayload(payload) && index < keys.length - 1) {
+        continue;
+      }
+      if (!response.ok) {
+        throw new Error(`capability policy HTTP ${response.status}${payload.error ? `: ${payload.error}` : ""}`);
+      }
+      return payload;
+    }
+    throw new Error("capability policy HTTP 403: invalid client key");
+  }
+
+  private isInvalidClientKeyPayload(payload: { error?: string; message?: string }) {
+    return `${payload.error || ""} ${payload.message || ""}`.toLowerCase().includes("invalid client key");
   }
 
   private normalizeCapabilityPolicy(payload: CapabilityPolicyPayload): CapabilityPolicyPayload {

@@ -45,6 +45,7 @@ import type { ClipboardEvent, CSSProperties, MouseEvent, ReactNode } from "react
 import { MessageContent, type AgentStepDisclosure, type ToolCallDisclosure } from "./components/MessageContent";
 import {
   cancelChatRequest,
+  checkForUpdates,
   enterpriseChangePassword,
   checkEnterpriseQuota,
   chooseProjectFolder,
@@ -57,23 +58,29 @@ import {
   filePreviewUrl,
   generateSessionTitle,
   getEnterpriseSession,
-  installCapabilityPack,
+  installDownloadedUpdate,
   listCapabilityPacks,
   loadPermissionState,
   loadMemoryFiles,
   loadRuntimeSnapshot,
   loadSessionHistory,
   openLocalPath,
+  openRuntimePath,
+  openDownloadPage,
   openMessageStream,
   reportDesktopEvent,
+  requestAgentInstallRequest,
   resetPermissionGrants,
   deleteRuntimeSession,
   renameRuntimeSession,
   savePastedFile,
+  saveRuntimeUiState,
   sendChatMessage,
   setSkillEnabled,
   updatePermissionMode,
   type CapabilityPack,
+  type DesktopUpdateStatus,
+  type EnterpriseQuotaCheckResult,
   type EnterpriseSession,
   type FileAttachment,
   type MemoryFile,
@@ -92,6 +99,7 @@ import {
   type UsageQuota
 } from "./services/ecorexApi";
 import { CHAT_SCROLL_THRESHOLD_PX, getChatScrollState, scrollElementToBottom } from "./utils/chatUx";
+import { redactInternalPromptText } from "./utils/redaction";
 
 type ThemeMode = "light" | "dark";
 type SidecarStatus = {
@@ -165,6 +173,12 @@ type ProjectContextMenu = {
   x: number;
   y: number;
 } | null;
+type InstallNotice = {
+  packId: string;
+  packName: string;
+  message: string;
+  dismissed?: boolean;
+} | null;
 
 const brandIconUrl = new URL("../build/icon.png", import.meta.url).href;
 document.documentElement.dataset.platform = window.ecorexDesktop?.platform || "web";
@@ -183,6 +197,27 @@ const initialSidecar: SidecarStatus = {
   message: "正在启动本地运行时",
   webPort: 9899
 };
+const initialUpdateStatus: DesktopUpdateStatus = {
+  state: "idle",
+  platform: window.ecorexDesktop?.platform || "web",
+  currentVersion: "",
+  message: "尚未检查更新"
+};
+
+function friendlyUpdateErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  if (/app-update\.ya?ml/i.test(message) && /ENOENT|no such file/i.test(message)) {
+    return "当前测试包未配置自动更新通道";
+  }
+  if (/latest\.ya?ml/i.test(message) && /404|not found|Cannot find channel/i.test(message)) {
+    return "当前自动更新通道暂未发布，请打开下载页获取最新版本";
+  }
+  if (/HttpError|at ElectronHttpExecutor|builder-util-runtime|app\.asar/i.test(message)) {
+    return "更新检查失败，请打开下载页获取最新版本";
+  }
+  return message || "更新检查失败";
+}
+
 const PROJECTS_STORAGE_KEY = "ecorex-projects";
 const SESSION_PROJECTS_STORAGE_KEY = "ecorex-session-projects";
 const SESSION_TITLES_STORAGE_KEY = "ecorex-session-titles";
@@ -612,7 +647,11 @@ function composerPermissionIcon(mode?: PermissionMode) {
 }
 
 function pausedMessageContent(content: string) {
-  return content || "已暂停，输入新消息后继续";
+  return content || "";
+}
+
+function interruptedMessageContent(content: string) {
+  return content || "任务已中断，输入新消息后可重试";
 }
 
 type AgentFinishReason = "done" | "paused" | "cancelled" | "error";
@@ -634,19 +673,39 @@ function finishAgentSteps(steps: AgentStepDisclosure[] | undefined, reason: Agen
   });
 }
 
-function normalizePausedMessages(items: ChatItem[]) {
-  return items.map((item) => (
-    item.pending && !item.requestId
-      ? {
-          ...item,
-          content: pausedMessageContent(item.content),
-          pending: false,
-          paused: true,
-          steps: finishAgentSteps(item.steps, "paused"),
-          toolCalls: item.toolCalls?.map((tool) => ({ ...tool, running: false }))
-        }
-      : item
-  ));
+function pausePendingMessage(item: ChatItem, interrupted = false): ChatItem {
+  return {
+    ...item,
+    content: interrupted ? interruptedMessageContent(item.content) : pausedMessageContent(item.content),
+    pending: false,
+    paused: true,
+    cancelled: false,
+    steps: finishAgentSteps(item.steps, "paused"),
+    toolCalls: item.toolCalls?.map((tool) => ({ ...tool, running: false }))
+  };
+}
+
+function normalizePausedMessages(
+  items: ChatItem[],
+  options?: {
+    sessionId?: string;
+    activeRequestIds?: Set<string>;
+    staleSessionIds?: Set<string>;
+    nowMs?: number;
+    inactiveRequestGraceMs?: number;
+  }
+) {
+  let changed = false;
+  const staleSession = Boolean(options?.sessionId && options.staleSessionIds?.has(options.sessionId));
+  const next = items.map((item) => {
+    if (!item.pending) return item;
+    if (!item.requestId || staleSession) {
+      changed = true;
+      return pausePendingMessage(item, Boolean(staleSession));
+    }
+    return item;
+  });
+  return changed ? next : items;
 }
 
 function plainTextForMessage(message: ChatItem) {
@@ -670,11 +729,22 @@ function plainTextForMessage(message: ChatItem) {
   for (const file of message.attachments || []) {
     parts.push(`${file.file_name}: ${file.file_path}`);
   }
-  return parts.filter(Boolean).join("\n\n").trim();
+  return redactInternalPromptText(parts.filter(Boolean).join("\n\n")).trim();
 }
 
 function isLiveAssistantMessage(message: ChatItem) {
   return message.role === "assistant" && message.pending === true && !message.paused && !message.cancelled;
+}
+
+function isSilentPausedAssistantMessage(message: ChatItem) {
+  return message.role === "assistant"
+    && Boolean(message.paused)
+    && !message.pending
+    && !message.cancelled
+    && !message.content.trim()
+    && !(message.reasoning || "").trim()
+    && !(message.steps || []).length
+    && !(message.toolCalls || []).length;
 }
 
 function projectContextPrompt(project: ProjectFolder) {
@@ -695,7 +765,7 @@ function normalizeToolCall(tool: RuntimeToolCall | ToolCallDisclosure): ToolCall
   return {
     name: tool.name || ("tool" in tool ? tool.tool : undefined) || fn?.name,
     arguments: tool.arguments ?? ("input" in tool ? tool.input : undefined) ?? fn?.arguments,
-    result: tool.result,
+    result: typeof tool.result === "string" ? redactInternalPromptText(tool.result) : tool.result,
     status: tool.status,
     is_error: tool.is_error,
     execution_time: tool.execution_time
@@ -704,7 +774,7 @@ function normalizeToolCall(tool: RuntimeToolCall | ToolCallDisclosure): ToolCall
 
 function normalizeStep(step: RuntimeStep): AgentStepDisclosure {
   const type = String(step.type || "").toLowerCase();
-  const content = step.content || step.text || step.thinking || "";
+  const content = redactInternalPromptText(step.content || step.text || step.thinking || "");
   if (type === "thinking" || type === "reasoning") {
     return { type: "thinking", content };
   }
@@ -713,7 +783,7 @@ function normalizeStep(step: RuntimeStep): AgentStepDisclosure {
       type: "tool",
       name: step.name || step.tool,
       arguments: step.arguments ?? step.input,
-      result: step.result,
+      result: typeof step.result === "string" ? redactInternalPromptText(step.result) : step.result,
       status: step.status,
       is_error: step.is_error,
       execution_time: step.execution_time,
@@ -759,9 +829,9 @@ function mapRuntimeMessage(item: RuntimeMessage, sessionId: string, index: numbe
   return {
     id: `${sessionId}-${index}`,
     role: item.role === "user" ? "user" : "assistant",
-    content: item.content || "",
+    content: redactInternalPromptText(item.content || ""),
     createdAt: item.created_at ? new Date(item.created_at * 1000).toISOString() : new Date().toISOString(),
-    reasoning: item.reasoning,
+    reasoning: item.reasoning ? redactInternalPromptText(item.reasoning) : undefined,
     steps: steps.length ? steps : undefined,
     toolCalls: item.tool_calls?.map(normalizeToolCall),
     requestId: item.request_id,
@@ -837,6 +907,7 @@ export function App() {
   const [authChecked, setAuthChecked] = useState(false);
   const [runtimeSnapshot, setRuntimeSnapshot] = useState(initialRuntime);
   const [sidecarStatus, setSidecarStatus] = useState(initialSidecar);
+  const [updateStatus, setUpdateStatus] = useState<DesktopUpdateStatus>(initialUpdateStatus);
   const [quotaSnapshot, setQuotaSnapshot] = useState<UsageQuota | null>(null);
   const [activeSessionId, setActiveSessionId] = useState(bootSession?.id || `ecorex-${Date.now()}`);
   const [activeSessionTitle, setActiveSessionTitle] = useState(bootSession?.state.title || "新对话");
@@ -859,6 +930,7 @@ export function App() {
   const [sessionTitles, setSessionTitles] = useState<StringMap>(() => readStorage<StringMap>(SESSION_TITLES_STORAGE_KEY, {}));
   const [pinnedSessions, setPinnedSessions] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(PINNED_SESSIONS_STORAGE_KEY, {}));
   const [pinnedProjects, setPinnedProjects] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(PINNED_PROJECTS_STORAGE_KEY, {}));
+  const [unreadSessionIds, setUnreadSessionIds] = useState<StringBoolMap>({});
   const [sessionUiState, setSessionUiState] = useState<Record<string, SessionUiState>>(() => readStorage<Record<string, SessionUiState>>(SESSION_UI_STORAGE_KEY, {}));
   const [enabledCapabilityPacks, setEnabledCapabilityPacks] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(CAPABILITY_ENABLED_STORAGE_KEY, {}));
   const [sessionRequestIds, setSessionRequestIds] = useState<StringMap>({});
@@ -866,6 +938,7 @@ export function App() {
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("account");
   const [projectMenu, setProjectMenu] = useState<ProjectContextMenu>(null);
   const [installingPackIds, setInstallingPackIds] = useState<StringBoolMap>({});
+  const [installNotice, setInstallNotice] = useState<InstallNotice>(null);
   const [memoryFiles, setMemoryFiles] = useState<MemoryFile[]>([]);
   const [dreamFiles, setDreamFiles] = useState<MemoryFile[]>([]);
   const [toast, setToast] = useState("");
@@ -878,6 +951,7 @@ export function App() {
   const streamCleanups = useRef<Record<string, () => void>>({});
   const streamCleanupRequestIds = useRef<StringMap>({});
   const sessionRequestIdsRef = useRef<StringMap>({});
+  const installWatchers = useRef<Record<string, number>>({});
   const activeSessionIdRef = useRef(activeSessionId);
   const messagesRef = useRef(messages);
   const sessionSwitchSeq = useRef(0);
@@ -887,6 +961,7 @@ export function App() {
   const preloadDone = useRef(false);
   const bootHistoryRefreshDone = useRef(false);
   const releaseNotesDismissedVersion = useRef("");
+  const uiStateSyncTimer = useRef<number | null>(null);
 
   useEffect(() => {
     applyTheme(theme);
@@ -918,8 +993,23 @@ export function App() {
   }, [enabledCapabilityPacks]);
 
   useEffect(() => {
-    writeStorage(SESSION_UI_STORAGE_KEY, pruneSessionUiState(sessionUiState));
-  }, [sessionUiState]);
+    const pruned = pruneSessionUiState(sessionUiState);
+    writeStorage(SESSION_UI_STORAGE_KEY, pruned);
+    if (sidecarStatus.state !== "running") return;
+    if (uiStateSyncTimer.current) {
+      window.clearTimeout(uiStateSyncTimer.current);
+    }
+    uiStateSyncTimer.current = window.setTimeout(() => {
+      void saveRuntimeUiState({
+        version: 1,
+        lastActiveSessionId: activeSessionIdRef.current,
+        activeProjectId,
+        sessionUiState: pruned,
+        savedAt: new Date().toISOString()
+      }).catch(() => undefined);
+      uiStateSyncTimer.current = null;
+    }, 800);
+  }, [sessionUiState, sidecarStatus.state, activeProjectId]);
 
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
@@ -1001,14 +1091,23 @@ export function App() {
 
   useEffect(() => {
     const unsubscribe = window.ecorexDesktop?.onSidecarStatus?.((status) => setSidecarStatus(status));
+    const unsubscribeUpdate = window.ecorexDesktop?.onUpdateStatus?.((status) => setUpdateStatus(status));
     window.ecorexDesktop?.getSidecarStatus?.().then((status) => setSidecarStatus(status)).catch(() => undefined);
+    window.ecorexDesktop?.getUpdateStatus?.().then((status) => setUpdateStatus(status)).catch(() => undefined);
     return () => {
       streamCleanup.current?.();
       Object.values(streamCleanups.current).forEach((cleanup) => cleanup());
       streamCleanup.current = null;
       streamCleanups.current = {};
       streamCleanupRequestIds.current = {};
+      Object.values(installWatchers.current).forEach((timer) => window.clearInterval(timer));
+      installWatchers.current = {};
+      if (uiStateSyncTimer.current) {
+        window.clearTimeout(uiStateSyncTimer.current);
+        uiStateSyncTimer.current = null;
+      }
       unsubscribe?.();
+      unsubscribeUpdate?.();
     };
   }, []);
 
@@ -1019,20 +1118,6 @@ export function App() {
     void (async () => {
       const nextPacks = await listCapabilityPacks().catch(() => []);
       setPacks(nextPacks);
-      const preinstallTargets = nextPacks.filter((pack) => !pack.installed && pack.policyMode === "preinstall");
-      if (preinstallTargets.length) {
-        setInstallingPackIds((current) => ({
-          ...current,
-          ...Object.fromEntries(preinstallTargets.map((pack) => [pack.id, true]))
-        }));
-        await Promise.all(preinstallTargets.map((pack) => installCapabilityPack(pack.id).catch(() => null)));
-        setInstallingPackIds((current) => {
-          const next = { ...current };
-          preinstallTargets.forEach((pack) => delete next[pack.id]);
-          return next;
-        });
-        setPacks(await listCapabilityPacks().catch(() => nextPacks));
-      }
       const snapshot = await loadRuntimeSnapshot().catch(() => null);
       if (snapshot) {
         let nextSnapshot = snapshot;
@@ -1076,6 +1161,58 @@ export function App() {
       window.clearInterval(timer);
     };
   }, [session]);
+
+  useEffect(() => {
+    if (!session || !window.ecorexDesktop?.checkForUpdates) return;
+    const timer = window.setTimeout(() => {
+      void handleCheckForUpdates();
+    }, 7000);
+    return () => window.clearTimeout(timer);
+  }, [session]);
+
+  useEffect(() => {
+    if (runtimeSnapshot.status !== "ready") return;
+    if (runtimeSnapshot.activeRequestsStatus === "unavailable") return;
+    const activeRequestIds = new Set(
+      (runtimeSnapshot.activeRequests || [])
+        .map((request) => request.request_id ? String(request.request_id) : "")
+        .filter(Boolean)
+    );
+    const staleSessionIds = new Set(
+      (runtimeSnapshot.staleLocks || [])
+        .filter((lock) => lock.removed || lock.dead_owner || lock.stale)
+        .map((lock) => lock.session_id ? String(lock.session_id) : "")
+        .filter(Boolean)
+    );
+    const nowMs = Date.now();
+    const nextState: Record<string, SessionUiState> = {};
+    const pausedSessionIds = new Set<string>();
+    let changed = false;
+    for (const [sessionId, state] of Object.entries(sessionUiState)) {
+      const normalized = normalizePausedMessages(state.messages || [], {
+        sessionId,
+        activeRequestIds,
+        staleSessionIds,
+        nowMs,
+        inactiveRequestGraceMs: 45_000
+      });
+      if (normalized !== state.messages) {
+        changed = true;
+        pausedSessionIds.add(sessionId);
+        nextState[sessionId] = { ...state, messages: normalized };
+      } else {
+        nextState[sessionId] = state;
+      }
+    }
+    if (!changed) return;
+    setSessionUiState(nextState);
+    const activeId = activeSessionIdRef.current;
+    if (activeId && pausedSessionIds.has(activeId)) {
+      const activeState = nextState[activeId];
+      if (activeState) setMessages(activeState.messages);
+    }
+    pausedSessionIds.forEach((sessionId) => finishSessionRequest(sessionId));
+  }, [runtimeSnapshot, sessionUiState]);
 
   const visibleSessions = useMemo(() => {
     const rows = mapSessions(runtimeSnapshot, activeSessionId, activeSessionTitle, sessionProjects, sessionTitles, pinnedSessions, projects, activeProjectId, sessionUiState);
@@ -1314,6 +1451,7 @@ export function App() {
     setActiveProjectId(nextProjectId);
     setPreviewFile(null);
     setApproval(null);
+    clearSessionUnread(row.id);
     if (restoreCachedSession(row.id, row.requestId, row.streamAvailable !== false)) {
       focusComposerSoon();
       return;
@@ -1555,6 +1693,20 @@ export function App() {
     }
   }
 
+  function clearSessionUnread(sessionId: string) {
+    setUnreadSessionIds((current) => {
+      if (!current[sessionId]) return current;
+      const next = { ...current };
+      delete next[sessionId];
+      return next;
+    });
+  }
+
+  function markSessionOutputReady(sessionId: string) {
+    if (activeSessionIdRef.current === sessionId) return;
+    setUnreadSessionIds((current) => current[sessionId] ? current : { ...current, [sessionId]: true });
+  }
+
   function updateAssistantMessage(sessionId: string, assistantId: string, updater: (message: ChatItem) => ChatItem) {
     updateSessionMessages(sessionId, (current) => current.map((message) => message.id === assistantId ? updater(message) : message));
   }
@@ -1577,6 +1729,8 @@ export function App() {
       updateSessionMessages(sessionId, () => mapped);
       if (activeSessionIdRef.current === sessionId) {
         setMessages(mapped);
+      } else {
+        markSessionOutputReady(sessionId);
       }
       return true;
     } catch (error) {
@@ -1613,6 +1767,8 @@ export function App() {
   }
 
   function appendReasoningStep(message: ChatItem, chunk: string): ChatItem {
+    chunk = redactInternalPromptText(chunk);
+    if (!chunk) return message;
     const steps = [...(message.steps || [])];
     const last = steps[steps.length - 1];
     if (last?.type === "thinking" && last.running) {
@@ -1624,7 +1780,7 @@ export function App() {
   }
 
   function flushIntermediateContent(message: ChatItem): ChatItem {
-    const content = message.content.trim();
+    const content = redactInternalPromptText(message.content).trim();
     if (!content) return message;
     return {
       ...message,
@@ -1685,7 +1841,9 @@ export function App() {
       id: toolId || undefined,
       name: toolName,
       arguments: item.arguments ?? item.input,
-      result: item.result ?? item.content ?? item.message,
+      result: typeof (item.result ?? item.content ?? item.message) === "string"
+        ? redactInternalPromptText(item.result ?? item.content ?? item.message)
+        : item.result ?? item.content ?? item.message,
       status: item.status || "done",
       execution_time: item.execution_time,
       is_error: item.status === "error" || item.status === "failed",
@@ -1723,7 +1881,7 @@ export function App() {
         {
           type: "media",
           fileType: type,
-          url: item.path || item.url || item.content,
+          url: item.path || item.url || redactInternalPromptText(item.content || ""),
           fileName: item.file_name || item.name
         }
       ]
@@ -1834,14 +1992,14 @@ export function App() {
           return;
         }
         updateAssistantMessage(sessionId, assistantId, (message) => ({
-          ...finishRunningSteps(message, "paused"),
+          ...message,
           requestId,
-          content: pausedMessageContent(message.content),
-          pending: false,
-          paused: true,
+          pending: true,
+          paused: false,
           cancelled: false
         }));
-        clearSessionRequestState(sessionId, requestId);
+        streamRetryCounts.current[sessionId] = 5;
+        window.setTimeout(() => scheduleStreamReconnect(sessionId, assistantId, requestId), 10000);
       })();
       return;
     }
@@ -1871,27 +2029,29 @@ export function App() {
         if (item.type === "cancelled") {
           updateAssistantMessage(sessionId, assistantId, (message) => ({
             ...finishRunningSteps(message, "cancelled"),
-            content: item.content || item.message || message.content || "已停止",
+            content: redactInternalPromptText(item.content || item.message || message.content || "已停止"),
             pending: false,
             cancelled: true
           }));
+          markSessionOutputReady(sessionId);
           finishSessionRequest(sessionId, requestId);
           return;
         }
         if (item.type === "done") {
           updateAssistantMessage(sessionId, assistantId, (message) => ({
             ...finishRunningSteps(message),
-            content: item.content || message.content,
+            content: redactInternalPromptText(item.content || message.content),
             pending: false,
             userSeq: typeof item.user_seq === "number" ? item.user_seq : message.userSeq,
             botSeq: typeof item.bot_seq === "number" ? item.bot_seq : message.botSeq
           }));
           completedRequestIds.current[requestId] = true;
+          markSessionOutputReady(sessionId);
           clearSessionRequestState(sessionId, requestId);
           return;
         }
         if (item.type === "error") {
-          const message = item.content || item.message || "运行时返回错误";
+          const message = redactInternalPromptText(item.content || item.message || "运行时返回错误");
           const staleRequest = /invalid request_id/i.test(message);
           finishSessionRequest(sessionId, requestId);
           if (staleRequest) {
@@ -1903,6 +2063,7 @@ export function App() {
               pending: false,
               paused: false
             }));
+            markSessionOutputReady(sessionId);
           }
           void reportDesktopEvent({ type: "error", source: "Desktop", message, sessionId });
           return;
@@ -1971,28 +2132,33 @@ export function App() {
             return item.type === "voice_attach" ? { ...finishRunningSteps(next), pending: false, paused: false } : next;
           });
           if (item.type === "voice_attach") {
+            markSessionOutputReady(sessionId);
             finishSessionRequest(sessionId, requestId);
             delete completedRequestIds.current[requestId];
           }
           return;
         }
-        if (item.type === "phase" && (item.content || item.message)) {
-          updateAssistantMessage(sessionId, assistantId, (message) => ({
-            ...message,
-            pending: true,
-            paused: false,
-            steps: [...(message.steps || []), { type: "phase", content: item.content || item.message }]
-          }));
-          return;
-        }
-        if ((item.type === "message_update" || item.type === "delta") && item.content) {
-          updateAssistantMessage(sessionId, assistantId, (message) => ({
-            ...finishRunningSteps(message),
-            content: `${message.content}${item.content}`,
-            pending: true,
-            paused: false
-          }));
-        }
+            if (item.type === "phase" && (item.content || item.message)) {
+              const phaseContent = redactInternalPromptText(item.content || item.message || "");
+              if (!phaseContent) return;
+              updateAssistantMessage(sessionId, assistantId, (message) => ({
+                ...message,
+                pending: true,
+                paused: false,
+                steps: [...(message.steps || []), { type: "phase", content: phaseContent }]
+              }));
+              return;
+            }
+            if ((item.type === "message_update" || item.type === "delta") && item.content) {
+              const deltaContent = redactInternalPromptText(item.content);
+              if (!deltaContent) return;
+              updateAssistantMessage(sessionId, assistantId, (message) => ({
+                ...finishRunningSteps(message),
+                content: `${message.content}${deltaContent}`,
+                pending: true,
+                paused: false
+              }));
+            }
       },
       onError: () => {
         if (completedRequestIds.current[requestId]) {
@@ -2084,15 +2250,6 @@ export function App() {
       }
     };
     const liveEstimatedTokens = () => estimatedTokens + Math.ceil(streamTextChars / 2) + Math.ceil(streamToolChars / 3);
-    const quota = await checkEnterpriseQuota(estimatedTokens);
-    if (quota.quota) {
-      setQuotaSnapshot(quota.quota);
-    }
-    if (quota.quota && quota.quota.allowed === false) {
-      setApproval({ type: "quota", title: "额度已达到上限", message: quota.quota.reason || "当前账号暂时不能继续发送。" });
-      return;
-    }
-
     const userMessage: ChatItem = {
       id: `u-${Date.now()}`,
       role: "user",
@@ -2114,6 +2271,25 @@ export function App() {
     setComposerText("");
     setAttachments([]);
     setApproval(null);
+
+    const quota = await checkEnterpriseQuota(estimatedTokens).catch((error) => {
+      setToast(error instanceof Error ? `额度检查暂不可用，已继续发送：${error.message}` : "额度检查暂不可用，已继续发送");
+      return { ok: true, quota: { allowed: true } } as EnterpriseQuotaCheckResult;
+    });
+    if (quota.quota) {
+      setQuotaSnapshot(quota.quota);
+    }
+    if (quota.quota && quota.quota.allowed === false) {
+      const quotaMessage = quota.quota.reason || "当前账号暂时不能继续发送。";
+      setApproval({ type: "quota", title: "额度已达到上限", message: quotaMessage });
+      updateAssistantMessage(requestSessionId, assistantId, (message) => ({
+        ...finishRunningSteps(message, "error"),
+        content: quotaMessage,
+        pending: false
+      }));
+      markSessionOutputReady(requestSessionId);
+      return;
+    }
 
     let usageReported = false;
     const reportChatUsage = (usage: TokenUsage | undefined, source: "provider" | "estimated") => {
@@ -2163,8 +2339,10 @@ export function App() {
       });
       if (result.status === "error") throw new Error(result.message || "发送失败");
       if (result.inline_reply) {
-        streamTextChars += result.inline_reply.length;
-        updateSessionMessages(requestSessionId, (current) => current.map((item) => item.id === assistantId ? { ...item, content: result.inline_reply || "", pending: false } : item));
+        const inlineReply = redactInternalPromptText(result.inline_reply || "");
+        streamTextChars += inlineReply.length;
+        updateSessionMessages(requestSessionId, (current) => current.map((item) => item.id === assistantId ? { ...item, content: inlineReply, pending: false } : item));
+        markSessionOutputReady(requestSessionId);
         reportChatUsage(result.usage, usageTotal(result.usage) ? "provider" : "estimated");
       }
       if (result.request_id && result.stream) {
@@ -2187,10 +2365,11 @@ export function App() {
             if (item.type === "cancelled") {
               updateAssistantMessage(requestSessionId, assistantId, (message) => ({
                 ...finishRunningSteps(message, "cancelled"),
-                content: item.content || item.message || message.content || "已停止",
+                content: redactInternalPromptText(item.content || item.message || message.content || "已停止"),
                 pending: false,
                 cancelled: true
               }));
+              markSessionOutputReady(requestSessionId);
               finishSessionRequest(requestSessionId, requestId);
               return;
             }
@@ -2202,7 +2381,7 @@ export function App() {
                 if (message.id === assistantId) {
                   return {
                     ...finishRunningSteps(message),
-                    content: item.content || message.content,
+                    content: redactInternalPromptText(item.content || message.content),
                     pending: false,
                     userSeq: typeof item.user_seq === "number" ? item.user_seq : message.userSeq,
                     botSeq: typeof item.bot_seq === "number" ? item.bot_seq : message.botSeq
@@ -2211,12 +2390,13 @@ export function App() {
                 return message;
               }));
               completedRequestIds.current[requestId] = true;
+              markSessionOutputReady(requestSessionId);
               clearSessionRequestState(requestSessionId, requestId);
               reportChatUsage(item.usage, usageTotal(item.usage) ? "provider" : "estimated");
               return;
             }
             if (item.type === "error") {
-              const message = item.content || item.message || "运行时返回错误";
+              const message = redactInternalPromptText(item.content || item.message || "运行时返回错误");
               const staleRequest = /invalid request_id/i.test(message);
               finishSessionRequest(requestSessionId, requestId);
               if (staleRequest) {
@@ -2228,6 +2408,7 @@ export function App() {
                   pending: false,
                   paused: false
                 } : entry));
+                markSessionOutputReady(requestSessionId);
               }
               reportChatUsage(item.usage, usageTotal(item.usage) ? "provider" : "estimated");
               void reportDesktopEvent({ type: "error", source: "Desktop", message, sessionId: requestSessionId });
@@ -2296,23 +2477,28 @@ export function App() {
                 return item.type === "voice_attach" ? { ...finishRunningSteps(next), pending: false, paused: false } : next;
               });
               if (item.type === "voice_attach") {
+                markSessionOutputReady(requestSessionId);
                 finishSessionRequest(requestSessionId, requestId);
                 delete completedRequestIds.current[requestId];
               }
               return;
             }
             if (item.type === "phase" && (item.content || item.message)) {
+              const phaseContent = redactInternalPromptText(item.content || item.message || "");
+              if (!phaseContent) return;
               updateAssistantMessage(requestSessionId, assistantId, (message) => ({
                 ...message,
                 pending: true,
-                steps: [...(message.steps || []), { type: "phase", content: item.content || item.message }]
+                steps: [...(message.steps || []), { type: "phase", content: phaseContent }]
               }));
               return;
             }
             if ((item.type === "message_update" || item.type === "delta") && item.content) {
+              const deltaContent = redactInternalPromptText(item.content);
+              if (!deltaContent) return;
               updateAssistantMessage(requestSessionId, assistantId, (message) => ({
                 ...finishRunningSteps(message),
-                content: `${message.content}${item.content}`,
+                content: `${message.content}${deltaContent}`,
                 pending: true
               }));
             }
@@ -2367,6 +2553,7 @@ export function App() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "发送失败";
       updateSessionMessages(requestSessionId, (current) => current.map((item) => item.id === assistantId ? { ...finishRunningSteps(item), content: message, pending: false } : item));
+      markSessionOutputReady(requestSessionId);
       finishSessionRequest(requestSessionId);
       void reportDesktopEvent({ type: "error", source: "Desktop", message, sessionId: requestSessionId });
     }
@@ -2421,6 +2608,136 @@ export function App() {
     }
   }
 
+  async function syncRuntimeUiStateNow() {
+    const mergedState = pruneSessionUiState({
+      ...sessionUiState,
+      [activeSessionId]: {
+        title: activeSessionTitle,
+        projectId: activeProjectId,
+        messages,
+        composerText,
+        attachments
+      }
+    });
+    writeStorage(SESSION_UI_STORAGE_KEY, mergedState);
+    if (sidecarStatus.state !== "running") return;
+    await saveRuntimeUiState({
+      version: 1,
+      lastActiveSessionId: activeSessionId,
+      activeProjectId,
+      sessionUiState: mergedState,
+      savedAt: new Date().toISOString()
+    }).catch(() => undefined);
+  }
+
+  async function handleCheckForUpdates() {
+    const status = await checkForUpdates().catch((error) => ({
+      ...updateStatus,
+      state: /app-update\.ya?ml|latest\.ya?ml/i.test(error instanceof Error ? error.message : String(error || "")) ? "not-available" as const : "error" as const,
+      message: friendlyUpdateErrorMessage(error)
+    }));
+    if (status) {
+      setUpdateStatus(status);
+      if (status.message) setToast(status.message);
+    }
+  }
+
+  async function handleInstallDownloadedUpdate() {
+    await syncRuntimeUiStateNow();
+    const status = await installDownloadedUpdate().catch((error) => ({
+      ...updateStatus,
+      state: "error" as const,
+      message: friendlyUpdateErrorMessage(error) || "安装更新失败"
+    }));
+    if (status) {
+      setUpdateStatus(status);
+      if (status.message) setToast(status.message);
+    }
+  }
+
+  function watchAgentPackInstall(pack: CapabilityPack, onInstalled?: () => void) {
+    if (installWatchers.current[pack.id]) return;
+    const started = Date.now();
+    const timer = window.setInterval(async () => {
+      const nextPacks = await listCapabilityPacks().catch(() => null);
+      if (nextPacks) {
+        setPacks(nextPacks);
+        const nextPack = nextPacks.find((item) => item.id === pack.id);
+        if (nextPack?.installed) {
+          window.clearInterval(timer);
+          delete installWatchers.current[pack.id];
+          setInstallingPackIds((current) => {
+            const next = { ...current };
+            delete next[pack.id];
+            return next;
+          });
+          setInstallNotice((current) => current?.packId === pack.id ? null : current);
+          setToast(`${pack.name} 已安装`);
+          onInstalled?.();
+          return;
+        }
+      }
+      if (Date.now() - started > 10 * 60 * 1000) {
+        window.clearInterval(timer);
+        delete installWatchers.current[pack.id];
+        setInstallingPackIds((current) => {
+          const next = { ...current };
+          delete next[pack.id];
+          return next;
+        });
+        setToast(`${pack.name} 安装未确认，请查看当前会话结果`);
+      }
+    }, 5000);
+    installWatchers.current[pack.id] = timer;
+  }
+
+  async function startAgentInstallChatTask(pack: CapabilityPack, prompt: string) {
+    const requestSessionId = activeSessionId;
+    const userMessage: ChatItem = {
+      id: `u-install-${Date.now()}`,
+      role: "user",
+      content: `安装能力包：${pack.name}`,
+      createdAt: new Date().toISOString()
+    };
+    const assistantId = `a-install-${Date.now()}`;
+    updateSessionMessages(requestSessionId, (current) => [
+      ...current,
+      userMessage,
+      { id: assistantId, role: "assistant", content: "", pending: true, createdAt: new Date().toISOString() }
+    ]);
+    setActiveSessionTitle((current) => {
+      const nextTitle = current === "新对话" ? `安装 ${pack.name}` : current;
+      setSessionTitles((titles) => ({ ...titles, [requestSessionId]: nextTitle }));
+      return nextTitle;
+    });
+    const result = await sendChatMessage({
+      sessionId: requestSessionId,
+      message: userMessage.content,
+      visibleMessage: userMessage.content,
+      hiddenContext: prompt,
+      attachments: []
+    });
+    if (result.status === "error") {
+      throw new Error(result.message || "发送安装任务失败");
+    }
+    if (result.inline_reply) {
+      updateAssistantMessage(requestSessionId, assistantId, (message) => ({
+        ...message,
+        content: redactInternalPromptText(result.inline_reply || ""),
+        pending: false
+      }));
+    }
+    if (result.request_id && result.stream) {
+      const requestId = result.request_id;
+      setActiveRequestId(requestId);
+      sessionRequestIdsRef.current = { ...sessionRequestIdsRef.current, [requestSessionId]: requestId };
+      setSessionRequestIds((current) => ({ ...current, [requestSessionId]: requestId }));
+      streamRetryCounts.current[requestSessionId] = 0;
+      updateAssistantMessage(requestSessionId, assistantId, (message) => ({ ...message, requestId }));
+      attachMessageStream(requestSessionId, assistantId, requestId);
+    }
+  }
+
   async function handleInstallPack(pack: CapabilityPack, onInstalled?: () => void) {
     if (pack.policyMode === "disabled") {
       setSettingsSection("abilities");
@@ -2428,25 +2745,38 @@ export function App() {
       setToast("管理员已禁用安装，请联系管理员预置能力包");
       return;
     }
+    if (activeSessionRequestId || messagesRef.current.some((message) => message.pending)) {
+      setToast("当前会话正在执行任务，请稍后再发起安装");
+      return;
+    }
     setSettingsSection("abilities");
     setSettingsOpen(true);
     setInstallingPackIds((current) => ({ ...current, [pack.id]: true }));
+    setInstallNotice({
+      packId: pack.id,
+      packName: pack.name,
+      message: `${pack.name} 正在安装，请稍后`
+    });
     try {
-      const result = await installCapabilityPack(pack.id);
-      const nextPacks = await listCapabilityPacks();
-      setPacks(nextPacks);
-      if (result?.installed) {
-        setToast(`${pack.name} 已安装`);
-        onInstalled?.();
-      } else {
-        setToast(result?.message || `${pack.name} 安装失败`);
+      const request = await requestAgentInstallRequest({
+        packId: pack.id,
+        packName: pack.name,
+        sessionId: activeSessionId
+      });
+      if (request.status === "error" || !request.prompt) {
+        throw new Error(request.message || "生成安装任务失败");
       }
-    } finally {
+      await startAgentInstallChatTask(pack, request.prompt);
+      watchAgentPackInstall(pack, onInstalled);
+      setToast(`${pack.name} 安装任务已交给 agent`);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : `${pack.name} 安装任务创建失败`);
       setInstallingPackIds((current) => {
         const next = { ...current };
         delete next[pack.id];
         return next;
       });
+      setInstallNotice((current) => current?.packId === pack.id ? null : current);
     }
   }
 
@@ -2505,7 +2835,8 @@ export function App() {
   }
 
   async function openArtifactFile(file: { file_path: string; file_name: string; file_type?: FileAttachment["file_type"] }) {
-    const result = await openLocalPath(file.file_path);
+    const isAbsolute = /^[a-zA-Z]:[\\/]/.test(file.file_path) || file.file_path.startsWith("\\\\") || file.file_path.startsWith("/");
+    const result = isAbsolute ? await openLocalPath(file.file_path) : await openRuntimePath(file.file_path);
     if (result) {
       setToast(result.startsWith("denied") ? "已取消打开文件" : result);
     }
@@ -2619,9 +2950,16 @@ export function App() {
   ];
   const activeProjectMemoryPath = activeProject?.memoryPath || (activeProject ? `${activeProject.path}\\.ecorex\\project-memory.md` : "");
   const hasPendingAssistantMessage = messages.some(isLiveAssistantMessage);
+  const visibleMessages = messages.filter((message) => !isSilentPausedAssistantMessage(message));
   const composerHasPayload = Boolean(composerText.trim() || attachments.length);
   const currentComposerPermissionMode: PermissionMode = permissionState?.mode || "smart-ask";
   const releaseNotes = runtimeSnapshot.releaseNotes;
+  const updateVisible = ["available", "downloading", "downloaded", "blocked", "error"].includes(updateStatus.state);
+  const updatePrimaryLabel = updateStatus.state === "downloaded"
+    ? "重启安装"
+    : updateStatus.platform === "win32" && updateStatus.state === "downloading"
+      ? "后台下载中"
+      : "打开下载页";
   const settingsNav: Array<{ id: SettingsSection; label: string; icon: ReactNode }> = [
     { id: "account", label: "账号", icon: <UserRound aria-hidden="true" /> },
     { id: "projects", label: "项目", icon: <FolderOpen aria-hidden="true" /> },
@@ -2634,9 +2972,11 @@ export function App() {
     const cachedMessages = sessionUiState[row.id]?.messages || [];
     const isRunning = row.status === "waiting" || row.status === "cancelling" || Boolean(row.requestId) || Boolean(sessionRequestIds[row.id]) || cachedMessages.some(isLiveAssistantMessage) || (row.id === activeSessionId && hasPendingAssistantMessage);
     const isActive = row.id === activeSessionId;
+    const hasUnread = Boolean(unreadSessionIds[row.id]) && !isActive && !isRunning;
+    const waitingReply = isActive && Boolean(approval);
     const rowTitle = [row.title, row.detail, formatTime(row.updatedAt)].filter(Boolean).join("\n");
     return (
-      <article className={`session-row is-${isRunning ? "waiting" : row.status}${isActive ? " is-active" : ""}`} key={row.id}>
+      <article className={`session-row is-${isRunning ? "waiting" : row.status}${isActive ? " is-active" : ""}${waitingReply ? " is-awaiting-reply" : ""}${hasUnread ? " is-unread" : ""}`} key={row.id}>
         <button
           className="session-main"
           type="button"
@@ -2645,9 +2985,9 @@ export function App() {
           data-tooltip={rowTitle}
           aria-current={isActive ? "page" : undefined}
         >
-          {isRunning ? <ThinkingIndicator compact /> : row.projectId ? <FolderOpen aria-hidden="true" /> : <Bot aria-hidden="true" />}
+          {isRunning ? <ThinkingIndicator compact /> : hasUnread ? <span className="session-unread-dot" aria-hidden="true" /> : row.projectId ? <FolderOpen aria-hidden="true" /> : <Bot aria-hidden="true" />}
           <span className="session-line"><strong>{row.title}</strong>{row.detail ? <small>{row.detail}</small> : null}</span>
-          <em>{formatTime(row.updatedAt)}</em>
+          <em>{waitingReply ? <span className="session-waiting-reply">等待回复</span> : formatTime(row.updatedAt)}</em>
         </button>
         <div className="session-actions">
           <button type="button" onClick={() => togglePinSession(row)} title={row.pinned ? "取消置顶" : "置顶会话"} aria-label={row.pinned ? "取消置顶" : "置顶会话"}>
@@ -2790,15 +3130,42 @@ export function App() {
           )}
         </header>
 
+        <section className={`update-banner is-${updateStatus.state}${updateVisible ? "" : " is-hidden"}`}>
+          {updateVisible && (
+            <>
+              <div>
+                <strong>{updateStatus.version ? `EcoreX ${updateStatus.version}` : "EcoreX 更新"}</strong>
+                <span>{updateStatus.message}</span>
+              </div>
+              <div className="update-actions">
+                {typeof updateStatus.progress === "number" && updateStatus.state === "downloading" && (
+                  <em>{Math.round(updateStatus.progress)}%</em>
+                )}
+                {updateStatus.state === "downloaded" ? (
+                  <button className="primary-action" type="button" onClick={() => void handleInstallDownloadedUpdate()}>{updatePrimaryLabel}</button>
+                ) : updateStatus.state === "downloading" ? (
+                  <button type="button" disabled>{updatePrimaryLabel}</button>
+                ) : (
+                  <button className="primary-action" type="button" onClick={() => void openDownloadPage()}>{updatePrimaryLabel}</button>
+                )}
+                <button type="button" onClick={() => void handleCheckForUpdates()}>重新检查</button>
+                <button className="icon-button" type="button" onClick={() => setUpdateStatus({ ...updateStatus, state: "idle", message: "已关闭更新提醒" })} title="关闭更新提醒" aria-label="关闭更新提醒">
+                  <X aria-hidden="true" />
+                </button>
+              </div>
+            </>
+          )}
+        </section>
+
         <div className="message-list" ref={messageListRef} onScroll={updateJumpLatestState}>
-          {messages.length === 0 ? (
+          {visibleMessages.length === 0 ? (
             <div className="empty-chat">
               <BrandMark />
               <strong>{activeProject ? activeProject.name : "可以直接开始"}</strong>
               <span>{activeProject ? "你可以把任何文件/图片/视频 参考扔到项目文件夹内 我会基于项目文件夹上下文回答你。" : "粘贴图片或文件，输入需求，EcoreX 会在需要能力包或权限时先确认。"}</span>
             </div>
           ) : (
-            messages.map((message) => (
+            visibleMessages.map((message) => (
               <article className={`message ${message.role}`} key={message.id}>
                 <div className="message-body">
                   <button
@@ -3084,8 +3451,17 @@ export function App() {
                   <section className="settings-section">
                     <div className="settings-section-head">
                       <strong>能力</strong>
-                      <span>登录前预加载/预安装；登录后在这里逐个勾选生效，默认全开</span>
+                      <span>点击安装后由当前会话 agent 诊断、安装和修复；勾选只控制是否参与自动触发</span>
                     </div>
+                    {installNotice && !installNotice.dismissed && (
+                      <div className="install-notice" role="status">
+                        <strong>{installNotice.message}</strong>
+                        <span>安装会在当前会话继续执行，关闭提示不会中断任务。</span>
+                        <button type="button" onClick={() => setInstallNotice((current) => current ? { ...current, dismissed: true } : current)}>
+                          关闭
+                        </button>
+                      </div>
+                    )}
                     <div className="ability-grid">
                       {abilityRows.map((ability) => (
                         <article key={ability.id} className={ability.enabled ? "is-ready" : "is-waiting"}>

@@ -163,7 +163,7 @@ def _ability_defs() -> Dict[str, Dict[str, Any]]:
             "startupImpact": "low",
             "enabled": True,
             "installable": False,
-            "notes": "Built in for v0.1.13; no extra install required.",
+            "notes": "Built in for v0.1.14; no extra install required.",
         },
         "skill-creator": {
             "label": "Skill creator",
@@ -172,7 +172,7 @@ def _ability_defs() -> Dict[str, Dict[str, Any]]:
             "startupImpact": "low",
             "enabled": True,
             "installable": False,
-            "notes": "Built in for v0.1.13; use when creating or packaging skills.",
+            "notes": "Built in for v0.1.14; use when creating or packaging skills.",
         },
         "ecorex-cli": {
             "label": "Structured EcoreX CLI",

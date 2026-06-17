@@ -16,6 +16,16 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+OPENAI_IMAGE_MODEL_ALIASES = {
+    "image-2-pro": "gpt-image-2-pro",
+    "image-2": "gpt-image-2",
+}
+
+
+def normalize_openai_image_model(model: str) -> str:
+    value = (model or "").strip()
+    return OPENAI_IMAGE_MODEL_ALIASES.get(value, value)
+
 
 def load_prompt(args: argparse.Namespace) -> str:
     if args.prompt_file:
@@ -113,7 +123,7 @@ def generate_once(
         raise RuntimeError("OPENAI_API_KEY is not set")
     api_base = (os.environ.get("OPENAI_API_BASE") or "https://api.openai.com/v1").rstrip("/")
     payload = _openai_image_payload(
-        model=model,
+        model=normalize_openai_image_model(model),
         prompt=prompt,
         size=size,
         quality=quality,
@@ -140,7 +150,13 @@ def generate_once(
 
 def generate_with_fallback(args: argparse.Namespace, prompt: str, output: Path, status_path: Path, h: str) -> dict[str, Any]:
     attempts: list[dict[str, str]] = []
-    for model in [args.model, args.fallback_model]:
+    original_model = normalize_openai_image_model(args.model)
+    fallback_model = normalize_openai_image_model(args.fallback_model)
+    model_candidates = []
+    for candidate in [original_model, fallback_model]:
+        if candidate and candidate not in model_candidates:
+            model_candidates.append(candidate)
+    for model in model_candidates:
         if not model:
             continue
         write_status(
@@ -148,7 +164,7 @@ def generate_with_fallback(args: argparse.Namespace, prompt: str, output: Path, 
             {
                 "status": "running",
                 "model": model,
-                "fallback_model": args.fallback_model,
+                "fallback_model": fallback_model,
                 "prompt_hash": h,
                 "output": str(output),
                 "attempts": attempts,
@@ -171,8 +187,8 @@ def generate_with_fallback(args: argparse.Namespace, prompt: str, output: Path, 
                 "ok": True,
                 "status": "completed",
                 "model": model,
-                "fallback_used": model != args.model,
-                "fallback_model": args.fallback_model,
+                "fallback_used": model != original_model,
+                "fallback_model": fallback_model,
                 "prompt_hash": h,
                 "output": str(output.resolve()),
                 "attempts": attempts,
@@ -181,14 +197,14 @@ def generate_with_fallback(args: argparse.Namespace, prompt: str, output: Path, 
             return result
         except Exception as exc:
             attempts.append({"model": model, "error": str(exc)})
-            if model == args.fallback_model:
+            if model == fallback_model:
                 break
 
     result = {
         "ok": False,
         "status": "failed",
-        "model": args.model,
-        "fallback_model": args.fallback_model,
+        "model": original_model,
+        "fallback_model": fallback_model,
         "prompt_hash": h,
         "output": str(output),
         "attempts": attempts,
@@ -267,6 +283,8 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--cache-by", default="prompt_hash", choices=["prompt_hash"])
     args = parser.parse_args()
+    args.model = normalize_openai_image_model(args.model)
+    args.fallback_model = normalize_openai_image_model(args.fallback_model)
 
     try:
         prompt = load_prompt(args)

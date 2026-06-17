@@ -11,6 +11,7 @@ config.json
 QR.png
 nohup.out
 tmp
+.tmp-*/
 plugins.json
 *.log
 logs/
@@ -44,6 +45,8 @@ desktop/dist-electron/
 desktop/.vite/
 desktop/.runtime-cache/
 desktop/release/
+desktop/release-local*/
+desktop/release-unsigned-v*/
 desktop/runtime/
 deploy/ecorex-site/downloads/
 deploy/ecorex-admin-api/*.sqlite3

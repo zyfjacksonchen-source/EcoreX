@@ -16,18 +16,20 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 
-VERSION = "0.1.13"
+VERSION = "0.1.14"
 PASSWORD_ITERATIONS = 180000
 SESSION_DAYS = 7
-DEFAULT_CLIENT_EVENT_KEY = "ecorex-desktop-v0.1.13"
+DEFAULT_CLIENT_EVENT_KEY = "ecorex-desktop-v0.1.14"
 DEFAULT_COMPAT_CLIENT_EVENT_KEYS = (
     "ecorex-desktop-v0.1.10",
     "ecorex-desktop-v0.1.11",
     "ecorex-desktop-v0.1.12",
     "ecorex-desktop-v0.1.13",
+    "ecorex-desktop-v0.1.14",
     "ecorex-web-v0.1.11-web.1",
     "ecorex-web-v0.1.12-web.1",
     "ecorex-web-v0.1.13-web.1",
+    "ecorex-web-v0.1.14-web.1",
 )
 DEFAULT_ADMIN_USERNAME = "admin"
 
@@ -45,7 +47,7 @@ DEFAULT_USAGE = [
 ]
 
 DEFAULT_LOGS = [
-    ("error", "Desktop", "EcoreX desktop failure collection is ready for v0.1.13 validation.", "unread"),
+    ("error", "Desktop", "EcoreX desktop failure collection is ready for v0.1.14 validation.", "unread"),
 ]
 
 DEFAULT_CAPABILITIES = [
@@ -939,7 +941,7 @@ class AdminStore:
         return self.upsert_global_model(payload)
 
     def delete_model_credential(self, credential_id, payload):
-        raise ValueError("global model cannot be deleted in v0.1.13")
+        raise ValueError("global model cannot be deleted in v0.1.14")
 
     def resolve_client_model_config(self, user_email="", device_id="", token=""):
         user = self.require_session(token, device_id)

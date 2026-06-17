@@ -31,7 +31,15 @@ function isAllowedPath(pathname: string, method: string) {
     "GET /api/channels",
     "GET /api/scheduler",
     "GET /api/version",
-    "GET /api/knowledge/list"
+    "GET /api/knowledge/list",
+    "GET /api/knowledge/read",
+    "GET /api/update-check",
+    "POST /api/ui-state",
+    "POST /api/open-path",
+    "GET /api/capabilities",
+    "POST /api/agent-install-request",
+    "GET /api/subagents",
+    "POST /api/subagents"
   ]);
   if (exact.has(`${upperMethod} ${cleanPath}`)) {
     return true;
@@ -43,6 +51,9 @@ function isAllowedPath(pathname: string, method: string) {
     return true;
   }
   if (upperMethod === "POST" && /^\/api\/sessions\/[^/]+\/clear_context$/.test(cleanPath)) {
+    return true;
+  }
+  if (upperMethod === "POST" && /^\/api\/subagents\/[^/]+\/(?:cancel|collect)$/.test(cleanPath)) {
     return true;
   }
   if (upperMethod === "GET" && cleanPath.startsWith("/uploads/")) {

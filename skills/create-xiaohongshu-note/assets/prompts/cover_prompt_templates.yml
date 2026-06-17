@@ -1,6 +1,6 @@
 default:
   model: gpt-image-2-pro
-  fallback_model: gpt-image-2
+  fallback_model: image-2
   size: 1080x1440
   template: |
     Create a high-quality Xiaohongshu cover image in portrait 3:4 ratio.

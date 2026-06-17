@@ -151,7 +151,7 @@ class EcoreXCli(BaseTool):
 
             broker = get_tool_permission_broker()
             if action in NETWORK_ACTIONS:
-                return broker.authorize_noninteractive("web_fetch", {"url": "https://skills.cowagent.ai"})
+                return broker.authorize_noninteractive("web_fetch", {"url": "https://www.ecoreai.cn/ecorex-agent/skills"})
             if action in {"skill_install", "skill_enable", "skill_disable"}:
                 return broker.authorize_noninteractive("skill_write", {"action": action, "name": args.get("name")})
             if action == "install_browser":

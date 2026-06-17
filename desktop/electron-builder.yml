@@ -16,6 +16,10 @@ asar: true
 extraMetadata:
   main: dist-electron/main.js
 
+publish:
+  provider: generic
+  url: https://www.ecoreai.cn/ecorex-agent/downloads/
+
 extraResources:
   - from: runtime/ecorex-runtime
     to: ecorex-runtime

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${VERSION:-0.1.13}"
+VERSION="${VERSION:-0.1.14}"
 ARTIFACT_URL="${ARTIFACT_URL:-https://www.ecoreai.cn/ecorex-agent/downloads/EcoreX_${VERSION}-webui-macos-universal.zip}"
 RELEASE_TAG="${RELEASE_TAG:-v${VERSION}}"
 RELEASE_ASSET_NAME="${RELEASE_ASSET_NAME:-}"

@@ -319,6 +319,27 @@ h3 {
   box-shadow: var(--shadow);
 }
 
+.download-card.is-recommended {
+  border-color: color-mix(in srgb, var(--brand) 52%, var(--rule));
+  box-shadow: 0 18px 40px rgba(255, 122, 47, 0.12);
+}
+
+.recommend-badge {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  color: #1a120c;
+  background: var(--brand);
+  font-size: 12px;
+  font-weight: 780;
+}
+
 .platform-icon {
   display: grid;
   place-items: center;

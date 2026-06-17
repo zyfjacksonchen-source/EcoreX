@@ -117,7 +117,7 @@ Required JSON fields:
   "image_generation_status": {
     "status": "pending",
     "model": "gpt-image-2-pro",
-    "fallback_model": "gpt-image-2",
+    "fallback_model": "image-2",
     "prompt_hash": ""
   }
 }

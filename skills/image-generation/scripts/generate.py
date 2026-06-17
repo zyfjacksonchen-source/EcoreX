@@ -218,7 +218,7 @@ class ImageProvider(ABC):
 
 
 # ---------------------------------------------------------------------------
-# OpenAI-compatible provider (gpt-image-2, gpt-image-1)
+# OpenAI-compatible provider (gpt-image-2-pro, gpt-image-2, gpt-image-1)
 # ---------------------------------------------------------------------------
 
 class OpenAIProvider(ImageProvider):
@@ -226,11 +226,20 @@ class OpenAIProvider(ImageProvider):
 
     DEFAULT_MODEL = "gpt-image-2-pro"
     FALLBACK_MODEL = "gpt-image-2"
+    MODEL_ALIASES = {
+        "image-2-pro": "gpt-image-2-pro",
+        "image-2": "gpt-image-2",
+    }
 
     def __init__(self, api_key: str, api_base: str, model: str):
         self.api_key = api_key
         self.api_base = api_base.rstrip("/")
-        self.model = model or self.DEFAULT_MODEL
+        self.model = self._normalize_model(model or self.DEFAULT_MODEL)
+
+    @classmethod
+    def _normalize_model(cls, model: str | None) -> str:
+        value = str(model or "").strip()
+        return cls.MODEL_ALIASES.get(value, value)
 
     def _headers(self) -> dict:
         return {
@@ -345,7 +354,7 @@ class OpenAIProvider(ImageProvider):
         )
 
     def _model_candidates(self) -> list[str]:
-        candidates = [self.model or self.DEFAULT_MODEL]
+        candidates = [self._normalize_model(self.model or self.DEFAULT_MODEL)]
         if candidates[0] == self.DEFAULT_MODEL and self.FALLBACK_MODEL not in candidates:
             candidates.append(self.FALLBACK_MODEL)
         return candidates
@@ -504,7 +513,9 @@ class OpenAIProvider(ImageProvider):
 class LinkAIProvider(ImageProvider):
     """Provider for LinkAI unified image generation API."""
 
-    DEFAULT_MODEL = "gpt-image-2"
+    # LinkAI default model follows EcoreX's OpenAI image default. The legacy
+    # "image-2-pro" id is accepted only as an OpenAI alias, not as a default.
+    DEFAULT_MODEL = "gpt-image-2-pro"
 
     def __init__(self, api_key: str, api_base: str, model: str):
         self.api_key = api_key
@@ -1168,7 +1179,7 @@ class MinimaxProvider(ImageProvider):
 # When the requested model matches a prefix, that provider is promoted to the
 # front of the queue. All other configured providers still run as fallbacks.
 _MODEL_PREFERRED_PROVIDER: list[tuple[tuple[str, ...], str]] = [
-    (("gpt-image",), "OpenAI"),
+    (("image-2", "gpt-image"), "OpenAI"),
     (("nano-banana", "gemini-"), "Gemini"),
     (("seedream", "doubao-seedream"), "Seedream"),
     (("qwen-image", "qwen"), "Qwen"),

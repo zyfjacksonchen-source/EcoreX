@@ -1,8 +1,8 @@
 param(
-    [string]$Version = "0.1.13",
+    [string]$Version = "0.1.14",
     [string]$SiteRoot = "deploy/ecorex-site",
     [string]$AdminApiRoot = "deploy/ecorex-admin-api",
-    [string]$InstallerPath = "desktop/release/EcoreX_0.1.13_x64-setup.exe",
+    [string]$InstallerPath = "desktop/release/EcoreX_0.1.14_x64-setup.exe",
     [string]$MacArm64DmgPath = "",
     [string]$MacX64DmgPath = "",
     [string]$WebTarballPath = "",
@@ -41,6 +41,18 @@ function Write-Utf8NoBom {
     )
     $encoding = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($Path, $Value, $encoding)
+}
+
+function Invoke-ReleaseTextSanitizer {
+    param([Parameter(Mandatory = $true)][string]$Root)
+    $sanitizer = Join-Path $repoRoot "scripts\sanitize-ecorex-release-runtime.py"
+    if (-not (Test-Path -LiteralPath $sanitizer)) {
+        throw "Release sanitizer missing: $sanitizer"
+    }
+    & python $sanitizer $Root
+    if ($LASTEXITCODE -ne 0) {
+        throw "Release text sanitizer failed for $Root"
+    }
 }
 
 function Test-ExternalArtifact {
@@ -83,6 +95,9 @@ $manifest = Get-Content -Raw -Encoding UTF8 -LiteralPath $manifestPath | Convert
 if ($manifest.version -ne $Version) {
     throw "Manifest version '$($manifest.version)' does not match expected '$Version'."
 }
+
+$outputResolved = [System.IO.Path]::GetFullPath((Join-Path $repoRoot $OutputDir))
+New-Item -ItemType Directory -Force -Path $outputResolved | Out-Null
 
 $artifactSources = @{}
 $artifactSources["windows-x64"] = $InstallerPath
@@ -151,8 +166,24 @@ if ($readyArtifacts.Count -eq 0) {
     throw "Manifest has no ready artifacts to publish."
 }
 
-$outputResolved = [System.IO.Path]::GetFullPath((Join-Path $repoRoot $OutputDir))
-New-Item -ItemType Directory -Force -Path $outputResolved | Out-Null
+foreach ($ready in $readyArtifacts) {
+    if ($ready.External) {
+        continue
+    }
+    $canonicalArtifactPath = Resolve-UnderDirectory -Path (Join-Path $outputResolved $ready.Artifact.fileName) -Base $outputResolved
+    if (-not ([System.IO.Path]::GetFullPath($ready.Path).Equals([System.IO.Path]::GetFullPath($canonicalArtifactPath), [System.StringComparison]::OrdinalIgnoreCase))) {
+        Copy-Item -LiteralPath $ready.Path -Destination $canonicalArtifactPath -Force
+    }
+    if ($ready.Artifact.id -eq "windows-x64") {
+        $sourceDir = Split-Path -Parent $ready.Path
+        foreach ($feedSource in @((Join-Path $sourceDir "latest.yml"), "$($ready.Path).blockmap")) {
+            if (Test-Path -LiteralPath $feedSource) {
+                $feedTarget = Resolve-UnderDirectory -Path (Join-Path $outputResolved (Split-Path -Leaf $feedSource)) -Base $outputResolved
+                Copy-Item -LiteralPath $feedSource -Destination $feedTarget -Force
+            }
+        }
+    }
+}
 
 $stagingRoot = Resolve-UnderDirectory -Path (Join-Path $outputResolved "ecorex-public-release-$Version") -Base $outputResolved
 $zipPath = Resolve-UnderDirectory -Path (Join-Path $outputResolved "EcoreX_$Version-public-release.zip") -Base $outputResolved
@@ -175,11 +206,34 @@ Get-ChildItem -LiteralPath $siteRootResolved -Force | Where-Object { $_.Name -ne
 
 $downloadOut = Join-Path $siteOut "downloads"
 New-Item -ItemType Directory -Force -Path $downloadOut | Out-Null
+$updateFeedFiles = @()
 foreach ($ready in $readyArtifacts) {
     if ($ready.External) {
         continue
     }
     Copy-Item -LiteralPath $ready.Path -Destination (Join-Path $downloadOut $ready.Artifact.fileName) -Force
+    if ($ready.Artifact.id -eq "windows-x64") {
+        $sourceDir = Split-Path -Parent $ready.Path
+        $latestSource = Join-Path $sourceDir "latest.yml"
+        $blockmapSource = "$($ready.Path).blockmap"
+        if (-not (Test-Path -LiteralPath $latestSource)) {
+            throw "Windows update feed file missing: $latestSource"
+        }
+        if (-not (Test-Path -LiteralPath $blockmapSource)) {
+            throw "Windows update blockmap missing: $blockmapSource"
+        }
+        foreach ($feedSource in @($latestSource, $blockmapSource)) {
+            $feedName = Split-Path -Leaf $feedSource
+            $feedTarget = Join-Path $downloadOut $feedName
+            Copy-Item -LiteralPath $feedSource -Destination $feedTarget -Force
+            $updateFeedFiles += [pscustomobject]@{
+                FileName = $feedName
+                RelativePath = "site/downloads/$feedName"
+                Size = (Get-Item -LiteralPath $feedTarget).Length
+                Sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $feedTarget).Hash.ToUpperInvariant()
+            }
+        }
+    }
 }
 
 $adminFiles = @("ecorex_admin_api.py", "Dockerfile", "README.md")
@@ -250,6 +304,14 @@ $checksums = [ordered]@{
     adminApiRoot = "admin-api"
     serverHelperRoot = "server"
     artifacts = $checksumArtifacts
+    updateFeed = @($updateFeedFiles | ForEach-Object {
+        [ordered]@{
+            fileName = $_.FileName
+            relativePath = $_.RelativePath
+            size = $_.Size
+            sha256 = $_.Sha256
+        }
+    })
     windows = [ordered]@{
         status = if ($windowsReady) { $windowsReady.Artifact.status } else { "not-included" }
         fileName = if ($windowsReady) { $windowsReady.Artifact.fileName } else { "" }
@@ -261,6 +323,8 @@ $checksums = [ordered]@{
     macos = if ($macReadyCount -gt 0) { "included $macReadyCount dmg artifact(s); signing/notarization evidence is external" } else { "deferred to Mac validation" }
 }
 Write-Utf8NoBom -Path (Join-Path $stagingRoot "checksums.json") -Value (($checksums | ConvertTo-Json -Depth 8) + "`n")
+
+Invoke-ReleaseTextSanitizer -Root $stagingRoot
 
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem

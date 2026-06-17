@@ -15,6 +15,10 @@ from models.openai.openai_http_client import OpenAIHTTPClient, OpenAIHTTPError
 class OpenAIImage(object):
     DEFAULT_IMAGE_MODEL = "gpt-image-2-pro"
     FALLBACK_IMAGE_MODEL = "gpt-image-2"
+    IMAGE_MODEL_ALIASES = {
+        "image-2-pro": "gpt-image-2-pro",
+        "image-2": "gpt-image-2",
+    }
 
     def __init__(self):
         # Lazy default client; subclasses (ChatGPTBot/OpenAIBot) typically
@@ -31,8 +35,13 @@ class OpenAIImage(object):
             self.tb4dalle = TokenBucket(conf().get("rate_limit_dalle", 50))
 
     @staticmethod
+    def _normalize_image_model(model: str) -> str:
+        value = str(model or "").strip()
+        return OpenAIImage.IMAGE_MODEL_ALIASES.get(value, value)
+
+    @staticmethod
     def _is_gpt_image_model(model: str) -> bool:
-        return str(model or "").startswith("gpt-image")
+        return OpenAIImage._normalize_image_model(model).startswith("gpt-image")
 
     @staticmethod
     def _is_model_unavailable_error(exc: Exception) -> bool:
@@ -69,6 +78,7 @@ class OpenAIImage(object):
         return f"file://{path}"
 
     def _build_image_payload(self, query: str, model: str) -> dict:
+        model = self._normalize_image_model(model)
         payload = {
             "prompt": query,
             "n": 1,
@@ -116,7 +126,7 @@ class OpenAIImage(object):
             if conf().get("rate_limit_dalle") and not self.tb4dalle.get_token():
                 return False, "请求太快了，请休息一下再问我吧"
             logger.info("[OPEN_AI] image_query={}".format(query))
-            model = conf().get("text_to_image") or self.DEFAULT_IMAGE_MODEL
+            model = self._normalize_image_model(conf().get("text_to_image") or self.DEFAULT_IMAGE_MODEL)
             try:
                 image_url = self._create_img_once(query, model, api_key=api_key, api_base=api_base)
             except OpenAIHTTPError as http_err:

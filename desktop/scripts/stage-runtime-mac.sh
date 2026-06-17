@@ -213,11 +213,20 @@ import os
 import sys
 
 out = sys.argv[1]
+client_event_key = os.environ.get("ECOREX_CLIENT_EVENT_KEY") or "ecorex-desktop-v0.1.14"
+compat_client_event_keys = list(dict.fromkeys([
+    client_event_key,
+    "ecorex-desktop-v0.1.13",
+    "ecorex-desktop-v0.1.12",
+    "ecorex-desktop-v0.1.11",
+    "ecorex-desktop-v0.1.10",
+]))
 policy = {
     "adminEventsUrl": os.environ.get("ECOREX_ADMIN_EVENTS_URL") or os.environ.get("ECOREX_ADMIN_BASE_URL", "https://www.ecoreai.cn/ecorex-agent").rstrip("/") + "/client/events",
     "modelConfigUrl": os.environ.get("ECOREX_MODEL_CONFIG_URL") or os.environ.get("ECOREX_ADMIN_BASE_URL", "https://www.ecoreai.cn/ecorex-agent").rstrip("/") + "/client/model-config",
     "capabilityPolicyUrl": os.environ.get("ECOREX_CAPABILITY_POLICY_URL") or os.environ.get("ECOREX_ADMIN_BASE_URL", "https://www.ecoreai.cn/ecorex-agent").rstrip("/") + "/client/capability-policy",
-    "clientEventKey": os.environ.get("ECOREX_CLIENT_EVENT_KEY") or "ecorex-desktop-v0.1.13",
+    "clientEventKey": client_event_key,
+    "compatClientEventKeys": compat_client_event_keys,
     "userEmail": os.environ.get("ECOREX_USER_EMAIL"),
     "deviceId": os.environ.get("ECOREX_DEVICE_ID"),
     "orgId": os.environ.get("ECOREX_ORG_ID"),
@@ -297,23 +306,24 @@ fi
 
 find "$RUNTIME_DIR" -type d -name "__pycache__" -prune -exec rm -rf {} +
 
-"$RUNTIME_PYTHON" - "$RUNTIME_DIR/runtime-manifest.json" "$REPO_ROOT" "$BUILDER_ARCH" "$PYTHON_STANDALONE_RELEASE" <<'PY'
+"$RUNTIME_PYTHON" - "$RUNTIME_DIR/runtime-manifest.json" "$BUILDER_ARCH" "$PYTHON_STANDALONE_RELEASE" <<'PY'
 import json
 import sys
 import time
 from pathlib import Path
 
-out, repo_root, arch, release = sys.argv[1:5]
+out, arch, release = sys.argv[1:4]
 manifest = {
     "product": "EcoreX",
     "runtime": "compatible-agent-runtime",
     "stagedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-    "repoRoot": repo_root,
     "pythonDistribution": f"python-build-standalone-{release}",
     "pythonArch": arch,
     "dependencyInstall": True,
 }
 Path(out).write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 PY
+
+python3 "$REPO_ROOT/scripts/sanitize-ecorex-release-runtime.py" "$RUNTIME_DIR"
 
 echo "EcoreX macOS runtime staged at $RUNTIME_DIR for $BUILDER_ARCH"

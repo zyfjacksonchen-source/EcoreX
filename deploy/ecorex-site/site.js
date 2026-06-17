@@ -52,6 +52,62 @@ document.querySelectorAll("img[data-fallback]").forEach((image) => {
 
 const cardOrder = ["windows-x64", "macos-dmg", "webui-windows-x64", "webui-macos-universal"];
 
+function detectVisitorDevice() {
+  const platform = String(
+    (navigator.userAgentData && navigator.userAgentData.platform) ||
+    navigator.platform ||
+    navigator.userAgent ||
+    ""
+  ).toLowerCase();
+  const ua = String(navigator.userAgent || "").toLowerCase();
+  const source = `${platform} ${ua}`;
+  const isMac = /mac|iphone|ipad|ipod/.test(source);
+  const isWindows = /win/.test(source);
+  let arch = "";
+  if (/arm64|aarch64|apple silicon/.test(source)) arch = "arm64";
+  if (/x86_64|x64|wow64|win64|amd64|intel/.test(source)) arch = "x64";
+  return {
+    platform: isMac ? "darwin" : isWindows ? "win32" : "web",
+    arch
+  };
+}
+
+function recommendedForDevice(manifest, device) {
+  const map = manifest.recommendedDownloads || {};
+  if (device.platform === "win32") return map.win32 || {};
+  if (device.platform === "darwin") return map.darwin || {};
+  if (/mac/i.test(navigator.userAgent || "")) {
+    return { webui: map.web?.macos };
+  }
+  if (/win/i.test(navigator.userAgent || "")) {
+    return { webui: map.web?.windows };
+  }
+  return map.web || {};
+}
+
+function orderForRecommendation(recommended) {
+  const priority = [];
+  if (recommended.primary) priority.push(recommended.primary);
+  if (recommended.webui) priority.push(recommended.webui);
+  return [
+    ...priority.filter(Boolean),
+    ...cardOrder.filter((id) => !priority.includes(id))
+  ];
+}
+
+function preferredArtifactId(cardId, recommended, device) {
+  if (cardId === "macos-dmg") {
+    return recommended.architectures?.[device.arch] || "";
+  }
+  if (recommended.primary === cardId) return cardId;
+  if (recommended.webui === cardId) return cardId;
+  return "";
+}
+
+function isRecommendedCard(cardId, recommended) {
+  return cardId === recommended.primary || cardId === recommended.webui;
+}
+
 const cardCopy = {
   "windows-x64": {
     icon: "Win",
@@ -126,13 +182,13 @@ function buttonForArtifact(artifact, label = "下载") {
   return `<span class="download-link is-disabled" title="${artifact.source || ""}">${pendingText}</span>`;
 }
 
-function architectureSelector(cardId, artifacts) {
+function architectureSelector(cardId, artifacts, preferredId = "") {
   const options = artifacts.filter(Boolean);
   if (options.length <= 1) {
     return `${artifactMeta(options[0])}${buttonForArtifact(options[0])}`;
   }
 
-  const initial = options.find(ready) || options[0];
+  const initial = options.find((item) => item.id === preferredId) || options.find(ready) || options[0];
   const selectId = `${cardId}-select`;
   const encoded = encodeURIComponent(JSON.stringify(options));
   return `
@@ -185,17 +241,21 @@ function renderDownloads(manifest) {
   grid.innerHTML = "";
 
   const grouped = collectCards(manifest.artifacts || []);
-  cardOrder.forEach((cardId) => {
+  const device = detectVisitorDevice();
+  const recommended = recommendedForDevice(manifest, device);
+  orderForRecommendation(recommended).forEach((cardId) => {
     const copy = cardCopy[cardId];
     const card = document.createElement("article");
-    card.className = "download-card";
+    const recommendedCard = isRecommendedCard(cardId, recommended);
+    card.className = `download-card${recommendedCard ? " is-recommended" : ""}`;
     card.innerHTML = `
+      ${recommendedCard ? `<span class="recommend-badge">推荐</span>` : ""}
       <span class="platform-icon">${copy.icon}</span>
       <h3>${copy.title}</h3>
       <small class="card-version">v${manifest.version}</small>
       <p>${copy.body}</p>
       ${cardNote(copy)}
-      ${architectureSelector(cardId, grouped[cardId] || [])}
+      ${architectureSelector(cardId, grouped[cardId] || [], preferredArtifactId(cardId, recommended, device))}
     `;
     grid.appendChild(card);
   });

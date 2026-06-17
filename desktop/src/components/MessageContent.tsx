@@ -1,4 +1,6 @@
 import { useState, type MouseEvent, type ReactNode } from "react";
+import { ExternalLink, FileText, FolderOpen, Image as ImageIcon } from "lucide-react";
+import { redactInternalPromptText } from "../utils/redaction";
 
 export type ToolCallDisclosure = {
   name?: string;
@@ -48,7 +50,7 @@ export type AgentStepDisclosure =
 export type LocalFilePayload = {
   file_path: string;
   file_name: string;
-  file_type?: "image" | "video" | "audio" | "file";
+  file_type?: "image" | "video" | "audio" | "file" | "directory";
 };
 
 const REASONING_RENDER_CAP = 4 * 1024;
@@ -68,7 +70,7 @@ function safeUrl(value: string, localFilePreviewUrl?: (filePath: string) => stri
   if (isRuntimeHttpPath(value)) {
     return runtimeHttpUrl(value);
   }
-  const localPath = localPathFromSource(value);
+  const localPath = localPathFromSource(value) || relativeArtifactPathFromSource(value);
   if (localPath && localFilePreviewUrl) {
     return localFilePreviewUrl(localPath);
   }
@@ -84,7 +86,7 @@ function safeImageUrl(value: string, localFilePreviewUrl?: (filePath: string) =>
   if (isRuntimeHttpPath(value)) {
     return runtimeHttpUrl(value);
   }
-  const localPath = localPathFromSource(value);
+  const localPath = localPathFromSource(value) || relativeArtifactPathFromSource(value);
   if (localPath && localFilePreviewUrl) {
     return localFilePreviewUrl(localPath);
   }
@@ -100,7 +102,7 @@ function safeMediaUrl(value: string, localFilePreviewUrl?: (filePath: string) =>
   if (isRuntimeHttpPath(value)) {
     return runtimeHttpUrl(value);
   }
-  const localPath = localPathFromSource(value);
+  const localPath = localPathFromSource(value) || relativeArtifactPathFromSource(value);
   if (localPath && localFilePreviewUrl) {
     return localFilePreviewUrl(localPath);
   }
@@ -168,7 +170,7 @@ function decodeBasicEntities(value: string) {
 }
 
 function linkAttributesForUrl(value: string, localFilePreviewUrl?: (filePath: string) => string) {
-  const localPath = localPathFromSource(value);
+  const localPath = localPathFromSource(value) || relativeArtifactPathFromSource(value);
   const href = safeUrl(value, localFilePreviewUrl);
   const attrs = [`href="${escapeHtml(href)}"`, `target="_blank"`, `rel="noreferrer"`];
   if (localPath) {
@@ -185,6 +187,198 @@ function mediaTypeFromUrl(value: string): "image" | "video" | "audio" | "" {
   if (/\.(mp4|webm|mov|m4v|mkv|avi)$/.test(path)) return "video";
   if (/\.(mp3|wav|ogg|m4a|aac|flac|webm)$/.test(path)) return "audio";
   return "";
+}
+
+const ARTIFACT_FILE_EXTENSIONS = [
+  "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg",
+  "mp4", "webm", "mov", "m4v", "mp3", "wav", "m4a",
+  "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+  "md", "txt", "csv", "json", "html", "zip"
+].join("|");
+
+type ArtifactFileType = NonNullable<LocalFilePayload["file_type"]>;
+
+type ArtifactItem = {
+  path: string;
+  name: string;
+  fileType: ArtifactFileType;
+};
+
+function artifactFileTypeFromPath(value: string): ArtifactFileType {
+  const media = mediaTypeFromUrl(value);
+  if (media) return media;
+  if (/[\\/]$/.test(value)) return "directory";
+  return "file";
+}
+
+function isArtifactFilePath(value: string) {
+  const source = String(value || "").trim();
+  return new RegExp(`\\.(${ARTIFACT_FILE_EXTENSIONS})(?:[?#].*)?$`, "i").test(source);
+}
+
+function isArtifactBasePath(value: string) {
+  const source = String(value || "").trim();
+  if (!source || isArtifactFilePath(source)) return false;
+  return /^(?:[A-Za-z]:[\\/]|\\\\|\/|(?:\.{1,2}[\\/])?(?:deliverables|output|outputs|artifacts|images|assets|prompts|workspace)[\\/])/i.test(source);
+}
+
+function joinArtifactPath(base: string, fileName: string) {
+  const cleanBase = base.trim().replace(/^["'`]+|["'`]+$/g, "");
+  const cleanFile = fileName.trim().replace(/^["'`]+|["'`]+$/g, "");
+  if (!cleanBase || !cleanFile) return "";
+  const slash = cleanBase.includes("\\") && !cleanBase.includes("/") ? "\\" : "/";
+  return cleanBase.replace(/[\\/]+$/g, "") + slash + cleanFile.replace(/^[\\/]+/g, "");
+}
+
+type ImageArtifact = {
+  path: string;
+  name: string;
+};
+
+function extractImageArtifacts(content: string) {
+  const source = redactInternalPromptText(content || "");
+  const pattern = /((?:[A-Za-z]:[\\/]|\\\\|\/|(?:\.{1,2}[\\/])?(?:deliverables|output|outputs|artifacts|images|assets|prompts|workspace)[\\/])[^`\r\n<>]*?\.(?:png|jpe?g|gif|webp|bmp|svg))(?:[)\]'"`，。；;,.!?！？:]|$)/gi;
+  const items: ImageArtifact[] = [];
+  const seen = new Set<string>();
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(source)) && items.length < 12) {
+    const raw = (match[1] || "").trim().replace(/^["'`]+|["'`]+$/g, "");
+    const path = localPathFromSource(raw) || relativeArtifactPathFromSource(raw);
+    if (!path || seen.has(path)) continue;
+    seen.add(path);
+    items.push({ path, name: basenameFromPath(path) });
+  }
+  return items;
+}
+
+function ImageArtifactGrid({
+  artifacts,
+  localFilePreviewUrl,
+  onOpenLocalFile
+}: {
+  artifacts: ImageArtifact[];
+  localFilePreviewUrl?: (filePath: string) => string;
+  onOpenLocalFile?: (file: LocalFilePayload) => void;
+}) {
+  if (!artifacts.length || !localFilePreviewUrl) return null;
+  return (
+    <div className="image-artifact-grid">
+      {artifacts.map((artifact) => (
+        <button
+          key={artifact.path}
+          type="button"
+          className="image-artifact-card"
+          onClick={() => onOpenLocalFile?.({ file_path: artifact.path, file_name: artifact.name, file_type: "image" })}
+          title={artifact.path}
+        >
+          <img src={localFilePreviewUrl(artifact.path)} alt={artifact.name} loading="lazy" />
+          <span>{artifact.name}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function extractArtifacts(content: string) {
+  const source = redactInternalPromptText(content || "");
+  const items: ArtifactItem[] = [];
+  const seen = new Set<string>();
+  const bases: string[] = [];
+  const add = (rawPath: string, fileType?: ArtifactFileType) => {
+    const path = (localPathFromSource(rawPath) || relativeArtifactPathFromSource(rawPath) || rawPath).trim();
+    if (!path || seen.has(path)) return;
+    seen.add(path);
+    items.push({
+      path,
+      name: basenameFromPath(path),
+      fileType: fileType || artifactFileTypeFromPath(path)
+    });
+  };
+
+  const dirPattern = /((?:[A-Za-z]:[\\/]|\\\\|\/|(?:\.{1,2}[\\/])?(?:deliverables|output|outputs|artifacts|images|assets|prompts|workspace)[\\/])[^`\r\n<>]*?[\\/])(?:[\s)\]'"`,.;:!?]|$)/gi;
+  let dirMatch: RegExpExecArray | null;
+  while ((dirMatch = dirPattern.exec(source)) && items.length < 20) {
+    const raw = (dirMatch[1] || "").trim().replace(/^["'`]+|["'`]+$/g, "");
+    if (!raw || !isArtifactBasePath(raw)) continue;
+    bases.push(raw);
+    add(raw, "directory");
+  }
+
+  const filePattern = new RegExp(
+    `((?:[A-Za-z]:[\\\\/]|\\\\\\\\|/|(?:\\.{1,2}[\\\\/])?(?:deliverables|output|outputs|artifacts|images|assets|prompts|workspace)[\\\\/])[^\\\`\\r\\n<>]*?\\.(${ARTIFACT_FILE_EXTENSIONS}))(?:[)\\]'"\\\`,.;:!?]|$)`,
+    "gi"
+  );
+  let fileMatch: RegExpExecArray | null;
+  while ((fileMatch = filePattern.exec(source)) && items.length < 24) {
+    const raw = (fileMatch[1] || "").trim().replace(/^["'`]+|["'`]+$/g, "");
+    const path = localPathFromSource(raw) || relativeArtifactPathFromSource(raw);
+    if (!path) continue;
+    add(path);
+  }
+
+  const base = bases[0] || "";
+  if (base) {
+    const fileLinePattern = new RegExp(`^\\s*(?:[-*]\\s*)?([^\\\\/:*?"<>|\\r\\n]+?\\.(${ARTIFACT_FILE_EXTENSIONS}))\\s*$`, "i");
+    for (const rawLine of source.replace(/\r\n/g, "\n").split("\n")) {
+      if (items.length >= 24) break;
+      const cleaned = rawLine.trim().replace(/^["'`]+|["'`]+$/g, "");
+      const match = cleaned.match(fileLinePattern);
+      if (!match) continue;
+      add(joinArtifactPath(base, match[1]));
+    }
+  }
+
+  return items;
+}
+
+function artifactIcon(type: ArtifactFileType) {
+  if (type === "directory") return <FolderOpen aria-hidden="true" />;
+  if (type === "image") return <ImageIcon aria-hidden="true" />;
+  return <FileText aria-hidden="true" />;
+}
+
+function ArtifactGrid({
+  artifacts,
+  localFilePreviewUrl,
+  onOpenLocalFile
+}: {
+  artifacts: ArtifactItem[];
+  localFilePreviewUrl?: (filePath: string) => string;
+  onOpenLocalFile?: (file: LocalFilePayload) => void;
+}) {
+  if (!artifacts.length) return null;
+  return (
+    <div className="artifact-grid image-artifact-grid">
+      {artifacts.map((artifact) => (
+        <button
+          key={artifact.path}
+          type="button"
+          className={`artifact-card image-artifact-card${artifact.fileType === "image" ? " is-image" : ""}`}
+          onClick={() => onOpenLocalFile?.({ file_path: artifact.path, file_name: artifact.name, file_type: artifact.fileType })}
+          title={artifact.path}
+        >
+          {artifact.fileType === "image" && localFilePreviewUrl ? (
+            <img src={localFilePreviewUrl(artifact.path)} alt={artifact.name} loading="lazy" />
+          ) : (
+            <span className="artifact-file-icon">{artifactIcon(artifact.fileType)}</span>
+          )}
+          <span className="artifact-card-label">
+            <span>{artifact.name}</span>
+            <ExternalLink aria-hidden="true" />
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function relativeArtifactPathFromSource(value?: string) {
+  const source = String(value || "").trim().replace(/^["'`]+|["'`]+$/g, "");
+  if (!source || /^[a-z][a-z0-9+.-]*:/i.test(source) || localPathFromSource(source)) return "";
+  if (!isArtifactFilePath(source)) return "";
+  if (!/^(?:\.{1,2}[\\/])?(?:deliverables|output|outputs|artifacts|images|assets|prompts|workspace)[\\/]/i.test(source)) return "";
+  if (source.includes("..")) return "";
+  return source;
 }
 
 function splitTrailingUrlPunctuation(value: string) {
@@ -338,11 +532,11 @@ function truncateReasoning(text: string) {
 
 function formatToolValue(value: unknown) {
   if (value === undefined || value === null || value === "") return "(none)";
-  if (typeof value === "string") return value;
+  if (typeof value === "string") return redactInternalPromptText(value);
   try {
-    return JSON.stringify(value, null, 2);
+    return redactInternalPromptText(JSON.stringify(value, null, 2));
   } catch {
-    return String(value);
+    return redactInternalPromptText(String(value));
   }
 }
 
@@ -372,13 +566,13 @@ function MarkdownBlock({
     <div
       className="markdown-content"
       onClick={handleClick}
-      dangerouslySetInnerHTML={{ __html: renderMarkdown(content, localFilePreviewUrl) }}
+      dangerouslySetInnerHTML={{ __html: renderMarkdown(redactInternalPromptText(content), localFilePreviewUrl) }}
     />
   );
 }
 
 function ThinkingStep({ content = "", running }: { content?: string; running?: boolean }) {
-  const trimmed = content.trim();
+  const trimmed = redactInternalPromptText(content).trim();
   const shown = truncateReasoning(trimmed);
   return (
     <details className={`agent-step agent-thinking-step${running ? " is-running" : ""}`} open={running || undefined}>
@@ -515,7 +709,7 @@ function renderStep(
     );
   }
   if (step.type === "phase") {
-    return <div className="agent-step agent-phase-step" key={index}>{step.content}</div>;
+    return <div className="agent-step agent-phase-step" key={index}>{redactInternalPromptText(step.content || "")}</div>;
   }
   return <MediaStep key={index} step={step} onOpenLocalFile={onOpenLocalFile} localFilePreviewUrl={localFilePreviewUrl} />;
 }
@@ -524,7 +718,7 @@ function splitSteps(steps: AgentStepDisclosure[], content: string) {
   const lastContentIndex = steps.reduce((latest, step, index) => (
     step.type === "content" && !step.intermediate ? index : latest
   ), -1);
-  const mainContent = content || (lastContentIndex >= 0 && steps[lastContentIndex].type === "content" ? steps[lastContentIndex].content || "" : "");
+  const mainContent = redactInternalPromptText(content || (lastContentIndex >= 0 && steps[lastContentIndex].type === "content" ? steps[lastContentIndex].content || "" : ""));
   const visibleSteps = steps.filter((_step, index) => index !== lastContentIndex);
   return { mainContent, visibleSteps };
 }
@@ -537,15 +731,23 @@ function MainAnswer({ content, pending, collapsible, localFilePreviewUrl, onOpen
   onOpenLocalFile?: (file: LocalFilePayload) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  if (!content) return null;
+  const artifacts = extractArtifacts(content);
+  const artifactGrid = <ArtifactGrid artifacts={artifacts} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />;
+  if (!content) return artifactGrid;
   if (!collapsible || pending || content.length <= LONG_REPLY_COLLAPSE_CHARS) {
-    return <MarkdownBlock content={content} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />;
+    return (
+      <>
+        <MarkdownBlock content={content} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />
+        {artifactGrid}
+      </>
+    );
   }
   if (expanded) {
     return (
       <div className="long-answer-disclosure is-expanded">
         <div className="long-answer-full">
           <MarkdownBlock content={content} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />
+          {artifactGrid}
         </div>
         <button className="long-answer-toggle long-answer-collapse-bottom" type="button" onClick={() => setExpanded(false)}>
           收起完整回复
@@ -557,6 +759,7 @@ function MainAnswer({ content, pending, collapsible, localFilePreviewUrl, onOpen
     <div className="long-answer-disclosure">
       <div className="long-answer-preview">
         <MarkdownBlock content={`${content.slice(0, LONG_REPLY_PREVIEW_CHARS).trimEnd()}...`} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />
+        {artifactGrid}
       </div>
       <button className="long-answer-toggle long-answer-expand-bottom" type="button" onClick={() => setExpanded(true)} title="长回复已默认收起，点击展开完整内容">
         展开完整回复
@@ -589,17 +792,24 @@ export function MessageContent(props: {
 
   return (
     <div className="message-content" aria-live={props.pending ? "polite" : undefined}>
-      {(visibleSteps.length > 0 || legacySteps.length > 0) && (
+      {(visibleSteps.length > 0 || legacySteps.length > 0) && props.pending && (
         <div className="agent-steps">
           {compactedSteps.map((step, index) => renderStep(step, index, props.onOpenLocalFile, props.localFilePreviewUrl))}
           {legacySteps}
         </div>
       )}
+      {(visibleSteps.length > 0 || legacySteps.length > 0) && !props.pending && (
+        <details className="agent-process-disclosure">
+          <summary>调用过程 · {visibleSteps.length + legacySteps.length} 步</summary>
+          <div className="agent-steps">
+            {compactedSteps.map((step, index) => renderStep(step, index, props.onOpenLocalFile, props.localFilePreviewUrl))}
+            {legacySteps}
+          </div>
+        </details>
+      )}
       <MainAnswer content={mainContent} pending={props.pending} collapsible={props.role !== "user"} localFilePreviewUrl={props.localFilePreviewUrl} onOpenLocalFile={props.onOpenLocalFile} />
       {props.cancelled ? (
         <div className="agent-cancelled-tag">已中止</div>
-      ) : props.paused ? (
-        <div className="agent-cancelled-tag">已暂停，输入新消息后继续</div>
       ) : props.pending ? (
         <span className="thinking-indicator"><span className="thinking-ring" aria-hidden="true" /><span>{mainContent ? "继续生成中" : "思考中"}</span></span>
       ) : null}

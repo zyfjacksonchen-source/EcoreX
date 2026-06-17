@@ -109,6 +109,63 @@ def _process_is_alive(pid: Any) -> Optional[bool]:
         return None
 
 
+def _session_lock_info(path: Path, now: int, stale_seconds: int = LOCK_STALE_SECONDS) -> Dict[str, Any]:
+    owner = _read_json(path, {})
+    try:
+        age = max(0, now - int(path.stat().st_mtime))
+    except Exception:
+        age = 0
+    owner_host = str(owner.get("host") or "").lower()
+    current_host = socket.gethostname().lower()
+    alive = _process_is_alive(owner.get("pid"))
+    dead_owner = owner_host == current_host and alive is False
+    stale = age >= stale_seconds
+    return {
+        "path": str(path),
+        "session_id": owner.get("sessionId") or "",
+        "pid": owner.get("pid"),
+        "host": owner.get("host") or "",
+        "created_at": owner.get("createdAt") or 0,
+        "age_seconds": age,
+        "alive": alive,
+        "dead_owner": dead_owner,
+        "stale": stale,
+        "removable": bool(dead_owner or stale),
+        "removed": False,
+    }
+
+
+def list_session_locks(workspace: str, cleanup: bool = False, stale_seconds: int = LOCK_STALE_SECONDS) -> list[Dict[str, Any]]:
+    """Return session lock diagnostics and optionally remove dead/stale locks."""
+    now = int(time.time())
+    result: list[Dict[str, Any]] = []
+    try:
+        paths = sorted(locks_dir(workspace).glob("session-*.lock"))
+    except Exception as exc:
+        logger.warning(f"[EcoreXWorkspace] Failed listing session locks: {exc}")
+        return result
+    for path in paths:
+        info = _session_lock_info(path, now, stale_seconds=stale_seconds)
+        if cleanup and info.get("removable"):
+            try:
+                path.unlink()
+                info["removed"] = True
+                logger.warning(
+                    f"[EcoreXWorkspace] Removed stale/dead session lock: "
+                    f"{path} pid={info.get('pid')} session={info.get('session_id')}"
+                )
+            except FileNotFoundError:
+                info["removed"] = True
+            except Exception as exc:
+                info["remove_error"] = str(exc)
+        result.append(info)
+    return result
+
+
+def cleanup_stale_session_locks(workspace: str, stale_seconds: int = LOCK_STALE_SECONDS) -> list[Dict[str, Any]]:
+    return list_session_locks(workspace, cleanup=True, stale_seconds=stale_seconds)
+
+
 def load_installation_manifest(workspace: str) -> Dict[str, Any]:
     path = installation_manifest_path(workspace)
     data = _read_json(path, {})
@@ -160,6 +217,7 @@ def save_ui_state(workspace: str, incoming: Dict[str, Any]) -> Dict[str, Any]:
     allowed = {
         "activeProjectId",
         "activeSessionId",
+        "lastActiveSessionId",
         "projects",
         "sessionProjects",
         "sessionTitles",
@@ -170,6 +228,7 @@ def save_ui_state(workspace: str, incoming: Dict[str, Any]) -> Dict[str, Any]:
         "enabledCapabilityPacks",
         "skillDefaultsApplied",
         "theme",
+        "savedAt",
     }
     current = load_ui_state(workspace)
     next_state = {

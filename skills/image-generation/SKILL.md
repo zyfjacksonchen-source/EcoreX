@@ -15,7 +15,7 @@ metadata:
 
 # Image Generation
 
-Generate and edit images using AI models. The script automatically picks a backend based on which API keys are configured — **you don't need to specify a model unless the user explicitly names one**.
+Generate and edit images using AI models. The script automatically picks a backend based on which API keys are configured. **Do not create final images by coding HTML/canvas/SVG/Pillow layouts; use the image model API script for real image generation.**
 
 Supported models (passed via `model` only when the user asks for a specific one):
 
@@ -113,6 +113,7 @@ If the script returns an error after trying all configured backends, **do NOT re
 ### Notes
 
 - OpenAI auto mode tries `gpt-image-2-pro` first and falls back to `gpt-image-2` only when the API reports model/access unavailability.
+- LinkAI fallback uses the same `gpt-image-2-pro` default; legacy `image-2-pro` input is normalized as a compatibility alias and must not be recommended as the default.
 - For GPT Image models, use the official Images API parameters (`model`, `prompt`, `n`, `size`, `quality`, `output_format`, `background`, `moderation`). Do not send `response_format`.
 - OpenAI requests without `image_url` use `/images/generations`; requests with `image_url` use `/images/edits` with multipart `image` / `image[]`.
 

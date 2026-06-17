@@ -179,6 +179,7 @@ class AgentStreamExecutor:
         self._last_convergence_hint_key = ""
         self._force_text_response_next_turn = False
         self._force_text_response_reason = ""
+        self._internal_hint_texts = []
         
         # Track files to send (populated by read tool)
         self.files_to_send = []  # List of file metadata dicts
@@ -278,7 +279,7 @@ class AgentStreamExecutor:
             logger.warning(f"[Agent] desktop tool permission check skipped: {e}")
             risky = (tool_name or "").strip().lower() in {
                 "bash", "shell", "terminal", "browser", "feishu_cli", "optional_abilities",
-                "mcp", "mcp_server", "write", "edit", "fs_write", "skill_write",
+                "agent_capability", "mcp", "mcp_server", "write", "edit", "fs_write", "skill_write",
                 "env_config", "send", "scheduler", "evolution_undo",
                 "web_fetch", "web_search", "vision",
             }
@@ -300,6 +301,28 @@ class AgentStreamExecutor:
                 "arguments": arguments if isinstance(arguments, dict) else {},
             }
             return proxy_name, proxy_args
+        if tool_name == "agent_capability":
+            args = arguments if isinstance(arguments, dict) else {}
+            action = str(args.get("action") or "").strip().lower()
+            if action == "install_pack":
+                return "optional_abilities", {
+                    "action": "install",
+                    "ability": args.get("pack_id") or args.get("ability") or "",
+                }
+            if action in {"install_skill", "enable_skill", "disable_skill"}:
+                return "skill_write", {
+                    "action": action,
+                    "name": args.get("skill") or args.get("name") or "",
+                    "type": args.get("type") or "",
+                }
+            if action in {"configure_mcp", "reload_mcp"}:
+                server = args.get("server") if isinstance(args.get("server"), dict) else {}
+                return "mcp_server", {
+                    "action": action,
+                    "server_name": server.get("name") or "",
+                    "command": server.get("command") or "",
+                }
+            return "agent_capability", args
         return tool_name, arguments
     
     def _is_thinking_enabled(self) -> bool:
@@ -521,6 +544,44 @@ class AgentStreamExecutor:
         """Disable tool schemas for the next model turn so loops close in text."""
         self._force_text_response_next_turn = True
         self._force_text_response_reason = reason or "external-capability-loop"
+
+    def _append_internal_hint(self, text: str) -> None:
+        """Add a model-only hint and remove it after the next model turn."""
+        hint = (text or "").strip()
+        if not hint:
+            return
+        self._internal_hint_texts.append(hint)
+        self.messages.append({
+            "role": "user",
+            "content": [{
+                "type": "text",
+                "text": hint,
+            }],
+        })
+
+    def _remove_internal_hints(self) -> None:
+        if not self._internal_hint_texts:
+            return
+        hints = set(self._internal_hint_texts)
+        cleaned = []
+        removed = 0
+        for message in self.messages:
+            if message.get("role") == "user":
+                content = message.get("content")
+                if (
+                    isinstance(content, list)
+                    and len(content) == 1
+                    and isinstance(content[0], dict)
+                    and content[0].get("type") == "text"
+                    and str(content[0].get("text") or "").strip() in hints
+                ):
+                    removed += 1
+                    continue
+            cleaned.append(message)
+        if removed:
+            self.messages[:] = cleaned
+            logger.debug(f"[Agent] Removed {removed} internal hint message(s) from history")
+        self._internal_hint_texts.clear()
 
     def _tool_result_user_action_blocker(self, tool_name: str, payload: Any) -> str:
         """Return a convergence blocker that should force a text-only turn."""
@@ -771,6 +832,7 @@ class AgentStreamExecutor:
 
                 # Call LLM (enable retry_on_empty for better reliability)
                 assistant_msg, tool_calls = self._call_llm_stream(retry_on_empty=True)
+                self._remove_internal_hints()
                 final_response = assistant_msg
 
                 # No tool calls, end loop
@@ -798,6 +860,7 @@ class AgentStreamExecutor:
                             
                             # 再调用一次 LLM
                             assistant_msg, tool_calls = self._call_llm_stream(retry_on_empty=False)
+                            self._remove_internal_hints()
                             final_response = assistant_msg
                             
                             # Remove the injected prompt from history so it doesn't
@@ -979,24 +1042,13 @@ class AgentStreamExecutor:
                                     f"with same args. Adding hint to LLM to provide final response."
                                 )
                                 self._force_text_response_once("repeated-successful-tool-call")
-                                # Add a gentle hint message to guide LLM to respond
-                                self.messages.append({
-                                    "role": "user",
-                                    "content": [{
-                                        "type": "text",
-                                        "text": "工具已成功执行并返回结果。请基于这些信息向用户做出回复，不要重复调用相同的工具。"
-                                    }]
-                                })
+                                self._append_internal_hint(
+                                    "工具已经成功执行并返回结果。请基于这些信息向用户做出回复，不要重复调用相同的工具。"
+                                )
                         convergence_hint = self._build_convergence_hint()
                         if convergence_hint:
                             logger.warning(f"[Agent] Adding convergence hint: {convergence_hint}")
-                            self.messages.append({
-                                "role": "user",
-                                "content": [{
-                                    "type": "text",
-                                    "text": convergence_hint
-                                }]
-                            })
+                            self._append_internal_hint(convergence_hint)
                     elif tool_calls:
                         # If we have tool_calls but no tool_result_blocks (unexpected error),
                         # create error results for all tool calls to maintain message integrity
@@ -1042,6 +1094,7 @@ class AgentStreamExecutor:
                 try:
                     self._force_text_response_once("max-turn-summary")
                     summary_response, summary_tools = self._call_llm_stream(retry_on_empty=False)
+                    self._remove_internal_hints()
                     if summary_response:
                         final_response = summary_response
                         logger.info(f"💭 Summary: {summary_response[:150]}{'...' if len(summary_response) > 150 else ''}")
@@ -1624,7 +1677,7 @@ class AgentStreamExecutor:
             self._force_text_response_once("external-capability-chain-budget")
             result = {
                 "status": "error",
-                "result": chain_reason,
+                "result": "已停止重复调用同一能力，正在整理已获得的信息。",
                 "execution_time": 0,
             }
             emit_tool_end(result)

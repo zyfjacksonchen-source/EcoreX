@@ -8,16 +8,23 @@ import { EnterpriseAuthManager } from "./enterpriseAuth.js";
 import { PermissionManager, type PermissionMode } from "./permissions.js";
 import { resolveRepoRoot, SidecarManager } from "./sidecar.js";
 import { TelemetryReporter } from "./telemetry.js";
+import { EcorexUpdateManager } from "./updater.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const runtimeRoot = resolveRepoRoot(__dirname);
 const sidecar = new SidecarManager(runtimeRoot);
 const capabilities = new CapabilityManager(runtimeRoot, __dirname);
 const telemetry = new TelemetryReporter(runtimeRoot);
 const permissions = new PermissionManager();
 const enterpriseAuth = new EnterpriseAuthManager(runtimeRoot);
+const updates = new EcorexUpdateManager(sidecar);
 nativeTheme.themeSource = "dark";
+
+if (!hasSingleInstanceLock) {
+  app.quit();
+}
 
 const imageExtensions = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"]);
 const videoExtensions = new Set([".mp4", ".webm", ".avi", ".mov", ".mkv"]);
@@ -114,6 +121,18 @@ function createMainWindow() {
   }
 }
 
+function focusMainWindow() {
+  const win = BrowserWindow.getAllWindows()[0];
+  if (!win) {
+    return;
+  }
+  if (win.isMinimized()) {
+    win.restore();
+  }
+  win.show();
+  win.focus();
+}
+
 function installApplicationMenu() {
   const isMac = process.platform === "darwin";
   const template: Electron.MenuItemConstructorOptions[] = [
@@ -196,23 +215,28 @@ function installApplicationMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+app.on("second-instance", () => {
+  focusMainWindow();
+});
+
 app.whenReady().then(async () => {
+  if (!hasSingleInstanceLock) {
+    return;
+  }
   app.setName("EcoreX");
   installApplicationMenu();
+  updates.init();
   ipcMain.handle("ecorex:get-sidecar-status", () => sidecar.getStatus());
   ipcMain.handle("ecorex:set-window-theme", (_event, theme: "light" | "dark") => {
     applyWindowTheme(theme === "dark" ? "dark" : "light");
     return { ok: true };
   });
   ipcMain.handle("ecorex:sidecar-json", (_event, request) => fetchSidecarJson(sidecar, request));
+  ipcMain.handle("ecorex:check-for-updates", () => updates.checkForUpdates());
+  ipcMain.handle("ecorex:get-update-status", () => updates.getStatus());
+  ipcMain.handle("ecorex:install-downloaded-update", () => updates.installDownloadedUpdate());
+  ipcMain.handle("ecorex:open-download-page", () => updates.openDownloadPage());
   ipcMain.handle("ecorex:list-capability-packs", () => capabilities.listPacks());
-  ipcMain.handle("ecorex:install-capability-pack", async (event, packId: string) => {
-    const decision = await permissions.authorizeHostCapability(event, "capability-install", { id: packId });
-    if (!decision.allowed) {
-      return capabilities.blockedPack(packId, decision.reason);
-    }
-    return capabilities.installPack(packId);
-  });
   ipcMain.handle("ecorex:get-telemetry-state", () => telemetry.getState());
   ipcMain.handle("ecorex:report-telemetry", (_event, event) => telemetry.report(event));
   ipcMain.handle("ecorex:refresh-enterprise-policy", () => sidecar.refreshEnterpriseModelConfig());
@@ -304,15 +328,10 @@ app.whenReady().then(async () => {
 
   await sidecar.refreshEnterpriseModelConfig();
   sidecar.start();
-  void capabilities.preinstallPolicyPacks(async (pack) => {
-    const decision = await permissions.authorizeHostCapability(undefined, "capability-preinstall", {
-      id: pack.id,
-      name: pack.name,
-      summary: pack.summary
-    });
-    return decision.allowed;
-  }).catch(() => undefined);
   createMainWindow();
+  setTimeout(() => {
+    void updates.checkForUpdates().catch(() => undefined);
+  }, 5000);
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

@@ -52,7 +52,7 @@ available_setting = {
     "nick_name_black_list": [],  # user nickname blacklist
     "group_welcome_msg": "",  # fixed welcome message for new group members; uses a random style when empty
     "trigger_by_self": False,  # whether the bot can be triggered by itself
-    "text_to_image": "gpt-image-2-pro",  # image generation model; gpt-image-2-pro falls back to gpt-image-2 when unavailable
+    "text_to_image": "gpt-image-2-pro",  # image generation model; falls back to gpt-image-2 when unavailable
     # Azure OpenAI dall-e-3 config
     "dalle3_image_style": "vivid", # dalle3 image style, options: vivid, natural
     "dalle3_image_quality": "hd", # dalle3 image quality, options: standard, hd
