@@ -129,6 +129,12 @@ _LEGACY_FORBIDDEN_RELEASE_TEXT = (
     _LEGACY_CHAT_UPPER,
 )
 FORBIDDEN_RELEASE_PATTERN = re.compile("|".join(re.escape(item) for item in _LEGACY_FORBIDDEN_RELEASE_TEXT))
+MIGRATION_README_NAMES = {"README.txt", "README-migration.txt"}
+MIGRATION_README_REQUIRED_FRAGMENTS = (
+    _s("The original v0.1.0 project name was ", _LEGACY_AGENT_MIXED, " and has been renamed to EcoreX."),
+    _s(_LEGACY_AGENT_MIXED, " is a historical project name / development stack name only. It does not indicate plagiarism, copying, or third-party ownership."),
+    _s("原始 v0.1.0 版本项目名 ", _LEGACY_AGENT_MIXED, " 已改名为 EcoreX；", _LEGACY_AGENT_MIXED, " 是历史项目名称/开发栈名称，不代表抄袭或第三方归属。"),
+)
 TEXT_ARCHIVE_SUFFIXES = {
     ".cfg",
     ".css",
@@ -191,10 +197,41 @@ def is_text_archive_name(name: str) -> bool:
     return base in TEXT_ARCHIVE_NAMES or pathlib.PurePosixPath(name).suffix.lower() in TEXT_ARCHIVE_SUFFIXES
 
 
+def is_allowed_migration_readme(name: str, text: str) -> bool:
+    base = pathlib.PurePosixPath(name).name
+    if base not in MIGRATION_README_NAMES:
+        return False
+    remaining = text
+    for fragment in MIGRATION_README_REQUIRED_FRAGMENTS:
+        if fragment not in remaining:
+            return False
+        remaining = remaining.replace(fragment, "")
+    return FORBIDDEN_RELEASE_PATTERN.search(remaining) is None
+
+
 def require_no_forbidden_release_text(label: str, name: str, text: str) -> None:
+    if is_allowed_migration_readme(name, text):
+        return
     match = FORBIDDEN_RELEASE_PATTERN.search(text)
     if match is not None:
         raise ValidationError(f"{label} contains forbidden legacy/private string {match.group(0)!r} in {name}")
+
+
+def require_migration_readme(
+    names: list[str],
+    read_text,
+    label: str,
+) -> None:
+    for name in names:
+        if pathlib.PurePosixPath(name).name not in MIGRATION_README_NAMES:
+            continue
+        try:
+            text = read_text(name)
+        except Exception:
+            continue
+        if is_allowed_migration_readme(name, text):
+            return
+    raise ValidationError(f"{label} missing EcoreX README migration note")
 
 
 def validate_zip_no_forbidden_release_strings(archive: zipfile.ZipFile, label: str) -> None:
@@ -295,6 +332,11 @@ def validate_zip_assets(path: pathlib.Path, label: str) -> None:
     with zipfile.ZipFile(path) as archive:
         validate_zip_no_forbidden_release_strings(archive, label)
         names = archive.namelist()
+        require_migration_readme(
+            names,
+            lambda name: archive.read(name).decode("utf-8", errors="replace"),
+            label,
+        )
         if label in {"webui-win-mac", "webui-macos-universal"}:
             require(
                 any(name.endswith("Install EcoreX WebUI.app/Contents/MacOS/Install EcoreX WebUI") for name in names),
@@ -325,6 +367,11 @@ def validate_tar_assets(path: pathlib.Path, label: str) -> None:
     with tarfile.open(path, "r:gz") as archive:
         validate_tar_no_forbidden_release_strings(archive, label)
         names = archive.getnames()
+        require_migration_readme(
+            names,
+            lambda name: archive.extractfile(name).read().decode("utf-8", errors="replace"),
+            label,
+        )
         if label == "webui-macos-universal":
             require(
                 any(name.endswith("Install EcoreX WebUI.app/Contents/MacOS/Install EcoreX WebUI") for name in names),
@@ -373,6 +420,7 @@ def validate_public_zip(
         validate_zip_no_forbidden_release_strings(archive, "public release zip")
         names = set(archive.namelist())
         for required in (
+            "README.txt",
             "site/index.html",
             "site/manifest.json",
             "site/admin/index.html",
@@ -385,6 +433,11 @@ def validate_public_zip(
         for required in REQUIRED_SITE_ASSETS:
             require(required in names, f"public zip missing image asset {required}")
             require(archive.getinfo(required).file_size > 0, f"public zip image asset is empty: {required}")
+        require_migration_readme(
+            list(names),
+            lambda name: archive.read(name).decode("utf-8", errors="replace"),
+            "public release zip",
+        )
 
         public_manifest = read_zip_json_no_bom(archive, "site/manifest.json")
         site_js = archive.read("site/site.js").decode("utf-8", errors="replace")
@@ -737,6 +790,12 @@ def validate_desktop_unpacked(desktop_dir: pathlib.Path, node_modules: pathlib.P
     require(app_asar.is_file(), f"desktop app.asar missing: {app_asar}")
     require(runtime.is_dir(), f"desktop runtime missing: {runtime}")
     validate_directory_no_forbidden_release_strings(runtime, "desktop runtime")
+    desktop_readme = desktop_dir / "README-migration.txt"
+    require(desktop_readme.is_file(), f"desktop package missing {desktop_readme.name}")
+    require(
+        is_allowed_migration_readme(desktop_readme.name, desktop_readme.read_text(encoding="utf-8")),
+        f"desktop package {desktop_readme.name} missing EcoreX migration note",
+    )
 
     for rel in REQUIRED_DESKTOP_RUNTIME_FILES:
         require((runtime / rel).is_file(), f"desktop runtime missing {rel}")

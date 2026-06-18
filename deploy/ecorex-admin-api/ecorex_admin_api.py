@@ -88,6 +88,15 @@ def compact_text(value, limit=500):
     return text[:limit]
 
 
+def normalize_image_model(value):
+    model = compact_text(value or "gpt-image-2-pro", 120)
+    aliases = {
+        "image-2-pro": "gpt-image-2-pro",
+        "image-2": "gpt-image-2",
+    }
+    return aliases.get(model, model)
+
+
 def as_int(value, default=0, minimum=0, maximum=10_000_000_000):
     try:
         number = int(value)
@@ -1135,7 +1144,7 @@ class AdminStore:
         return self._model_test_failure(purpose, "会话端点不可用或模型名不可用。", last)
 
     def _test_openai_image(self, prepared, payload):
-        image_model = compact_text(payload.get("imageModel") or payload.get("image_model") or prepared["model"], 120)
+        image_model = normalize_image_model(payload.get("imageModel") or payload.get("image_model") or "gpt-image-2-pro")
         body = {
             "model": image_model,
             "prompt": "EcoreX image generation connectivity test, simple orange brand icon on white background.",

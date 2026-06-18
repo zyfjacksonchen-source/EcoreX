@@ -20,6 +20,10 @@ publish:
   provider: generic
   url: https://www.ecoreai.cn/ecorex-agent/downloads/
 
+extraFiles:
+  - from: build/README-migration.txt
+    to: README-migration.txt
+
 extraResources:
   - from: runtime/ecorex-runtime
     to: ecorex-runtime

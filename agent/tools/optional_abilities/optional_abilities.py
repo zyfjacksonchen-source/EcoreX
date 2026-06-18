@@ -18,6 +18,44 @@ from config import conf
 
 RUNTIME_ROOT = Path(__file__).resolve().parents[3]
 
+_LIVE_PROVIDER_CONFIG_KEYS = {
+    "model",
+    "bot_type",
+    "text_to_image",
+    "open_ai_api_key",
+    "open_ai_api_base",
+    "custom_api_key",
+    "custom_api_base",
+    "linkai_api_key",
+    "linkai_api_base",
+    "claude_api_key",
+    "claude_api_base",
+    "gemini_api_key",
+    "gemini_api_base",
+    "minimax_api_key",
+    "minimax_api_base",
+    "deepseek_api_key",
+    "deepseek_api_base",
+    "mimo_api_key",
+    "mimo_api_base",
+    "qianfan_api_key",
+    "qianfan_api_base",
+    "zhipu_ai_api_key",
+    "zhipu_ai_api_base",
+    "moonshot_api_key",
+    "moonshot_api_base",
+    "ark_api_key",
+    "ark_api_base",
+    "dashscope_api_key",
+    "dashscope_api_base",
+    "use_azure_chatgpt",
+    "azure_deployment_id",
+    "azure_api_version",
+    "azure_openai_dalle_api_base",
+    "azure_openai_dalle_api_key",
+    "azure_openai_dalle_deployment_id",
+}
+
 
 def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -53,6 +91,8 @@ def _write_runtime_config(data: Dict[str, Any]) -> Path:
 def _update_live_config(data: Dict[str, Any]) -> None:
     live = conf()
     for key, value in data.items():
+        if key in _LIVE_PROVIDER_CONFIG_KEYS and live.get(key) not in (None, ""):
+            continue
         live[key] = value
 
 
@@ -78,6 +118,24 @@ def _capability_manifest_path() -> Optional[Path]:
         if path.exists():
             return path
     return None
+
+
+def _capability_pack_ids() -> set[str]:
+    pack_ids = {str(meta.get("packId")) for meta in _ability_defs().values() if meta.get("packId")}
+    manifest = _capability_manifest_path()
+    if not manifest:
+        return pack_ids
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8-sig"))
+    except Exception as exc:
+        logger.warning(f"[OptionalAbilities] failed reading capability manifest ids: {exc}")
+        return pack_ids
+    packs = data.get("packs") if isinstance(data, dict) else None
+    if isinstance(packs, list):
+        for pack in packs:
+            if isinstance(pack, dict) and pack.get("id"):
+                pack_ids.add(str(pack["id"]))
+    return pack_ids
 
 
 def _capability_state(pack_id: str) -> Dict[str, Any]:
@@ -463,6 +521,8 @@ class OptionalAbilities(BaseTool):
         defs = _ability_defs()
         meta = defs.get(ability)
         if not meta:
+            if ability in _capability_pack_ids():
+                return self._install_capability_pack(ability, timeout)
             return ToolResult.fail({"status": "error", "message": f"unknown ability: {ability}", "known": sorted(defs)})
 
         if ability == "feishu-cli":

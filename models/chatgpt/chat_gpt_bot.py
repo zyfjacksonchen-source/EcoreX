@@ -342,7 +342,15 @@ class AzureChatGPTBot(ChatGPTBot):
         )
 
     def create_img(self, query, retry_count=0, api_key=None):
-        text_to_image_model = conf().get("text_to_image")
+        text_to_image_model = OpenAIImage._normalize_image_model(conf().get("text_to_image") or OpenAIImage.DEFAULT_IMAGE_MODEL)
+        if OpenAIImage._is_gpt_image_model(text_to_image_model):
+            return OpenAIImage.create_img(
+                self,
+                query,
+                retry_count,
+                api_key=conf().get("open_ai_api_key") or api_key,
+                api_base=conf().get("open_ai_api_base"),
+            )
         if text_to_image_model == "dall-e-2":
             api_version = "2023-06-01-preview"
             endpoint = conf().get("azure_openai_dalle_api_base","open_ai_api_base")

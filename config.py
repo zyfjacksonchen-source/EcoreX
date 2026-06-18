@@ -392,6 +392,8 @@ def _ensure_ecorex_runtime_defaults(cfg: dict):
 
     cfg.setdefault("scheduler_enabled", False)
     cfg.setdefault("mcp_auto_start", False)
+    if cfg.get("text_to_image") in (None, ""):
+        cfg["text_to_image"] = "gpt-image-2-pro"
     if cfg.get("self_evolution_enabled") in (None, ""):
         cfg["self_evolution_enabled"] = False
 

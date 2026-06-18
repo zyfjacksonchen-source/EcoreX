@@ -30,6 +30,9 @@ TEXT_SUFFIXES = {
     ".yml",
 }
 TEXT_NAMES = {"LICENSE", "README", "README.txt", "runtime-manifest.json"}
+VOLATILE_DIR_NAMES = {"capability-state"}
+VOLATILE_FILE_SUFFIXES = {".log"}
+WINDOWS_PYTHON_LAUNCHER_DIR = pathlib.PurePosixPath("python/Scripts")
 
 
 def _s(*parts: str) -> str:
@@ -61,6 +64,24 @@ FORBIDDEN = (
     LEGACY_CHAT_UNDERSCORE,
     LEGACY_CHAT_UPPER,
 )
+FORBIDDEN_RE = re.compile("|".join(re.escape(item) for item in FORBIDDEN))
+MIGRATION_README_NAMES = {"README.txt", "README-migration.txt"}
+MIGRATION_README_REQUIRED_FRAGMENTS = (
+    _s("The original v0.1.0 project name was ", LEGACY_AGENT_MIXED, " and has been renamed to EcoreX."),
+    _s(LEGACY_AGENT_MIXED, " is a historical project name / development stack name only. It does not indicate plagiarism, copying, or third-party ownership."),
+    _s("原始 v0.1.0 版本项目名 ", LEGACY_AGENT_MIXED, " 已改名为 EcoreX；", LEGACY_AGENT_MIXED, " 是历史项目名称/开发栈名称，不代表抄袭或第三方归属。"),
+)
+
+
+def is_allowed_migration_readme(path: pathlib.Path, text: str) -> bool:
+    if path.name not in MIGRATION_README_NAMES:
+        return False
+    remaining = text
+    for fragment in MIGRATION_README_REQUIRED_FRAGMENTS:
+        if fragment not in remaining:
+            return False
+        remaining = remaining.replace(fragment, "")
+    return FORBIDDEN_RE.search(remaining) is None
 
 
 def is_text_candidate(path: pathlib.Path) -> bool:
@@ -109,6 +130,23 @@ def sanitize_runtime_manifest(path: pathlib.Path) -> None:
 
 def sanitize_tree(root: pathlib.Path) -> list[pathlib.Path]:
     changed: list[pathlib.Path] = []
+    for path in sorted(root.rglob("*"), reverse=True):
+        if path.is_dir() and path.name in VOLATILE_DIR_NAMES:
+            for child in sorted(path.rglob("*"), reverse=True):
+                if child.is_file():
+                    child.unlink(missing_ok=True)
+                elif child.is_dir():
+                    child.rmdir()
+            path.rmdir()
+            changed.append(path)
+        elif path.is_file() and path.suffix.lower() in VOLATILE_FILE_SUFFIXES:
+            path.unlink(missing_ok=True)
+            changed.append(path)
+    scripts_dir = root / WINDOWS_PYTHON_LAUNCHER_DIR
+    if scripts_dir.is_dir():
+        for path in scripts_dir.glob("*.exe"):
+            path.unlink(missing_ok=True)
+            changed.append(path)
     if (root / "runtime-manifest.json").is_file():
         sanitize_runtime_manifest(root / "runtime-manifest.json")
         changed.append(root / "runtime-manifest.json")
@@ -121,6 +159,8 @@ def sanitize_tree(root: pathlib.Path) -> list[pathlib.Path]:
             continue
         except Exception:
             continue
+        if is_allowed_migration_readme(path, original):
+            continue
         sanitized = sanitize_text(original)
         if sanitized != original:
             path.write_text(sanitized, encoding="utf-8")
@@ -130,10 +170,9 @@ def sanitize_tree(root: pathlib.Path) -> list[pathlib.Path]:
 
 def find_forbidden(root: pathlib.Path) -> list[str]:
     hits: list[str] = []
-    forbidden_re = re.compile("|".join(re.escape(item) for item in FORBIDDEN))
     for path in root.rglob("*"):
         rel = path.relative_to(root).as_posix()
-        if forbidden_re.search(rel):
+        if FORBIDDEN_RE.search(rel):
             hits.append(rel)
             continue
         if not path.is_file() or not is_text_candidate(path):
@@ -141,10 +180,16 @@ def find_forbidden(root: pathlib.Path) -> list[str]:
         try:
             text = path.read_text(encoding="utf-8-sig")
         except UnicodeDecodeError:
+            try:
+                data = path.read_bytes()
+            except Exception:
+                continue
+            if any(item.encode("utf-8") in data for item in FORBIDDEN):
+                hits.append(rel)
             continue
         except Exception:
             continue
-        if forbidden_re.search(text):
+        if FORBIDDEN_RE.search(text) and not is_allowed_migration_readme(path, text):
             hits.append(rel)
     return hits
 

@@ -123,6 +123,14 @@ function New-ReleaseJson {
     } | ConvertTo-Json -Depth 6) + "`n"
 }
 
+function Get-ReleaseMigrationReadmeNote {
+    $readmePath = Join-Path $repoRoot "desktop\build\README-migration.txt"
+    if (-not (Test-Path -LiteralPath $readmePath)) {
+        throw "Release migration README missing: $readmePath"
+    }
+    return (Get-Content -Raw -Encoding UTF8 -LiteralPath $readmePath).TrimEnd()
+}
+
 function New-MacInstallerApp {
     param(
         [Parameter(Mandatory = $true)][string]$AppRoot,
@@ -494,7 +502,8 @@ New-Item -ItemType Directory -Force -Path (Join-Path $windowsStage "scripts") | 
 Write-Utf8NoBom -Path (Join-Path $windowsStage "Install EcoreX WebUI.cmd") -Value $windowsCmd
 Write-Utf8NoBom -Path (Join-Path $windowsStage "scripts/install-ecorex-webui-win.ps1") -Value $windowsPs1
 Write-Utf8NoBom -Path (Join-Path $windowsStage "release.json") -Value (New-ReleaseJson -ArtifactId "webui-windows-x64" -Platform "Windows x64" -InstallEntry "Install EcoreX WebUI.cmd")
-Write-Utf8NoBom -Path (Join-Path $windowsStage "README.txt") -Value "Double-click Install EcoreX WebUI.cmd. The installer copies EcoreX WebUI to your local app data, starts the local service, and opens http://127.0.0.1:9909/app/ in your browser.`n"
+$windowsReadme = "Double-click Install EcoreX WebUI.cmd. The installer copies EcoreX WebUI to your local app data, starts the local service, and opens http://127.0.0.1:9909/app/ in your browser.`n`n$(Get-ReleaseMigrationReadmeNote)"
+Write-Utf8NoBom -Path (Join-Path $windowsStage "README.txt") -Value $windowsReadme
 
 Compress-Archive -Path (Join-Path $windowsStage "*") -DestinationPath $windowsZip -CompressionLevel Optimal -Force
 
@@ -724,7 +733,8 @@ New-Item -ItemType Directory -Force -Path (Join-Path $macStage "scripts") | Out-
 Write-Utf8NoBom -Path (Join-Path $macStage "scripts/install-ecorex-webui-mac.sh") -Value $macInstall
 New-MacInstallerApp -AppRoot (Join-Path $macStage "Install EcoreX WebUI.app") -InstallScriptRelative "scripts/install-ecorex-webui-mac.sh"
 Write-Utf8NoBom -Path (Join-Path $macStage "release.json") -Value (New-ReleaseJson -ArtifactId "webui-macos-universal" -Platform "macOS arm64/x64" -InstallEntry "Install EcoreX WebUI.app")
-Write-Utf8NoBom -Path (Join-Path $macStage "README.txt") -Value "Double-click Install EcoreX WebUI.app. The installer runs without opening Terminal, writes logs to ~/Library/Application Support/EcoreX WebUI/state, starts the local service, and opens http://127.0.0.1:9909/app/ in your browser.`n"
+$macReadme = "Double-click Install EcoreX WebUI.app. The installer runs without opening Terminal, writes logs to ~/Library/Application Support/EcoreX WebUI/state, starts the local service, and opens http://127.0.0.1:9909/app/ in your browser.`n`n$(Get-ReleaseMigrationReadmeNote)"
+Write-Utf8NoBom -Path (Join-Path $macStage "README.txt") -Value $macReadme
 
 $macStandaloneStage = Join-Path $stagingRoot "$macLeaf-standalone"
 $macStandaloneApp = Join-Path $macStandaloneStage "Install EcoreX WebUI.app"
@@ -776,6 +786,7 @@ macOS:
 
 The installer copies EcoreX WebUI to the user-local app data folder, starts the local service, and opens http://127.0.0.1:9909/app/ in the default browser.
 '@
+$combinedReadme = $combinedReadme.TrimEnd() + "`n`n" + (Get-ReleaseMigrationReadmeNote)
 
 Write-Utf8NoBom -Path (Join-Path $combinedStage "Install EcoreX WebUI.cmd") -Value $combinedCmd
 New-MacInstallerApp -AppRoot (Join-Path $combinedStage "Install EcoreX WebUI.app") -InstallScriptRelative "macos/scripts/install-ecorex-webui-mac.sh"

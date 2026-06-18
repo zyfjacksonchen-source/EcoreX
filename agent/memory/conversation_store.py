@@ -272,7 +272,10 @@ def _group_into_display_turns(
             # user never sees a synthetic "[SCHEDULED] self-evolution" bubble;
             # the assistant reply that follows is still rendered.
             if text and not _is_internal_user_marker(text):
-                turns.append({"role": "user", "content": text, "created_at": created_at})
+                user_turn = {"role": "user", "content": text, "created_at": created_at}
+                if isinstance(_u_extras, dict) and _u_extras:
+                    user_turn["extras"] = _u_extras
+                turns.append(user_turn)
 
         # Build an ordered list of steps preserving the original sequence:
         #   thinking → content → tool_call → content → ...

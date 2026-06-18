@@ -336,7 +336,7 @@ class LinkAIBot(Bot, OpenAICompatibleBot):
             data = {
                 "prompt": query,
                 "n": 1,
-                "model": conf().get("text_to_image") or "dall-e-2",
+                "model": conf().get("text_to_image") or "gpt-image-2-pro",
                 "response_format": "url",
                 "img_proxy": conf().get("image_proxy")
             }

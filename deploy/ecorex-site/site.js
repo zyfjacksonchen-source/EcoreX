@@ -50,7 +50,7 @@ document.querySelectorAll("img[data-fallback]").forEach((image) => {
   });
 });
 
-const cardOrder = ["windows-x64", "macos-dmg", "webui-windows-x64", "webui-macos-universal"];
+const cardOrder = ["windows-x64", "webui-windows-x64", "webui-macos-universal"];
 
 function detectVisitorDevice() {
   const platform = String(

@@ -826,6 +826,21 @@ class AgentBridge:
                 "role": "user",
                 "content": [{"type": "text", "text": visible_query}],
             }
+            attachments = context.get("attachments") if context else None
+            if isinstance(attachments, list):
+                cleaned = []
+                for att in attachments[:20]:
+                    if not isinstance(att, dict):
+                        continue
+                    item = {}
+                    for key in ("file_path", "file_name", "file_type", "preview_url"):
+                        value = att.get(key)
+                        if value:
+                            item[key] = str(value)
+                    if item.get("file_path"):
+                        cleaned.append(item)
+                if cleaned:
+                    user_msg["extras"] = {"attachments": cleaned}
             store.append_messages(session_id, [user_msg], channel_type=channel_type)
             return True
         except Exception as e:

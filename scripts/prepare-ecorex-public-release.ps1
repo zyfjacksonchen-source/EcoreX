@@ -43,6 +43,14 @@ function Write-Utf8NoBom {
     [System.IO.File]::WriteAllText($Path, $Value, $encoding)
 }
 
+function Get-ReleaseMigrationReadmeNote {
+    $readmePath = Join-Path $repoRoot "desktop\build\README-migration.txt"
+    if (-not (Test-Path -LiteralPath $readmePath)) {
+        throw "Release migration README missing: $readmePath"
+    }
+    return (Get-Content -Raw -Encoding UTF8 -LiteralPath $readmePath).TrimEnd()
+}
+
 function Invoke-ReleaseTextSanitizer {
     param([Parameter(Mandatory = $true)][string]$Root)
     $sanitizer = Join-Path $repoRoot "scripts\sanitize-ecorex-release-runtime.py"
@@ -199,6 +207,15 @@ $siteOut = Join-Path $stagingRoot "site"
 $adminOut = Join-Path $stagingRoot "admin-api"
 $serverOut = Join-Path $stagingRoot "server"
 New-Item -ItemType Directory -Force -Path $siteOut, $adminOut, $serverOut | Out-Null
+
+$publicReadme = @"
+EcoreX public release package
+
+This archive contains the EcoreX public download site, Admin API deployment files, server helper scripts, and checksums for EcoreX $Version.
+
+$(Get-ReleaseMigrationReadmeNote)
+"@
+Write-Utf8NoBom -Path (Join-Path $stagingRoot "README.txt") -Value $publicReadme
 
 Get-ChildItem -LiteralPath $siteRootResolved -Force | Where-Object { $_.Name -ne "downloads" } | ForEach-Object {
     Copy-Item -LiteralPath $_.FullName -Destination $siteOut -Recurse -Force

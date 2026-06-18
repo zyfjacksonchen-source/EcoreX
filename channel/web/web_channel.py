@@ -1866,6 +1866,8 @@ class WebChannel(ChatChannel):
             context["request_id"] = request_id
             context["session_lock"] = session_lock
             context["visible_message"] = (visible_message or "Please handle these attachments.").strip()
+            if isinstance(attachments, list):
+                context["attachments"] = attachments
             if is_voice_input:
                 # Web channel runs its own TTS post-pipeline via
                 # _maybe_dispatch_auto_tts; don't set desire_rtype here or

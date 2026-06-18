@@ -1,7 +1,7 @@
 {
   "product": "EcoreX",
   "version": "0.1.14",
-  "updatedAt": "2026-06-17",
+  "updatedAt": "2026-06-18",
   "notes": "EcoreX v0.1.14 development manifest: Windows update feed, macOS/WebUI update prompts, Subagent v1, agent-managed capability installation, safer WebUI packages, and device-adaptive downloads.",
   "update": {
     "windows": {
@@ -10,11 +10,16 @@
     },
     "macos": {
       "mode": "prompt-download",
-      "artifactIds": ["macos-arm64-dmg", "macos-x64-dmg"]
+      "artifactIds": [
+        "webui-macos-universal"
+      ]
     },
     "webui": {
       "mode": "prompt-download",
-      "artifactIds": ["webui-windows-x64", "webui-macos-universal"]
+      "artifactIds": [
+        "webui-windows-x64",
+        "webui-macos-universal"
+      ]
     }
   },
   "recommendedDownloads": {
@@ -23,12 +28,8 @@
       "webui": "webui-windows-x64"
     },
     "darwin": {
-      "primary": "macos-dmg",
-      "webui": "webui-macos-universal",
-      "architectures": {
-        "arm64": "macos-arm64-dmg",
-        "x64": "macos-x64-dmg"
-      }
+      "primary": "webui-macos-universal",
+      "webui": "webui-macos-universal"
     },
     "web": {
       "windows": "webui-windows-x64",
@@ -43,10 +44,13 @@
       "variant": "Desktop x64 signed installer",
       "fileName": "EcoreX_0.1.14_x64-setup.exe",
       "href": "downloads/EcoreX_0.1.14_x64-setup.exe",
-      "size": 149411853,
-      "sha256": "813EBC8FC8F47D38682D2F81E14E89B4E2A73BE93A3E974EB514236E36E4F566",
-      "status": "ready-unsigned",
-      "source": "Local v0.1.14 Windows installer built and smoke-tested on Windows; Authenticode signing is still pending."
+      "size": 148926704,
+      "sha256": "EE069E63F99908F44CD0D88FD6E9C6607119D94EDC610BEE95F71688FA58D448",
+      "status": "ready",
+      "source": "Local v0.1.14 Windows installer rebuilt after API key preservation and release sanitizer hardening, Authenticode-signed, and update feed hash verified on Windows.",
+      "updatedAt": "2026-06-18T03:18:19.548Z",
+      "signature": "valid",
+      "signatureThumbprint": "0F678477DFC0A2BDAAB88307126EF657FAF8674F"
     },
     {
       "id": "webui-windows-x64",
@@ -55,10 +59,11 @@
       "variant": "WebUI one-click local package",
       "fileName": "EcoreX_0.1.14-webui-windows-x64.zip",
       "href": "downloads/EcoreX_0.1.14-webui-windows-x64.zip",
-      "size": 72909048,
-      "sha256": "F660C64FA070AC1EDBD6F8CF03EB4DB53596DA55407DBC1EA11AD038D6B326C1",
+      "size": 72278756,
+      "sha256": "8C7732CB1E43FBFA14FBB492135723CBA097BF3182F66CBC48C746B1BE3844ED",
       "status": "ready-unsigned",
-      "source": "Local v0.1.14 Windows WebUI package built with agent-managed capability installation and release-package branding sanitation."
+      "source": "Local v0.1.14 Windows WebUI package rebuilt after API key preservation fix and release-package binary path sanitation.",
+      "updatedAt": "2026-06-18T03:18:19.548Z"
     },
     {
       "id": "webui-macos-universal",
@@ -67,10 +72,11 @@
       "variant": "WebUI one-click local package",
       "fileName": "EcoreX_0.1.14-webui-macos-universal.zip",
       "href": "downloads/EcoreX_0.1.14-webui-macos-universal.zip",
-      "size": 165334046,
-      "sha256": "7C644E5C35B42A8F32B9FA2F049B18BCD4E8D256A40F270DB7EBC6AD919E486E",
+      "size": 165335924,
+      "sha256": "6C75BA11A3F94CD92B7101F0A0BE68657698A39C14C601BC81300435DC043BBC",
       "status": "ready-unsigned",
-      "source": "Local v0.1.14 macOS WebUI package built as a self-contained Install EcoreX WebUI.app ZIP without terminal-opening entrypoints."
+      "source": "Local v0.1.14 macOS WebUI package rebuilt after API key preservation fix as a self-contained Install EcoreX WebUI.app ZIP.",
+      "updatedAt": "2026-06-18T03:18:19.548Z"
     },
     {
       "id": "web-linux-service",
@@ -79,37 +85,12 @@
       "variant": "Web service deployment package",
       "fileName": "EcoreX_0.1.14-web-linux-service.tar.gz",
       "href": "downloads/EcoreX_0.1.14-web-linux-service.tar.gz",
-      "size": 3157449,
-      "sha256": "DBCD33853359F88569A49DA6BB2749DFDE6A4AE696D2F1D2328F2A6C2E4B0E8B",
+      "size": 3160967,
+      "sha256": "4A7FFAB7C3FD4479F60B91ADB6C3FE7A122304396963126BCA3CE53DB0CEB7CC",
       "status": "ready-unsigned",
       "visible": false,
-      "source": "Local v0.1.14 web service deployment package built from the updated runtime and renderer assets."
-    },
-    {
-      "id": "macos-arm64-dmg",
-      "version": "0.1.14",
-      "platform": "macOS",
-      "variant": "Desktop Apple Silicon DMG",
-      "fileName": "EcoreX_0.1.14_arm64.dmg",
-      "href": "https://www.ecoreai.cn/ecorex-agent/downloads/EcoreX_0.1.14_arm64.dmg",
-      "size": 0,
-      "sha256": "pending",
-      "status": "pending-build",
-      "source": "Will be replaced by the macOS Apple Silicon DMG after build validation.",
-      "external": true
-    },
-    {
-      "id": "macos-x64-dmg",
-      "version": "0.1.14",
-      "platform": "macOS",
-      "variant": "Desktop Intel DMG",
-      "fileName": "EcoreX_0.1.14_x64.dmg",
-      "href": "https://www.ecoreai.cn/ecorex-agent/downloads/EcoreX_0.1.14_x64.dmg",
-      "size": 0,
-      "sha256": "pending",
-      "status": "pending-build",
-      "source": "Will be replaced by the macOS Intel DMG after build validation.",
-      "external": true
+      "source": "Local v0.1.14 web service deployment package rebuilt from the updated runtime and renderer assets.",
+      "updatedAt": "2026-06-18T03:18:19.548Z"
     }
   ],
   "admin": {

@@ -183,6 +183,28 @@ type InstallNotice = {
 const brandIconUrl = new URL("../build/icon.png", import.meta.url).href;
 document.documentElement.dataset.platform = window.ecorexDesktop?.platform || "web";
 
+function isRuntimePreviewPath(value?: string) {
+  const source = String(value || "").trim();
+  return /^https?:\/\//i.test(source) || /^(?:\/(?:uploads|static|app)(?:\/|$)|\/api\/file(?:[/?#]|$))/.test(source);
+}
+
+function isLocalAbsolutePath(value?: string) {
+  const source = String(value || "").trim();
+  return /^[a-zA-Z]:[\\/]/.test(source) || source.startsWith("\\\\") || (/^\//.test(source) && !isRuntimePreviewPath(source));
+}
+
+function joinLocalPath(base: string, child: string) {
+  const root = base.trim();
+  const rel = child.trim().replace(/^[\\/]+/g, "");
+  if (!root || !rel) return child;
+  const slash = root.includes("\\") && !root.includes("/") ? "\\" : "/";
+  return root.replace(/[\\/]+$/g, "") + slash + rel;
+}
+
+function isImageAttachment(file: FileAttachment) {
+  return file.file_type === "image" || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(file.file_name || file.file_path || "");
+}
+
 const initialRuntime: RuntimeSnapshot = {
   status: "offline",
   message: "正在连接本地运行时",
@@ -316,6 +338,13 @@ function displayModelName(value?: string) {
   return model;
 }
 
+function isRuntimeRequestUiActive(request?: RuntimeActiveRequest | null) {
+  if (!request?.request_id) return false;
+  if (!request.cancelled) return true;
+  const ageSeconds = Number(request.age_seconds || 0);
+  return !Number.isFinite(ageSeconds) || ageSeconds < 30;
+}
+
 function BrandMark() {
   const [failed, setFailed] = useState(false);
   return (
@@ -362,6 +391,7 @@ function mapSessions(
   const activeRequestBySession = new Map<string, RuntimeActiveRequest>(
     (snapshot.activeRequests || [])
       .filter((request) => request.session_id && request.request_id)
+      .filter(isRuntimeRequestUiActive)
       .map((request) => [String(request.session_id), request])
   );
   const rows: SessionRow[] = snapshot.sessions.map((session, index) => {
@@ -685,6 +715,17 @@ function pausePendingMessage(item: ChatItem, interrupted = false): ChatItem {
   };
 }
 
+function finishInactivePendingMessage(item: ChatItem): ChatItem {
+  return {
+    ...item,
+    pending: false,
+    paused: false,
+    cancelled: false,
+    steps: finishAgentSteps(item.steps, "done"),
+    toolCalls: item.toolCalls?.map((tool) => ({ ...tool, running: false }))
+  };
+}
+
 function normalizePausedMessages(
   items: ChatItem[],
   options?: {
@@ -697,11 +738,22 @@ function normalizePausedMessages(
 ) {
   let changed = false;
   const staleSession = Boolean(options?.sessionId && options.staleSessionIds?.has(options.sessionId));
+  const activeRequestIds = options?.activeRequestIds;
+  const nowMs = options?.nowMs || Date.now();
+  const inactiveGraceMs = options?.inactiveRequestGraceMs ?? 0;
   const next = items.map((item) => {
     if (!item.pending) return item;
     if (!item.requestId || staleSession) {
       changed = true;
       return pausePendingMessage(item, Boolean(staleSession));
+    }
+    if (activeRequestIds && !activeRequestIds.has(item.requestId)) {
+      const createdAtMs = item.createdAt ? new Date(item.createdAt).getTime() : 0;
+      const inGrace = Boolean(createdAtMs && Number.isFinite(createdAtMs) && nowMs - createdAtMs < inactiveGraceMs);
+      if (!inGrace) {
+        changed = true;
+        return finishInactivePendingMessage(item);
+      }
     }
     return item;
   });
@@ -802,7 +854,9 @@ function normalizeStep(step: RuntimeStep): AgentStepDisclosure {
     return {
       type: "media",
       fileType,
-      url: step.path || content,
+      url: step.url || content || step.path,
+      filePath: step.path,
+      previewUrl: step.url,
       fileName: step.file_name
     };
   }
@@ -821,6 +875,33 @@ function runtimeExtrasMediaSteps(item: RuntimeMessage): AgentStepDisclosure[] {
   }];
 }
 
+function runtimeExtrasAttachments(item: RuntimeMessage): FileAttachment[] | undefined {
+  const raw = item.extras?.attachments;
+  if (!Array.isArray(raw)) return undefined;
+  const attachments = raw
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === "object"))
+    .map((entry): FileAttachment | null => {
+      const filePath = String(entry.file_path || entry.path || "").trim();
+      if (!filePath) return null;
+      const fileName = String(entry.file_name || entry.name || filePath.split(/[\\/]/).filter(Boolean).pop() || filePath);
+      const rawType = String(entry.file_type || entry.type || "file");
+      const fileType: FileAttachment["file_type"] = rawType === "image" || rawType === "video" || rawType === "audio" || rawType === "directory"
+        ? rawType
+        : "file";
+      const attachment: FileAttachment = {
+        file_path: filePath,
+        file_name: fileName,
+        file_type: fileType
+      };
+      if (typeof entry.preview_url === "string" && entry.preview_url) {
+        attachment.preview_url = entry.preview_url;
+      }
+      return attachment;
+    })
+    .filter((entry): entry is FileAttachment => Boolean(entry));
+  return attachments.length ? attachments : undefined;
+}
+
 function mapRuntimeMessage(item: RuntimeMessage, sessionId: string, index: number): ChatItem {
   const steps = [
     ...(item.steps?.map(normalizeStep) || []),
@@ -833,6 +914,7 @@ function mapRuntimeMessage(item: RuntimeMessage, sessionId: string, index: numbe
     createdAt: item.created_at ? new Date(item.created_at * 1000).toISOString() : new Date().toISOString(),
     reasoning: item.reasoning ? redactInternalPromptText(item.reasoning) : undefined,
     steps: steps.length ? steps : undefined,
+    attachments: item.role === "user" ? runtimeExtrasAttachments(item) : undefined,
     toolCalls: item.tool_calls?.map(normalizeToolCall),
     requestId: item.request_id,
     userSeq: item.user_seq ?? item.seq,
@@ -1175,6 +1257,7 @@ export function App() {
     if (runtimeSnapshot.activeRequestsStatus === "unavailable") return;
     const activeRequestIds = new Set(
       (runtimeSnapshot.activeRequests || [])
+        .filter(isRuntimeRequestUiActive)
         .map((request) => request.request_id ? String(request.request_id) : "")
         .filter(Boolean)
     );
@@ -1186,7 +1269,7 @@ export function App() {
     );
     const nowMs = Date.now();
     const nextState: Record<string, SessionUiState> = {};
-    const pausedSessionIds = new Set<string>();
+    const settledSessionIds = new Set<string>();
     let changed = false;
     for (const [sessionId, state] of Object.entries(sessionUiState)) {
       const normalized = normalizePausedMessages(state.messages || [], {
@@ -1198,7 +1281,7 @@ export function App() {
       });
       if (normalized !== state.messages) {
         changed = true;
-        pausedSessionIds.add(sessionId);
+        settledSessionIds.add(sessionId);
         nextState[sessionId] = { ...state, messages: normalized };
       } else {
         nextState[sessionId] = state;
@@ -1207,11 +1290,14 @@ export function App() {
     if (!changed) return;
     setSessionUiState(nextState);
     const activeId = activeSessionIdRef.current;
-    if (activeId && pausedSessionIds.has(activeId)) {
+    if (activeId && settledSessionIds.has(activeId)) {
       const activeState = nextState[activeId];
       if (activeState) setMessages(activeState.messages);
     }
-    pausedSessionIds.forEach((sessionId) => finishSessionRequest(sessionId));
+    settledSessionIds.forEach((sessionId) => {
+      finishSessionRequest(sessionId);
+      void refreshSessionFromHistory(sessionId);
+    });
   }, [runtimeSnapshot, sessionUiState]);
 
   const visibleSessions = useMemo(() => {
@@ -1224,6 +1310,17 @@ export function App() {
     () => projects.find((project) => project.id === activeProjectId) || null,
     [projects, activeProjectId]
   );
+  const resolveArtifactPath = (filePath: string) => {
+    const raw = String(filePath || "").trim();
+    if (!raw || isRuntimePreviewPath(raw) || isLocalAbsolutePath(raw) || /^[a-z][a-z0-9+.-]*:/i.test(raw)) return raw;
+    return activeProject?.path ? joinLocalPath(activeProject.path, raw) : raw;
+  };
+  const attachmentPreviewUrl = (file: FileAttachment) => {
+    if (file.previewDataUrl) return file.previewDataUrl;
+    if (file.preview_url) return filePreviewUrl(file.preview_url, sidecarStatus.webPort);
+    if (!isImageAttachment(file)) return "";
+    return filePreviewUrl(resolveArtifactPath(file.file_path), sidecarStatus.webPort);
+  };
   const sortedProjects = useMemo(
     () => [...projects].sort((a, b) => Number(Boolean(pinnedProjects[b.id] || b.pinned)) - Number(Boolean(pinnedProjects[a.id] || a.pinned))),
     [projects, pinnedProjects]
@@ -1947,6 +2044,7 @@ export function App() {
         const active = (snapshot?.activeRequests || []).find((request) => (
           String(request.session_id || "") === sessionId
           && String(request.request_id || "") === requestId
+          && isRuntimeRequestUiActive(request)
         ));
         if (snapshot) setRuntimeSnapshot(snapshot);
         if (active?.cancelled) {
@@ -1955,10 +2053,7 @@ export function App() {
             requestId,
             pending: true,
             paused: false,
-            cancelled: false,
-            steps: (message.steps || []).some((step) => step.type === "phase" && step.content === "后台任务正在停止")
-              ? message.steps
-              : [...(message.steps || []), { type: "phase", content: "后台任务正在停止" }]
+            cancelled: false
           }));
           window.setTimeout(() => scheduleStreamReconnect(sessionId, assistantId, requestId), 5000);
           return;
@@ -1973,10 +2068,7 @@ export function App() {
             requestId,
             pending: true,
             paused: false,
-            cancelled: false,
-            steps: (message.steps || []).some((step) => step.type === "phase" && step.content === "后台任务仍在执行，等待恢复连接")
-              ? message.steps
-              : [...(message.steps || []), { type: "phase", content: "后台任务仍在执行，等待恢复连接" }]
+            cancelled: false
           }));
           streamRetryCounts.current[sessionId] = active.stream_available === false ? 5 : 0;
           if (active.stream_available !== false) {
@@ -1992,14 +2084,14 @@ export function App() {
           return;
         }
         updateAssistantMessage(sessionId, assistantId, (message) => ({
-          ...message,
+          ...finishRunningSteps(message),
           requestId,
-          pending: true,
+          pending: false,
           paused: false,
           cancelled: false
         }));
-        streamRetryCounts.current[sessionId] = 5;
-        window.setTimeout(() => scheduleStreamReconnect(sessionId, assistantId, requestId), 10000);
+        markSessionOutputReady(sessionId);
+        finishSessionRequest(sessionId, requestId);
       })();
       return;
     }
@@ -2167,17 +2259,6 @@ export function App() {
           return;
         }
         if (!isCurrentSessionRequest(sessionId, requestId)) return;
-        const notice = "连接已断开，后台任务仍在执行";
-        updateAssistantMessage(sessionId, assistantId, (message) => ({
-          ...message,
-          requestId,
-          pending: true,
-          paused: false,
-          cancelled: false,
-          steps: (message.steps || []).some((step) => step.type === "phase" && step.content === notice)
-            ? message.steps
-            : [...(message.steps || []), { type: "phase", content: notice }]
-        }));
         closeSessionStream(sessionId, requestId);
         scheduleStreamReconnect(sessionId, assistantId, requestId);
       }
@@ -2203,9 +2284,16 @@ export function App() {
     const enabledPacks = packs.filter((pack) => capabilityPackEnabled(pack.id));
     const neededPack = skipCapabilityCheck ? null : detectNeededPack(text, attachments, enabledPacks);
     if (neededPack) {
+      const resumeSessionId = activeSessionIdRef.current;
       setSettingsSection("abilities");
       setSettingsOpen(true);
-      void handleInstallPack(neededPack, () => void sendNow(true));
+      void handleInstallPack(neededPack, () => {
+        if (activeSessionIdRef.current !== resumeSessionId) {
+          setToast(`${neededPack.name} 已安装，请回到原会话继续发送`);
+          return;
+        }
+        void sendNow(true);
+      });
       return;
     }
 
@@ -2510,17 +2598,6 @@ export function App() {
               return;
             }
             if (!isCurrentSessionRequest(requestSessionId, requestId)) return;
-            const notice = "连接已断开，后台任务仍在执行";
-            updateAssistantMessage(requestSessionId, assistantId, (message) => ({
-              ...message,
-              requestId,
-              pending: true,
-              paused: false,
-              cancelled: false,
-              steps: (message.steps || []).some((step) => step.type === "phase" && step.content === notice)
-                ? message.steps
-                : [...(message.steps || []), { type: "phase", content: notice }]
-            }));
             closeSessionStream(requestSessionId, requestId);
             scheduleStreamReconnect(requestSessionId, assistantId, requestId);
           }
@@ -2676,6 +2753,18 @@ export function App() {
           onInstalled?.();
           return;
         }
+        if (nextPack?.state === "failed") {
+          window.clearInterval(timer);
+          delete installWatchers.current[pack.id];
+          setInstallingPackIds((current) => {
+            const next = { ...current };
+            delete next[pack.id];
+            return next;
+          });
+          setInstallNotice((current) => current?.packId === pack.id ? null : current);
+          setToast(nextPack.message || `${pack.name} 安装失败，请查看当前会话诊断`);
+          return;
+        }
       }
       if (Date.now() - started > 10 * 60 * 1000) {
         window.clearInterval(timer);
@@ -2691,8 +2780,8 @@ export function App() {
     installWatchers.current[pack.id] = timer;
   }
 
-  async function startAgentInstallChatTask(pack: CapabilityPack, prompt: string) {
-    const requestSessionId = activeSessionId;
+  async function startAgentInstallChatTask(pack: CapabilityPack, prompt: string, sessionId: string) {
+    const requestSessionId = sessionId;
     const userMessage: ChatItem = {
       id: `u-install-${Date.now()}`,
       role: "user",
@@ -2705,11 +2794,14 @@ export function App() {
       userMessage,
       { id: assistantId, role: "assistant", content: "", pending: true, createdAt: new Date().toISOString() }
     ]);
-    setActiveSessionTitle((current) => {
-      const nextTitle = current === "新对话" ? `安装 ${pack.name}` : current;
-      setSessionTitles((titles) => ({ ...titles, [requestSessionId]: nextTitle }));
-      return nextTitle;
-    });
+    const currentTitle = sessionTitles[requestSessionId]
+      || sessionUiState[requestSessionId]?.title
+      || (activeSessionIdRef.current === requestSessionId ? activeSessionTitle : "新对话");
+    const nextTitle = currentTitle === "新对话" ? `安装 ${pack.name}` : currentTitle;
+    setSessionTitles((titles) => ({ ...titles, [requestSessionId]: nextTitle }));
+    if (activeSessionIdRef.current === requestSessionId) {
+      setActiveSessionTitle(nextTitle);
+    }
     const result = await sendChatMessage({
       sessionId: requestSessionId,
       message: userMessage.content,
@@ -2749,6 +2841,7 @@ export function App() {
       setToast("当前会话正在执行任务，请稍后再发起安装");
       return;
     }
+    const requestSessionId = activeSessionIdRef.current;
     setSettingsSection("abilities");
     setSettingsOpen(true);
     setInstallingPackIds((current) => ({ ...current, [pack.id]: true }));
@@ -2761,12 +2854,12 @@ export function App() {
       const request = await requestAgentInstallRequest({
         packId: pack.id,
         packName: pack.name,
-        sessionId: activeSessionId
+        sessionId: requestSessionId
       });
       if (request.status === "error" || !request.prompt) {
         throw new Error(request.message || "生成安装任务失败");
       }
-      await startAgentInstallChatTask(pack, request.prompt);
+      await startAgentInstallChatTask(pack, request.prompt, requestSessionId);
       watchAgentPackInstall(pack, onInstalled);
       setToast(`${pack.name} 安装任务已交给 agent`);
     } catch (error) {
@@ -2835,8 +2928,20 @@ export function App() {
   }
 
   async function openArtifactFile(file: { file_path: string; file_name: string; file_type?: FileAttachment["file_type"] }) {
-    const isAbsolute = /^[a-zA-Z]:[\\/]/.test(file.file_path) || file.file_path.startsWith("\\\\") || file.file_path.startsWith("/");
-    const result = isAbsolute ? await openLocalPath(file.file_path) : await openRuntimePath(file.file_path);
+    const rawPath = String(file.file_path || "").trim();
+    if (!rawPath) return;
+    if (isRuntimePreviewPath(rawPath)) {
+      setToast("该预览链接没有可直接打开的本地路径");
+      return;
+    }
+    const resolvedPath = resolveArtifactPath(rawPath);
+    let result = "";
+    try {
+      result = await openRuntimePath(resolvedPath);
+    } catch (error) {
+      if (!isLocalAbsolutePath(resolvedPath)) throw error;
+      result = await openLocalPath(resolvedPath);
+    }
     if (result) {
       setToast(result.startsWith("denied") ? "已取消打开文件" : result);
     }
@@ -3187,13 +3292,13 @@ export function App() {
                     steps={message.steps}
                     toolCalls={message.toolCalls}
                     onOpenLocalFile={(file) => void openArtifactFile(file)}
-                    localFilePreviewUrl={(filePath) => filePreviewUrl(filePath, sidecarStatus.webPort)}
+                    localFilePreviewUrl={(filePath) => filePreviewUrl(resolveArtifactPath(filePath), sidecarStatus.webPort)}
                   />
                   {message.attachments?.length ? (
                     <div className="message-files">
                       {message.attachments.map((file) => (
                         <button key={file.file_path} onClick={() => void openArtifactFile(file)} title="点击在本地打开">
-                          {fileIcon(file)}{file.file_name}
+                          {attachmentPreviewUrl(file) ? <img src={attachmentPreviewUrl(file)} alt={file.file_name} loading="lazy" /> : fileIcon(file)}<span>{file.file_name}</span>
                         </button>
                       ))}
                     </div>

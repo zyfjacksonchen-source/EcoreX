@@ -44,6 +44,8 @@ export type AgentStepDisclosure =
       type: "media";
       fileType?: "image" | "video" | "audio" | "file";
       url?: string;
+      filePath?: string;
+      previewUrl?: string;
       fileName?: string;
     };
 
@@ -115,7 +117,7 @@ function safeMediaUrl(value: string, localFilePreviewUrl?: (filePath: string) =>
 }
 
 function isRuntimeHttpPath(value?: string) {
-  return /^\/(uploads|static|app)\//.test(String(value || "").trim());
+  return /^(?:\/(?:uploads|static|app)(?:\/|$)|\/api\/file(?:[/?#]|$))/.test(String(value || "").trim());
 }
 
 function runtimeHttpUrl(value: string) {
@@ -182,7 +184,14 @@ function linkAttributesForUrl(value: string, localFilePreviewUrl?: (filePath: st
 }
 
 function mediaTypeFromUrl(value: string): "image" | "video" | "audio" | "" {
-  const path = String(value || "").split(/[?#]/)[0].toLowerCase();
+  let candidate = String(value || "").trim();
+  try {
+    const url = new URL(candidate, window.location.href);
+    candidate = url.searchParams.get("path") || url.pathname || candidate;
+  } catch {
+    // Plain local paths are handled as-is.
+  }
+  const path = candidate.split(/[?#]/)[0].toLowerCase();
   if (/\.(png|jpe?g|gif|webp|bmp|svg)$/.test(path)) return "image";
   if (/\.(mp4|webm|mov|m4v|mkv|avi)$/.test(path)) return "video";
   if (/\.(mp3|wav|ogg|m4a|aac|flac|webm)$/.test(path)) return "audio";
@@ -618,12 +627,19 @@ function MediaStep({ step, onOpenLocalFile, localFilePreviewUrl }: {
   onOpenLocalFile?: (file: LocalFilePayload) => void;
   localFilePreviewUrl?: (filePath: string) => string;
 }) {
-  if (!step.url) return null;
-  const localPath = localPathFromSource(step.url);
-  if (localPath && step.fileType === "image" && localFilePreviewUrl) {
-    const fileName = step.fileName || basenameFromPath(localPath);
-    const image = <img className="agent-media-image" src={localFilePreviewUrl(localPath)} alt={fileName} />;
-    if (!onOpenLocalFile) return image;
+  const previewSource = step.previewUrl || step.url || step.filePath || "";
+  const openSource = step.filePath || step.url || "";
+  if (!previewSource && !openSource) return null;
+  const localPath = localPathFromSource(openSource) || relativeArtifactPathFromSource(openSource);
+  const fileName = step.fileName || basenameFromPath(localPath || previewSource || openSource);
+  const previewUrl = previewSource
+    ? safeMediaUrl(previewSource, localFilePreviewUrl)
+    : localPath && localFilePreviewUrl
+      ? localFilePreviewUrl(localPath)
+      : "";
+  if (step.fileType === "image" && previewUrl) {
+    const image = <img className="agent-media-image" src={previewUrl} alt={fileName} loading="lazy" />;
+    if (!onOpenLocalFile || !localPath) return image;
     return (
       <button
         type="button"
@@ -635,12 +651,11 @@ function MediaStep({ step, onOpenLocalFile, localFilePreviewUrl }: {
       </button>
     );
   }
-  if (localPath && step.fileType === "audio" && localFilePreviewUrl) {
-    const fileName = step.fileName || basenameFromPath(localPath);
+  if (step.fileType === "audio" && previewUrl) {
     return (
       <div className="agent-audio-card">
-        <audio className="agent-media-audio" src={localFilePreviewUrl(localPath)} controls />
-        {onOpenLocalFile && (
+        <audio className="agent-media-audio" src={previewUrl} controls />
+        {localPath && onOpenLocalFile && (
           <button
             type="button"
             className="agent-file-link"
@@ -654,7 +669,6 @@ function MediaStep({ step, onOpenLocalFile, localFilePreviewUrl }: {
     );
   }
   if (localPath && onOpenLocalFile) {
-    const fileName = step.fileName || basenameFromPath(localPath);
     return (
       <button
         type="button"
@@ -666,18 +680,15 @@ function MediaStep({ step, onOpenLocalFile, localFilePreviewUrl }: {
       </button>
     );
   }
-  if (step.fileType === "image") {
-    return <img className="agent-media-image" src={safeImageUrl(step.url, localFilePreviewUrl)} alt={step.fileName || "image"} />;
+  if (step.fileType === "video" && previewUrl) {
+    return <video className="agent-media-video" src={previewUrl} controls />;
   }
-  if (step.fileType === "video") {
-    return <video className="agent-media-video" src={safeMediaUrl(step.url, localFilePreviewUrl)} controls />;
-  }
-  if (step.fileType === "audio") {
-    return <audio className="agent-media-audio" src={safeMediaUrl(step.url, localFilePreviewUrl)} controls />;
+  if (step.fileType === "audio" && previewUrl) {
+    return <audio className="agent-media-audio" src={previewUrl} controls />;
   }
   return (
-    <a className="agent-file-link" href={safeUrl(step.url, localFilePreviewUrl)} target="_blank" rel="noreferrer">
-      {step.fileName || step.url}
+    <a className="agent-file-link" href={safeUrl(previewSource || openSource, localFilePreviewUrl)} target="_blank" rel="noreferrer">
+      {fileName || previewSource || openSource}
     </a>
   );
 }

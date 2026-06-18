@@ -1495,6 +1495,30 @@ html[data-platform="web"] .window-brand {
   max-width: 240px;
 }
 
+.message-files button:has(img) {
+  min-height: 0;
+  width: 132px;
+  padding: 6px;
+  border-radius: var(--radius-md);
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+}
+
+.message-files button img {
+  width: 100%;
+  aspect-ratio: 1.35;
+  object-fit: cover;
+  border-radius: calc(var(--radius-sm) + 2px);
+  background: var(--color-surface);
+}
+
+.message-files button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .composer-zone {
   display: grid;
   gap: 8px;

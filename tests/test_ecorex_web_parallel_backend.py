@@ -2,6 +2,7 @@
 import json
 import os
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -119,6 +120,28 @@ class TestEcoreXWorkspaceState(unittest.TestCase):
             self.assertTrue(locks[0]["removed"])
             self.assertFalse(lock.path.exists())
 
+    def test_history_display_preserves_user_attachment_extras(self):
+        from agent.memory.conversation_store import ConversationStore
+
+        with tempfile.TemporaryDirectory() as workspace:
+            store = ConversationStore(Path(workspace) / "conversation.sqlite3")
+            store.append_messages("session-with-image", [{
+                "role": "user",
+                "content": [{"type": "text", "text": "分析这张图"}],
+                "extras": {
+                    "attachments": [{
+                        "file_path": r"C:\tmp\cover.png",
+                        "file_name": "cover.png",
+                        "file_type": "image",
+                    }]
+                },
+            }])
+
+            page = store.load_history_page("session-with-image", page=1, page_size=20)
+
+        self.assertEqual(page["messages"][0]["role"], "user")
+        self.assertEqual(page["messages"][0]["extras"]["attachments"][0]["file_name"], "cover.png")
+
 
 class TestSubagentTool(unittest.TestCase):
     class _Context:
@@ -204,6 +227,60 @@ class TestAgentCapabilityPermissions(unittest.TestCase):
         self.assertEqual(proxy_args["action"], "install")
         self.assertEqual(proxy_args["ability"], "office-pdf")
 
+    def test_agent_capability_install_pack_accepts_capability_pack_id(self):
+        from agent.tools.agent_capability.agent_capability import AgentCapabilityTool
+        from agent.tools.base_tool import ToolResult
+        from agent.tools.optional_abilities.optional_abilities import OptionalAbilities
+
+        calls = []
+
+        def fake_install(self, pack_id, timeout):
+            calls.append((pack_id, timeout))
+            return ToolResult.success({"status": "success", "packId": pack_id})
+
+        with patch.object(OptionalAbilities, "_install_capability_pack", fake_install):
+            result = AgentCapabilityTool().execute({
+                "action": "install_pack",
+                "pack_id": "feishu-lark",
+                "timeout": 45,
+            })
+
+        self.assertEqual(result.status, "success")
+        self.assertEqual(calls, [("feishu-lark", 45)])
+
+    def test_optional_abilities_update_preserves_live_provider_config(self):
+        import config as config_module
+        from agent.tools.optional_abilities import optional_abilities
+
+        previous = config_module.config
+        try:
+            config_module.config = config_module.Config({
+                "model": "gpt-5.5",
+                "bot_type": "openai",
+                "open_ai_api_key": "sk-live",
+                "open_ai_api_base": "http://127.0.0.1:8080/v1",
+                "text_to_image": "gpt-image-2-pro",
+            })
+
+            optional_abilities._update_live_config({
+                "model": "deepseek-v4-flash",
+                "bot_type": "",
+                "open_ai_api_key": "",
+                "open_ai_api_base": "https://api.openai.com/v1",
+                "text_to_image": "gpt-image-2",
+                "tools": {"feishu_cli": {"auto_install": True}},
+            })
+
+            live = config_module.conf()
+            self.assertEqual(live.get("model"), "gpt-5.5")
+            self.assertEqual(live.get("bot_type"), "openai")
+            self.assertEqual(live.get("open_ai_api_key"), "sk-live")
+            self.assertEqual(live.get("open_ai_api_base"), "http://127.0.0.1:8080/v1")
+            self.assertEqual(live.get("text_to_image"), "gpt-image-2-pro")
+            self.assertEqual(live.get("tools"), {"feishu_cli": {"auto_install": True}})
+        finally:
+            config_module.config = previous
+
     def test_agent_capability_safe_diagnostics_do_not_require_prompt(self):
         from common.ecorex_tool_permissions import get_tool_permission_broker
 
@@ -215,6 +292,33 @@ class TestAgentCapabilityPermissions(unittest.TestCase):
 
         self.assertTrue(decision["allowed"])
         self.assertEqual(decision["reason"], "read-only-agent-capability-status")
+
+
+class TestReleaseRuntimeSanitizer(unittest.TestCase):
+    def test_sanitizer_removes_runtime_state_and_python_launchers(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            launcher = root / "python" / "Scripts" / "pip.exe"
+            launcher.parent.mkdir(parents=True)
+            launcher.write_bytes(b"MZ launcher #!C:\\CowAgent\\desktop\\runtime\\ecorex-runtime\\python\\python.exe\nPK")
+            state = root / "capability-state" / "feishu-lark.json"
+            state.parent.mkdir(parents=True)
+            state.write_text('{"logPath":"C:\\\\CowAgent\\\\runtime.log"}', encoding="utf-8")
+            readme = root / "README.txt"
+            readme.write_text(
+                "The original v0.1.0 project name was CowAgent and has been renamed to EcoreX.\n"
+                "CowAgent is a historical project name / development stack name only. It does not indicate plagiarism, copying, or third-party ownership.\n"
+                "原始 v0.1.0 版本项目名 CowAgent 已改名为 EcoreX；CowAgent 是历史项目名称/开发栈名称，不代表抄袭或第三方归属。\n",
+                encoding="utf-8",
+            )
+
+            script = Path(__file__).resolve().parents[1] / "scripts" / "sanitize-ecorex-release-runtime.py"
+            subprocess.run([sys.executable, str(script), str(root)], check=True, capture_output=True, text=True)
+            subprocess.run([sys.executable, str(script), str(root), "--check"], check=True, capture_output=True, text=True)
+
+            self.assertFalse(launcher.exists())
+            self.assertFalse(state.exists())
+            self.assertTrue(readme.exists())
 
 
 class TestWebParallelHandlers(unittest.TestCase):

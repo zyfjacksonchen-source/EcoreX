@@ -92,6 +92,7 @@ export type RuntimeStep = {
   has_tool_calls?: boolean;
   file_name?: string;
   file_type?: string;
+  url?: string;
   path?: string;
 };
 
@@ -111,6 +112,7 @@ export type RuntimeMessage = {
       url?: string;
       kind?: string;
     };
+    attachments?: unknown;
     [key: string]: unknown;
   };
 };
@@ -120,6 +122,7 @@ export type FileAttachment = {
   file_name: string;
   file_type: "image" | "video" | "audio" | "file" | "directory";
   previewDataUrl?: string;
+  preview_url?: string;
 };
 
 export type RuntimeSnapshot = {
@@ -773,6 +776,10 @@ export async function reportDesktopEvent(event: {
 }
 
 export function filePreviewUrl(filePath: string, webPort: number) {
+  if (/^https?:\/\//i.test(filePath)) return filePath;
+  if (/^\/(?:uploads|static|app)(?:\/|$)|^\/api\/file(?:[/?#]|$)/.test(filePath)) {
+    return `http://127.0.0.1:${webPort}${filePath}`;
+  }
   return `http://127.0.0.1:${webPort}/api/file?path=${encodeURIComponent(filePath)}`;
 }
 

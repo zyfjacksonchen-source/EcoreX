@@ -97,6 +97,14 @@ function Write-Utf8NoBom {
     [System.IO.File]::WriteAllText($Path, $Value, $encoding)
 }
 
+function Get-ReleaseMigrationReadmeNote {
+    $readmePath = Join-Path $repoRoot "desktop\build\README-migration.txt"
+    if (-not (Test-Path -LiteralPath $readmePath)) {
+        throw "Release migration README missing: $readmePath"
+    }
+    return (Get-Content -Raw -Encoding UTF8 -LiteralPath $readmePath).TrimEnd()
+}
+
 $repoRoot = (Resolve-Path -LiteralPath ".").Path
 $runtimeRootResolved = Resolve-RequiredPath $RuntimeRoot
 $siteRootResolved = Resolve-RequiredPath $SiteRoot
@@ -138,6 +146,15 @@ $serviceOut = Join-Path $stagingRoot "service"
 $webBuildOut = Join-Path $stagingRoot "web-build"
 $requirementsOut = Join-Path $stagingRoot "requirements"
 New-Item -ItemType Directory -Force -Path $runtimeOut, $scriptsOut, $serviceOut, $webBuildOut, $requirementsOut | Out-Null
+
+$webReleaseReadme = @"
+EcoreX WebUI service release package
+
+This archive contains the EcoreX WebUI service runtime, web build, installation helpers, service templates, and checksums for EcoreX $Version.
+
+$(Get-ReleaseMigrationReadmeNote)
+"@
+Write-Utf8NoBom -Path (Join-Path $stagingRoot "README.txt") -Value $webReleaseReadme
 
 $runtimeFiles = @(
     "app.py",
