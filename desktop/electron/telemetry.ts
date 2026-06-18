@@ -3,7 +3,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveEnterprisePolicy, type EnterprisePolicy } from "./enterprisePolicy.js";
+import { enterpriseRequestHeaders, resolveEnterprisePolicy, type EnterprisePolicy } from "./enterprisePolicy.js";
 
 export type TelemetryEvent = {
   type: "usage" | "error" | "warn" | "info";
@@ -88,10 +88,12 @@ export class TelemetryReporter {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-EcoreX-Client-Key": policy.clientEventKey,
-          "X-EcoreX-User-Token": session?.token || "",
-          "X-EcoreX-Device-Id": session?.deviceId || this.resolveDeviceId(policy),
-          ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {})
+          ...enterpriseRequestHeaders({
+            clientEventKey: policy.clientEventKey,
+            userToken: session?.token,
+            deviceId: session?.deviceId || this.resolveDeviceId(policy),
+            authorizationToken: session?.token
+          })
         },
         body: JSON.stringify(body)
       });

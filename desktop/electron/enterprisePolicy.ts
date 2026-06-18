@@ -11,6 +11,8 @@ export type EnterprisePolicy = {
   orgId?: string;
 };
 
+const ASCII_HEADER_RE = /^[\x20-\x7E]*$/;
+
 export const DEFAULT_CLIENT_EVENT_KEY = "ecorex-desktop-v0.1.14";
 export const DEFAULT_COMPAT_CLIENT_EVENT_KEYS = [
   "ecorex-desktop-v0.1.14",
@@ -106,4 +108,41 @@ export function enterpriseClientEventKeys(policy: EnterprisePolicy) {
     }
   }
   return keys;
+}
+
+export function toAsciiHeaderValue(value: unknown) {
+  const text = String(value ?? "").trim();
+  if (!text) {
+    return "";
+  }
+  return ASCII_HEADER_RE.test(text) ? text : encodeURIComponent(text);
+}
+
+export function enterpriseRequestHeaders(input: {
+  clientEventKey?: string;
+  userEmail?: string;
+  userToken?: string;
+  deviceId?: string;
+  orgId?: string;
+  authorizationToken?: string;
+}) {
+  const headers: Record<string, string> = {};
+  const setHeader = (name: string, value: unknown) => {
+    const safeValue = toAsciiHeaderValue(value);
+    if (safeValue) {
+      headers[name] = safeValue;
+    }
+  };
+
+  setHeader("X-EcoreX-Client-Key", input.clientEventKey);
+  setHeader("X-EcoreX-User-Email", input.userEmail);
+  setHeader("X-EcoreX-User-Token", input.userToken);
+  setHeader("X-EcoreX-Device-Id", input.deviceId);
+  setHeader("X-EcoreX-Org-Id", input.orgId);
+
+  const authorizationToken = toAsciiHeaderValue(input.authorizationToken);
+  if (authorizationToken) {
+    headers.Authorization = `Bearer ${authorizationToken}`;
+  }
+  return headers;
 }

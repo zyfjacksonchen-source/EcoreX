@@ -3,7 +3,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { enterpriseClientEventKeys, resolveEnterprisePolicy, type EnterprisePolicy } from "./enterprisePolicy.js";
+import { enterpriseClientEventKeys, enterpriseRequestHeaders, resolveEnterprisePolicy, type EnterprisePolicy } from "./enterprisePolicy.js";
 
 export type EnterpriseSession = {
   token: string;
@@ -80,9 +80,11 @@ export class EnterpriseAuthManager {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-EcoreX-Client-Key": clientEventKey,
-        "X-EcoreX-Device-Id": this.getDeviceId(policy),
-        "X-EcoreX-Org-Id": policy.orgId || ""
+        ...enterpriseRequestHeaders({
+          clientEventKey,
+          deviceId: this.getDeviceId(policy),
+          orgId: policy.orgId
+        })
       },
       body: JSON.stringify({
         email: compactText(input.email, 180),
@@ -131,11 +133,13 @@ export class EnterpriseAuthManager {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${session.token}`,
-        "X-EcoreX-User-Token": session.token,
-        "X-EcoreX-Client-Key": clientEventKey,
-        "X-EcoreX-Device-Id": session.deviceId,
-        "X-EcoreX-Org-Id": policy.orgId || ""
+        ...enterpriseRequestHeaders({
+          clientEventKey,
+          userToken: session.token,
+          deviceId: session.deviceId,
+          orgId: policy.orgId,
+          authorizationToken: session.token
+        })
       },
       body: JSON.stringify({
         oldPassword: input.oldPassword,
@@ -169,11 +173,13 @@ export class EnterpriseAuthManager {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${session.token}`,
-        "X-EcoreX-User-Token": session.token,
-        "X-EcoreX-Client-Key": clientEventKey,
-        "X-EcoreX-Device-Id": session.deviceId,
-        "X-EcoreX-Org-Id": policy.orgId || ""
+        ...enterpriseRequestHeaders({
+          clientEventKey,
+          userToken: session.token,
+          deviceId: session.deviceId,
+          orgId: policy.orgId,
+          authorizationToken: session.token
+        })
       },
       body: JSON.stringify({ estimatedTokens })
     }));

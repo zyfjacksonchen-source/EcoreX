@@ -4,7 +4,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { enterpriseClientEventKeys, resolveEnterprisePolicy, type EnterprisePolicy } from "./enterprisePolicy.js";
+import { enterpriseClientEventKeys, enterpriseRequestHeaders, resolveEnterprisePolicy, type EnterprisePolicy } from "./enterprisePolicy.js";
 
 export type CapabilityState =
   | "installed"
@@ -328,14 +328,14 @@ export class CapabilityManager {
     const keys = enterpriseClientEventKeys(policy);
     for (const [index, clientEventKey] of keys.entries()) {
       const response = await fetch(capabilityPolicyUrl, {
-        headers: {
-          "X-EcoreX-Client-Key": clientEventKey,
-          "X-EcoreX-User-Email": session?.user?.email || policy.userEmail || "",
-          "X-EcoreX-User-Token": session?.token || "",
-          "X-EcoreX-Device-Id": session?.deviceId || this.resolveDeviceId(policy),
-          "X-EcoreX-Org-Id": policy.orgId || "",
-          ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {})
-        },
+        headers: enterpriseRequestHeaders({
+          clientEventKey,
+          userEmail: session?.user?.email || policy.userEmail,
+          userToken: session?.token,
+          deviceId: session?.deviceId || this.resolveDeviceId(policy),
+          orgId: policy.orgId,
+          authorizationToken: session?.token
+        }),
         signal
       });
       const payload = (await response.json().catch(() => ({}))) as CapabilityPolicyPayload & { error?: string; message?: string };

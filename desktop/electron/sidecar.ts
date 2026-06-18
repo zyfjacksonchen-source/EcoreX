@@ -3,7 +3,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { enterpriseClientEventKeys, resolveEnterprisePolicy, type EnterprisePolicy } from "./enterprisePolicy.js";
+import { enterpriseClientEventKeys, enterpriseRequestHeaders, resolveEnterprisePolicy, type EnterprisePolicy } from "./enterprisePolicy.js";
 
 export type SidecarState = "starting" | "running" | "stopped" | "failed" | "skipped";
 
@@ -283,14 +283,14 @@ export class SidecarManager {
     const keys = enterpriseClientEventKeys(policy);
     for (const [index, clientEventKey] of keys.entries()) {
       const response = await fetch(modelConfigUrl, {
-        headers: {
-          "X-EcoreX-Client-Key": clientEventKey,
-          "X-EcoreX-User-Email": session?.user?.email || policy.userEmail || "",
-          "X-EcoreX-User-Token": session?.token || "",
-          "X-EcoreX-Device-Id": session?.deviceId || this.resolveDeviceId(policy),
-          "X-EcoreX-Org-Id": policy.orgId || "",
-          ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {})
-        }
+        headers: enterpriseRequestHeaders({
+          clientEventKey,
+          userEmail: session?.user?.email || policy.userEmail,
+          userToken: session?.token,
+          deviceId: session?.deviceId || this.resolveDeviceId(policy),
+          orgId: policy.orgId,
+          authorizationToken: session?.token
+        })
       });
       const payload = (await response.json().catch(() => ({}))) as ModelPolicyPayload & { error?: string; message?: string };
       if (response.status === 403 && this.isInvalidClientKeyPayload(payload) && index < keys.length - 1) {
