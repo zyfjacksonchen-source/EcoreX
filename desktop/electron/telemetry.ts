@@ -3,7 +3,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { enterpriseRequestHeaders, resolveEnterprisePolicy, type EnterprisePolicy } from "./enterprisePolicy.js";
+import { enterpriseRequestHeaders, normalizeEnterpriseDeviceId, resolveEnterprisePolicy, type EnterprisePolicy } from "./enterprisePolicy.js";
 
 export type TelemetryEvent = {
   type: "usage" | "error" | "warn" | "info";
@@ -142,10 +142,7 @@ export class TelemetryReporter {
   }
 
   private resolveDeviceId(policy: EnterprisePolicy) {
-    if (policy.deviceId) {
-      return policy.deviceId;
-    }
-    return `${os.hostname()}-${process.platform}`;
+    return normalizeEnterpriseDeviceId(policy.deviceId || `${os.hostname()}-${process.platform}`);
   }
 
   private async writeFailedEvent(body: Record<string, unknown>, reason: string) {

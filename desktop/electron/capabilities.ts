@@ -4,7 +4,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { enterpriseClientEventKeys, enterpriseRequestHeaders, resolveEnterprisePolicy, type EnterprisePolicy } from "./enterprisePolicy.js";
+import { enterpriseClientEventKeys, enterpriseRequestHeaders, normalizeEnterpriseDeviceId, resolveEnterprisePolicy, type EnterprisePolicy } from "./enterprisePolicy.js";
 
 export type CapabilityState =
   | "installed"
@@ -445,9 +445,6 @@ export class CapabilityManager {
   }
 
   private resolveDeviceId(policy: EnterprisePolicy) {
-    if (policy.deviceId) {
-      return policy.deviceId;
-    }
-    return `${os.hostname()}-${process.platform}`;
+    return normalizeEnterpriseDeviceId(policy.deviceId || `${os.hostname()}-${process.platform}`);
   }
 }

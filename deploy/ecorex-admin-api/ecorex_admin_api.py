@@ -13,7 +13,7 @@ import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 
 VERSION = "0.1.14"
@@ -146,6 +146,19 @@ def constant_equal(left, right):
     if not left or not right:
         return False
     return hmac.compare_digest(str(left), str(right))
+
+
+def device_id_matches(stored, provided):
+    stored_text = compact_text(stored, 180)
+    provided_text = compact_text(provided, 180)
+    if not stored_text or not provided_text:
+        return True
+    try:
+        stored_variants = {stored_text, quote(stored_text, safe=""), unquote(stored_text)}
+        provided_variants = {provided_text, quote(provided_text, safe=""), unquote(provided_text)}
+        return bool(stored_variants & provided_variants)
+    except Exception:
+        return stored_text == provided_text
 
 
 def client_event_keys():
@@ -729,6 +742,7 @@ class AdminStore:
         return {
             "ok": True,
             "token": token,
+            "deviceId": device_id,
             "expiresAt": expires,
             "user": self.serialize_user(fresh),
             "quota": quota,
@@ -757,7 +771,7 @@ class AdminStore:
                 raise PermissionError("user token expired")
             if row["status"] == "disabled":
                 raise PermissionError("user is disabled")
-            if row["device_id"] and device_id and row["device_id"] != device_id:
+            if not device_id_matches(row["device_id"], device_id):
                 raise PermissionError("device does not match user session")
             conn.execute("UPDATE client_sessions SET last_seen_at=? WHERE token_hash=?", (now_iso(), token_hash))
             conn.commit()

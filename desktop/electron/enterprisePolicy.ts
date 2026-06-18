@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import crypto from "node:crypto";
 
 export type EnterprisePolicy = {
   adminEventsUrl?: string;
@@ -12,6 +13,7 @@ export type EnterprisePolicy = {
 };
 
 const ASCII_HEADER_RE = /^[\x20-\x7E]*$/;
+const SAFE_DEVICE_ID_RE = /^[A-Za-z0-9._:@+-]{1,180}$/;
 
 export const DEFAULT_CLIENT_EVENT_KEY = "ecorex-desktop-v0.1.14";
 export const DEFAULT_COMPAT_CLIENT_EVENT_KEYS = [
@@ -118,6 +120,21 @@ export function toAsciiHeaderValue(value: unknown) {
   return ASCII_HEADER_RE.test(text) ? text : encodeURIComponent(text);
 }
 
+export function normalizeEnterpriseDeviceId(value: unknown, fallback = "ecorex-device") {
+  const raw = String(value ?? "").trim() || fallback;
+  if (SAFE_DEVICE_ID_RE.test(raw)) {
+    return raw.slice(0, 180);
+  }
+  const asciiHint = raw
+    .normalize("NFKD")
+    .replace(/[^\x20-\x7E]/g, "-")
+    .replace(/[^A-Za-z0-9._:@+-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  const hash = crypto.createHash("sha256").update(raw, "utf8").digest("hex").slice(0, 24);
+  return `ecorex-${asciiHint || "device"}-${hash}`.slice(0, 180);
+}
+
 export function enterpriseRequestHeaders(input: {
   clientEventKey?: string;
   userEmail?: string;
@@ -137,7 +154,7 @@ export function enterpriseRequestHeaders(input: {
   setHeader("X-EcoreX-Client-Key", input.clientEventKey);
   setHeader("X-EcoreX-User-Email", input.userEmail);
   setHeader("X-EcoreX-User-Token", input.userToken);
-  setHeader("X-EcoreX-Device-Id", input.deviceId);
+  setHeader("X-EcoreX-Device-Id", input.deviceId ? normalizeEnterpriseDeviceId(input.deviceId) : "");
   setHeader("X-EcoreX-Org-Id", input.orgId);
 
   const authorizationToken = toAsciiHeaderValue(input.authorizationToken);

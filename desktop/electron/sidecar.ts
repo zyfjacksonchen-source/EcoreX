@@ -3,7 +3,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { enterpriseClientEventKeys, enterpriseRequestHeaders, resolveEnterprisePolicy, type EnterprisePolicy } from "./enterprisePolicy.js";
+import { enterpriseClientEventKeys, enterpriseRequestHeaders, normalizeEnterpriseDeviceId, resolveEnterprisePolicy, type EnterprisePolicy } from "./enterprisePolicy.js";
 
 export type SidecarState = "starting" | "running" | "stopped" | "failed" | "skipped";
 
@@ -659,10 +659,7 @@ export class SidecarManager {
   }
 
   private resolveDeviceId(policy: EnterprisePolicy) {
-    if (policy.deviceId) {
-      return policy.deviceId;
-    }
-    return `${os.hostname()}-${process.platform}`;
+    return normalizeEnterpriseDeviceId(policy.deviceId || `${os.hostname()}-${process.platform}`);
   }
 
   private deriveModelConfigUrl(adminEventsUrl?: string) {

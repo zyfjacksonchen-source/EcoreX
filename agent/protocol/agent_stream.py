@@ -4,6 +4,7 @@ Agent Stream Execution Module - Multi-turn reasoning based on tool-call
 Provides streaming output, event system, and complete tool-call loop
 """
 import json
+import re
 import shlex
 import time
 from typing import List, Dict, Any, Optional, Callable, Tuple
@@ -74,6 +75,44 @@ def _normalize_usage(usage: dict, model_name: str = "") -> dict:
         "totalTokens": total_tokens,
         "model": model_name or "",
     }
+
+
+def _user_visible_llm_error(message: Any, status_code: Any = "", error_code: Any = "", error_type: Any = "") -> str:
+    raw = str(message or "").strip()
+    raw_lower = raw.lower()
+    status_text = str(status_code or "").strip()
+    if (
+        status_text in ("0", "N/A")
+        or "connectionreseterror" in raw_lower
+        or "connection reset by peer" in raw_lower
+        or "connection aborted" in raw_lower
+        or raw_lower.startswith("connection error")
+        or raw_lower.startswith("stream interrupted")
+        or raw_lower.startswith("stream error")
+    ):
+        return _t(
+            "网络连接被中断，请稍后重试；如果持续出现，请检查当前网络、代理或模型接口地址。",
+            "The network connection was interrupted. Please try again later; if it keeps happening, check the network, proxy, or model endpoint.",
+        )
+    if "timed out" in raw_lower or "timeout" in raw_lower:
+        return _t(
+            "模型接口响应超时，请稍后重试；如果持续出现，请检查当前网络、代理或模型接口地址。",
+            "The model endpoint timed out. Please try again later; if it keeps happening, check the network, proxy, or model endpoint.",
+        )
+    if status_text and status_text not in ("", "N/A"):
+        code_text = str(error_code or "").strip()
+        type_text = str(error_type or "").strip()
+        extras = []
+        if code_text:
+            extras.append(f"Code: {code_text}")
+        if type_text:
+            extras.append(f"Type: {type_text}")
+        suffix = f" ({', '.join(extras)})" if extras else ""
+        return f"{raw} (Status: {status_text}){suffix}"
+    return re.sub(r"\s+\(Status:\s*0,\s*Code:\s*,\s*Type:\s*\)\s*$", "", raw).strip() or _t(
+        "模型接口请求失败，请稍后重试。",
+        "The model request failed. Please try again later.",
+    )
 
 
 def _truncate_reasoning_for_storage(text: str) -> str:
@@ -1317,8 +1356,8 @@ class AgentStreamExecutor:
                         # Mark as context overflow for special handling
                         raise Exception(f"[CONTEXT_OVERFLOW] {error_msg} (Status: {status_code})")
                     else:
-                        # Raise exception with full error message for retry logic
-                        raise Exception(f"{error_msg} (Status: {status_code}, Code: {error_code}, Type: {error_type})")
+                        # Raise a user-safe message while keeping raw details in logs above.
+                        raise Exception(_user_visible_llm_error(error_msg, status_code, error_code, error_type))
 
                 # Parse chunk
                 if isinstance(chunk, dict) and chunk.get("choices"):

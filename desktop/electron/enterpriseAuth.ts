@@ -3,7 +3,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { enterpriseClientEventKeys, enterpriseRequestHeaders, resolveEnterprisePolicy, type EnterprisePolicy } from "./enterprisePolicy.js";
+import { enterpriseClientEventKeys, enterpriseRequestHeaders, normalizeEnterpriseDeviceId, resolveEnterprisePolicy, type EnterprisePolicy } from "./enterprisePolicy.js";
 
 export type EnterpriseSession = {
   token: string;
@@ -23,6 +23,13 @@ export type EnterpriseSession = {
 
 export type EnterpriseSessionView = Omit<EnterpriseSession, "token"> & {
   authenticated: true;
+};
+
+type EnterpriseLoginPayload = EnterpriseSession & {
+  ok?: boolean;
+  error?: string;
+  deviceId?: string;
+  device_id?: string;
 };
 
 function readJson<T>(filePath: string): T | null {
@@ -49,6 +56,11 @@ export class EnterpriseAuthManager {
     if (!session?.token || !session.expiresAt) {
       return null;
     }
+    const normalizedDeviceId = normalizeEnterpriseDeviceId(session.deviceId || this.getDeviceId());
+    if (session.deviceId !== normalizedDeviceId) {
+      void this.logout();
+      return null;
+    }
     const expiresAt = Date.parse(session.expiresAt);
     if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
       void this.logout();
@@ -67,7 +79,7 @@ export class EnterpriseAuthManager {
   }
 
   getDeviceId(policy = this.loadPolicy()) {
-    return policy.deviceId || `${os.hostname()}-${process.platform}`;
+    return normalizeEnterpriseDeviceId(policy.deviceId || `${os.hostname()}-${process.platform}`);
   }
 
   async login(input: { email: string; password: string }) {
@@ -76,7 +88,7 @@ export class EnterpriseAuthManager {
     if (!authUrl || !policy.clientEventKey) {
       throw new Error("企业登录策略未配置，请确认安装包包含 enterprise-policy.json。");
     }
-    const { response, payload } = await this.fetchClientJsonWithKeyFallback<EnterpriseSession & { ok?: boolean; error?: string }>(policy, authUrl, (clientEventKey) => ({
+    const { response, payload } = await this.fetchClientJsonWithKeyFallback<EnterpriseLoginPayload>(policy, authUrl, (clientEventKey) => ({
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -96,12 +108,13 @@ export class EnterpriseAuthManager {
     if (!response.ok || payload.ok === false || !payload.token) {
       throw new Error(payload.error || `企业登录失败：HTTP ${response.status}`);
     }
+    const deviceId = normalizeEnterpriseDeviceId(payload.deviceId || payload.device_id || this.getDeviceId(policy));
     const session: EnterpriseSession = {
       token: payload.token,
       expiresAt: payload.expiresAt,
       user: payload.user,
       quota: payload.quota,
-      deviceId: this.getDeviceId(policy),
+      deviceId,
       savedAt: new Date().toISOString()
     };
     await fsp.mkdir(path.dirname(this.sessionPath()), { recursive: true });

@@ -87,12 +87,11 @@
       "platform": "macOS",
       "variant": "Desktop Apple Silicon DMG",
       "fileName": "EcoreX_0.1.14_arm64.dmg",
-      "href": "https://github.com/zhangyifanjackson-dotcom/EcoreX/releases/download/v0.1.14/EcoreX_0.1.14_arm64.dmg",
-      "external": true,
+      "href": "downloads/EcoreX_0.1.14_arm64.dmg",
       "size": 193148636,
       "sha256": "0B4A5E00157DBAE0C82333FBB7B6D4BB4C8F06F2D16F947477D0016E346D3D6A",
       "status": "ready-unsigned",
-      "source": "GitHub Actions macOS DMG build from EcoreX v0.1.14 commit cb1709a; hosted on GitHub Release.",
+      "source": "GitHub Actions macOS DMG build from EcoreX v0.1.14 commit cb1709a; mirrored to the public download host.",
       "updatedAt": "2026-06-18T05:44:24Z"
     },
     {
@@ -101,12 +100,11 @@
       "platform": "macOS",
       "variant": "Desktop Intel DMG",
       "fileName": "EcoreX_0.1.14_x64.dmg",
-      "href": "https://github.com/zhangyifanjackson-dotcom/EcoreX/releases/download/v0.1.14/EcoreX_0.1.14_x64.dmg",
-      "external": true,
+      "href": "downloads/EcoreX_0.1.14_x64.dmg",
       "size": 200527249,
       "sha256": "C6123DFD9578A50A1190C416AFD6EFD33BDC66AFFFADB3ECA9DE971A0248F3DE",
       "status": "ready-unsigned",
-      "source": "GitHub Actions macOS DMG build from EcoreX v0.1.14 commit cb1709a; hosted on GitHub Release.",
+      "source": "GitHub Actions macOS DMG build from EcoreX v0.1.14 commit cb1709a; mirrored to the public download host.",
       "updatedAt": "2026-06-18T05:44:05Z"
     },
     {

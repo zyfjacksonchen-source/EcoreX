@@ -73,6 +73,9 @@ const TOOL_CHAIN_END_PATTERN = markerFromCodes([
 const TOOL_CHAIN_REPEAT_PATTERN = new RegExp(`${TOOL_CHAIN_PROVIDER_PATTERN}${escapeRegExp(TOOL_CHAIN_REPEAT_TAIL)}[\\s\\S]*?(?:${TOOL_CHAIN_END_PATTERN})`, "g");
 
 const USER_VISIBLE_REPLACEMENT = "已停止重复调用同一能力，正在整理已获得的信息。";
+const NETWORK_ERROR_REPLACEMENT = "网络连接被中断，请稍后重试；如果持续出现，请检查当前网络、代理或模型接口地址。";
+const RAW_NETWORK_ERROR_PATTERN = /(?:❌\s*)?(?:Connection error|Stream interrupted|Stream error):[\s\S]*?(?:ConnectionResetError\([^)]*\)|connection reset by peer|Connection aborted\.[\s\S]*?)(?:\s*\(Status:\s*0,\s*Code:\s*,\s*Type:\s*\))?/gi;
+const RAW_STATUS_ZERO_PATTERN = /[\s\S]*?(?:ConnectionResetError|connection reset by peer|Connection aborted)[\s\S]*?\(Status:\s*0,\s*Code:\s*,\s*Type:\s*\)[\s\S]*/i;
 
 export function containsInternalPromptText(value: unknown) {
   const text = String(value ?? "");
@@ -81,8 +84,10 @@ export function containsInternalPromptText(value: unknown) {
 
 export function redactInternalPromptText(value: unknown) {
   const text = String(value ?? "");
-  if (!containsInternalPromptText(text)) return text;
-  const redacted = text
+  if (RAW_STATUS_ZERO_PATTERN.test(text)) return NETWORK_ERROR_REPLACEMENT;
+  const networkRedacted = text.replace(RAW_NETWORK_ERROR_PATTERN, NETWORK_ERROR_REPLACEMENT).trim();
+  if (!containsInternalPromptText(networkRedacted)) return networkRedacted;
+  const redacted = networkRedacted
     .replace(EXTERNAL_CAPABILITY_CHAIN_PATTERN, USER_VISIBLE_REPLACEMENT)
     .replace(TOOL_CHAIN_REPEAT_PATTERN, USER_VISIBLE_REPLACEMENT)
     .split(/\r?\n/)

@@ -143,8 +143,21 @@
 - [x] 2026-06-17 生产 WebUI runtime 已升级：`/opt/ecorex-web/current` 指向 `/opt/ecorex-web/releases/20260617112511-v0.1.14`，`https://www.ecoreai.cn/ecorex-agent/api/version` 返回 `0.1.14`，`/app/` 服务 `index-DvvyXXS_.js`。
 - [x] 2026-06-17 生产 Admin API 已重建并重启 Docker Compose 服务 `xhs-report-ecorex-admin-api-1`，v0.1.14 desktop/web client key 均返回 `401 missing user token`，不再是 `403 invalid client key`，v0.1.13 key 兼容保留。
 - [x] 2026-06-17 生产 server checks 通过：`check-ecorex-server-release.sh` 通过 public manifest/root/assets/admin gate/client gate 和 ready artifact HTTP 检查；`check-ecorex-web-release.sh` 使用 `BASE_URL=http://172.18.0.1:9909` 通过 login/app/auth/version/SSE 检查。
+- [x] 2026-06-18 修复二次消息吞掉、任务完成后仍显示继续生成、WebUI 本地文件/文件夹打开、图片/文档产物卡片展示、enterprise device mismatch 误报额度上限等问题；详见 `docs/ecorex/v0.1.14/development-log.md`。
+- [x] 2026-06-18 Windows 正式安装器完成签名并验证：setup、`EcoreX.exe`、NSIS `elevate.exe` 均为 Authenticode `Valid`；最终 installer 大小 `148936840`，SHA256 `E4906C076169FE6FB70FFF8E0BF09C687BC2F76C6267359B37DB7D58A5FD6007`。
+- [x] 2026-06-18 Windows update feed 已按最终签名安装器重算 `.blockmap` 与 `latest.yml`，避免签名前 feed 导致 size/sha512 mismatch。
+- [x] 2026-06-18 GitHub Release `v0.1.14` 已覆盖上传最终 Windows setup、blockmap、latest.yml、Windows WebUI、macOS WebUI、Apple Silicon DMG、Intel DMG。
+- [x] 2026-06-18 macOS DMG GitHub 私有外链匿名访问 404 的坑已处理：两个 DMG 已镜像到公网下载站，manifest 改为 `downloads/EcoreX_0.1.14_arm64.dmg` 和 `downloads/EcoreX_0.1.14_x64.dmg`。
+- [x] 2026-06-18 最终 public release 包已重建并通过 validator：`release-artifacts/EcoreX_0.1.14-public-release.zip`，大小 `783848264`，SHA256 `D6F23CF644A9DFE8F1585062118B2E2E37F7F7C02176D331DE24A82369EA398A`。
+- [x] 2026-06-18 public 下载页已重新部署到生产：`/srv/ecorex-agent-download/current` 指向 `/srv/ecorex-agent-download/releases/20260618063002-v0.1.14`；Windows installer、blockmap、Windows WebUI、macOS WebUI、Apple Silicon DMG、Intel DMG、Linux service 包均 HTTP 200。
+- [x] 2026-06-18 `check-ecorex-server-release.sh` 生产检查通过；`verify-ecorex-release.ps1` 通过公网 manifest、下载包、Admin gate、Client gate 和本地 Windows Authenticode 签名校验。
+- [x] 2026-06-18 本轮修改、构建、签名、GitHub Release、public release、生产部署和踩坑点已写入 `docs/ecorex/v0.1.14/development-log.md`。
 - [ ] 待用户手测：真实 v0.1.13 Windows 已安装客户端升级到 v0.1.14 后 session、聊天文本、附件、图片产物、active session/project 不丢失。
 - [ ] 待用户手测：macOS/WebUI 真实环境只提示下载，不自动覆盖本地目录。
 - [ ] 待用户手测：能力安装在当前会话内由 agent 执行，安装提示可关闭且完成后弹出成功/失败提醒。
 - [ ] 待用户手测：WebUI 项目文件夹、知识库链接、图片产物聊天内预览、左侧会话小点/等待回复状态均符合预期。
-- [ ] 待用户确认后再发布部署、最终 commit/push。
+- [x] 2026-06-18 用户手测通过后的最终发布部署、GitHub Release 覆盖、manifest 提交和 `main` / `codex/ecorex-v0.1.14` 推送已完成。
+- [x] 2026-06-18 线上用户热修：中文/非 ASCII 机器名导致 raw/URL encoded deviceId 不一致的问题已修复；后台兼容 raw、encoded、decoded 三种历史格式，桌面端统一归一为安全 ASCII deviceId。
+- [x] 2026-06-18 线上用户热修：`ConnectionResetError(54, 'Connection reset by peer')`、`Status: 0, Code: , Type:` 等底层网络异常不再直接展示给用户，后端与前端均已清洗为本地化网络中断提示。
+- [x] 2026-06-18 热修验证通过：`python -m unittest tests.test_ecorex_admin_device_id`、`python -m py_compile deploy/ecorex-admin-api/ecorex_admin_api.py agent/protocol/agent_stream.py models/openai/openai_http_client.py`、`npm --prefix desktop run typecheck`、`npm --prefix desktop run build`。
+- [x] 2026-06-18 macOS DMG 随包增加 `README-macos-agent-install.txt`，供 WorkBuddy 等本机 agent 校验来源/hash 后安装 unsigned DMG；README 进入 DMG 顶层和 `.app/Contents/Resources/`，并明确禁止关闭全局 Gatekeeper。

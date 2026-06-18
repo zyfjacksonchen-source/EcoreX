@@ -29,6 +29,8 @@ extraResources:
     to: ecorex-runtime
     filter:
       - "**/*"
+  - from: build/README-macos-agent-install.txt
+    to: README-macos-agent-install.txt
 
 win:
   icon: build/icon.ico
@@ -62,3 +64,17 @@ mac:
 
 dmg:
   artifactName: EcoreX_${version}_${arch}.${ext}
+  contents:
+    - x: 130
+      y: 220
+      type: file
+      name: EcoreX.app
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+    - x: 270
+      y: 340
+      type: file
+      path: build/README-macos-agent-install.txt
+      name: README-macos-agent-install.txt

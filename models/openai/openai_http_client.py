@@ -35,8 +35,17 @@ DEFAULT_API_BASE = "https://api.openai.com/v1"
 DEFAULT_TIMEOUT = 600  # seconds; matches old openai SDK default
 
 
-_APP_TITLE = "CowAgent"
-_APP_REFERER = "https://github.com/zhayujie/CowAgent"
+_APP_TITLE = "EcoreX"
+_APP_REFERER = "https://github.com/zhangyifanjackson-dotcom/EcoreX"
+NETWORK_INTERRUPTED_MESSAGE = (
+    "网络连接被中断，请稍后重试；如果持续出现，请检查当前网络、代理或模型接口地址。"
+)
+NETWORK_TIMEOUT_MESSAGE = (
+    "模型接口响应超时，请稍后重试；如果持续出现，请检查当前网络、代理或模型接口地址。"
+)
+NETWORK_REQUEST_FAILED_MESSAGE = (
+    "模型接口请求失败，请稍后重试；如果持续出现，请检查当前网络、代理或模型接口地址。"
+)
 
 # Per-gateway app attribution headers, only sent when the request host
 # matches a documented gateway. Sending these to user-configured custom
@@ -254,11 +263,14 @@ class OpenAIHTTPClient:
                 params=extra_query,
             )
         except requests.exceptions.Timeout as e:
-            raise OpenAIHTTPError(408, {}, f"Request timed out: {e}")
+            logger.warning("[OpenAIHTTP] request timed out: %s", e)
+            raise OpenAIHTTPError(408, {"internal": str(e)}, NETWORK_TIMEOUT_MESSAGE)
         except requests.exceptions.ConnectionError as e:
-            raise OpenAIHTTPError(0, {}, f"Connection error: {e}")
+            logger.warning("[OpenAIHTTP] connection error: %s", e)
+            raise OpenAIHTTPError(0, {"internal": str(e)}, NETWORK_INTERRUPTED_MESSAGE)
         except requests.exceptions.RequestException as e:
-            raise OpenAIHTTPError(0, {}, f"Request failed: {e}")
+            logger.warning("[OpenAIHTTP] request failed: %s", e)
+            raise OpenAIHTTPError(0, {"internal": str(e)}, NETWORK_REQUEST_FAILED_MESSAGE)
 
         return self._parse_response(resp)
 
@@ -303,13 +315,16 @@ class OpenAIHTTPClient:
                 params=params,
             )
         except requests.exceptions.Timeout as e:
-            yield self._make_error_chunk(408, f"Request timed out: {e}")
+            logger.warning("[OpenAIHTTP] stream request timed out: %s", e)
+            yield self._make_error_chunk(408, NETWORK_TIMEOUT_MESSAGE)
             return
         except requests.exceptions.ConnectionError as e:
-            yield self._make_error_chunk(0, f"Connection error: {e}")
+            logger.warning("[OpenAIHTTP] stream connection error: %s", e)
+            yield self._make_error_chunk(0, NETWORK_INTERRUPTED_MESSAGE)
             return
         except requests.exceptions.RequestException as e:
-            yield self._make_error_chunk(0, f"Request failed: {e}")
+            logger.warning("[OpenAIHTTP] stream request failed: %s", e)
+            yield self._make_error_chunk(0, NETWORK_REQUEST_FAILED_MESSAGE)
             return
 
         if resp.status_code >= 400:
@@ -375,9 +390,11 @@ class OpenAIHTTPClient:
                     continue
                 yield chunk
         except requests.exceptions.ChunkedEncodingError as e:
-            yield self._make_error_chunk(0, f"Stream interrupted: {e}")
+            logger.warning("[OpenAIHTTP] stream interrupted: %s", e)
+            yield self._make_error_chunk(0, NETWORK_INTERRUPTED_MESSAGE)
         except requests.exceptions.RequestException as e:
-            yield self._make_error_chunk(0, f"Stream error: {e}")
+            logger.warning("[OpenAIHTTP] stream error: %s", e)
+            yield self._make_error_chunk(0, NETWORK_REQUEST_FAILED_MESSAGE)
         finally:
             try:
                 resp.close()
