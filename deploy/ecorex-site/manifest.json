@@ -62,11 +62,11 @@
       "variant": "WebUI one-click local package",
       "fileName": "EcoreX_0.1.14-webui-windows-x64.zip",
       "href": "downloads/EcoreX_0.1.14-webui-windows-x64.zip",
-      "size": 72279835,
-      "sha256": "E645A650DA744126C8A8242BF52E3B0425253601D5EE894AF7432E2CFA268A6C",
+      "size": 72281171,
+      "sha256": "54AC64F81C83E35C67524A53ADED3319DB28B84DC9CFCF8557D85B21C89502A2",
       "status": "ready-unsigned",
-      "source": "GitHub Release v0.1.14 Windows WebUI package rebuilt from commit cb1709a with WebUI open-path fallback, inline artifact cards, and enterprise session-device fixes.",
-      "updatedAt": "2026-06-18T05:48:52Z"
+      "source": "GitHub Release v0.1.14 Windows WebUI package rebuilt from commit 6703f12 with WebUI open-path fallback, inline artifact cards, enterprise session-device fixes, and network error localization.",
+      "updatedAt": "2026-06-18T07:47:53Z"
     },
     {
       "id": "webui-macos-universal",
@@ -75,11 +75,11 @@
       "variant": "WebUI one-click local package",
       "fileName": "EcoreX_0.1.14-webui-macos-universal.zip",
       "href": "downloads/EcoreX_0.1.14-webui-macos-universal.zip",
-      "size": 165337005,
-      "sha256": "8F8911696DD0EE949A5EB4C97BB0E91A22FE9F307882E625F7DD315AE053DCD5",
+      "size": 165338344,
+      "sha256": "43021CFC5389D0518F1AEB9ECC0DBB8F0EFEBE39FFCC6AAB7B8955BEAF0371B0",
       "status": "ready-unsigned",
-      "source": "GitHub Release v0.1.14 macOS WebUI package rebuilt from commit cb1709a with WebUI open-path fallback, inline artifact cards, and enterprise session-device fixes.",
-      "updatedAt": "2026-06-18T05:49:29Z"
+      "source": "GitHub Release v0.1.14 macOS WebUI package rebuilt from commit 6703f12 with WebUI open-path fallback, inline artifact cards, enterprise session-device fixes, and network error localization.",
+      "updatedAt": "2026-06-18T07:48:12Z"
     },
     {
       "id": "macos-arm64-dmg",
@@ -88,11 +88,11 @@
       "variant": "Desktop Apple Silicon DMG",
       "fileName": "EcoreX_0.1.14_arm64.dmg",
       "href": "downloads/EcoreX_0.1.14_arm64.dmg",
-      "size": 193148636,
-      "sha256": "0B4A5E00157DBAE0C82333FBB7B6D4BB4C8F06F2D16F947477D0016E346D3D6A",
+      "size": 193155189,
+      "sha256": "51D89CD821BD3C81A6FBE4EB7B058AEDD63405BE2C7C5F2DD71B7F1D4F13804D",
       "status": "ready-unsigned",
-      "source": "GitHub Actions macOS DMG build from EcoreX v0.1.14 commit cb1709a; mirrored to the public download host.",
-      "updatedAt": "2026-06-18T05:44:24Z"
+      "source": "GitHub Actions macOS DMG build from EcoreX v0.1.14 commit 6703f12 with agent-install README guidance; mirrored to the public download host.",
+      "updatedAt": "2026-06-18T07:35:07Z"
     },
     {
       "id": "macos-x64-dmg",
@@ -101,11 +101,11 @@
       "variant": "Desktop Intel DMG",
       "fileName": "EcoreX_0.1.14_x64.dmg",
       "href": "downloads/EcoreX_0.1.14_x64.dmg",
-      "size": 200527249,
-      "sha256": "C6123DFD9578A50A1190C416AFD6EFD33BDC66AFFFADB3ECA9DE971A0248F3DE",
+      "size": 200529764,
+      "sha256": "161FA28331704AECDA53BD19EAA08C3D347F17BC48E3078A40EAB1E8AE8E4A0E",
       "status": "ready-unsigned",
-      "source": "GitHub Actions macOS DMG build from EcoreX v0.1.14 commit cb1709a; mirrored to the public download host.",
-      "updatedAt": "2026-06-18T05:44:05Z"
+      "source": "GitHub Actions macOS DMG build from EcoreX v0.1.14 commit 6703f12 with agent-install README guidance; mirrored to the public download host.",
+      "updatedAt": "2026-06-18T07:35:11Z"
     },
     {
       "id": "web-linux-service",
