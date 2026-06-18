@@ -213,6 +213,19 @@ type ArtifactItem = {
   fileType: ArtifactFileType;
 };
 
+function mergeArtifacts(...groups: ArtifactItem[][]) {
+  const items: ArtifactItem[] = [];
+  const seen = new Set<string>();
+  for (const group of groups) {
+    for (const item of group) {
+      if (!item.path || seen.has(item.path)) continue;
+      seen.add(item.path);
+      items.push(item);
+    }
+  }
+  return items;
+}
+
 function artifactFileTypeFromPath(value: string): ArtifactFileType {
   const media = mediaTypeFromUrl(value);
   if (media) return media;
@@ -223,6 +236,15 @@ function artifactFileTypeFromPath(value: string): ArtifactFileType {
 function isArtifactFilePath(value: string) {
   const source = String(value || "").trim();
   return new RegExp(`\\.(${ARTIFACT_FILE_EXTENSIONS})(?:[?#].*)?$`, "i").test(source);
+}
+
+function isBareArtifactFilePath(value: string) {
+  const source = String(value || "").trim().replace(/^["'`]+|["'`]+$/g, "");
+  return Boolean(source)
+    && !/[\\/]/.test(source)
+    && !source.includes("..")
+    && !/^[a-z][a-z0-9+.-]*:/i.test(source)
+    && isArtifactFilePath(source);
 }
 
 function isArtifactBasePath(value: string) {
@@ -288,13 +310,14 @@ function ImageArtifactGrid({
   );
 }
 
-function extractArtifacts(content: string) {
+function extractArtifacts(content: string, options?: { allowBareFiles?: boolean }) {
   const source = redactInternalPromptText(content || "");
   const items: ArtifactItem[] = [];
   const seen = new Set<string>();
   const bases: string[] = [];
+  const allowBareFiles = Boolean(options?.allowBareFiles);
   const add = (rawPath: string, fileType?: ArtifactFileType) => {
-    const path = (localPathFromSource(rawPath) || relativeArtifactPathFromSource(rawPath) || rawPath).trim();
+    const path = (localPathFromSource(rawPath) || relativeArtifactPathFromSource(rawPath, allowBareFiles) || rawPath).trim();
     if (!path || seen.has(path)) return;
     seen.add(path);
     items.push({
@@ -334,6 +357,24 @@ function extractArtifacts(content: string) {
       const match = cleaned.match(fileLinePattern);
       if (!match) continue;
       add(joinArtifactPath(base, match[1]));
+    }
+  }
+
+  if (allowBareFiles) {
+    const quotedFilePattern = new RegExp(`["'\`]([^"'\\\`<>\\r\\n]{1,220}\\.(${ARTIFACT_FILE_EXTENSIONS}))["'\`]`, "gi");
+    let quotedMatch: RegExpExecArray | null;
+    while ((quotedMatch = quotedFilePattern.exec(source)) && items.length < 24) {
+      const raw = (quotedMatch[1] || "").trim();
+      if (!isBareArtifactFilePath(raw)) continue;
+      add(raw);
+    }
+
+    const bareFilePattern = new RegExp(`(?:^|[\\s:：,，;；])([^\\s"'\\\`<>\\\\/]{1,180}\\.(${ARTIFACT_FILE_EXTENSIONS}))(?=$|[\\s,，;；。.!?！？])`, "gi");
+    let bareMatch: RegExpExecArray | null;
+    while ((bareMatch = bareFilePattern.exec(source)) && items.length < 24) {
+      const raw = (bareMatch[1] || "").trim();
+      if (!isBareArtifactFilePath(raw)) continue;
+      add(raw);
     }
   }
 
@@ -381,10 +422,11 @@ function ArtifactGrid({
   );
 }
 
-function relativeArtifactPathFromSource(value?: string) {
+function relativeArtifactPathFromSource(value?: string, allowBareFile = false) {
   const source = String(value || "").trim().replace(/^["'`]+|["'`]+$/g, "");
   if (!source || /^[a-z][a-z0-9+.-]*:/i.test(source) || localPathFromSource(source)) return "";
   if (!isArtifactFilePath(source)) return "";
+  if (allowBareFile && isBareArtifactFilePath(source)) return source;
   if (!/^(?:\.{1,2}[\\/])?(?:deliverables|output|outputs|artifacts|images|assets|prompts|workspace)[\\/]/i.test(source)) return "";
   if (source.includes("..")) return "";
   return source;
@@ -429,7 +471,12 @@ function linkifyPlainTextSegments(html: string, localFilePreviewUrl?: (filePath:
 
 function renderInline(value: string, localFilePreviewUrl?: (filePath: string) => string) {
   let html = escapeHtml(value);
-  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+  html = html.replace(/`([^`]+)`/g, (_match, rawCode: string) => {
+    const decoded = decodeBasicEntities(rawCode);
+    const localPath = localPathFromSource(decoded) || relativeArtifactPathFromSource(decoded, true);
+    if (!localPath) return `<code>${rawCode}</code>`;
+    return `<a href="#" class="markdown-local-file-link inline-local-file-code" data-ecorex-file-path="${escapeHtml(localPath)}" data-ecorex-file-name="${escapeHtml(basenameFromPath(localPath))}"><code>${rawCode}</code></a>`;
+  });
   html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
   html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt: string, href: string) => {
@@ -547,6 +594,39 @@ function formatToolValue(value: unknown) {
   } catch {
     return redactInternalPromptText(String(value));
   }
+}
+
+function extractArtifactsFromUnknown(value: unknown) {
+  if (value === undefined || value === null || value === "") return [];
+  const text = typeof value === "string" ? value : formatToolValue(value);
+  return extractArtifacts(text, { allowBareFiles: true });
+}
+
+function extractArtifactsFromSteps(steps: AgentStepDisclosure[], toolCalls: ToolCallDisclosure[] = []) {
+  const groups: ArtifactItem[][] = [];
+  for (const step of steps) {
+    if (step.type === "media") {
+      const source = step.filePath || step.url || step.previewUrl || "";
+      const path = localPathFromSource(source) || relativeArtifactPathFromSource(source, true);
+      if (path) {
+        groups.push([{
+          path,
+          name: step.fileName || basenameFromPath(path),
+          fileType: step.fileType || artifactFileTypeFromPath(path)
+        }]);
+      }
+      continue;
+    }
+    if (step.type === "tool") {
+      groups.push(extractArtifactsFromUnknown(step.arguments));
+      groups.push(extractArtifactsFromUnknown(step.result));
+    }
+  }
+  for (const tool of toolCalls) {
+    groups.push(extractArtifactsFromUnknown(tool.arguments));
+    groups.push(extractArtifactsFromUnknown(tool.result));
+  }
+  return mergeArtifacts(...groups).slice(0, 24);
 }
 
 function MarkdownBlock({
@@ -734,15 +814,16 @@ function splitSteps(steps: AgentStepDisclosure[], content: string) {
   return { mainContent, visibleSteps };
 }
 
-function MainAnswer({ content, pending, collapsible, localFilePreviewUrl, onOpenLocalFile }: {
+function MainAnswer({ content, pending, collapsible, extraArtifacts = [], localFilePreviewUrl, onOpenLocalFile }: {
   content: string;
   pending?: boolean;
   collapsible?: boolean;
+  extraArtifacts?: ArtifactItem[];
   localFilePreviewUrl?: (filePath: string) => string;
   onOpenLocalFile?: (file: LocalFilePayload) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const artifacts = extractArtifacts(content);
+  const artifacts = mergeArtifacts(extractArtifacts(content, { allowBareFiles: true }), extraArtifacts);
   const artifactGrid = <ArtifactGrid artifacts={artifacts} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />;
   if (!content) return artifactGrid;
   if (!collapsible || pending || content.length <= LONG_REPLY_COLLAPSE_CHARS) {
@@ -794,6 +875,7 @@ export function MessageContent(props: {
   const steps = props.steps || [];
   const { mainContent, visibleSteps } = splitSteps(steps, props.content);
   const compactedSteps = compactToolSteps(visibleSteps);
+  const stepArtifacts = extractArtifactsFromSteps(compactedSteps, props.toolCalls || []);
   const legacySteps: ReactNode[] = [];
 
   if (!steps.length && props.role !== "user") {
@@ -818,7 +900,7 @@ export function MessageContent(props: {
           </div>
         </details>
       )}
-      <MainAnswer content={mainContent} pending={props.pending} collapsible={props.role !== "user"} localFilePreviewUrl={props.localFilePreviewUrl} onOpenLocalFile={props.onOpenLocalFile} />
+      <MainAnswer content={mainContent} pending={props.pending} collapsible={props.role !== "user"} extraArtifacts={stepArtifacts} localFilePreviewUrl={props.localFilePreviewUrl} onOpenLocalFile={props.onOpenLocalFile} />
       {props.cancelled ? (
         <div className="agent-cancelled-tag">已中止</div>
       ) : props.pending ? (

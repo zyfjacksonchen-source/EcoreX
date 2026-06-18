@@ -597,10 +597,14 @@ export async function savePastedFile(file: File): Promise<FileAttachment | null>
 }
 
 export async function openLocalPath(filePath: string) {
-  if (!window.ecorexDesktop?.openPath) {
-    return "desktop bridge unavailable";
+  const trimmedPath = String(filePath || "").trim();
+  if (!trimmedPath) {
+    return "path is required";
   }
-  return window.ecorexDesktop.openPath(filePath);
+  if (window.ecorexDesktop?.openPath) {
+    return window.ecorexDesktop.openPath(trimmedPath);
+  }
+  return openRuntimePath(trimmedPath);
 }
 
 export async function openRuntimePath(filePath: string) {

@@ -100,6 +100,15 @@ def _web_app_bridge_script() -> str:
     }
   }
 
+  function sessionDeviceId(session) {
+    var id = session && session.deviceId ? String(session.deviceId) : deviceId();
+    if (session && !session.deviceId) {
+      session.deviceId = id;
+      writeAdminSession(session);
+    }
+    return id;
+  }
+
   function writeAdminSession(session) {
     try {
       if (session) window.localStorage.setItem(WEB_SESSION_KEY, JSON.stringify(session));
@@ -362,7 +371,7 @@ def _web_app_bridge_script() -> str:
         "Accept": "application/json",
         "Content-Type": "application/json",
         "X-EcoreX-Client-Key": keys[i],
-        "X-EcoreX-Device-Id": deviceId()
+        "X-EcoreX-Device-Id": sessionDeviceId(session)
       };
       if (session && session.token) headers["X-EcoreX-User-Token"] = session.token;
       var response = await fetch(clientBase() + path, {
@@ -571,10 +580,11 @@ def _web_app_bridge_script() -> str:
       var adminPayload = null;
       var adminError = null;
       try {
+        var currentDeviceId = deviceId();
         adminPayload = await clientJson("/auth/login", "POST", {
           email: input.email,
           password: input.password,
-          deviceId: deviceId(),
+          deviceId: currentDeviceId,
           appVersion: "0.1.14-web.1"
         }, false);
       } catch (error) {
@@ -584,7 +594,7 @@ def _web_app_bridge_script() -> str:
         var adminSession = {
           authenticated: true,
           token: adminPayload.token,
-          deviceId: deviceId(),
+          deviceId: adminPayload.deviceId || adminPayload.device_id || currentDeviceId,
           expiresAt: adminPayload.expiresAt || new Date(Date.now() + 7 * 86400 * 1000).toISOString(),
           user: adminPayload.user,
           quota: adminPayload.quota || { allowed: true }

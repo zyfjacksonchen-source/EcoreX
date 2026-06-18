@@ -550,6 +550,21 @@ function quotaNumber(quota: UsageQuota | null | undefined, key: keyof UsageQuota
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
+function isQuotaLimitFailure(quota: UsageQuota | null | undefined) {
+  if (!quota || quota.allowed !== false) return false;
+  if (quota.overDaily === true || quota.overWeekly === true) return true;
+  const reason = String(quota.reason || "").toLowerCase();
+  if (!reason) return false;
+  if (/device does not match|invalid user token|user token expired|missing user token|尚未登录|未登录|登录|session|device/.test(reason)) return false;
+  return /quota|daily|weekly|limit|额度|上限|已用完|超过|本次请求/.test(reason);
+}
+
+function isEnterpriseAuthFailure(quota: UsageQuota | null | undefined) {
+  if (!quota || quota.allowed !== false) return false;
+  const reason = String(quota.reason || "").toLowerCase();
+  return /device does not match|invalid user token|user token expired|missing user token|尚未登录|未登录|登录|session|token|device/.test(reason);
+}
+
 function percentOf(used: number, limit: number) {
   if (!limit) return 0;
   return Math.min(100, Math.max(0, (used / limit) * 100));
@@ -758,6 +773,69 @@ function normalizePausedMessages(
     return item;
   });
   return changed ? next : items;
+}
+
+function messageSequenceKey(message: ChatItem) {
+  if (message.role === "user" && typeof message.userSeq === "number") return `user:${message.userSeq}`;
+  if (message.role === "assistant" && typeof message.botSeq === "number") return `assistant:${message.botSeq}`;
+  return "";
+}
+
+function messageRequestKey(message: ChatItem) {
+  return message.role === "assistant" && message.requestId ? `request:${message.requestId}` : "";
+}
+
+function messageContentKey(message: ChatItem) {
+  const content = redactInternalPromptText(message.content || "").trim();
+  if (!content) return "";
+  return `${message.role}:${content}`;
+}
+
+function mergeHistoryWithLocalMessages(history: ChatItem[], local: ChatItem[]) {
+  if (!history.length || !local.length) return history.length ? history : local;
+  const sequenceKeys = new Set(history.map(messageSequenceKey).filter(Boolean));
+  const requestKeys = new Set(history.map(messageRequestKey).filter(Boolean));
+  const contentKeys = new Set(history.map(messageContentKey).filter(Boolean));
+  const preserved: ChatItem[] = [];
+  let skipPendingAssistantAfterMatchedUser = false;
+
+  for (const message of local) {
+    const sequenceKey = messageSequenceKey(message);
+    if (sequenceKey && sequenceKeys.has(sequenceKey)) {
+      skipPendingAssistantAfterMatchedUser = message.role === "user";
+      continue;
+    }
+    const requestKey = messageRequestKey(message);
+    if (requestKey && requestKeys.has(requestKey)) {
+      skipPendingAssistantAfterMatchedUser = false;
+      continue;
+    }
+    const contentKey = messageContentKey(message);
+    if (contentKey && contentKeys.has(contentKey)) {
+      skipPendingAssistantAfterMatchedUser = message.role === "user";
+      continue;
+    }
+
+    if (message.role === "assistant" && message.pending && skipPendingAssistantAfterMatchedUser) {
+      skipPendingAssistantAfterMatchedUser = false;
+      continue;
+    }
+
+    const localOnly = message.pending
+      || message.paused
+      || message.id.startsWith("u-")
+      || message.id.startsWith("a-")
+      || (!sequenceKey && !requestKey);
+    if (!localOnly) continue;
+
+    preserved.push(message);
+    skipPendingAssistantAfterMatchedUser = false;
+    if (sequenceKey) sequenceKeys.add(sequenceKey);
+    if (requestKey) requestKeys.add(requestKey);
+    if (contentKey) contentKeys.add(contentKey);
+  }
+
+  return preserved.length ? [...history, ...preserved] : history;
 }
 
 function plainTextForMessage(message: ChatItem) {
@@ -1823,9 +1901,13 @@ export function App() {
         )
       ));
       if (!hasFinalAssistant) return false;
-      updateSessionMessages(sessionId, () => mapped);
+      const localMessages = sessionId === activeSessionIdRef.current
+        ? messagesRef.current
+        : sessionUiState[sessionId]?.messages || [];
+      const merged = mergeHistoryWithLocalMessages(mapped, localMessages);
+      updateSessionMessages(sessionId, () => merged);
       if (activeSessionIdRef.current === sessionId) {
-        setMessages(mapped);
+        setMessages(merged);
       } else {
         markSessionOutputReady(sessionId);
       }
@@ -2369,10 +2451,26 @@ export function App() {
     }
     if (quota.quota && quota.quota.allowed === false) {
       const quotaMessage = quota.quota.reason || "当前账号暂时不能继续发送。";
-      setApproval({ type: "quota", title: "额度已达到上限", message: quotaMessage });
+      const authFailure = isEnterpriseAuthFailure(quota.quota) && !isQuotaLimitFailure(quota.quota);
+      setApproval({
+        type: authFailure ? "error" : "quota",
+        title: authFailure ? "登录状态异常" : "额度已达到上限",
+        message: authFailure ? `${quotaMessage}。请重新登录后继续。` : quotaMessage,
+        actions: authFailure ? [
+          {
+            label: "重新登录",
+            primary: true,
+            onClick: () => void logout()
+          },
+          {
+            label: "知道了",
+            onClick: () => setApproval(null)
+          }
+        ] : undefined
+      });
       updateAssistantMessage(requestSessionId, assistantId, (message) => ({
         ...finishRunningSteps(message, "error"),
-        content: quotaMessage,
+        content: authFailure ? "登录状态异常，请重新登录后继续。" : quotaMessage,
         pending: false
       }));
       markSessionOutputReady(requestSessionId);

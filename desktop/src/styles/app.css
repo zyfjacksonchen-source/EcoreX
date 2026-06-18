@@ -1424,6 +1424,14 @@ html[data-platform="web"] .window-brand {
   text-decoration: none;
 }
 
+.inline-local-file-code {
+  text-decoration: none;
+}
+
+.inline-local-file-code code {
+  cursor: pointer;
+}
+
 .long-answer-disclosure {
   display: grid;
   gap: 8px;
