@@ -79,6 +79,9 @@ v0.1.15 continues from the accepted v0.1.14 desktop hand-test state. The user as
 
 ## Verification Results
 
+- User hand-test status:
+  - 2026-06-18: User reported the v0.1.15 hand-test candidate passed and requested GitHub push before the next follow-up iteration.
+  - Git marker planned before follow-up work: `v0.1.15-handtest-pass`.
 - `npm --prefix desktop run typecheck`: passed.
 - `python -m py_compile channel/web/web_channel.py`: passed.
 - `python -m compileall channel desktop/electron -q`: passed.
