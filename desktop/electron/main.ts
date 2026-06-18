@@ -313,7 +313,7 @@ app.whenReady().then(async () => {
     await permissions.rememberSelectedPaths([filePath]);
     return toAttachment(filePath);
   });
-  ipcMain.handle("ecorex:open-path", async (event, filePath: string) => {
+  ipcMain.handle("ecorex:open-path", async (event, filePath: string, action: "open" | "reveal" | "openWith" = "open") => {
     if (!filePath || !path.isAbsolute(filePath)) {
       return "invalid path";
     }
@@ -321,7 +321,19 @@ app.whenReady().then(async () => {
     if (!decision.allowed) {
       return `denied: ${decision.reason}`;
     }
-    const result = await shell.openPath(filePath);
+    let result = "";
+    if (action === "reveal") {
+      shell.showItemInFolder(filePath);
+    } else if (action === "openWith" && process.platform === "win32") {
+      const { spawn } = await import("node:child_process");
+      spawn("rundll32.exe", ["shell32.dll,OpenAs_RunDLL", filePath], {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true
+      }).unref();
+    } else {
+      result = await shell.openPath(filePath);
+    }
     await permissions.writeOpenResult(filePath, result);
     return result;
   });

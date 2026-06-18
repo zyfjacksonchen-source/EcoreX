@@ -86,7 +86,7 @@ body::before {
   right: 0;
   z-index: 100;
   height: var(--titlebar-height);
-  background: var(--color-bg);
+  background: var(--color-surface);
   -webkit-app-region: drag;
 }
 
@@ -404,7 +404,8 @@ html[data-platform="web"] .window-brand {
 }
 
 .sidebar-actions button,
-.sidebar-actions .search-box {
+.sidebar-actions .search-box,
+.sidebar-footer button {
   border-color: transparent !important;
   background: transparent !important;
 }
@@ -412,7 +413,9 @@ html[data-platform="web"] .window-brand {
 .sidebar-actions button:hover,
 .sidebar-actions button:focus-visible,
 .sidebar-actions .search-box:hover,
-.sidebar-actions .search-box:focus-within {
+.sidebar-actions .search-box:focus-within,
+.sidebar-footer button:hover,
+.sidebar-footer button:focus-visible {
   border-color: var(--color-border) !important;
   background: var(--color-surface-raised) !important;
 }
@@ -488,7 +491,7 @@ html[data-platform="web"] .window-brand {
 
 .project-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   padding: 0;
 }
 
@@ -498,7 +501,8 @@ html[data-platform="web"] .window-brand {
   background: transparent;
 }
 
-.project-row .project-menu-button {
+.project-row .project-menu-button,
+.project-row .project-new-session-button {
   width: 28px;
   justify-content: center;
   padding: 0;
@@ -506,7 +510,9 @@ html[data-platform="web"] .window-brand {
 }
 
 .project-row:hover .project-menu-button,
-.project-row:focus-within .project-menu-button {
+.project-row:focus-within .project-menu-button,
+.project-row:hover .project-new-session-button,
+.project-row:focus-within .project-new-session-button {
   opacity: 1;
 }
 
@@ -1004,6 +1010,31 @@ html[data-platform="web"] .window-brand {
   background: var(--color-brand-soft);
 }
 
+.message.assistant .message-body,
+.message.system .message-body {
+  width: min(780px, 100%);
+  max-width: min(780px, 92%);
+  padding: 2px 34px 2px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.message.assistant .message-copy-button,
+.message.system .message-copy-button {
+  top: 0;
+  right: 0;
+  opacity: 0;
+}
+
+.message.assistant .message-body:hover .message-copy-button,
+.message.assistant .message-copy-button:focus-visible,
+.message.system .message-body:hover .message-copy-button,
+.message.system .message-copy-button:focus-visible {
+  opacity: 1;
+}
+
 .message-copy-button {
   position: absolute;
   top: 7px;
@@ -1143,28 +1174,214 @@ html[data-platform="web"] .window-brand {
   background: transparent;
 }
 
+.streaming-markdown {
+  display: grid;
+  gap: 8px;
+}
+
+.streaming-tail {
+  color: var(--color-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.56;
+}
+
+.streaming-code {
+  max-width: 100%;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+  white-space: pre-wrap;
+}
+
+.artifact-shelf {
+  display: grid;
+  gap: 6px;
+}
+
+.artifact-list {
+  display: grid;
+  gap: 4px;
+}
+
+.artifact-row {
+  min-height: 34px;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+}
+
+.artifact-row:hover,
+.artifact-row:focus-within {
+  border-color: var(--color-border);
+  background: color-mix(in srgb, var(--color-surface-raised) 72%, transparent);
+}
+
+.artifact-row-icon {
+  width: 28px;
+  height: 28px;
+  display: inline-grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xs);
+  background: var(--color-surface-muted);
+  color: var(--color-muted);
+  font-size: 14px;
+}
+
+.artifact-row-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.artifact-row-main {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.artifact-row-main strong,
+.artifact-row-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-row-main strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.artifact-row-main small {
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
+.artifact-row-stats {
+  display: inline-flex;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.artifact-row-stats em {
+  font-style: normal;
+}
+
+.artifact-row-stats .is-added {
+  color: var(--color-success);
+}
+
+.artifact-row-stats .is-removed {
+  color: var(--color-danger);
+}
+
+.artifact-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.16s ease;
+}
+
+.artifact-row:hover .artifact-row-actions,
+.artifact-row:focus-within .artifact-row-actions {
+  opacity: 1;
+}
+
+.artifact-icon-button {
+  width: 26px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-muted);
+}
+
+.artifact-icon-button:hover,
+.artifact-icon-button:focus-visible {
+  border-color: var(--color-border);
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+  outline: 0;
+}
+
+.artifact-icon-button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.artifact-menu-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.artifact-action-menu {
+  position: absolute;
+  top: 30px;
+  right: 0;
+  z-index: 20;
+  min-width: 136px;
+  display: grid;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-popover);
+}
+
+.artifact-action-menu button {
+  min-height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-text);
+  font-size: 12px;
+  text-align: left;
+}
+
+.artifact-action-menu button:hover,
+.artifact-action-menu button:focus-visible {
+  background: var(--color-surface-muted);
+  outline: 0;
+}
+
 .agent-steps {
   display: grid;
   gap: 6px;
 }
 
 .agent-process-disclosure {
-  margin-bottom: 8px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--color-surface-raised) 58%, transparent);
+  margin-bottom: 6px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .agent-process-disclosure.is-live {
-  background: color-mix(in srgb, var(--color-brand) 5%, var(--color-surface-raised));
+  background: transparent;
 }
 
 .agent-process-disclosure > summary {
-  min-height: 32px;
+  min-height: 26px;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 10px;
+  padding: 0;
   color: var(--color-muted);
   cursor: pointer;
   font-size: 12px;
@@ -1185,25 +1402,25 @@ html[data-platform="web"] .window-brand {
 }
 
 .agent-process-disclosure[open] > summary {
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 0;
 }
 
 .agent-process-disclosure > .agent-steps {
-  padding: 8px;
+  padding: 4px 0 0 16px;
 }
 
 .agent-step {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--color-surface-raised) 72%, transparent);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .agent-step summary {
-  min-height: 30px;
+  min-height: 26px;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 9px;
+  padding: 0;
   color: var(--color-muted);
   cursor: pointer;
   list-style: none;
@@ -1212,7 +1429,7 @@ html[data-platform="web"] .window-brand {
 .agent-step summary:hover,
 .agent-step summary:focus-visible {
   color: var(--color-text);
-  background: var(--color-surface-muted);
+  background: transparent;
   outline: 0;
 }
 
@@ -1221,12 +1438,11 @@ html[data-platform="web"] .window-brand {
 }
 
 .agent-step[open] summary {
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 0;
 }
 
 .agent-tool-step.tool-failed {
-  border-color: color-mix(in srgb, var(--color-danger) 45%, var(--color-border));
-  background: color-mix(in srgb, var(--color-danger) 5%, var(--color-surface-raised));
+  color: var(--color-danger);
 }
 
 .agent-tool-step.tool-failed summary {

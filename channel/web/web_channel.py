@@ -43,8 +43,9 @@ def _web_app_bridge_script() -> str:
 (function () {
   if (window.ecorexDesktop) return;
 
-  var DEFAULT_WEB_CLIENT_KEY = "ecorex-web-v0.1.14-web.1";
+  var DEFAULT_WEB_CLIENT_KEY = "ecorex-web-v0.1.15-web.1";
   var DEFAULT_WEB_COMPAT_CLIENT_KEYS = [
+    "ecorex-web-v0.1.15-web.1",
     "ecorex-web-v0.1.14-web.1",
     "ecorex-web-v0.1.13-web.1",
     "ecorex-web-v0.1.12-web.1",
@@ -470,7 +471,7 @@ def _web_app_bridge_script() -> str:
   var updateStatus = {
     state: "idle",
     platform: desktopPlatform,
-    currentVersion: "0.1.14-web.1",
+    currentVersion: "0.1.15-web.1",
     message: "尚未检查更新"
   };
 
@@ -480,7 +481,7 @@ def _web_app_bridge_script() -> str:
       updateStatus = {
         state: payload.hasUpdate ? "available" : "not-available",
         platform: desktopPlatform,
-        currentVersion: payload.currentVersion || "0.1.14-web.1",
+        currentVersion: payload.currentVersion || "0.1.15-web.1",
         version: payload.latestVersion || payload.version,
         downloadUrl: payload.downloadUrl,
         message: payload.message || (payload.hasUpdate ? "发现新版本，请前往下载页安装" : "当前已经是最新版本"),
@@ -491,7 +492,7 @@ def _web_app_bridge_script() -> str:
       updateStatus = {
         state: "error",
         platform: desktopPlatform,
-        currentVersion: "0.1.14-web.1",
+        currentVersion: "0.1.15-web.1",
         message: error && error.message ? error.message : String(error),
         checkedAt: new Date().toISOString()
       };
@@ -523,8 +524,8 @@ def _web_app_bridge_script() -> str:
     chooseFiles: chooseFiles,
     chooseProjectFolder: async function () { return null; },
     savePastedFile: savePastedFile,
-    openPath: async function (filePath) {
-      var result = await apiJson({ path: "/api/open-path", method: "POST", body: { path: filePath || "" } });
+    openPath: async function (filePath, action) {
+      var result = await apiJson({ path: "/api/open-path", method: "POST", body: { path: filePath || "", action: action || "open" } });
       return result.message || "";
     },
     getPermissionState: async function () {
@@ -585,7 +586,7 @@ def _web_app_bridge_script() -> str:
           email: input.email,
           password: input.password,
           deviceId: currentDeviceId,
-          appVersion: "0.1.14-web.1"
+          appVersion: "0.1.15-web.1"
         }, false);
       } catch (error) {
         adminError = error;
@@ -932,6 +933,7 @@ class WebChannel(ChatChannel):
         self.sse_conditions = {}  # request_id -> threading.Condition
         self.sse_subscribers = {}  # request_id -> active EventSource connection count
         self.sse_done_sent = set()  # request_id values that already emitted a done event
+        self.request_artifacts = {}  # request_id -> list of structured artifact dicts
         self.sse_stream_tokens = {}  # legacy field; no longer used to supersede streams
         self._http_server = None
 
@@ -1037,6 +1039,7 @@ class WebChannel(ChatChannel):
         self.sse_subscribers.pop(request_id, None)
         self.sse_done_sent.discard(request_id)
         self.sse_stream_tokens.pop(request_id, None)
+        self.request_artifacts.pop(request_id, None)
         self.request_to_session.pop(request_id, None)
 
     def _push_done_event_once(self, request_id: str, item: Dict[str, Any]) -> bool:
@@ -1137,7 +1140,139 @@ class WebChannel(ChatChannel):
             logger.debug(f"[WebChannel] _fetch_agent_usage failed: {e}")
             return None
 
+    def _artifact_kind(self, file_type: str, path_value: str = "") -> str:
+        kind = str(file_type or "").lower()
+        if kind in ("image", "video", "audio", "directory", "file", "url", "diff"):
+            return kind
+        lower = str(path_value or "").lower()
+        if lower.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg")):
+            return "image"
+        if lower.endswith((".mp4", ".webm", ".mov", ".m4v", ".mkv", ".avi")):
+            return "video"
+        if lower.endswith((".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac")):
+            return "audio"
+        return "file"
+
+    def _artifact_from_file_event(self, request_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        file_path = str(data.get("path") or data.get("file_path") or "").strip()
+        file_name = str(data.get("file_name") or os.path.basename(file_path) or "artifact").strip()
+        file_type = str(data.get("file_type") or "file").strip()
+        kind = self._artifact_kind(file_type, file_path)
+        from urllib.parse import quote
+        preview_url = f"/api/file?path={quote(file_path)}" if file_path else ""
+        artifact = {
+            "id": f"{request_id}:{file_path or file_name}",
+            "requestId": request_id,
+            "kind": kind,
+            "intent": "deliverable",
+            "operation": "exported",
+            "status": "ready",
+            "title": file_name,
+            "path": file_path,
+            "previewUrl": preview_url if kind in ("image", "video", "audio", "file") else "",
+            "source": {
+                "toolName": str(data.get("tool_name") or data.get("tool") or "file_to_send"),
+                "createdAt": time.time(),
+            },
+        }
+        try:
+            if file_path and os.path.exists(file_path):
+                artifact["sizeBytes"] = os.path.getsize(file_path)
+                mime_type = mimetypes.guess_type(file_path)[0]
+                if mime_type:
+                    artifact["mimeType"] = mime_type
+        except Exception:
+            pass
+        return artifact
+
+    def _record_request_artifact(self, request_id: str, artifact: Dict[str, Any]) -> None:
+        if not request_id or not artifact:
+            return
+        items = self.request_artifacts.setdefault(request_id, [])
+        key = str(artifact.get("path") or artifact.get("relativePath") or artifact.get("url") or artifact.get("id") or "").lower()
+        for index, existing in enumerate(items):
+            existing_key = str(existing.get("path") or existing.get("relativePath") or existing.get("url") or existing.get("id") or "").lower()
+            if existing.get("id") == artifact.get("id") or (key and existing_key == key):
+                items[index] = {**existing, **artifact}
+                return
+        items.append(artifact)
+
+    def _diff_stats(self, diff_text: str) -> Dict[str, int]:
+        added = 0
+        removed = 0
+        for line in str(diff_text or "").splitlines():
+            if line.startswith("+++") or line.startswith("---"):
+                continue
+            if line.startswith("+"):
+                added += 1
+            elif line.startswith("-"):
+                removed += 1
+        return {"addedLines": added, "removedLines": removed}
+
+    def _artifacts_from_tool_result(
+        self,
+        request_id: str,
+        tool_name: str,
+        tool_call_id: str,
+        status: str,
+        result: Any,
+    ) -> List[Dict[str, Any]]:
+        if not isinstance(result, dict):
+            return []
+        tool_key = str(tool_name or "").lower()
+        raw_paths = []
+        for key in ("path", "file_path", "filePath", "output_path", "outputPath"):
+            value = result.get(key)
+            if isinstance(value, str) and value.strip():
+                raw_paths.append(value.strip())
+        if not raw_paths:
+            return []
+        artifacts: List[Dict[str, Any]] = []
+        for raw_path in raw_paths[:4]:
+            file_name = str(result.get("file_name") or result.get("fileName") or os.path.basename(raw_path) or raw_path)
+            raw_type = str(result.get("file_type") or result.get("fileType") or "file")
+            kind = self._artifact_kind(raw_type, raw_path)
+            is_edit = "edit" in tool_key or "patch" in tool_key
+            stats = self._diff_stats(str(result.get("diff") or "")) if result.get("diff") else {}
+            if not stats and isinstance(result.get("added_lines"), int):
+                stats = {
+                    "addedLines": int(result.get("added_lines") or 0),
+                    "removedLines": int(result.get("removed_lines") or 0),
+                }
+            artifact = {
+                "id": f"{request_id}:{tool_call_id}:{raw_path}",
+                "requestId": request_id,
+                "kind": kind,
+                "intent": "changed-file" if is_edit else "deliverable",
+                "operation": "modified" if is_edit else "created",
+                "status": "ready" if status in ("success", "done", "ok", "") else "failed",
+                "title": file_name,
+                "path": raw_path,
+                "source": {
+                    "toolCallId": tool_call_id,
+                    "toolName": tool_name,
+                    "createdAt": time.time(),
+                },
+            }
+            if stats:
+                artifact["stats"] = stats
+            if isinstance(result.get("bytes_written"), int):
+                artifact["stats"] = {**artifact.get("stats", {}), "bytesWritten": int(result.get("bytes_written") or 0)}
+            artifacts.append(artifact)
+        return artifacts
+
+    def _persist_request_artifacts(self, request_id: str, session_id: str) -> None:
+        artifacts = self.request_artifacts.get(request_id) or []
+        if not artifacts or not session_id:
+            return
+        try:
+            from agent.memory import get_conversation_store
+            get_conversation_store().attach_extras_to_last_assistant(session_id, {"artifacts": artifacts})
+        except Exception as e:
+            logger.debug(f"[WebChannel] artifact persist skipped for {request_id}: {e}")
+
     def _build_done_event(self, request_id: str, session_id: str, content: str):
+        self._persist_request_artifacts(request_id, session_id)
         seqs = self._fetch_latest_pair_seqs(session_id)
         payload = {
             "type": "done",
@@ -1150,6 +1285,9 @@ class WebChannel(ChatChannel):
         usage = self._fetch_agent_usage(session_id)
         if usage:
             payload["usage"] = usage
+        artifacts = self.request_artifacts.get(request_id) or []
+        if artifacts:
+            payload["artifacts"] = artifacts
         return payload
 
     @staticmethod
@@ -1210,9 +1348,11 @@ class WebChannel(ChatChannel):
         except Exception as e:
             logger.debug(f"[WebChannel] cancel token unregister skipped for {request_id}: {e}")
 
+        session_id = context.get("session_id") or self.request_to_session.get(request_id, "")
+        self._persist_request_artifacts(request_id, session_id)
+
         if worker_exception is not None and self._sse_request_exists(request_id):
             try:
-                session_id = context.get("session_id") or self.request_to_session.get(request_id, "")
                 message = str(worker_exception) or "Worker failed before producing a response."
                 self._push_done_event_once(request_id, {
                     "type": "done",
@@ -1406,6 +1546,16 @@ class WebChannel(ChatChannel):
                 status = data.get("status", "success")
                 result = data.get("result", "")
                 exec_time = data.get("execution_time", 0)
+                tool_call_id = data.get("tool_call_id", "")
+                for artifact in self._artifacts_from_tool_result(request_id, tool_name, tool_call_id, status, result):
+                    self._record_request_artifact(request_id, artifact)
+                    self._push_sse_event(request_id, {
+                        "type": "artifact",
+                        "action": "upsert",
+                        "artifact": artifact,
+                        "request_id": request_id,
+                        "timestamp": time.time(),
+                    })
                 # Truncate long results to avoid huge SSE payloads
                 result_str = str(result)
                 if len(result_str) > 2000:
@@ -1413,7 +1563,7 @@ class WebChannel(ChatChannel):
                 self._push_sse_event(request_id, {
                     "type": "tool_end",
                     "tool": tool_name,
-                    "tool_call_id": data.get("tool_call_id", ""),
+                    "tool_call_id": tool_call_id,
                     "status": status,
                     "result": result_str,
                     "execution_time": round(exec_time, 2)
@@ -1485,19 +1635,14 @@ class WebChannel(ChatChannel):
                         })
 
             elif event_type == "file_to_send":
-                file_path = data.get("path", "")
-                file_name = data.get("file_name", os.path.basename(file_path))
-                file_type = data.get("file_type", "file")
-                from urllib.parse import quote
-                web_url = f"/api/file?path={quote(file_path)}"
-                is_image = file_type == "image"
+                artifact = self._artifact_from_file_event(request_id, data)
+                self._record_request_artifact(request_id, artifact)
                 self._push_sse_event(request_id, {
-                    "type": "image" if is_image else "file",
-                    "content": web_url,
-                    "url": web_url,
-                    "path": file_path,
-                    "file_name": file_name,
-                    "file_type": file_type,
+                    "type": "artifact",
+                    "action": "upsert",
+                    "artifact": artifact,
+                    "request_id": request_id,
+                    "timestamp": time.time(),
                 })
 
         return on_event
@@ -2794,6 +2939,9 @@ class OpenPathHandler:
                 return json.dumps({"status": "error", "message": "payload too large"}, ensure_ascii=False)
             body = json.loads(raw)
             path_value = str(body.get("path") or body.get("file_path") or "").strip()
+            action = str(body.get("action") or "open").strip().lower()
+            if action not in ("open", "reveal", "openwith", "open_with"):
+                action = "open"
             if not path_value:
                 return json.dumps({"status": "error", "message": "path is required"}, ensure_ascii=False)
             workspace_root = os.path.realpath(_get_workspace_root())
@@ -2821,17 +2969,27 @@ class OpenPathHandler:
                 logger.warning(f"[WebChannel] open path permission check failed: {exc}")
                 return json.dumps({"status": "error", "message": "open path permission check failed"}, ensure_ascii=False)
 
-            self._open_path(path_value)
+            self._open_path(path_value, action)
             return json.dumps({"status": "success", "message": "", "path": path_value}, ensure_ascii=False)
         except Exception as e:
             logger.error(f"[WebChannel] open path error: {e}")
             return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
 
-    def _open_path(self, path_value: str) -> None:
+    def _open_path(self, path_value: str, action: str = "open") -> None:
         if os.name == "nt":
-            os.startfile(path_value)  # type: ignore[attr-defined]
+            if action == "reveal":
+                subprocess.Popen(["explorer", "/select,", path_value], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            elif action in ("openwith", "open_with"):
+                subprocess.Popen(["rundll32.exe", "shell32.dll,OpenAs_RunDLL", path_value], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            else:
+                os.startfile(path_value)  # type: ignore[attr-defined]
             return
-        command = ["open", path_value] if sys.platform == "darwin" else ["xdg-open", path_value]
+        if action == "reveal" and sys.platform == "darwin":
+            command = ["open", "-R", path_value]
+        elif action == "reveal":
+            command = ["xdg-open", os.path.dirname(path_value) or path_value]
+        else:
+            command = ["open", path_value] if sys.platform == "darwin" else ["xdg-open", path_value]
         subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
@@ -3018,7 +3176,7 @@ class ClientProxyHandler:
         return target
 
     def _forward_headers(self) -> dict:
-        headers = {"User-Agent": "EcoreX-WebUI/0.1.14"}
+        headers = {"User-Agent": "EcoreX-WebUI/0.1.15"}
         for key, value in web.ctx.env.items():
             if key == "CONTENT_TYPE":
                 name = "Content-Type"

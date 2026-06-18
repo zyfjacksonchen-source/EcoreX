@@ -2,9 +2,9 @@
 
 ## Active Goal
 
-- Version: v0.1.13
-- Objective: fix composer input lockups during session switching/new sessions/concurrent sessions; add Ctrl/Command+Enter multiline input; make `find` and `skill-creator` built-in out-of-box abilities; expose non-Feishu project CLI actions through a structured tool; audit subagent and goal capability boundaries; and add user-facing update notes for WebUI/Desktop reopen after update.
-- Current branch/worktree note: `codex/ecorex-v0.1.13` is based on remote v0.1.12 final commit `b76f5a0d8495c9d447078e1db56f06b56cc962d2`. Generated `.tmp-*` and `desktop/release-local-*` folders remain ignored and must not be hand-edited as source of truth.
+- Version: v0.1.15
+- Objective: align the desktop chat experience with Codex-style rendering, lower process noise, stable streaming Markdown, explicit artifact disclosure/opening, and project-session isolation; build a local hand-test package after multi-agent verification.
+- Current branch/worktree note: `codex/ecorex-v0.1.15` starts from checkpoint commit `7656474 chore: checkpoint before v0.1.15 codex-like UX`. Generated `.tmp-*`, `desktop/release-local-*`, and packaged release folders remain build outputs, not source of truth.
 
 ## Work Ownership
 
@@ -27,6 +27,9 @@
 - macOS signing, notarization, and Gatekeeper validation are intentionally skipped in this Windows round and will be run later on a Mac.
 
 ## Running Notes
+
+- 2026-06-18: Started v0.1.15 from the accepted v0.1.14 hand-test state. Scope follows the user's Codex-like UX brief: no-card assistant text, low-noise process rows, stable streaming Markdown, explicit structured artifacts with local open/reveal/open-with choices, and a fix for project-folder sessions leaking into other projects. Detailed implementation log lives at `docs/ecorex/v0.1.15/development-log.md`.
+- 2026-06-18: Completed v0.1.15 local hand-test candidate after final multi-agent consensus. Desktop package path is `desktop/release/win-unpacked/EcoreX.exe`, size `210896896`, SHA256 `CF58A41A44BB0C64E1B80E760EE8CD86735D413F2CABB7BB8E4805DF3E98B154`; WebUI assets are coherent across source, `desktop/dist`, staged runtime, and packaged runtime as `index-Bc1E1o6S.js` / `index-yCt4GcZK.css`; `cli/VERSION`, `pyproject.toml`, Desktop package metadata, and runtime policy keys are aligned to `0.1.15`.
 
 - 2026-06-16: Started v0.1.13 source pass from remote v0.1.12 final commit `b76f5a0d8495c9d447078e1db56f06b56cc962d2`. Implemented composer focus/session-switch race hardening, Ctrl/Command+Enter multiline input, built-in `find` tool/skill, structured `ecorex_cli`, `/api/version` release notes, and one-time WebUI/Desktop update notes. Subagent and goal runtime tools are not present yet; documented product development plans in `docs/ecorex/v0.1.13/agent-capability-audit-and-plan.md`. No v0.1.13 artifact has been built, signed, uploaded, or deployed yet; public manifest remains v0.1.12 until real release artifacts exist.
 - 2026-06-16: Advanced v0.1.13 release packaging after user hand-test. Current WebUI artifacts are ready with macOS WebUI using `Install EcoreX WebUI.app` instead of a terminal-opening `.command`. Build macOS Apps/GitHub Actions run `27604509625` rebuilt both v0.1.13 desktop DMGs on `macos-15` successfully; the unsigned/unnotarized DMGs were SHA256-verified and materialized under the public download host. Windows desktop setup was rebuilt from signed `win-unpacked` and signed via elevated Certum SimplySign/signtool; Authenticode is `Valid`, size `149193112`, SHA256 `D44E562E9874CAF7E9F2519FCDDE8A9EAC6A8E4D401956AB9672B4A051D4634B`.

@@ -182,7 +182,7 @@ interface Window {
       file_name: string;
       file_type: "image" | "video" | "audio" | "file" | "directory";
     }>;
-    openPath: (filePath: string) => Promise<string>;
+    openPath: (filePath: string, action?: "open" | "reveal" | "openWith") => Promise<string>;
     apiJson: (request: {
       path: string;
       method?: "GET" | "POST" | "PUT" | "DELETE";

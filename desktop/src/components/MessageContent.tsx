@@ -1,5 +1,14 @@
 import { useState, type MouseEvent, type ReactNode } from "react";
-import { ExternalLink, FileText, FolderOpen, Image as ImageIcon } from "lucide-react";
+import {
+  ExternalLink,
+  Eye,
+  FileText,
+  FolderOpen,
+  Image as ImageIcon,
+  MoreHorizontal,
+  MonitorUp
+} from "lucide-react";
+import type { AgentArtifact } from "../services/ecorexApi";
 import { redactInternalPromptText } from "../utils/redaction";
 
 export type ToolCallDisclosure = {
@@ -53,6 +62,7 @@ export type LocalFilePayload = {
   file_path: string;
   file_name: string;
   file_type?: "image" | "video" | "audio" | "file" | "directory";
+  open_action?: "preview" | "open" | "reveal" | "copy" | "openWith";
 };
 
 const REASONING_RENDER_CAP = 4 * 1024;
@@ -225,6 +235,65 @@ type ArtifactItem = {
   name: string;
   fileType: ArtifactFileType;
 };
+
+type DisplayArtifact = AgentArtifact & {
+  legacyPath?: string;
+};
+
+function artifactKindFromFileType(fileType: ArtifactFileType): AgentArtifact["kind"] {
+  return fileType === "image" || fileType === "video" || fileType === "audio" || fileType === "directory"
+    ? fileType
+    : "file";
+}
+
+function artifactFileTypeFromKind(kind: AgentArtifact["kind"]): ArtifactFileType {
+  if (kind === "image" || kind === "video" || kind === "audio" || kind === "directory") return kind;
+  return "file";
+}
+
+function artifactPath(artifact: AgentArtifact) {
+  return artifact.path || artifact.relativePath || artifact.url || "";
+}
+
+function displayArtifactTitle(artifact: AgentArtifact) {
+  const source = artifact.title || artifactPath(artifact);
+  return source ? basenameFromPath(source) : "未命名产物";
+}
+
+function displayArtifactSubtitle(artifact: AgentArtifact) {
+  if (artifact.relativePath) return artifact.relativePath;
+  if (artifact.path) return artifact.path;
+  return artifact.url || "";
+}
+
+function legacyArtifactToAgentArtifact(item: ArtifactItem): DisplayArtifact {
+  return {
+    id: `legacy:${artifactDedupeKey(item)}`,
+    kind: artifactKindFromFileType(item.fileType),
+    intent: "deliverable",
+    operation: "exported",
+    status: "ready",
+    title: item.name,
+    path: item.path,
+    legacyPath: item.path,
+    source: { toolName: "legacy-detected", createdAt: Date.now() }
+  };
+}
+
+function mergeAgentArtifacts(primary: AgentArtifact[] = [], legacy: ArtifactItem[] = []) {
+  const items: DisplayArtifact[] = [];
+  const seen = new Set<string>();
+  const add = (artifact: DisplayArtifact) => {
+    const source = artifactPath(artifact).replace(/\\/g, "/").toLowerCase();
+    const key = source || artifact.id;
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    items.push(artifact);
+  };
+  primary.forEach((artifact) => add(artifact));
+  legacy.map(legacyArtifactToAgentArtifact).forEach(add);
+  return items;
+}
 
 function mergeArtifacts(...groups: ArtifactItem[][]) {
   const items: ArtifactItem[] = [];
@@ -465,6 +534,124 @@ function ArtifactGrid({
   );
 }
 
+function ArtifactShelf({
+  artifacts,
+  legacyArtifacts = [],
+  localFilePreviewUrl,
+  onOpenLocalFile
+}: {
+  artifacts?: AgentArtifact[];
+  legacyArtifacts?: ArtifactItem[];
+  localFilePreviewUrl?: (filePath: string) => string;
+  onOpenLocalFile?: (file: LocalFilePayload) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [openMenuId, setOpenMenuId] = useState("");
+  const items = mergeAgentArtifacts(artifacts, legacyArtifacts);
+  if (!items.length) return null;
+
+  const visibleArtifacts = expanded ? items : items.slice(0, 3);
+  const hiddenCount = Math.max(items.length - visibleArtifacts.length, 0);
+  const changedCount = items.filter((item) => item.intent === "changed-file").length;
+  const title = changedCount === items.length ? "更改文件" : changedCount ? "产物与更改" : "生成产物";
+
+  const runAction = async (artifact: DisplayArtifact, action: NonNullable<LocalFilePayload["open_action"]>) => {
+    const source = artifactPath(artifact);
+    if (!source) return;
+    if (action === "copy") {
+      await navigator.clipboard?.writeText(source).catch(() => undefined);
+      setOpenMenuId("");
+      return;
+    }
+    if (artifact.kind === "url" && artifact.url && action !== "reveal" && action !== "openWith") {
+      window.open(artifact.url, "_blank", "noopener,noreferrer");
+      setOpenMenuId("");
+      return;
+    }
+    onOpenLocalFile?.({
+      file_path: source,
+      file_name: displayArtifactTitle(artifact),
+      file_type: artifactFileTypeFromKind(artifact.kind),
+      open_action: action
+    });
+    setOpenMenuId("");
+  };
+
+  return (
+    <section className="artifact-shelf" aria-label={title}>
+      <div className="artifact-section-head">
+        <strong>{title}</strong>
+        <span>{items.length} 个</span>
+      </div>
+      <div className="artifact-list">
+        {visibleArtifacts.map((artifact) => {
+          const source = artifactPath(artifact);
+          const fileType = artifactFileTypeFromKind(artifact.kind);
+          const name = displayArtifactTitle(artifact);
+          const subtitle = displayArtifactSubtitle(artifact);
+          const previewSource = artifact.thumbnailUrl || artifact.previewUrl || source;
+          const previewUrl = artifact.kind === "image" && previewSource && localFilePreviewUrl
+            ? localFilePreviewUrl(previewSource)
+            : artifact.kind === "image" && previewSource
+              ? safeImageUrl(previewSource, localFilePreviewUrl)
+              : "";
+          const menuOpen = openMenuId === artifact.id;
+          return (
+            <div className={`artifact-row is-${artifact.kind}`} key={artifact.id} title={subtitle || name}>
+              <span className="artifact-row-icon" aria-hidden="true">
+                {previewUrl ? <img src={previewUrl} alt="" loading="lazy" /> : artifactIcon(fileType)}
+              </span>
+              <span className="artifact-row-main">
+                <strong>{name}</strong>
+                {subtitle && <small>{subtitle}</small>}
+              </span>
+              {artifact.stats && (
+                <span className="artifact-row-stats" aria-label="变更统计">
+                  {typeof artifact.stats.addedLines === "number" && <em className="is-added">+{artifact.stats.addedLines}</em>}
+                  {typeof artifact.stats.removedLines === "number" && <em className="is-removed">-{artifact.stats.removedLines}</em>}
+                </span>
+              )}
+              <span className="artifact-row-actions">
+                <button type="button" className="artifact-icon-button" title="预览" aria-label={`预览 ${name}`} onClick={() => void runAction(artifact, "preview")}>
+                  <Eye aria-hidden="true" />
+                </button>
+                <button type="button" className="artifact-icon-button" title="本地打开" aria-label={`本地打开 ${name}`} onClick={() => void runAction(artifact, "open")}>
+                  <MonitorUp aria-hidden="true" />
+                </button>
+                <span className="artifact-menu-wrap">
+                  <button
+                    type="button"
+                    className="artifact-icon-button"
+                    title="打开方式"
+                    aria-label={`${name} 的打开方式`}
+                    aria-expanded={menuOpen}
+                    onClick={() => setOpenMenuId((current) => current === artifact.id ? "" : artifact.id)}
+                  >
+                    <MoreHorizontal aria-hidden="true" />
+                  </button>
+                  {menuOpen && (
+                    <span className="artifact-action-menu" role="menu">
+                      <button type="button" role="menuitem" onClick={() => void runAction(artifact, "open")}>本地打开</button>
+                      <button type="button" role="menuitem" onClick={() => void runAction(artifact, "reveal")}>在文件夹中显示</button>
+                      <button type="button" role="menuitem" onClick={() => void runAction(artifact, "openWith")}>选择应用打开</button>
+                      <button type="button" role="menuitem" onClick={() => void runAction(artifact, "copy")}>复制路径</button>
+                    </span>
+                  )}
+                </span>
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      {items.length > 3 && (
+        <button className="artifact-grid-toggle" type="button" onClick={() => setExpanded((current) => !current)}>
+          {expanded ? "收起产物" : `显示另外 ${hiddenCount} 个`}
+        </button>
+      )}
+    </section>
+  );
+}
+
 function relativeArtifactPathFromSource(value?: string, allowBareFile = false) {
   const source = cleanArtifactCandidate(value || "");
   if (!source || /^[a-z][a-z0-9+.-]*:/i.test(source) || localPathFromSource(source)) return "";
@@ -617,6 +804,48 @@ function renderMarkdown(markdown: string, localFilePreviewUrl?: (filePath: strin
   }
   flushAll();
   return out.join("");
+}
+
+function countMatches(value: string, pattern: RegExp) {
+  return value.match(pattern)?.length || 0;
+}
+
+function splitStreamingMarkdown(markdown: string) {
+  const source = String(markdown || "").replace(/\r\n/g, "\n");
+  const fenceMatches = [...source.matchAll(/^```[\w-]*\s*$/gm)];
+  if (fenceMatches.length % 2 === 1) {
+    const lastFence = fenceMatches[fenceMatches.length - 1];
+    const fenceLineEnd = source.indexOf("\n", lastFence.index || 0);
+    return {
+      stable: source.slice(0, lastFence.index).trimEnd(),
+      tail: source.slice(fenceLineEnd >= 0 ? fenceLineEnd + 1 : source.length),
+      tailKind: "code" as const
+    };
+  }
+
+  const lastBreak = source.lastIndexOf("\n\n");
+  if (lastBreak >= 0) {
+    return {
+      stable: source.slice(0, lastBreak).trimEnd(),
+      tail: source.slice(lastBreak + 2),
+      tailKind: "text" as const
+    };
+  }
+
+  return { stable: "", tail: source, tailKind: "text" as const };
+}
+
+function cleanStreamingTail(value: string) {
+  let text = redactInternalPromptText(value || "").replace(/\r\n/g, "\n").trimEnd();
+  text = text.replace(/^(```+[\w-]*\s*)/gm, "");
+  if (/^\s{0,3}#{1,6}\s*$/.test(text)) return "";
+  if (/^\s{0,3}(?:[-*]|\d+\.)\s*$/.test(text)) return "";
+  text = text.replace(/!\[([^\]]*)\]\([^)]*$/, "$1");
+  text = text.replace(/\[([^\]]+)\]\([^)]*$/, "$1");
+  text = text.replace(/\[([^\]]*)$/, "$1");
+  if (countMatches(text, /\*\*/g) % 2 === 1) text = text.replace(/\*\*/g, "");
+  if (countMatches(text, /`/g) % 2 === 1) text = text.replace(/`/g, "");
+  return text;
 }
 
 function truncateReasoning(text: string) {
@@ -777,6 +1006,31 @@ function MarkdownBlock({
       onClick={handleClick}
       dangerouslySetInnerHTML={{ __html: renderMarkdown(redactInternalPromptText(content), localFilePreviewUrl) }}
     />
+  );
+}
+
+function StreamingMarkdownBlock({
+  content,
+  localFilePreviewUrl,
+  onOpenLocalFile
+}: {
+  content: string;
+  localFilePreviewUrl?: (filePath: string) => string;
+  onOpenLocalFile?: (file: LocalFilePayload) => void;
+}) {
+  const { stable, tail, tailKind } = splitStreamingMarkdown(redactInternalPromptText(content));
+  const cleanedTail = cleanStreamingTail(tail);
+  return (
+    <div className="streaming-markdown">
+      {stable && <MarkdownBlock content={stable} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />}
+      {tailKind === "code" ? (
+        <pre className="streaming-code"><code>{tail}</code></pre>
+      ) : cleanedTail ? (
+        <div className="streaming-tail">
+          <MarkdownBlock content={cleanedTail} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -986,23 +1240,28 @@ function splitSteps(steps: AgentStepDisclosure[], content: string) {
   return { mainContent, visibleSteps };
 }
 
-function MainAnswer({ content, pending, collapsible, extraArtifacts = [], localFilePreviewUrl, onOpenLocalFile }: {
+function MainAnswer({ content, pending, collapsible, artifacts = [], extraArtifacts = [], localFilePreviewUrl, onOpenLocalFile }: {
   content: string;
   pending?: boolean;
   collapsible?: boolean;
+  artifacts?: AgentArtifact[];
   extraArtifacts?: ArtifactItem[];
   localFilePreviewUrl?: (filePath: string) => string;
   onOpenLocalFile?: (file: LocalFilePayload) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const artifacts = mergeArtifacts(extractArtifacts(content, { allowBareFiles: false }), extraArtifacts);
-  const artifactGrid = <ArtifactGrid artifacts={artifacts} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />;
-  if (!content) return artifactGrid;
+  const legacyArtifacts = mergeArtifacts(extractArtifacts(content, { allowBareFiles: false }), extraArtifacts);
+  const artifactShelf = <ArtifactShelf artifacts={artifacts} legacyArtifacts={legacyArtifacts} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />;
+  if (!content) return artifactShelf;
   if (!collapsible || pending || content.length <= LONG_REPLY_COLLAPSE_CHARS) {
     return (
       <>
-        <MarkdownBlock content={content} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />
-        {artifactGrid}
+        {pending ? (
+          <StreamingMarkdownBlock content={content} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />
+        ) : (
+          <MarkdownBlock content={content} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />
+        )}
+        {artifactShelf}
       </>
     );
   }
@@ -1011,7 +1270,7 @@ function MainAnswer({ content, pending, collapsible, extraArtifacts = [], localF
       <div className="long-answer-disclosure is-expanded">
         <div className="long-answer-full">
           <MarkdownBlock content={content} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />
-          {artifactGrid}
+          {artifactShelf}
         </div>
         <button className="long-answer-toggle long-answer-collapse-bottom" type="button" onClick={() => setExpanded(false)}>
           收起完整回复
@@ -1023,7 +1282,7 @@ function MainAnswer({ content, pending, collapsible, extraArtifacts = [], localF
     <div className="long-answer-disclosure">
       <div className="long-answer-preview">
         <MarkdownBlock content={`${content.slice(0, LONG_REPLY_PREVIEW_CHARS).trimEnd()}...`} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />
-        {artifactGrid}
+        {artifactShelf}
       </div>
       <button className="long-answer-toggle long-answer-expand-bottom" type="button" onClick={() => setExpanded(true)} title="长回复已默认收起，点击展开完整内容">
         展开完整回复
@@ -1041,6 +1300,7 @@ export function MessageContent(props: {
   reasoning?: string;
   steps?: AgentStepDisclosure[];
   toolCalls?: ToolCallDisclosure[];
+  artifacts?: AgentArtifact[];
   onOpenLocalFile?: (file: LocalFilePayload) => void;
   localFilePreviewUrl?: (filePath: string) => string;
 }) {
@@ -1064,7 +1324,7 @@ export function MessageContent(props: {
         onOpenLocalFile={props.onOpenLocalFile}
         localFilePreviewUrl={props.localFilePreviewUrl}
       />
-      <MainAnswer content={mainContent} pending={props.pending} collapsible={props.role !== "user"} extraArtifacts={stepArtifacts} localFilePreviewUrl={props.localFilePreviewUrl} onOpenLocalFile={props.onOpenLocalFile} />
+      <MainAnswer content={mainContent} pending={props.pending} collapsible={props.role !== "user"} artifacts={props.artifacts} extraArtifacts={stepArtifacts} localFilePreviewUrl={props.localFilePreviewUrl} onOpenLocalFile={props.onOpenLocalFile} />
       {props.cancelled ? (
         <div className="agent-cancelled-tag">已中止</div>
       ) : props.pending ? (

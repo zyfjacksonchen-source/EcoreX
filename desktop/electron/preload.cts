@@ -71,7 +71,8 @@ contextBridge.exposeInMainWorld("ecorexDesktop", {
       file_name: string;
       file_type: "image" | "video" | "file" | "directory";
     }>,
-  openPath: (filePath: string) => ipcRenderer.invoke("ecorex:open-path", filePath) as Promise<string>,
+  openPath: (filePath: string, action?: "open" | "reveal" | "openWith") =>
+    ipcRenderer.invoke("ecorex:open-path", filePath, action || "open") as Promise<string>,
   apiJson: (request: { path: string; method?: "GET" | "POST" | "PUT" | "DELETE"; body?: unknown }) =>
     ipcRenderer.invoke("ecorex:sidecar-json", request) as Promise<unknown>,
   onSidecarStatus: (listener: (status: SidecarStatus) => void) => {

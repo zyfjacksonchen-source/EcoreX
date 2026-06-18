@@ -113,6 +113,7 @@ export type RuntimeMessage = {
       kind?: string;
     };
     attachments?: unknown;
+    artifacts?: unknown;
     [key: string]: unknown;
   };
 };
@@ -123,6 +124,40 @@ export type FileAttachment = {
   file_type: "image" | "video" | "audio" | "file" | "directory";
   previewDataUrl?: string;
   preview_url?: string;
+};
+
+export type AgentArtifactKind = "file" | "image" | "video" | "audio" | "directory" | "url" | "diff";
+export type AgentArtifactIntent = "deliverable" | "changed-file" | "preview";
+export type AgentArtifactOperation = "created" | "modified" | "exported" | "downloaded" | "deployed";
+export type AgentArtifactStatus = "pending" | "ready" | "failed" | "superseded";
+export type OpenPathAction = "open" | "reveal" | "openWith";
+
+export type AgentArtifact = {
+  id: string;
+  requestId?: string;
+  kind: AgentArtifactKind;
+  intent: AgentArtifactIntent;
+  operation: AgentArtifactOperation;
+  status: AgentArtifactStatus;
+  title: string;
+  path?: string;
+  relativePath?: string;
+  url?: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  previewUrl?: string;
+  thumbnailUrl?: string;
+  stats?: {
+    addedLines?: number;
+    removedLines?: number;
+    bytesWritten?: number;
+  };
+  source?: {
+    toolCallId?: string;
+    toolName?: string;
+    activityId?: string;
+    createdAt?: number;
+  };
 };
 
 export type RuntimeSnapshot = {
@@ -273,6 +308,9 @@ export type StreamItem = {
   file_type?: string;
   url?: string;
   path?: string;
+  artifact?: AgentArtifact;
+  artifacts?: AgentArtifact[];
+  action?: string;
   user_seq?: number;
   bot_seq?: number;
   usage?: TokenUsage;
@@ -596,19 +634,19 @@ export async function savePastedFile(file: File): Promise<FileAttachment | null>
   return attachment;
 }
 
-export async function openLocalPath(filePath: string) {
+export async function openLocalPath(filePath: string, action: OpenPathAction = "open") {
   const trimmedPath = String(filePath || "").trim();
   if (!trimmedPath) {
     return "path is required";
   }
   if (window.ecorexDesktop?.openPath) {
-    return window.ecorexDesktop.openPath(trimmedPath);
+    return window.ecorexDesktop.openPath(trimmedPath, action);
   }
-  return openRuntimePath(trimmedPath);
+  return openRuntimePath(trimmedPath, action);
 }
 
-export async function openRuntimePath(filePath: string) {
-  const result = await apiJson<{ status?: string; message?: string }>("/api/open-path", "POST", { path: filePath });
+export async function openRuntimePath(filePath: string, action: OpenPathAction = "open") {
+  const result = await apiJson<{ status?: string; message?: string }>("/api/open-path", "POST", { path: filePath, action });
   return result.message || "";
 }
 

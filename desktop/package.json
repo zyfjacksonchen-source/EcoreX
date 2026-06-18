@@ -1,6 +1,6 @@
 {
   "name": "ecorex-desktop",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "private": true,
   "description": "EcoreX desktop application with a local agent runtime",
   "author": "EcoreX",

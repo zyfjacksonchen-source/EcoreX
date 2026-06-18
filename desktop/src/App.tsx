@@ -80,6 +80,7 @@ import {
   updatePermissionMode,
   type CapabilityPack,
   type DesktopUpdateStatus,
+  type AgentArtifact,
   type EnterpriseQuotaCheckResult,
   type EnterpriseSession,
   type FileAttachment,
@@ -96,7 +97,8 @@ import {
   type RuntimeSnapshot,
   type StreamItem,
   type TokenUsage,
-  type UsageQuota
+  type UsageQuota,
+  type OpenPathAction
 } from "./services/ecorexApi";
 import { CHAT_SCROLL_THRESHOLD_PX, getChatScrollState, scrollElementToBottom } from "./utils/chatUx";
 import { redactInternalPromptText } from "./utils/redaction";
@@ -132,6 +134,7 @@ type ChatItem = {
   reasoning?: string;
   steps?: AgentStepDisclosure[];
   toolCalls?: ToolCallDisclosure[];
+  artifacts?: AgentArtifact[];
   cancelled?: boolean;
   requestId?: string;
   userSeq?: number;
@@ -384,7 +387,6 @@ function mapSessions(
   sessionTitles: StringMap,
   pinnedSessions: StringBoolMap,
   projects: ProjectFolder[],
-  activeProjectId: string | null,
   sessionUiState: Record<string, SessionUiState>
 ): SessionRow[] {
   const projectById = new Map(projects.map((project) => [project.id, project]));
@@ -396,7 +398,7 @@ function mapSessions(
   );
   const rows: SessionRow[] = snapshot.sessions.map((session, index) => {
     const id = session.session_id || session.id || `runtime-${index}`;
-    const projectId = sessionProjects[id];
+    const projectId = sessionProjects[id] || null;
     const project = projectId ? projectById.get(projectId) : undefined;
     const activeRequest = activeRequestBySession.get(id);
     const activeRequestId = activeRequest?.request_id ? String(activeRequest.request_id) : undefined;
@@ -419,7 +421,7 @@ function mapSessions(
     if (rowIds.has(sessionId)) continue;
     const hasContent = Boolean(cached.composerText || cached.attachments.length || cached.messages.length);
     if (!hasContent) continue;
-    const projectId = cached.projectId || sessionProjects[sessionId] || null;
+    const projectId = sessionProjects[sessionId] || null;
     const project = projectId ? projectById.get(projectId) : undefined;
     const live = (cached.messages || []).some(isLiveAssistantMessage);
     const activeRequest = activeRequestBySession.get(sessionId);
@@ -441,7 +443,7 @@ function mapSessions(
   }
   for (const [sessionId, activeRequest] of activeRequestBySession.entries()) {
     if (rowIds.has(sessionId)) continue;
-    const projectId = sessionProjects[sessionId] || sessionUiState[sessionId]?.projectId || null;
+    const projectId = sessionProjects[sessionId] || null;
     const project = projectId ? projectById.get(projectId) : undefined;
     const requestId = activeRequest.request_id ? String(activeRequest.request_id) : undefined;
     const isCancelling = Boolean(activeRequest.cancelled);
@@ -460,7 +462,8 @@ function mapSessions(
     rowIds.add(sessionId);
   }
   if (!rows.some((row) => row.id === activeSessionId)) {
-    const project = activeProjectId ? projectById.get(activeProjectId) : undefined;
+    const projectId = sessionProjects[activeSessionId] || null;
+    const project = projectId ? projectById.get(projectId) : undefined;
     const activeRequest = activeRequestBySession.get(activeSessionId);
     const activeRequestId = activeRequest?.request_id ? String(activeRequest.request_id) : undefined;
     const isCancelling = Boolean(activeRequest?.cancelled);
@@ -980,6 +983,69 @@ function runtimeExtrasAttachments(item: RuntimeMessage): FileAttachment[] | unde
   return attachments.length ? attachments : undefined;
 }
 
+function normalizeArtifactEntry(entry: unknown, index: number, requestId?: string): AgentArtifact | null {
+  if (!entry || typeof entry !== "object") return null;
+  const raw = entry as Record<string, unknown>;
+  const path = String(raw.path || raw.file_path || raw.filePath || "").trim();
+  const url = String(raw.url || "").trim();
+  const relativePath = String(raw.relativePath || raw.relative_path || "").trim();
+  const titleSource = String(raw.title || raw.file_name || raw.name || path || relativePath || url || "").trim();
+  if (!path && !url && !relativePath && !titleSource) return null;
+  const rawKind = String(raw.kind || raw.file_type || raw.type || "").toLowerCase();
+  const kind: AgentArtifact["kind"] = rawKind === "image" || rawKind === "video" || rawKind === "audio" || rawKind === "directory" || rawKind === "url" || rawKind === "diff"
+    ? rawKind
+    : rawKind === "file" || path || relativePath
+      ? "file"
+      : "url";
+  const rawIntent = String(raw.intent || "").toLowerCase();
+  const intent: AgentArtifact["intent"] = rawIntent === "changed-file" || rawIntent === "preview" ? rawIntent : "deliverable";
+  const rawOperation = String(raw.operation || "").toLowerCase();
+  const operation: AgentArtifact["operation"] = rawOperation === "modified" || rawOperation === "created" || rawOperation === "downloaded" || rawOperation === "deployed"
+    ? rawOperation
+    : "exported";
+  const rawStatus = String(raw.status || "").toLowerCase();
+  const status: AgentArtifact["status"] = rawStatus === "pending" || rawStatus === "failed" || rawStatus === "superseded" ? rawStatus : "ready";
+  const id = String(raw.id || `${requestId || "artifact"}-${index}-${path || relativePath || url || titleSource}`).trim();
+  const source = raw.source && typeof raw.source === "object" ? raw.source as Record<string, unknown> : {};
+  const stats = raw.stats && typeof raw.stats === "object" ? raw.stats as Record<string, unknown> : {};
+  return {
+    id,
+    requestId: String(raw.requestId || raw.request_id || requestId || "").trim() || undefined,
+    kind,
+    intent,
+    operation,
+    status,
+    title: titleSource || "未命名产物",
+    path: path || undefined,
+    relativePath: relativePath || undefined,
+    url: url || undefined,
+    mimeType: String(raw.mimeType || raw.mime_type || "").trim() || undefined,
+    sizeBytes: typeof raw.sizeBytes === "number" ? raw.sizeBytes : typeof raw.size_bytes === "number" ? raw.size_bytes : undefined,
+    previewUrl: String(raw.previewUrl || raw.preview_url || "").trim() || undefined,
+    thumbnailUrl: String(raw.thumbnailUrl || raw.thumbnail_url || "").trim() || undefined,
+    stats: Object.keys(stats).length ? {
+      addedLines: typeof stats.addedLines === "number" ? stats.addedLines : typeof stats.added_lines === "number" ? stats.added_lines : undefined,
+      removedLines: typeof stats.removedLines === "number" ? stats.removedLines : typeof stats.removed_lines === "number" ? stats.removed_lines : undefined,
+      bytesWritten: typeof stats.bytesWritten === "number" ? stats.bytesWritten : typeof stats.bytes_written === "number" ? stats.bytes_written : undefined
+    } : undefined,
+    source: {
+      toolCallId: String(source.toolCallId || source.tool_call_id || "").trim() || undefined,
+      toolName: String(source.toolName || source.tool_name || "").trim() || undefined,
+      activityId: String(source.activityId || source.activity_id || "").trim() || undefined,
+      createdAt: typeof source.createdAt === "number" ? source.createdAt : typeof source.created_at === "number" ? source.created_at : undefined
+    }
+  };
+}
+
+function runtimeExtrasArtifacts(item: RuntimeMessage): AgentArtifact[] | undefined {
+  const raw = item.extras?.artifacts;
+  if (!Array.isArray(raw)) return undefined;
+  const artifacts = raw
+    .map((entry, index) => normalizeArtifactEntry(entry, index, item.request_id))
+    .filter((entry): entry is AgentArtifact => Boolean(entry));
+  return artifacts.length ? artifacts : undefined;
+}
+
 function mapRuntimeMessage(item: RuntimeMessage, sessionId: string, index: number): ChatItem {
   const steps = [
     ...(item.steps?.map(normalizeStep) || []),
@@ -993,6 +1059,7 @@ function mapRuntimeMessage(item: RuntimeMessage, sessionId: string, index: numbe
     reasoning: item.reasoning ? redactInternalPromptText(item.reasoning) : undefined,
     steps: steps.length ? steps : undefined,
     attachments: item.role === "user" ? runtimeExtrasAttachments(item) : undefined,
+    artifacts: item.role === "assistant" ? runtimeExtrasArtifacts(item) : undefined,
     toolCalls: item.tool_calls?.map(normalizeToolCall),
     requestId: item.request_id,
     userSeq: item.user_seq ?? item.seq,
@@ -1062,6 +1129,7 @@ function AuthGate(props: { onLogin: (session: EnterpriseSession) => void }) {
 
 export function App() {
   const bootSession = useMemo(() => pickBootSession(readStorage<Record<string, SessionUiState>>(SESSION_UI_STORAGE_KEY, {})), []);
+  const bootSessionProjects = useMemo(() => readStorage<SessionProjectMap>(SESSION_PROJECTS_STORAGE_KEY, {}), []);
   const [theme, setTheme] = useState<ThemeMode>(initialTheme);
   const [session, setSession] = useState<EnterpriseSession | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
@@ -1086,7 +1154,7 @@ export function App() {
   const [packs, setPacks] = useState<CapabilityPack[]>([]);
   const [permissionState, setPermissionState] = useState<PermissionState | null>(null);
   const [projects, setProjects] = useState<ProjectFolder[]>(() => readStorage<ProjectFolder[]>(PROJECTS_STORAGE_KEY, []));
-  const [sessionProjects, setSessionProjects] = useState<SessionProjectMap>(() => readStorage<SessionProjectMap>(SESSION_PROJECTS_STORAGE_KEY, {}));
+  const [sessionProjects, setSessionProjects] = useState<SessionProjectMap>(() => bootSessionProjects);
   const [sessionTitles, setSessionTitles] = useState<StringMap>(() => readStorage<StringMap>(SESSION_TITLES_STORAGE_KEY, {}));
   const [pinnedSessions, setPinnedSessions] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(PINNED_SESSIONS_STORAGE_KEY, {}));
   const [pinnedProjects, setPinnedProjects] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(PINNED_PROJECTS_STORAGE_KEY, {}));
@@ -1094,7 +1162,7 @@ export function App() {
   const [sessionUiState, setSessionUiState] = useState<Record<string, SessionUiState>>(() => readStorage<Record<string, SessionUiState>>(SESSION_UI_STORAGE_KEY, {}));
   const [enabledCapabilityPacks, setEnabledCapabilityPacks] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(CAPABILITY_ENABLED_STORAGE_KEY, {}));
   const [sessionRequestIds, setSessionRequestIds] = useState<StringMap>({});
-  const [activeProjectId, setActiveProjectId] = useState<string | null>(bootSession?.state.projectId || null);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(bootSession?.id ? bootSessionProjects[bootSession.id] || null : null);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("account");
   const [projectMenu, setProjectMenu] = useState<ProjectContextMenu>(null);
   const [installingPackIds, setInstallingPackIds] = useState<StringBoolMap>({});
@@ -1110,6 +1178,7 @@ export function App() {
   const streamCleanup = useRef<null | (() => void)>(null);
   const streamCleanups = useRef<Record<string, () => void>>({});
   const streamCleanupRequestIds = useRef<StringMap>({});
+  const streamDeltaBuffers = useRef<Record<string, { sessionId: string; assistantId: string; requestId: string; text: string; frame: number | null }>>({});
   const sessionRequestIdsRef = useRef<StringMap>({});
   const installWatchers = useRef<Record<string, number>>({});
   const queuedInstallRef = useRef<Array<{ pack: CapabilityPack; onInstalled?: () => void; sessionId: string }>>([]);
@@ -1154,28 +1223,40 @@ export function App() {
   }, [enabledCapabilityPacks]);
 
   useEffect(() => {
-    const pruned = pruneSessionUiState(sessionUiState);
+    const projectSyncedState = Object.fromEntries(
+      Object.entries(sessionUiState).map(([sessionId, state]) => [
+        sessionId,
+        { ...state, projectId: sessionProjects[sessionId] || null }
+      ])
+    );
+    const pruned = pruneSessionUiState(projectSyncedState);
     writeStorage(SESSION_UI_STORAGE_KEY, pruned);
     if (sidecarStatus.state !== "running") return;
     if (uiStateSyncTimer.current) {
       window.clearTimeout(uiStateSyncTimer.current);
     }
+    const runtimeActiveProjectId = sessionProjects[activeSessionIdRef.current] || null;
     uiStateSyncTimer.current = window.setTimeout(() => {
       void saveRuntimeUiState({
         version: 1,
         lastActiveSessionId: activeSessionIdRef.current,
-        activeProjectId,
+        activeProjectId: runtimeActiveProjectId,
         sessionUiState: pruned,
         savedAt: new Date().toISOString()
       }).catch(() => undefined);
       uiStateSyncTimer.current = null;
     }, 800);
-  }, [sessionUiState, sidecarStatus.state, activeProjectId]);
+  }, [sessionUiState, sessionProjects, sidecarStatus.state]);
 
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
     window.localStorage.setItem(LAST_ACTIVE_SESSION_STORAGE_KEY, activeSessionId);
   }, [activeSessionId]);
+
+  useEffect(() => {
+    const projectId = sessionProjects[activeSessionId] || null;
+    setActiveProjectId((current) => current === projectId ? current : projectId);
+  }, [activeSessionId, sessionProjects]);
 
   useEffect(() => {
     sessionRequestIdsRef.current = sessionRequestIds;
@@ -1198,17 +1279,18 @@ export function App() {
   }, [runtimeSnapshot.status, runtimeSnapshot.releaseNotes?.version]);
 
   useEffect(() => {
+    const projectId = sessionProjects[activeSessionId] || null;
     setSessionUiState((current) => ({
       ...current,
       [activeSessionId]: {
         title: activeSessionTitle,
-        projectId: activeProjectId,
+        projectId,
         messages,
         composerText,
         attachments
       }
     }));
-  }, [activeSessionId, activeSessionTitle, activeProjectId, messages, composerText, attachments]);
+  }, [activeSessionId, activeSessionTitle, sessionProjects, messages, composerText, attachments]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(syncComposerHeight);
@@ -1261,6 +1343,10 @@ export function App() {
       streamCleanup.current = null;
       streamCleanups.current = {};
       streamCleanupRequestIds.current = {};
+      Object.values(streamDeltaBuffers.current).forEach((buffer) => {
+        if (buffer.frame !== null) window.cancelAnimationFrame(buffer.frame);
+      });
+      streamDeltaBuffers.current = {};
       Object.values(installWatchers.current).forEach((timer) => window.clearInterval(timer));
       installWatchers.current = {};
       if (uiStateSyncTimer.current) {
@@ -1404,11 +1490,13 @@ export function App() {
     });
   }, [runtimeSnapshot, sessionUiState]);
 
+  const allSessions = useMemo(() => (
+    mapSessions(runtimeSnapshot, activeSessionId, activeSessionTitle, sessionProjects, sessionTitles, pinnedSessions, projects, sessionUiState)
+  ), [runtimeSnapshot, activeSessionId, activeSessionTitle, sessionProjects, sessionTitles, pinnedSessions, projects, sessionUiState]);
   const visibleSessions = useMemo(() => {
-    const rows = mapSessions(runtimeSnapshot, activeSessionId, activeSessionTitle, sessionProjects, sessionTitles, pinnedSessions, projects, activeProjectId, sessionUiState);
     const needle = searchQuery.trim().toLowerCase();
-    return needle ? rows.filter((row) => `${row.title} ${row.detail}`.toLowerCase().includes(needle)) : rows;
-  }, [runtimeSnapshot, activeSessionId, activeSessionTitle, sessionProjects, sessionTitles, pinnedSessions, projects, activeProjectId, sessionUiState, searchQuery]);
+    return needle ? allSessions.filter((row) => `${row.title} ${row.detail}`.toLowerCase().includes(needle)) : allSessions;
+  }, [allSessions, searchQuery]);
 
   const activeProject = useMemo(
     () => projects.find((project) => project.id === activeProjectId) || null,
@@ -1438,6 +1526,14 @@ export function App() {
     })),
     [sortedProjects, projectSessions]
   );
+  const selectOrCreateProjectSession = (project: ProjectFolder) => {
+    const existing = allSessions.find((row) => row.projectId === project.id);
+    if (existing) {
+      void selectSession(existing);
+      return;
+    }
+    startNewSession(project);
+  };
   const currentModelName = displayModelName(runtimeSnapshot.currentModel);
   const mentionMatch = /@([\w\u4e00-\u9fa5-]*)$/.exec(composerText);
   const skillMentions = mentionMatch
@@ -1629,21 +1725,21 @@ export function App() {
   function restoreCachedSession(sessionId: string, activeRequestId?: string, streamAvailable = true) {
     const cached = sessionUiState[sessionId];
     if (!cached) return false;
+    const projectId = sessionProjects[sessionId] || null;
     const nextMessages = normalizePausedMessages(cached.messages);
     setMessages(nextMessages);
     setComposerText(cached.composerText);
     setAttachments(cached.attachments);
     setActiveSessionTitle(sessionTitles[sessionId] || cached.title || "新对话");
-    setActiveProjectId(cached.projectId || sessionProjects[sessionId] || null);
-    if (nextMessages !== cached.messages) {
-      setSessionUiState((current) => ({
-        ...current,
-        [sessionId]: {
-          ...cached,
-          messages: nextMessages
-        }
-      }));
-    }
+    setActiveProjectId(projectId);
+    setSessionUiState((current) => ({
+      ...current,
+      [sessionId]: {
+        ...cached,
+        projectId,
+        messages: nextMessages
+      }
+    }));
     const liveMessage = nextMessages.find((message) => isLiveAssistantMessage(message) && message.requestId);
     if (liveMessage?.requestId && streamAvailable) {
       setSessionRequestIds((current) => ({ ...current, [sessionId]: liveMessage.requestId || "" }));
@@ -1658,7 +1754,7 @@ export function App() {
 
   async function selectSession(row: SessionRow) {
     const switchSeq = ++sessionSwitchSeq.current;
-    const nextProjectId = row.projectId || null;
+    const nextProjectId = sessionProjects[row.id] || null;
     autoScrollRef.current = true;
     setShowJumpLatest(false);
     activeSessionIdRef.current = row.id;
@@ -1698,10 +1794,10 @@ export function App() {
         [row.id]: {
           ...(current[row.id] || {
             title: row.title,
-            projectId: nextProjectId,
             composerText: "",
             attachments: []
           }),
+          projectId: nextProjectId,
           messages: mapped
         }
       }));
@@ -1798,11 +1894,9 @@ export function App() {
       setProjects((current) => {
         const existing = current.find((item) => item.path === project.path);
         if (existing) {
-          setActiveProjectId(existing.id);
           nextProject = { ...existing, updatedAt: project.updatedAt };
           return current.map((item) => item.path === project.path ? nextProject : item);
         }
-        setActiveProjectId(project.id);
         return [project, ...current];
       });
       window.setTimeout(() => startNewSession(nextProject), 0);
@@ -1900,6 +1994,7 @@ export function App() {
         ...current,
         [sessionId]: {
           ...existing,
+          projectId: sessionProjects[sessionId] || null,
           messages: updater(existing.messages)
         }
       };
@@ -2109,6 +2204,31 @@ export function App() {
     };
   }
 
+  function artifactDedupeKey(artifact: AgentArtifact) {
+    return (artifact.path || artifact.relativePath || artifact.url || artifact.id).replace(/\\/g, "/").toLowerCase();
+  }
+
+  function appendArtifact(message: ChatItem, item: StreamItem): ChatItem {
+    const incoming = item.artifact
+      ? normalizeArtifactEntry(item.artifact, 0, item.request_id || message.requestId)
+      : Array.isArray(item.artifacts)
+        ? item.artifacts.map((entry, index) => normalizeArtifactEntry(entry, index, item.request_id || message.requestId)).filter((entry): entry is AgentArtifact => Boolean(entry))
+        : [];
+    const artifacts = Array.isArray(incoming) ? incoming : incoming ? [incoming] : [];
+    if (!artifacts.length) return message;
+    const nextArtifacts = [...(message.artifacts || [])];
+    for (const artifact of artifacts) {
+      const key = artifactDedupeKey(artifact);
+      const index = nextArtifacts.findIndex((entry) => entry.id === artifact.id || artifactDedupeKey(entry) === key);
+      if (index >= 0) {
+        nextArtifacts[index] = { ...nextArtifacts[index], ...artifact };
+      } else {
+        nextArtifacts.push(artifact);
+      }
+    }
+    return { ...message, pending: true, artifacts: nextArtifacts };
+  }
+
   function isCurrentSessionRequest(sessionId: string, requestId?: string) {
     return !requestId || sessionRequestIdsRef.current[sessionId] === requestId;
   }
@@ -2122,17 +2242,81 @@ export function App() {
     return Boolean(completedRequestIds.current[requestId] && isPostDoneTailItem(item));
   }
 
+  function streamDeltaKey(sessionId: string, assistantId: string, requestId: string) {
+    return `${sessionId}::${assistantId}::${requestId}`;
+  }
+
+  function flushBufferedDelta(key: string) {
+    const buffer = streamDeltaBuffers.current[key];
+    if (!buffer) return;
+    if (buffer.frame !== null) {
+      window.cancelAnimationFrame(buffer.frame);
+      buffer.frame = null;
+    }
+    const text = buffer.text;
+    buffer.text = "";
+    if (!text) return;
+    updateAssistantMessage(buffer.sessionId, buffer.assistantId, (message) => ({
+      ...finishRunningSteps(message),
+      content: `${message.content}${text}`,
+      pending: true,
+      paused: false
+    }));
+  }
+
+  function enqueueAssistantDelta(sessionId: string, assistantId: string, requestId: string, rawContent: string) {
+    const deltaContent = redactInternalPromptText(rawContent);
+    if (!deltaContent) return;
+    const key = streamDeltaKey(sessionId, assistantId, requestId);
+    const buffer = streamDeltaBuffers.current[key] || {
+      sessionId,
+      assistantId,
+      requestId,
+      text: "",
+      frame: null
+    };
+    buffer.text += deltaContent;
+    streamDeltaBuffers.current[key] = buffer;
+    if (buffer.frame !== null) return;
+    buffer.frame = window.requestAnimationFrame(() => {
+      const current = streamDeltaBuffers.current[key];
+      if (current) current.frame = null;
+      flushBufferedDelta(key);
+    });
+  }
+
+  function flushStreamDeltaBuffers(sessionId: string, requestId?: string) {
+    Object.keys(streamDeltaBuffers.current).forEach((key) => {
+      const buffer = streamDeltaBuffers.current[key];
+      if (!buffer || buffer.sessionId !== sessionId) return;
+      if (requestId && buffer.requestId !== requestId) return;
+      flushBufferedDelta(key);
+    });
+  }
+
+  function clearStreamDeltaBuffers(sessionId: string, requestId?: string) {
+    Object.keys(streamDeltaBuffers.current).forEach((key) => {
+      const buffer = streamDeltaBuffers.current[key];
+      if (!buffer || buffer.sessionId !== sessionId) return;
+      if (requestId && buffer.requestId !== requestId) return;
+      if (buffer.frame !== null) window.cancelAnimationFrame(buffer.frame);
+      delete streamDeltaBuffers.current[key];
+    });
+  }
+
   function closeSessionStream(sessionId: string, requestId?: string) {
     const cleanup = streamCleanups.current[sessionId];
     if (!cleanup) return;
     const cleanupRequestId = streamCleanupRequestIds.current[sessionId];
     if (requestId && cleanupRequestId && cleanupRequestId !== requestId) return;
+    flushStreamDeltaBuffers(sessionId, requestId);
     cleanup();
     delete streamCleanups.current[sessionId];
     delete streamCleanupRequestIds.current[sessionId];
     if (streamCleanup.current === cleanup) {
       streamCleanup.current = null;
     }
+    clearStreamDeltaBuffers(sessionId, requestId);
   }
 
   function clearSessionRequestState(sessionId: string, requestId?: string) {
@@ -2155,8 +2339,10 @@ export function App() {
   }
 
   function finishSessionRequest(sessionId: string, requestId?: string) {
+    flushStreamDeltaBuffers(sessionId, requestId);
     clearSessionRequestState(sessionId, requestId);
     closeSessionStream(sessionId, requestId);
+    clearStreamDeltaBuffers(sessionId, requestId);
   }
 
   function scheduleStreamReconnect(sessionId: string, assistantId: string, requestId: string) {
@@ -2242,6 +2428,8 @@ export function App() {
       onItem: (item) => {
         if (item.request_id && item.request_id !== requestId) return;
         if (!shouldAcceptStreamItem(sessionId, requestId, item)) return;
+        const isDeltaItem = item.type === "message_update" || item.type === "delta";
+        if (!isDeltaItem) flushStreamDeltaBuffers(sessionId, requestId);
         if (item.type === "cancelled") {
           updateAssistantMessage(sessionId, assistantId, (message) => ({
             ...finishRunningSteps(message, "cancelled"),
@@ -2255,7 +2443,7 @@ export function App() {
         }
         if (item.type === "done") {
           updateAssistantMessage(sessionId, assistantId, (message) => ({
-            ...finishRunningSteps(message),
+            ...(item.artifact || item.artifacts ? appendArtifact(finishRunningSteps(message), item) : finishRunningSteps(message)),
             content: redactInternalPromptText(item.content || message.content),
             pending: false,
             userSeq: typeof item.user_seq === "number" ? item.user_seq : message.userSeq,
@@ -2345,6 +2533,10 @@ export function App() {
           updateAssistantMessage(sessionId, assistantId, (message) => appendToolEnd(message, item));
           return;
         }
+        if (item.type === "artifact") {
+          updateAssistantMessage(sessionId, assistantId, (message) => appendArtifact(message, item));
+          return;
+        }
         if (item.type === "image" || item.type === "video" || item.type === "file" || item.type === "voice_attach") {
           updateAssistantMessage(sessionId, assistantId, (message) => {
             const next = appendMediaStep(message, item);
@@ -2369,14 +2561,7 @@ export function App() {
               return;
             }
             if ((item.type === "message_update" || item.type === "delta") && item.content) {
-              const deltaContent = redactInternalPromptText(item.content);
-              if (!deltaContent) return;
-              updateAssistantMessage(sessionId, assistantId, (message) => ({
-                ...finishRunningSteps(message),
-                content: `${message.content}${deltaContent}`,
-                pending: true,
-                paused: false
-              }));
+              enqueueAssistantDelta(sessionId, assistantId, requestId, item.content);
             }
       },
       onError: () => {
@@ -2593,6 +2778,8 @@ export function App() {
             if (item.request_id && item.request_id !== requestId) return;
             if (!shouldAcceptStreamItem(requestSessionId, requestId, item)) return;
             observeStreamUsage(item);
+            const isDeltaItem = item.type === "message_update" || item.type === "delta";
+            if (!isDeltaItem) flushStreamDeltaBuffers(requestSessionId, requestId);
             if (item.type === "cancelled") {
               updateAssistantMessage(requestSessionId, assistantId, (message) => ({
                 ...finishRunningSteps(message, "cancelled"),
@@ -2610,8 +2797,11 @@ export function App() {
                   return { ...message, userSeq: item.user_seq };
                 }
                 if (message.id === assistantId) {
+                  const nextMessage = item.artifact || item.artifacts
+                    ? appendArtifact(finishRunningSteps(message), item)
+                    : finishRunningSteps(message);
                   return {
-                    ...finishRunningSteps(message),
+                    ...nextMessage,
                     content: redactInternalPromptText(item.content || message.content),
                     pending: false,
                     userSeq: typeof item.user_seq === "number" ? item.user_seq : message.userSeq,
@@ -2705,6 +2895,10 @@ export function App() {
               updateAssistantMessage(requestSessionId, assistantId, (message) => appendToolEnd(message, item));
               return;
             }
+            if (item.type === "artifact") {
+              updateAssistantMessage(requestSessionId, assistantId, (message) => appendArtifact(message, item));
+              return;
+            }
             if (item.type === "image" || item.type === "video" || item.type === "file" || item.type === "voice_attach") {
               updateAssistantMessage(requestSessionId, assistantId, (message) => {
                 const next = appendMediaStep(message, item);
@@ -2728,13 +2922,7 @@ export function App() {
               return;
             }
             if ((item.type === "message_update" || item.type === "delta") && item.content) {
-              const deltaContent = redactInternalPromptText(item.content);
-              if (!deltaContent) return;
-              updateAssistantMessage(requestSessionId, assistantId, (message) => ({
-                ...finishRunningSteps(message),
-                content: `${message.content}${deltaContent}`,
-                pending: true
-              }));
+              enqueueAssistantDelta(requestSessionId, assistantId, requestId, item.content);
             }
           },
           onError: () => {
@@ -2761,11 +2949,11 @@ export function App() {
           ...current,
           [requestSessionId]: {
             ...(current[requestSessionId] || {
-              projectId: sessionProjects[requestSessionId] || null,
               messages: [],
               composerText: "",
               attachments: []
             }),
+            projectId: sessionProjects[requestSessionId] || null,
             title
           }
         }));
@@ -2832,11 +3020,12 @@ export function App() {
   }
 
   async function syncRuntimeUiStateNow() {
+    const projectId = sessionProjects[activeSessionId] || null;
     const mergedState = pruneSessionUiState({
       ...sessionUiState,
       [activeSessionId]: {
         title: activeSessionTitle,
-        projectId: activeProjectId,
+        projectId,
         messages,
         composerText,
         attachments
@@ -2847,7 +3036,7 @@ export function App() {
     await saveRuntimeUiState({
       version: 1,
       lastActiveSessionId: activeSessionId,
-      activeProjectId,
+      activeProjectId: projectId,
       sessionUiState: mergedState,
       savedAt: new Date().toISOString()
     }).catch(() => undefined);
@@ -3090,7 +3279,44 @@ export function App() {
     window.setTimeout(() => setCopiedMessageId((current) => current === message.id ? "" : current), 1400);
   }
 
-  async function openArtifactFile(file: { file_path: string; file_name: string; file_type?: FileAttachment["file_type"] }) {
+  async function openArtifactFile(file: { file_path: string; file_name: string; file_type?: FileAttachment["file_type"]; open_action?: "preview" | "open" | "reveal" | "copy" | "openWith" }) {
+    const rawPath = String(file.file_path || "").trim();
+    if (!rawPath) return;
+    const action = file.open_action || "open";
+    if (action === "preview") {
+      setPreviewFile({
+        file_path: rawPath,
+        file_name: file.file_name,
+        file_type: file.file_type || "file"
+      });
+      return;
+    }
+    if (isRuntimePreviewPath(rawPath)) {
+      setToast("该预览链接没有可直接打开的本地路径");
+      return;
+    }
+    const resolvedPath = resolveArtifactPath(rawPath);
+    const candidates = Array.from(new Set([rawPath, resolvedPath].filter(Boolean)));
+    let result = "";
+    const openAction: OpenPathAction = action === "reveal" ? "reveal" : action === "openWith" ? "openWith" : "open";
+    for (const candidate of candidates) {
+      try {
+        result = await openRuntimePath(candidate, openAction);
+      } catch (error) {
+        if (!isLocalAbsolutePath(candidate)) {
+          result = error instanceof Error ? error.message : String(error || "");
+        } else {
+          result = await openLocalPath(candidate, openAction);
+        }
+      }
+      if (!/path not found|not found|找不到|不存在/i.test(result)) break;
+    }
+    if (result) {
+      setToast(result.startsWith("denied") ? "已取消打开文件" : result);
+    }
+  }
+
+  async function legacyOpenArtifactFile(file: { file_path: string; file_name: string; file_type?: FileAttachment["file_type"] }) {
     const rawPath = String(file.file_path || "").trim();
     if (!rawPath) return;
     if (isRuntimePreviewPath(rawPath)) {
@@ -3321,11 +3547,14 @@ export function App() {
                   >
                     <button
                       type="button"
-                      onClick={() => setActiveProjectId(project.id)}
+                      onClick={() => selectOrCreateProjectSession(project)}
                       title={`${project.name}\n${project.path}\n项目记忆：${project.memoryPath || ".ecorex/project-memory.md"}`}
                     >
                       <FolderOpen aria-hidden="true" />
                       <span>{project.name}</span>
+                    </button>
+                    <button className="project-new-session-button" type="button" title={`为 ${project.name} 创建新会话`} aria-label={`为 ${project.name} 创建新会话`} onClick={() => startNewSession(project)}>
+                      <Plus aria-hidden="true" />
                     </button>
                     <button className="project-menu-button" type="button" title="项目操作" aria-label="项目操作" onClick={(event) => showProjectMenu(event, project)}>
                       <MoreHorizontal aria-hidden="true" />
@@ -3461,6 +3690,7 @@ export function App() {
                     reasoning={message.reasoning}
                     steps={message.steps}
                     toolCalls={message.toolCalls}
+                    artifacts={message.artifacts}
                     onOpenLocalFile={(file) => void openArtifactFile(file)}
                     localFilePreviewUrl={(filePath) => filePreviewUrl(filePath, sidecarStatus.webPort)}
                   />
