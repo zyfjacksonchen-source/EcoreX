@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import platform
 import re
@@ -103,7 +104,7 @@ def _tail_text(
 
 
 def _candidate_log_paths(runtime_root: Path) -> List[Path]:
-    paths = [
+    paths = _active_log_paths() + [
         runtime_root / "run.log",
         runtime_root / "logs" / "run.log",
         Path.cwd() / "run.log",
@@ -123,6 +124,20 @@ def _candidate_log_paths(runtime_root: Path) -> List[Path]:
             seen.add(key)
             unique.append(path)
     return unique
+
+
+def _active_log_paths() -> List[Path]:
+    paths: List[Path] = []
+    for log_name in ("log", ""):
+        try:
+            active_logger = logging.getLogger(log_name)
+            for handler in active_logger.handlers:
+                filename = getattr(handler, "baseFilename", None)
+                if filename:
+                    paths.append(Path(str(filename)))
+        except Exception:
+            continue
+    return paths
 
 
 def _check_cdp(endpoint: str) -> Dict[str, Any]:

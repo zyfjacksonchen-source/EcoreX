@@ -643,7 +643,7 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
     require_contains(broker, "\"filesystem-access\"", f"{label} permission broker")
 
     release_notes = read_text_by_suffix("common/ecorex_release_notes.py")
-    require_contains(release_notes, "\"version\": \"0.1.14\"", f"{label} release notes")
+    require_contains(release_notes, "\"version\": \"0.1.15\"", f"{label} release notes")
     require_contains(release_notes, "\"updatePolicy\"", f"{label} release notes")
     require_contains(release_notes, "\"webui\"", f"{label} release notes")
 
@@ -766,6 +766,9 @@ def validate_frontend_bundle_texts(read_text_by_suffix, label: str) -> None:
     require_contains(renderer, "activeRequests", f"{label} renderer bundle")
     require_contains(renderer, "releaseNotes", f"{label} renderer bundle")
     require_contains(renderer, "ecorex-release-notes-seen-version", f"{label} renderer bundle")
+    require_contains(renderer, "/api/project-folder", f"{label} renderer bundle")
+    require_contains(renderer, "/api/open-path", f"{label} renderer bundle")
+    require_contains(renderer, "data-ecorex-file-path", f"{label} renderer bundle")
 
 
 def zip_text_by_suffix(archive: zipfile.ZipFile, suffix: str) -> str:
@@ -834,6 +837,9 @@ def validate_desktop_unpacked(desktop_dir: pathlib.Path, node_modules: pathlib.P
     require_no_forbidden_release_text("desktop api bridge", "dist-electron/apiBridge.js", api_bridge_text)
     require_contains(api_bridge_text, "/api/agent-install-request", "desktop api bridge")
     require_contains(api_bridge_text, "/api/subagents", "desktop api bridge")
+    require_contains(api_bridge_text, "/api/project-folder", "desktop api bridge")
+    require_contains(api_bridge_text, "/api/logs", "desktop api bridge")
+    require_contains(api_bridge_text, "/api/logs/snapshot", "desktop api bridge")
     require_contains(api_bridge_text, "This EcoreX desktop API path is not allowed", "desktop api bridge")
 
     updater_text = extract_asar_text(app_asar, "dist-electron/updater.js", node_modules)
@@ -864,6 +870,9 @@ def validate_desktop_unpacked(desktop_dir: pathlib.Path, node_modules: pathlib.P
     require_no_forbidden_release_text("desktop renderer bundle", "renderer", renderer_text)
     require_contains(renderer_text, "voice_attach", "desktop renderer bundle")
     require_contains(renderer_text, "extras?.audio", "desktop renderer bundle")
+    require_contains(renderer_text, "/api/project-folder", "desktop renderer bundle")
+    require_contains(renderer_text, "/api/open-path", "desktop renderer bundle")
+    require_contains(renderer_text, "data-ecorex-file-path", "desktop renderer bundle")
     print(f"PASS desktop unpacked host-boundary {desktop_dir}")
 
 
@@ -871,7 +880,7 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", default="deploy/ecorex-site/manifest.json")
     parser.add_argument("--artifact-dir", default="release-artifacts")
-    parser.add_argument("--version", default="0.1.14")
+    parser.add_argument("--version", default="")
     parser.add_argument("--public-zip", default="")
     parser.add_argument("--desktop-dir", default="")
     parser.add_argument("--desktop-node-modules", default="desktop/node_modules")
@@ -881,6 +890,11 @@ def main(argv: list[str]) -> int:
         help="Validate a local desktop unpacked build without requiring release artifacts.",
     )
     args = parser.parse_args(argv)
+    if not args.version:
+        desktop_package = pathlib.Path("desktop/package.json")
+        require(desktop_package.is_file(), "cannot infer version: desktop/package.json missing")
+        args.version = json.loads(desktop_package.read_text(encoding="utf-8")).get("version", "")
+        require(args.version, "cannot infer version: desktop/package.json has no version")
 
     if args.desktop_only:
         require(bool(args.desktop_dir), "--desktop-only requires --desktop-dir")

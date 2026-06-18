@@ -186,6 +186,14 @@ copy_runtime_sources() {
     fi
   done
 
+  local desktop_dist="$DESKTOP_ROOT/dist"
+  if [[ -f "$desktop_dist/index.html" ]]; then
+    local app_dir="$RUNTIME_DIR/channel/web/static/app"
+    rm -rf "$app_dir"
+    mkdir -p "$app_dir"
+    cp -R "$desktop_dist/." "$app_dir/"
+  fi
+
   cp "$DESKTOP_ROOT/runtime-packs/core-requirements.txt" "$RUNTIME_DIR/core-requirements.txt"
   cp "$DESKTOP_ROOT/runtime-packs/capabilities.json" "$RUNTIME_DIR/capabilities.json"
   mkdir -p "$RUNTIME_DIR/scripts"

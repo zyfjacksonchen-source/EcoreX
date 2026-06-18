@@ -1,4 +1,4 @@
-import { useState, type MouseEvent, type ReactNode } from "react";
+import { useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import {
   ExternalLink,
   Eye,
@@ -733,21 +733,57 @@ function renderList(items: string[], ordered: boolean, out: string[], localFileP
   items.length = 0;
 }
 
+function isTableRow(line: string) {
+  const trimmed = line.trim();
+  return trimmed.includes("|") && /^\|?.+\|.+\|?$/.test(trimmed);
+}
+
+function isTableSeparator(line: string) {
+  const cells = parseTableCells(line);
+  return cells.length > 1 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+}
+
+function parseTableCells(line: string) {
+  return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+}
+
+function renderTable(lines: string[], out: string[], localFilePreviewUrl?: (filePath: string) => string) {
+  if (!lines.length) return;
+  if (lines.length < 2 || !isTableSeparator(lines[1])) {
+    out.push(`<p>${renderInline(lines.map((line) => line.trim()).join(" "), localFilePreviewUrl)}</p>`);
+    lines.length = 0;
+    return;
+  }
+
+  const header = parseTableCells(lines[0]);
+  const rows = lines.slice(2).filter(isTableRow).map(parseTableCells);
+  const headHtml = `<thead><tr>${header.map((cell) => `<th>${renderInline(cell, localFilePreviewUrl)}</th>`).join("")}</tr></thead>`;
+  const bodyHtml = rows.length
+    ? `<tbody>${rows.map((row) => `<tr>${header.map((_cell, index) => `<td>${renderInline(row[index] || "", localFilePreviewUrl)}</td>`).join("")}</tr>`).join("")}</tbody>`
+    : "";
+  out.push(`<table>${headHtml}${bodyHtml}</table>`);
+  lines.length = 0;
+}
+
 function renderMarkdown(markdown: string, localFilePreviewUrl?: (filePath: string) => string) {
   const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
   const out: string[] = [];
   const paragraph: string[] = [];
   const bullets: string[] = [];
   const numbers: string[] = [];
+  const table: string[] = [];
   let code: string[] | null = null;
 
   const flushAll = () => {
     flushParagraph(paragraph, out, localFilePreviewUrl);
     renderList(bullets, false, out, localFilePreviewUrl);
     renderList(numbers, true, out, localFilePreviewUrl);
+    renderTable(table, out, localFilePreviewUrl);
   };
 
-  for (const raw of lines) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const raw = lines[lineIndex];
+    const nextRaw = lines[lineIndex + 1] || "";
     const fence = raw.match(/^```([\w-]*)\s*$/);
     if (fence) {
       if (code) {
@@ -769,6 +805,16 @@ function renderMarkdown(markdown: string, localFilePreviewUrl?: (filePath: strin
       flushAll();
       continue;
     }
+
+    if (isTableRow(raw) && (table.length > 0 || isTableSeparator(nextRaw))) {
+      flushParagraph(paragraph, out, localFilePreviewUrl);
+      renderList(bullets, false, out, localFilePreviewUrl);
+      renderList(numbers, true, out, localFilePreviewUrl);
+      table.push(raw);
+      continue;
+    }
+
+    renderTable(table, out, localFilePreviewUrl);
 
     const heading = raw.match(/^(#{1,4})\s+(.+)$/);
     if (heading) {
@@ -823,11 +869,11 @@ function splitStreamingMarkdown(markdown: string) {
     };
   }
 
-  const lastBreak = source.lastIndexOf("\n\n");
-  if (lastBreak >= 0) {
+  const lastLineBreak = source.lastIndexOf("\n");
+  if (lastLineBreak >= 0) {
     return {
-      stable: source.slice(0, lastBreak).trimEnd(),
-      tail: source.slice(lastBreak + 2),
+      stable: source.slice(0, lastLineBreak).trimEnd(),
+      tail: source.slice(lastLineBreak + 1),
       tailKind: "text" as const
     };
   }
@@ -840,6 +886,8 @@ function cleanStreamingTail(value: string) {
   text = text.replace(/^(```+[\w-]*\s*)/gm, "");
   if (/^\s{0,3}#{1,6}\s*$/.test(text)) return "";
   if (/^\s{0,3}(?:[-*]|\d+\.)\s*$/.test(text)) return "";
+  if (/^\s*\|?(?:\s*:?-{0,3}:?\s*\|)+\s*$/.test(text)) return "";
+  if (/^\s*\|.+\|?\s*$/.test(text)) return "";
   text = text.replace(/!\[([^\]]*)\]\([^)]*$/, "$1");
   text = text.replace(/\[([^\]]+)\]\([^)]*$/, "$1");
   text = text.replace(/\[([^\]]*)$/, "$1");
@@ -987,6 +1035,10 @@ function MarkdownBlock({
   localFilePreviewUrl?: (filePath: string) => string;
   onOpenLocalFile?: (file: LocalFilePayload) => void;
 }) {
+  const html = useMemo(
+    () => renderMarkdown(redactInternalPromptText(content), localFilePreviewUrl),
+    [content, localFilePreviewUrl]
+  );
   const handleClick = (event: MouseEvent<HTMLDivElement>) => {
     if (!onOpenLocalFile) return;
     const target = event.target instanceof Element ? event.target : null;
@@ -1004,7 +1056,7 @@ function MarkdownBlock({
     <div
       className="markdown-content"
       onClick={handleClick}
-      dangerouslySetInnerHTML={{ __html: renderMarkdown(redactInternalPromptText(content), localFilePreviewUrl) }}
+      dangerouslySetInnerHTML={{ __html: html }}
     />
   );
 }
@@ -1018,8 +1070,10 @@ function StreamingMarkdownBlock({
   localFilePreviewUrl?: (filePath: string) => string;
   onOpenLocalFile?: (file: LocalFilePayload) => void;
 }) {
-  const { stable, tail, tailKind } = splitStreamingMarkdown(redactInternalPromptText(content));
-  const cleanedTail = cleanStreamingTail(tail);
+  const { stable, tail, tailKind, cleanedTail } = useMemo(() => {
+    const split = splitStreamingMarkdown(redactInternalPromptText(content));
+    return { ...split, cleanedTail: cleanStreamingTail(split.tail) };
+  }, [content]);
   return (
     <div className="streaming-markdown">
       {stable && <MarkdownBlock content={stable} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />}
@@ -1250,7 +1304,10 @@ function MainAnswer({ content, pending, collapsible, artifacts = [], extraArtifa
   onOpenLocalFile?: (file: LocalFilePayload) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const legacyArtifacts = mergeArtifacts(extractArtifacts(content, { allowBareFiles: false }), extraArtifacts);
+  const legacyArtifacts = useMemo(
+    () => pending ? mergeArtifacts(extraArtifacts) : mergeArtifacts(extractArtifacts(content, { allowBareFiles: false }), extraArtifacts),
+    [content, pending, extraArtifacts]
+  );
   const artifactShelf = <ArtifactShelf artifacts={artifacts} legacyArtifacts={legacyArtifacts} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />;
   if (!content) return artifactShelf;
   if (!collapsible || pending || content.length <= LONG_REPLY_COLLAPSE_CHARS) {
@@ -1305,9 +1362,12 @@ export function MessageContent(props: {
   localFilePreviewUrl?: (filePath: string) => string;
 }) {
   const steps = props.steps || [];
-  const { mainContent, visibleSteps } = splitSteps(steps, props.content);
-  const compactedSteps = compactToolSteps(visibleSteps);
-  const stepArtifacts = extractArtifactsFromSteps(compactedSteps, props.toolCalls || []);
+  const { mainContent, visibleSteps } = useMemo(() => splitSteps(steps, props.content), [steps, props.content]);
+  const compactedSteps = useMemo(() => compactToolSteps(visibleSteps), [visibleSteps]);
+  const stepArtifacts = useMemo(
+    () => extractArtifactsFromSteps(compactedSteps, props.toolCalls || []),
+    [compactedSteps, props.toolCalls]
+  );
   const legacySteps: ReactNode[] = [];
 
   if (!steps.length && props.role !== "user") {

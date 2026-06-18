@@ -287,6 +287,7 @@ export type StreamItem = {
   type?: string;
   content?: string;
   text?: string;
+  delta?: string;
   message?: string;
   title?: string;
   tool?: string;
@@ -607,6 +608,13 @@ export async function chooseProjectFolder(): Promise<ProjectFolder | null> {
   return window.ecorexDesktop.chooseProjectFolder();
 }
 
+export async function registerProjectFolderPath(projectPath: string): Promise<ProjectFolder | null> {
+  const trimmedPath = String(projectPath || "").trim();
+  if (!trimmedPath) return null;
+  const result = await apiJson<{ status?: string; project?: ProjectFolder }>("/api/project-folder", "POST", { path: trimmedPath });
+  return result.project || null;
+}
+
 export async function savePastedFile(file: File): Promise<FileAttachment | null> {
   if (!window.ecorexDesktop?.savePastedFile) {
     return null;
@@ -829,17 +837,45 @@ export function filePreviewUrl(filePath: string, webPort: number) {
   return `http://127.0.0.1:${webPort}/api/file?path=${encodeURIComponent(filePath)}`;
 }
 
+const streamLastEventIds = new Map<string, string>();
+const streamCursorCleanupTimers = new Map<string, number>();
+
+function rememberStreamCursor(requestId: string, eventId: string) {
+  if (!requestId || !eventId) return;
+  streamLastEventIds.set(requestId, eventId);
+  const cleanup = streamCursorCleanupTimers.get(requestId);
+  if (cleanup) window.clearTimeout(cleanup);
+}
+
+function scheduleStreamCursorCleanup(requestId: string, delayMs = 120_000) {
+  if (!requestId) return;
+  const cleanup = streamCursorCleanupTimers.get(requestId);
+  if (cleanup) window.clearTimeout(cleanup);
+  streamCursorCleanupTimers.set(requestId, window.setTimeout(() => {
+    streamLastEventIds.delete(requestId);
+    streamCursorCleanupTimers.delete(requestId);
+  }, delayMs));
+}
+
 export function openMessageStream(input: {
   requestId: string;
   webPort: number;
   onItem: (item: StreamItem) => void;
   onError: () => void;
 }) {
-  const url = `http://127.0.0.1:${input.webPort}/stream?request_id=${encodeURIComponent(input.requestId)}`;
+  const params = new URLSearchParams({ request_id: input.requestId });
+  const lastEventId = streamLastEventIds.get(input.requestId);
+  if (lastEventId) params.set("last_event_id", lastEventId);
+  const url = `http://127.0.0.1:${input.webPort}/stream?${params.toString()}`;
   const events = new EventSource(url);
   events.onmessage = (event) => {
     try {
-      input.onItem(JSON.parse(event.data) as StreamItem);
+      rememberStreamCursor(input.requestId, event.lastEventId);
+      const item = JSON.parse(event.data) as StreamItem;
+      if (item.type === "done" || item.type === "cancelled" || item.type === "voice_attach") {
+        scheduleStreamCursorCleanup(input.requestId);
+      }
+      input.onItem(item);
     } catch {
       input.onItem({ type: "error", message: "无法解析运行时返回" });
     }

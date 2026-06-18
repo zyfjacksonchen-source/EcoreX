@@ -527,6 +527,9 @@ class AgentStreamExecutor:
             parts = name.split("__", 2)
             server = parts[1] if len(parts) > 1 and parts[1] else "server"
             return f"mcp:{server}"
+        if name == "host_diagnostics":
+            action = str(args.get("action") or "status").strip().lower()
+            return f"host_diagnostics:{action or 'status'}"
         if name in {"read", "ls", "web_fetch", "web_search"}:
             return f"{name}:read"
         return name or "unknown"
@@ -1796,6 +1799,11 @@ class AgentStreamExecutor:
             blocker = self._tool_result_user_action_blocker(tool_name, result_payload)
             if blocker:
                 self._force_text_response_once(blocker)
+
+            if tool_name == "host_diagnostics":
+                action = str(arguments.get("action") or "status").strip().lower()
+                if result.status == "success" and action in {"logs", "all"}:
+                    self._force_text_response_once("host-diagnostics-logs-ready")
 
             # Record tool result for failure tracking
             success = result.status == "success"

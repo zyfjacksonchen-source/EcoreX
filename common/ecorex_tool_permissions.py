@@ -581,6 +581,58 @@ class ToolPermissionBroker:
         })
         return decision
 
+    def remember_workspace_root(self, path: str, access: str = "write", cwd: Optional[str] = None) -> Dict[str, Any]:
+        root = _resolve_profile_path(path, cwd)
+        if not root:
+            return {"status": "error", "message": "path is required"}
+        if not os.path.isdir(root):
+            return {"status": "error", "message": f"path is not a directory: {root}"}
+
+        settings = self._load_settings()
+        profile = settings.get("filesystem")
+        if not isinstance(profile, dict):
+            profile = _default_filesystem_profile(cwd)
+        roots = profile.get("workspaceRoots") or profile.get("workspace_roots") or []
+        if not isinstance(roots, list):
+            roots = []
+        root_real = os.path.realpath(root)
+        root_key = _norm_path(root_real)
+        normalized_roots = []
+        seen = set()
+        for item in roots:
+            resolved = _resolve_profile_path(str(item), cwd)
+            if not resolved:
+                continue
+            key = _norm_path(resolved)
+            if key not in seen:
+                seen.add(key)
+                normalized_roots.append(resolved)
+        if root_key not in seen:
+            normalized_roots.append(root_real)
+        profile["workspaceRoots"] = normalized_roots
+        profile.setdefault("defaultAccess", "deny")
+        rules = profile.get("rules")
+        if not isinstance(rules, list):
+            rules = []
+        workspace_rule = next((rule for rule in rules if isinstance(rule, dict) and rule.get("path") == ":workspace_roots"), None)
+        normalized_access = _normalize_access(access, "write")
+        if workspace_rule is not None:
+            current_access = _normalize_access(workspace_rule.get("access"), "deny")
+            if _ACCESS_RANK.get(current_access, 0) < _ACCESS_RANK.get(normalized_access, 2):
+                workspace_rule["access"] = normalized_access
+        else:
+            rules.append({"path": ":workspace_roots", "access": _normalize_access(access, "write")})
+        profile["rules"] = rules
+        settings["filesystem"] = profile
+        settings["updatedAt"] = _now()
+        self._save_settings(settings)
+        self._audit("filesystem-profile", "allow", {
+            "operation": "remember-workspace-root",
+            "path": _mask_sensitive(root_real),
+            "access": _normalize_access(access, "write"),
+        })
+        return {"status": "success", "path": root_real, **self.get_state()}
+
     def decide(self, request_id: str, decision: str, remember: bool = False) -> Dict[str, Any]:
         normalized = (decision or "").strip().lower()
         if normalized in {"allow", "allow_once", "always_allow"}:

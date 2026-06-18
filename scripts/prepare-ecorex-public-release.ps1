@@ -1,8 +1,8 @@
 param(
-    [string]$Version = "0.1.14",
+    [string]$Version = "",
     [string]$SiteRoot = "deploy/ecorex-site",
     [string]$AdminApiRoot = "deploy/ecorex-admin-api",
-    [string]$InstallerPath = "desktop/release/EcoreX_0.1.14_x64-setup.exe",
+    [string]$InstallerPath = "",
     [string]$MacArm64DmgPath = "",
     [string]$MacX64DmgPath = "",
     [string]$WebTarballPath = "",
@@ -95,6 +95,17 @@ function Assert-ExternalArtifactMetadata {
 }
 
 $repoRoot = (Resolve-Path -LiteralPath ".").Path
+$desktopPackagePath = Join-Path $repoRoot "desktop/package.json"
+if (-not $Version) {
+    if (-not (Test-Path -LiteralPath $desktopPackagePath)) {
+        throw "Cannot infer version because desktop/package.json does not exist. Pass -Version explicitly."
+    }
+    $desktopPackage = Get-Content -Raw -Encoding UTF8 -LiteralPath $desktopPackagePath | ConvertFrom-Json
+    $Version = [string]$desktopPackage.version
+}
+if (-not $InstallerPath) {
+    $InstallerPath = Join-Path "desktop/release" "EcoreX_${Version}_x64-setup.exe"
+}
 $siteRootResolved = Resolve-RequiredPath $SiteRoot
 $adminApiRootResolved = Resolve-RequiredPath $AdminApiRoot
 

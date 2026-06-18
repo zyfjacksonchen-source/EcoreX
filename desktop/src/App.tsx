@@ -73,6 +73,7 @@ import {
   resetPermissionGrants,
   deleteRuntimeSession,
   renameRuntimeSession,
+  registerProjectFolderPath,
   savePastedFile,
   saveRuntimeUiState,
   sendChatMessage,
@@ -292,7 +293,7 @@ function writeStorage<T>(key: string, value: T) {
 
 function pruneSessionUiState(state: Record<string, SessionUiState>) {
   const entries = Object.entries(state);
-  const liveEntries = entries.filter(([, value]) => (value.messages || []).some((message) => message.role === "assistant" && message.pending && message.requestId && !message.paused && !message.cancelled));
+  const liveEntries = entries.filter(([, value]) => hasLivePersistedMessages(value.messages || []));
   const retained = new Map<string, SessionUiState>();
   for (const [sessionId, value] of entries.slice(-24)) retained.set(sessionId, value);
   for (const [sessionId, value] of liveEntries) retained.set(sessionId, value);
@@ -308,15 +309,27 @@ function pruneSessionUiState(state: Record<string, SessionUiState>) {
   );
 }
 
+function hasLivePersistedMessages(messages: ChatItem[]) {
+  return messages.some((message) => (
+    message.role === "assistant"
+    && message.pending
+    && Boolean(message.requestId)
+    && !message.paused
+    && !message.cancelled
+  ));
+}
+
+function hasLiveSessionUiState(state: Record<string, SessionUiState>) {
+  return Object.values(state).some((value) => hasLivePersistedMessages(value.messages || []));
+}
+
 function pickBootSession(state: Record<string, SessionUiState>) {
   const entries = Object.entries(state);
   const savedId = window.localStorage.getItem(LAST_ACTIVE_SESSION_STORAGE_KEY) || "";
   if (savedId && state[savedId]) {
     return { id: savedId, state: state[savedId] };
   }
-  const liveEntry = [...entries].reverse().find(([, value]) => (value.messages || []).some((message) => (
-    message.role === "assistant" && message.pending && message.requestId && !message.paused && !message.cancelled
-  )));
+  const liveEntry = [...entries].reverse().find(([, value]) => hasLivePersistedMessages(value.messages || []));
   if (liveEntry) return { id: liveEntry[0], state: liveEntry[1] };
   const latestEntry = entries[entries.length - 1];
   return latestEntry ? { id: latestEntry[0], state: latestEntry[1] } : null;
@@ -1178,7 +1191,7 @@ export function App() {
   const streamCleanup = useRef<null | (() => void)>(null);
   const streamCleanups = useRef<Record<string, () => void>>({});
   const streamCleanupRequestIds = useRef<StringMap>({});
-  const streamDeltaBuffers = useRef<Record<string, { sessionId: string; assistantId: string; requestId: string; text: string; frame: number | null }>>({});
+  const streamDeltaBuffers = useRef<Record<string, { sessionId: string; assistantId: string; requestId: string; text: string; timer: number | null }>>({});
   const sessionRequestIdsRef = useRef<StringMap>({});
   const installWatchers = useRef<Record<string, number>>({});
   const queuedInstallRef = useRef<Array<{ pack: CapabilityPack; onInstalled?: () => void; sessionId: string }>>([]);
@@ -1191,6 +1204,8 @@ export function App() {
   const preloadDone = useRef(false);
   const bootHistoryRefreshDone = useRef(false);
   const releaseNotesDismissedVersion = useRef("");
+  const uiStateLocalSyncTimer = useRef<number | null>(null);
+  const pendingUiStateStorage = useRef<Record<string, SessionUiState> | null>(null);
   const uiStateSyncTimer = useRef<number | null>(null);
 
   useEffect(() => {
@@ -1230,7 +1245,19 @@ export function App() {
       ])
     );
     const pruned = pruneSessionUiState(projectSyncedState);
-    writeStorage(SESSION_UI_STORAGE_KEY, pruned);
+    pendingUiStateStorage.current = pruned;
+    if (uiStateLocalSyncTimer.current) {
+      window.clearTimeout(uiStateLocalSyncTimer.current);
+    }
+    const hasLiveState = hasLiveSessionUiState(pruned);
+    uiStateLocalSyncTimer.current = window.setTimeout(() => {
+      const pending = pendingUiStateStorage.current;
+      if (pending) {
+        writeStorage(SESSION_UI_STORAGE_KEY, pending);
+        pendingUiStateStorage.current = null;
+      }
+      uiStateLocalSyncTimer.current = null;
+    }, hasLiveState ? 1800 : 120);
     if (sidecarStatus.state !== "running") return;
     if (uiStateSyncTimer.current) {
       window.clearTimeout(uiStateSyncTimer.current);
@@ -1245,7 +1272,7 @@ export function App() {
         savedAt: new Date().toISOString()
       }).catch(() => undefined);
       uiStateSyncTimer.current = null;
-    }, 800);
+    }, hasLiveState ? 2500 : 350);
   }, [sessionUiState, sessionProjects, sidecarStatus.state]);
 
   useEffect(() => {
@@ -1344,11 +1371,19 @@ export function App() {
       streamCleanups.current = {};
       streamCleanupRequestIds.current = {};
       Object.values(streamDeltaBuffers.current).forEach((buffer) => {
-        if (buffer.frame !== null) window.cancelAnimationFrame(buffer.frame);
+        if (buffer.timer !== null) window.clearTimeout(buffer.timer);
       });
       streamDeltaBuffers.current = {};
       Object.values(installWatchers.current).forEach((timer) => window.clearInterval(timer));
       installWatchers.current = {};
+      if (uiStateLocalSyncTimer.current) {
+        window.clearTimeout(uiStateLocalSyncTimer.current);
+        uiStateLocalSyncTimer.current = null;
+      }
+      if (pendingUiStateStorage.current) {
+        writeStorage(SESSION_UI_STORAGE_KEY, pendingUiStateStorage.current);
+        pendingUiStateStorage.current = null;
+      }
       if (uiStateSyncTimer.current) {
         window.clearTimeout(uiStateSyncTimer.current);
         uiStateSyncTimer.current = null;
@@ -1945,7 +1980,7 @@ export function App() {
   }
 
   function openProjectInExplorer(project: ProjectFolder) {
-    void openLocalPath(project.path);
+    void registerProjectFolderPath(project.path).catch(() => null).then(() => openLocalPath(project.path));
     setProjectMenu(null);
   }
 
@@ -2237,6 +2272,10 @@ export function App() {
     return item.type === "voice_attach";
   }
 
+  function streamItemText(item: StreamItem) {
+    return String(item.content ?? item.text ?? item.delta ?? "");
+  }
+
   function shouldAcceptStreamItem(sessionId: string, requestId: string, item: StreamItem) {
     if (isCurrentSessionRequest(sessionId, requestId)) return true;
     return Boolean(completedRequestIds.current[requestId] && isPostDoneTailItem(item));
@@ -2249,9 +2288,9 @@ export function App() {
   function flushBufferedDelta(key: string) {
     const buffer = streamDeltaBuffers.current[key];
     if (!buffer) return;
-    if (buffer.frame !== null) {
-      window.cancelAnimationFrame(buffer.frame);
-      buffer.frame = null;
+    if (buffer.timer !== null) {
+      window.clearTimeout(buffer.timer);
+      buffer.timer = null;
     }
     const text = buffer.text;
     buffer.text = "";
@@ -2273,16 +2312,16 @@ export function App() {
       assistantId,
       requestId,
       text: "",
-      frame: null
+      timer: null
     };
     buffer.text += deltaContent;
     streamDeltaBuffers.current[key] = buffer;
-    if (buffer.frame !== null) return;
-    buffer.frame = window.requestAnimationFrame(() => {
+    if (buffer.timer !== null) return;
+    buffer.timer = window.setTimeout(() => {
       const current = streamDeltaBuffers.current[key];
-      if (current) current.frame = null;
+      if (current) current.timer = null;
       flushBufferedDelta(key);
-    });
+    }, 34);
   }
 
   function flushStreamDeltaBuffers(sessionId: string, requestId?: string) {
@@ -2299,7 +2338,7 @@ export function App() {
       const buffer = streamDeltaBuffers.current[key];
       if (!buffer || buffer.sessionId !== sessionId) return;
       if (requestId && buffer.requestId !== requestId) return;
-      if (buffer.frame !== null) window.cancelAnimationFrame(buffer.frame);
+      if (buffer.timer !== null) window.clearTimeout(buffer.timer);
       delete streamDeltaBuffers.current[key];
     });
   }
@@ -2560,8 +2599,8 @@ export function App() {
               }));
               return;
             }
-            if ((item.type === "message_update" || item.type === "delta") && item.content) {
-              enqueueAssistantDelta(sessionId, assistantId, requestId, item.content);
+            if (item.type === "message_update" || item.type === "delta") {
+              enqueueAssistantDelta(sessionId, assistantId, requestId, streamItemText(item));
             }
       },
       onError: () => {
@@ -2921,8 +2960,8 @@ export function App() {
               }));
               return;
             }
-            if ((item.type === "message_update" || item.type === "delta") && item.content) {
-              enqueueAssistantDelta(requestSessionId, assistantId, requestId, item.content);
+            if (item.type === "message_update" || item.type === "delta") {
+              enqueueAssistantDelta(requestSessionId, assistantId, requestId, streamItemText(item));
             }
           },
           onError: () => {
@@ -3235,6 +3274,9 @@ export function App() {
   }
 
   async function confirmOpenFile(file: FileAttachment) {
+    if (activeProject?.path) {
+      await registerProjectFolderPath(activeProject.path).catch(() => null);
+    }
     const result = await openLocalPath(file.file_path);
     setApproval(null);
     if (result) {
@@ -3296,7 +3338,10 @@ export function App() {
       return;
     }
     const resolvedPath = resolveArtifactPath(rawPath);
-    const candidates = Array.from(new Set([rawPath, resolvedPath].filter(Boolean)));
+    const candidates = Array.from(new Set([resolvedPath, rawPath].filter(Boolean)));
+    if (activeProject?.path) {
+      await registerProjectFolderPath(activeProject.path).catch(() => null);
+    }
     let result = "";
     const openAction: OpenPathAction = action === "reveal" ? "reveal" : action === "openWith" ? "openWith" : "open";
     for (const candidate of candidates) {
@@ -3324,7 +3369,10 @@ export function App() {
       return;
     }
     const resolvedPath = resolveArtifactPath(rawPath);
-    const candidates = Array.from(new Set([rawPath, resolvedPath].filter(Boolean)));
+    const candidates = Array.from(new Set([resolvedPath, rawPath].filter(Boolean)));
+    if (activeProject?.path) {
+      await registerProjectFolderPath(activeProject.path).catch(() => null);
+    }
     let result = "";
     for (const candidate of candidates) {
       try {

@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } from "electron";
 import fsp from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { fetchSidecarJson } from "./apiBridge.js";
@@ -43,6 +44,11 @@ function toAttachment(filePath: string) {
 function safeFileName(name: string, fallback: string) {
   const cleaned = path.basename(name || fallback).replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_");
   return cleaned || fallback;
+}
+
+function stableProjectId(folderPath: string) {
+  const normalized = path.resolve(folderPath).toLowerCase();
+  return `project-${createHash("sha1").update(normalized).digest("hex").slice(0, 16)}`;
 }
 
 function applyWindowTheme(theme: "light" | "dark") {
@@ -280,7 +286,7 @@ app.whenReady().then(async () => {
     if (result.canceled || !result.filePaths[0]) {
       return null;
     }
-    const folderPath = result.filePaths[0];
+    const folderPath = await fsp.realpath(result.filePaths[0]).catch(() => path.resolve(result.filePaths[0]));
     const projectStateDir = path.join(folderPath, ".ecorex");
     const projectMemoryPath = path.join(projectStateDir, "project-memory.md");
     const projectDreamsPath = path.join(projectStateDir, "dreams");
@@ -292,7 +298,7 @@ app.whenReady().then(async () => {
     ).catch(() => undefined);
     await permissions.rememberSelectedPaths([folderPath]);
     return {
-      id: `project-${Date.now()}`,
+      id: stableProjectId(folderPath),
       name: path.basename(folderPath) || folderPath,
       path: folderPath,
       memoryPath: projectMemoryPath,

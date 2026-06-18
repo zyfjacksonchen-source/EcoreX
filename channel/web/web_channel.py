@@ -34,6 +34,25 @@ from config import conf, _ensure_ecorex_runtime_defaults
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
 VIDEO_EXTENSIONS = {".mp4", ".webm", ".avi", ".mov", ".mkv"}
+DANGEROUS_OPEN_EXTENSIONS = {
+    ".app",
+    ".bat",
+    ".cmd",
+    ".command",
+    ".com",
+    ".exe",
+    ".js",
+    ".jse",
+    ".lnk",
+    ".msi",
+    ".ps1",
+    ".reg",
+    ".scr",
+    ".sh",
+    ".vbe",
+    ".vbs",
+    ".wsf",
+}
 
 
 def _web_app_bridge_script() -> str:
@@ -522,7 +541,16 @@ def _web_app_bridge_script() -> str:
       return function () {};
     },
     chooseFiles: chooseFiles,
-    chooseProjectFolder: async function () { return null; },
+    chooseProjectFolder: async function () {
+      var label = desktopPlatform === "darwin"
+        ? "请输入或粘贴本机项目文件夹路径，例如 /Users/name/project"
+        : "请输入或粘贴本机项目文件夹路径，例如 C:\\\\Users\\\\name\\\\project";
+      var folderPath = window.prompt(label, "");
+      folderPath = String(folderPath || "").trim();
+      if (!folderPath) return null;
+      var payload = await apiJson({ path: "/api/project-folder", method: "POST", body: { path: folderPath } });
+      return payload.project || null;
+    },
     savePastedFile: savePastedFile,
     openPath: async function (filePath, action) {
       var result = await apiJson({ path: "/api/open-path", method: "POST", body: { path: filePath || "", action: action || "open" } });
@@ -917,6 +945,8 @@ class WebMessage(ChatMessage):
 class WebChannel(ChatChannel):
     NOT_SUPPORT_REPLYTYPE = [ReplyType.VOICE]
     _instance = None
+    SSE_MAX_REPLAY_EVENTS = 2000
+    SSE_ORPHAN_TTL_SECONDS = 120
 
     # def __new__(cls):
     #     if cls._instance is None:
@@ -930,9 +960,11 @@ class WebChannel(ChatChannel):
         self.request_to_session = {}  # request_id -> session_id
         self.sse_queues = {}  # request_id -> Queue (legacy/test mirror for SSE events)
         self.sse_events = {}  # request_id -> replayable SSE event list
+        self.sse_event_offsets = {}  # request_id -> absolute event id for sse_events[0]
         self.sse_conditions = {}  # request_id -> threading.Condition
         self.sse_subscribers = {}  # request_id -> active EventSource connection count
         self.sse_done_sent = set()  # request_id values that already emitted a done event
+        self.sse_cleanup_timers = {}  # request_id -> guarded orphan cleanup Timer
         self.request_artifacts = {}  # request_id -> list of structured artifact dicts
         self.sse_stream_tokens = {}  # legacy field; no longer used to supersede streams
         self._http_server = None
@@ -1008,6 +1040,8 @@ class WebChannel(ChatChannel):
             self.sse_queues[request_id] = Queue()
         if request_id not in self.sse_events:
             self.sse_events[request_id] = []
+        if request_id not in self.sse_event_offsets:
+            self.sse_event_offsets[request_id] = 0
         if request_id not in self.sse_conditions:
             self.sse_conditions[request_id] = threading.Condition()
 
@@ -1028,19 +1062,64 @@ class WebChannel(ChatChannel):
             logger.debug(f"[WebChannel] legacy SSE queue mirror skipped for {request_id}: {e}")
         cond = self.sse_conditions[request_id]
         with cond:
-            self.sse_events[request_id].append(event)
+            events = self.sse_events[request_id]
+            events.append(event)
+            excess = len(events) - self.SSE_MAX_REPLAY_EVENTS
+            if excess > 0:
+                del events[:excess]
+                self.sse_event_offsets[request_id] = self.sse_event_offsets.get(request_id, 0) + excess
             cond.notify_all()
         return True
 
     def _cleanup_sse_request(self, request_id: str) -> None:
+        timer = self.sse_cleanup_timers.pop(request_id, None)
+        if timer:
+            try:
+                timer.cancel()
+            except Exception:
+                pass
         self.sse_queues.pop(request_id, None)
         self.sse_events.pop(request_id, None)
+        self.sse_event_offsets.pop(request_id, None)
         self.sse_conditions.pop(request_id, None)
         self.sse_subscribers.pop(request_id, None)
         self.sse_done_sent.discard(request_id)
         self.sse_stream_tokens.pop(request_id, None)
         self.request_artifacts.pop(request_id, None)
         self.request_to_session.pop(request_id, None)
+
+    def _cleanup_sse_request_if_idle(self, request_id: str, reason: str = "") -> None:
+        self.sse_cleanup_timers.pop(request_id, None)
+        if not self._sse_request_exists(request_id):
+            return
+        if self.sse_subscribers.get(request_id, 0) > 0:
+            return
+        try:
+            from agent.protocol import get_cancel_registry
+
+            if get_cancel_registry().get_event(request_id) is not None:
+                self._schedule_sse_cleanup(request_id, delay=self.SSE_ORPHAN_TTL_SECONDS, reason="active-request")
+                return
+        except Exception as exc:
+            logger.debug(f"[WebChannel] SSE cleanup active check skipped for {request_id}: {exc}")
+            return
+        logger.info(f"[WebChannel] Cleaning idle SSE replay state for {request_id}: {reason}")
+        self._cleanup_sse_request(request_id)
+
+    def _schedule_sse_cleanup(self, request_id: str, delay: int = None, reason: str = "") -> None:
+        if not request_id or not self._sse_request_exists(request_id):
+            return
+        timer = self.sse_cleanup_timers.pop(request_id, None)
+        if timer:
+            try:
+                timer.cancel()
+            except Exception:
+                pass
+        next_delay = self.SSE_ORPHAN_TTL_SECONDS if delay is None else max(1, int(delay))
+        cleanup_timer = threading.Timer(next_delay, lambda: self._cleanup_sse_request_if_idle(request_id, reason))
+        cleanup_timer.daemon = True
+        self.sse_cleanup_timers[request_id] = cleanup_timer
+        cleanup_timer.start()
 
     def _push_done_event_once(self, request_id: str, item: Dict[str, Any]) -> bool:
         """Emit one terminal done event per request while preserving replay."""
@@ -1050,6 +1129,8 @@ class WebChannel(ChatChannel):
         pushed = self._push_sse_event(request_id, item)
         if pushed:
             self.sse_done_sent.add(request_id)
+            if self.sse_subscribers.get(request_id, 0) <= 0:
+                self._schedule_sse_cleanup(request_id, reason="terminal-without-subscriber")
         return pushed
 
     def _push_cancelled_events_for_session(self, session_id: str, request_ids: List[str], lang: str = "zh") -> None:
@@ -1364,7 +1445,10 @@ class WebChannel(ChatChannel):
             except Exception as e:
                 logger.debug(f"[WebChannel] worker exception SSE fallback skipped for {request_id}: {e}")
 
-        if not self._sse_request_exists(request_id):
+        if self._sse_request_exists(request_id):
+            if self.sse_subscribers.get(request_id, 0) <= 0:
+                self._schedule_sse_cleanup(request_id, reason="worker-finalized-without-subscriber")
+        else:
             self.request_to_session.pop(request_id, None)
 
     def send(self, reply: Reply, context: Context):
@@ -2085,13 +2169,23 @@ class WebChannel(ChatChannel):
         cond = self.sse_conditions[request_id]
         subscriber_count = self.sse_subscribers.get(request_id, 0) + 1
         self.sse_subscribers[request_id] = subscriber_count
+        cleanup_timer = self.sse_cleanup_timers.pop(request_id, None)
+        if cleanup_timer:
+            try:
+                cleanup_timer.cancel()
+            except Exception:
+                pass
 
         start_index = 0
         try:
             raw_last_id = getattr(web, "ctx", None)
             raw_last_id = getattr(raw_last_id, "env", {}).get("HTTP_LAST_EVENT_ID", "") if raw_last_id else ""
+            params = web.input(last_event_id="")
+            query_last_id = str(params.last_event_id or "")
+            raw_last_id = str(raw_last_id or query_last_id or "")
             if raw_last_id != "":
-                start_index = max(0, int(raw_last_id) + 1)
+                event_offset = self.sse_event_offsets.get(request_id, 0)
+                start_index = max(0, int(raw_last_id) + 1 - event_offset)
         except Exception:
             start_index = 0
         index = start_index
@@ -2111,7 +2205,7 @@ class WebChannel(ChatChannel):
                 with cond:
                     events = self.sse_events.get(request_id, [])
                     if index < len(events):
-                        event_id = index
+                        event_id = self.sse_event_offsets.get(request_id, 0) + index
                         item = events[index]
                         index += 1
                     else:
@@ -2158,6 +2252,8 @@ class WebChannel(ChatChannel):
             # connection can resume reading the remaining events.
             if remaining <= 0 and (post_done or time.time() >= deadline):
                 self._cleanup_sse_request(request_id)
+            elif remaining <= 0:
+                self._schedule_sse_cleanup(request_id, reason="detached-without-terminal")
 
     def cancel_request(self):
         """
@@ -2367,6 +2463,7 @@ class WebChannel(ChatChannel):
             '/api/tool-permissions', 'ToolPermissionHandler',
             '/api/update-check', 'UpdateCheckHandler',
             '/api/open-path', 'OpenPathHandler',
+            '/api/project-folder', 'ProjectFolderHandler',
             '/api/capabilities', 'CapabilitiesHandler',
             '/api/agent-install-request', 'AgentInstallRequestHandler',
             '/api/subagents', 'SubagentsHandler',
@@ -2395,6 +2492,7 @@ class WebChannel(ChatChannel):
             '/api/messages/delete', 'MessageDeleteHandler',
             '/api/ui-state', 'UiStateHandler',
             '/api/installations', 'InstallationsHandler',
+            '/api/logs/snapshot', 'LogsSnapshotHandler',
             '/api/logs', 'LogsHandler',
             '/api/version', 'VersionHandler',
             '/assets/(.*)', 'AssetsHandler',
@@ -2907,7 +3005,7 @@ class UpdateCheckHandler:
         for artifact in artifacts:
             if isinstance(artifact, dict) and artifact.get("id") == preferred_id:
                 return artifact
-        return next((artifact for artifact in artifacts if isinstance(artifact, dict) and artifact.get("status") in ("ready", "ready-unsigned")), {})
+        return {}
 
     def _absolute_download_url(self, href: str) -> str:
         if not href:
@@ -2951,6 +3049,13 @@ class OpenPathHandler:
             path_value = os.path.realpath(expanded_path)
             if not os.path.exists(path_value):
                 return json.dumps({"status": "error", "message": f"path not found: {path_value}"}, ensure_ascii=False)
+            if action != "reveal":
+                ext = os.path.splitext(path_value.rstrip("/\\"))[1].lower()
+                if ext in DANGEROUS_OPEN_EXTENSIONS:
+                    return json.dumps({
+                        "status": "error",
+                        "message": "Refusing to launch executable or script files from WebUI. Use reveal/show in folder and open it manually if you trust it.",
+                    }, ensure_ascii=False)
 
             try:
                 from common.ecorex_tool_permissions import get_tool_permission_broker
@@ -2991,6 +3096,65 @@ class OpenPathHandler:
         else:
             command = ["open", path_value] if sys.platform == "darwin" else ["xdg-open", path_value]
         subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _stable_project_id(path_value: str) -> str:
+    normalized = os.path.normcase(os.path.realpath(path_value)).replace("\\", "/")
+    digest = hashlib.sha1(normalized.encode("utf-8", errors="ignore")).hexdigest()[:16]
+    return f"project-{digest}"
+
+
+def _project_payload_from_path(path_value: str) -> Dict[str, Any]:
+    folder_path = os.path.realpath(os.path.expanduser(path_value))
+    if not os.path.isdir(folder_path):
+        raise ValueError(f"project folder not found: {folder_path}")
+    try:
+        from common.ecorex_tool_permissions import get_tool_permission_broker
+
+        broker = get_tool_permission_broker()
+        state = broker.get_state()
+        if state.get("mode") == "read-only":
+            raise PermissionError("Read Only mode blocks project folder registration because it creates .ecorex files.")
+        registered = broker.remember_workspace_root(folder_path, access="write", cwd=_get_workspace_root())
+        if registered.get("status") == "error":
+            raise PermissionError(registered.get("message") or "project folder permission registration failed")
+    except Exception as exc:
+        logger.warning(f"[WebChannel] project folder permission registration failed: {exc}")
+        raise
+    project_state_dir = os.path.join(folder_path, ".ecorex")
+    project_memory_path = os.path.join(project_state_dir, "project-memory.md")
+    project_dreams_path = os.path.join(project_state_dir, "dreams")
+    os.makedirs(project_dreams_path, exist_ok=True)
+    if not os.path.exists(project_memory_path):
+        with open(project_memory_path, "w", encoding="utf-8") as handle:
+            handle.write("# Project Memory\n\nEcoreX stores project-specific summaries here. Keep this file concise and do not duplicate global user memory.\n")
+    return {
+        "id": _stable_project_id(folder_path),
+        "name": os.path.basename(folder_path) or folder_path,
+        "path": folder_path,
+        "memoryPath": project_memory_path,
+        "dreamsPath": project_dreams_path,
+        "updatedAt": datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    }
+
+
+class ProjectFolderHandler:
+    def POST(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            raw = web.data() or b"{}"
+            if len(raw) > 64 * 1024:
+                return json.dumps({"status": "error", "message": "payload too large"}, ensure_ascii=False)
+            body = json.loads(raw)
+            path_value = str(body.get("path") or body.get("folder_path") or "").strip()
+            if not path_value:
+                return json.dumps({"status": "error", "message": "path is required"}, ensure_ascii=False)
+            project = _project_payload_from_path(path_value)
+            return json.dumps({"status": "success", "project": project}, ensure_ascii=False)
+        except Exception as exc:
+            logger.error(f"[WebChannel] project folder error: {exc}")
+            return json.dumps({"status": "error", "message": str(exc)}, ensure_ascii=False)
 
 
 def _tool_result_to_payload(result) -> dict:
@@ -5874,18 +6038,81 @@ class InstallationsHandler:
             return json.dumps({"status": "error", "message": str(e)})
 
 
+def _log_snapshot_payload(max_lines: int = 200) -> Dict[str, Any]:
+    from config import get_root
+
+    log_path = _resolve_run_log_path(Path(get_root()))
+    try:
+        from agent.tools.host_diagnostics.host_diagnostics import _tail_text
+
+        tail = _tail_text(log_path, max_lines=max(1, min(500, int(max_lines or 200))), cwd=str(log_path.parent))
+        return {
+            "status": "success" if tail.get("exists") and not tail.get("blocked") else "error",
+            "type": "snapshot",
+            "generatedAt": datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            "log": tail,
+            "content": "\n".join(tail.get("lines") or []),
+            "message": tail.get("reason") or tail.get("error") or ("" if tail.get("exists") else "run.log not found"),
+        }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "type": "snapshot",
+            "generatedAt": datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            "log": {"path": str(log_path), "exists": False, "error": str(exc), "lines": []},
+            "content": "",
+            "message": str(exc),
+        }
+
+
+def _resolve_run_log_path(runtime_root: Path) -> Path:
+    try:
+        from agent.tools.host_diagnostics.host_diagnostics import _candidate_log_paths
+
+        candidates = _candidate_log_paths(runtime_root)
+        for candidate in candidates:
+            if candidate.exists() and candidate.is_file():
+                return candidate
+        if candidates:
+            return candidates[0]
+    except Exception as exc:
+        logger.debug(f"[WebChannel] active log path lookup failed: {exc}")
+    return runtime_root / "run.log"
+
+
+def _parse_log_line_limit(value: Any, default: int = 200) -> int:
+    try:
+        return max(1, min(500, int(value or default)))
+    except (TypeError, ValueError):
+        return default
+
+
+class LogsSnapshotHandler:
+    def GET(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        params = web.input(lines="200")
+        return json.dumps(_log_snapshot_payload(_parse_log_line_limit(params.lines)), ensure_ascii=False)
+
+
 class LogsHandler:
     def GET(self):
         _require_auth()
+        accept = (web.ctx.env.get("HTTP_ACCEPT") or "").lower()
+        if "text/event-stream" not in accept:
+            web.header('Content-Type', 'application/json; charset=utf-8')
+            params = web.input(lines="200")
+            return json.dumps(_log_snapshot_payload(_parse_log_line_limit(params.lines)), ensure_ascii=False)
+
         web.header('Content-Type', 'text/event-stream; charset=utf-8')
         web.header('Cache-Control', 'no-cache')
         web.header('X-Accel-Buffering', 'no')
 
         from config import get_root
-        log_path = os.path.join(get_root(), "run.log")
+        log_path = _resolve_run_log_path(Path(get_root()))
 
         def generate():
-            if not os.path.isfile(log_path):
+            if not log_path.is_file():
                 yield b"data: {\"type\": \"error\", \"message\": \"run.log not found\"}\n\n"
                 return
 
@@ -5893,7 +6120,7 @@ class LogsHandler:
             try:
                 from agent.tools.host_diagnostics.host_diagnostics import _mask, _tail_text
 
-                tail = _tail_text(Path(log_path), max_lines=200, cwd=_get_workspace_root())
+                tail = _tail_text(log_path, max_lines=200, cwd=str(log_path.parent))
                 if tail.get("blocked"):
                     payload = json.dumps({
                         "type": "error",

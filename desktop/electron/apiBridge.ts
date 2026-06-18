@@ -31,6 +31,8 @@ function isAllowedPath(pathname: string, method: string) {
     "GET /api/channels",
     "GET /api/scheduler",
     "GET /api/version",
+    "GET /api/logs",
+    "GET /api/logs/snapshot",
     "GET /api/knowledge/list",
     "GET /api/knowledge/read",
     "GET /api/update-check",
@@ -38,6 +40,7 @@ function isAllowedPath(pathname: string, method: string) {
     "POST /api/open-path",
     "GET /api/capabilities",
     "POST /api/agent-install-request",
+    "POST /api/project-folder",
     "GET /api/subagents",
     "POST /api/subagents"
   ]);
@@ -87,13 +90,16 @@ export async function fetchSidecarJson(sidecar: SidecarManager, request: ApiRequ
   }
 
   let response: Response;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
   try {
     response = await fetch(`${sidecar.getBaseUrl()}${path}`, {
       method,
       headers: {
         "Content-Type": "application/json"
       },
-      body: method === "GET" ? undefined : JSON.stringify(request.body ?? {})
+      body: method === "GET" ? undefined : JSON.stringify(request.body ?? {}),
+      signal: controller.signal
     });
   } catch (error) {
     const status = sidecar.getStatus();
@@ -101,10 +107,14 @@ export async function fetchSidecarJson(sidecar: SidecarManager, request: ApiRequ
       status: "error",
       message: status.state === "starting"
         ? "EcoreX local runtime is still starting. Please try again in a moment."
-        : `EcoreX local runtime request failed: ${error instanceof Error ? error.message : String(error)}`,
+        : error instanceof Error && error.name === "AbortError"
+          ? "EcoreX local runtime request timed out. Please try again."
+          : `EcoreX local runtime request failed: ${error instanceof Error ? error.message : String(error)}`,
       sidecarState: status.state,
       webPort: status.webPort
     };
+  } finally {
+    clearTimeout(timeout);
   }
 
   const text = await response.text();

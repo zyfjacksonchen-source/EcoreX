@@ -475,13 +475,14 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertNotIn("desktop/dist", html)
 
     def test_version_handler_returns_user_facing_release_notes(self):
+        from cli import __version__
         from channel.web import web_channel
 
         payload = json.loads(web_channel.VersionHandler().GET())
 
-        self.assertEqual(payload["version"], "0.1.14")
+        self.assertEqual(payload["version"], __version__)
         notes = payload["releaseNotes"]
-        self.assertEqual(notes["version"], "0.1.14")
+        self.assertEqual(notes["version"], __version__)
         self.assertIn("highlights", notes)
         self.assertIn("fixes", notes)
         self.assertIn("howTo", notes)
