@@ -227,6 +227,19 @@ class TestAgentCapabilityPermissions(unittest.TestCase):
         self.assertEqual(proxy_args["action"], "install")
         self.assertEqual(proxy_args["ability"], "office-pdf")
 
+    def test_agent_capability_feishu_permission_mentions_cli_second_step(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        proxy_name, proxy_args = AgentStreamExecutor._permission_proxy_for_tool(
+            None,
+            "agent_capability",
+            {"action": "install_pack", "pack_id": "feishu-lark"},
+        )
+
+        self.assertEqual(proxy_name, "optional_abilities")
+        self.assertEqual(proxy_args["action"], "install")
+        self.assertEqual(proxy_args["ability"], "feishu-lark + feishu-cli")
+
     def test_agent_capability_install_pack_accepts_capability_pack_id(self):
         from agent.tools.agent_capability.agent_capability import AgentCapabilityTool
         from agent.tools.base_tool import ToolResult
@@ -238,7 +251,12 @@ class TestAgentCapabilityPermissions(unittest.TestCase):
             calls.append((pack_id, timeout))
             return ToolResult.success({"status": "success", "packId": pack_id})
 
-        with patch.object(OptionalAbilities, "_install_capability_pack", fake_install):
+        def fake_feishu_cli(self, timeout):
+            calls.append(("feishu-cli", timeout))
+            return ToolResult.success({"status": "success", "ability": "feishu-cli", "enabled": True, "output": "npm installed lark cli"})
+
+        with patch.object(OptionalAbilities, "_install_capability_pack", fake_install), \
+                patch.object(OptionalAbilities, "_install_feishu_cli", fake_feishu_cli):
             result = AgentCapabilityTool().execute({
                 "action": "install_pack",
                 "pack_id": "feishu-lark",
@@ -246,7 +264,30 @@ class TestAgentCapabilityPermissions(unittest.TestCase):
             })
 
         self.assertEqual(result.status, "success")
-        self.assertEqual(calls, [("feishu-lark", 45)])
+        self.assertEqual(calls, [("feishu-lark", 45), ("feishu-cli", 45)])
+        self.assertEqual(result.result["installPlan"], ["feishu-lark", "feishu-cli"])
+        self.assertEqual(result.result["steps"][1]["stdoutTail"], "npm installed lark cli")
+
+    def test_agent_capability_install_pack_accepts_feishu_cli_alias(self):
+        from agent.tools.agent_capability.agent_capability import AgentCapabilityTool
+        from agent.tools.base_tool import ToolResult
+        from agent.tools.optional_abilities.optional_abilities import OptionalAbilities
+
+        calls = []
+
+        def fake_feishu_cli(self, timeout):
+            calls.append(("feishu-cli", timeout))
+            return ToolResult.success({"status": "success", "ability": "feishu-cli", "enabled": True})
+
+        with patch.object(OptionalAbilities, "_install_feishu_cli", fake_feishu_cli):
+            result = AgentCapabilityTool().execute({
+                "action": "install_pack",
+                "pack_id": "lark-cli",
+                "timeout": 30,
+            })
+
+        self.assertEqual(result.status, "success")
+        self.assertEqual(calls, [("feishu-cli", 30)])
 
     def test_optional_abilities_update_preserves_live_provider_config(self):
         import config as config_module
@@ -280,6 +321,62 @@ class TestAgentCapabilityPermissions(unittest.TestCase):
             self.assertEqual(live.get("tools"), {"feishu_cli": {"auto_install": True}})
         finally:
             config_module.config = previous
+
+    def test_optional_ability_install_uses_isolated_target_dir_and_timeout(self):
+        from agent.tools.optional_abilities import optional_abilities
+        from agent.tools.optional_abilities.optional_abilities import OptionalAbilities
+
+        original_sys_path = list(sys.path)
+        original_pythonpath = os.environ.get("PYTHONPATH")
+        try:
+            with tempfile.TemporaryDirectory() as workspace:
+                root = Path(workspace)
+                (root / "scripts").mkdir(parents=True)
+                (root / "scripts" / "install-capability.py").write_text("# test installer\n", encoding="utf-8")
+                (root / "capabilities.json").write_text(
+                    json.dumps({"packs": [{"id": "office-pdf", "moduleChecks": ["fitz"]}]}),
+                    encoding="utf-8",
+                )
+
+                captured = {}
+
+                def fake_run(command, **kwargs):
+                    captured["command"] = command
+                    captured["kwargs"] = kwargs
+                    target_dir = root / "capability-packages" / "office-pdf"
+                    target_dir.mkdir(parents=True)
+                    state_dir = root / "capability-state"
+                    state_dir.mkdir(parents=True, exist_ok=True)
+                    (state_dir / "office-pdf.json").write_text(
+                        json.dumps({
+                            "packId": "office-pdf",
+                            "state": "installed",
+                            "installed": True,
+                            "targetDir": str(target_dir),
+                        }),
+                        encoding="utf-8",
+                    )
+                    return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+                with patch.object(optional_abilities, "RUNTIME_ROOT", root), \
+                        patch.object(optional_abilities.subprocess, "run", fake_run):
+                    result = OptionalAbilities()._install_capability_pack("office-pdf", 123)
+
+                self.assertEqual(result.status, "success")
+                self.assertIn("--target-dir", captured["command"])
+                target_arg = captured["command"][captured["command"].index("--target-dir") + 1]
+                self.assertEqual(Path(target_arg), root / "capability-packages" / "office-pdf")
+                self.assertIn("--timeout", captured["command"])
+                self.assertEqual(captured["command"][captured["command"].index("--timeout") + 1], "123")
+                self.assertEqual(captured["kwargs"]["timeout"], 123)
+                self.assertIn(str(root / "capability-packages" / "office-pdf"), sys.path)
+                self.assertEqual(result.result["capabilityState"]["targetDir"], str(root / "capability-packages" / "office-pdf"))
+        finally:
+            sys.path[:] = original_sys_path
+            if original_pythonpath is None:
+                os.environ.pop("PYTHONPATH", None)
+            else:
+                os.environ["PYTHONPATH"] = original_pythonpath
 
     def test_agent_capability_safe_diagnostics_do_not_require_prompt(self):
         from common.ecorex_tool_permissions import get_tool_permission_broker
@@ -352,6 +449,22 @@ class TestWebParallelHandlers(unittest.TestCase):
 
             self.assertEqual(post_result["status"], "success")
             self.assertEqual(get_result["manifest"]["surfaces"]["desktop"]["version"], "test")
+
+    def test_agent_install_request_for_feishu_guides_agent_without_manual_consent(self):
+        from channel.web import web_channel
+
+        handler = web_channel.AgentInstallRequestHandler()
+        payload = {"packId": "feishu-lark", "packName": "飞书 / Lark 连接器", "sessionId": "s1"}
+        with patch.object(web_channel, "_require_auth", return_value=None):
+            with patch.object(web_channel.web, "data", return_value=json.dumps(payload).encode("utf-8")):
+                result = json.loads(handler.POST())
+
+        self.assertEqual(result["status"], "success")
+        prompt = result["prompt"]
+        self.assertIn("agent_capability", prompt)
+        self.assertIn("feishu-cli", prompt)
+        self.assertIn("不要要求用户输入", prompt)
+        self.assertIn("不要反复诊断", prompt)
 
     def test_default_app_shell_is_independent_of_desktop_dist(self):
         from channel.web.web_channel import _default_web_app_html
@@ -776,6 +889,31 @@ class TestWebParallelHandlers(unittest.TestCase):
 
         first_stream.close()
         second_stream.close()
+
+    def test_done_event_is_emitted_once_per_request(self):
+        from channel.web import web_channel
+
+        channel = web_channel.WebChannel()
+        request_id = "req-test-done-once"
+        channel.request_to_session = {request_id: "session-test-done-once"}
+        channel._ensure_sse_state(request_id)
+
+        first = channel._push_done_event_once(request_id, {
+            "type": "done",
+            "content": "first",
+            "request_id": request_id,
+        })
+        second = channel._push_done_event_once(request_id, {
+            "type": "done",
+            "content": "second",
+            "request_id": request_id,
+        })
+
+        self.assertTrue(first)
+        self.assertFalse(second)
+        self.assertEqual(len(channel.sse_events[request_id]), 1)
+        event = channel.sse_queues[request_id].get(timeout=1)
+        self.assertEqual(event["content"], "first")
 
 
 class TestAgentHostBoundary(unittest.TestCase):

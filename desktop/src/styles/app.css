@@ -1045,6 +1045,16 @@ html[data-platform="web"] .window-brand {
   margin-top: 8px;
 }
 
+.message-body .thinking-indicator .thinking-ring,
+.agent-thinking-step .thinking-ring {
+  width: 8px;
+  height: 8px;
+  border: 0;
+  background: var(--color-brand);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-brand) 12%, transparent);
+  animation: none;
+}
+
 .message-body p + .thinking-indicator {
   padding-top: 2px;
 }
@@ -1145,15 +1155,29 @@ html[data-platform="web"] .window-brand {
   background: color-mix(in srgb, var(--color-surface-raised) 58%, transparent);
 }
 
+.agent-process-disclosure.is-live {
+  background: color-mix(in srgb, var(--color-brand) 5%, var(--color-surface-raised));
+}
+
 .agent-process-disclosure > summary {
   min-height: 32px;
   display: flex;
   align-items: center;
+  gap: 8px;
   padding: 0 10px;
   color: var(--color-muted);
   cursor: pointer;
   font-size: 12px;
   list-style: none;
+}
+
+.agent-process-current {
+  min-width: 0;
+  max-width: 58%;
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-process-disclosure > summary::-webkit-details-marker {
@@ -1225,12 +1249,8 @@ html[data-platform="web"] .window-brand {
 }
 
 .tool-status-dot.is-running {
-  width: 13px;
-  height: 13px;
-  border: 2px solid color-mix(in srgb, var(--color-brand) 22%, transparent);
-  border-top-color: var(--color-brand);
-  background: transparent;
-  animation: spin 0.9s linear infinite;
+  background: var(--color-brand);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-brand) 12%, transparent);
 }
 
 .tool-status-dot.is-error {
@@ -1317,11 +1337,53 @@ html[data-platform="web"] .window-brand {
   border-color: var(--color-brand);
 }
 
+.artifact-section {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.artifact-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-text);
+  font-size: 12px;
+}
+
+.artifact-section-head strong {
+  font-weight: 650;
+}
+
+.artifact-section-head span {
+  color: var(--color-muted);
+}
+
 .image-artifact-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(142px, 1fr));
   gap: 8px;
+}
+
+.message-content > .image-artifact-grid {
   margin-top: 10px;
+}
+
+.artifact-grid-toggle {
+  justify-self: center;
+  min-height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  color: var(--color-muted);
+  background: var(--color-surface);
+}
+
+.artifact-grid-toggle:hover,
+.artifact-grid-toggle:focus-visible {
+  color: var(--color-text);
+  border-color: var(--color-brand);
+  outline: 0;
 }
 
 .image-artifact-card {

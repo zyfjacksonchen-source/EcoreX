@@ -673,6 +673,15 @@ export async function resetPermissionGrants(): Promise<PermissionState | null> {
 
 export async function listCapabilityPacks(): Promise<CapabilityPack[]> {
   let bridgePacks: CapabilityPack[] = [];
+  try {
+    const payload = await apiJson<Record<string, unknown>>("/api/capabilities");
+    const runtimePacks = capabilityPacksFromRuntime(payload);
+    if (runtimePacks.length) {
+      return runtimePacks;
+    }
+  } catch {
+    // Fall back to the Electron bridge while the runtime is still starting.
+  }
   if (window.ecorexDesktop?.listCapabilityPacks) {
     try {
       bridgePacks = await window.ecorexDesktop.listCapabilityPacks();
@@ -683,12 +692,7 @@ export async function listCapabilityPacks(): Promise<CapabilityPack[]> {
   if (bridgePacks.length) {
     return bridgePacks;
   }
-  try {
-    const payload = await apiJson<Record<string, unknown>>("/api/capabilities");
-    return capabilityPacksFromRuntime(payload);
-  } catch {
-    return bridgePacks;
-  }
+  return bridgePacks;
 }
 
 function capabilityPacksFromRuntime(payload: Record<string, unknown>): CapabilityPack[] {

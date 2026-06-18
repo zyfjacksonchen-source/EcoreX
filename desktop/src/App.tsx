@@ -839,27 +839,27 @@ function mergeHistoryWithLocalMessages(history: ChatItem[], local: ChatItem[]) {
 }
 
 function plainTextForMessage(message: ChatItem) {
-  const parts = [message.content];
+  const parts: string[] = [];
+  const seen = new Set<string>();
+  const addPart = (value?: string) => {
+    const text = redactInternalPromptText(value || "").trim();
+    if (!text || seen.has(text)) return;
+    seen.add(text);
+    parts.push(text);
+  };
+  addPart(message.content);
   for (const step of message.steps || []) {
-    if (step.type === "thinking" || step.type === "content" || step.type === "phase") {
-      if (step.content) parts.push(step.content);
-    } else if (step.type === "tool") {
-      parts.push(`[${step.name || "tool"}]`);
-      if (step.result !== undefined && step.result !== "") {
-        try {
-          parts.push(typeof step.result === "string" ? step.result : JSON.stringify(step.result, null, 2));
-        } catch {
-          parts.push(String(step.result));
-        }
-      }
-    } else if (step.url) {
-      parts.push(step.fileName ? `${step.fileName}: ${step.url}` : step.url);
+    if (step.type === "content" && step.content && !step.intermediate) {
+      addPart(step.content);
+    } else if (step.type === "media" && (step.url || step.filePath)) {
+      const source = step.filePath || step.url || "";
+      addPart(step.fileName ? `${step.fileName}: ${source}` : source);
     }
   }
   for (const file of message.attachments || []) {
-    parts.push(`${file.file_name}: ${file.file_path}`);
+    addPart(`${file.file_name}: ${file.file_path}`);
   }
-  return redactInternalPromptText(parts.filter(Boolean).join("\n\n")).trim();
+  return parts.join("\n\n").trim();
 }
 
 function isLiveAssistantMessage(message: ChatItem) {
@@ -1112,6 +1112,7 @@ export function App() {
   const streamCleanupRequestIds = useRef<StringMap>({});
   const sessionRequestIdsRef = useRef<StringMap>({});
   const installWatchers = useRef<Record<string, number>>({});
+  const queuedInstallRef = useRef<Array<{ pack: CapabilityPack; onInstalled?: () => void; sessionId: string }>>([]);
   const activeSessionIdRef = useRef(activeSessionId);
   const messagesRef = useRef(messages);
   const sessionSwitchSeq = useRef(0);
@@ -1323,6 +1324,31 @@ export function App() {
   }, [session]);
 
   useEffect(() => {
+    if (!packs.length) return;
+    const terminal = new Set(
+      packs
+        .filter((pack) => pack.installed || pack.state === "failed")
+        .map((pack) => pack.id)
+    );
+    if (!terminal.size) return;
+    setInstallingPackIds((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const id of terminal) {
+        if (next[id]) {
+          delete next[id];
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+    setInstallNotice((current) => {
+      if (!current?.packId || current.dismissed || !terminal.has(current.packId)) return current;
+      return null;
+    });
+  }, [packs]);
+
+  useEffect(() => {
     if (!session || !window.ecorexDesktop?.checkForUpdates) return;
     const timer = window.setTimeout(() => {
       void handleCheckForUpdates();
@@ -1397,7 +1423,7 @@ export function App() {
     if (file.previewDataUrl) return file.previewDataUrl;
     if (file.preview_url) return filePreviewUrl(file.preview_url, sidecarStatus.webPort);
     if (!isImageAttachment(file)) return "";
-    return filePreviewUrl(resolveArtifactPath(file.file_path), sidecarStatus.webPort);
+    return filePreviewUrl(file.file_path, sidecarStatus.webPort);
   };
   const sortedProjects = useMemo(
     () => [...projects].sort((a, b) => Number(Boolean(pinnedProjects[b.id] || b.pinned)) - Number(Boolean(pinnedProjects[a.id] || a.pinned))),
@@ -1447,6 +1473,21 @@ export function App() {
     percent: contextPercent,
     title: meterTitle("当前会话上下文估算", contextUsed, CONTEXT_THRESHOLD_TOKENS)
   };
+
+  useEffect(() => {
+    const queue = queuedInstallRef.current;
+    if (!queue.length) return;
+    const nextIndex = queue.findIndex((item) => {
+      if (sessionRequestIds[item.sessionId]) return false;
+      const sessionMessages = item.sessionId === activeSessionId
+        ? messages
+        : sessionUiState[item.sessionId]?.messages || [];
+      return !sessionMessages.some((message) => message.pending);
+    });
+    if (nextIndex < 0) return;
+    const [queued] = queue.splice(nextIndex, 1);
+    window.setTimeout(() => void handleInstallPack(queued.pack, queued.onInstalled, queued.sessionId), 0);
+  }, [activeSessionId, activeSessionRequestId, messages, sessionRequestIds, sessionUiState]);
 
   function capabilityPackEnabled(packId: string) {
     return enabledCapabilityPacks[packId] !== false;
@@ -1921,13 +1962,14 @@ export function App() {
     void refreshSessionFromHistory(sessionId).then((restored) => {
       if (restored) return;
       updateAssistantMessage(sessionId, assistantId, (message) => ({
-        ...finishRunningSteps(message, "paused"),
-        requestId,
-        content: pausedMessageContent(message.content),
+        ...finishRunningSteps(message),
+        requestId: undefined,
+        content: redactInternalPromptText(message.content || "任务状态已同步。如未完成，请重新发送。"),
         pending: false,
-        paused: true,
+        paused: false,
         cancelled: false
       }));
+      markSessionOutputReady(sessionId);
     });
   }
 
@@ -2222,6 +2264,9 @@ export function App() {
           completedRequestIds.current[requestId] = true;
           markSessionOutputReady(sessionId);
           clearSessionRequestState(sessionId, requestId);
+          window.setTimeout(() => {
+            void refreshSessionFromHistory(sessionId);
+          }, 300);
           return;
         }
         if (item.type === "error") {
@@ -2578,6 +2623,9 @@ export function App() {
               completedRequestIds.current[requestId] = true;
               markSessionOutputReady(requestSessionId);
               clearSessionRequestState(requestSessionId, requestId);
+              window.setTimeout(() => {
+                void refreshSessionFromHistory(requestSessionId);
+              }, 300);
               reportChatUsage(item.usage, usageTotal(item.usage) ? "provider" : "estimated");
               return;
             }
@@ -2848,6 +2896,7 @@ export function App() {
           });
           setInstallNotice((current) => current?.packId === pack.id ? null : current);
           setToast(`${pack.name} 已安装`);
+          void loadRuntimeSnapshot().then(setRuntimeSnapshot).catch(() => undefined);
           onInstalled?.();
           return;
         }
@@ -2874,7 +2923,7 @@ export function App() {
         });
         setToast(`${pack.name} 安装未确认，请查看当前会话结果`);
       }
-    }, 5000);
+    }, 2000);
     installWatchers.current[pack.id] = timer;
   }
 
@@ -2928,18 +2977,34 @@ export function App() {
     }
   }
 
-  async function handleInstallPack(pack: CapabilityPack, onInstalled?: () => void) {
+  async function handleInstallPack(pack: CapabilityPack, onInstalled?: () => void, targetSessionId?: string) {
+    const requestSessionId = targetSessionId || activeSessionIdRef.current;
     if (pack.policyMode === "disabled") {
       setSettingsSection("abilities");
       setSettingsOpen(true);
       setToast("管理员已禁用安装，请联系管理员预置能力包");
       return;
     }
-    if (activeSessionRequestId || messagesRef.current.some((message) => message.pending)) {
-      setToast("当前会话正在执行任务，请稍后再发起安装");
+    const targetRequestId = sessionRequestIdsRef.current[requestSessionId] || sessionRequestIds[requestSessionId] || "";
+    const targetMessages = requestSessionId === activeSessionIdRef.current
+      ? messagesRef.current
+      : sessionUiState[requestSessionId]?.messages || [];
+    if (targetRequestId || targetMessages.some((message) => message.pending)) {
+      const alreadyQueued = queuedInstallRef.current.some((item) => item.sessionId === requestSessionId && item.pack.id === pack.id);
+      if (!alreadyQueued) {
+        queuedInstallRef.current.push({ pack, onInstalled, sessionId: requestSessionId });
+      }
+      setSettingsSection("abilities");
+      setSettingsOpen(true);
+      setInstallingPackIds((current) => ({ ...current, [pack.id]: true }));
+      setInstallNotice({
+        packId: pack.id,
+        packName: pack.name,
+        message: `${pack.name} 已排队，当前任务结束后自动安装`
+      });
+      setToast(`${pack.name} 已排队安装`);
       return;
     }
-    const requestSessionId = activeSessionIdRef.current;
     setSettingsSection("abilities");
     setSettingsOpen(true);
     setInstallingPackIds((current) => ({ ...current, [pack.id]: true }));
@@ -3033,12 +3098,19 @@ export function App() {
       return;
     }
     const resolvedPath = resolveArtifactPath(rawPath);
+    const candidates = Array.from(new Set([rawPath, resolvedPath].filter(Boolean)));
     let result = "";
-    try {
-      result = await openRuntimePath(resolvedPath);
-    } catch (error) {
-      if (!isLocalAbsolutePath(resolvedPath)) throw error;
-      result = await openLocalPath(resolvedPath);
+    for (const candidate of candidates) {
+      try {
+        result = await openRuntimePath(candidate);
+      } catch (error) {
+        if (!isLocalAbsolutePath(candidate)) {
+          result = error instanceof Error ? error.message : String(error || "");
+        } else {
+          result = await openLocalPath(candidate);
+        }
+      }
+      if (!/path not found|not found|找不到|不存在/i.test(result)) break;
     }
     if (result) {
       setToast(result.startsWith("denied") ? "已取消打开文件" : result);
@@ -3390,7 +3462,7 @@ export function App() {
                     steps={message.steps}
                     toolCalls={message.toolCalls}
                     onOpenLocalFile={(file) => void openArtifactFile(file)}
-                    localFilePreviewUrl={(filePath) => filePreviewUrl(resolveArtifactPath(filePath), sidecarStatus.webPort)}
+                    localFilePreviewUrl={(filePath) => filePreviewUrl(filePath, sidecarStatus.webPort)}
                   />
                   {message.attachments?.length ? (
                     <div className="message-files">

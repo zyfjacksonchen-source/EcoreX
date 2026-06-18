@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -109,6 +110,54 @@ def _state_dir() -> Path:
     return RUNTIME_ROOT / "capability-state"
 
 
+def _safe_pack_dir_name(pack_id: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(pack_id or "").strip()).strip(".-")
+    return safe or "pack"
+
+
+def _capability_package_root() -> Path:
+    return RUNTIME_ROOT / "capability-packages"
+
+
+def _capability_target_dir(pack_id: str) -> Path:
+    return _capability_package_root() / _safe_pack_dir_name(pack_id)
+
+
+def _add_capability_target_to_path(path: Path) -> None:
+    try:
+        resolved = str(path.resolve())
+    except Exception:
+        resolved = str(path)
+    if not path.exists():
+        return
+    existing = {str(Path(item).resolve()) for item in sys.path if item}
+    if resolved not in existing:
+        sys.path.insert(0, resolved)
+
+    pythonpath = os.environ.get("PYTHONPATH", "")
+    parts = [item for item in pythonpath.split(os.pathsep) if item]
+    normalized = {str(Path(item).resolve()) for item in parts}
+    if resolved not in normalized:
+        os.environ["PYTHONPATH"] = resolved if not pythonpath else resolved + os.pathsep + pythonpath
+
+
+def _apply_installed_capability_paths() -> None:
+    state_dir = _state_dir()
+    if not state_dir.exists():
+        return
+    for state_path in state_dir.glob("*.json"):
+        try:
+            data = json.loads(state_path.read_text(encoding="utf-8-sig"))
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+        if not (data.get("installed") or data.get("state") == "installed"):
+            continue
+        target = data.get("targetDir") or str(_capability_target_dir(str(data.get("packId") or state_path.stem)))
+        _add_capability_target_to_path(Path(str(target)))
+
+
 def _capability_manifest_path() -> Optional[Path]:
     candidates = [
         RUNTIME_ROOT / "capabilities.json",
@@ -151,6 +200,7 @@ def _capability_state(pack_id: str) -> Dict[str, Any]:
                 "updatedAt": data.get("updatedAt"),
                 "message": data.get("message"),
                 "logPath": data.get("logPath"),
+                "targetDir": data.get("targetDir"),
             }
     except Exception as exc:
         logger.warning(f"[OptionalAbilities] failed reading capability state {pack_id}: {exc}")
@@ -390,6 +440,7 @@ class OptionalAbilities(BaseTool):
     }
 
     def execute(self, args: Dict[str, Any]) -> ToolResult:
+        _apply_installed_capability_paths()
         action = str(args.get("action") or "").strip().lower().replace("-", "_")
         ability = str(args.get("ability") or "").strip().lower().replace("_", "-")
         if action in {"list", "status"}:
@@ -562,6 +613,7 @@ class OptionalAbilities(BaseTool):
 
         state_dir = _state_dir()
         state_dir.mkdir(parents=True, exist_ok=True)
+        target_dir = _capability_target_dir(pack_id)
         command = [
             sys.executable,
             str(installer),
@@ -573,6 +625,10 @@ class OptionalAbilities(BaseTool):
             str(manifest),
             "--index-dir",
             str(state_dir),
+            "--target-dir",
+            str(target_dir),
+            "--timeout",
+            str(timeout),
         ]
         try:
             result = subprocess.run(
@@ -589,10 +645,13 @@ class OptionalAbilities(BaseTool):
             return ToolResult.fail({"status": "error", "message": str(exc), "packId": pack_id})
 
         state = _capability_state(pack_id)
+        if state.get("installed"):
+            _add_capability_target_to_path(target_dir)
         payload = {
             "status": "success" if result.returncode == 0 else "error",
             "packId": pack_id,
             "exitCode": result.returncode,
+            "targetDir": str(target_dir),
             "capabilityState": state,
             "stdout": (result.stdout or "")[-4000:],
             "stderr": (result.stderr or "")[-4000:],

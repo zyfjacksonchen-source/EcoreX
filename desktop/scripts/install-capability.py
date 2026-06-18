@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import argparse
+import importlib.machinery
 import importlib.util
 import json
 import os
@@ -48,6 +51,21 @@ def missing_modules(modules) -> list[str]:
     return missing
 
 
+def missing_modules_in_target(modules, target_dir: Path | None) -> list[str]:
+    if not target_dir:
+        return missing_modules(modules)
+    missing = []
+    for module in modules or []:
+        module_name = str(module).split(".", 1)[0]
+        try:
+            found = importlib.machinery.PathFinder.find_spec(module_name, [str(target_dir)]) is not None
+        except Exception:
+            found = False
+        if not found:
+            missing.append(str(module))
+    return missing
+
+
 def prepend_path_env(env: dict[str, str], key: str, value: Path | None) -> None:
     if not value:
         return
@@ -56,10 +74,22 @@ def prepend_path_env(env: dict[str, str], key: str, value: Path | None) -> None:
     env[key] = raw if not current else raw + os.pathsep + current
 
 
-def run_logged(command: list[str], log_file, env: dict[str, str]) -> None:
+def run_logged(command: list[str], log_file, env: dict[str, str], timeout: int) -> None:
     log_file.write(f"Running: {' '.join(command)}\n")
     log_file.flush()
-    result = subprocess.run(command, stdout=log_file, stderr=subprocess.STDOUT, env=env, text=True)
+    try:
+        result = subprocess.run(
+            command,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            env=env,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        log_file.write(f"\nCommand timed out after {timeout}s: {' '.join(command)}\n")
+        log_file.flush()
+        raise RuntimeError(f"Command timed out after {timeout}s: {' '.join(command)}") from exc
     if result.returncode != 0:
         raise RuntimeError(f"Command failed with exit code {result.returncode}: {' '.join(command)}")
 
@@ -75,6 +105,7 @@ def main() -> int:
     parser.add_argument("--index-url", default="")
     parser.add_argument("--find-links", default="")
     parser.add_argument("--no-index", action="store_true")
+    parser.add_argument("--timeout", type=int, default=600)
     args = parser.parse_args()
 
     pack_id = args.pack_id
@@ -83,11 +114,13 @@ def main() -> int:
     state_dir = Path(args.index_dir).resolve() if args.index_dir else runtime_dir / "capability-state"
     target_dir = Path(args.target_dir).resolve() if args.target_dir else None
     playwright_browsers_dir = Path(args.playwright_browsers_dir).resolve() if args.playwright_browsers_dir else None
+    timeout = max(30, int(args.timeout or 600))
     state_dir.mkdir(parents=True, exist_ok=True)
     if target_dir:
         target_dir.mkdir(parents=True, exist_ok=True)
         if str(target_dir) not in sys.path:
             sys.path.insert(0, str(target_dir))
+    status_extra = {"targetDir": str(target_dir)} if target_dir else {}
 
     status_path = state_dir / f"{pack_id}.json"
     log_path = state_dir / f"{pack_id}.log"
@@ -103,9 +136,10 @@ def main() -> int:
             status_path,
             pack_id,
             "busy",
-            "该能力包正在安装，请稍后再试。",
+            "Capability pack is already installing; please retry later.",
             logPath=str(log_path),
             installed=False,
+            **status_extra,
         )
         return 3
 
@@ -128,21 +162,23 @@ def main() -> int:
             status_path,
             pack_id,
             "checking",
-            f"正在检查 {pack.get('name', pack_id)} 是否已可用。",
+            f"Checking whether {pack.get('name', pack_id)} is available.",
             logPath=str(log_path),
             installed=False,
+            **status_extra,
         )
 
-        missing_before = missing_modules(pack.get("moduleChecks", []))
+        missing_before = missing_modules_in_target(pack.get("moduleChecks", []), target_dir)
         if not missing_before:
             write_status(
                 status_path,
                 pack_id,
                 "installed",
-                f"{pack.get('name', pack_id)} 已可用。",
+                f"{pack.get('name', pack_id)} is already available.",
                 logPath=str(log_path),
                 installed=True,
                 missingModules=[],
+                **status_extra,
             )
             return 0
 
@@ -150,11 +186,12 @@ def main() -> int:
             status_path,
             pack_id,
             "installing",
-            f"正在安装 {pack.get('name', pack_id)}，首次安装可能需要几分钟。",
+            f"Installing {pack.get('name', pack_id)}; first install may take a few minutes.",
             logPath=str(log_path),
             installed=False,
             missingModules=missing_before,
             estimatedSizeMb=pack.get("estimatedSizeMb"),
+            **status_extra,
         )
 
         with log_path.open("w", encoding="utf-8") as log_file:
@@ -179,17 +216,17 @@ def main() -> int:
                 if args.no_index:
                     command.append("--no-index")
                 if target_dir:
-                    command.extend(["--target", str(target_dir)])
+                    command.extend(["--target", str(target_dir), "--upgrade"])
                 command.append(str(requirement))
-                run_logged(command, log_file, env)
+                run_logged(command, log_file, env, timeout)
 
             for command in pack.get("postInstallCommands", []) or []:
                 if command == "python -m playwright install chromium":
-                    run_logged([str(python), "-m", "playwright", "install", "chromium"], log_file, env)
+                    run_logged([str(python), "-m", "playwright", "install", "chromium"], log_file, env, timeout)
                 else:
                     raise RuntimeError(f"Unsupported post-install command: {command}")
 
-        missing_after = missing_modules(pack.get("moduleChecks", []))
+        missing_after = missing_modules_in_target(pack.get("moduleChecks", []), target_dir)
         if missing_after:
             raise RuntimeError(f"Installed but module check failed: {', '.join(missing_after)}")
 
@@ -197,16 +234,17 @@ def main() -> int:
             status_path,
             pack_id,
             "installed",
-            f"{pack.get('name', pack_id)} 安装完成。",
+            f"{pack.get('name', pack_id)} installed.",
             logPath=str(log_path),
             installed=True,
             missingModules=[],
+            **status_extra,
         )
         return 0
     except Exception as exc:
         message = str(exc)
         if pack and pack.get("failureHint") and pack.get("failureHint") not in message:
-            message = f"{message}。{pack.get('failureHint')}"
+            message = f"{message}. {pack.get('failureHint')}"
         write_status(
             status_path,
             pack_id,
@@ -214,6 +252,7 @@ def main() -> int:
             message,
             logPath=str(log_path),
             installed=False,
+            **status_extra,
         )
         with log_path.open("a", encoding="utf-8") as log_file:
             log_file.write(f"\n[{utc_stamp()}] ERROR: {message}\n")

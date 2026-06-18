@@ -31,6 +31,7 @@ export type CapabilityPack = {
   message: string;
   installed: boolean;
   logPath?: string;
+  targetDir?: string;
   missingModules?: string[];
   updatedAt?: string;
   policyMode?: CapabilityPolicyMode;
@@ -48,6 +49,7 @@ type StatusFile = {
   message?: string;
   installed?: boolean;
   logPath?: string;
+  targetDir?: string;
   missingModules?: string[];
   updatedAt?: string;
 };
@@ -279,7 +281,7 @@ export class CapabilityManager {
 
     return {
       stateDir: path.join(this.runtimeRoot, "capability-state"),
-      targetDir: "",
+      targetDir: path.join(this.runtimeRoot, "capability-packages"),
       playwrightBrowsersDir: ""
     };
   }
@@ -287,8 +289,34 @@ export class CapabilityManager {
   private resolveCapabilityEnv() {
     const layout = this.resolveInstallLayout();
     const env: NodeJS.ProcessEnv = {};
-    if (layout.targetDir) {
-      env.PYTHONPATH = [layout.targetDir, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter);
+    const pythonPaths: string[] = [];
+    if (layout.targetDir && fs.existsSync(layout.targetDir)) {
+      pythonPaths.push(layout.targetDir);
+      try {
+        for (const entry of fs.readdirSync(layout.targetDir, { withFileTypes: true })) {
+          if (entry.isDirectory()) {
+            pythonPaths.push(path.join(layout.targetDir, entry.name));
+          }
+        }
+      } catch {
+        // Capability probing must remain best-effort.
+      }
+    }
+    try {
+      if (fs.existsSync(layout.stateDir)) {
+        for (const entry of fs.readdirSync(layout.stateDir, { withFileTypes: true })) {
+          if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+          const status = JSON.parse(fs.readFileSync(path.join(layout.stateDir, entry.name), "utf8")) as StatusFile;
+          if (status.targetDir && fs.existsSync(status.targetDir)) {
+            pythonPaths.push(status.targetDir);
+          }
+        }
+      }
+    } catch {
+      // Status files are diagnostic only; ignore malformed entries.
+    }
+    if (pythonPaths.length) {
+      env.PYTHONPATH = [...new Set([...pythonPaths, process.env.PYTHONPATH].filter(Boolean))].join(path.delimiter);
     }
     if (layout.playwrightBrowsersDir) {
       env.PLAYWRIGHT_BROWSERS_PATH = layout.playwrightBrowsersDir;

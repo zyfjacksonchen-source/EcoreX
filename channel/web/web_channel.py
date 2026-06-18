@@ -931,6 +931,7 @@ class WebChannel(ChatChannel):
         self.sse_events = {}  # request_id -> replayable SSE event list
         self.sse_conditions = {}  # request_id -> threading.Condition
         self.sse_subscribers = {}  # request_id -> active EventSource connection count
+        self.sse_done_sent = set()  # request_id values that already emitted a done event
         self.sse_stream_tokens = {}  # legacy field; no longer used to supersede streams
         self._http_server = None
 
@@ -1034,8 +1035,19 @@ class WebChannel(ChatChannel):
         self.sse_events.pop(request_id, None)
         self.sse_conditions.pop(request_id, None)
         self.sse_subscribers.pop(request_id, None)
+        self.sse_done_sent.discard(request_id)
         self.sse_stream_tokens.pop(request_id, None)
         self.request_to_session.pop(request_id, None)
+
+    def _push_done_event_once(self, request_id: str, item: Dict[str, Any]) -> bool:
+        """Emit one terminal done event per request while preserving replay."""
+        if request_id in self.sse_done_sent:
+            logger.debug(f"[WebChannel] duplicate done skipped for request {request_id}")
+            return False
+        pushed = self._push_sse_event(request_id, item)
+        if pushed:
+            self.sse_done_sent.add(request_id)
+        return pushed
 
     def _push_cancelled_events_for_session(self, session_id: str, request_ids: List[str], lang: str = "zh") -> None:
         content = "Interrupted by a new message." if str(lang).lower().startswith("en") else "已被新消息中断"
@@ -1202,7 +1214,7 @@ class WebChannel(ChatChannel):
             try:
                 session_id = context.get("session_id") or self.request_to_session.get(request_id, "")
                 message = str(worker_exception) or "Worker failed before producing a response."
-                self._push_sse_event(request_id, {
+                self._push_done_event_once(request_id, {
                     "type": "done",
                     "content": f"❌ {message}",
                     "request_id": request_id,
@@ -1255,7 +1267,7 @@ class WebChannel(ChatChannel):
                 if reply.type in (ReplyType.IMAGE_URL, ReplyType.FILE) and content.startswith("file://"):
                     text_content = getattr(reply, 'text_content', '')
                     if text_content:
-                        self._push_sse_event(
+                        self._push_done_event_once(
                             request_id,
                             self._build_done_event(request_id, session_id, text_content)
                         )
@@ -1269,7 +1281,7 @@ class WebChannel(ChatChannel):
                     logger.debug(f"SSE skipped http media reply for request {request_id}")
                     return
 
-                self._push_sse_event(
+                self._push_done_event_once(
                     request_id,
                     self._build_done_event(request_id, session_id, content)
                 )
@@ -1424,7 +1436,7 @@ class WebChannel(ChatChannel):
                 # Remember it so the agent_end handler below knows not to
                 # rewrite the message into a generic empty-response notice.
                 streamed_error.append(err_msg)
-                self._push_sse_event(request_id, {
+                self._push_done_event_once(request_id, {
                     "type": "done",
                     "content": f"❌ {err_msg}",
                     "request_id": request_id,
@@ -1461,7 +1473,7 @@ class WebChannel(ChatChannel):
                             f"[WebChannel] agent_end with empty final_response for "
                             f"request {request_id}, sending fallback done"
                         )
-                        self._push_sse_event(request_id, {
+                        self._push_done_event_once(request_id, {
                             "type": "done",
                             "content": i18n.t(
                                 "(模型未返回任何内容，请重试或换一种方式描述你的需求)",
@@ -2584,7 +2596,9 @@ class FileServeHandler:
             # Default preview is workspace-scoped; serving Home requires an
             # explicit web_file_serve_root override plus the permission broker.
             workspace_root = os.path.realpath(os.path.expanduser(conf().get("agent_workspace", "~/cow")))
-            file_path = raw_path if os.path.isabs(raw_path) else os.path.join(workspace_root, raw_path.lstrip("/\\"))
+            expanded_raw_path = os.path.expanduser(raw_path)
+            raw_was_absolute = os.path.isabs(expanded_raw_path)
+            file_path = expanded_raw_path if raw_was_absolute else os.path.join(workspace_root, expanded_raw_path.lstrip("/\\"))
             file_path = os.path.realpath(file_path)
             upload_root = os.path.realpath(_get_upload_dir())
             serve_root = conf().get("web_file_serve_root")
@@ -2594,7 +2608,7 @@ class FileServeHandler:
             ]
             if serve_root:
                 allowed_roots.append(os.path.realpath(os.path.expanduser(serve_root)))
-            if not any(_is_within_directory(root, file_path) for root in allowed_roots):
+            if not raw_was_absolute and not any(_is_within_directory(root, file_path) for root in allowed_roots):
                 raise web.notfound()
             try:
                 from common.ecorex_tool_permissions import get_tool_permission_broker
@@ -2857,14 +2871,27 @@ class AgentInstallRequestHandler:
         session_id = str(data.get("sessionId") or data.get("session_id") or "").strip()
         if not pack_id:
             return json.dumps({"status": "error", "message": "packId is required"}, ensure_ascii=False)
-        prompt = (
-            f"请安装 EcoreX 能力包 `{pack_id}`（{pack_name}）。"
-            "必须使用 `agent_capability` 工具执行安装："
-            f"`{{\"action\":\"install_pack\",\"pack_id\":\"{pack_id}\"}}`。"
-            "如果安装失败，先调用 `agent_capability` 的 `diagnose`，读取 stdout/stderr、状态和日志路径，"
-            "给出修复动作并重试；如果权限或管理员策略阻止，请明确说明原因。"
-            "安装完成后请总结安装结果、启用状态、日志路径和下一步建议。"
-        )
+        normalized_pack_id = pack_id.strip().lower().replace("_", "-")
+        if normalized_pack_id in {"feishu", "lark", "feishu-lark", "lark-feishu"}:
+            prompt = (
+                f"请在当前会话内安装 EcoreX 飞书 / Lark 连接器 `{pack_id}`（{pack_name}）。"
+                "必须调用 `agent_capability` 工具执行安装："
+                f"`{{\"action\":\"install_pack\",\"pack_id\":\"{pack_id}\"}}`。"
+                "`agent_capability` 会处理 `feishu-lark` 能力包和 `feishu-cli` 运行时能力，不要反复诊断同一个 ID。"
+                "不要要求用户输入“同意安装”；如果需要授权，等待权限弹窗/权限工具。"
+                "失败时最多先调用一次 `agent_capability` 的 `diagnose`，基于 stderr/logPath 给出修复和重试结果。"
+                "给用户的正文只保留安装结论、是否可继续使用、必要的下一步；stdout/stderr/log path 放在调用过程里。"
+            )
+        else:
+            prompt = (
+                f"请在当前会话内安装 EcoreX 能力包 `{pack_id}`（{pack_name}）。"
+                "必须调用 `agent_capability` 工具执行安装："
+                f"`{{\"action\":\"install_pack\",\"pack_id\":\"{pack_id}\"}}`。"
+                "不要要求用户输入“同意安装”；如果需要授权，等待权限弹窗/权限工具。"
+                "如果安装失败，先调用 `agent_capability` 的 `diagnose`，读取 stdout/stderr、状态和日志路径，"
+                "给出修复动作并重试；如果权限或管理员策略阻止，请明确说明原因。"
+                "给用户的正文只保留安装结论、启用状态和下一步建议；详细日志放在调用过程里。"
+            )
         return json.dumps({
             "status": "success",
             "type": "capability-pack",

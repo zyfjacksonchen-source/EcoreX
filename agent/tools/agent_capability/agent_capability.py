@@ -59,6 +59,49 @@ def _write_config(data: Dict[str, Any]) -> str:
     return written
 
 
+_PACK_ALIASES = {
+    "feishu": "feishu-lark",
+    "lark": "feishu-lark",
+    "feishu-lark": "feishu-lark",
+    "lark-feishu": "feishu-lark",
+    "feishu_cli": "feishu-cli",
+    "feishu-cli": "feishu-cli",
+    "lark-cli": "feishu-cli",
+}
+
+
+def _normalize_pack_id(value: str) -> str:
+    key = str(value or "").strip().lower().replace("_", "-")
+    return _PACK_ALIASES.get(key, key)
+
+
+def _payload_for_result(result: ToolResult) -> Dict[str, Any]:
+    payload = result.result if isinstance(result.result, dict) else {"result": result.result}
+    return {"status": result.status or payload.get("status") or "success", **payload}
+
+
+def _tail(value: Any, limit: int = 1200) -> str:
+    text = str(value or "")
+    return text[-limit:] if len(text) > limit else text
+
+
+def _compact_install_step(ability: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    state = payload.get("capabilityState") if isinstance(payload.get("capabilityState"), dict) else {}
+    return {
+        "ability": ability,
+        "status": payload.get("status") or "success",
+        "message": payload.get("message") or state.get("message") or "",
+        "exitCode": payload.get("exitCode"),
+        "configPath": payload.get("configPath"),
+        "logPath": payload.get("logPath") or state.get("logPath"),
+        "stdoutTail": _tail(payload.get("stdout") or payload.get("output")),
+        "stderrTail": _tail(payload.get("stderr")),
+        "enabled": payload.get("enabled"),
+        "installed": state.get("installed"),
+        "state": state.get("state"),
+    }
+
+
 class AgentCapabilityTool(BaseTool):
     name = "agent_capability"
     description = (
@@ -93,10 +136,10 @@ class AgentCapabilityTool(BaseTool):
             if action == "diagnose":
                 return self._diagnose(workspace)
             if action == "install_pack":
-                pack_id = str(params.get("pack_id") or params.get("ability") or "").strip()
+                pack_id = _normalize_pack_id(str(params.get("pack_id") or params.get("ability") or ""))
                 if not pack_id:
                     return ToolResult.fail({"status": "error", "message": "pack_id is required"})
-                return OptionalAbilities().execute({"action": "install", "ability": pack_id, "timeout": params.get("timeout")})
+                return self._install_pack(pack_id, params.get("timeout"))
             if action == "install_skill":
                 return self._install_skill(workspace, params)
             if action == "enable_skill":
@@ -111,6 +154,34 @@ class AgentCapabilityTool(BaseTool):
             logger.exception(f"[AgentCapability] action failed: {action}")
             return ToolResult.fail({"status": "error", "action": action, "message": str(exc)})
         return ToolResult.fail({"status": "error", "message": "unknown action"})
+
+    def _install_pack(self, pack_id: str, timeout: Any) -> ToolResult:
+        install_plan = ["feishu-lark", "feishu-cli"] if pack_id == "feishu-lark" else [pack_id]
+        steps = []
+        for ability in install_plan:
+            payload = _payload_for_result(OptionalAbilities().execute({
+                "action": "install",
+                "ability": ability,
+                "timeout": timeout,
+            }))
+            steps.append(_compact_install_step(ability, payload))
+            if payload.get("status") != "success":
+                return ToolResult.fail({
+                    "status": "error",
+                    "packId": pack_id,
+                    "message": f"{ability} 安装失败，已保留诊断信息，请先根据 stderr/logPath 修复后重试。",
+                    "installPlan": install_plan,
+                    "steps": steps,
+                    "nextAction": {"action": "diagnose"},
+                })
+        return ToolResult.success({
+            "status": "success",
+            "packId": pack_id,
+            "message": f"{pack_id} 已安装完成。",
+            "installPlan": install_plan,
+            "steps": steps,
+            "nextAction": "refresh capabilities and continue the user task",
+        })
 
     def _diagnose(self, workspace: str) -> ToolResult:
         abilities = OptionalAbilities().execute({"action": "list"}).result

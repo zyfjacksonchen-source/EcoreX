@@ -56,8 +56,13 @@ export type LocalFilePayload = {
 };
 
 const REASONING_RENDER_CAP = 4 * 1024;
+const TOOL_DETAIL_RENDER_CAP = 6 * 1024;
 const LONG_REPLY_COLLAPSE_CHARS = 1400;
 const LONG_REPLY_PREVIEW_CHARS = 520;
+const ARTIFACT_PREVIEW_LIMIT = 6;
+const ARTIFACT_RELATIVE_ROOTS = "deliverables|output|outputs|artifacts|images|assets";
+const ARTIFACT_ABSOLUTE_POSIX_ROOTS = "Users|Volumes|home|tmp|var|mnt|opt|srv|workspace";
+const ARTIFACT_PATH_PREFIX = `(?:[A-Za-z]:[\\\\/]|\\\\\\\\|/(?:${ARTIFACT_ABSOLUTE_POSIX_ROOTS})[\\\\/]|(?:\\.{1,2}[\\\\/])?(?:${ARTIFACT_RELATIVE_ROOTS})[\\\\/])`;
 
 function escapeHtml(value: unknown) {
   return String(value ?? "")
@@ -162,6 +167,14 @@ function basenameFromPath(value: string) {
   return normalized.split("/").filter(Boolean).pop() || value;
 }
 
+function cleanArtifactCandidate(value: string) {
+  return String(value || "")
+    .trim()
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .replace(/[)\]'",.;:!?，。；：！？]+$/g, "")
+    .trim();
+}
+
 function decodeBasicEntities(value: string) {
   return value
     .replace(/&quot;/g, '"')
@@ -218,12 +231,26 @@ function mergeArtifacts(...groups: ArtifactItem[][]) {
   const seen = new Set<string>();
   for (const group of groups) {
     for (const item of group) {
-      if (!item.path || seen.has(item.path)) continue;
-      seen.add(item.path);
+      const key = artifactDedupeKey(item);
+      if (!item.path || seen.has(key)) continue;
+      seen.add(key);
       items.push(item);
     }
   }
   return items;
+}
+
+function artifactDedupeKey(item: ArtifactItem) {
+  const normalized = item.path
+    .replace(/^file:\/+/i, "")
+    .replace(/\\/g, "/")
+    .replace(/^\/([A-Za-z]:\/)/, "$1")
+    .replace(/[?#].*$/, "")
+    .replace(/\/+/g, "/")
+    .toLowerCase();
+  if (item.fileType === "image") return `image:${basenameFromPath(normalized)}`;
+  const parts = normalized.split("/").filter(Boolean);
+  return `${item.fileType}:${parts.slice(-4).join("/") || normalized}`;
 }
 
 function artifactFileTypeFromPath(value: string): ArtifactFileType {
@@ -234,7 +261,8 @@ function artifactFileTypeFromPath(value: string): ArtifactFileType {
 }
 
 function isArtifactFilePath(value: string) {
-  const source = String(value || "").trim();
+  const source = cleanArtifactCandidate(value);
+  if (!source || /^https?:\/\//i.test(source) || /[{}]/.test(source)) return false;
   return new RegExp(`\\.(${ARTIFACT_FILE_EXTENSIONS})(?:[?#].*)?$`, "i").test(source);
 }
 
@@ -248,9 +276,10 @@ function isBareArtifactFilePath(value: string) {
 }
 
 function isArtifactBasePath(value: string) {
-  const source = String(value || "").trim();
+  const source = cleanArtifactCandidate(value);
   if (!source || isArtifactFilePath(source)) return false;
-  return /^(?:[A-Za-z]:[\\/]|\\\\|\/|(?:\.{1,2}[\\/])?(?:deliverables|output|outputs|artifacts|images|assets|prompts|workspace)[\\/])/i.test(source);
+  if (/^https?:\/\//i.test(source) || /[{}]/.test(source)) return false;
+  return new RegExp(`^${ARTIFACT_PATH_PREFIX}`, "i").test(source);
 }
 
 function joinArtifactPath(base: string, fileName: string) {
@@ -268,12 +297,12 @@ type ImageArtifact = {
 
 function extractImageArtifacts(content: string) {
   const source = redactInternalPromptText(content || "");
-  const pattern = /((?:[A-Za-z]:[\\/]|\\\\|\/|(?:\.{1,2}[\\/])?(?:deliverables|output|outputs|artifacts|images|assets|prompts|workspace)[\\/])[^`\r\n<>]*?\.(?:png|jpe?g|gif|webp|bmp|svg))(?:[)\]'"`，。；;,.!?！？:]|$)/gi;
+  const pattern = new RegExp(`(${ARTIFACT_PATH_PREFIX}[^\\\`\\r\\n<>]*?\\.(?:png|jpe?g|gif|webp|bmp|svg))(?:[)\\]'"\\\`,.;:!?]|$)`, "gi");
   const items: ImageArtifact[] = [];
   const seen = new Set<string>();
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(source)) && items.length < 12) {
-    const raw = (match[1] || "").trim().replace(/^["'`]+|["'`]+$/g, "");
+    const raw = cleanArtifactCandidate(match[1] || "");
     const path = localPathFromSource(raw) || relativeArtifactPathFromSource(raw);
     if (!path || seen.has(path)) continue;
     seen.add(path);
@@ -317,7 +346,7 @@ function extractArtifacts(content: string, options?: { allowBareFiles?: boolean 
   const bases: string[] = [];
   const allowBareFiles = Boolean(options?.allowBareFiles);
   const add = (rawPath: string, fileType?: ArtifactFileType) => {
-    const path = (localPathFromSource(rawPath) || relativeArtifactPathFromSource(rawPath, allowBareFiles) || rawPath).trim();
+    const path = (localPathFromSource(rawPath) || relativeArtifactPathFromSource(rawPath, allowBareFiles) || "").trim();
     if (!path || seen.has(path)) return;
     seen.add(path);
     items.push({
@@ -327,22 +356,22 @@ function extractArtifacts(content: string, options?: { allowBareFiles?: boolean 
     });
   };
 
-  const dirPattern = /((?:[A-Za-z]:[\\/]|\\\\|\/|(?:\.{1,2}[\\/])?(?:deliverables|output|outputs|artifacts|images|assets|prompts|workspace)[\\/])[^`\r\n<>]*?[\\/])(?:[\s)\]'"`,.;:!?]|$)/gi;
+  const dirPattern = new RegExp(`(${ARTIFACT_PATH_PREFIX}[^\\\`\\r\\n<>]*?[\\\\/])(?:[\\s)\\]'"\\\`,.;:!?]|$)`, "gi");
   let dirMatch: RegExpExecArray | null;
   while ((dirMatch = dirPattern.exec(source)) && items.length < 20) {
-    const raw = (dirMatch[1] || "").trim().replace(/^["'`]+|["'`]+$/g, "");
+    const raw = cleanArtifactCandidate(dirMatch[1] || "");
     if (!raw || !isArtifactBasePath(raw)) continue;
     bases.push(raw);
     add(raw, "directory");
   }
 
   const filePattern = new RegExp(
-    `((?:[A-Za-z]:[\\\\/]|\\\\\\\\|/|(?:\\.{1,2}[\\\\/])?(?:deliverables|output|outputs|artifacts|images|assets|prompts|workspace)[\\\\/])[^\\\`\\r\\n<>]*?\\.(${ARTIFACT_FILE_EXTENSIONS}))(?:[)\\]'"\\\`,.;:!?]|$)`,
+    `(${ARTIFACT_PATH_PREFIX}[^\\\`\\r\\n<>]*?\\.(${ARTIFACT_FILE_EXTENSIONS}))(?:[)\\]'"\\\`,.;:!?]|$)`,
     "gi"
   );
   let fileMatch: RegExpExecArray | null;
   while ((fileMatch = filePattern.exec(source)) && items.length < 24) {
-    const raw = (fileMatch[1] || "").trim().replace(/^["'`]+|["'`]+$/g, "");
+    const raw = cleanArtifactCandidate(fileMatch[1] || "");
     const path = localPathFromSource(raw) || relativeArtifactPathFromSource(raw);
     if (!path) continue;
     add(path);
@@ -396,38 +425,52 @@ function ArtifactGrid({
   localFilePreviewUrl?: (filePath: string) => string;
   onOpenLocalFile?: (file: LocalFilePayload) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
   if (!artifacts.length) return null;
+  const visibleArtifacts = expanded ? artifacts : artifacts.slice(0, ARTIFACT_PREVIEW_LIMIT);
+  const hiddenCount = Math.max(artifacts.length - visibleArtifacts.length, 0);
   return (
-    <div className="artifact-grid image-artifact-grid">
-      {artifacts.map((artifact) => (
-        <button
-          key={artifact.path}
-          type="button"
-          className={`artifact-card image-artifact-card${artifact.fileType === "image" ? " is-image" : ""}`}
-          onClick={() => onOpenLocalFile?.({ file_path: artifact.path, file_name: artifact.name, file_type: artifact.fileType })}
-          title={artifact.path}
-        >
-          {artifact.fileType === "image" && localFilePreviewUrl ? (
-            <img src={localFilePreviewUrl(artifact.path)} alt={artifact.name} loading="lazy" />
-          ) : (
-            <span className="artifact-file-icon">{artifactIcon(artifact.fileType)}</span>
-          )}
-          <span className="artifact-card-label">
-            <span>{artifact.name}</span>
-            <ExternalLink aria-hidden="true" />
-          </span>
+    <div className="artifact-section">
+      <div className="artifact-section-head">
+        <strong>生成产物</strong>
+        <span>{artifacts.length} 个</span>
+      </div>
+      <div className="artifact-grid image-artifact-grid">
+        {visibleArtifacts.map((artifact) => (
+          <button
+            key={artifact.path}
+            type="button"
+            className={`artifact-card image-artifact-card${artifact.fileType === "image" ? " is-image" : ""}`}
+            onClick={() => onOpenLocalFile?.({ file_path: artifact.path, file_name: artifact.name, file_type: artifact.fileType })}
+            title={artifact.path}
+          >
+            {artifact.fileType === "image" && localFilePreviewUrl ? (
+              <img src={localFilePreviewUrl(artifact.path)} alt={artifact.name} loading="lazy" />
+            ) : (
+              <span className="artifact-file-icon">{artifactIcon(artifact.fileType)}</span>
+            )}
+            <span className="artifact-card-label">
+              <span>{artifact.name}</span>
+              <ExternalLink aria-hidden="true" />
+            </span>
+          </button>
+        ))}
+      </div>
+      {artifacts.length > ARTIFACT_PREVIEW_LIMIT && (
+        <button className="artifact-grid-toggle" type="button" onClick={() => setExpanded((current) => !current)}>
+          {expanded ? "收起产物" : `显示另外 ${hiddenCount} 个`}
         </button>
-      ))}
+      )}
     </div>
   );
 }
 
 function relativeArtifactPathFromSource(value?: string, allowBareFile = false) {
-  const source = String(value || "").trim().replace(/^["'`]+|["'`]+$/g, "");
+  const source = cleanArtifactCandidate(value || "");
   if (!source || /^[a-z][a-z0-9+.-]*:/i.test(source) || localPathFromSource(source)) return "";
   if (!isArtifactFilePath(source)) return "";
   if (allowBareFile && isBareArtifactFilePath(source)) return source;
-  if (!/^(?:\.{1,2}[\\/])?(?:deliverables|output|outputs|artifacts|images|assets|prompts|workspace)[\\/]/i.test(source)) return "";
+  if (!new RegExp(`^(?:\\.{1,2}[\\\\/])?(?:${ARTIFACT_RELATIVE_ROOTS})[\\\\/]`, "i").test(source)) return "";
   if (source.includes("..")) return "";
   return source;
 }
@@ -588,18 +631,91 @@ function truncateReasoning(text: string) {
 
 function formatToolValue(value: unknown) {
   if (value === undefined || value === null || value === "") return "(none)";
-  if (typeof value === "string") return redactInternalPromptText(value);
+  let text = "";
+  if (typeof value === "string") {
+    text = value;
+  } else {
+    try {
+      text = JSON.stringify(value, null, 2);
+    } catch {
+      text = String(value);
+    }
+  }
+  text = redactInternalPromptText(text);
+  if (text.length <= TOOL_DETAIL_RENDER_CAP) return text;
+  const head = text.slice(0, Math.floor(TOOL_DETAIL_RENDER_CAP * 0.65));
+  const tail = text.slice(-Math.floor(TOOL_DETAIL_RENDER_CAP * 0.2));
+  return `${head}\n\n... [tool output truncated for display, ${text.length - head.length - tail.length} chars omitted] ...\n\n${tail}`;
+}
+
+function resultHasExplicitArtifactFields(value: unknown) {
+  if (!value || typeof value !== "object") return false;
+  if (Array.isArray(value)) {
+    return value.slice(0, 20).some(resultHasExplicitArtifactFields);
+  }
   try {
-    return redactInternalPromptText(JSON.stringify(value, null, 2));
+    return Object.keys(value as Record<string, unknown>).some((key) => (
+      /^(?:artifacts?|deliverables?|outputs?|files?|generatedFiles|generated_files|media|attachments?|file_path|filePath|path|url)$/i.test(key)
+    ));
   } catch {
-    return redactInternalPromptText(String(value));
+    return false;
   }
 }
 
-function extractArtifactsFromUnknown(value: unknown) {
+function extractArtifactsFromStructured(value: unknown): ArtifactItem[] {
+  if (!value || typeof value !== "object") return [];
+  const groups: ArtifactItem[][] = [];
+  const visit = (entry: unknown, depth = 0, parentKey = "") => {
+    if (depth > 4 || entry === undefined || entry === null) return;
+    if (typeof entry === "string") {
+      const keyAllowsText = /^(?:artifacts?|deliverables?|outputs?|files?|generatedFiles|generated_files|media|attachments?)$/i.test(parentKey);
+      if (keyAllowsText) groups.push(extractArtifacts(entry, { allowBareFiles: true }));
+      return;
+    }
+    if (Array.isArray(entry)) {
+      entry.forEach((item) => visit(item, depth + 1, parentKey));
+      return;
+    }
+    if (typeof entry !== "object") return;
+    const record = entry as Record<string, unknown>;
+    const rawPath = String(record.file_path || record.filePath || record.path || record.url || "").trim();
+    if (rawPath) {
+      const path = localPathFromSource(rawPath) || relativeArtifactPathFromSource(rawPath, false);
+      if (path) {
+        const rawType = String(record.file_type || record.fileType || record.type || "").toLowerCase();
+        const fileType: ArtifactFileType = rawType === "directory" || rawType === "image" || rawType === "video" || rawType === "audio"
+          ? rawType
+          : artifactFileTypeFromPath(path);
+        groups.push([{
+          path,
+          name: String(record.file_name || record.fileName || record.name || basenameFromPath(path)),
+          fileType
+        }]);
+      }
+    }
+    for (const [key, child] of Object.entries(record)) {
+      if (/^(?:artifacts?|deliverables?|outputs?|files?|generatedFiles|generated_files|media|attachments?)$/i.test(key)) {
+        visit(child, depth + 1, key);
+      }
+    }
+  };
+  visit(value);
+  return mergeArtifacts(...groups);
+}
+
+function extractArtifactsFromUnknown(value: unknown, options?: { allowBareFiles?: boolean }) {
   if (value === undefined || value === null || value === "") return [];
-  const text = typeof value === "string" ? value : formatToolValue(value);
-  return extractArtifacts(text, { allowBareFiles: true });
+  if (typeof value === "object") {
+    const structured = extractArtifactsFromStructured(value);
+    if (structured.length) return structured;
+  }
+  if (typeof value !== "string") return [];
+  const text = value;
+  return extractArtifacts(text, { allowBareFiles: options?.allowBareFiles ?? true });
+}
+
+function isArtifactProducingTool(name?: string) {
+  return /(?:write|save|send|export|render|image|artifact|deliverable)/i.test(String(name || ""));
 }
 
 function extractArtifactsFromSteps(steps: AgentStepDisclosure[], toolCalls: ToolCallDisclosure[] = []) {
@@ -607,7 +723,7 @@ function extractArtifactsFromSteps(steps: AgentStepDisclosure[], toolCalls: Tool
   for (const step of steps) {
     if (step.type === "media") {
       const source = step.filePath || step.url || step.previewUrl || "";
-      const path = localPathFromSource(source) || relativeArtifactPathFromSource(source, true);
+      const path = localPathFromSource(source) || relativeArtifactPathFromSource(source, false);
       if (path) {
         groups.push([{
           path,
@@ -618,13 +734,17 @@ function extractArtifactsFromSteps(steps: AgentStepDisclosure[], toolCalls: Tool
       continue;
     }
     if (step.type === "tool") {
-      groups.push(extractArtifactsFromUnknown(step.arguments));
-      groups.push(extractArtifactsFromUnknown(step.result));
+      const artifactTool = isArtifactProducingTool(step.name);
+      if (artifactTool || resultHasExplicitArtifactFields(step.result)) {
+        groups.push(extractArtifactsFromUnknown(step.result, { allowBareFiles: artifactTool }));
+      }
     }
   }
   for (const tool of toolCalls) {
-    groups.push(extractArtifactsFromUnknown(tool.arguments));
-    groups.push(extractArtifactsFromUnknown(tool.result));
+    const artifactTool = isArtifactProducingTool(tool.name);
+    if (artifactTool || resultHasExplicitArtifactFields(tool.result)) {
+      groups.push(extractArtifactsFromUnknown(tool.result, { allowBareFiles: artifactTool }));
+    }
   }
   return mergeArtifacts(...groups).slice(0, 24);
 }
@@ -664,7 +784,7 @@ function ThinkingStep({ content = "", running }: { content?: string; running?: b
   const trimmed = redactInternalPromptText(content).trim();
   const shown = truncateReasoning(trimmed);
   return (
-    <details className={`agent-step agent-thinking-step${running ? " is-running" : ""}`} open={running || undefined}>
+    <details className={`agent-step agent-thinking-step${running ? " is-running" : ""}`}>
       <summary title={running ? "EcoreX 正在推理，完成后可展开查看思考摘要" : "展开查看本轮思考摘要"}>
         <span className="thinking-ring" aria-hidden="true" />
         <span>{running ? "思考中" : "思考完成"}</span>
@@ -680,7 +800,7 @@ function ToolStep({ step }: { step: ToolCallDisclosure }) {
   const isError = step.is_error === true || step.status === "error" || step.status === "failed";
   const running = step.running === true || step.status === "running";
   return (
-    <details className={`agent-step agent-tool-step${isError ? " tool-failed" : ""}`} open={running || undefined}>
+    <details className={`agent-step agent-tool-step${isError ? " tool-failed" : ""}`}>
       <summary title={running ? "工具正在执行，完成后可查看输入和结果" : "展开查看工具输入和结果"}>
         <span className={`tool-status-dot${running ? " is-running" : isError ? " is-error" : " is-done"}`} aria-hidden="true" />
         <span className="tool-name">{step.name || "工具调用"}</span>
@@ -805,6 +925,58 @@ function renderStep(
   return <MediaStep key={index} step={step} onOpenLocalFile={onOpenLocalFile} localFilePreviewUrl={localFilePreviewUrl} />;
 }
 
+function stepIsRunning(step: AgentStepDisclosure) {
+  return step.type === "thinking" && step.running
+    || step.type === "tool" && (step.running || step.status === "running");
+}
+
+function stepIsError(step: AgentStepDisclosure) {
+  return step.type === "tool" && (step.is_error === true || step.status === "error" || step.status === "failed");
+}
+
+function stepSummary(step?: AgentStepDisclosure) {
+  if (!step) return "";
+  if (step.type === "thinking") return step.running ? "正在思考" : "思考完成";
+  if (step.type === "tool") return step.name ? `工具：${step.name}` : "工具调用";
+  if (step.type === "media") return step.fileName ? `产物：${step.fileName}` : "产物已生成";
+  if (step.type === "phase") return redactInternalPromptText(step.content || "").slice(0, 48);
+  return redactInternalPromptText(step.content || "").slice(0, 48);
+}
+
+function ProcessDisclosure({
+  pending,
+  steps,
+  legacySteps,
+  onOpenLocalFile,
+  localFilePreviewUrl
+}: {
+  pending?: boolean;
+  steps: AgentStepDisclosure[];
+  legacySteps: ReactNode[];
+  onOpenLocalFile?: (file: LocalFilePayload) => void;
+  localFilePreviewUrl?: (filePath: string) => string;
+}) {
+  if (!steps.length && !legacySteps.length) return null;
+  const runningStep = [...steps].reverse().find(stepIsRunning);
+  const errorStep = [...steps].reverse().find(stepIsError);
+  const currentStep = runningStep || errorStep || steps[steps.length - 1];
+  const count = steps.length + legacySteps.length;
+  const statusClass = pending ? " is-running" : errorStep ? " is-error" : " is-done";
+  return (
+    <details className={`agent-process-disclosure${pending ? " is-live" : ""}`}>
+      <summary>
+        <span className={`tool-status-dot${statusClass}`} aria-hidden="true" />
+        <span>{pending ? `正在处理 · ${count} 步` : `调用过程 · ${count} 步`}</span>
+        {currentStep && <span className="agent-process-current">{stepSummary(currentStep)}</span>}
+      </summary>
+      <div className="agent-steps">
+        {steps.map((step, index) => renderStep(step, index, onOpenLocalFile, localFilePreviewUrl))}
+        {legacySteps}
+      </div>
+    </details>
+  );
+}
+
 function splitSteps(steps: AgentStepDisclosure[], content: string) {
   const lastContentIndex = steps.reduce((latest, step, index) => (
     step.type === "content" && !step.intermediate ? index : latest
@@ -823,7 +995,7 @@ function MainAnswer({ content, pending, collapsible, extraArtifacts = [], localF
   onOpenLocalFile?: (file: LocalFilePayload) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const artifacts = mergeArtifacts(extractArtifacts(content, { allowBareFiles: true }), extraArtifacts);
+  const artifacts = mergeArtifacts(extractArtifacts(content, { allowBareFiles: false }), extraArtifacts);
   const artifactGrid = <ArtifactGrid artifacts={artifacts} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />;
   if (!content) return artifactGrid;
   if (!collapsible || pending || content.length <= LONG_REPLY_COLLAPSE_CHARS) {
@@ -885,21 +1057,13 @@ export function MessageContent(props: {
 
   return (
     <div className="message-content" aria-live={props.pending ? "polite" : undefined}>
-      {(visibleSteps.length > 0 || legacySteps.length > 0) && props.pending && (
-        <div className="agent-steps">
-          {compactedSteps.map((step, index) => renderStep(step, index, props.onOpenLocalFile, props.localFilePreviewUrl))}
-          {legacySteps}
-        </div>
-      )}
-      {(visibleSteps.length > 0 || legacySteps.length > 0) && !props.pending && (
-        <details className="agent-process-disclosure">
-          <summary>调用过程 · {visibleSteps.length + legacySteps.length} 步</summary>
-          <div className="agent-steps">
-            {compactedSteps.map((step, index) => renderStep(step, index, props.onOpenLocalFile, props.localFilePreviewUrl))}
-            {legacySteps}
-          </div>
-        </details>
-      )}
+      <ProcessDisclosure
+        pending={props.pending}
+        steps={compactedSteps}
+        legacySteps={legacySteps}
+        onOpenLocalFile={props.onOpenLocalFile}
+        localFilePreviewUrl={props.localFilePreviewUrl}
+      />
       <MainAnswer content={mainContent} pending={props.pending} collapsible={props.role !== "user"} extraArtifacts={stepArtifacts} localFilePreviewUrl={props.localFilePreviewUrl} onOpenLocalFile={props.onOpenLocalFile} />
       {props.cancelled ? (
         <div className="agent-cancelled-tag">已中止</div>

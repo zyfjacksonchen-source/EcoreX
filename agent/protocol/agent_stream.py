@@ -344,9 +344,15 @@ class AgentStreamExecutor:
             args = arguments if isinstance(arguments, dict) else {}
             action = str(args.get("action") or "").strip().lower()
             if action == "install_pack":
+                ability = args.get("pack_id") or args.get("ability") or ""
+                normalized_ability = str(ability or "").strip().lower().replace("_", "-")
+                if normalized_ability in {"feishu", "lark", "feishu-lark", "lark-feishu"}:
+                    ability = "feishu-lark + feishu-cli"
+                elif normalized_ability in {"feishu-cli", "lark-cli"}:
+                    ability = "feishu-cli"
                 return "optional_abilities", {
                     "action": "install",
-                    "ability": args.get("pack_id") or args.get("ability") or "",
+                    "ability": ability,
                 }
             if action in {"install_skill", "enable_skill", "disable_skill"}:
                 return "skill_write", {
