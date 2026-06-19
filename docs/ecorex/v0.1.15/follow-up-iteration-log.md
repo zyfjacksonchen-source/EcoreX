@@ -6,6 +6,7 @@
 - 2026-06-19: Rebuilt the NSIS installer from the signed `win-unpacked` directory, signed `desktop\release\EcoreX_0.1.15_x64-setup.exe`, verified Authenticode `Valid` for both the app exe and setup exe, regenerated `latest.yml` and `.blockmap` after signing, and updated `deploy\ecorex-site\manifest.json` from `pending-signature` to `ready`.
 - 2026-06-19: Final signed Windows setup metadata: `desktop\release\EcoreX_0.1.15_x64-setup.exe`, size `145857440`, SHA256 `5F89F7453CE50465E86F5638B7DCEEF855981BA6D99722309A7F968E3D883B49`, update sha512 `KrS2wHISUsRH9edGkYB6sRV0MkRiA+GHlEjHE+ixTFemfiYhbPfMwr8sabC/JaV9NeNuQHIsMiEpRQ+fnZOQtw==`.
 - 2026-06-19: Rebuilt the publishable public release bundle with `scripts\prepare-ecorex-public-release.ps1 -Version 0.1.15`. Output: `release-artifacts\EcoreX_0.1.15-public-release.zip`, size `148746471`, SHA256 `FC99AB0270B1875F63F089DCA6D1E4B6C88D30874F397F5A78A2533953AB27D6`. Validator passed and included only ready artifacts; pending Mac/WebUI/Linux entries remain non-downloadable.
+- 2026-06-19: During final verification, `scripts\verify-ecorex-release.ps1` still treated `status=pending` WebUI/Linux artifacts as required public downloads. Updated it to require HTTP 200 only for `status=ready` artifacts, matching the release validator, server checker, updater, and download page semantics.
 
 ## Start State
 

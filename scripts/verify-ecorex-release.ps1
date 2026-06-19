@@ -284,7 +284,11 @@ foreach ($requiredId in @("windows-x64", "macos-arm64-dmg", "macos-x64-dmg")) {
 }
 
 foreach ($artifact in $manifest.artifacts) {
-    if (($artifact.status -like "pending-*") -or ($SkipMacArtifacts -and $artifact.id -like "macos-*")) {
+    $status = [string]$artifact.status
+    if (-not $status) {
+        $status = "ready"
+    }
+    if (($status -ne "ready") -or ($SkipMacArtifacts -and $artifact.id -like "macos-*")) {
         $checks.Add((New-Check "Public download: $($artifact.fileName)" "skipped" "Artifact status is $($artifact.status); not required in this verification pass." "warn"))
         continue
     }
