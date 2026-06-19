@@ -3252,7 +3252,7 @@ export function App() {
 
   function packActionLabel(pack: CapabilityPack, installing = false) {
     if (pack.discoveryOnly) {
-      return installing ? "正在交给 agent" : "交给 agent";
+      return installing ? "正在用 find skill" : "用 find skill";
     }
     return installing ? "正在安装" : "安装";
   }
@@ -3262,7 +3262,7 @@ export function App() {
   }
 
   function packTaskNoun(pack: CapabilityPack) {
-    return pack.discoveryOnly ? "配置任务" : "安装任务";
+    return pack.discoveryOnly ? "find skill 任务" : "安装任务";
   }
 
   function watchAgentPackInstall(pack: CapabilityPack, onInstalled?: () => void) {
@@ -3316,10 +3316,11 @@ export function App() {
 
   async function startAgentInstallChatTask(pack: CapabilityPack, prompt: string, sessionId: string) {
     const requestSessionId = sessionId;
+    const taskLabel = pack.discoveryOnly ? `用 find skill 发现能力：${pack.name}` : `安装能力包：${pack.name}`;
     const userMessage: ChatItem = {
       id: `u-install-${Date.now()}`,
       role: "user",
-      content: `安装能力包：${pack.name}`,
+      content: taskLabel,
       createdAt: new Date().toISOString()
     };
     const assistantId = `a-install-${Date.now()}`;
@@ -3331,7 +3332,7 @@ export function App() {
     const currentTitle = sessionTitles[requestSessionId]
       || sessionUiState[requestSessionId]?.title
       || (activeSessionIdRef.current === requestSessionId ? activeSessionTitle : "新对话");
-    const nextTitle = currentTitle === "新对话" ? `安装 ${pack.name}` : currentTitle;
+    const nextTitle = currentTitle === "新对话" ? (pack.discoveryOnly ? `find skill ${pack.name}` : `安装 ${pack.name}`) : currentTitle;
     setSessionTitles((titles) => ({ ...titles, [requestSessionId]: nextTitle }));
     if (activeSessionIdRef.current === requestSessionId) {
       setActiveSessionTitle(nextTitle);
@@ -3391,9 +3392,9 @@ export function App() {
       setInstallNotice({
         packId: pack.id,
         packName: pack.name,
-        message: `${pack.name} 已排队，当前任务结束后自动${pack.discoveryOnly ? "交给 agent" : "安装"}`
+        message: `${pack.name} 已排队，当前任务结束后自动${pack.discoveryOnly ? "走 find skill" : "安装"}`
       });
-      setToast(`${pack.name} 已排队${pack.discoveryOnly ? "交给 agent" : "安装"}`);
+      setToast(`${pack.name} 已排队${pack.discoveryOnly ? "走 find skill" : "安装"}`);
       return;
     }
     if (shouldOpenCapabilitySettings(pack)) {
@@ -3404,7 +3405,7 @@ export function App() {
     setInstallNotice({
       packId: pack.id,
       packName: pack.name,
-      message: pack.discoveryOnly ? `${pack.name} 正在交给 agent，请稍后` : `${pack.name} 正在安装，请稍后`
+      message: pack.discoveryOnly ? `${pack.name} 正在通过 find skill 发现安装源，请稍后` : `${pack.name} 正在安装，请稍后`
     });
     try {
       const request = await requestAgentInstallRequest({
@@ -3425,12 +3426,12 @@ export function App() {
         setInstallNotice({
           packId: pack.id,
           packName: pack.name,
-          message: `${pack.name} 配置任务已交给 agent`
+          message: `${pack.name} find skill 任务已创建`
         });
       } else {
         watchAgentPackInstall(pack, onInstalled);
       }
-      setToast(`${pack.name} ${packTaskNoun(pack)}已交给 agent`);
+      setToast(`${pack.name} ${packTaskNoun(pack)}已创建`);
     } catch (error) {
       setToast(error instanceof Error ? error.message : `${pack.name} ${packTaskNoun(pack)}创建失败`);
       setInstallingPackIds((current) => {
@@ -3985,7 +3986,7 @@ export function App() {
                     ) : (
                       <>
                         <button className="primary-action" onClick={() => void handleInstallPack(approval.pack)}>
-                          {approval.pack.discoveryOnly ? "交给 agent" : "安装并继续"}
+                          {approval.pack.discoveryOnly ? "用 find skill" : "安装并继续"}
                         </button>
                         <button onClick={() => { setApproval(null); approval.resume(); }}>跳过继续</button>
                       </>
