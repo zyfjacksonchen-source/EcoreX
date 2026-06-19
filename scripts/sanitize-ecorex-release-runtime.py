@@ -54,6 +54,10 @@ LEGACY_GITEE_HOST = _s("gitee.com/", LEGACY_AUTHOR)
 LEGACY_DOCS_HOST = _s("docs.", LEGACY_AGENT_LOWER, ".ai")
 LEGACY_SKILLS_HOST = _s("skills.", LEGACY_AGENT_LOWER, ".ai")
 LEGACY_ROOT_HOST = _s(LEGACY_AGENT_LOWER, ".ai")
+LEGACY_CLI_PLUGIN_SNAKE = _s("cow", "_cli")
+LEGACY_CLI_PLUGIN_CAMEL = _s("Cow", "Cli")
+LEGACY_CLI_PLUGIN_UPPER = _s("COW", "_CLI")
+LEGACY_CLI_PRODUCT = _s("Cow", " CLI")
 FORBIDDEN = (
     LEGACY_AGENT_MIXED,
     LEGACY_AGENT_UPPER,
@@ -64,6 +68,10 @@ FORBIDDEN = (
     LEGACY_CHAT_DASH,
     LEGACY_CHAT_UNDERSCORE,
     LEGACY_CHAT_UPPER,
+    LEGACY_CLI_PLUGIN_SNAKE,
+    LEGACY_CLI_PLUGIN_CAMEL,
+    LEGACY_CLI_PLUGIN_UPPER,
+    LEGACY_CLI_PRODUCT,
 )
 FORBIDDEN_RE = re.compile("|".join(re.escape(item) for item in FORBIDDEN))
 MIGRATION_README_NAMES = {"README.txt", "README-migration.txt"}
@@ -91,6 +99,12 @@ def is_text_candidate(path: pathlib.Path) -> bool:
 
 def sanitize_text(text: str) -> str:
     replacements = (
+        (LEGACY_CLI_PLUGIN_UPPER, "ECOREX_CLI"),
+        (LEGACY_CLI_PLUGIN_CAMEL, "EcoreXCli"),
+        (LEGACY_CLI_PLUGIN_SNAKE, "ecorex_cli"),
+        (LEGACY_CLI_PRODUCT, "EcoreX CLI"),
+        ("cow/slash", "EcoreX/slash"),
+        ("cow supports", "EcoreX supports"),
         (LEGACY_LOCAL_WIN, "EcoreX"),
         (LEGACY_LOCAL_POSIX, "EcoreX"),
         (_s(LEGACY_REPO_HOST, "/", LEGACY_CHAT_DASH), "github.com/zhangyifanjackson-dotcom/EcoreX"),
@@ -113,6 +127,25 @@ def sanitize_text(text: str) -> str:
     for before, after in replacements:
         text = text.replace(before, after)
     return text
+
+
+def sanitize_paths(root: pathlib.Path) -> list[pathlib.Path]:
+    changed: list[pathlib.Path] = []
+    for path in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+        name = path.name
+        new_name = (
+            name.replace(LEGACY_CLI_PLUGIN_UPPER, "ECOREX_CLI")
+            .replace(LEGACY_CLI_PLUGIN_CAMEL, "EcoreXCli")
+            .replace(LEGACY_CLI_PLUGIN_SNAKE, "ecorex_cli")
+        )
+        if new_name == name:
+            continue
+        target = path.with_name(new_name)
+        if target.exists():
+            raise RuntimeError(f"cannot rename legacy release path {path} to existing {target}")
+        path.rename(target)
+        changed.append(target)
+    return changed
 
 
 def sanitize_runtime_manifest(path: pathlib.Path) -> None:
@@ -176,6 +209,7 @@ def sanitize_tree(root: pathlib.Path) -> list[pathlib.Path]:
         if sanitized != original:
             path.write_text(sanitized, encoding="utf-8")
             changed.append(path)
+    changed.extend(sanitize_paths(root))
     return changed
 
 

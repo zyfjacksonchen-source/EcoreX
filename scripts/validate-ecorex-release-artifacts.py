@@ -117,6 +117,10 @@ _LEGACY_AUTHOR = _s("zha", "yuj", "ie")
 _LEGACY_CHAT_DASH = _s("chat", "gpt", "-on-", "we", "chat")
 _LEGACY_CHAT_UNDERSCORE = _LEGACY_CHAT_DASH.replace("-", "_")
 _LEGACY_CHAT_UPPER = _LEGACY_CHAT_DASH.upper()
+_LEGACY_CLI_PLUGIN_SNAKE = _s("cow", "_cli")
+_LEGACY_CLI_PLUGIN_CAMEL = _s("Cow", "Cli")
+_LEGACY_CLI_PLUGIN_UPPER = _s("COW", "_CLI")
+_LEGACY_CLI_PRODUCT = _s("Cow", " CLI")
 _LEGACY_FORBIDDEN_RELEASE_TEXT = (
     _LEGACY_AGENT_MIXED,
     _LEGACY_AGENT_UPPER,
@@ -127,6 +131,10 @@ _LEGACY_FORBIDDEN_RELEASE_TEXT = (
     _LEGACY_CHAT_DASH,
     _LEGACY_CHAT_UNDERSCORE,
     _LEGACY_CHAT_UPPER,
+    _LEGACY_CLI_PLUGIN_SNAKE,
+    _LEGACY_CLI_PLUGIN_CAMEL,
+    _LEGACY_CLI_PLUGIN_UPPER,
+    _LEGACY_CLI_PRODUCT,
 )
 FORBIDDEN_RELEASE_PATTERN = re.compile("|".join(re.escape(item) for item in _LEGACY_FORBIDDEN_RELEASE_TEXT))
 MIGRATION_README_NAMES = {"README.txt", "README-migration.txt"}
@@ -550,6 +558,10 @@ def require_not_contains(text: str, needle: str, label: str) -> None:
     require(needle not in text, f"{label} contains forbidden {needle!r}")
 
 
+def require_regex(text: str, pattern: str, label: str) -> None:
+    require(re.search(pattern, text) is not None, f"{label} missing pattern {pattern!r}")
+
+
 def referenced_frontend_assets(index_text: str, label: str) -> tuple[str, str]:
     for forbidden in FORBIDDEN_WEB_ASSETS:
         require_not_contains(index_text, forbidden, label)
@@ -721,8 +733,8 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
     require_not_contains(xhs_image, "from openai import OpenAI", f"{label} xhs image generation")
 
     web_channel = read_text_by_suffix("channel/web/web_channel.py")
-    require_contains(web_channel, '"openai":    ["gpt-image-2-pro"', f"{label} admin image model catalog")
-    require_contains(web_channel, '"linkai": [\n            "gpt-image-2-pro"', f"{label} admin image model catalog")
+    require_regex(web_channel, r'"openai"\s*:\s*\[\s*"gpt-image-2-pro"', f"{label} admin image model catalog")
+    require_regex(web_channel, r'"linkai"\s*:\s*\[\s*"gpt-image-2-pro"', f"{label} admin image model catalog")
     require_contains(web_channel, '("openai",    "gpt-image-2-pro")', f"{label} admin image auto hint")
     require_contains(web_channel, '("linkai",    "gpt-image-2-pro")', f"{label} admin image LinkAI fallback hint")
     require_not_contains(web_channel, '("linkai",    "image-2-pro")', f"{label} admin image LinkAI fallback hint")
