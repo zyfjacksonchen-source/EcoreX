@@ -22,11 +22,12 @@ Always verify the SHA256 value in `SHA256SUMS.txt` or `manifest.json` before ins
 
 ## macOS Install
 
-The current public macOS package may be unsigned/not notarized.
+The v0.1.15 macOS DMG is intentionally distributed without Apple Developer ID signing or notarization. macOS Gatekeeper may block the first launch even when the SHA256 is correct.
 
 1. Download the `.dmg` for your CPU architecture.
 2. Open the DMG and drag EcoreX to `/Applications`.
-3. First launch may be blocked by Gatekeeper. Use one of these user-controlled options:
+3. Verify the downloaded DMG SHA256 against `SHA256SUMS.txt` or `manifest.json`.
+4. First launch may be blocked by Gatekeeper. Use one of these user-controlled options:
    - Finder: right-click `EcoreX.app`, choose `Open`, then confirm.
    - Terminal: run `xattr -dr com.apple.quarantine /Applications/EcoreX.app`, then open EcoreX normally.
 
@@ -36,7 +37,14 @@ Only do this for an installer whose SHA256 matches `SHA256SUMS.txt`.
 
 Agents should download installers from this repository, never clone this repository expecting source code.
 
-For macOS unsigned installs, agents should explain the Gatekeeper prompt and ask the user before running any quarantine-removal command.
+For WorkBuddy or other install agents:
+
+1. Select `EcoreX_0.1.15_arm64.dmg` on Apple Silicon or `EcoreX_0.1.15_x64.dmg` on Intel.
+2. Verify SHA256 before installing.
+3. Mount the DMG and copy `EcoreX.app` to `/Applications`.
+4. If macOS reports that the app cannot be opened because it is from an unidentified developer or cannot be checked for malicious software, explain this is expected for the unsigned DMG and ask the user before bypassing Gatekeeper.
+5. Preferred bypass: instruct the user to right-click `/Applications/EcoreX.app` and choose `Open`.
+6. Scripted bypass, only with user approval: `xattr -dr com.apple.quarantine /Applications/EcoreX.app`.
 
 ## Release Files
 

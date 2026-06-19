@@ -22,7 +22,7 @@ on:
       notarize:
         description: "Submit macOS DMG to Apple notarization when secrets are present"
         type: boolean
-        default: true
+        default: false
       release_tag:
         description: "GitHub release tag for workflow-dispatched DMG assets"
         type: string
@@ -68,7 +68,7 @@ jobs:
         run: npm ci
 
       - name: Require macOS signing and notarization secrets
-        if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.notarize) }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.notarize }}
         run: |
           missing=0
           for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
@@ -82,8 +82,14 @@ jobs:
             exit 1
           fi
       - name: Build DMG
+        env:
+          NOTARIZE_MAC: ${{ github.event_name == 'workflow_dispatch' && inputs.notarize }}
         run: |
-          if [[ -z "${CSC_LINK:-}" ]]; then
+          if [[ "${NOTARIZE_MAC}" != "true" ]]; then
+            unset CSC_LINK
+            unset CSC_KEY_PASSWORD
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+          elif [[ -z "${CSC_LINK:-}" ]]; then
             unset CSC_LINK
             unset CSC_KEY_PASSWORD
             export CSC_IDENTITY_AUTO_DISCOVERY=false
@@ -91,7 +97,7 @@ jobs:
           npm run "package:mac:${{ matrix.arch }}"
 
       - name: Notarize and staple DMG
-        if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.notarize) }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.notarize }}
         run: |
           if [[ -z "${CSC_LINK}" || -z "${APPLE_ID}" || -z "${APPLE_APP_SPECIFIC_PASSWORD}" || -z "${APPLE_TEAM_ID}" ]]; then
             echo "Code signing or Apple notarization secrets are not configured; refusing unsigned public DMG." >&2
@@ -108,7 +114,7 @@ jobs:
           done
 
       - name: Validate notarized artifacts
-        if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.notarize) }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.notarize }}
         run: |
           if [[ -z "${APPLE_ID}" || -z "${APPLE_APP_SPECIFIC_PASSWORD}" || -z "${APPLE_TEAM_ID}" || -z "${CSC_LINK}" ]]; then
             echo "Signing/notarization secrets are incomplete; strict validation cannot be skipped for a public DMG." >&2
