@@ -686,7 +686,7 @@ class AgentBridge:
         """
         file_type = file_info.get("file_type", "file")
         file_path = file_info.get("path")
-        
+
         # For images, use IMAGE_URL type (channel will handle upload)
         if file_type == "image":
             # Convert local path to file:// URL for channel processing

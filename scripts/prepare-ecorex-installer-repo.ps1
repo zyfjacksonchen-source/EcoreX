@@ -1,7 +1,7 @@
 param(
     [string]$Version = "",
     [string]$OutputDir = "release-installers",
-    [string]$ReadmeTemplate = "docs/ecorex/v0.1.15/installer-repo-README.md",
+    [string]$ReadmeTemplate = "docs/ecorex/v0.1.16/installer-repo-README.md",
     [string]$WindowsInstaller = "",
     [string]$WindowsLatestYml = "",
     [string]$WindowsBlockmap = "",

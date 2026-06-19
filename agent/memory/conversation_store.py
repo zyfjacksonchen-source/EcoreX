@@ -960,6 +960,47 @@ class ConversationStore:
             finally:
                 conn.close()
 
+    def attach_extras_to_assistant_seq(
+        self,
+        session_id: str,
+        seq: int,
+        extras: Dict[str, Any],
+    ) -> Optional[int]:
+        """Merge ``extras`` into a specific assistant message seq."""
+        if not extras or seq is None:
+            return None
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    """
+                    SELECT extras FROM messages
+                    WHERE session_id = ? AND role = 'assistant' AND seq = ?
+                    """,
+                    (session_id, int(seq)),
+                ).fetchone()
+                if not row:
+                    return None
+                raw = row[0]
+                try:
+                    cur = json.loads(raw) if raw else {}
+                    if not isinstance(cur, dict):
+                        cur = {}
+                except Exception:
+                    cur = {}
+                cur.update(extras)
+                conn.execute(
+                    "UPDATE messages SET extras = ? WHERE session_id = ? AND seq = ?",
+                    (json.dumps(cur, ensure_ascii=False), session_id, int(seq)),
+                )
+                conn.commit()
+                return int(seq)
+            except Exception as e:
+                logger.warning(f"[ConversationStore] attach_extras_to_assistant_seq failed: {e}")
+                return None
+            finally:
+                conn.close()
+
     def load_history_page(
         self,
         session_id: str,

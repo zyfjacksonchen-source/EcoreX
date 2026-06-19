@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import {
   ExternalLink,
   Eye,
@@ -69,6 +69,8 @@ const REASONING_RENDER_CAP = 4 * 1024;
 const TOOL_DETAIL_RENDER_CAP = 6 * 1024;
 const LONG_REPLY_COLLAPSE_CHARS = 1400;
 const LONG_REPLY_PREVIEW_CHARS = 520;
+const STREAM_RENDER_THROTTLE_CHARS = 12000;
+const STREAM_MARKDOWN_CHUNK_CHARS = 8000;
 const ARTIFACT_PREVIEW_LIMIT = 6;
 const ARTIFACT_RELATIVE_ROOTS = "deliverables|output|outputs|artifacts|images|assets";
 const ARTIFACT_ABSOLUTE_POSIX_ROOTS = "Users|Volumes|home|tmp|var|mnt|opt|srv|workspace";
@@ -246,7 +248,41 @@ type DisplayArtifact = AgentArtifact & {
   legacyPath?: string;
 };
 
-type ArtifactAvailability = "pending" | "ready" | "missing";
+type ArtifactAvailability = "pending" | "ready" | "missing" | "denied" | "error";
+
+function useThrottledStreamingContent(content: string, pending?: boolean) {
+  const [visible, setVisible] = useState(content);
+  const latestRef = useRef(content);
+  const timerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    latestRef.current = content;
+    const shouldThrottle = pending && content.length >= STREAM_RENDER_THROTTLE_CHARS;
+    if (!shouldThrottle) {
+      if (timerRef.current !== null) {
+        window.clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      setVisible(content);
+      return;
+    }
+    if (timerRef.current !== null) return;
+    const delay = content.length >= 100000 ? 220 : 110;
+    timerRef.current = window.setTimeout(() => {
+      timerRef.current = null;
+      setVisible(latestRef.current);
+    }, delay);
+  }, [content, pending]);
+
+  useEffect(() => () => {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
+  return visible;
+}
 
 function artifactSourceKey(artifact: AgentArtifact) {
   return (artifactPath(artifact) || artifact.id || "").replace(/\\/g, "/").toLowerCase();
@@ -265,6 +301,21 @@ function artifactExistsForKind(stat: LocalPathStat, kind: AgentArtifact["kind"])
   if (!stat.exists) return false;
   if (kind === "directory") return stat.isDirectory !== false;
   return stat.isFile !== false;
+}
+
+function artifactAvailabilityFromStat(stat: LocalPathStat, kind: AgentArtifact["kind"]): ArtifactAvailability {
+  const status = String(stat.status || "").toLowerCase();
+  if (status === "denied") return "denied";
+  if (status === "error") return "error";
+  return artifactExistsForKind(stat, kind) ? "ready" : "missing";
+}
+
+function artifactAvailabilityLabel(status: ArtifactAvailability) {
+  if (status === "pending") return "checking local file";
+  if (status === "denied") return "blocked by file permissions";
+  if (status === "error") return "could not verify local file";
+  if (status === "missing") return "local file not found";
+  return "";
 }
 
 function artifactKindFromFileType(fileType: ArtifactFileType): AgentArtifact["kind"] {
@@ -594,18 +645,15 @@ function ArtifactShelf({
         .then((stat) => {
           setAvailability((current) => ({
             ...current,
-            [key]: artifactExistsForKind(stat, artifact.kind) ? "ready" : "missing"
+            [key]: artifactAvailabilityFromStat(stat, artifact.kind)
           }));
         })
         .catch(() => {
-          setAvailability((current) => ({ ...current, [key]: "missing" }));
+          setAvailability((current) => ({ ...current, [key]: "error" }));
         });
     });
   }, [availability, localFileStat, rawItems]);
-  const items = rawItems.filter((artifact) => {
-    if (!localFileStat || !shouldVerifyArtifact(artifact)) return true;
-    return availability[artifactSourceKey(artifact)] === "ready";
-  });
+  const items = rawItems;
   if (!items.length) return null;
 
   const visibleArtifacts = expanded ? items : items.slice(0, 3);
@@ -616,8 +664,15 @@ function ArtifactShelf({
   const runAction = async (artifact: DisplayArtifact, action: NonNullable<LocalFilePayload["open_action"]>) => {
     const source = artifactPath(artifact);
     if (!source) return;
+    const sourceStatus = localFileStat && shouldVerifyArtifact(artifact)
+      ? availability[artifactSourceKey(artifact)] || "pending"
+      : "ready";
     if (action === "copy") {
       await navigator.clipboard?.writeText(source).catch(() => undefined);
+      setOpenMenuId("");
+      return;
+    }
+    if (sourceStatus !== "ready") {
       setOpenMenuId("");
       return;
     }
@@ -652,15 +707,22 @@ function ArtifactShelf({
           const previewUrl = artifact.kind === "image" && previewSource
             ? safeImageUrl(previewSource, localFilePreviewUrl)
             : "";
-          const isPreviewableImage = artifact.kind === "image" && Boolean(previewUrl);
+          const availabilityStatus = localFileStat && shouldVerifyArtifact(artifact)
+            ? availability[artifactSourceKey(artifact)] || "pending"
+            : "ready";
+          const availabilityText = artifactAvailabilityLabel(availabilityStatus);
+          const blocked = availabilityStatus !== "ready";
+          const displayPreviewUrl = blocked ? "" : previewUrl;
+          const isPreviewableImage = artifact.kind === "image" && Boolean(displayPreviewUrl);
           const menuOpen = openMenuId === artifact.id;
           return (
-            <div className={`artifact-row is-${artifact.kind}`} key={artifact.id} title={displayPath || subtitle || name}>
+            <div className={`artifact-row is-${artifact.kind}${blocked ? ` is-${availabilityStatus}` : ""}`} key={artifact.id} title={displayPath || subtitle || name}>
               <span className="artifact-row-icon" aria-hidden="true">
-                {previewUrl ? <img src={previewUrl} alt="" loading="lazy" /> : artifactIcon(fileType)}
+                {displayPreviewUrl ? <img src={displayPreviewUrl} alt="" loading="lazy" /> : artifactIcon(fileType)}
               </span>
               <span className="artifact-row-main">
                 <strong>{name}</strong>
+                {availabilityText ? <small className={`artifact-status is-${availabilityStatus}`}>{availabilityText}</small> : null}
                 {displayPath ? <small className="artifact-card-path">路径：{displayPath}</small> : subtitle && <small>{subtitle}</small>}
               </span>
               {artifact.stats && (
@@ -892,7 +954,7 @@ function renderMarkdown(markdown: string, localFilePreviewUrl?: (filePath: strin
 
     renderTable(table, out, localFilePreviewUrl);
 
-    const heading = raw.match(/^(#{1,4})\s+(.+)$/);
+    const heading = raw.match(/^(#{1,6})(?:\s+|(?=[\u4e00-\u9fff\d一二三四五六七八九十、]))(.+)$/u);
     if (heading) {
       flushAll();
       lastOrderedNumber = 0;
@@ -951,9 +1013,28 @@ function splitStreamingMarkdown(markdown: string) {
 
   const lastLineBreak = source.lastIndexOf("\n");
   if (lastLineBreak >= 0) {
+    let stable = source.slice(0, lastLineBreak).trimEnd();
+    let tail = source.slice(lastLineBreak + 1);
+    const stableLines = stable.split("\n");
+    let lastContentLine = stableLines.length - 1;
+    while (lastContentLine >= 0 && !stableLines[lastContentLine].trim()) {
+      lastContentLine -= 1;
+    }
+    if (lastContentLine >= 0 && isTableRow(stableLines[lastContentLine])) {
+      let tableStart = lastContentLine;
+      while (tableStart > 0 && isTableRow(stableLines[tableStart - 1])) {
+        tableStart -= 1;
+      }
+      const tableLines = stableLines.slice(tableStart, lastContentLine + 1);
+      if (tableLines.length < 2 || !isTableSeparator(tableLines[1])) {
+        const moved = stableLines.slice(tableStart).join("\n");
+        stable = stableLines.slice(0, tableStart).join("\n").trimEnd();
+        tail = [moved, tail].filter(Boolean).join("\n");
+      }
+    }
     return {
-      stable: source.slice(0, lastLineBreak).trimEnd(),
-      tail: source.slice(lastLineBreak + 1),
+      stable,
+      tail,
       tailKind: "text" as const
     };
   }
@@ -964,6 +1045,14 @@ function splitStreamingMarkdown(markdown: string) {
 function cleanStreamingTail(value: string) {
   let text = redactInternalPromptText(value || "").replace(/\r\n/g, "\n").trimEnd();
   text = text.replace(/^(```+[\w-]*\s*)/gm, "");
+  const tailLines = text.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (tailLines.length && tailLines.every((line) => (
+    isTableRow(line)
+    || isTableSeparator(line)
+    || /^\|?(?:\s*:?-{0,3}:?\s*\|?)+\s*$/.test(line)
+  ))) {
+    return "";
+  }
   if (/^\s{0,3}#{1,6}\s*$/.test(text)) return "";
   if (/^\s{0,3}(?:[-*]|\d+\.)\s*$/.test(text)) return "";
   if (/^\s*\|?(?:\s*:?-{0,3}:?\s*\|)+\s*$/.test(text)) return "";
@@ -1141,6 +1230,63 @@ function MarkdownBlock({
   );
 }
 
+const MemoMarkdownBlock = memo(MarkdownBlock);
+
+function splitStableMarkdownChunks(content: string) {
+  const source = String(content || "");
+  if (source.length <= STREAM_MARKDOWN_CHUNK_CHARS) return [source];
+  const chunks: string[] = [];
+  let start = 0;
+  const hasBalancedFences = (value: string) => {
+    return ([...value.matchAll(/^```[\w-]*\s*$/gm)].length % 2) === 0;
+  };
+  while (start < source.length) {
+    const remaining = source.length - start;
+    if (remaining <= STREAM_MARKDOWN_CHUNK_CHARS) {
+      chunks.push(source.slice(start));
+      break;
+    }
+    const target = start + STREAM_MARKDOWN_CHUNK_CHARS;
+    let boundary = source.lastIndexOf("\n\n", target);
+    const minBoundary = start + Math.floor(STREAM_MARKDOWN_CHUNK_CHARS / 3);
+    while (boundary > minBoundary && !hasBalancedFences(source.slice(start, boundary))) {
+      boundary = source.lastIndexOf("\n\n", Math.max(start, boundary - 2));
+    }
+    if (boundary <= minBoundary) {
+      chunks.push(source.slice(start));
+      break;
+    }
+    chunks.push(source.slice(start, boundary).trimEnd());
+    start = boundary;
+    while (source[start] === "\n") start += 1;
+  }
+  return chunks.filter(Boolean);
+}
+
+function StreamingStableMarkdown({
+  content,
+  localFilePreviewUrl,
+  onOpenLocalFile
+}: {
+  content: string;
+  localFilePreviewUrl?: (filePath: string) => string;
+  onOpenLocalFile?: (file: LocalFilePayload) => void;
+}) {
+  const chunks = useMemo(() => splitStableMarkdownChunks(content), [content]);
+  return (
+    <>
+      {chunks.map((chunk, index) => (
+        <MemoMarkdownBlock
+          key={`${index}:${chunk.length}:${chunk.slice(0, 24)}`}
+          content={chunk}
+          localFilePreviewUrl={localFilePreviewUrl}
+          onOpenLocalFile={onOpenLocalFile}
+        />
+      ))}
+    </>
+  );
+}
+
 function StreamingMarkdownBlock({
   content,
   localFilePreviewUrl,
@@ -1156,7 +1302,7 @@ function StreamingMarkdownBlock({
   }, [content]);
   return (
     <div className="streaming-markdown">
-      {stable && <MarkdownBlock content={stable} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />}
+      {stable && <StreamingStableMarkdown content={stable} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />}
       {tailKind === "code" ? (
         <pre className="streaming-code"><code>{tail}</code></pre>
       ) : cleanedTail ? (
@@ -1417,7 +1563,7 @@ function MainAnswer({ content, pending, collapsible, artifacts = [], extraArtifa
   );
 }
 
-export function MessageContent(props: {
+export const MessageContent = memo(function MessageContent(props: {
   role: "user" | "assistant" | "system";
   content: string;
   pending?: boolean;
@@ -1432,7 +1578,8 @@ export function MessageContent(props: {
   localFileStat?: (filePath: string) => Promise<LocalPathStat>;
 }) {
   const steps = props.steps || [];
-  const { mainContent, visibleSteps } = useMemo(() => splitSteps(steps, props.content), [steps, props.content]);
+  const visibleContent = useThrottledStreamingContent(props.content, props.pending);
+  const { mainContent, visibleSteps } = useMemo(() => splitSteps(steps, visibleContent), [steps, visibleContent]);
   const compactedSteps = useMemo(() => compactToolSteps(visibleSteps), [visibleSteps]);
   const stepArtifacts = useMemo(
     () => extractArtifactsFromSteps(compactedSteps, props.toolCalls || []),
@@ -1462,4 +1609,4 @@ export function MessageContent(props: {
       ) : null}
     </div>
   );
-}
+});

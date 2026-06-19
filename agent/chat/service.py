@@ -169,7 +169,7 @@ class ChatService:
             messages_copy = agent.messages.copy()
             original_length = len(agent.messages)
 
-        from agent.protocol.agent_stream import AgentStreamExecutor
+        from agent.protocol.agent_stream import AgentStreamExecutor, new_messages_since_user_query
 
         # Register a cancel token so /cancel can abort this in-flight run.
         # IM channels key on session_id (no per-turn request_id here).
@@ -205,6 +205,12 @@ class ChatService:
                     registry.unregister(session_id)
                 except Exception:
                     pass
+
+        # Normalize the legacy suffix logic below to the actual run boundary.
+        # Context trim plus a long tool chain can grow the final list back past
+        # the pre-run length, so length alone is not a reliable boundary.
+        run_messages = new_messages_since_user_query(executor.messages, original_length, query)
+        original_length = max(0, len(executor.messages) - len(run_messages))
 
         # Sync executor messages back to agent (thread-safe).
         # The executor may have trimmed context, making its list shorter than

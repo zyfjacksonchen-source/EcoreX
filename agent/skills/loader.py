@@ -68,7 +68,7 @@ class SkillLoader:
         diagnostics = []
         
         try:
-            entries = os.listdir(dir_path)
+            entries = sorted(os.listdir(dir_path), key=lambda item: item.lower())
         except Exception as e:
             diagnostics.append(f"Failed to list directory {dir_path}: {e}")
             return LoadSkillsResult(skills=skills, diagnostics=diagnostics)
@@ -221,6 +221,7 @@ class SkillLoader:
         self,
         builtin_dir: Optional[str] = None,
         custom_dir: Optional[str] = None,
+        extra_dirs: Optional[List[str]] = None,
     ) -> Dict[str, SkillEntry]:
         """
         Load skills from builtin and custom directories.
@@ -241,6 +242,18 @@ class SkillLoader:
         # Load builtin skills (lower precedence)
         if builtin_dir and os.path.exists(builtin_dir):
             result = self.load_skills_from_dir(builtin_dir, source='builtin')
+            all_diagnostics.extend(result.diagnostics)
+            for skill in result.skills:
+                entry = self._create_skill_entry(skill)
+                skill_map[skill.name] = entry
+
+        # Load additional read-only skills (global installs and plugin cache).
+        # These override built-ins but remain lower precedence than workspace
+        # custom skills so user/workspace overrides continue to win.
+        for extra_dir in extra_dirs or []:
+            if not extra_dir or not os.path.exists(extra_dir):
+                continue
+            result = self.load_skills_from_dir(extra_dir, source='extra')
             all_diagnostics.extend(result.diagnostics)
             for skill in result.skills:
                 entry = self._create_skill_entry(skill)

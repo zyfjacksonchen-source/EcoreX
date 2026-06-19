@@ -38,6 +38,51 @@ MAX_STORED_REASONING_CHARS = 4 * 1024  # 4 KB
 _REASONING_TRUNCATE_MARKER = "\n\n... [reasoning truncated, {omitted} chars omitted] ...\n\n"
 
 
+def _is_real_user_query_message(message: dict, expected_text: str = "") -> bool:
+    """True for the user's prompt, false for role=user tool_result messages."""
+    if not isinstance(message, dict) or message.get("role") != "user":
+        return False
+    content = message.get("content", [])
+    if isinstance(content, str):
+        return not expected_text or content == expected_text
+    if not isinstance(content, list):
+        return False
+    has_tool_result = any(
+        isinstance(block, dict) and block.get("type") == "tool_result"
+        for block in content
+    )
+    if has_tool_result:
+        return False
+    text_blocks = [
+        str(block.get("text") or "")
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "text"
+    ]
+    if not text_blocks:
+        return False
+    return not expected_text or "\n".join(text_blocks) == expected_text
+
+
+def new_messages_since_user_query(messages: list, original_length: int, user_message: str = "") -> list:
+    """Return the current user query plus all messages produced by this run.
+
+    Context trimming can make the final message list shorter than the original
+    list, but a long tool chain can grow it back past ``original_length``. A
+    length-only test then persists only the tail, so locate the run boundary by
+    the real user query instead.
+    """
+    if not isinstance(messages, list):
+        return []
+    fallback_start = min(max(int(original_length or 0), 0), len(messages))
+    for idx in range(len(messages) - 1, -1, -1):
+        if _is_real_user_query_message(messages[idx], user_message):
+            return list(messages[idx:])
+    for idx in range(len(messages) - 1, -1, -1):
+        if _is_real_user_query_message(messages[idx]):
+            return list(messages[idx:])
+    return list(messages[fallback_start:])
+
+
 def _coerce_usage_int(value) -> int:
     try:
         return max(0, int(value or 0))

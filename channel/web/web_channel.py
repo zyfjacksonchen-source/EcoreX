@@ -63,8 +63,9 @@ def _web_app_bridge_script() -> str:
 (function () {
   if (window.ecorexDesktop) return;
 
-  var DEFAULT_WEB_CLIENT_KEY = "ecorex-web-v0.1.15-web.1";
+  var DEFAULT_WEB_CLIENT_KEY = "ecorex-web-v0.1.16-web.1";
   var DEFAULT_WEB_COMPAT_CLIENT_KEYS = [
+    "ecorex-web-v0.1.16-web.1",
     "ecorex-web-v0.1.15-web.1",
     "ecorex-web-v0.1.14-web.1",
     "ecorex-web-v0.1.13-web.1",
@@ -491,7 +492,7 @@ def _web_app_bridge_script() -> str:
   var updateStatus = {
     state: "idle",
     platform: desktopPlatform,
-    currentVersion: "0.1.15-web.1",
+    currentVersion: "0.1.16-web.1",
     message: "尚未检查更新"
   };
 
@@ -501,7 +502,7 @@ def _web_app_bridge_script() -> str:
       updateStatus = {
         state: payload.hasUpdate ? "available" : "not-available",
         platform: desktopPlatform,
-        currentVersion: payload.currentVersion || "0.1.15-web.1",
+        currentVersion: payload.currentVersion || "0.1.16-web.1",
         version: payload.latestVersion || payload.version,
         downloadUrl: payload.downloadUrl,
         message: payload.message || (payload.hasUpdate ? "发现新版本，请前往下载页安装" : "当前已经是最新版本"),
@@ -512,7 +513,7 @@ def _web_app_bridge_script() -> str:
       updateStatus = {
         state: "error",
         platform: desktopPlatform,
-        currentVersion: "0.1.15-web.1",
+        currentVersion: "0.1.16-web.1",
         message: error && error.message ? error.message : String(error),
         checkedAt: new Date().toISOString()
       };
@@ -622,7 +623,7 @@ def _web_app_bridge_script() -> str:
           email: input.email,
           password: input.password,
           deviceId: currentDeviceId,
-          appVersion: "0.1.15-web.1"
+          appVersion: "0.1.16-web.1"
         }, false);
       } catch (error) {
         adminError = error;
@@ -973,6 +974,7 @@ class WebChannel(ChatChannel):
         self.sse_subscribers = {}  # request_id -> active EventSource connection count
         self.sse_done_sent = set()  # request_id values that already emitted a done event
         self.sse_cleanup_timers = {}  # request_id -> guarded orphan cleanup Timer
+        self.sse_lock = threading.RLock()
         self.request_artifacts = {}  # request_id -> list of structured artifact dicts
         self.sse_stream_tokens = {}  # legacy field; no longer used to supersede streams
         self._http_server = None
@@ -1044,19 +1046,21 @@ class WebChannel(ChatChannel):
     def _ensure_sse_state(self, request_id: str) -> None:
         if not request_id:
             return
-        if request_id not in self.sse_queues:
-            self.sse_queues[request_id] = Queue()
-        if request_id not in self.sse_events:
-            self.sse_events[request_id] = []
-        if request_id not in self.sse_event_offsets:
-            self.sse_event_offsets[request_id] = 0
-        if request_id not in self.sse_conditions:
-            self.sse_conditions[request_id] = threading.Condition()
+        with self.sse_lock:
+            if request_id not in self.sse_queues:
+                self.sse_queues[request_id] = Queue()
+            if request_id not in self.sse_events:
+                self.sse_events[request_id] = []
+            if request_id not in self.sse_event_offsets:
+                self.sse_event_offsets[request_id] = 0
+            if request_id not in self.sse_conditions:
+                self.sse_conditions[request_id] = threading.Condition()
 
     def _sse_request_exists(self, request_id: str) -> bool:
-        return bool(request_id) and (
-            request_id in self.sse_queues or request_id in self.sse_events
-        )
+        with self.sse_lock:
+            return bool(request_id) and (
+                request_id in self.sse_queues or request_id in self.sse_events
+            )
 
     def _push_sse_event(self, request_id: str, item: Dict[str, Any]) -> bool:
         """Append one SSE event for every subscriber and keep legacy queue parity."""
@@ -1064,13 +1068,18 @@ class WebChannel(ChatChannel):
             return False
         self._ensure_sse_state(request_id)
         event = dict(item or {})
-        try:
-            self.sse_queues[request_id].put(event)
-        except Exception as e:
-            logger.debug(f"[WebChannel] legacy SSE queue mirror skipped for {request_id}: {e}")
-        cond = self.sse_conditions[request_id]
+        with self.sse_lock:
+            if not self._sse_request_exists(request_id):
+                return False
+            try:
+                self.sse_queues[request_id].put(event)
+            except Exception as e:
+                logger.debug(f"[WebChannel] legacy SSE queue mirror skipped for {request_id}: {e}")
+            cond = self.sse_conditions[request_id]
         with cond:
-            events = self.sse_events[request_id]
+            events = self.sse_events.get(request_id)
+            if events is None:
+                return False
             events.append(event)
             excess = len(events) - self.SSE_MAX_REPLAY_EVENTS
             if excess > 0:
@@ -1080,27 +1089,33 @@ class WebChannel(ChatChannel):
         return True
 
     def _cleanup_sse_request(self, request_id: str) -> None:
-        timer = self.sse_cleanup_timers.pop(request_id, None)
-        if timer:
-            try:
-                timer.cancel()
-            except Exception:
-                pass
-        self.sse_queues.pop(request_id, None)
-        self.sse_events.pop(request_id, None)
-        self.sse_event_offsets.pop(request_id, None)
-        self.sse_conditions.pop(request_id, None)
-        self.sse_subscribers.pop(request_id, None)
-        self.sse_done_sent.discard(request_id)
-        self.sse_stream_tokens.pop(request_id, None)
-        self.request_artifacts.pop(request_id, None)
-        self.request_to_session.pop(request_id, None)
+        with self.sse_lock:
+            timer = self.sse_cleanup_timers.pop(request_id, None)
+            if timer:
+                try:
+                    timer.cancel()
+                except Exception:
+                    pass
+            self.sse_queues.pop(request_id, None)
+            self.sse_events.pop(request_id, None)
+            self.sse_event_offsets.pop(request_id, None)
+            self.sse_conditions.pop(request_id, None)
+            self.sse_subscribers.pop(request_id, None)
+            self.sse_done_sent.discard(request_id)
+            self.sse_stream_tokens.pop(request_id, None)
+            self.request_artifacts.pop(request_id, None)
+            self.request_to_session.pop(request_id, None)
 
     def _cleanup_sse_request_if_idle(self, request_id: str, reason: str = "") -> None:
-        self.sse_cleanup_timers.pop(request_id, None)
-        if not self._sse_request_exists(request_id):
+        with self.sse_lock:
+            self.sse_cleanup_timers.pop(request_id, None)
+            exists = bool(request_id) and (
+                request_id in self.sse_queues or request_id in self.sse_events
+            )
+            subscribers = self.sse_subscribers.get(request_id, 0)
+        if not exists:
             return
-        if self.sse_subscribers.get(request_id, 0) > 0:
+        if subscribers > 0:
             return
         try:
             from agent.protocol import get_cancel_registry
@@ -1117,27 +1132,35 @@ class WebChannel(ChatChannel):
     def _schedule_sse_cleanup(self, request_id: str, delay: int = None, reason: str = "") -> None:
         if not request_id or not self._sse_request_exists(request_id):
             return
-        timer = self.sse_cleanup_timers.pop(request_id, None)
-        if timer:
-            try:
-                timer.cancel()
-            except Exception:
-                pass
-        next_delay = self.SSE_ORPHAN_TTL_SECONDS if delay is None else max(1, int(delay))
-        cleanup_timer = threading.Timer(next_delay, lambda: self._cleanup_sse_request_if_idle(request_id, reason))
-        cleanup_timer.daemon = True
-        self.sse_cleanup_timers[request_id] = cleanup_timer
-        cleanup_timer.start()
+        with self.sse_lock:
+            timer = self.sse_cleanup_timers.pop(request_id, None)
+            if timer:
+                try:
+                    timer.cancel()
+                except Exception:
+                    pass
+            next_delay = self.SSE_ORPHAN_TTL_SECONDS if delay is None else max(1, int(delay))
+            cleanup_timer = threading.Timer(next_delay, lambda: self._cleanup_sse_request_if_idle(request_id, reason))
+            cleanup_timer.daemon = True
+            self.sse_cleanup_timers[request_id] = cleanup_timer
+            cleanup_timer.start()
 
     def _push_done_event_once(self, request_id: str, item: Dict[str, Any]) -> bool:
         """Emit one terminal done event per request while preserving replay."""
-        if request_id in self.sse_done_sent:
-            logger.debug(f"[WebChannel] duplicate done skipped for request {request_id}")
-            return False
-        pushed = self._push_sse_event(request_id, item)
-        if pushed:
+        with self.sse_lock:
+            if request_id in self.sse_done_sent:
+                logger.debug(f"[WebChannel] duplicate done skipped for request {request_id}")
+                return False
             self.sse_done_sent.add(request_id)
-            if self.sse_subscribers.get(request_id, 0) <= 0:
+        pushed = self._push_sse_event(request_id, item)
+        if not pushed:
+            with self.sse_lock:
+                self.sse_done_sent.discard(request_id)
+            return False
+        with self.sse_lock:
+            has_subscribers = self.sse_subscribers.get(request_id, 0) > 0
+        if pushed:
+            if not has_subscribers:
                 self._schedule_sse_cleanup(request_id, reason="terminal-without-subscriber")
         return pushed
 
@@ -1591,17 +1614,15 @@ class WebChannel(ChatChannel):
                     logger.debug(f"SSE skipped http media reply for request {request_id}")
                     return
 
-                self._push_done_event_once(
-                    request_id,
-                    self._build_done_event(request_id, session_id, content)
-                )
+                done_event = self._build_done_event(request_id, session_id, content)
+                self._push_done_event_once(request_id, done_event)
                 logger.debug(f"SSE done sent for request {request_id}")
                 # Auto-trigger TTS once the bot finishes its text reply. The
                 # synthesis runs in the background so the chat stream is never
                 # blocked; the resulting audio URL is pushed via a follow-up
                 # `voice_attach` SSE event and persisted to messages.extras.
                 if reply.type == ReplyType.TEXT and content.strip():
-                    self._maybe_dispatch_auto_tts(request_id, session_id, content, context)
+                    self._maybe_dispatch_auto_tts(request_id, session_id, content, context, done_event.get("bot_seq"))
                 return
 
             # Fallback: polling mode
@@ -1886,6 +1907,7 @@ class WebChannel(ChatChannel):
         session_id: str,
         text: str,
         context: dict,
+        bot_seq: int = None,
     ) -> None:
         try:
             mode = self._resolve_voice_reply_mode()
@@ -1897,7 +1919,7 @@ class WebChannel(ChatChannel):
                 return
             threading.Thread(
                 target=self._synthesize_tts_async,
-                args=(request_id, session_id, text),
+                args=(request_id, session_id, text, bot_seq),
                 daemon=True,
             ).start()
         except Exception as e:
@@ -1908,6 +1930,7 @@ class WebChannel(ChatChannel):
         request_id: str,
         session_id: str,
         text: str,
+        bot_seq: int = None,
     ) -> None:
         try:
             from bridge.bridge import Bridge
@@ -1925,7 +1948,13 @@ class WebChannel(ChatChannel):
             payload = {"audio": {"url": url, "kind": "tts"}}
             try:
                 from agent.memory import get_conversation_store
-                get_conversation_store().attach_extras_to_last_assistant(session_id, payload)
+                store = get_conversation_store()
+                if bot_seq is not None:
+                    attached = store.attach_extras_to_assistant_seq(session_id, int(bot_seq), payload)
+                    if attached is None:
+                        logger.debug(f"[WebChannel] tts seq attach missed for request {request_id}, seq={bot_seq}")
+                else:
+                    store.attach_extras_to_last_assistant(session_id, payload)
             except Exception as e:
                 logger.debug(f"[WebChannel] tts persist skipped: {e}")
             if not self._sse_request_exists(request_id):
@@ -2287,10 +2316,14 @@ class WebChannel(ChatChannel):
             return
 
         self._ensure_sse_state(request_id)
-        cond = self.sse_conditions[request_id]
-        subscriber_count = self.sse_subscribers.get(request_id, 0) + 1
-        self.sse_subscribers[request_id] = subscriber_count
-        cleanup_timer = self.sse_cleanup_timers.pop(request_id, None)
+        with self.sse_lock:
+            cond = self.sse_conditions.get(request_id)
+            if cond is None:
+                yield b"data: {\"type\": \"error\", \"message\": \"invalid request_id\"}\n\n"
+                return
+            subscriber_count = self.sse_subscribers.get(request_id, 0) + 1
+            self.sse_subscribers[request_id] = subscriber_count
+            cleanup_timer = self.sse_cleanup_timers.pop(request_id, None)
         if cleanup_timer:
             try:
                 cleanup_timer.cancel()
@@ -2305,7 +2338,8 @@ class WebChannel(ChatChannel):
             query_last_id = str(params.last_event_id or "")
             raw_last_id = str(raw_last_id or query_last_id or "")
             if raw_last_id != "":
-                event_offset = self.sse_event_offsets.get(request_id, 0)
+                with self.sse_lock:
+                    event_offset = self.sse_event_offsets.get(request_id, 0)
                 start_index = max(0, int(raw_last_id) + 1 - event_offset)
         except Exception:
             start_index = 0
@@ -2362,11 +2396,12 @@ class WebChannel(ChatChannel):
             disconnected_early = not post_done and time.time() < deadline
             if disconnected_early:
                 logger.info(f"[WebChannel] SSE client detached; request keeps running: {request_id}")
-            remaining = max(0, self.sse_subscribers.get(request_id, 1) - 1)
-            if remaining:
-                self.sse_subscribers[request_id] = remaining
-            else:
-                self.sse_subscribers.pop(request_id, None)
+            with self.sse_lock:
+                remaining = max(0, self.sse_subscribers.get(request_id, 1) - 1)
+                if remaining:
+                    self.sse_subscribers[request_id] = remaining
+                else:
+                    self.sse_subscribers.pop(request_id, None)
             # Only drop the queue once the reply is actually complete. If the
             # client disconnected early (e.g. switched sessions and will
             # re-attach with the same request_id), keep the queue so the new
@@ -3034,9 +3069,6 @@ class FileStatHandler:
                 return json.dumps({"status": "remote", "path": path_value, "exists": True}, ensure_ascii=False)
 
             resolved = _resolve_web_local_path(path_value)
-            if not os.path.exists(resolved):
-                return json.dumps({"status": "missing", "path": resolved, "exists": False, "message": "path not found"}, ensure_ascii=False)
-
             try:
                 from common.ecorex_tool_permissions import get_tool_permission_broker
 
@@ -3048,13 +3080,16 @@ class FileStatHandler:
                 if not decision.get("allowed", True):
                     return json.dumps({
                         "status": "denied",
-                        "path": resolved,
+                        "path": path_value,
                         "exists": False,
                         "message": decision.get("reason") or "file stat blocked by permissions",
                     }, ensure_ascii=False)
             except Exception as exc:
                 logger.warning(f"[WebChannel] file stat permission check failed: {exc}")
-                return json.dumps({"status": "error", "path": resolved, "exists": False, "message": "file stat permission check failed"}, ensure_ascii=False)
+                return json.dumps({"status": "error", "path": path_value, "exists": False, "message": "file stat permission check failed"}, ensure_ascii=False)
+
+            if not os.path.exists(resolved):
+                return json.dumps({"status": "missing", "path": path_value, "exists": False, "message": "path not found"}, ensure_ascii=False)
 
             is_file = os.path.isfile(resolved)
             payload = {
@@ -3560,7 +3595,7 @@ class ClientProxyHandler:
         return target
 
     def _forward_headers(self) -> dict:
-        headers = {"User-Agent": "EcoreX-WebUI/0.1.15"}
+        headers = {"User-Agent": "EcoreX-WebUI/0.1.16"}
         for key, value in web.ctx.env.items():
             if key == "CONTENT_TYPE":
                 name = "Content-Type"
@@ -6481,10 +6516,18 @@ class KnowledgeGraphHandler:
 class VersionHandler:
     def GET(self):
         web.header('Content-Type', 'application/json; charset=utf-8')
+        import os
         from cli import __version__
         from common.ecorex_release_notes import get_current_release_notes
+        runtime_token = os.environ.get("ECOREX_DESKTOP_RUNTIME_TOKEN", "")
+        header_token = web.ctx.env.get("HTTP_X_ECOREX_RUNTIME_TOKEN", "")
+        verified = bool(runtime_token and header_token and runtime_token == header_token)
 
-        return json.dumps({
+        payload = {
             "version": __version__,
             "releaseNotes": get_current_release_notes(),
-        }, ensure_ascii=False)
+            "desktopRuntimeVerified": verified,
+        }
+        if verified:
+            payload["bootId"] = os.environ.get("ECOREX_DESKTOP_BOOT_ID", "")
+        return json.dumps(payload, ensure_ascii=False)

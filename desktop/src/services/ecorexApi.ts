@@ -984,6 +984,10 @@ function scheduleStreamCursorCleanup(requestId: string, delayMs = 120_000) {
   }, delayMs));
 }
 
+export function hasMessageStreamCursor(requestId: string) {
+  return Boolean(requestId && streamLastEventIds.has(requestId));
+}
+
 export function openMessageStream(input: {
   requestId: string;
   webPort: number;

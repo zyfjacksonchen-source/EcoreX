@@ -1,5 +1,6 @@
 import { app, BrowserWindow } from "electron";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -65,6 +66,8 @@ export class SidecarManager {
   private intentionallyStoppedChildren = new WeakSet<ChildProcessWithoutNullStreams>();
   private restartAttempts = 0;
   private restartTimer: NodeJS.Timeout | null = null;
+  private bootId = randomUUID();
+  private runtimeToken = randomUUID();
   private readonly maxRestartAttempts = 3;
   private status: SidecarStatus = {
     state: "stopped",
@@ -131,6 +134,8 @@ export class SidecarManager {
     }
 
     this.stoppingIntentionally = false;
+    this.bootId = randomUUID();
+    this.runtimeToken = randomUUID();
     if (this.restartTimer) {
       clearTimeout(this.restartTimer);
       this.restartTimer = null;
@@ -160,6 +165,8 @@ export class SidecarManager {
         ...process.env,
         ...this.enterpriseEnv,
         ECOREX_DESKTOP: "1",
+        ECOREX_DESKTOP_BOOT_ID: this.bootId,
+        ECOREX_DESKTOP_RUNTIME_TOKEN: this.runtimeToken,
         ECOREX_DESKTOP_USER_DATA: app.getPath("userData"),
         PATH: [this.resolveExternalCliPath(), process.env.PATH].filter(Boolean).join(path.delimiter),
         PYTHONPATH: [this.repoRoot, this.resolveCapabilityPythonPath(), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
@@ -170,6 +177,7 @@ export class SidecarManager {
         PYTHONNOUSERSITE: "1",
         WEB_PORT: String(webPort)
       },
+      detached: process.platform !== "win32",
       windowsHide: true
     });
 
@@ -243,8 +251,37 @@ export class SidecarManager {
     if (!this.child) {
       return;
     }
-    this.intentionallyStoppedChildren.add(this.child);
-    this.child.kill();
+    const childToStop = this.child;
+    const pid = childToStop.pid;
+    let exited = false;
+    childToStop.once("exit", () => {
+      exited = true;
+    });
+    this.intentionallyStoppedChildren.add(childToStop);
+    if (pid && process.platform === "win32") {
+      spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true
+      }).on("error", () => {
+        if (!exited) childToStop.kill();
+      });
+    } else if (pid) {
+      try {
+        process.kill(-pid, "SIGTERM");
+      } catch {
+        childToStop.kill();
+      }
+      setTimeout(() => {
+        if (exited) return;
+        try {
+          process.kill(-pid, "SIGKILL");
+        } catch {
+          childToStop.kill("SIGKILL");
+        }
+      }, 2500);
+    } else {
+      childToStop.kill();
+    }
     this.child = null;
     this.updateStatus({
       state: "stopped",
@@ -419,9 +456,14 @@ export class SidecarManager {
     const timer = setTimeout(() => controller.abort(), 1200);
     try {
       const response = await fetch(`http://127.0.0.1:${webPort}/api/version`, {
+        headers: {
+          "X-EcoreX-Runtime-Token": this.runtimeToken
+        },
         signal: controller.signal
       });
-      return response.ok;
+      if (!response.ok) return false;
+      const payload = await response.json().catch(() => null) as { desktopRuntimeVerified?: boolean } | null;
+      return Boolean(payload?.desktopRuntimeVerified);
     } catch {
       return false;
     } finally {

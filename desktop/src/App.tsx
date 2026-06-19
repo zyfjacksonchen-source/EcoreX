@@ -42,9 +42,9 @@ import {
   ZoomIn,
   ZoomOut
 } from "lucide-react";
-import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ClipboardEvent, CSSProperties, DragEvent, MouseEvent, ReactNode } from "react";
-import { MessageContent, type AgentStepDisclosure, type ToolCallDisclosure } from "./components/MessageContent";
+import { MessageContent, type AgentStepDisclosure, type LocalFilePayload, type ToolCallDisclosure } from "./components/MessageContent";
 import {
   cancelChatRequest,
   checkForUpdates,
@@ -60,6 +60,7 @@ import {
   filePreviewUrl,
   generateSessionTitle,
   getEnterpriseSession,
+  hasMessageStreamCursor,
   installDownloadedUpdate,
   listCapabilityPacks,
   loadPermissionState,
@@ -203,9 +204,30 @@ function isRuntimePreviewPath(value?: string) {
   return /^https?:\/\//i.test(source) || /^(?:\/(?:uploads|static|app)(?:\/|$)|\/api\/file(?:[/?#]|$))/.test(source);
 }
 
-function isLocalAbsolutePath(value?: string) {
+function nativePathFromFileUrl(value?: string) {
   const source = String(value || "").trim();
-  return /^[a-zA-Z]:[\\/]/.test(source) || source.startsWith("\\\\") || (/^\//.test(source) && !isRuntimePreviewPath(source));
+  if (!/^file:\/\//i.test(source)) return "";
+  try {
+    const parsed = new URL(source);
+    if (parsed.hostname) {
+      return `\\\\${parsed.hostname}${decodeURIComponent(parsed.pathname).replace(/\//g, "\\")}`;
+    }
+    const decoded = decodeURIComponent(parsed.pathname || "");
+    return decoded.replace(/^\/([a-zA-Z]:[\\/])/, "$1").replace(/\//g, "\\");
+  } catch {
+    return source.replace(/^file:\/\/+/i, "").replace(/^\/([a-zA-Z]:[\\/])/, "$1");
+  }
+}
+
+function normalizeLocalSource(value?: string) {
+  const source = String(value || "").trim();
+  return nativePathFromFileUrl(source) || source;
+}
+
+function isLocalAbsolutePath(value?: string) {
+  const source = normalizeLocalSource(value);
+  const platform = window.ecorexDesktop?.platform || "";
+  return /^[a-zA-Z]:[\\/]/.test(source) || source.startsWith("\\\\") || (platform !== "win32" && /^\//.test(source) && !isRuntimePreviewPath(source));
 }
 
 function joinLocalPath(base: string, child: string) {
@@ -1370,11 +1392,13 @@ export function App() {
   const messagesRef = useRef(messages);
   const sessionSwitchSeq = useRef(0);
   const autoScrollRef = useRef(true);
+  const appBootMs = useRef(Date.now());
   const completedRequestIds = useRef<StringBoolMap>({});
   const streamRetryCounts = useRef<Record<string, number>>({});
   const sendGenerationRef = useRef(0);
   const preflightAbortRef = useRef<AbortController | null>(null);
   const phaseTimersRef = useRef<Record<string, number[]>>({});
+  const historyRecoveryTimersRef = useRef<Record<string, number[]>>({});
   const preloadDone = useRef(false);
   const bootHistoryRefreshDone = useRef(false);
   const releaseNotesDismissedVersion = useRef("");
@@ -1551,6 +1575,10 @@ export function App() {
         if (buffer.timer !== null) window.clearTimeout(buffer.timer);
       });
       streamDeltaBuffers.current = {};
+      Object.values(historyRecoveryTimersRef.current).forEach((timers) => {
+        timers.forEach((timer) => window.clearTimeout(timer));
+      });
+      historyRecoveryTimersRef.current = {};
       Object.values(installWatchers.current).forEach((timer) => window.clearInterval(timer));
       installWatchers.current = {};
       if (uiStateLocalSyncTimer.current) {
@@ -1670,6 +1698,7 @@ export function App() {
         .filter(Boolean)
     );
     const nowMs = Date.now();
+    const bootMs = appBootMs.current;
     const nextState: Record<string, SessionUiState> = {};
     const settledSessionIds = new Set<string>();
     let changed = false;
@@ -1679,7 +1708,12 @@ export function App() {
         activeRequestIds,
         staleSessionIds,
         nowMs,
-        inactiveRequestGraceMs: 45_000
+        inactiveRequestGraceMs: (state.messages || []).some((message) => (
+          message.pending
+          && message.requestId
+          && message.createdAt
+          && new Date(message.createdAt).getTime() < bootMs
+        )) ? 2_000 : 45_000
       });
       if (normalized !== state.messages) {
         changed = true;
@@ -1714,17 +1748,29 @@ export function App() {
     () => projects.find((project) => project.id === activeProjectId) || null,
     [projects, activeProjectId]
   );
-  const resolveArtifactPath = (filePath: string) => {
-    const raw = String(filePath || "").trim();
-    if (!raw || isRuntimePreviewPath(raw) || isLocalAbsolutePath(raw) || /^[a-z][a-z0-9+.-]*:/i.test(raw)) return raw;
-    return activeProject?.path ? joinLocalPath(activeProject.path, raw) : raw;
+
+  const projectPathForSession = (sessionId: string) => {
+    const projectId = sessionProjects[sessionId] || null;
+    if (!projectId) return "";
+    return projects.find((project) => project.id === projectId)?.path || "";
   };
-  const statArtifactPath = async (filePath: string): Promise<LocalPathStat> => {
-    const raw = String(filePath || "").trim();
+
+  const resolveArtifactPathForSession = (sessionId: string, filePath: string) => {
+    const raw = normalizeLocalSource(filePath);
+    if (!raw || isRuntimePreviewPath(raw) || isLocalAbsolutePath(raw) || /^[a-z][a-z0-9+.-]*:/i.test(raw)) return raw;
+    const projectPath = projectPathForSession(sessionId);
+    return projectPath ? joinLocalPath(projectPath, raw) : raw;
+  };
+
+  const resolveArtifactPath = (filePath: string) => {
+    return resolveArtifactPathForSession(activeSessionIdRef.current, filePath);
+  };
+  const statArtifactPath = async (filePath: string, sessionId = activeSessionIdRef.current): Promise<LocalPathStat> => {
+    const raw = normalizeLocalSource(filePath);
     if (!raw || isRuntimePreviewPath(raw) || /^https?:\/\//i.test(raw)) {
       return { path: raw, exists: Boolean(raw), status: raw ? "remote" : "error" };
     }
-    const resolvedPath = resolveArtifactPath(raw);
+    const resolvedPath = resolveArtifactPathForSession(sessionId, raw);
     return statLocalPath(resolvedPath);
   };
   const attachmentPreviewUrl = (file: FileAttachment) => {
@@ -1759,9 +1805,16 @@ export function App() {
   const mentionMatch = /@([\w\u4e00-\u9fa5-]*)$/.exec(composerText);
   const skillMentions = mentionMatch
     ? skillDisplayRows.filter((skill) => {
-        const label = skill.displayName || skill.name || "";
-        return label && label.toLowerCase().includes(mentionMatch[1].toLowerCase());
-      }).slice(0, 6)
+        const needle = mentionMatch[1].toLowerCase();
+        const haystack = [
+          skill.displayName,
+          skill.name,
+          skill.description,
+          skill.source,
+          skill.path
+        ].filter(Boolean).join(" ").toLowerCase();
+        return haystack.includes(needle);
+      }).slice(0, 24)
     : [];
   const activeSessionRequestId = sessionRequestIds[activeSessionId] || "";
   const dailyUsed = quotaNumber(quotaSnapshot, "dailyUsed");
@@ -1902,11 +1955,18 @@ export function App() {
       const textarea = composerRef.current;
       if (!textarea) return;
       textarea.focus({ preventScroll: true });
+      const cursor = textarea.value.length;
+      try {
+        textarea.setSelectionRange(cursor, cursor);
+      } catch {
+        // IME/composition can briefly reject selection updates; focus is still useful.
+      }
       syncComposerHeight();
     };
     focus();
     window.requestAnimationFrame(focus);
-    window.setTimeout(focus, 40);
+    window.requestAnimationFrame(() => window.requestAnimationFrame(focus));
+    [40, 120, 300, 700].forEach((delay) => window.setTimeout(focus, delay));
   }
 
   function insertComposerNewline(textarea: HTMLTextAreaElement) {
@@ -1966,6 +2026,7 @@ export function App() {
     streamRetryCounts.current[sessionId] = 0;
     if (streamAvailable) {
       window.setTimeout(() => attachMessageStream(sessionId, assistantId, requestId), 0);
+      scheduleHistoryRecovery(sessionId, requestId);
     } else {
       void refreshSessionFromHistory(sessionId).then((restored) => {
         if (!restored) {
@@ -2377,6 +2438,34 @@ export function App() {
     }
   }
 
+  function historyRecoveryKey(sessionId: string, requestId: string) {
+    return `${sessionId}::${requestId}`;
+  }
+
+  function clearHistoryRecovery(sessionId: string, requestId?: string) {
+    const prefix = requestId ? historyRecoveryKey(sessionId, requestId) : `${sessionId}::`;
+    Object.keys(historyRecoveryTimersRef.current).forEach((key) => {
+      if (requestId ? key === prefix : key.startsWith(prefix)) {
+        historyRecoveryTimersRef.current[key].forEach((timer) => window.clearTimeout(timer));
+        delete historyRecoveryTimersRef.current[key];
+      }
+    });
+  }
+
+  function scheduleHistoryRecovery(sessionId: string, requestId: string, delays = [1200, 3500, 8000]) {
+    if (!requestId) return;
+    const key = historyRecoveryKey(sessionId, requestId);
+    clearHistoryRecovery(sessionId, requestId);
+    historyRecoveryTimersRef.current[key] = delays.map((delay) => window.setTimeout(() => {
+      const currentRequestId = sessionRequestIdsRef.current[sessionId];
+      if (currentRequestId && currentRequestId !== requestId && !completedRequestIds.current[requestId]) {
+        clearHistoryRecovery(sessionId, requestId);
+        return;
+      }
+      void refreshSessionFromHistory(sessionId);
+    }, delay));
+  }
+
   function recoverStaleRequestFromHistory(sessionId: string, assistantId: string, requestId: string) {
     void refreshSessionFromHistory(sessionId).then((restored) => {
       if (restored) return;
@@ -2686,11 +2775,15 @@ export function App() {
     buffer.text += deltaContent;
     streamDeltaBuffers.current[key] = buffer;
     if (buffer.timer !== null) return;
+    const currentLength = activeSessionIdRef.current === sessionId
+      ? messagesRef.current.find((message) => message.id === assistantId)?.content.length || 0
+      : 0;
+    const flushDelay = currentLength >= 100000 ? 180 : currentLength >= 30000 ? 90 : 34;
     buffer.timer = window.setTimeout(() => {
       const current = streamDeltaBuffers.current[key];
       if (current) current.timer = null;
       flushBufferedDelta(key);
-    }, 34);
+    }, flushDelay);
   }
 
   function flushStreamDeltaBuffers(sessionId: string, requestId?: string) {
@@ -2748,6 +2841,7 @@ export function App() {
 
   function finishSessionRequest(sessionId: string, requestId?: string) {
     flushStreamDeltaBuffers(sessionId, requestId);
+    clearHistoryRecovery(sessionId, requestId);
     clearSessionRequestState(sessionId, requestId);
     closeSessionStream(sessionId, requestId);
     clearStreamDeltaBuffers(sessionId, requestId);
@@ -2830,9 +2924,18 @@ export function App() {
     if (existingRequestId && existingRequestId !== requestId) {
       closeSessionStream(sessionId, existingRequestId);
     }
+    const hasCursor = hasMessageStreamCursor(requestId);
+    if (!hasCursor) {
+      updateAssistantMessage(sessionId, assistantId, (message) => (
+        message.pending && message.requestId === requestId && message.content
+          ? { ...message, content: "", steps: message.steps?.length ? message.steps : [{ type: "phase", content: "正在恢复响应通道" }] }
+          : message
+      ));
+    }
     setActiveRequestId(requestId);
     sessionRequestIdsRef.current = { ...sessionRequestIdsRef.current, [sessionId]: requestId };
     setSessionRequestIds((current) => ({ ...current, [sessionId]: requestId }));
+    scheduleHistoryRecovery(sessionId, requestId);
     const cleanup = openMessageStream({
       requestId,
       webPort: sidecarStatus.webPort,
@@ -2870,6 +2973,7 @@ export function App() {
             delete completedRequestIds.current[requestId];
           }, 70_000);
           markSessionOutputReady(sessionId);
+          clearHistoryRecovery(sessionId, requestId);
           clearSessionRequestState(sessionId, requestId);
           window.setTimeout(() => {
             void refreshSessionFromHistory(sessionId);
@@ -2985,11 +3089,12 @@ export function App() {
           finishSessionRequest(sessionId, requestId);
           return;
         }
-        if (!isCurrentSessionRequest(sessionId, requestId)) return;
-        closeSessionStream(sessionId, requestId);
-        scheduleStreamReconnect(sessionId, assistantId, requestId);
-      }
-    });
+          if (!isCurrentSessionRequest(sessionId, requestId)) return;
+          closeSessionStream(sessionId, requestId);
+          scheduleHistoryRecovery(sessionId, requestId, [800, 2400, 5000]);
+          scheduleStreamReconnect(sessionId, assistantId, requestId);
+        }
+      });
     streamCleanup.current = cleanup;
     streamCleanups.current[sessionId] = cleanup;
     streamCleanupRequestIds.current[sessionId] = requestId;
@@ -3065,8 +3170,9 @@ export function App() {
   async function sendNow(skipCapabilityCheck = false) {
     const text = composerText.trim();
     if (!text && !attachments.length) return;
+    const previousRequestId = activeSessionRequestId;
+    const previousSessionId = activeSessionId;
     if (activeSessionRequestId) {
-      await cancelChatRequest({ requestId: activeSessionRequestId, sessionId: activeSessionId }).catch(() => null);
       closeSessionStream(activeSessionId, activeSessionRequestId);
       markSessionRequestsPaused(activeSessionId);
       clearSessionRequestState(activeSessionId, activeSessionRequestId);
@@ -3150,6 +3256,16 @@ export function App() {
         steps: [{ type: "phase", content: "正在发送" }]
       }
     ]);
+    if (previousRequestId) {
+      void cancelChatRequest({ requestId: previousRequestId, sessionId: previousSessionId }).catch((error) => {
+        void reportDesktopEvent({
+          type: "warn",
+          source: "Desktop",
+          message: error instanceof Error ? error.message : String(error || "cancel failed"),
+          sessionId: previousSessionId
+        });
+      });
+    }
     queuePreflightPhase(requestSessionId, assistantId, sendGeneration, 800, "已收到，正在准备响应");
     queuePreflightPhase(requestSessionId, assistantId, sendGeneration, 1800, "正在检查额度");
     queuePreflightPhase(requestSessionId, assistantId, sendGeneration, 3600, "正在建立响应通道");
@@ -3340,6 +3456,7 @@ export function App() {
         sessionRequestIdsRef.current = { ...sessionRequestIdsRef.current, [requestSessionId]: requestId };
         setSessionRequestIds((current) => ({ ...current, [requestSessionId]: requestId }));
         streamRetryCounts.current[requestSessionId] = 0;
+        scheduleHistoryRecovery(requestSessionId, requestId);
         updateAssistantMessage(requestSessionId, assistantId, (message) => ({
           ...replaceCurrentPhase(message, "正在连接响应"),
           requestId
@@ -3388,6 +3505,7 @@ export function App() {
                 delete completedRequestIds.current[requestId];
               }, 70_000);
               markSessionOutputReady(requestSessionId);
+              clearHistoryRecovery(requestSessionId, requestId);
               clearSessionRequestState(requestSessionId, requestId);
               window.setTimeout(() => {
                 void refreshSessionFromHistory(requestSessionId);
@@ -3506,6 +3624,7 @@ export function App() {
             }
             if (!isCurrentSessionRequest(requestSessionId, requestId)) return;
             closeSessionStream(requestSessionId, requestId);
+            scheduleHistoryRecovery(requestSessionId, requestId, [800, 2400, 5000]);
             scheduleStreamReconnect(requestSessionId, assistantId, requestId);
           }
         });
@@ -3905,11 +4024,12 @@ export function App() {
   }
 
   async function openArtifactFile(file: { file_path: string; file_name: string; file_type?: FileAttachment["file_type"]; open_action?: "preview" | "open" | "reveal" | "copy" | "openWith" }) {
-    const rawPath = String(file.file_path || "").trim();
+    const rawPath = normalizeLocalSource(file.file_path);
     if (!rawPath) return;
     let action = file.open_action || "open";
     const fileType = file.file_type || "file";
-    const resolvedPath = resolveArtifactPath(rawPath);
+    const artifactSessionId = activeSessionIdRef.current;
+    const resolvedPath = resolveArtifactPathForSession(artifactSessionId, rawPath);
     if (action === "preview") {
       if (fileType !== "image") {
         action = "open";
@@ -3934,8 +4054,9 @@ export function App() {
       return;
     }
     const candidates = Array.from(new Set([resolvedPath, rawPath].filter(Boolean)));
-    if (activeProject?.path) {
-      await registerProjectFolderPath(activeProject.path).catch(() => null);
+    const projectPath = projectPathForSession(artifactSessionId);
+    if (projectPath) {
+      await registerProjectFolderPath(projectPath).catch(() => null);
     }
     let result = "";
     const openAction: OpenPathAction = action === "reveal" ? "reveal" : action === "openWith" ? "openWith" : "open";
@@ -3957,16 +4078,18 @@ export function App() {
   }
 
   async function legacyOpenArtifactFile(file: { file_path: string; file_name: string; file_type?: FileAttachment["file_type"] }) {
-    const rawPath = String(file.file_path || "").trim();
+    const rawPath = normalizeLocalSource(file.file_path);
     if (!rawPath) return;
     if (isRuntimePreviewPath(rawPath)) {
       setToast("该预览链接没有可直接打开的本地路径");
       return;
     }
-    const resolvedPath = resolveArtifactPath(rawPath);
+    const artifactSessionId = activeSessionIdRef.current;
+    const resolvedPath = resolveArtifactPathForSession(artifactSessionId, rawPath);
     const candidates = Array.from(new Set([resolvedPath, rawPath].filter(Boolean)));
-    if (activeProject?.path) {
-      await registerProjectFolderPath(activeProject.path).catch(() => null);
+    const projectPath = projectPathForSession(artifactSessionId);
+    if (projectPath) {
+      await registerProjectFolderPath(projectPath).catch(() => null);
     }
     let result = "";
     for (const candidate of candidates) {
@@ -3985,6 +4108,18 @@ export function App() {
       setToast(result.startsWith("denied") ? "已取消打开文件" : result);
     }
   }
+
+  const handleOpenMessageLocalFile = useCallback((file: LocalFilePayload) => {
+    void openArtifactFile(file);
+  }, [activeSessionId, activeProject?.path, sidecarStatus.webPort, sessionProjects, projects]);
+
+  const messageLocalFilePreviewUrl = useCallback((filePath: string) => (
+    filePreviewUrl(resolveArtifactPathForSession(activeSessionId, filePath), sidecarStatus.webPort)
+  ), [activeSessionId, sidecarStatus.webPort, sessionProjects, projects]);
+
+  const messageLocalFileStat = useCallback((filePath: string) => (
+    statArtifactPath(filePath, activeSessionId)
+  ), [activeSessionId, sessionProjects, projects]);
 
   async function logout() {
     await enterpriseLogout();
@@ -4334,9 +4469,9 @@ export function App() {
                     steps={message.steps}
                     toolCalls={message.toolCalls}
                     artifacts={message.artifacts}
-                    onOpenLocalFile={(file) => void openArtifactFile(file)}
-                    localFilePreviewUrl={(filePath) => filePreviewUrl(filePath, sidecarStatus.webPort)}
-                    localFileStat={statArtifactPath}
+                    onOpenLocalFile={handleOpenMessageLocalFile}
+                    localFilePreviewUrl={messageLocalFilePreviewUrl}
+                    localFileStat={messageLocalFileStat}
                   />
                   {message.attachments?.length ? (
                     <div className="message-files">

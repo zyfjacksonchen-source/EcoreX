@@ -1264,6 +1264,20 @@ html[data-platform="web"] .window-brand {
   background: color-mix(in srgb, var(--color-surface-raised) 72%, transparent);
 }
 
+.artifact-row.is-pending,
+.artifact-row.is-missing,
+.artifact-row.is-denied,
+.artifact-row.is-error {
+  border-color: var(--color-border);
+  background: color-mix(in srgb, var(--color-surface-muted) 70%, transparent);
+}
+
+.artifact-row.is-missing,
+.artifact-row.is-denied,
+.artifact-row.is-error {
+  opacity: 0.86;
+}
+
 .artifact-row-icon {
   width: 28px;
   height: 28px;
@@ -1304,6 +1318,16 @@ html[data-platform="web"] .window-brand {
 .artifact-row-main small {
   color: var(--color-muted);
   font-size: 11px;
+}
+
+.artifact-row-main .artifact-status {
+  font-weight: 600;
+  color: var(--color-warning);
+}
+
+.artifact-row-main .artifact-status.is-denied,
+.artifact-row-main .artifact-status.is-error {
+  color: var(--color-danger);
 }
 
 .artifact-row-main .artifact-card-path {

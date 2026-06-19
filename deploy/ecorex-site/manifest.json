@@ -1,130 +1,130 @@
 {
-  "product": "EcoreX",
-  "version": "0.1.15",
-  "updatedAt": "2026-06-19",
-  "notes": "EcoreX v0.1.15 follow-up manifest: Codex-like desktop streaming UX, explicit artifacts, WebUI local folder/file opening fixes, bounded log snapshots, SSE replay cleanup, and build-after-stage validation.",
-  "update": {
-    "windows": {
-      "mode": "auto-download",
-      "artifactId": "windows-x64"
-    },
-    "macos": {
-      "mode": "prompt-download",
-      "artifactIds": [
-        "macos-arm64-dmg",
-        "macos-x64-dmg",
-        "webui-macos-universal"
-      ]
-    },
-    "webui": {
-      "mode": "prompt-download",
-      "artifactIds": [
-        "webui-windows-x64",
-        "webui-macos-universal"
-      ]
-    }
-  },
-  "recommendedDownloads": {
-    "win32": {
-      "primary": "windows-x64",
-      "webui": "webui-windows-x64"
-    },
-    "darwin": {
-      "primary": "macos-arm64-dmg",
-      "intel": "macos-x64-dmg",
-      "webui": "webui-macos-universal"
-    },
-    "web": {
-      "windows": "webui-windows-x64",
-      "macos": "webui-macos-universal"
-    }
-  },
-  "artifacts": [
-    {
-      "id": "windows-x64",
-      "version": "0.1.15",
-      "platform": "Windows",
-      "variant": "Desktop x64 installer",
-      "fileName": "EcoreX_0.1.15_x64-setup.exe",
-      "href": "downloads/EcoreX_0.1.15_x64-setup.exe",
-      "size": 143626296,
-      "sha256": "87DE07DA7BCCB1193BDE8965398079B8F35B61E54E8880D24C8B41049F4056ED",
-      "status": "ready",
-      "source": "Signed v0.1.15 Windows installer built from codex/ecorex-v0.1.15 with Codex-like streaming UX, drag/drop attachments, immediate send feedback, artifact filtering, ordered image artifact rendering, preview-plus-path image outputs, and find-skill-gated Feishu/Lark discovery.",
-      "updatedAt": "2026-06-19T09:08:48Z",
-      "signature": "authenticode-valid:0F678477DFC0A2BDAAB88307126EF657FAF8674F"
-    },
-    {
-      "id": "webui-windows-x64",
-      "version": "0.1.15",
-      "platform": "Windows",
-      "variant": "WebUI one-click local package",
-      "fileName": "EcoreX_0.1.15-webui-windows-x64.zip",
-      "href": "downloads/EcoreX_0.1.15-webui-windows-x64.zip",
-      "size": 64527732,
-      "sha256": "0184668BA9B3C1D9A26CA9AE19388A5277D8EE98ED4D379DFDFAA8C3E2CBB897",
-      "status": "ready",
-      "source": "Rebuilt v0.1.15 Windows WebUI local package from the sanitized EcoreX runtime. Artifact scan passed with no legacy product-name/CLI strings and no original project build/source paths.",
-      "updatedAt": "2026-06-19T11:44:00Z"
-    },
-    {
-      "id": "webui-macos-universal",
-      "version": "0.1.15",
-      "platform": "macOS",
-      "variant": "WebUI one-click local package",
-      "fileName": "EcoreX_0.1.15-webui-macos-universal.zip",
-      "href": "downloads/EcoreX_0.1.15-webui-macos-universal.zip",
-      "size": 157939821,
-      "sha256": "51A7578577BA1BABEE97D8EDB3CD0E199D64F0CE31FA5D4D8859E22D1868527F",
-      "status": "ready",
-      "source": "Rebuilt v0.1.15 macOS WebUI local package from the sanitized EcoreX runtime. Artifact scan passed with no legacy product-name/CLI strings and no original project build/source paths.",
-      "updatedAt": "2026-06-19T11:44:00Z"
-    },
-    {
-      "id": "macos-arm64-dmg",
-      "version": "0.1.15",
-      "platform": "macOS",
-      "variant": "Desktop Apple Silicon DMG",
-      "fileName": "EcoreX_0.1.15_arm64.dmg",
-      "href": "downloads/EcoreX_0.1.15_arm64.dmg",
-      "size": 193192053,
-      "sha256": "AE69236FA513D61D6E7491C339E07968BECF99BC515DB96FF80F5FD7B7CCD8A9",
-      "status": "ready",
-      "source": "Unsigned v0.1.15 Apple Silicon DMG built on GitHub Actions macOS runner. Installer-only README documents SHA256 verification and Gatekeeper bypass for WorkBuddy-style agents.",
-      "updatedAt": "2026-06-19T10:20:10Z",
-      "signature": "unsigned-gatekeeper-bypass-documented"
-    },
-    {
-      "id": "macos-x64-dmg",
-      "version": "0.1.15",
-      "platform": "macOS",
-      "variant": "Desktop Intel DMG",
-      "fileName": "EcoreX_0.1.15_x64.dmg",
-      "href": "downloads/EcoreX_0.1.15_x64.dmg",
-      "size": 200599586,
-      "sha256": "202C01CC62E565073EBFC5A7111498C660A0D2C108BCCA667D4EEF311BD57022",
-      "status": "ready",
-      "source": "Unsigned v0.1.15 Intel DMG built on GitHub Actions macOS runner. Installer-only README documents SHA256 verification and Gatekeeper bypass for WorkBuddy-style agents.",
-      "updatedAt": "2026-06-19T10:20:10Z",
-      "signature": "unsigned-gatekeeper-bypass-documented"
-    },
-    {
-      "id": "web-linux-service",
-      "version": "0.1.15",
-      "platform": "Linux",
-      "variant": "Web service deployment package",
-      "fileName": "EcoreX_0.1.15-web-linux-service.tar.gz",
-      "href": "downloads/EcoreX_0.1.15-web-linux-service.tar.gz",
-      "size": 3215588,
-      "sha256": "55748254B95CE27B16EE9EC7C81896E489103DF4C4F68028DC3A444D58F59E81",
-      "status": "ready",
-      "visible": false,
-      "source": "Rebuilt v0.1.15 Linux Web service package from the sanitized EcoreX runtime. Artifact scan passed with no legacy product-name/CLI strings and no original project build/source paths.",
-      "updatedAt": "2026-06-19T11:44:00Z"
-    }
-  ],
-  "admin": {
-    "href": "admin/",
-    "auth": "basic"
-  }
+    "product":  "EcoreX",
+    "version":  "0.1.16",
+    "updatedAt":  "2026-06-19",
+    "notes":  "EcoreX v0.1.16 production-stability candidate: desktop streaming render guardrails, deterministic skill discovery, focus/response recovery, artifact path hardening, sidecar lifecycle cleanup, and runtime privacy fixes.",
+    "update":  {
+                   "windows":  {
+                                   "mode":  "auto-download",
+                                   "artifactId":  "windows-x64"
+                               },
+                   "macos":  {
+                                 "mode":  "prompt-download",
+                                 "artifactIds":  [
+                                                     "macos-arm64-dmg",
+                                                     "macos-x64-dmg",
+                                                     "webui-macos-universal"
+                                                 ]
+                             },
+                   "webui":  {
+                                 "mode":  "prompt-download",
+                                 "artifactIds":  [
+                                                     "webui-windows-x64",
+                                                     "webui-macos-universal"
+                                                 ]
+                             }
+               },
+    "recommendedDownloads":  {
+                                 "win32":  {
+                                               "primary":  "windows-x64",
+                                               "webui":  "webui-windows-x64"
+                                           },
+                                 "darwin":  {
+                                                "primary":  "macos-arm64-dmg",
+                                                "intel":  "macos-x64-dmg",
+                                                "webui":  "webui-macos-universal"
+                                            },
+                                 "web":  {
+                                             "windows":  "webui-windows-x64",
+                                             "macos":  "webui-macos-universal"
+                                         }
+                             },
+    "artifacts":  [
+                      {
+                          "id":  "windows-x64",
+                          "version":  "0.1.16",
+                          "platform":  "Windows",
+                          "variant":  "Desktop x64 installer",
+                          "fileName":  "EcoreX_0.1.16_x64-setup.exe",
+                          "href":  "downloads/EcoreX_0.1.16_x64-setup.exe",
+                          "size":  143298882,
+                          "sha256":  "90E45AFF3DE797B57D21D79C688C79DD3E697F5C3E1EE94EC191B951810BA5C0",
+                          "status":  "ready",
+                          "source":  "Unsigned local v0.1.16 Windows installer built from codex/ecorex-v0.1.16 for production-grade hand testing; signing/notarized public promotion remains a release gate.",
+                          "updatedAt":  "2026-06-19T15:15:49Z",
+                          "signature":  "unsigned-local-handtest"
+                      },
+                      {
+                          "id":  "webui-windows-x64",
+                          "version":  "0.1.16",
+                          "platform":  "Windows",
+                          "variant":  "WebUI one-click local package",
+                          "fileName":  "EcoreX_0.1.16-webui-windows-x64.zip",
+                          "href":  "downloads/EcoreX_0.1.16-webui-windows-x64.zip",
+                          "size":  0,
+                          "sha256":  "",
+                          "status":  "pending",
+                          "source":  "Pending v0.1.16 artifact build and checksum verification.",
+                          "updatedAt":  "2026-06-19T15:15:49Z"
+                      },
+                      {
+                          "id":  "webui-macos-universal",
+                          "version":  "0.1.16",
+                          "platform":  "macOS",
+                          "variant":  "WebUI one-click local package",
+                          "fileName":  "EcoreX_0.1.16-webui-macos-universal.zip",
+                          "href":  "downloads/EcoreX_0.1.16-webui-macos-universal.zip",
+                          "size":  0,
+                          "sha256":  "",
+                          "status":  "pending",
+                          "source":  "Pending v0.1.16 artifact build and checksum verification.",
+                          "updatedAt":  "2026-06-19T15:15:49Z"
+                      },
+                      {
+                          "id":  "macos-arm64-dmg",
+                          "version":  "0.1.16",
+                          "platform":  "macOS",
+                          "variant":  "Desktop Apple Silicon DMG",
+                          "fileName":  "EcoreX_0.1.16_arm64.dmg",
+                          "href":  "downloads/EcoreX_0.1.16_arm64.dmg",
+                          "size":  0,
+                          "sha256":  "",
+                          "status":  "pending",
+                          "source":  "Pending v0.1.16 artifact build and checksum verification.",
+                          "updatedAt":  "2026-06-19T15:15:49Z",
+                          "signature":  "pending"
+                      },
+                      {
+                          "id":  "macos-x64-dmg",
+                          "version":  "0.1.16",
+                          "platform":  "macOS",
+                          "variant":  "Desktop Intel DMG",
+                          "fileName":  "EcoreX_0.1.16_x64.dmg",
+                          "href":  "downloads/EcoreX_0.1.16_x64.dmg",
+                          "size":  0,
+                          "sha256":  "",
+                          "status":  "pending",
+                          "source":  "Pending v0.1.16 artifact build and checksum verification.",
+                          "updatedAt":  "2026-06-19T15:15:49Z",
+                          "signature":  "pending"
+                      },
+                      {
+                          "id":  "web-linux-service",
+                          "version":  "0.1.16",
+                          "platform":  "Linux",
+                          "variant":  "Web service deployment package",
+                          "fileName":  "EcoreX_0.1.16-web-linux-service.tar.gz",
+                          "href":  "downloads/EcoreX_0.1.16-web-linux-service.tar.gz",
+                          "size":  0,
+                          "sha256":  "",
+                          "status":  "pending",
+                          "visible":  false,
+                          "source":  "Pending v0.1.16 artifact build and checksum verification.",
+                          "updatedAt":  "2026-06-19T15:15:49Z"
+                      }
+                  ],
+    "admin":  {
+                  "href":  "admin/",
+                  "auth":  "basic"
+              }
 }

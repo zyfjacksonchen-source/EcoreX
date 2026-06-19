@@ -214,9 +214,10 @@ import os
 import sys
 
 out = sys.argv[1]
-client_event_key = os.environ.get("ECOREX_CLIENT_EVENT_KEY") or "ecorex-desktop-v0.1.15"
+client_event_key = os.environ.get("ECOREX_CLIENT_EVENT_KEY") or "ecorex-desktop-v0.1.16"
 compat_client_event_keys = list(dict.fromkeys([
     client_event_key,
+    "ecorex-desktop-v0.1.15",
     "ecorex-desktop-v0.1.14",
     "ecorex-desktop-v0.1.13",
     "ecorex-desktop-v0.1.12",

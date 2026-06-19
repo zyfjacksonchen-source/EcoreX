@@ -628,7 +628,7 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
     require_contains(broker, "\"filesystem-access\"", f"{label} permission broker")
 
     release_notes = read_text_by_suffix("common/ecorex_release_notes.py")
-    require_contains(release_notes, "\"version\": \"0.1.15\"", f"{label} release notes")
+    require_contains(release_notes, "\"version\": \"0.1.16\"", f"{label} release notes")
     require_contains(release_notes, "\"updatePolicy\"", f"{label} release notes")
     require_contains(release_notes, "\"webui\"", f"{label} release notes")
 
