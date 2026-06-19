@@ -126,6 +126,17 @@ export type FileAttachment = {
   preview_url?: string;
 };
 
+export type LocalPathStat = {
+  status?: string;
+  message?: string;
+  path: string;
+  exists: boolean;
+  isFile?: boolean;
+  isDirectory?: boolean;
+  mimeType?: string;
+  sizeBytes?: number;
+};
+
 export type AgentArtifactKind = "file" | "image" | "video" | "audio" | "directory" | "url" | "diff";
 export type AgentArtifactIntent = "deliverable" | "changed-file" | "preview";
 export type AgentArtifactOperation = "created" | "modified" | "exported" | "downloaded" | "deployed";
@@ -221,6 +232,10 @@ export type CapabilityPack = {
   name: string;
   summary: string;
   installMode: "user-or-admin" | "admin-recommended";
+  discoveryOnly?: boolean;
+  sourceUrl?: string;
+  mirrorUrls?: string[];
+  installHint?: string;
   estimatedSizeMb?: number;
   state: CapabilityState;
   message: string;
@@ -658,6 +673,14 @@ export async function openRuntimePath(filePath: string, action: OpenPathAction =
   return result.message || "";
 }
 
+export async function statLocalPath(filePath: string): Promise<LocalPathStat> {
+  const trimmedPath = String(filePath || "").trim();
+  if (!trimmedPath) {
+    return { path: "", exists: false, status: "error", message: "path is required" };
+  }
+  return apiJson<LocalPathStat>("/api/file-stat", "POST", { path: trimmedPath });
+}
+
 export async function loadPermissionState(): Promise<PermissionState | null> {
   if (window.ecorexDesktop?.getPermissionState) {
     return window.ecorexDesktop.getPermissionState();
@@ -700,6 +723,10 @@ export async function requestAgentInstallRequest(input: {
     packId?: string;
     packName?: string;
     sessionId?: string;
+    discoveryOnly?: boolean;
+    sourceUrl?: string;
+    mirrorUrls?: string[];
+    installHint?: string;
   }>("/api/agent-install-request", "POST", input);
 }
 
@@ -758,11 +785,28 @@ function capabilityPacksFromRuntime(payload: Record<string, unknown>): Capabilit
       const installed = Boolean(state.installed);
       const rawState = String(state.state || (installed ? "installed" : "not-installed"));
       const capabilityState = isCapabilityState(rawState) ? rawState : "unknown";
+      const mirrorUrls = Array.isArray(item.mirrorUrls)
+        ? item.mirrorUrls.filter((url): url is string => typeof url === "string")
+        : Array.isArray(state.mirrorUrls)
+          ? state.mirrorUrls.filter((url): url is string => typeof url === "string")
+          : undefined;
       return {
         id,
         name: String(item.label || id),
         summary: String(item.notes || item.defaultPolicy || ""),
         installMode: "user-or-admin",
+        discoveryOnly: item.discoveryOnly === true || state.discoveryOnly === true,
+        sourceUrl: typeof item.sourceUrl === "string"
+          ? item.sourceUrl
+          : typeof state.sourceUrl === "string"
+            ? state.sourceUrl
+            : undefined,
+        mirrorUrls,
+        installHint: typeof item.installHint === "string"
+          ? item.installHint
+          : typeof state.installHint === "string"
+            ? state.installHint
+            : undefined,
         state: capabilityState,
         message: String(state.message || (installed ? "能力包已安装" : "点击安装后由当前会话 agent 处理")),
         installed,

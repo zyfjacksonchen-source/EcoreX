@@ -18,6 +18,9 @@ from config import conf
 
 
 RUNTIME_ROOT = Path(__file__).resolve().parents[3]
+FEISHU_LARK_SOURCE_URL = "https://github.com/larksuite/oapi-sdk-python"
+FEISHU_LARK_MIRROR_URLS = ["https://gitcode.com/gh_mirrors/oa/oapi-sdk-python.git"]
+FEISHU_LARK_PYPI_MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
 
 _LIVE_PROVIDER_CONFIG_KEYS = {
     "model",
@@ -319,13 +322,21 @@ def _ability_defs() -> Dict[str, Dict[str, Any]]:
             "notes": "Keeps browser automation available without starting Chrome/CDP at boot.",
         },
         "feishu-cli": {
-            "label": "Feishu/Lark CLI auto-install",
+            "label": "Feishu/Lark connector discovery",
             "kind": "optional-runtime",
             "defaultPolicy": "discoverable-disabled",
             "startupImpact": "medium",
             "configPath": ["tools", "feishu_cli", "auto_install"],
             "packId": "feishu-lark",
-            "notes": "The feishu_cli tool stays visible; npm install is attempted only after enable/install.",
+            "discoveryOnly": True,
+            "sourceUrl": FEISHU_LARK_SOURCE_URL,
+            "mirrorUrls": FEISHU_LARK_MIRROR_URLS,
+            "installHint": (
+                "Agent should use the built-in find skill first (gated as find-skill) to discover Feishu/Lark connector sources, "
+                "then fall back to GitHub, the domestic GitCode mirror, "
+                f"or PyPI mirror {FEISHU_LARK_PYPI_MIRROR}."
+            ),
+            "notes": "The connector is only discovered here; the current agent uses the find skill/find-skill gate before any SDK fallback.",
         },
         "scheduler": {
             "label": "Scheduler background service",
@@ -480,6 +491,9 @@ class OptionalAbilities(BaseTool):
             "agentCanEnable": meta.get("kind") == "optional-runtime",
             "agentCanInstall": bool(meta.get("packId")),
         }
+        for field in ("discoveryOnly", "sourceUrl", "mirrorUrls", "installHint"):
+            if field in meta:
+                item[field] = meta[field]
         if "enabled" in meta:
             item["enabled"] = bool(meta.get("enabled"))
         elif meta.get("configKey"):
@@ -568,38 +582,48 @@ class OptionalAbilities(BaseTool):
             "configPath": str(path),
         })
 
+    def _feishu_lark_discovery_only(self, ability: str) -> ToolResult:
+        return ToolResult.fail({
+            "status": "error",
+            "ability": ability,
+            "packId": "feishu-lark",
+            "discoveryOnly": True,
+            "sourceUrl": FEISHU_LARK_SOURCE_URL,
+            "mirrorUrls": FEISHU_LARK_MIRROR_URLS,
+            "installHint": (
+                "Use the built-in find skill first (gated as find-skill) to discover and install the Feishu/Lark skill or connector. "
+                f"If the find skill falls back to the official GitHub source, run: python -m pip install --upgrade \"git+{FEISHU_LARK_SOURCE_URL}.git\". "
+                f"If GitHub times out, use the domestic Git mirror: python -m pip install --upgrade \"git+{FEISHU_LARK_MIRROR_URLS[0]}\". "
+                f"If that still fails, use the PyPI mirror: python -m pip install -i {FEISHU_LARK_PYPI_MIRROR} --upgrade lark-oapi."
+            ),
+            "message": (
+                "feishu-lark is discovery-only. Use the built-in find skill/find-skill gate first, then fall back to "
+                "GitHub/domestic Git/PyPI mirrors if discovery or GitHub times out."
+            ),
+        })
+
     def _install(self, ability: str, timeout: int) -> ToolResult:
         defs = _ability_defs()
         meta = defs.get(ability)
         if not meta:
+            if ability == "feishu-lark":
+                return self._feishu_lark_discovery_only(ability)
             if ability in _capability_pack_ids():
                 return self._install_capability_pack(ability, timeout)
             return ToolResult.fail({"status": "error", "message": f"unknown ability: {ability}", "known": sorted(defs)})
 
         if ability == "feishu-cli":
-            return self._install_feishu_cli(timeout)
+            return self._feishu_lark_discovery_only(ability)
 
         pack_id = meta.get("packId")
         if not pack_id:
             return ToolResult.fail({"status": "error", "message": f"{ability} has no installer"})
+        if str(pack_id) == "feishu-lark":
+            return self._feishu_lark_discovery_only(ability)
         return self._install_capability_pack(str(pack_id), timeout)
 
     def _install_feishu_cli(self, timeout: int) -> ToolResult:
-        config = _read_runtime_config()
-        _set_nested(config, "tools", "feishu_cli", "auto_install", value=True)
-        path = _write_runtime_config(config)
-        _update_live_config(config)
-        try:
-            from agent.tools.feishu_cli.feishu_cli import FeishuCli
-
-            result = FeishuCli({"auto_install": True, "cwd": str(RUNTIME_ROOT)}).execute({
-                "action": "ensure",
-                "install_if_missing": True,
-                "timeout": timeout,
-            })
-        except Exception as exc:
-            return ToolResult.fail({"status": "error", "message": f"Feishu CLI install failed: {exc}", "configPath": str(path)})
-        return result
+        return self._feishu_lark_discovery_only("feishu-cli")
 
     def _install_capability_pack(self, pack_id: str, timeout: int) -> ToolResult:
         manifest = _capability_manifest_path()

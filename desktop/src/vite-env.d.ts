@@ -54,6 +54,10 @@ interface Window {
         name: string;
         summary: string;
         installMode: "user-or-admin" | "admin-recommended";
+        discoveryOnly?: boolean;
+        sourceUrl?: string;
+        mirrorUrls?: string[];
+        installHint?: string;
         estimatedSizeMb?: number;
         state: "installed" | "not-installed" | "checking" | "installing" | "busy" | "failed" | "unknown";
         message: string;
@@ -181,6 +185,16 @@ interface Window {
       file_path: string;
       file_name: string;
       file_type: "image" | "video" | "audio" | "file" | "directory";
+    }>;
+    statPath?: (filePath: string) => Promise<{
+      status?: string;
+      message?: string;
+      path: string;
+      exists: boolean;
+      isFile?: boolean;
+      isDirectory?: boolean;
+      mimeType?: string;
+      sizeBytes?: number;
     }>;
     openPath: (filePath: string, action?: "open" | "reveal" | "openWith") => Promise<string>;
     apiJson: (request: {

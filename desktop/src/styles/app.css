@@ -1496,6 +1496,12 @@ html[data-platform="web"] .window-brand {
   background: var(--color-danger);
 }
 
+.tool-status-dot.is-cancelled {
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--color-muted) 72%, var(--color-border));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-surface) 70%, transparent);
+}
+
 .tool-status-dot.is-done {
   background: var(--color-success);
 }
@@ -1532,6 +1538,16 @@ html[data-platform="web"] .window-brand {
   padding: 8px 9px;
   color: var(--color-muted);
   font-size: 12px;
+}
+
+.agent-cancelled-tag {
+  width: fit-content;
+  margin-top: 6px;
+  padding: 5px 8px;
+  border: 1px solid color-mix(in srgb, var(--color-muted) 24%, var(--color-border));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-muted) 7%, transparent);
+  line-height: 1.2;
 }
 
 .agent-content-step {
@@ -1939,6 +1955,7 @@ html[data-platform="web"] .window-brand {
 }
 
 .composer {
+  position: relative;
   min-height: 46px;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto auto;
@@ -1949,6 +1966,46 @@ html[data-platform="web"] .window-brand {
   border-radius: 24px;
   background: var(--color-surface);
   box-shadow: 0 10px 32px color-mix(in srgb, var(--color-text) 8%, transparent);
+}
+
+.composer.is-drag-active {
+  border-color: color-mix(in srgb, var(--color-brand) 72%, var(--color-border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-brand) 18%, transparent);
+}
+
+.composer-drop-overlay {
+  position: absolute;
+  inset: 5px;
+  z-index: 4;
+  pointer-events: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px dashed color-mix(in srgb, var(--color-brand) 72%, var(--color-border));
+  border-radius: 20px;
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-brand-soft) 82%, var(--color-surface));
+  opacity: 0;
+  transform: scale(0.985);
+  transition:
+    opacity var(--motion-fast) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-standard);
+}
+
+.composer.is-drag-active .composer-drop-overlay {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.composer-drop-overlay svg {
+  width: 18px;
+  height: 18px;
+}
+
+.composer-drop-overlay span {
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .skill-mention-popover {
@@ -2709,6 +2766,41 @@ html[data-platform="web"] .window-brand {
   padding: 0 14px;
 }
 
+.image-preview-popover {
+  width: min(720px, calc(100vw - 48px));
+  max-height: calc(100vh - 116px);
+  overflow: hidden;
+  grid-template-rows: auto minmax(180px, 1fr) auto;
+  border-radius: var(--radius-lg);
+}
+
+.preview-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.preview-image-frame {
+  min-width: 0;
+  min-height: 220px;
+  height: min(64vh, 620px);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+}
+
+.preview-image-frame img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  transform: scale(var(--preview-zoom, 1));
+  transform-origin: center;
+  transition: transform var(--motion-fast) var(--ease-standard);
+}
+
 .toast {
   position: fixed;
   left: 50%;
@@ -2765,6 +2857,15 @@ html[data-platform="web"] .window-brand {
   }
 
   .preview-popover {
-    width: calc(100vw - 320px);
+    width: min(720px, calc(100vw - 36px));
+  }
+
+  .image-preview-popover {
+    max-height: calc(100vh - 72px);
+  }
+
+  .preview-image-frame {
+    min-height: 180px;
+    height: min(58vh, 520px);
   }
 }

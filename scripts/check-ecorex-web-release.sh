@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${VERSION:-0.1.14}"
+VERSION="${VERSION:-0.1.15}"
 SERVICE_NAME="${SERVICE_NAME:-ecorex-web}"
 INSTALL_ROOT="${INSTALL_ROOT:-/opt/ecorex-web}"
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-/srv/ecorex-agent-workspace}"

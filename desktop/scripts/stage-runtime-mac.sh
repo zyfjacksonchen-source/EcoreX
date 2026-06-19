@@ -199,14 +199,7 @@ copy_runtime_sources() {
   mkdir -p "$RUNTIME_DIR/scripts"
   cp "$SCRIPT_DIR/install-capability.py" "$RUNTIME_DIR/scripts/install-capability.py"
 
-  if [[ -n "${ECOREX_LARK_CLI_DARWIN:-}" && -f "$ECOREX_LARK_CLI_DARWIN" ]]; then
-    mkdir -p "$RUNTIME_DIR/tools/bin"
-    cp "$ECOREX_LARK_CLI_DARWIN" "$RUNTIME_DIR/tools/bin/lark-cli"
-    chmod +x "$RUNTIME_DIR/tools/bin/lark-cli"
-    echo "Bundled lark-cli for macOS runtime: $ECOREX_LARK_CLI_DARWIN"
-  else
-    echo "macOS lark-cli binary not provided; runtime will use npm auto-install fallback."
-  fi
+  echo "Skipping bundled lark-cli for macOS runtime; Feishu/Lark connector remains discovery-only and routes installs through the built-in find skill/find-skill gate."
 
   if [[ "${ECOREX_DISABLE_ENTERPRISE_POLICY:-}" != "1" ]]; then
     local admin_base admin_events_url model_config_url capability_policy_url policy_path

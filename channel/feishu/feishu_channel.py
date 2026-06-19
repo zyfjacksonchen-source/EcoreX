@@ -44,6 +44,10 @@ URL_VERIFICATION = "url_verification"
 # the actual import to _startup_websocket() where it is needed.
 LARK_SDK_AVAILABLE = importlib.util.find_spec("lark_oapi") is not None
 lark = None  # will be populated on first use via _ensure_lark_imported()
+LARK_OAPI_DISCOVERY_GUIDANCE = (
+    "请先让当前 agent 通过内置 find skill / find-skill 能力发现飞书/Lark 连接器；"
+    "GitHub 超时后再降级使用 GitCode 国内镜像或清华 PyPI 镜像安装 lark-oapi。"
+)
 
 
 def _ensure_lark_imported():
@@ -152,7 +156,7 @@ def _register_via_qr_in_terminal() -> bool:
         logger.error(
             "[FeiShu] 缺少 feishu_app_id / feishu_app_secret。"
             "未安装 lark-oapi SDK，无法在终端发起扫码创建。"
-            "请执行 pip install -U 'lark-oapi>=1.5.5' 后重试，或手动在 config.json 中填入凭据。"
+            f"{LARK_OAPI_DISCOVERY_GUIDANCE} 或手动在 config.json 中填入凭据。"
         )
         return False
 
@@ -172,7 +176,7 @@ def _register_via_qr_in_terminal() -> bool:
             installed = "unknown"
         logger.error(
             f"[FeiShu] 当前 lark-oapi 版本 ({installed}) 不支持一键创建应用，需要 >= 1.5.5。"
-            "请执行 pip install -U 'lark-oapi>=1.5.5' 后重试，或手动在 config.json 中填入凭据。"
+            f"{LARK_OAPI_DISCOVERY_GUIDANCE} 或手动在 config.json 中填入凭据。"
         )
         return False
 
@@ -252,7 +256,7 @@ class FeiShuChanel(ChatChannel):
 
         # 验证配置
         if self.feishu_event_mode == 'websocket' and not LARK_SDK_AVAILABLE:
-            logger.error("[FeiShu] websocket mode requires lark_oapi. Please install: pip install lark-oapi")
+            logger.error(f"[FeiShu] websocket mode requires lark_oapi. {LARK_OAPI_DISCOVERY_GUIDANCE}")
             raise Exception("lark_oapi not installed")
 
     def startup(self):

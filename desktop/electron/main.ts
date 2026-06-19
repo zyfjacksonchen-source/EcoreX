@@ -31,6 +31,26 @@ const imageExtensions = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp
 const videoExtensions = new Set([".mp4", ".webm", ".avi", ".mov", ".mkv"]);
 const externalUrlProtocols = new Set(["http:", "https:", "mailto:"]);
 
+function mimeTypeForLocalPath(filePath: string) {
+  const ext = path.extname(filePath).toLowerCase();
+  const imageMime: Record<string, string> = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".bmp": "image/bmp",
+    ".svg": "image/svg+xml"
+  };
+  const videoMime: Record<string, string> = {
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".mov": "video/quicktime",
+    ".m4v": "video/x-m4v"
+  };
+  return imageMime[ext] || videoMime[ext] || "";
+}
+
 function toAttachment(filePath: string) {
   const ext = path.extname(filePath).toLowerCase();
   const fileType = imageExtensions.has(ext) ? "image" : videoExtensions.has(ext) ? "video" : "file";
@@ -318,6 +338,27 @@ app.whenReady().then(async () => {
     await fsp.writeFile(filePath, Buffer.from(input.dataBase64, "base64"));
     await permissions.rememberSelectedPaths([filePath]);
     return toAttachment(filePath);
+  });
+  ipcMain.handle("ecorex:stat-path", async (_event, filePath: string) => {
+    const target = String(filePath || "").trim();
+    if (!target || !path.isAbsolute(target)) {
+      return { status: "error", path: target, exists: false, message: "invalid path" };
+    }
+    try {
+      const resolved = path.resolve(target);
+      const stat = await fsp.stat(resolved);
+      return {
+        status: "success",
+        path: resolved,
+        exists: true,
+        isFile: stat.isFile(),
+        isDirectory: stat.isDirectory(),
+        mimeType: stat.isFile() ? mimeTypeForLocalPath(resolved) : "",
+        sizeBytes: stat.isFile() ? stat.size : undefined
+      };
+    } catch {
+      return { status: "missing", path: target, exists: false, message: "path not found" };
+    }
   });
   ipcMain.handle("ecorex:open-path", async (event, filePath: string, action: "open" | "reveal" | "openWith" = "open") => {
     if (!filePath || !path.isAbsolute(filePath)) {

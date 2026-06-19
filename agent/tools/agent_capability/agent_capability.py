@@ -69,6 +69,10 @@ _PACK_ALIASES = {
     "lark-cli": "feishu-cli",
 }
 
+FEISHU_LARK_SOURCE_URL = "https://github.com/larksuite/oapi-sdk-python"
+FEISHU_LARK_MIRROR_URLS = ["https://gitcode.com/gh_mirrors/oa/oapi-sdk-python.git"]
+FEISHU_LARK_PYPI_MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
+
 
 def _normalize_pack_id(value: str) -> str:
     key = str(value or "").strip().lower().replace("_", "-")
@@ -102,6 +106,33 @@ def _compact_install_step(ability: str, payload: Dict[str, Any]) -> Dict[str, An
     }
 
 
+_FEISHU_LARK_SKILL_HINTS = (
+    "feishu",
+    "lark",
+    "飞书",
+    "@larksuite",
+    "lark-oapi",
+    "oapi-sdk-python",
+    "lark-cli",
+)
+
+
+def _contains_feishu_lark_hint(value: Any) -> bool:
+    try:
+        text = json.dumps(value, ensure_ascii=False, sort_keys=True) if isinstance(value, (dict, list)) else str(value or "")
+    except Exception:
+        text = str(value or "")
+    lowered = text.lower()
+    return any(hint.lower() in lowered for hint in _FEISHU_LARK_SKILL_HINTS)
+
+
+def _has_find_skill_discovery(params: Dict[str, Any]) -> bool:
+    for key in ("discovery_source", "source", "via", "gate", "resolved_by"):
+        if "find" in str(params.get(key) or "").strip().lower():
+            return True
+    return params.get("find_skill_result") is not None or params.get("findSkillResult") is not None
+
+
 class AgentCapabilityTool(BaseTool):
     name = "agent_capability"
     description = (
@@ -121,6 +152,8 @@ class AgentCapabilityTool(BaseTool):
             "skill": {"type": "string", "description": "Skill name."},
             "url": {"type": "string", "description": "Skill package/repo URL for install_skill."},
             "files": {"type": "array", "description": "Optional skill file entries for install_skill."},
+            "discovery_source": {"type": "string", "description": "Discovery gate used before install_skill, e.g. find-skill."},
+            "find_skill_result": {"type": "object", "description": "Optional structured result returned by the find skill/find-skill gate."},
             "server": {"type": "object", "description": "MCP server config for configure_mcp."},
             "timeout": {"type": "integer", "description": "Install timeout seconds."},
         },
@@ -156,6 +189,26 @@ class AgentCapabilityTool(BaseTool):
         return ToolResult.fail({"status": "error", "message": "unknown action"})
 
     def _install_pack(self, pack_id: str, timeout: Any) -> ToolResult:
+        if pack_id == "feishu-lark":
+            return ToolResult.fail({
+                "status": "error",
+                "packId": pack_id,
+                "discoveryOnly": True,
+                "sourceUrl": FEISHU_LARK_SOURCE_URL,
+                "mirrorUrls": FEISHU_LARK_MIRROR_URLS,
+                "installHint": (
+                    "feishu-lark is discovery-only. Do not use install_pack. "
+                    "Use the built-in find skill first (gated as find-skill) to discover and choose the Feishu/Lark connector install source. "
+                    f"If the find skill returns the official GitHub source, install it with: python -m pip install --upgrade \"git+{FEISHU_LARK_SOURCE_URL}.git\". "
+                    f"If GitHub times out, use the domestic Git mirror: python -m pip install --upgrade \"git+{FEISHU_LARK_MIRROR_URLS[0]}\". "
+                    f"If that still fails, use the PyPI mirror: python -m pip install -i {FEISHU_LARK_PYPI_MIRROR} --upgrade lark-oapi."
+                ),
+                "message": (
+                    "feishu-lark is discovery-only. Use the built-in find skill/find-skill gate first, then fall back to "
+                    "GitHub, a domestic Git mirror, or a PyPI mirror as needed."
+                ),
+                "nextAction": {"action": "diagnose"},
+            })
         install_plan = ["feishu-lark", "feishu-cli"] if pack_id == "feishu-lark" else [pack_id]
         steps = []
         for ability in install_plan:
@@ -203,6 +256,25 @@ class AgentCapabilityTool(BaseTool):
 
     def _install_skill(self, workspace: str, params: Dict[str, Any]) -> ToolResult:
         name = str(params.get("skill") or params.get("name") or "").strip()
+        if _contains_feishu_lark_hint({
+            "name": name,
+            "url": params.get("url"),
+            "files": params.get("files"),
+            "category": params.get("category"),
+        }) and not _has_find_skill_discovery(params):
+            return ToolResult.fail({
+                "status": "error",
+                "message": (
+                    "Feishu/Lark related skill installs must be discovered through the built-in "
+                    "find skill / find-skill gate first. Retry install_skill with "
+                    "discovery_source='find-skill' or a find_skill_result payload."
+                ),
+                "nextAction": {
+                    "skill": "find",
+                    "ability": "find-skill",
+                    "query": "Feishu Lark connector skill or SDK source",
+                },
+            })
         payload = {
             "name": name,
             "url": params.get("url"),

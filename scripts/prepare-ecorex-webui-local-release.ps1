@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.1.14",
+    [string]$Version = "0.1.15",
     [string]$RuntimeRoot = "desktop/runtime/ecorex-runtime",
     [string]$OutputDir = "release-artifacts",
     [switch]$KeepStaging
@@ -537,7 +537,7 @@ $macInstall = @'
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.1.14"
+VERSION="0.1.15"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 INSTALL_ROOT="${ECOREX_WEBUI_INSTALL_ROOT:-$HOME/Library/Application Support/EcoreX WebUI}"

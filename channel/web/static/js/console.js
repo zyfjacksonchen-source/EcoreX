@@ -2540,7 +2540,7 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                 }
                 if (!botEl.querySelector('.agent-cancelled-tag')) {
                     const tag = document.createElement('div');
-                    tag.className = 'agent-cancelled-tag text-xs text-amber-600 dark:text-amber-400 mt-1';
+                    tag.className = 'agent-cancelled-tag text-xs text-slate-500 dark:text-slate-400 mt-1';
                     tag.textContent = (currentLang === 'zh') ? '已中止' : 'Cancelled';
                     stepsEl.appendChild(tag);
                 }

@@ -1,4 +1,4 @@
-import { useMemo, useState, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import {
   ExternalLink,
   Eye,
@@ -8,7 +8,7 @@ import {
   MoreHorizontal,
   MonitorUp
 } from "lucide-react";
-import type { AgentArtifact } from "../services/ecorexApi";
+import type { AgentArtifact, LocalPathStat } from "../services/ecorexApi";
 import { redactInternalPromptText } from "../utils/redaction";
 
 export type ToolCallDisclosure = {
@@ -73,6 +73,7 @@ const ARTIFACT_PREVIEW_LIMIT = 6;
 const ARTIFACT_RELATIVE_ROOTS = "deliverables|output|outputs|artifacts|images|assets";
 const ARTIFACT_ABSOLUTE_POSIX_ROOTS = "Users|Volumes|home|tmp|var|mnt|opt|srv|workspace";
 const ARTIFACT_PATH_PREFIX = `(?:[A-Za-z]:[\\\\/]|\\\\\\\\|/(?:${ARTIFACT_ABSOLUTE_POSIX_ROOTS})[\\\\/]|(?:\\.{1,2}[\\\\/])?(?:${ARTIFACT_RELATIVE_ROOTS})[\\\\/])`;
+const INTERRUPTED_TOOL_STATUSES = new Set(["aborted", "cancelled", "canceled", "paused", "stopped"]);
 
 function escapeHtml(value: unknown) {
   return String(value ?? "")
@@ -239,6 +240,27 @@ type ArtifactItem = {
 type DisplayArtifact = AgentArtifact & {
   legacyPath?: string;
 };
+
+type ArtifactAvailability = "pending" | "ready" | "missing";
+
+function artifactSourceKey(artifact: AgentArtifact) {
+  return (artifactPath(artifact) || artifact.id || "").replace(/\\/g, "/").toLowerCase();
+}
+
+function isRemoteArtifactSource(value: string) {
+  return /^https?:\/\//i.test(String(value || "").trim());
+}
+
+function shouldVerifyArtifact(artifact: AgentArtifact) {
+  const source = artifactPath(artifact);
+  return Boolean(source) && artifact.kind !== "url" && artifact.kind !== "diff" && !isRemoteArtifactSource(source);
+}
+
+function artifactExistsForKind(stat: LocalPathStat, kind: AgentArtifact["kind"]) {
+  if (!stat.exists) return false;
+  if (kind === "directory") return stat.isDirectory !== false;
+  return stat.isFile !== false;
+}
 
 function artifactKindFromFileType(fileType: ArtifactFileType): AgentArtifact["kind"] {
   return fileType === "image" || fileType === "video" || fileType === "audio" || fileType === "directory"
@@ -538,16 +560,43 @@ function ArtifactShelf({
   artifacts,
   legacyArtifacts = [],
   localFilePreviewUrl,
+  localFileStat,
   onOpenLocalFile
 }: {
   artifacts?: AgentArtifact[];
   legacyArtifacts?: ArtifactItem[];
   localFilePreviewUrl?: (filePath: string) => string;
+  localFileStat?: (filePath: string) => Promise<LocalPathStat>;
   onOpenLocalFile?: (file: LocalFilePayload) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [openMenuId, setOpenMenuId] = useState("");
-  const items = mergeAgentArtifacts(artifacts, legacyArtifacts);
+  const [availability, setAvailability] = useState<Record<string, ArtifactAvailability>>({});
+  const rawItems = useMemo(() => mergeAgentArtifacts(artifacts, legacyArtifacts), [artifacts, legacyArtifacts]);
+  useEffect(() => {
+    if (!localFileStat) return;
+    rawItems.forEach((artifact) => {
+      if (!shouldVerifyArtifact(artifact)) return;
+      const source = artifactPath(artifact);
+      const key = artifactSourceKey(artifact);
+      if (!source || availability[key]) return;
+      setAvailability((current) => current[key] ? current : { ...current, [key]: "pending" });
+      localFileStat(source)
+        .then((stat) => {
+          setAvailability((current) => ({
+            ...current,
+            [key]: artifactExistsForKind(stat, artifact.kind) ? "ready" : "missing"
+          }));
+        })
+        .catch(() => {
+          setAvailability((current) => ({ ...current, [key]: "missing" }));
+        });
+    });
+  }, [availability, localFileStat, rawItems]);
+  const items = rawItems.filter((artifact) => {
+    if (!localFileStat || !shouldVerifyArtifact(artifact)) return true;
+    return availability[artifactSourceKey(artifact)] === "ready";
+  });
   if (!items.length) return null;
 
   const visibleArtifacts = expanded ? items : items.slice(0, 3);
@@ -590,11 +639,10 @@ function ArtifactShelf({
           const name = displayArtifactTitle(artifact);
           const subtitle = displayArtifactSubtitle(artifact);
           const previewSource = artifact.thumbnailUrl || artifact.previewUrl || source;
-          const previewUrl = artifact.kind === "image" && previewSource && localFilePreviewUrl
-            ? localFilePreviewUrl(previewSource)
-            : artifact.kind === "image" && previewSource
-              ? safeImageUrl(previewSource, localFilePreviewUrl)
-              : "";
+          const previewUrl = artifact.kind === "image" && previewSource
+            ? safeImageUrl(previewSource, localFilePreviewUrl)
+            : "";
+          const isPreviewableImage = artifact.kind === "image" && Boolean(previewUrl);
           const menuOpen = openMenuId === artifact.id;
           return (
             <div className={`artifact-row is-${artifact.kind}`} key={artifact.id} title={subtitle || name}>
@@ -612,9 +660,11 @@ function ArtifactShelf({
                 </span>
               )}
               <span className="artifact-row-actions">
-                <button type="button" className="artifact-icon-button" title="预览" aria-label={`预览 ${name}`} onClick={() => void runAction(artifact, "preview")}>
-                  <Eye aria-hidden="true" />
-                </button>
+                {isPreviewableImage && (
+                  <button type="button" className="artifact-icon-button" title="预览图片" aria-label={`预览图片 ${name}`} onClick={() => void runAction(artifact, "preview")}>
+                    <Eye aria-hidden="true" />
+                  </button>
+                )}
                 <button type="button" className="artifact-icon-button" title="本地打开" aria-label={`本地打开 ${name}`} onClick={() => void runAction(artifact, "open")}>
                   <MonitorUp aria-hidden="true" />
                 </button>
@@ -932,7 +982,7 @@ function resultHasExplicitArtifactFields(value: unknown) {
   }
   try {
     return Object.keys(value as Record<string, unknown>).some((key) => (
-      /^(?:artifacts?|deliverables?|outputs?|files?|generatedFiles|generated_files|media|attachments?|file_path|filePath|path|url)$/i.test(key)
+      /^(?:artifacts?|deliverables?|outputs?|files?|generatedFiles|generated_files|media|attachments?)$/i.test(key)
     ));
   } catch {
     return false;
@@ -1105,12 +1155,14 @@ function ThinkingStep({ content = "", running }: { content?: string; running?: b
 }
 
 function ToolStep({ step }: { step: ToolCallDisclosure }) {
-  const isError = step.is_error === true || step.status === "error" || step.status === "failed";
+  const isInterrupted = toolStepIsInterrupted(step);
+  const isError = !isInterrupted && (step.is_error === true || step.status === "error" || step.status === "failed");
   const running = step.running === true || step.status === "running";
+  const statusClass = running ? " is-running" : isInterrupted ? " is-cancelled" : isError ? " is-error" : " is-done";
   return (
-    <details className={`agent-step agent-tool-step${isError ? " tool-failed" : ""}`}>
-      <summary title={running ? "工具正在执行，完成后可查看输入和结果" : "展开查看工具输入和结果"}>
-        <span className={`tool-status-dot${running ? " is-running" : isError ? " is-error" : " is-done"}`} aria-hidden="true" />
+    <details className={`agent-step agent-tool-step${isError ? " tool-failed" : ""}${isInterrupted ? " tool-cancelled" : ""}`}>
+      <summary title={running ? "工具正在执行，完成后可查看输入和结果" : isInterrupted ? "工具调用已中止，可展开查看已返回的信息" : "展开查看工具输入和结果"}>
+        <span className={`tool-status-dot${statusClass}`} aria-hidden="true" />
         <span className="tool-name">{step.name || "工具调用"}</span>
         {typeof step.execution_time === "number" && <span className="tool-time">{step.execution_time}s</span>}
       </summary>
@@ -1159,23 +1211,6 @@ function MediaStep({ step, onOpenLocalFile, localFilePreviewUrl }: {
       </button>
     );
   }
-  if (step.fileType === "audio" && previewUrl) {
-    return (
-      <div className="agent-audio-card">
-        <audio className="agent-media-audio" src={previewUrl} controls />
-        {localPath && onOpenLocalFile && (
-          <button
-            type="button"
-            className="agent-file-link"
-            onClick={() => onOpenLocalFile({ file_path: localPath, file_name: fileName, file_type: "audio" })}
-        title="点击在本地打开"
-          >
-            {fileName}
-          </button>
-        )}
-      </div>
-    );
-  }
   if (localPath && onOpenLocalFile) {
     return (
       <button
@@ -1187,12 +1222,6 @@ function MediaStep({ step, onOpenLocalFile, localFilePreviewUrl }: {
         {fileName}
       </button>
     );
-  }
-  if (step.fileType === "video" && previewUrl) {
-    return <video className="agent-media-video" src={previewUrl} controls />;
-  }
-  if (step.fileType === "audio" && previewUrl) {
-    return <audio className="agent-media-audio" src={previewUrl} controls />;
   }
   return (
     <a className="agent-file-link" href={safeUrl(previewSource || openSource, localFilePreviewUrl)} target="_blank" rel="noreferrer">
@@ -1239,13 +1268,21 @@ function stepIsRunning(step: AgentStepDisclosure) {
 }
 
 function stepIsError(step: AgentStepDisclosure) {
-  return step.type === "tool" && (step.is_error === true || step.status === "error" || step.status === "failed");
+  return step.type === "tool" && !stepIsInterrupted(step) && (step.is_error === true || step.status === "error" || step.status === "failed");
+}
+
+function toolStepIsInterrupted(step: Pick<ToolCallDisclosure, "status">) {
+  return INTERRUPTED_TOOL_STATUSES.has(String(step.status || "").trim().toLowerCase());
+}
+
+function stepIsInterrupted(step: AgentStepDisclosure) {
+  return step.type === "tool" && toolStepIsInterrupted(step);
 }
 
 function stepSummary(step?: AgentStepDisclosure) {
   if (!step) return "";
   if (step.type === "thinking") return step.running ? "正在思考" : "思考完成";
-  if (step.type === "tool") return step.name ? `工具：${step.name}` : "工具调用";
+  if (step.type === "tool") return stepIsInterrupted(step) ? (step.name ? `已中止：${step.name}` : "已中止") : step.name ? `工具：${step.name}` : "工具调用";
   if (step.type === "media") return step.fileName ? `产物：${step.fileName}` : "产物已生成";
   if (step.type === "phase") return redactInternalPromptText(step.content || "").slice(0, 48);
   return redactInternalPromptText(step.content || "").slice(0, 48);
@@ -1267,9 +1304,10 @@ function ProcessDisclosure({
   if (!steps.length && !legacySteps.length) return null;
   const runningStep = [...steps].reverse().find(stepIsRunning);
   const errorStep = [...steps].reverse().find(stepIsError);
-  const currentStep = runningStep || errorStep || steps[steps.length - 1];
+  const interruptedStep = [...steps].reverse().find(stepIsInterrupted);
+  const currentStep = runningStep || errorStep || interruptedStep || steps[steps.length - 1];
   const count = steps.length + legacySteps.length;
-  const statusClass = pending ? " is-running" : errorStep ? " is-error" : " is-done";
+  const statusClass = pending ? " is-running" : errorStep ? " is-error" : interruptedStep ? " is-cancelled" : " is-done";
   return (
     <details className={`agent-process-disclosure${pending ? " is-live" : ""}`}>
       <summary>
@@ -1294,13 +1332,14 @@ function splitSteps(steps: AgentStepDisclosure[], content: string) {
   return { mainContent, visibleSteps };
 }
 
-function MainAnswer({ content, pending, collapsible, artifacts = [], extraArtifacts = [], localFilePreviewUrl, onOpenLocalFile }: {
+function MainAnswer({ content, pending, collapsible, artifacts = [], extraArtifacts = [], localFilePreviewUrl, localFileStat, onOpenLocalFile }: {
   content: string;
   pending?: boolean;
   collapsible?: boolean;
   artifacts?: AgentArtifact[];
   extraArtifacts?: ArtifactItem[];
   localFilePreviewUrl?: (filePath: string) => string;
+  localFileStat?: (filePath: string) => Promise<LocalPathStat>;
   onOpenLocalFile?: (file: LocalFilePayload) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -1308,7 +1347,7 @@ function MainAnswer({ content, pending, collapsible, artifacts = [], extraArtifa
     () => pending ? mergeArtifacts(extraArtifacts) : mergeArtifacts(extractArtifacts(content, { allowBareFiles: false }), extraArtifacts),
     [content, pending, extraArtifacts]
   );
-  const artifactShelf = <ArtifactShelf artifacts={artifacts} legacyArtifacts={legacyArtifacts} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />;
+  const artifactShelf = <ArtifactShelf artifacts={artifacts} legacyArtifacts={legacyArtifacts} localFilePreviewUrl={localFilePreviewUrl} localFileStat={localFileStat} onOpenLocalFile={onOpenLocalFile} />;
   if (!content) return artifactShelf;
   if (!collapsible || pending || content.length <= LONG_REPLY_COLLAPSE_CHARS) {
     return (
@@ -1360,6 +1399,7 @@ export function MessageContent(props: {
   artifacts?: AgentArtifact[];
   onOpenLocalFile?: (file: LocalFilePayload) => void;
   localFilePreviewUrl?: (filePath: string) => string;
+  localFileStat?: (filePath: string) => Promise<LocalPathStat>;
 }) {
   const steps = props.steps || [];
   const { mainContent, visibleSteps } = useMemo(() => splitSteps(steps, props.content), [steps, props.content]);
@@ -1384,7 +1424,7 @@ export function MessageContent(props: {
         onOpenLocalFile={props.onOpenLocalFile}
         localFilePreviewUrl={props.localFilePreviewUrl}
       />
-      <MainAnswer content={mainContent} pending={props.pending} collapsible={props.role !== "user"} artifacts={props.artifacts} extraArtifacts={stepArtifacts} localFilePreviewUrl={props.localFilePreviewUrl} onOpenLocalFile={props.onOpenLocalFile} />
+      <MainAnswer content={mainContent} pending={props.pending} collapsible={props.role !== "user"} artifacts={props.artifacts} extraArtifacts={stepArtifacts} localFilePreviewUrl={props.localFilePreviewUrl} localFileStat={props.localFileStat} onOpenLocalFile={props.onOpenLocalFile} />
       {props.cancelled ? (
         <div className="agent-cancelled-tag">已中止</div>
       ) : props.pending ? (

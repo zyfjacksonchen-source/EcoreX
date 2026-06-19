@@ -347,7 +347,11 @@ class AgentStreamExecutor:
                 ability = args.get("pack_id") or args.get("ability") or ""
                 normalized_ability = str(ability or "").strip().lower().replace("_", "-")
                 if normalized_ability in {"feishu", "lark", "feishu-lark", "lark-feishu"}:
-                    ability = "feishu-lark + feishu-cli"
+                    return "agent_capability", {
+                        "action": "install_pack",
+                        "pack_id": "feishu-lark",
+                        "discoveryOnly": True,
+                    }
                 elif normalized_ability in {"feishu-cli", "lark-cli"}:
                     ability = "feishu-cli"
                 return "optional_abilities", {

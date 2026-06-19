@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from queue import Queue, Empty
@@ -552,6 +553,9 @@ def _web_app_bridge_script() -> str:
       return payload.project || null;
     },
     savePastedFile: savePastedFile,
+    statPath: async function (filePath) {
+      return apiJson({ path: "/api/file-stat", method: "POST", body: { path: filePath || "" } });
+    },
     openPath: async function (filePath, action) {
       var result = await apiJson({ path: "/api/open-path", method: "POST", body: { path: filePath || "", action: action || "open" } });
       return result.message || "";
@@ -579,6 +583,10 @@ def _web_app_bridge_script() -> str:
             name: String(item.label || packId),
             summary: String(item.notes || item.defaultPolicy || ""),
             installMode: "user-or-admin",
+            discoveryOnly: item.discoveryOnly === true || state.discoveryOnly === true,
+            sourceUrl: typeof item.sourceUrl === "string" ? item.sourceUrl : state.sourceUrl,
+            mirrorUrls: Array.isArray(item.mirrorUrls) ? item.mirrorUrls : state.mirrorUrls,
+            installHint: typeof item.installHint === "string" ? item.installHint : state.installHint,
             state: String(state.state || (installed ? "installed" : "not-installed")),
             message: String(state.message || (installed ? "能力包已安装" : "点击安装后由当前会话 agent 处理")),
             installed: installed,
@@ -1234,8 +1242,43 @@ class WebChannel(ChatChannel):
             return "audio"
         return "file"
 
+    def _resolve_artifact_local_path(self, path_value: str) -> str:
+        value = str(path_value or "").strip()
+        if value.startswith("/api/file"):
+            parsed = urllib.parse.urlparse(value)
+            query = urllib.parse.parse_qs(parsed.query)
+            value = (query.get("path") or [""])[0] or value
+        expanded = os.path.expanduser(value)
+        if not os.path.isabs(expanded):
+            expanded = os.path.join(_get_workspace_root(), expanded.lstrip("/\\"))
+        return os.path.realpath(expanded)
+
+    def _artifact_path_available(self, path_value: str) -> bool:
+        value = str(path_value or "").strip()
+        if not value:
+            return False
+        if value.startswith("http://") or value.startswith("https://"):
+            return True
+        resolved = self._resolve_artifact_local_path(value)
+        if not os.path.exists(resolved):
+            return False
+        try:
+            from common.ecorex_tool_permissions import get_tool_permission_broker
+
+            decision = get_tool_permission_broker().authorize_file_access(
+                "read",
+                resolved,
+                cwd=_get_workspace_root(),
+            )
+            return bool(decision.get("allowed", True))
+        except Exception as exc:
+            logger.warning(f"[WebChannel] artifact availability check failed: {exc}")
+            return False
+
     def _artifact_from_file_event(self, request_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
         file_path = str(data.get("path") or data.get("file_path") or "").strip()
+        if file_path and not self._artifact_path_available(file_path):
+            return {}
         file_name = str(data.get("file_name") or os.path.basename(file_path) or "artifact").strip()
         file_type = str(data.get("file_type") or "file").strip()
         kind = self._artifact_kind(file_type, file_path)
@@ -1301,6 +1344,13 @@ class WebChannel(ChatChannel):
         if not isinstance(result, dict):
             return []
         tool_key = str(tool_name or "").lower()
+        result_type = str(result.get("type") or "").lower()
+        artifact_tool = any(
+            keyword in tool_key
+            for keyword in ("write", "save", "send", "export", "render", "image", "artifact", "deliverable", "edit", "patch")
+        )
+        if not artifact_tool and result_type not in {"file_to_send", "artifact", "generated_file", "output_file"}:
+            return []
         raw_paths = []
         for key in ("path", "file_path", "filePath", "output_path", "outputPath"):
             value = result.get(key)
@@ -1310,6 +1360,8 @@ class WebChannel(ChatChannel):
             return []
         artifacts: List[Dict[str, Any]] = []
         for raw_path in raw_paths[:4]:
+            if not self._artifact_path_available(raw_path):
+                continue
             file_name = str(result.get("file_name") or result.get("fileName") or os.path.basename(raw_path) or raw_path)
             raw_type = str(result.get("file_type") or result.get("fileType") or "file")
             kind = self._artifact_kind(raw_type, raw_path)
@@ -2462,6 +2514,7 @@ class WebChannel(ChatChannel):
             '/api/active-requests', 'ActiveRequestsHandler',
             '/api/tool-permissions', 'ToolPermissionHandler',
             '/api/update-check', 'UpdateCheckHandler',
+            '/api/file-stat', 'FileStatHandler',
             '/api/open-path', 'OpenPathHandler',
             '/api/project-folder', 'ProjectFolderHandler',
             '/api/capabilities', 'CapabilitiesHandler',
@@ -2883,6 +2936,73 @@ class FileServeHandler:
             raise web.notfound()
 
 
+def _resolve_web_local_path(path_value: str) -> str:
+    workspace_root = os.path.realpath(_get_workspace_root())
+    expanded_path = os.path.expanduser(str(path_value or "").strip())
+    if not os.path.isabs(expanded_path):
+        expanded_path = os.path.join(workspace_root, expanded_path.lstrip("/\\"))
+    return os.path.realpath(expanded_path)
+
+
+class FileStatHandler:
+    def POST(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            raw = web.data() or b"{}"
+            if len(raw) > 64 * 1024:
+                return json.dumps({"status": "error", "path": "", "exists": False, "message": "payload too large"}, ensure_ascii=False)
+            body = json.loads(raw)
+            path_value = str(body.get("path") or body.get("file_path") or "").strip()
+            if not path_value:
+                return json.dumps({"status": "error", "path": "", "exists": False, "message": "path is required"}, ensure_ascii=False)
+            if path_value.startswith("/api/file"):
+                parsed = urllib.parse.urlparse(path_value)
+                query = urllib.parse.parse_qs(parsed.query)
+                path_value = (query.get("path") or [""])[0] or path_value
+            if path_value.startswith("http://") or path_value.startswith("https://"):
+                return json.dumps({"status": "remote", "path": path_value, "exists": True}, ensure_ascii=False)
+
+            resolved = _resolve_web_local_path(path_value)
+            if not os.path.exists(resolved):
+                return json.dumps({"status": "missing", "path": resolved, "exists": False, "message": "path not found"}, ensure_ascii=False)
+
+            try:
+                from common.ecorex_tool_permissions import get_tool_permission_broker
+
+                decision = get_tool_permission_broker().authorize_file_access(
+                    "read",
+                    resolved,
+                    cwd=_get_workspace_root(),
+                )
+                if not decision.get("allowed", True):
+                    return json.dumps({
+                        "status": "denied",
+                        "path": resolved,
+                        "exists": False,
+                        "message": decision.get("reason") or "file stat blocked by permissions",
+                    }, ensure_ascii=False)
+            except Exception as exc:
+                logger.warning(f"[WebChannel] file stat permission check failed: {exc}")
+                return json.dumps({"status": "error", "path": resolved, "exists": False, "message": "file stat permission check failed"}, ensure_ascii=False)
+
+            is_file = os.path.isfile(resolved)
+            payload = {
+                "status": "success",
+                "path": resolved,
+                "exists": True,
+                "isFile": is_file,
+                "isDirectory": os.path.isdir(resolved),
+                "mimeType": mimetypes.guess_type(resolved)[0] or "",
+            }
+            if is_file:
+                payload["sizeBytes"] = os.path.getsize(resolved)
+            return json.dumps(payload, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] file stat error: {e}")
+            return json.dumps({"status": "error", "path": "", "exists": False, "message": str(e)}, ensure_ascii=False)
+
+
 class PollHandler:
     def POST(self):
         _require_auth()
@@ -3195,15 +3315,31 @@ class AgentInstallRequestHandler:
             return json.dumps({"status": "error", "message": "packId is required"}, ensure_ascii=False)
         normalized_pack_id = pack_id.strip().lower().replace("_", "-")
         if normalized_pack_id in {"feishu", "lark", "feishu-lark", "lark-feishu"}:
+            source_url = "https://github.com/larksuite/oapi-sdk-python"
+            mirror_url = "https://gitcode.com/gh_mirrors/oa/oapi-sdk-python.git"
+            pypi_mirror = "https://pypi.tuna.tsinghua.edu.cn/simple"
             prompt = (
-                f"请在当前会话内安装 EcoreX 飞书 / Lark 连接器 `{pack_id}`（{pack_name}）。"
-                "必须调用 `agent_capability` 工具执行安装："
-                f"`{{\"action\":\"install_pack\",\"pack_id\":\"{pack_id}\"}}`。"
-                "`agent_capability` 会处理 `feishu-lark` 能力包和 `feishu-cli` 运行时能力，不要反复诊断同一个 ID。"
-                "不要要求用户输入“同意安装”；如果需要授权，等待权限弹窗/权限工具。"
-                "失败时最多先调用一次 `agent_capability` 的 `diagnose`，基于 stderr/logPath 给出修复和重试结果。"
-                "给用户的正文只保留安装结论、是否可继续使用、必要的下一步；stdout/stderr/log path 放在调用过程里。"
+                f"当前用户需要 EcoreX 飞书 / Lark 连接器 `{pack_id}`（{pack_name}）。"
+                "该能力包现在是 discovery-only：不要调用 "
+                f"`{{\"action\":\"install_pack\",\"pack_id\":\"{pack_id}\"}}`，也不要触发旧的预置安装。"
+                "所有飞书 CLI / Lark / skill 安装入口必须先走内置 `find` skill（能力 gate 名称为 `find-skill`）做发现和安装方案选择。"
+                "请先用 `agent_capability` 的 `diagnose` 确认 `find` skill / `find-skill` 能力已加载；如未加载，先启用/安装它，再继续。"
+                "通过 `find` skill 查找飞书/Lark 相关 skill、connector 或官方 SDK 源，并优先按它返回的 GitHub 地址安装。"
+                "如果最终调用 `agent_capability` 的 `install_skill`，必须带上 `discovery_source: \"find-skill\"` 或 `find_skill_result`。"
+                f"如果 `find` skill 发现链路中的 GitHub 网络超时或不可达，降级使用国内 Git 镜像：`python -m pip install --upgrade \"git+{mirror_url}\"`。"
+                f"如果 Git 镜像仍不可用，再降级使用 PyPI 国内镜像：`python -m pip install -i {pypi_mirror} --upgrade lark-oapi`。"
+                f"如果 `find` skill 没有返回可安装 skill，再使用官方 GitHub 源兜底：`python -m pip install --upgrade \"git+{source_url}.git\"`。"
+                "每个来源最多重试一次，避免长时间卡住。"
+                "完成后再调用一次 `agent_capability` 的 `diagnose`，给用户正文只保留安装结论、使用状态和必要下一步；详细 stdout/stderr/log path 放在调用过程里。"
             )
+            extra_fields = {
+                "discoveryOnly": True,
+                "sourceUrl": source_url,
+                "mirrorUrls": [mirror_url],
+                "installHint": (
+                    "先通过内置 find skill / find-skill 能力发现和安装；GitHub 超时后使用 GitCode 国内镜像；仍失败时使用清华 PyPI 镜像安装 lark-oapi。"
+                ),
+            }
         else:
             prompt = (
                 f"请在当前会话内安装 EcoreX 能力包 `{pack_id}`（{pack_name}）。"
@@ -3214,6 +3350,7 @@ class AgentInstallRequestHandler:
                 "给出修复动作并重试；如果权限或管理员策略阻止，请明确说明原因。"
                 "给用户的正文只保留安装结论、启用状态和下一步建议；详细日志放在调用过程里。"
             )
+            extra_fields = {}
         return json.dumps({
             "status": "success",
             "type": "capability-pack",
@@ -3221,6 +3358,7 @@ class AgentInstallRequestHandler:
             "packName": pack_name,
             "sessionId": session_id,
             "prompt": prompt,
+            **extra_fields,
         }, ensure_ascii=False)
 
 
@@ -5527,7 +5665,10 @@ class FeishuRegisterHandler:
             except ImportError:
                 with cls._lock:
                     cls._state["status"] = "error"
-                    cls._state["error"] = "lark-oapi SDK 未安装，请执行 pip install -U lark-oapi"
+                    cls._state["error"] = (
+                        "lark-oapi SDK 未安装。请先让当前 agent 通过内置 find skill / find-skill 能力发现飞书/Lark 连接器；"
+                        "GitHub 超时后再降级使用 GitCode 国内镜像或清华 PyPI 镜像安装 lark-oapi。"
+                    )
                 return
 
             def _on_qr(info):

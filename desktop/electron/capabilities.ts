@@ -22,6 +22,10 @@ export type CapabilityPack = {
   name: string;
   summary: string;
   installMode: "user-or-admin" | "admin-recommended";
+  discoveryOnly?: boolean;
+  sourceUrl?: string;
+  mirrorUrls?: string[];
+  installHint?: string;
   estimatedSizeMb?: number;
   requirements?: string[];
   moduleChecks?: string[];
@@ -128,9 +132,12 @@ export class CapabilityManager {
         const missingModules = check?.missingModules || status.missingModules || [];
         const state: CapabilityState = installed ? "installed" : status.state || "not-installed";
         const policyPack = policyPacks.get(pack.id);
-        const packPolicyMode = (policyPack?.mode as CapabilityPolicyMode | undefined) || policy.mode || "ask";
+        const discoveryOnly = pack.discoveryOnly === true;
+        const packPolicyMode = discoveryOnly ? "ask" : (policyPack?.mode as CapabilityPolicyMode | undefined) || policy.mode || "ask";
         const message =
-          packPolicyMode === "disabled" && !installed
+          discoveryOnly && !installed
+            ? `${pack.name} is discoverable. EcoreX will hand it to the built-in find skill/find-skill gate in the current agent session when needed.`
+            : packPolicyMode === "disabled" && !installed
             ? `Administrator disabled self-service installation for ${pack.name}.`
             : installed
               ? `${pack.name} is ready.`

@@ -82,22 +82,7 @@ function Enable-EmbeddedPythonSite {
 function Copy-OptionalLarkCli {
     param([Parameter(Mandatory = $true)][string]$TargetRuntime)
 
-    $candidates = @()
-    if ($env:ECOREX_LARK_CLI_EXE) {
-        $candidates += $env:ECOREX_LARK_CLI_EXE
-    }
-    $candidates += "C:\cli-main\bin\lark-cli.exe"
-
-    foreach ($candidate in $candidates) {
-        if ($candidate -and (Test-Path -LiteralPath $candidate)) {
-            $targetDir = Join-Path $TargetRuntime "tools\bin"
-            New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
-            Copy-Item -LiteralPath $candidate -Destination (Join-Path $targetDir "lark-cli.exe") -Force
-            Write-Host "Bundled lark-cli for Windows runtime: $candidate"
-            return
-        }
-    }
-    Write-Host "lark-cli.exe was not found; runtime will use npm auto-install fallback."
+    Write-Host "Skipping bundled lark-cli for Windows runtime; Feishu/Lark connector remains discovery-only and routes installs through the built-in find skill/find-skill gate."
 }
 
 function Invoke-ReleaseRuntimeSanitizer {

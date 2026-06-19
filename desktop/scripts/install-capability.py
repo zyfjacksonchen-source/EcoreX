@@ -149,6 +149,24 @@ def main() -> int:
         pack = next((item for item in packs if item.get("id") == pack_id), None)
         if not pack:
             raise RuntimeError(f"Unknown capability pack: {pack_id}")
+        if pack.get("discoveryOnly") is True:
+            write_status(
+                status_path,
+                pack_id,
+                "failed",
+                (
+                    f"{pack.get('name', pack_id)} is discovery-only. "
+                    "Use the built-in find skill/find-skill gate in the current agent session instead of preinstalling it."
+                ),
+                logPath=str(log_path),
+                installed=False,
+                discoveryOnly=True,
+                sourceUrl=pack.get("sourceUrl"),
+                mirrorUrls=pack.get("mirrorUrls", []),
+                installHint=pack.get("installHint"),
+                **status_extra,
+            )
+            return 4
 
         env = os.environ.copy()
         env["PYTHONNOUSERSITE"] = "1"

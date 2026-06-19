@@ -38,10 +38,12 @@ import {
   Upload,
   UserRound,
   WandSparkles,
-  X
+  X,
+  ZoomIn,
+  ZoomOut
 } from "lucide-react";
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
-import type { ClipboardEvent, CSSProperties, MouseEvent, ReactNode } from "react";
+import type { ClipboardEvent, CSSProperties, DragEvent, MouseEvent, ReactNode } from "react";
 import { MessageContent, type AgentStepDisclosure, type ToolCallDisclosure } from "./components/MessageContent";
 import {
   cancelChatRequest,
@@ -78,6 +80,7 @@ import {
   saveRuntimeUiState,
   sendChatMessage,
   setSkillEnabled,
+  statLocalPath,
   updatePermissionMode,
   type CapabilityPack,
   type DesktopUpdateStatus,
@@ -85,6 +88,7 @@ import {
   type EnterpriseQuotaCheckResult,
   type EnterpriseSession,
   type FileAttachment,
+  type LocalPathStat,
   type MemoryFile,
   type PermissionMode,
   type PermissionState,
@@ -996,20 +1000,30 @@ function runtimeExtrasAttachments(item: RuntimeMessage): FileAttachment[] | unde
   return attachments.length ? attachments : undefined;
 }
 
+function inferArtifactKind(rawKind: string, mimeType: string, source: string, hasLocalPath: boolean): AgentArtifact["kind"] {
+  if (rawKind === "image" || rawKind === "video" || rawKind === "audio" || rawKind === "directory" || rawKind === "url" || rawKind === "diff") {
+    return rawKind;
+  }
+  const lowerMime = mimeType.toLowerCase();
+  const lowerSource = source.toLowerCase().split(/[?#]/)[0];
+  if (lowerMime.startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp|svg)$/.test(lowerSource)) return "image";
+  if (lowerMime.startsWith("video/") || /\.(mp4|webm|mov|m4v|mkv|avi)$/.test(lowerSource)) return "video";
+  if (lowerMime.startsWith("audio/") || /\.(mp3|wav|ogg|m4a|aac|flac)$/.test(lowerSource)) return "audio";
+  if (rawKind === "file" || hasLocalPath) return "file";
+  return "url";
+}
+
 function normalizeArtifactEntry(entry: unknown, index: number, requestId?: string): AgentArtifact | null {
   if (!entry || typeof entry !== "object") return null;
   const raw = entry as Record<string, unknown>;
   const path = String(raw.path || raw.file_path || raw.filePath || "").trim();
   const url = String(raw.url || "").trim();
   const relativePath = String(raw.relativePath || raw.relative_path || "").trim();
+  const mimeType = String(raw.mimeType || raw.mime_type || "").trim();
   const titleSource = String(raw.title || raw.file_name || raw.name || path || relativePath || url || "").trim();
   if (!path && !url && !relativePath && !titleSource) return null;
   const rawKind = String(raw.kind || raw.file_type || raw.type || "").toLowerCase();
-  const kind: AgentArtifact["kind"] = rawKind === "image" || rawKind === "video" || rawKind === "audio" || rawKind === "directory" || rawKind === "url" || rawKind === "diff"
-    ? rawKind
-    : rawKind === "file" || path || relativePath
-      ? "file"
-      : "url";
+  const kind = inferArtifactKind(rawKind, mimeType, path || relativePath || url || titleSource, Boolean(path || relativePath));
   const rawIntent = String(raw.intent || "").toLowerCase();
   const intent: AgentArtifact["intent"] = rawIntent === "changed-file" || rawIntent === "preview" ? rawIntent : "deliverable";
   const rawOperation = String(raw.operation || "").toLowerCase();
@@ -1032,7 +1046,7 @@ function normalizeArtifactEntry(entry: unknown, index: number, requestId?: strin
     path: path || undefined,
     relativePath: relativePath || undefined,
     url: url || undefined,
-    mimeType: String(raw.mimeType || raw.mime_type || "").trim() || undefined,
+    mimeType: mimeType || undefined,
     sizeBytes: typeof raw.sizeBytes === "number" ? raw.sizeBytes : typeof raw.size_bytes === "number" ? raw.size_bytes : undefined,
     previewUrl: String(raw.previewUrl || raw.preview_url || "").trim() || undefined,
     thumbnailUrl: String(raw.thumbnailUrl || raw.thumbnail_url || "").trim() || undefined,
@@ -1156,6 +1170,7 @@ export function App() {
   const [messages, setMessages] = useState<ChatItem[]>(() => normalizePausedMessages(bootSession?.state.messages || []));
   const [composerText, setComposerText] = useState(bootSession?.state.composerText || "");
   const [attachments, setAttachments] = useState<FileAttachment[]>(bootSession?.state.attachments || []);
+  const [composerDragActive, setComposerDragActive] = useState(false);
   const [, setActiveRequestId] = useState("");
   const [approval, setApproval] = useState<ApprovalState | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1164,6 +1179,7 @@ export function App() {
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
   const [showJumpLatest, setShowJumpLatest] = useState(false);
   const [previewFile, setPreviewFile] = useState<FileAttachment | null>(null);
+  const [previewZoom, setPreviewZoom] = useState(1);
   const [packs, setPacks] = useState<CapabilityPack[]>([]);
   const [permissionState, setPermissionState] = useState<PermissionState | null>(null);
   const [projects, setProjects] = useState<ProjectFolder[]>(() => readStorage<ProjectFolder[]>(PROJECTS_STORAGE_KEY, []));
@@ -1187,6 +1203,7 @@ export function App() {
   const [passwordDraft, setPasswordDraft] = useState({ oldPassword: "", newPassword: "", confirmPassword: "" });
   const [passwordBusy, setPasswordBusy] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const composerDragDepth = useRef(0);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const streamCleanup = useRef<null | (() => void)>(null);
   const streamCleanups = useRef<Record<string, () => void>>({});
@@ -1542,6 +1559,14 @@ export function App() {
     if (!raw || isRuntimePreviewPath(raw) || isLocalAbsolutePath(raw) || /^[a-z][a-z0-9+.-]*:/i.test(raw)) return raw;
     return activeProject?.path ? joinLocalPath(activeProject.path, raw) : raw;
   };
+  const statArtifactPath = async (filePath: string): Promise<LocalPathStat> => {
+    const raw = String(filePath || "").trim();
+    if (!raw || isRuntimePreviewPath(raw) || /^https?:\/\//i.test(raw)) {
+      return { path: raw, exists: Boolean(raw), status: raw ? "remote" : "error" };
+    }
+    const resolvedPath = resolveArtifactPath(raw);
+    return statLocalPath(resolvedPath);
+  };
   const attachmentPreviewUrl = (file: FileAttachment) => {
     if (file.previewDataUrl) return file.previewDataUrl;
     if (file.preview_url) return filePreviewUrl(file.preview_url, sidecarStatus.webPort);
@@ -1619,6 +1644,38 @@ export function App() {
     const [queued] = queue.splice(nextIndex, 1);
     window.setTimeout(() => void handleInstallPack(queued.pack, queued.onInstalled, queued.sessionId), 0);
   }, [activeSessionId, activeSessionRequestId, messages, sessionRequestIds, sessionUiState]);
+
+  useEffect(() => {
+    setPreviewZoom(1);
+  }, [previewFile?.file_path]);
+
+  useEffect(() => {
+    if (!composerDragActive) return;
+    const reset = () => clearComposerDragState();
+    window.addEventListener("dragend", reset);
+    window.addEventListener("blur", reset);
+    return () => {
+      window.removeEventListener("dragend", reset);
+      window.removeEventListener("blur", reset);
+    };
+  }, [composerDragActive]);
+
+  useEffect(() => {
+    const preventFileDropNavigation = (event: globalThis.DragEvent) => {
+      const types = Array.from(event.dataTransfer?.types || []);
+      if (!types.includes("Files")) return;
+      event.preventDefault();
+      if (event.type === "drop") {
+        clearComposerDragState();
+      }
+    };
+    window.addEventListener("dragover", preventFileDropNavigation);
+    window.addEventListener("drop", preventFileDropNavigation);
+    return () => {
+      window.removeEventListener("dragover", preventFileDropNavigation);
+      window.removeEventListener("drop", preventFileDropNavigation);
+    };
+  }, []);
 
   function capabilityPackEnabled(packId: string) {
     return enabledCapabilityPacks[packId] !== false;
@@ -1993,8 +2050,30 @@ export function App() {
     try {
       const files = await chooseLocalFiles(sidecarStatus.webPort);
       setAttachments((current) => [...current, ...files]);
+      composerRef.current?.focus({ preventScroll: true });
     } catch (error) {
       setToast(error instanceof Error ? error.message : "选择文件失败");
+    }
+  }
+
+  async function attachBrowserFiles(files: File[], source: "paste" | "drop") {
+    if (!files.length) return;
+    try {
+      const results = await Promise.allSettled(files.map((file) => savePastedFile(file)));
+      const nextFiles = results
+        .filter((result): result is PromiseFulfilledResult<FileAttachment | null> => result.status === "fulfilled")
+        .map((result) => result.value)
+        .filter(Boolean) as FileAttachment[];
+      if (!nextFiles.length) {
+        setToast(source === "drop" ? "未能添加拖拽的文件" : "未能添加粘贴的文件");
+        return;
+      }
+      setAttachments((current) => [...current, ...nextFiles]);
+      const failedCount = results.filter((result) => result.status === "rejected").length;
+      setToast(failedCount ? `已添加 ${nextFiles.length} 个文件，${failedCount} 个失败` : source === "drop" ? `已添加 ${nextFiles.length} 个文件` : "已添加粘贴的文件");
+      composerRef.current?.focus({ preventScroll: true });
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : source === "drop" ? "拖拽附件失败" : "粘贴附件失败");
     }
   }
 
@@ -2002,18 +2081,48 @@ export function App() {
     const files = Array.from(event.clipboardData.files || []);
     if (!files.length) return;
     event.preventDefault();
-    try {
-      const saved = await Promise.all(files.map((file) => savePastedFile(file)));
-      const nextFiles = saved.filter(Boolean) as FileAttachment[];
-      if (!nextFiles.length) {
-        setToast("未能添加粘贴的文件");
-        return;
-      }
-      setAttachments((current) => [...current, ...nextFiles]);
-      setToast("已添加粘贴的文件");
-    } catch (error) {
-      setToast(error instanceof Error ? error.message : "粘贴附件失败");
+    await attachBrowserFiles(files, "paste");
+  }
+
+  function dragEventHasFiles(event: DragEvent<HTMLElement>) {
+    return Array.from(event.dataTransfer.types || []).includes("Files");
+  }
+
+  function handleComposerDragEnter(event: DragEvent<HTMLFormElement>) {
+    if (!dragEventHasFiles(event)) return;
+    event.preventDefault();
+    composerDragDepth.current += 1;
+    event.dataTransfer.dropEffect = "copy";
+    setComposerDragActive(true);
+  }
+
+  function handleComposerDragOver(event: DragEvent<HTMLFormElement>) {
+    if (!dragEventHasFiles(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setComposerDragActive(true);
+  }
+
+  function handleComposerDragLeave(event: DragEvent<HTMLFormElement>) {
+    if (!dragEventHasFiles(event)) return;
+    composerDragDepth.current = Math.max(0, composerDragDepth.current - 1);
+    if (composerDragDepth.current === 0) {
+      setComposerDragActive(false);
     }
+  }
+
+  function handleComposerDrop(event: DragEvent<HTMLFormElement>) {
+    if (!dragEventHasFiles(event)) return;
+    event.preventDefault();
+    composerDragDepth.current = 0;
+    setComposerDragActive(false);
+    const files = Array.from(event.dataTransfer.files || []);
+    void attachBrowserFiles(files, "drop");
+  }
+
+  function clearComposerDragState() {
+    composerDragDepth.current = 0;
+    setComposerDragActive(false);
   }
 
   function updateSessionMessages(sessionId: string, updater: (messages: ChatItem[]) => ChatItem[]) {
@@ -2105,6 +2214,16 @@ export function App() {
 
   function finishRunningSteps(message: ChatItem, reason: AgentFinishReason = "done"): ChatItem {
     return { ...message, steps: finishAgentSteps(message.steps, reason), toolCalls: message.toolCalls?.map((tool) => ({ ...tool, running: false })) };
+  }
+
+  function clearTransientSendSteps(message: ChatItem): ChatItem {
+    return {
+      ...message,
+      steps: (message.steps || []).filter((step) => (
+        step.type !== "phase"
+        || (step.content !== "正在发送" && step.content !== "正在连接响应")
+      ))
+    };
   }
 
   function markSessionRequestsPaused(sessionId: string) {
@@ -2481,13 +2600,18 @@ export function App() {
           return;
         }
         if (item.type === "done") {
-          updateAssistantMessage(sessionId, assistantId, (message) => ({
-            ...(item.artifact || item.artifacts ? appendArtifact(finishRunningSteps(message), item) : finishRunningSteps(message)),
-            content: redactInternalPromptText(item.content || message.content),
-            pending: false,
-            userSeq: typeof item.user_seq === "number" ? item.user_seq : message.userSeq,
-            botSeq: typeof item.bot_seq === "number" ? item.bot_seq : message.botSeq
-          }));
+          updateAssistantMessage(sessionId, assistantId, (message) => {
+            const nextMessage = item.artifact || item.artifacts
+              ? appendArtifact(finishRunningSteps(message), item)
+              : finishRunningSteps(message);
+            return {
+              ...clearTransientSendSteps(nextMessage),
+              content: redactInternalPromptText(item.content || message.content),
+              pending: false,
+              userSeq: typeof item.user_seq === "number" ? item.user_seq : message.userSeq,
+              botSeq: typeof item.bot_seq === "number" ? item.bot_seq : message.botSeq
+            };
+          });
           completedRequestIds.current[requestId] = true;
           markSessionOutputReady(sessionId);
           clearSessionRequestState(sessionId, requestId);
@@ -2636,8 +2760,10 @@ export function App() {
     const neededPack = skipCapabilityCheck ? null : detectNeededPack(text, attachments, enabledPacks);
     if (neededPack) {
       const resumeSessionId = activeSessionIdRef.current;
-      setSettingsSection("abilities");
-      setSettingsOpen(true);
+      if (shouldOpenCapabilitySettings(neededPack)) {
+        setSettingsSection("abilities");
+        setSettingsOpen(true);
+      }
       void handleInstallPack(neededPack, () => {
         if (activeSessionIdRef.current !== resumeSessionId) {
           setToast(`${neededPack.name} 已安装，请回到原会话继续发送`);
@@ -2698,7 +2824,18 @@ export function App() {
     };
     const assistantId = `a-${Date.now()}`;
     const requestSessionId = activeSessionId;
-    updateSessionMessages(requestSessionId, (current) => [...current, userMessage, { id: assistantId, role: "assistant", content: "", pending: true, createdAt: new Date().toISOString() }]);
+    updateSessionMessages(requestSessionId, (current) => [
+      ...current,
+      userMessage,
+      {
+        id: assistantId,
+        role: "assistant",
+        content: "",
+        pending: true,
+        createdAt: new Date().toISOString(),
+        steps: [{ type: "phase", content: "正在发送" }]
+      }
+    ]);
     setActiveSessionTitle((current) => {
       const nextTitle = current === "新对话" ? shortTitle(text) : current;
       setSessionTitles((titles) => ({ ...titles, [requestSessionId]: nextTitle }));
@@ -2796,7 +2933,11 @@ export function App() {
       if (result.inline_reply) {
         const inlineReply = redactInternalPromptText(result.inline_reply || "");
         streamTextChars += inlineReply.length;
-        updateSessionMessages(requestSessionId, (current) => current.map((item) => item.id === assistantId ? { ...item, content: inlineReply, pending: false } : item));
+        updateSessionMessages(requestSessionId, (current) => current.map((item) => item.id === assistantId ? {
+          ...clearTransientSendSteps(finishRunningSteps(item)),
+          content: inlineReply,
+          pending: false
+        } : item));
         markSessionOutputReady(requestSessionId);
         reportChatUsage(result.usage, usageTotal(result.usage) ? "provider" : "estimated");
       }
@@ -2808,7 +2949,10 @@ export function App() {
         streamRetryCounts.current[requestSessionId] = 0;
         updateAssistantMessage(requestSessionId, assistantId, (message) => ({
           ...message,
-          requestId
+          requestId,
+          steps: message.steps?.length
+            ? message.steps.map((step, index) => index === 0 && step.type === "phase" ? { ...step, content: "正在连接响应" } : step)
+            : [{ type: "phase", content: "正在连接响应" }]
         }));
         const cleanup = openMessageStream({
           requestId,
@@ -2840,7 +2984,7 @@ export function App() {
                     ? appendArtifact(finishRunningSteps(message), item)
                     : finishRunningSteps(message);
                   return {
-                    ...nextMessage,
+                    ...clearTransientSendSteps(nextMessage),
                     content: redactInternalPromptText(item.content || message.content),
                     pending: false,
                     userSeq: typeof item.user_seq === "number" ? item.user_seq : message.userSeq,
@@ -3106,6 +3250,21 @@ export function App() {
     }
   }
 
+  function packActionLabel(pack: CapabilityPack, installing = false) {
+    if (pack.discoveryOnly) {
+      return installing ? "正在交给 agent" : "交给 agent";
+    }
+    return installing ? "正在安装" : "安装";
+  }
+
+  function shouldOpenCapabilitySettings(pack: CapabilityPack) {
+    return !pack.discoveryOnly;
+  }
+
+  function packTaskNoun(pack: CapabilityPack) {
+    return pack.discoveryOnly ? "配置任务" : "安装任务";
+  }
+
   function watchAgentPackInstall(pack: CapabilityPack, onInstalled?: () => void) {
     if (installWatchers.current[pack.id]) return;
     const started = Date.now();
@@ -3208,8 +3367,10 @@ export function App() {
   async function handleInstallPack(pack: CapabilityPack, onInstalled?: () => void, targetSessionId?: string) {
     const requestSessionId = targetSessionId || activeSessionIdRef.current;
     if (pack.policyMode === "disabled") {
-      setSettingsSection("abilities");
-      setSettingsOpen(true);
+      if (shouldOpenCapabilitySettings(pack)) {
+        setSettingsSection("abilities");
+        setSettingsOpen(true);
+      }
       setToast("管理员已禁用安装，请联系管理员预置能力包");
       return;
     }
@@ -3222,24 +3383,28 @@ export function App() {
       if (!alreadyQueued) {
         queuedInstallRef.current.push({ pack, onInstalled, sessionId: requestSessionId });
       }
-      setSettingsSection("abilities");
-      setSettingsOpen(true);
+      if (shouldOpenCapabilitySettings(pack)) {
+        setSettingsSection("abilities");
+        setSettingsOpen(true);
+      }
       setInstallingPackIds((current) => ({ ...current, [pack.id]: true }));
       setInstallNotice({
         packId: pack.id,
         packName: pack.name,
-        message: `${pack.name} 已排队，当前任务结束后自动安装`
+        message: `${pack.name} 已排队，当前任务结束后自动${pack.discoveryOnly ? "交给 agent" : "安装"}`
       });
-      setToast(`${pack.name} 已排队安装`);
+      setToast(`${pack.name} 已排队${pack.discoveryOnly ? "交给 agent" : "安装"}`);
       return;
     }
-    setSettingsSection("abilities");
-    setSettingsOpen(true);
+    if (shouldOpenCapabilitySettings(pack)) {
+      setSettingsSection("abilities");
+      setSettingsOpen(true);
+    }
     setInstallingPackIds((current) => ({ ...current, [pack.id]: true }));
     setInstallNotice({
       packId: pack.id,
       packName: pack.name,
-      message: `${pack.name} 正在安装，请稍后`
+      message: pack.discoveryOnly ? `${pack.name} 正在交给 agent，请稍后` : `${pack.name} 正在安装，请稍后`
     });
     try {
       const request = await requestAgentInstallRequest({
@@ -3251,10 +3416,23 @@ export function App() {
         throw new Error(request.message || "生成安装任务失败");
       }
       await startAgentInstallChatTask(pack, request.prompt, requestSessionId);
-      watchAgentPackInstall(pack, onInstalled);
-      setToast(`${pack.name} 安装任务已交给 agent`);
+      if (pack.discoveryOnly) {
+        setInstallingPackIds((current) => {
+          const next = { ...current };
+          delete next[pack.id];
+          return next;
+        });
+        setInstallNotice({
+          packId: pack.id,
+          packName: pack.name,
+          message: `${pack.name} 配置任务已交给 agent`
+        });
+      } else {
+        watchAgentPackInstall(pack, onInstalled);
+      }
+      setToast(`${pack.name} ${packTaskNoun(pack)}已交给 agent`);
     } catch (error) {
-      setToast(error instanceof Error ? error.message : `${pack.name} 安装任务创建失败`);
+      setToast(error instanceof Error ? error.message : `${pack.name} ${packTaskNoun(pack)}创建失败`);
       setInstallingPackIds((current) => {
         const next = { ...current };
         delete next[pack.id];
@@ -3270,6 +3448,18 @@ export function App() {
       title: "打开文件前确认",
       message: `EcoreX 将在系统中打开 ${file.file_name}。`,
       file
+    });
+  }
+
+  function previewOrOpenFile(file: FileAttachment) {
+    if (!isImageAttachment(file)) {
+      requestOpenFile(file);
+      return;
+    }
+    setPreviewFile({
+      ...file,
+      file_type: "image",
+      previewDataUrl: attachmentPreviewUrl(file)
     });
   }
 
@@ -3324,20 +3514,32 @@ export function App() {
   async function openArtifactFile(file: { file_path: string; file_name: string; file_type?: FileAttachment["file_type"]; open_action?: "preview" | "open" | "reveal" | "copy" | "openWith" }) {
     const rawPath = String(file.file_path || "").trim();
     if (!rawPath) return;
-    const action = file.open_action || "open";
+    let action = file.open_action || "open";
+    const fileType = file.file_type || "file";
+    const resolvedPath = resolveArtifactPath(rawPath);
     if (action === "preview") {
-      setPreviewFile({
-        file_path: rawPath,
-        file_name: file.file_name,
-        file_type: file.file_type || "file"
-      });
+      if (fileType !== "image") {
+        action = "open";
+      } else {
+        const previewPath = isRuntimePreviewPath(rawPath) ? rawPath : resolvedPath;
+        setPreviewFile({
+          file_path: previewPath,
+          file_name: file.file_name,
+          file_type: "image",
+          previewDataUrl: filePreviewUrl(previewPath, sidecarStatus.webPort)
+        });
+        return;
+      }
+    }
+    if (action === "copy") {
+      await navigator.clipboard?.writeText(resolvedPath || rawPath).catch(() => undefined);
+      setToast("路径已复制");
       return;
     }
     if (isRuntimePreviewPath(rawPath)) {
       setToast("该预览链接没有可直接打开的本地路径");
       return;
     }
-    const resolvedPath = resolveArtifactPath(rawPath);
     const candidates = Array.from(new Set([resolvedPath, rawPath].filter(Boolean)));
     if (activeProject?.path) {
       await registerProjectFolderPath(activeProject.path).catch(() => null);
@@ -3741,6 +3943,7 @@ export function App() {
                     artifacts={message.artifacts}
                     onOpenLocalFile={(file) => void openArtifactFile(file)}
                     localFilePreviewUrl={(filePath) => filePreviewUrl(filePath, sidecarStatus.webPort)}
+                    localFileStat={statArtifactPath}
                   />
                   {message.attachments?.length ? (
                     <div className="message-files">
@@ -3781,7 +3984,9 @@ export function App() {
                       <button onClick={() => setApproval(null)}>知道了</button>
                     ) : (
                       <>
-                        <button className="primary-action" onClick={() => void handleInstallPack(approval.pack)}>安装并继续</button>
+                        <button className="primary-action" onClick={() => void handleInstallPack(approval.pack)}>
+                          {approval.pack.discoveryOnly ? "交给 agent" : "安装并继续"}
+                        </button>
                         <button onClick={() => { setApproval(null); approval.resume(); }}>跳过继续</button>
                       </>
                     )}
@@ -3801,12 +4006,19 @@ export function App() {
             </section>
           )}
 
-          <form className="composer" onSubmit={(event) => { event.preventDefault(); void sendNow(); }}>
+          <form
+            className={`composer${composerDragActive ? " is-drag-active" : ""}`}
+            onSubmit={(event) => { event.preventDefault(); void sendNow(); }}
+            onDragEnter={handleComposerDragEnter}
+            onDragOver={handleComposerDragOver}
+            onDragLeave={handleComposerDragLeave}
+            onDrop={handleComposerDrop}
+          >
             {attachments.length > 0 && (
               <div className="attachment-tray">
                 {attachments.map((file) => (
                   <article key={file.file_path}>
-                    <button className="attachment-preview" type="button" onClick={() => setPreviewFile(file)} title="点击预览，右侧弹层会显示文件">
+                    <button className="attachment-preview" type="button" onClick={() => previewOrOpenFile(file)} title={isImageAttachment(file) ? "点击预览图片" : "点击在本地打开"}>
                       {file.previewDataUrl ? <img src={file.previewDataUrl} alt="" /> : fileIcon(file)}
                       <span>{file.file_name}</span>
                     </button>
@@ -3854,6 +4066,10 @@ export function App() {
                 <SendHorizontal aria-hidden="true" />
               </button>
             )}
+            <div className="composer-drop-overlay" aria-hidden="true">
+              <Upload aria-hidden="true" />
+              <span>松开添加</span>
+            </div>
             <div className="composer-footer">
               <div className="composer-permission-row" aria-label="本机访问权限">
                 <div className="composer-permission-menu">
@@ -4022,7 +4238,7 @@ export function App() {
                           <div><strong>{ability.name}</strong><span>{ability.detail}</span></div>
                           {"pack" in ability && ability.pack && !ability.enabled ? (
                             <button disabled={Boolean(installingPackIds[ability.pack.id])} onClick={() => void handleInstallPack(ability.pack!)}>
-                              {installingPackIds[ability.pack.id] ? "正在安装" : "安装"}
+                              {packActionLabel(ability.pack, Boolean(installingPackIds[ability.pack.id]))}
                             </button>
                           ) : <em>{ability.enabled ? "已开启" : "待配置"}</em>}
                         </article>
@@ -4050,9 +4266,18 @@ export function App() {
                             <input type="checkbox" checked={capabilityPackEnabled(pack.id)} onChange={(event) => toggleCapabilityPack(pack, event.currentTarget.checked)} />
                             <span>生效</span>
                           </label>
-                          <div><strong>{pack.name}</strong><span>{installingPackIds[pack.id] ? "正在安装，请稍候" : pack.message}</span></div>
+                          <div>
+                            <strong>{pack.name}</strong>
+                            <span>{installingPackIds[pack.id] ? `${packActionLabel(pack, true)}，请稍候` : pack.message}</span>
+                          </div>
                           <button disabled={pack.installed || pack.policyMode === "disabled" || Boolean(installingPackIds[pack.id])} onClick={() => void handleInstallPack(pack)}>
-                            {installingPackIds[pack.id] ? "正在安装" : pack.installed ? "已安装" : pack.policyMode === "disabled" ? "管理员禁用" : "安装"}
+                            {installingPackIds[pack.id]
+                              ? packActionLabel(pack, true)
+                              : pack.installed
+                                ? "已安装"
+                                : pack.policyMode === "disabled"
+                                  ? "管理员禁用"
+                                  : packActionLabel(pack)}
                           </button>
                         </article>
                       ))}
@@ -4179,14 +4404,19 @@ export function App() {
         </div>
       )}
 
-      {previewFile && (
-        <div className="preview-popover">
-          <header><strong>{previewFile.file_name}</strong><button className="icon-button" title="关闭预览" aria-label="关闭预览" onClick={() => setPreviewFile(null)}><X aria-hidden="true" /></button></header>
-          {previewFile.file_type === "image" && previewFile.previewDataUrl ? (
-            <img src={previewFile.previewDataUrl} alt={previewFile.file_name} />
-          ) : (
-            <iframe src={filePreviewUrl(previewFile.file_path, sidecarStatus.webPort)} title={previewFile.file_name} />
-          )}
+      {previewFile && isImageAttachment(previewFile) && (
+        <div className="preview-popover image-preview-popover" style={{ "--preview-zoom": previewZoom } as CSSProperties}>
+          <header>
+            <strong>{previewFile.file_name}</strong>
+            <span className="preview-actions">
+              <button className="icon-button" title="缩小" aria-label="缩小" onClick={() => setPreviewZoom((value) => Math.max(0.5, Math.round((value - 0.25) * 100) / 100))}><ZoomOut aria-hidden="true" /></button>
+              <button className="icon-button" title="放大" aria-label="放大" onClick={() => setPreviewZoom((value) => Math.min(3, Math.round((value + 0.25) * 100) / 100))}><ZoomIn aria-hidden="true" /></button>
+              <button className="icon-button" title="关闭预览" aria-label="关闭预览" onClick={() => setPreviewFile(null)}><X aria-hidden="true" /></button>
+            </span>
+          </header>
+          <div className="preview-image-frame">
+            <img src={previewFile.previewDataUrl || filePreviewUrl(previewFile.file_path, sidecarStatus.webPort)} alt={previewFile.file_name} />
+          </div>
           <button onClick={() => requestOpenFile(previewFile)}>在系统中打开</button>
         </div>
       )}

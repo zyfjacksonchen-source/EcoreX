@@ -1,8 +1,8 @@
 """Feishu/Lark CLI tool wrapper for EcoreX runtimes.
 
-This tool keeps Feishu access out of ad-hoc shell commands. It resolves or
-installs `lark-cli`, reports auth state, starts split-flow user auth, and runs
-CLI commands with bounded timeouts.
+This tool keeps Feishu access out of ad-hoc shell commands. It resolves an
+already available `lark-cli`, reports auth state, starts split-flow user auth,
+and runs CLI commands with bounded timeouts. It does not install the CLI.
 """
 
 from __future__ import annotations
@@ -23,6 +23,9 @@ from common.log import logger
 
 
 DEFAULT_LARK_CLI_PACKAGE = os.environ.get("ECOREX_LARK_CLI_PACKAGE", "@larksuite/cli@1.0.40")
+FEISHU_LARK_SOURCE_URL = "https://github.com/larksuite/oapi-sdk-python"
+FEISHU_LARK_MIRROR_URLS = ["https://gitcode.com/gh_mirrors/oa/oapi-sdk-python.git"]
+FEISHU_LARK_PYPI_MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
 DEFAULT_TIMEOUT_SECONDS = 45
 
 
@@ -262,11 +265,10 @@ def _check_expected_paths(paths: Iterable[str]) -> Dict[str, Any]:
 class FeishuCli(BaseTool):
     name: str = "feishu_cli"
     description: str = (
-        "Use this instead of bash for Feishu/Lark operations. It ensures lark-cli is "
-        "available, checks user auth, starts split-flow auth with --no-wait, and runs "
-        "lark-cli commands with bounded timeouts. For Feishu Base/Docs/Drive reading, "
-        "call feishu_cli first; do not call raw `bash lark-cli ...` unless this tool "
-        "reports an unrecoverable setup issue."
+        "Use this instead of bash for Feishu/Lark operations when lark-cli is already "
+        "available. It checks user auth, starts split-flow auth with --no-wait, and runs "
+        "lark-cli commands with bounded timeouts. It never installs lark-cli; if missing, "
+        "use the built-in find skill first (gated as find-skill), then the discovery-only connector guidance returned by this tool."
     )
     params: dict = {
         "type": "object",
@@ -294,7 +296,7 @@ class FeishuCli(BaseTool):
             },
             "install_if_missing": {
                 "type": "boolean",
-                "description": "Try npm install -g @larksuite/cli when lark-cli is missing. Default true for ensure/run/auth_login.",
+                "description": "Deprecated. Ignored because Feishu/Lark connector installation is discovery-only.",
             },
             "expected_paths": {
                 "type": "array",
@@ -317,11 +319,7 @@ class FeishuCli(BaseTool):
     def execute(self, args: Dict[str, Any]) -> ToolResult:
         action = str(args.get("action") or "").strip().lower()
         timeout = int(args.get("timeout") or self.config.get("timeout") or DEFAULT_TIMEOUT_SECONDS)
-        install_if_missing = args.get("install_if_missing")
-        if install_if_missing is None:
-            install_if_missing = self.auto_install and action in {"ensure", "auth_login", "run"}
-        else:
-            install_if_missing = bool(install_if_missing)
+        install_if_missing = False
         env = _tool_env()
 
         if action == "status":
@@ -364,61 +362,23 @@ class FeishuCli(BaseTool):
         command = _resolve_lark_command(env)
         if command:
             return {"status": "success", "available": True, "command": command, "installedNow": False}
-        if not install_if_missing:
-            return self._missing_payload(env)
-
-        npm = _which("npm", env)
-        if not npm:
-            return self._missing_payload(env, "npm is not available; install Node.js or preinstall @larksuite/cli.")
-
-        install_cmd = [npm, "install", "-g", self.package]
-        try:
-            result = _run_process(
-                install_cmd,
-                timeout=max(timeout, 180),
-                env=env,
-                cwd=self.cwd,
-                cancel_event=getattr(self, "cancel_event", None),
-            )
-        except subprocess.TimeoutExpired as exc:
-            return {
-                "status": "error",
-                "available": False,
-                "message": f"Timed out installing {self.package}",
-                "output": _sanitize((exc.output or "") + "\n" + (exc.stderr or "")),
-            }
-        except _ProcessCancelled as exc:
-            return {
-                "status": "cancelled",
-                "available": False,
-                "message": f"Cancelled installing {self.package}",
-                "output": _sanitize((exc.stdout or "") + "\n" + (exc.stderr or ""))[-4000:],
-            }
-        output = _sanitize((result.stdout or "") + ("\n" + result.stderr if result.stderr else ""))
-        command = _resolve_lark_command(_tool_env())
-        if result.returncode != 0 or not command:
-            return {
-                "status": "error",
-                "available": False,
-                "message": f"Failed to install {self.package}",
-                "exitCode": result.returncode,
-                "output": output[-4000:],
-            }
-        return {
-            "status": "success",
-            "available": True,
-            "command": command,
-            "installedNow": True,
-            "output": output[-2000:],
-        }
+        return self._missing_payload(env)
 
     def _missing_payload(self, env: Dict[str, str], message: str = "") -> Dict[str, Any]:
         return {
             "status": "error",
             "available": False,
-            "message": message or "lark-cli is not available.",
+            "discoveryOnly": True,
+            "message": message or "lark-cli is not available. EcoreX no longer auto-installs the old CLI path; use the built-in find skill/find-skill gate first.",
             "npm": _which("npm", env),
-            "installHint": f"npm install -g {self.package}",
+            "sourceUrl": FEISHU_LARK_SOURCE_URL,
+            "mirrorUrls": FEISHU_LARK_MIRROR_URLS,
+            "installHint": (
+                "Use the built-in find skill first (gated as find-skill) to discover and install the Feishu/Lark skill or connector. "
+                f"If the find skill falls back to the official GitHub source, run: python -m pip install --upgrade \"git+{FEISHU_LARK_SOURCE_URL}.git\". "
+                f"If GitHub times out, use the domestic Git mirror: python -m pip install --upgrade \"git+{FEISHU_LARK_MIRROR_URLS[0]}\". "
+                f"If that still fails, use the PyPI mirror: python -m pip install -i {FEISHU_LARK_PYPI_MIRROR} --upgrade lark-oapi."
+            ),
             "pathHints": [str(path) for path in _candidate_bin_dirs() if path.exists()],
         }
 
