@@ -49,10 +49,10 @@
       "href": "downloads/EcoreX_0.1.15_x64-setup.exe",
       "size": 148927961,
       "sha256": "C4F063532F815AC3869DAB582AB462B0125F5CE71EDF18FC42E5116842C45779",
-      "status": "ready-unsigned",
-      "source": "Local v0.1.15 Windows installer built from the current follow-up branch with Codex-like streaming UX, WebUI local open fixes, SSE cleanup, and packaged WebUI static validation.",
+      "status": "pending-signature",
+      "source": "Local v0.1.15 Windows installer must be rebuilt and signed before publication; SimplySign/Certum provider is currently not exposing the signing key container.",
       "updatedAt": "2026-06-18T16:30:34Z",
-      "signature": "not-signed-local"
+      "signature": "pending-signature"
     },
     {
       "id": "webui-windows-x64",

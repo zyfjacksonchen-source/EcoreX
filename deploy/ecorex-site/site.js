@@ -146,7 +146,7 @@ function shortSha(sha256) {
 }
 
 function ready(artifact) {
-  return artifact?.status === "ready" || artifact?.status === "ready-unsigned";
+  return artifact?.status === "ready";
 }
 
 function isExternalHref(href) {
@@ -174,11 +174,10 @@ function buttonForArtifact(artifact, label = "下载") {
     return `<span class="download-link is-disabled">待发布</span>`;
   }
   if (ready(artifact)) {
-    const suffix = artifact.status === "ready-unsigned" ? "（未公证）" : "";
     const downloadAttr = isExternalHref(artifact.href) ? "" : " download";
-    return `<a class="download-link" href="${artifactHref(artifact)}"${downloadAttr} title="${artifact.source || ""}">${label}${suffix}</a>`;
+    return `<a class="download-link" href="${artifactHref(artifact)}"${downloadAttr} title="${artifact.source || ""}">${label}</a>`;
   }
-  const pendingText = artifact.status === "pending-signature" ? "待签名" : "待验证";
+  const pendingText = artifact.status === "pending-signature" || artifact.status === "ready-unsigned" ? "待签名" : "待验证";
   return `<span class="download-link is-disabled" title="${artifact.source || ""}">${pendingText}</span>`;
 }
 

@@ -86,7 +86,7 @@ import sys
 manifest = pathlib.Path(sys.argv[1])
 downloads = pathlib.Path(sys.argv[2])
 expected = sys.argv[3]
-publishable = {"ready", "ready-unsigned"}
+publishable = {"ready"}
 failures = 0
 
 def fail(message):
@@ -185,7 +185,7 @@ import urllib.request
 
 manifest = pathlib.Path(sys.argv[1])
 base_url = sys.argv[2].rstrip("/")
-publishable = {"ready", "ready-unsigned"}
+publishable = {"ready"}
 failures = 0
 
 def status_for(url):

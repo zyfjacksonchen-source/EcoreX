@@ -14,7 +14,7 @@ import tarfile
 import zipfile
 
 
-PUBLISHABLE_STATUSES = {"ready", "ready-unsigned"}
+PUBLISHABLE_STATUSES = {"ready"}
 FORBIDDEN_WEB_ASSETS = (
     "index-dSHNqlZq.js",
     "index-DBjPv6j0.css",

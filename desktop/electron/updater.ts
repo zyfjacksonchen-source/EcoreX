@@ -299,7 +299,7 @@ export class EcorexUpdateManager {
       const latestVersion = String(manifest.version || "");
       const artifactId = platformArtifactId(process.platform);
       const artifact = (manifest.artifacts || []).find((item) =>
-        item.id === artifactId && (item.status === "ready" || item.status === "ready-unsigned")
+        item.id === artifactId && item.status === "ready"
       );
       const hasUpdate = Boolean(artifact && latestVersion && compareVersions(latestVersion, app.getVersion()) > 0);
       this.setStatus({

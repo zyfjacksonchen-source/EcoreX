@@ -3112,7 +3112,7 @@ class UpdateCheckHandler:
     def _pick_artifact(self, manifest: Dict[str, Any], platform: str) -> Dict[str, Any]:
         artifacts = [
             artifact for artifact in (manifest.get("artifacts") if isinstance(manifest.get("artifacts"), list) else [])
-            if isinstance(artifact, dict) and artifact.get("status") in ("ready", "ready-unsigned")
+            if isinstance(artifact, dict) and artifact.get("status") == "ready"
         ]
         platform_value = platform.lower()
         preferred_id = ""

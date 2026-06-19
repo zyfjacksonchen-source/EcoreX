@@ -127,7 +127,7 @@ $artifactSources["macos-arm64-dmg"] = if ($MacArm64DmgPath) { $MacArm64DmgPath }
 $artifactSources["macos-x64-dmg"] = if ($MacX64DmgPath) { $MacX64DmgPath } else { Join-Path "desktop/release" "EcoreX_${Version}_x64.dmg" }
 $artifactSources["web-linux-service"] = if ($WebTarballPath) { $WebTarballPath } else { Join-Path "release-artifacts" "EcoreX_${Version}-web-linux-service.tar.gz" }
 
-$publishableStatuses = @("ready", "ready-unsigned")
+$publishableStatuses = @("ready")
 $readyArtifacts = @()
 foreach ($artifact in $manifest.artifacts) {
     if ([string]$artifact.status -notin $publishableStatuses) {
