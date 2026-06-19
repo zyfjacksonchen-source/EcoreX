@@ -47,12 +47,12 @@
       "variant": "Desktop x64 installer",
       "fileName": "EcoreX_0.1.15_x64-setup.exe",
       "href": "downloads/EcoreX_0.1.15_x64-setup.exe",
-      "size": 148927961,
-      "sha256": "C4F063532F815AC3869DAB582AB462B0125F5CE71EDF18FC42E5116842C45779",
-      "status": "pending-signature",
-      "source": "Local v0.1.15 Windows installer must be rebuilt and signed before publication; SimplySign/Certum provider is currently not exposing the signing key container.",
-      "updatedAt": "2026-06-18T16:30:34Z",
-      "signature": "pending-signature"
+      "size": 145857440,
+      "sha256": "5F89F7453CE50465E86F5638B7DCEEF855981BA6D99722309A7F968E3D883B49",
+      "status": "ready",
+      "source": "Signed v0.1.15 Windows installer built from codex/ecorex-v0.1.15 with Codex-like streaming UX, drag/drop attachments, immediate send feedback, artifact filtering, and find-skill-gated Feishu/Lark discovery.",
+      "updatedAt": "2026-06-19T03:28:19Z",
+      "signature": "authenticode-valid:0F678477DFC0A2BDAAB88307126EF657FAF8674F"
     },
     {
       "id": "webui-windows-x64",

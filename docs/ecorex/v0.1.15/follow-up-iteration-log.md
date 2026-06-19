@@ -1,5 +1,12 @@
 # EcoreX v0.1.15 Follow-up Iteration Log
 
+## Final Signing and Publication State
+
+- 2026-06-19: User confirmed the elevated signing session is logged in. Restarted Smart Card service, stopped the running hand-test `EcoreX.exe` processes that were locking `win-unpacked\EcoreX.exe`, and successfully signed the v0.1.15 Windows core app and NSIS setup with certificate thumbprint `0F678477DFC0A2BDAAB88307126EF657FAF8674F`.
+- 2026-06-19: Rebuilt the NSIS installer from the signed `win-unpacked` directory, signed `desktop\release\EcoreX_0.1.15_x64-setup.exe`, verified Authenticode `Valid` for both the app exe and setup exe, regenerated `latest.yml` and `.blockmap` after signing, and updated `deploy\ecorex-site\manifest.json` from `pending-signature` to `ready`.
+- 2026-06-19: Final signed Windows setup metadata: `desktop\release\EcoreX_0.1.15_x64-setup.exe`, size `145857440`, SHA256 `5F89F7453CE50465E86F5638B7DCEEF855981BA6D99722309A7F968E3D883B49`, update sha512 `KrS2wHISUsRH9edGkYB6sRV0MkRiA+GHlEjHE+ixTFemfiYhbPfMwr8sabC/JaV9NeNuQHIsMiEpRQ+fnZOQtw==`.
+- 2026-06-19: Rebuilt the publishable public release bundle with `scripts\prepare-ecorex-public-release.ps1 -Version 0.1.15`. Output: `release-artifacts\EcoreX_0.1.15-public-release.zip`, size `148746471`, SHA256 `FC99AB0270B1875F63F089DCA6D1E4B6C88D30874F397F5A78A2533953AB27D6`. Validator passed and included only ready artifacts; pending Mac/WebUI/Linux entries remain non-downloadable.
+
 ## Start State
 
 - Date: 2026-06-18
