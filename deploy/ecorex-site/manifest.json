@@ -47,11 +47,11 @@
       "variant": "Desktop x64 installer",
       "fileName": "EcoreX_0.1.15_x64-setup.exe",
       "href": "downloads/EcoreX_0.1.15_x64-setup.exe",
-      "size": 145857440,
-      "sha256": "5F89F7453CE50465E86F5638B7DCEEF855981BA6D99722309A7F968E3D883B49",
+      "size": 143626296,
+      "sha256": "87DE07DA7BCCB1193BDE8965398079B8F35B61E54E8880D24C8B41049F4056ED",
       "status": "ready",
-      "source": "Signed v0.1.15 Windows installer built from codex/ecorex-v0.1.15 with Codex-like streaming UX, drag/drop attachments, immediate send feedback, artifact filtering, and find-skill-gated Feishu/Lark discovery.",
-      "updatedAt": "2026-06-19T03:28:19Z",
+      "source": "Signed v0.1.15 Windows installer built from codex/ecorex-v0.1.15 with Codex-like streaming UX, drag/drop attachments, immediate send feedback, artifact filtering, ordered image artifact rendering, preview-plus-path image outputs, and find-skill-gated Feishu/Lark discovery.",
+      "updatedAt": "2026-06-19T09:08:48Z",
       "signature": "authenticode-valid:0F678477DFC0A2BDAAB88307126EF657FAF8674F"
     },
     {
