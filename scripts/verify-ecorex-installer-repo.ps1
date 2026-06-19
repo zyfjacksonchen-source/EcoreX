@@ -80,12 +80,27 @@ $forbiddenDirs = @(
     "__pycache__"
 )
 
-$files = Get-ChildItem -LiteralPath $rootResolved -Recurse -File -Force
+$repoGitDir = Join-Path $rootResolved ".git"
+$isInsideRootGit = {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $repoGitDir)) {
+        return $false
+    }
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    return $fullPath.StartsWith($repoGitDir + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+$files = Get-ChildItem -LiteralPath $rootResolved -Recurse -File -Force | Where-Object {
+    -not (& $isInsideRootGit $_.FullName)
+}
 if (-not ($files | Where-Object { $_.Name -eq "README.md" })) {
     throw "README.md is required for the public installer repository."
 }
 
 foreach ($dir in Get-ChildItem -LiteralPath $rootResolved -Recurse -Directory -Force) {
+    if ($dir.FullName.Equals($repoGitDir, [System.StringComparison]::OrdinalIgnoreCase) -or (& $isInsideRootGit $dir.FullName)) {
+        continue
+    }
     if ($forbiddenDirs -contains $dir.Name) {
         throw "Forbidden source directory in installer-only repo: $($dir.FullName)"
     }
