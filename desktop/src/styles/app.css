@@ -1166,6 +1166,22 @@ html[data-platform="web"] .window-brand {
   border-radius: var(--radius-sm);
 }
 
+.markdown-local-image-artifact {
+  display: grid;
+  gap: 6px;
+  max-width: min(640px, 100%);
+  margin-top: 4px;
+}
+
+.markdown-local-image-artifact .markdown-local-file-link {
+  width: fit-content;
+  max-width: 100%;
+}
+
+.markdown-local-image-artifact .markdown-local-image-preview {
+  margin-top: 2px;
+}
+
 .markdown-content .markdown-audio {
   display: block;
   width: min(420px, 100%);

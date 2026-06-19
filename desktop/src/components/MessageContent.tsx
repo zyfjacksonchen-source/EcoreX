@@ -237,6 +237,11 @@ type ArtifactItem = {
   fileType: ArtifactFileType;
 };
 
+type OrderedListItem = {
+  value: string;
+  number: number;
+};
+
 type DisplayArtifact = AgentArtifact & {
   legacyPath?: string;
 };
@@ -726,7 +731,12 @@ function renderBareUrl(raw: string, localFilePreviewUrl?: (filePath: string) => 
   const { url, trailing } = splitTrailingUrlPunctuation(raw);
   const localPath = localPathFromSource(url) || relativeArtifactPathFromSource(url, true);
   if (localPath) {
-    return `<a ${linkAttributesForUrl(url, localFilePreviewUrl)}>${escapeHtml(url)}</a>${escapeHtml(trailing)}`;
+    const localLink = `<a ${linkAttributesForUrl(url, localFilePreviewUrl)}>${escapeHtml(url)}</a>`;
+    const previewSrc = mediaTypeFromUrl(localPath) === "image" ? safeImageUrl(localPath, localFilePreviewUrl) : "";
+    if (previewSrc) {
+      return `<span class="markdown-local-image-artifact">${localLink}<img class="markdown-image markdown-local-image-preview" src="${escapeHtml(previewSrc)}" alt="${escapeHtml(basenameFromPath(localPath))}" loading="lazy" /></span>${escapeHtml(trailing)}`;
+    }
+    return `${localLink}${escapeHtml(trailing)}`;
   }
   const mediaType = mediaTypeFromUrl(url);
   if (mediaType === "image") {
@@ -785,10 +795,16 @@ function flushParagraph(lines: string[], out: string[], localFilePreviewUrl?: (f
   lines.length = 0;
 }
 
-function renderList(items: string[], ordered: boolean, out: string[], localFilePreviewUrl?: (filePath: string) => string) {
+function renderList(items: string[] | OrderedListItem[], ordered: boolean, out: string[], localFilePreviewUrl?: (filePath: string) => string) {
   if (!items.length) return;
-  const tag = ordered ? "ol" : "ul";
-  out.push(`<${tag}>${items.map((item) => `<li>${renderInline(item, localFilePreviewUrl)}</li>`).join("")}</${tag}>`);
+  if (ordered) {
+    const orderedItems = items as OrderedListItem[];
+    const start = orderedItems[0]?.number && orderedItems[0].number !== 1 ? ` start="${orderedItems[0].number}"` : "";
+    out.push(`<ol${start}>${orderedItems.map((item) => `<li>${renderInline(item.value, localFilePreviewUrl)}</li>`).join("")}</ol>`);
+  } else {
+    const bulletItems = items as string[];
+    out.push(`<ul>${bulletItems.map((item) => `<li>${renderInline(item, localFilePreviewUrl)}</li>`).join("")}</ul>`);
+  }
   items.length = 0;
 }
 
@@ -829,9 +845,10 @@ function renderMarkdown(markdown: string, localFilePreviewUrl?: (filePath: strin
   const out: string[] = [];
   const paragraph: string[] = [];
   const bullets: string[] = [];
-  const numbers: string[] = [];
+  const numbers: OrderedListItem[] = [];
   const table: string[] = [];
   let code: string[] | null = null;
+  let lastOrderedNumber = 0;
 
   const flushAll = () => {
     flushParagraph(paragraph, out, localFilePreviewUrl);
@@ -878,6 +895,7 @@ function renderMarkdown(markdown: string, localFilePreviewUrl?: (filePath: strin
     const heading = raw.match(/^(#{1,4})\s+(.+)$/);
     if (heading) {
       flushAll();
+      lastOrderedNumber = 0;
       const level = Math.min(heading[1].length + 2, 5);
       out.push(`<h${level}>${renderInline(heading[2], localFilePreviewUrl)}</h${level}>`);
       continue;
@@ -891,11 +909,14 @@ function renderMarkdown(markdown: string, localFilePreviewUrl?: (filePath: strin
       continue;
     }
 
-    const numbered = raw.match(/^\s*\d+\.\s+(.+)$/);
+    const numbered = raw.match(/^\s*(\d+)\.\s+(.+)$/);
     if (numbered) {
       flushParagraph(paragraph, out, localFilePreviewUrl);
       renderList(bullets, false, out, localFilePreviewUrl);
-      numbers.push(numbered[1]);
+      const parsedNumber = Number.parseInt(numbered[1] || "1", 10);
+      const effectiveNumber = parsedNumber > lastOrderedNumber ? parsedNumber : lastOrderedNumber + 1;
+      lastOrderedNumber = effectiveNumber;
+      numbers.push({ number: effectiveNumber, value: numbered[2] || "" });
       continue;
     }
 

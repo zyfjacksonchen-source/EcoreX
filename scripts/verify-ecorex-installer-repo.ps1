@@ -23,9 +23,6 @@ $allowedExtensions = @(
     ".yml",
     ".yaml",
     ".blockmap",
-    ".json",
-    ".txt",
-    ".md",
     ".sha256"
 )
 $forbiddenExtensions = @(
