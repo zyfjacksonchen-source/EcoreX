@@ -152,7 +152,6 @@ EcoreX WebUI service release package
 
 This archive contains the EcoreX WebUI service runtime, web build, installation helpers, service templates, and checksums for EcoreX $Version.
 
-$(Get-ReleaseMigrationReadmeNote)
 "@
 Write-Utf8NoBom -Path (Join-Path $stagingRoot "README.txt") -Value $webReleaseReadme
 
