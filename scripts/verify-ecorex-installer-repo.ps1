@@ -11,6 +11,7 @@ if (-not (Test-Path -LiteralPath $rootResolved)) {
 
 $allowedNames = @(
     "README.md",
+    ".gitattributes",
     "manifest.json",
     "SHA256SUMS.txt",
     "latest.yml"

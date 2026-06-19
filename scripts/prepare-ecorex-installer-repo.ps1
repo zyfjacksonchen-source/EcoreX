@@ -72,6 +72,14 @@ New-Item -ItemType Directory -Force -Path $targetRoot | Out-Null
 
 Copy-Item -LiteralPath $readmeResolved -Destination (Join-Path $targetRoot "README.md") -Force
 
+$lfsAttributes = @(
+    "*.exe filter=lfs diff=lfs merge=lfs -text",
+    "*.dmg filter=lfs diff=lfs merge=lfs -text",
+    "*.pkg filter=lfs diff=lfs merge=lfs -text",
+    "*.msi filter=lfs diff=lfs merge=lfs -text"
+) -join [Environment]::NewLine
+Write-Utf8NoBom -Path (Join-Path $targetRoot ".gitattributes") -Value ($lfsAttributes + [Environment]::NewLine)
+
 $inputs = @(
     @{ id = "windows-x64-installer"; path = Resolve-OptionalFile $WindowsInstaller },
     @{ id = "windows-latest-yml"; path = Resolve-OptionalFile $WindowsLatestYml },
