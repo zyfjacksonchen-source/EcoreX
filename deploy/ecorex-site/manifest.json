@@ -87,11 +87,12 @@
       "variant": "Desktop Apple Silicon DMG",
       "fileName": "EcoreX_0.1.15_arm64.dmg",
       "href": "downloads/EcoreX_0.1.15_arm64.dmg",
-      "size": 193155189,
-      "sha256": "51D89CD821BD3C81A6FBE4EB7B058AEDD63405BE2C7C5F2DD71B7F1D4F13804D",
-      "status": "pending",
-      "source": "Pending v0.1.15 Apple Silicon DMG build.",
-      "updatedAt": "2026-06-19"
+      "size": 193192053,
+      "sha256": "AE69236FA513D61D6E7491C339E07968BECF99BC515DB96FF80F5FD7B7CCD8A9",
+      "status": "ready",
+      "source": "Unsigned v0.1.15 Apple Silicon DMG built on GitHub Actions macOS runner. Installer-only README documents SHA256 verification and Gatekeeper bypass for WorkBuddy-style agents.",
+      "updatedAt": "2026-06-19T10:20:10Z",
+      "signature": "unsigned-gatekeeper-bypass-documented"
     },
     {
       "id": "macos-x64-dmg",
@@ -100,11 +101,12 @@
       "variant": "Desktop Intel DMG",
       "fileName": "EcoreX_0.1.15_x64.dmg",
       "href": "downloads/EcoreX_0.1.15_x64.dmg",
-      "size": 200529764,
-      "sha256": "161FA28331704AECDA53BD19EAA08C3D347F17BC48E3078A40EAB1E8AE8E4A0E",
-      "status": "pending",
-      "source": "Pending v0.1.15 Intel DMG build.",
-      "updatedAt": "2026-06-19"
+      "size": 200599586,
+      "sha256": "202C01CC62E565073EBFC5A7111498C660A0D2C108BCCA667D4EEF311BD57022",
+      "status": "ready",
+      "source": "Unsigned v0.1.15 Intel DMG built on GitHub Actions macOS runner. Installer-only README documents SHA256 verification and Gatekeeper bypass for WorkBuddy-style agents.",
+      "updatedAt": "2026-06-19T10:20:10Z",
+      "signature": "unsigned-gatekeeper-bypass-documented"
     },
     {
       "id": "web-linux-service",
