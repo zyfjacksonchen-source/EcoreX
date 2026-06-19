@@ -209,29 +209,18 @@ def is_allowed_migration_readme(name: str, text: str) -> bool:
     return FORBIDDEN_RELEASE_PATTERN.search(remaining) is None
 
 
-def require_no_forbidden_release_text(label: str, name: str, text: str) -> None:
-    if is_allowed_migration_readme(name, text):
+def require_no_forbidden_release_text(
+    label: str,
+    name: str,
+    text: str,
+    *,
+    allow_migration_readme: bool = False,
+) -> None:
+    if allow_migration_readme and is_allowed_migration_readme(name, text):
         return
     match = FORBIDDEN_RELEASE_PATTERN.search(text)
     if match is not None:
         raise ValidationError(f"{label} contains forbidden legacy/private string {match.group(0)!r} in {name}")
-
-
-def require_migration_readme(
-    names: list[str],
-    read_text,
-    label: str,
-) -> None:
-    for name in names:
-        if pathlib.PurePosixPath(name).name not in MIGRATION_README_NAMES:
-            continue
-        try:
-            text = read_text(name)
-        except Exception:
-            continue
-        if is_allowed_migration_readme(name, text):
-            return
-    raise ValidationError(f"{label} missing EcoreX README migration note")
 
 
 def validate_zip_no_forbidden_release_strings(archive: zipfile.ZipFile, label: str) -> None:
@@ -332,11 +321,6 @@ def validate_zip_assets(path: pathlib.Path, label: str) -> None:
     with zipfile.ZipFile(path) as archive:
         validate_zip_no_forbidden_release_strings(archive, label)
         names = archive.namelist()
-        require_migration_readme(
-            names,
-            lambda name: archive.read(name).decode("utf-8", errors="replace"),
-            label,
-        )
         if label in {"webui-win-mac", "webui-macos-universal"}:
             require(
                 any(name.endswith("Install EcoreX WebUI.app/Contents/MacOS/Install EcoreX WebUI") for name in names),
@@ -367,11 +351,6 @@ def validate_tar_assets(path: pathlib.Path, label: str) -> None:
     with tarfile.open(path, "r:gz") as archive:
         validate_tar_no_forbidden_release_strings(archive, label)
         names = archive.getnames()
-        require_migration_readme(
-            names,
-            lambda name: archive.extractfile(name).read().decode("utf-8", errors="replace"),
-            label,
-        )
         if label == "webui-macos-universal":
             require(
                 any(name.endswith("Install EcoreX WebUI.app/Contents/MacOS/Install EcoreX WebUI") for name in names),
@@ -433,12 +412,6 @@ def validate_public_zip(
         for required in REQUIRED_SITE_ASSETS:
             require(required in names, f"public zip missing image asset {required}")
             require(archive.getinfo(required).file_size > 0, f"public zip image asset is empty: {required}")
-        require_migration_readme(
-            list(names),
-            lambda name: archive.read(name).decode("utf-8", errors="replace"),
-            "public release zip",
-        )
-
         public_manifest = read_zip_json_no_bom(archive, "site/manifest.json")
         site_js = archive.read("site/site.js").decode("utf-8", errors="replace")
         require_contains(

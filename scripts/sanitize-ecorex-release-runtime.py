@@ -33,6 +33,7 @@ TEXT_NAMES = {"LICENSE", "README", "README.txt", "runtime-manifest.json"}
 VOLATILE_DIR_NAMES = {"capability-state"}
 VOLATILE_FILE_SUFFIXES = {".log"}
 WINDOWS_PYTHON_LAUNCHER_DIR = pathlib.PurePosixPath("python/Scripts")
+SITE_PACKAGES_PARTS = {"site-packages", "dist-packages"}
 
 
 def _s(*parts: str) -> str:
@@ -130,6 +131,16 @@ def sanitize_runtime_manifest(path: pathlib.Path) -> None:
 
 def sanitize_tree(root: pathlib.Path) -> list[pathlib.Path]:
     changed: list[pathlib.Path] = []
+    for path in sorted(root.rglob("*"), reverse=True):
+        rel_parts = set(path.relative_to(root).parts)
+        if path.is_dir() and path.name in {"test", "tests"} and rel_parts.intersection(SITE_PACKAGES_PARTS):
+            for child in sorted(path.rglob("*"), reverse=True):
+                if child.is_file():
+                    child.unlink(missing_ok=True)
+                elif child.is_dir():
+                    child.rmdir()
+            path.rmdir()
+            changed.append(path)
     for path in sorted(root.rglob("*"), reverse=True):
         if path.is_dir() and path.name in VOLATILE_DIR_NAMES:
             for child in sorted(path.rglob("*"), reverse=True):

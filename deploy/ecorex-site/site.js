@@ -50,7 +50,7 @@ document.querySelectorAll("img[data-fallback]").forEach((image) => {
   });
 });
 
-const cardOrder = ["windows-x64", "webui-windows-x64", "webui-macos-universal"];
+const cardOrder = ["windows-x64", "macos-dmg", "webui-windows-x64", "webui-macos-universal"];
 
 function detectVisitorDevice() {
   const platform = String(
@@ -87,17 +87,23 @@ function recommendedForDevice(manifest, device) {
 
 function orderForRecommendation(recommended) {
   const priority = [];
-  if (recommended.primary) priority.push(recommended.primary);
-  if (recommended.webui) priority.push(recommended.webui);
+  if (recommended.primary) priority.push(cardIdForArtifactId(recommended.primary));
+  if (recommended.webui) priority.push(cardIdForArtifactId(recommended.webui));
   return [
-    ...priority.filter(Boolean),
+    ...priority.filter((id, index) => id && priority.indexOf(id) === index),
     ...cardOrder.filter((id) => !priority.includes(id))
   ];
 }
 
+function cardIdForArtifactId(id) {
+  if (id === "macos-arm64-dmg" || id === "macos-x64-dmg") return "macos-dmg";
+  return id || "";
+}
+
 function preferredArtifactId(cardId, recommended, device) {
   if (cardId === "macos-dmg") {
-    return recommended.architectures?.[device.arch] || "";
+    if (device.arch === "x64") return recommended.intel || "macos-x64-dmg";
+    return recommended.primary || "macos-arm64-dmg";
   }
   if (recommended.primary === cardId) return cardId;
   if (recommended.webui === cardId) return cardId;
@@ -105,7 +111,7 @@ function preferredArtifactId(cardId, recommended, device) {
 }
 
 function isRecommendedCard(cardId, recommended) {
-  return cardId === recommended.primary || cardId === recommended.webui;
+  return cardId === cardIdForArtifactId(recommended.primary) || cardId === cardIdForArtifactId(recommended.webui);
 }
 
 const cardCopy = {
@@ -244,6 +250,7 @@ function renderDownloads(manifest) {
   const recommended = recommendedForDevice(manifest, device);
   orderForRecommendation(recommended).forEach((cardId) => {
     const copy = cardCopy[cardId];
+    if (!copy) return;
     const card = document.createElement("article");
     const recommendedCard = isRecommendedCard(cardId, recommended);
     card.className = `download-card${recommendedCard ? " is-recommended" : ""}`;

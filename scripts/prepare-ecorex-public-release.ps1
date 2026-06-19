@@ -226,7 +226,6 @@ EcoreX public release package
 
 This archive contains the EcoreX public download site, Admin API deployment files, server helper scripts, and checksums for EcoreX $Version.
 
-$(Get-ReleaseMigrationReadmeNote)
 "@
 Write-Utf8NoBom -Path (Join-Path $stagingRoot "README.txt") -Value $publicReadme
 
