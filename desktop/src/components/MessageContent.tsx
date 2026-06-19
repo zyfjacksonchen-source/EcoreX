@@ -288,6 +288,10 @@ function displayArtifactSubtitle(artifact: AgentArtifact) {
   return artifact.url || "";
 }
 
+function displayArtifactPath(artifact: AgentArtifact) {
+  return artifact.path || artifact.relativePath || artifact.url || "";
+}
+
 function legacyArtifactToAgentArtifact(item: ArtifactItem): DisplayArtifact {
   return {
     id: `legacy:${artifactDedupeKey(item)}`,
@@ -638,6 +642,7 @@ function ArtifactShelf({
           const fileType = artifactFileTypeFromKind(artifact.kind);
           const name = displayArtifactTitle(artifact);
           const subtitle = displayArtifactSubtitle(artifact);
+          const displayPath = displayArtifactPath(artifact);
           const previewSource = artifact.thumbnailUrl || artifact.previewUrl || source;
           const previewUrl = artifact.kind === "image" && previewSource
             ? safeImageUrl(previewSource, localFilePreviewUrl)
@@ -645,13 +650,13 @@ function ArtifactShelf({
           const isPreviewableImage = artifact.kind === "image" && Boolean(previewUrl);
           const menuOpen = openMenuId === artifact.id;
           return (
-            <div className={`artifact-row is-${artifact.kind}`} key={artifact.id} title={subtitle || name}>
+            <div className={`artifact-row is-${artifact.kind}`} key={artifact.id} title={displayPath || subtitle || name}>
               <span className="artifact-row-icon" aria-hidden="true">
                 {previewUrl ? <img src={previewUrl} alt="" loading="lazy" /> : artifactIcon(fileType)}
               </span>
               <span className="artifact-row-main">
                 <strong>{name}</strong>
-                {subtitle && <small>{subtitle}</small>}
+                {displayPath ? <small className="artifact-card-path">路径：{displayPath}</small> : subtitle && <small>{subtitle}</small>}
               </span>
               {artifact.stats && (
                 <span className="artifact-row-stats" aria-label="变更统计">
@@ -719,6 +724,10 @@ function splitTrailingUrlPunctuation(value: string) {
 
 function renderBareUrl(raw: string, localFilePreviewUrl?: (filePath: string) => string) {
   const { url, trailing } = splitTrailingUrlPunctuation(raw);
+  const localPath = localPathFromSource(url) || relativeArtifactPathFromSource(url, true);
+  if (localPath) {
+    return `<a ${linkAttributesForUrl(url, localFilePreviewUrl)}>${escapeHtml(url)}</a>${escapeHtml(trailing)}`;
+  }
   const mediaType = mediaTypeFromUrl(url);
   if (mediaType === "image") {
     const src = safeImageUrl(url, localFilePreviewUrl);

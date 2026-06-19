@@ -1290,6 +1290,12 @@ html[data-platform="web"] .window-brand {
   font-size: 11px;
 }
 
+.artifact-row-main .artifact-card-path {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .artifact-row-stats {
   display: inline-flex;
   gap: 4px;
@@ -1739,6 +1745,14 @@ html[data-platform="web"] .window-brand {
   color: var(--color-text);
   background: var(--color-surface-raised);
   text-decoration: none;
+}
+
+.markdown-local-file-link {
+  color: var(--color-brand-strong);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .inline-local-file-code {
