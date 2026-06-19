@@ -320,39 +320,14 @@ def _warmup_agent_runtime():
 
 
 def _sync_builtin_skills():
-    """Initialize missing builtin skills in the workspace without overwriting overlays."""
-    import shutil
+    """Keep built-in skills discoverable without copying them into user space."""
     try:
-        workspace = conf().get("agent_workspace", "~/cow")
-        workspace = os.path.expanduser(workspace)
         project_root = os.path.dirname(os.path.abspath(__file__))
         builtin_dir = os.path.join(project_root, "skills")
-        custom_dir = os.path.join(workspace, "skills")
-
-        if not os.path.isdir(builtin_dir):
-            return
-
-        os.makedirs(custom_dir, exist_ok=True)
-        synced = 0
-        for name in os.listdir(builtin_dir):
-            src = os.path.join(builtin_dir, name)
-            if not os.path.isdir(src) or not os.path.isfile(os.path.join(src, "SKILL.md")):
-                continue
-            dst = os.path.join(custom_dir, name)
-            try:
-                if os.path.isdir(dst):
-                    # Workspace skills are intentional overlays. Never delete
-                    # them at startup, otherwise a runtime skill repair would be
-                    # lost on the next launch.
-                    continue
-                shutil.copytree(src, dst)
-                synced += 1
-            except Exception as e:
-                logger.warning(f"[App] Failed to sync builtin skill '{name}': {e}")
-        if synced:
-            logger.info(f"[App] Synced {synced} builtin skill(s) to workspace")
+        if os.path.isdir(builtin_dir):
+            logger.debug("[App] Builtin skill catalog is loaded in place; workspace copies are disabled")
     except Exception as e:
-        logger.warning(f"[App] Builtin skills sync failed: {e}")
+        logger.warning(f"[App] Builtin skill catalog check failed: {e}")
 
 
 def run():
@@ -380,7 +355,9 @@ def run():
         if web_console_enabled and "web" not in channel_names:
             channel_names.append("web")
 
-        # Sync builtin skills to workspace before channels start
+        # Built-in skills are loaded from the packaged catalog. Do not copy
+        # them into the workspace at startup; user skills remain explicit
+        # overlays/forks managed by the ExtensionRegistry.
         _sync_builtin_skills()
 
         logger.info(f"[App] Starting channels: {channel_names}")

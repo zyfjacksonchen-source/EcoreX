@@ -892,6 +892,7 @@ let loadingContainers = {};
 let activeStreams = {};   // request_id -> EventSource
 let sessionActiveRequest = {};   // session_id -> request_id (in-flight stream per session)
 let streamBuffers = {};   // request_id -> { items: [event...], timestamp } for re-attach replay
+let streamLastEventIds = {};   // request_id -> last SSE id acknowledged by this browser
 let isComposing = false;
 let appConfig = { use_agent: false, title: 'EcoreX', subtitle: '', providers: {}, api_bases: {} };
 
@@ -2289,6 +2290,7 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
             delete sessionActiveRequest[ownerSession];
         }
         delete streamBuffers[requestId];
+        delete streamLastEventIds[requestId];
     };
 
     const MAX_RECONNECTS = 10;
@@ -2297,6 +2299,16 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
 
     function ensureBotEl() {
         if (botEl) return;
+        if (loadingEl && loadingEl.classList && loadingEl.classList.contains('bot-message-group')) {
+            botEl = loadingEl;
+            botEl.dataset.requestId = requestId;
+            loadingEl = null;
+            stepsEl = botEl.querySelector('.agent-steps');
+            contentEl = botEl.querySelector('.answer-content');
+            mediaEl = botEl.querySelector('.media-content');
+            currentPhaseEl = botEl.querySelector('.agent-current-phase');
+            return;
+        }
         if (loadingEl) { loadingEl.remove(); loadingEl = null; }
         botEl = document.createElement('div');
         botEl.className = 'flex gap-3 px-4 sm:px-6 py-3 bot-message-group';
@@ -2335,6 +2347,76 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
     // Holds the live EventSource so terminal events (done/voice_attach/error)
     // can close it. During replay there is no live connection (null).
     let currentEs = null;
+    let streamingAnswerPre = null;
+    let streamingAnswerTextNode = null;
+    let streamingAnswerPendingText = '';
+    let streamingAnswerRafScheduled = false;
+    let currentPhaseEl = null;
+
+    function resetStreamingAnswerPreview() {
+        streamingAnswerPre = null;
+        streamingAnswerTextNode = null;
+        streamingAnswerPendingText = '';
+        streamingAnswerRafScheduled = false;
+    }
+
+    function renderStreamError(message) {
+        const text = message || t('error_send');
+        if (loadingEl && (!loadingEl.classList || !loadingEl.classList.contains('bot-message-group'))) {
+            loadingEl.remove();
+            loadingEl = null;
+        }
+        ensureBotEl();
+        botEl?.querySelector('.agent-loading-dots')?.remove();
+        if (contentEl) {
+            contentEl.classList.remove('sse-streaming');
+            resetStreamingAnswerPreview();
+            contentEl.textContent = text;
+            contentEl.dataset.rawMd = text;
+        }
+        scrollChatToBottom();
+    }
+
+    function appendStreamingAnswerPreview(chunk) {
+        const text = String(chunk || '');
+        if (!text) return;
+        ensureBotEl();
+        botEl?.querySelector('.agent-loading-dots')?.remove();
+        if (!streamingAnswerPre || !streamingAnswerPre.isConnected) {
+            contentEl.innerHTML = '<pre class="answer-stream-pre"></pre>';
+            streamingAnswerPre = contentEl.querySelector('.answer-stream-pre');
+            streamingAnswerPre.appendChild(document.createTextNode(''));
+            streamingAnswerTextNode = streamingAnswerPre.firstChild;
+        }
+        streamingAnswerPendingText += text;
+        if (streamingAnswerRafScheduled) return;
+        streamingAnswerRafScheduled = true;
+        requestAnimationFrame(() => {
+            streamingAnswerRafScheduled = false;
+            if (!streamingAnswerTextNode || !streamingAnswerPre || !streamingAnswerPre.isConnected) {
+                streamingAnswerPendingText = '';
+                return;
+            }
+            const pending = streamingAnswerPendingText;
+            streamingAnswerPendingText = '';
+            if (!pending) return;
+            streamingAnswerTextNode.appendData(pending);
+            scrollChatToBottom();
+        });
+    }
+
+    function replaceCurrentPhase(text) {
+        const content = String(text || '').trim();
+        if (!content) return;
+        ensureBotEl();
+        if (!currentPhaseEl || !currentPhaseEl.isConnected) {
+            currentPhaseEl = document.createElement('div');
+            currentPhaseEl.className = 'agent-current-phase text-xs sm:text-sm text-slate-500 dark:text-slate-400 py-1 my-0.5';
+            stepsEl.appendChild(currentPhaseEl);
+        }
+        currentPhaseEl.textContent = content;
+        scrollChatToBottom();
+    }
 
     // Render one SSE event into the bubble. Used by the live handler and by
     // re-attach replay alike, so both paths produce identical UI.
@@ -2401,16 +2483,16 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                     }
                 }
 
-            } else if (item.type === 'delta') {
+            } else if (item.type === 'delta' || item.type === 'message_update') {
                 ensureBotEl();
                 if (currentReasoningEl) {
                     finalizeThinking(currentReasoningEl, reasoningStartTime, reasoningText);
                     currentReasoningEl = null;
                     reasoningText = '';
                 }
-                accumulatedText += item.content;
-                contentEl.innerHTML = renderMarkdown(accumulatedText);
-                scrollChatToBottom();
+                const chunk = String(item.content || item.text || item.message || '');
+                accumulatedText += chunk;
+                appendStreamingAnswerPreview(chunk);
 
             } else if (item.type === 'message_end') {
                 if (item.has_tool_calls && accumulatedText.trim()) {
@@ -2421,11 +2503,13 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                     stepsEl.appendChild(frozenEl);
                     accumulatedText = '';
                     contentEl.innerHTML = '';
+                    resetStreamingAnswerPreview();
                     scrollChatToBottom();
                 }
 
             } else if (item.type === 'tool_start') {
                 ensureBotEl();
+                botEl?.querySelector('.agent-loading-dots')?.remove();
                 if (currentReasoningEl) {
                     finalizeThinking(currentReasoningEl, reasoningStartTime, reasoningText);
                     currentReasoningEl = null;
@@ -2433,6 +2517,7 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                 }
                 accumulatedText = '';
                 contentEl.innerHTML = '';
+                resetStreamingAnswerPreview();
 
                 // Add tool execution indicator (collapsible)
                 currentToolEl = document.createElement('div');
@@ -2495,6 +2580,7 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                 // Intermediate text sent before media items; display it but keep SSE open.
                 ensureBotEl();
                 contentEl.classList.remove('sse-streaming');
+                resetStreamingAnswerPreview();
                 const textContent = item.content || accumulatedText;
                 if (textContent) contentEl.innerHTML = renderMarkdown(textContent);
                 applyHighlighting(botEl);
@@ -2522,12 +2608,7 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
 
             } else if (item.type === 'phase') {
                 // Coarse progress (e.g. cow install-browser); must not close SSE (unlike "done")
-                ensureBotEl();
-                const wrap = document.createElement('div');
-                wrap.className = 'text-xs sm:text-sm text-slate-600 dark:text-slate-400 border-l-2 border-primary-400 pl-2 py-1 my-0.5';
-                wrap.textContent = String(item.content || '');
-                stepsEl.appendChild(wrap);
-                scrollChatToBottom();
+                replaceCurrentPhase(item.content || item.message || '');
 
             } else if (item.type === 'cancelled') {
                 // Agent acknowledged the stop; mark the bubble. A trailing
@@ -2562,7 +2643,9 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                     if (loadingEl) { loadingEl.remove(); loadingEl = null; }
                     addBotMessage(finalText, new Date((item.timestamp || Date.now() / 1000) * 1000), requestId);
                 } else if (botEl) {
+                    botEl.querySelector('.agent-loading-dots')?.remove();
                     contentEl.classList.remove('sse-streaming');
+                    resetStreamingAnswerPreview();
                     if (finalText) contentEl.innerHTML = renderAnswerHtml(finalText);
                     contentEl.dataset.rawMd = finalText || finalTextRaw || '';
                     const copyBtn = botEl.querySelector('.copy-msg-btn');
@@ -2617,20 +2700,28 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                 if (currentEs) { currentEs.close(); }
                 delete activeStreams[requestId];
                 clearOwnerRequest();
-                if (loadingEl) { loadingEl.remove(); loadingEl = null; }
-                addBotMessage(t('error_send'), new Date());
+                if (isActive()) {
+                    renderStreamError(item.message || item.content || t('error_send'));
+                }
                 resetSendBtnSendMode();
             }
     }
 
     function connect() {
-        const es = new EventSource(`/stream?request_id=${encodeURIComponent(requestId)}`);
+        const lastEventId = streamLastEventIds[requestId];
+        const cursor = lastEventId !== undefined && lastEventId !== null && String(lastEventId) !== ''
+            ? `&last_event_id=${encodeURIComponent(String(lastEventId))}`
+            : '';
+        const es = new EventSource(`/stream?request_id=${encodeURIComponent(requestId)}${cursor}`);
         currentEs = es;
         activeStreams[requestId] = es;
 
         es.onmessage = function(e) {
             let item;
             try { item = JSON.parse(e.data); } catch (_) { return; }
+            if (e.lastEventId !== undefined && e.lastEventId !== null && String(e.lastEventId) !== '') {
+                streamLastEventIds[requestId] = e.lastEventId;
+            }
 
             // Successful data received, reset reconnect counter
             reconnectCount = 0;
@@ -2683,16 +2774,18 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
             // a background session must not mutate the currently shown chat.
             clearOwnerRequest();
             if (!isActive()) return;
-            if (loadingEl) { loadingEl.remove(); loadingEl = null; }
             if (!botEl) {
-                addBotMessage(t('error_send'), new Date());
+                renderStreamError(t('error_send'));
             } else if (accumulatedText) {
                 contentEl.classList.remove('sse-streaming');
+                resetStreamingAnswerPreview();
                 const displayText = localizeCancelMarker(accumulatedText);
                 contentEl.innerHTML = renderAnswerHtml(displayText);
                 contentEl.dataset.rawMd = displayText;
                 applyHighlighting(botEl);
                 bindChatKnowledgeLinks(botEl);
+            } else {
+                renderStreamError(t('error_send'));
             }
             resetSendBtnSendMode();
         };
@@ -3338,14 +3431,36 @@ function loadHistory(page) {
 
 function addLoadingIndicator() {
     const el = document.createElement('div');
-    el.className = 'flex gap-3 px-4 sm:px-6 py-3';
+    el.className = 'flex gap-3 px-4 sm:px-6 py-3 bot-message-group';
     el.innerHTML = `
         <img src="assets/icon.png" alt="EcoreX" class="w-8 h-8 rounded-lg flex-shrink-0">
-        <div class="bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-2xl px-4 py-3">
-            <div class="flex items-center gap-1.5">
-                <span class="w-2 h-2 rounded-full bg-primary-400 animate-pulse-dot" style="animation-delay: 0s"></span>
-                <span class="w-2 h-2 rounded-full bg-primary-400 animate-pulse-dot" style="animation-delay: 0.2s"></span>
-                <span class="w-2 h-2 rounded-full bg-primary-400 animate-pulse-dot" style="animation-delay: 0.4s"></span>
+        <div class="min-w-0 flex-1 max-w-[85%]">
+            <div class="bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-2xl px-4 py-3 text-sm leading-relaxed msg-content text-slate-700 dark:text-slate-200">
+                <div class="agent-steps">
+                    <div class="agent-current-phase text-xs sm:text-sm text-slate-500 dark:text-slate-400 py-1 my-0.5">
+                        ${currentLang === 'zh' ? '正在发送' : 'Sending'}
+                    </div>
+                </div>
+                <div class="answer-content sse-streaming"></div>
+                <div class="media-content"></div>
+                <div class="bot-audio-slot"></div>
+                <div class="agent-loading-dots flex items-center gap-1.5 mt-1.5">
+                    <span class="w-1.5 h-1.5 rounded-full bg-primary-400 animate-pulse-dot" style="animation-delay: 0s"></span>
+                    <span class="w-1.5 h-1.5 rounded-full bg-primary-400 animate-pulse-dot" style="animation-delay: 0.2s"></span>
+                    <span class="w-1.5 h-1.5 rounded-full bg-primary-400 animate-pulse-dot" style="animation-delay: 0.4s"></span>
+                </div>
+            </div>
+            <div class="flex items-center gap-2 mt-1.5">
+                <span class="text-xs text-slate-400 dark:text-slate-500">${formatTime(new Date())}</span>
+                <button class="copy-msg-btn text-xs text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400 transition-colors cursor-pointer" title="${currentLang === 'zh' ? '复制' : 'Copy'}" style="display:none">
+                    <i class="fas fa-copy"></i>
+                </button>
+                <button class="speak-msg-btn text-xs text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400 transition-colors cursor-pointer" title="${t('speak_msg')}" style="display:none;">
+                    <i class="fas fa-volume-up"></i>
+                </button>
+                <button class="regenerate-msg-btn text-xs text-slate-300 dark:text-slate-600 hover:text-primary-400 dark:hover:text-primary-400 transition-colors cursor-pointer" title="${t('regenerate_response')}" style="display:none;">
+                    <i class="fas fa-rotate-right"></i>
+                </button>
             </div>
         </div>
     `;
@@ -3727,6 +3842,7 @@ function _reattachStream(sid) {
         const oldEs = activeStreams[requestId];
         if (oldEs) { try { oldEs.close(); } catch (_) {} delete activeStreams[requestId]; }
         delete streamBuffers[requestId];
+        delete streamLastEventIds[requestId];
         delete sessionActiveRequest[sid];
         resetSendBtnSendMode();
         return false;

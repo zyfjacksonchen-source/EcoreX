@@ -142,6 +142,39 @@ class TestEcoreXWorkspaceState(unittest.TestCase):
         self.assertEqual(page["messages"][0]["role"], "user")
         self.assertEqual(page["messages"][0]["extras"]["attachments"][0]["file_name"], "cover.png")
 
+    def test_history_page_returns_context_boundary_after_clear(self):
+        from agent.memory.conversation_store import ConversationStore
+
+        with tempfile.TemporaryDirectory() as workspace:
+            store = ConversationStore(Path(workspace) / "conversation.sqlite3")
+            store.append_messages("session-clear-context", [
+                {"role": "user", "content": "old question"},
+                {"role": "assistant", "content": "old answer"},
+            ], channel_type="web")
+            new_seq = store.clear_context("session-clear-context")
+            page = store.load_history_page("session-clear-context", page=1, page_size=20)
+
+        self.assertGreaterEqual(new_seq, 2)
+        self.assertEqual(page["context_start_seq"], new_seq)
+        self.assertEqual(page["messages"][0]["role"], "user")
+        self.assertIn("_seq", page["messages"][0])
+        self.assertLess(page["messages"][0]["_seq"], page["context_start_seq"])
+
+    def test_history_page_marks_assistant_with_turn_seq(self):
+        from agent.memory.conversation_store import ConversationStore
+
+        with tempfile.TemporaryDirectory() as workspace:
+            store = ConversationStore(Path(workspace) / "conversation.sqlite3")
+            store.append_messages("session-assistant-seq", [
+                {"role": "user", "content": "question"},
+                {"role": "assistant", "content": "answer"},
+            ], channel_type="web")
+            page = store.load_history_page("session-assistant-seq", page=1, page_size=20)
+
+        self.assertEqual(page["messages"][0]["role"], "user")
+        self.assertEqual(page["messages"][1]["role"], "assistant")
+        self.assertEqual(page["messages"][1]["_seq"], page["messages"][0]["_seq"])
+
 
 class TestSubagentTool(unittest.TestCase):
     class _Context:
@@ -236,48 +269,42 @@ class TestAgentCapabilityPermissions(unittest.TestCase):
             {"action": "install_pack", "pack_id": "feishu-lark"},
         )
 
-        self.assertEqual(proxy_name, "optional_abilities")
-        self.assertEqual(proxy_args["action"], "install")
-        self.assertEqual(proxy_args["ability"], "feishu-lark + feishu-cli")
+        self.assertEqual(proxy_name, "agent_capability")
+        self.assertEqual(proxy_args["action"], "install_pack")
+        self.assertEqual(proxy_args["pack_id"], "feishu-lark")
+        self.assertTrue(proxy_args["discoveryOnly"])
 
-    def test_agent_capability_install_pack_accepts_capability_pack_id(self):
+    def test_agent_capability_feishu_pack_is_discovery_only(self):
         from agent.tools.agent_capability.agent_capability import AgentCapabilityTool
-        from agent.tools.base_tool import ToolResult
         from agent.tools.optional_abilities.optional_abilities import OptionalAbilities
 
         calls = []
 
         def fake_install(self, pack_id, timeout):
             calls.append((pack_id, timeout))
-            return ToolResult.success({"status": "success", "packId": pack_id})
+            raise AssertionError("feishu-lark must not enter capability-pack installer")
 
-        def fake_feishu_cli(self, timeout):
-            calls.append(("feishu-cli", timeout))
-            return ToolResult.success({"status": "success", "ability": "feishu-cli", "enabled": True, "output": "npm installed lark cli"})
-
-        with patch.object(OptionalAbilities, "_install_capability_pack", fake_install), \
-                patch.object(OptionalAbilities, "_install_feishu_cli", fake_feishu_cli):
+        with patch.object(OptionalAbilities, "_install_capability_pack", fake_install):
             result = AgentCapabilityTool().execute({
                 "action": "install_pack",
                 "pack_id": "feishu-lark",
                 "timeout": 45,
             })
 
-        self.assertEqual(result.status, "success")
-        self.assertEqual(calls, [("feishu-lark", 45), ("feishu-cli", 45)])
-        self.assertEqual(result.result["installPlan"], ["feishu-lark", "feishu-cli"])
-        self.assertEqual(result.result["steps"][1]["stdoutTail"], "npm installed lark cli")
+        self.assertEqual(result.status, "error")
+        self.assertEqual(calls, [])
+        self.assertTrue(result.result["discoveryOnly"])
+        self.assertIn("find-skill", result.result["message"])
 
     def test_agent_capability_install_pack_accepts_feishu_cli_alias(self):
         from agent.tools.agent_capability.agent_capability import AgentCapabilityTool
-        from agent.tools.base_tool import ToolResult
         from agent.tools.optional_abilities.optional_abilities import OptionalAbilities
 
         calls = []
 
         def fake_feishu_cli(self, timeout):
             calls.append(("feishu-cli", timeout))
-            return ToolResult.success({"status": "success", "ability": "feishu-cli", "enabled": True})
+            raise AssertionError("feishu-cli alias must stay discovery-only")
 
         with patch.object(OptionalAbilities, "_install_feishu_cli", fake_feishu_cli):
             result = AgentCapabilityTool().execute({
@@ -286,8 +313,9 @@ class TestAgentCapabilityPermissions(unittest.TestCase):
                 "timeout": 30,
             })
 
-        self.assertEqual(result.status, "success")
-        self.assertEqual(calls, [("feishu-cli", 30)])
+        self.assertEqual(result.status, "error")
+        self.assertEqual(calls, [])
+        self.assertTrue(result.result["discoveryOnly"])
 
     def test_optional_abilities_update_preserves_live_provider_config(self):
         import config as config_module
@@ -462,7 +490,8 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         prompt = result["prompt"]
         self.assertIn("agent_capability", prompt)
-        self.assertIn("feishu-cli", prompt)
+        self.assertIn("feishu_cli", prompt)
+        self.assertIn("@larksuite/cli", prompt)
         self.assertIn("不要要求用户输入", prompt)
         self.assertIn("不要反复诊断", prompt)
 
@@ -891,6 +920,33 @@ class TestWebParallelHandlers(unittest.TestCase):
         first_stream.close()
         second_stream.close()
 
+    def test_sse_query_last_event_id_resumes_after_cursor(self):
+        from channel.web import web_channel
+
+        channel = web_channel.WebChannel()
+        request_id = "req-test-sse-cursor"
+        channel.request_to_session = {request_id: "session-test-sse-cursor"}
+        channel._ensure_sse_state(request_id)
+        channel._push_sse_event(request_id, {
+            "type": "phase",
+            "content": "first",
+            "request_id": request_id,
+        })
+        channel._push_sse_event(request_id, {
+            "type": "done",
+            "content": "second",
+            "request_id": request_id,
+        })
+
+        with patch.object(web_channel.web, "input", return_value=types.SimpleNamespace(last_event_id="0")):
+            resumed = channel.stream_response(request_id)
+            chunk = next(resumed)
+
+        self.assertIn(b"id: 1", chunk)
+        self.assertNotIn(b'"content": "first"', chunk)
+        self.assertIn(b'"content": "second"', chunk)
+        resumed.close()
+
     def test_done_event_is_emitted_once_per_request(self):
         from channel.web import web_channel
 
@@ -915,6 +971,36 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertEqual(len(channel.sse_events[request_id]), 1)
         event = channel.sse_queues[request_id].get(timeout=1)
         self.assertEqual(event["content"], "first")
+
+    def test_local_image_reply_emits_done_with_artifact(self):
+        from bridge.context import Context, ContextType
+        from bridge.reply import Reply, ReplyType
+        from channel.web import web_channel
+
+        with tempfile.TemporaryDirectory() as workspace:
+            image_path = Path(workspace) / "generated.png"
+            image_path.write_bytes(b"\x89PNG\r\n\x1a\n")
+            request_id = "req-local-image-reply"
+            session_id = "session-local-image-reply"
+            channel = web_channel.WebChannel()
+            channel.request_to_session = {request_id: session_id}
+            channel._ensure_sse_state(request_id)
+            context = Context(ContextType.TEXT, "draw")
+            context["request_id"] = request_id
+            context["session_id"] = session_id
+            context["on_event"] = lambda _event: None
+
+            with patch.object(channel, "_artifact_path_available", return_value=True):
+                with patch.object(channel, "_fetch_latest_pair_seqs", return_value={"user_seq": None, "bot_seq": None}):
+                    with patch.object(channel, "_fetch_agent_usage", return_value=None):
+                        channel.send(Reply(ReplyType.IMAGE_URL, f"file://{image_path}"), context)
+
+            event = channel.sse_queues[request_id].get(timeout=1)
+            self.assertEqual(event["type"], "done")
+            self.assertEqual(event["request_id"], request_id)
+            self.assertIn("artifacts", event)
+            self.assertEqual(event["artifacts"][0]["kind"], "image")
+            self.assertEqual(event["artifacts"][0]["path"], str(image_path))
 
 
 class TestAgentHostBoundary(unittest.TestCase):
@@ -1153,7 +1239,7 @@ class TestAgentHostBoundary(unittest.TestCase):
 
         cases = [
             (
-                "npx -y @larksuite/cli@1.0.40 base +record-list --as user",
+                "npx -y @larksuite/cli@1.0.56 base +record-list --as user",
                 ["base", "+record-list", "--as", "user"],
             ),
             (
@@ -1405,7 +1491,9 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertEqual(tool.cwd, next_workspace)
         self.assertEqual(tool.package, "@custom/lark-cli@9.9.9")
         self.assertFalse(tool.auto_install)
-        self.assertEqual(missing["installHint"], "npm install -g @custom/lark-cli@9.9.9")
+        self.assertIn("find-skill", missing["installHint"])
+        self.assertIn("@custom/lark-cli@9.9.9", missing["installHint"])
+        self.assertIn("registry.npmmirror.com", missing["installHint"])
 
     def test_feishu_cli_ensure_respects_auto_install_false(self):
         from agent.tools.feishu_cli.feishu_cli import FeishuCli
@@ -1420,8 +1508,42 @@ class TestAgentHostBoundary(unittest.TestCase):
 
         self.assertEqual(result.status, "success")
         self.assertFalse(result.result["available"])
-        self.assertEqual(result.result["installHint"], "npm install -g @custom/lark-cli@9.9.9")
+        self.assertIn("find-skill", result.result["installHint"])
+        self.assertIn("@custom/lark-cli@9.9.9", result.result["installHint"])
+        self.assertIn("registry.npmmirror.com", result.result["installHint"])
         run_process.assert_not_called()
+
+    def test_feishu_cli_install_requires_find_skill_gate(self):
+        from agent.tools.feishu_cli.feishu_cli import FeishuCli
+
+        tool = FeishuCli({"package": "@larksuite/cli@1.0.56"})
+        with patch("agent.tools.feishu_cli.feishu_cli._resolve_lark_command", return_value=None), \
+                patch("agent.tools.feishu_cli.feishu_cli._which", return_value="npm"), \
+                patch.object(FeishuCli, "_safe_run") as safe_run:
+            result = tool.execute({"action": "install", "timeout": 1})
+
+        self.assertEqual(result.status, "error")
+        self.assertTrue(result.result["discoveryOnly"])
+        self.assertIn("find-skill", result.result["message"])
+        safe_run.assert_not_called()
+
+    def test_feishu_cli_install_allows_find_skill_gate(self):
+        from agent.tools.feishu_cli.feishu_cli import FeishuCli
+
+        tool = FeishuCli({"package": "@larksuite/cli@1.0.56"})
+        with patch("agent.tools.feishu_cli.feishu_cli._resolve_lark_command", side_effect=[None, ["lark"]]), \
+                patch("agent.tools.feishu_cli.feishu_cli._which", return_value="npm"), \
+                patch.object(FeishuCli, "_safe_run", return_value={"status": "success", "exitCode": 0, "output": "ok"}) as safe_run:
+            result = tool.execute({
+                "action": "install",
+                "timeout": 1,
+                "discovery_source": "find-skill",
+            })
+
+        self.assertEqual(result.status, "success")
+        self.assertTrue(result.result["installedNow"])
+        self.assertEqual(result.result["registry"], "https://registry.npmjs.org")
+        safe_run.assert_called_once()
 
     def test_tool_manager_create_tool_applies_feishu_cli_config(self):
         from agent.tools.tool_manager import ToolManager
@@ -2615,9 +2737,9 @@ class TestAgentHostBoundary(unittest.TestCase):
 
             SkillManager(builtin_dir=str(builtin), custom_dir=str(custom))
 
-            refreshed = (custom_skill / "scripts" / "generate.py").read_text(encoding="utf-8")
-            self.assertIn('DEFAULT_MODEL = "gpt-image-2-pro"', refreshed)
-            self.assertTrue(any((custom / ".ecorex-backups").iterdir()))
+            preserved = (custom_skill / "scripts" / "generate.py").read_text(encoding="utf-8")
+            self.assertIn('DEFAULT_MODEL = "gpt-image-2"', preserved)
+            self.assertFalse((custom / ".ecorex-backups").exists())
 
     def test_managed_builtin_skill_refresh_respects_explicit_override_marker(self):
         from agent.skills.manager import CUSTOM_OVERRIDE_MARKER, SkillManager
@@ -2687,9 +2809,9 @@ class TestAgentHostBoundary(unittest.TestCase):
 
             SkillManager(builtin_dir=str(builtin), custom_dir=str(custom))
 
-            refreshed = (custom_skill / "scripts" / "generate_cover_image.py").read_text(encoding="utf-8")
-            self.assertIn("/images/generations", refreshed)
-            self.assertIn('"output_format"', refreshed)
+            preserved = (custom_skill / "scripts" / "generate_cover_image.py").read_text(encoding="utf-8")
+            self.assertIn("from openai import OpenAI", preserved)
+            self.assertFalse((custom / ".ecorex-backups").exists())
 
     def test_custom_filesystem_profile_blocks_background_memory_writes(self):
         from agent.memory.summarizer import (

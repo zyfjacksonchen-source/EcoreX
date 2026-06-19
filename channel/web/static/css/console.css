@@ -509,6 +509,23 @@
     vertical-align: middle;
 }
 
+.answer-stream-pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: inherit;
+    line-height: inherit;
+    color: inherit;
+    background: transparent;
+}
+
+.agent-current-phase {
+    color: #737373;
+}
+.dark .agent-current-phase {
+    color: #a3a3a3;
+}
+
 /* Agent steps (thinking summaries + tool indicators) */
 .agent-steps:empty { display: none; }
 .agent-steps:not(:empty) {

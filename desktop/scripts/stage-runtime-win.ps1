@@ -280,7 +280,7 @@ foreach ($packId in $PreinstallPacks) {
         continue
     }
     Write-Host "Preinstalling capability pack $packId"
-    & $runtimePython (Join-Path $runtimeScripts "install-capability.py") --pack-id $packId --runtime-dir $runtimeResolved --manifest (Join-Path $runtimeResolved "capabilities.json")
+    & $runtimePython (Join-Path $runtimeScripts "install-capability.py") --pack-id $packId --runtime-dir $runtimeResolved --manifest (Join-Path $runtimeResolved "capabilities.json") --fallback-index-url "https://pypi.tuna.tsinghua.edu.cn/simple"
     if ($LASTEXITCODE -ne 0) {
         throw "Capability pack preinstall failed: $packId"
     }

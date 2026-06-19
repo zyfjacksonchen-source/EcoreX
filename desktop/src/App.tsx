@@ -48,12 +48,12 @@ import { MessageContent, type AgentStepDisclosure, type ToolCallDisclosure } fro
 import {
   cancelChatRequest,
   checkForUpdates,
+  clearRuntimeContext,
   enterpriseChangePassword,
   checkEnterpriseQuota,
   chooseProjectFolder,
   chooseLocalFiles,
   decideToolPermission,
-  deleteMessagePair,
   enableDefaultSkills,
   enterpriseLogin,
   enterpriseLogout,
@@ -65,7 +65,7 @@ import {
   loadPermissionState,
   loadMemoryFiles,
   loadRuntimeSnapshot,
-  loadSessionHistory,
+  loadSessionHistoryWithMeta,
   openLocalPath,
   openRuntimePath,
   openDownloadPage,
@@ -94,6 +94,7 @@ import {
   type PermissionState,
   type ProjectFolder,
   type RuntimeActiveRequest,
+  type RuntimeExtension,
   type RuntimeMessage,
   type RuntimeSkill,
   type RuntimeStep,
@@ -119,6 +120,8 @@ type SessionRow = {
   id: string;
   title: string;
   detail: string;
+  activityAt?: string | number;
+  createdAt?: string | number;
   updatedAt: string | number;
   status: "active" | "waiting" | "cancelling" | "ready" | "failed";
   requestId?: string;
@@ -142,8 +145,10 @@ type ChatItem = {
   artifacts?: AgentArtifact[];
   cancelled?: boolean;
   requestId?: string;
+  phaseStartedAt?: number;
   userSeq?: number;
   botSeq?: number;
+  contextExcluded?: boolean;
 };
 type ApprovalState =
   | {
@@ -175,6 +180,8 @@ type SessionUiState = {
   messages: ChatItem[];
   composerText: string;
   attachments: FileAttachment[];
+  contextStartSeq?: number;
+  lastActivityAt?: string | number;
 };
 type ProjectContextMenu = {
   projectId: string;
@@ -220,6 +227,8 @@ const initialRuntime: RuntimeSnapshot = {
   totalSessions: 0,
   toolsCount: 0,
   skillsCount: 0,
+  extensionsCount: 0,
+  extensionSummary: {},
   modelsCount: 0
 };
 const initialSidecar: SidecarStatus = {
@@ -391,6 +400,39 @@ function formatTime(value?: string | number) {
   return date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
+function timeMs(value?: string | number) {
+  if (!value) return 0;
+  if (typeof value === "string" && /^(运行中|正在停止|刚刚|本地)$/.test(value)) return 0;
+  const normalized = typeof value === "number" && value < 10_000_000_000 ? value * 1000 : value;
+  const parsed = new Date(normalized).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function latestMessageMs(messages: ChatItem[] | undefined) {
+  return (messages || []).reduce((latest, message) => Math.max(latest, timeMs(message.createdAt)), 0);
+}
+
+function latestTimeValue(...values: Array<string | number | undefined>) {
+  let bestValue: string | number | undefined;
+  let bestMs = 0;
+  for (const value of values) {
+    const ms = timeMs(value);
+    if (ms > bestMs) {
+      bestMs = ms;
+      bestValue = value;
+    }
+  }
+  return bestValue || values.find((value) => Boolean(value)) || "";
+}
+
+function sessionActivityMs(row: SessionRow) {
+  const activity = timeMs(row.activityAt);
+  if (activity) return activity;
+  const updated = timeMs(row.updatedAt);
+  if (updated) return updated;
+  return timeMs(row.createdAt);
+}
+
 function shortTitle(text: string) {
   const clean = text.replace(/\s+/g, " ").trim();
   return clean ? clean.slice(0, 22) : "新对话";
@@ -417,14 +459,19 @@ function mapSessions(
     const id = session.session_id || session.id || `runtime-${index}`;
     const projectId = sessionProjects[id] || null;
     const project = projectId ? projectById.get(projectId) : undefined;
+    const cached = sessionUiState[id];
+    const cachedActivity = latestTimeValue(cached?.lastActivityAt, latestMessageMs(cached?.messages));
     const activeRequest = activeRequestBySession.get(id);
     const activeRequestId = activeRequest?.request_id ? String(activeRequest.request_id) : undefined;
     const isCancelling = Boolean(activeRequest?.cancelled);
+    const activityAt = latestTimeValue(cachedActivity, session.last_active, session.updatedAt, session.created_at);
     return {
       id,
       title: sessionTitles[id] || session.title || session.session_id || "未命名会话",
       detail: project ? project.name : "",
-      updatedAt: activeRequestId && !session.last_active ? (isCancelling ? "正在停止" : "运行中") : session.last_active || "",
+      activityAt,
+      createdAt: session.created_at || cachedActivity || activityAt,
+      updatedAt: activeRequestId && !activityAt ? (isCancelling ? "正在停止" : "运行中") : activityAt || "",
       status: activeRequestId ? (isCancelling ? "cancelling" : "waiting") : id === activeSessionId ? "active" : "ready",
       requestId: activeRequestId,
       streamAvailable: activeRequest?.stream_available !== false,
@@ -444,8 +491,11 @@ function mapSessions(
     const activeRequest = activeRequestBySession.get(sessionId);
     const activeRequestId = activeRequest?.request_id ? String(activeRequest.request_id) : undefined;
     const isCancelling = Boolean(activeRequest?.cancelled);
+    const activityAt = cached.lastActivityAt || latestMessageMs(cached.messages);
     rows.push({
       id: sessionId,
+      activityAt,
+      createdAt: activityAt,
       title: sessionTitles[sessionId] || cached.title || "未命名会话",
       detail: project ? project.name : "",
       updatedAt: activeRequestId ? (isCancelling ? "正在停止" : "运行中") : live ? "运行中" : "本地",
@@ -464,8 +514,11 @@ function mapSessions(
     const project = projectId ? projectById.get(projectId) : undefined;
     const requestId = activeRequest.request_id ? String(activeRequest.request_id) : undefined;
     const isCancelling = Boolean(activeRequest.cancelled);
+    const activityAt = activeRequest.created_at || Date.now();
     rows.push({
       id: sessionId,
+      activityAt,
+      createdAt: activityAt,
       title: sessionTitles[sessionId] || sessionUiState[sessionId]?.title || sessionId,
       detail: project ? project.name : "",
       updatedAt: isCancelling ? "正在停止" : "运行中",
@@ -484,8 +537,11 @@ function mapSessions(
     const activeRequest = activeRequestBySession.get(activeSessionId);
     const activeRequestId = activeRequest?.request_id ? String(activeRequest.request_id) : undefined;
     const isCancelling = Boolean(activeRequest?.cancelled);
+    const activityAt = sessionUiState[activeSessionId]?.lastActivityAt || latestMessageMs(sessionUiState[activeSessionId]?.messages) || Date.now();
     rows.unshift({
       id: activeSessionId,
+      activityAt,
+      createdAt: activityAt,
       title: sessionTitles[activeSessionId] || localTitle || "新对话",
       detail: project ? project.name : "",
       updatedAt: activeRequestId ? (isCancelling ? "正在停止" : "运行中") : "刚刚",
@@ -497,7 +553,15 @@ function mapSessions(
       ...(project ? { projectId: project.id, projectName: project.name } : {})
     });
   }
-  return rows.sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)));
+  return rows.sort((a, b) => {
+    const pinnedDiff = Number(Boolean(b.pinned)) - Number(Boolean(a.pinned));
+    if (pinnedDiff) return pinnedDiff;
+    const activityDiff = sessionActivityMs(b) - sessionActivityMs(a);
+    if (activityDiff) return activityDiff;
+    const createdDiff = timeMs(b.createdAt) - timeMs(a.createdAt);
+    if (createdDiff) return createdDiff;
+    return b.id.localeCompare(a.id);
+  });
 }
 
 function estimateTextTokens(text: string) {
@@ -591,14 +655,15 @@ function percentOf(used: number, limit: number) {
 }
 
 function meterTitle(label: string, used: number, limit?: number) {
-  const usedDetail = `${Math.round(used).toLocaleString("zh-CN")} tokens`;
+  const usedDetail = `${compactTokenCount(used)} tokens`;
   if (!limit) return `${label}：${usedDetail}，暂无上限数据`;
-  const limitDetail = `${Math.round(limit).toLocaleString("zh-CN")} tokens`;
+  const limitDetail = `${compactTokenCount(limit)} tokens`;
   return `${label}：${usedDetail} / ${limitDetail}，${Math.round(percentOf(used, limit))}%`;
 }
 
 function estimateContextTokens(messages: ChatItem[], draft: string, files: FileAttachment[]) {
   const history = messages.reduce((total, message) => {
+    if (message.contextExcluded) return total;
     const messageTokens = estimateTokenCount(message.content || "", message.attachments || []);
     const stepTokens = (message.steps || []).reduce((stepTotal, step) => {
       if (step.type === "thinking" || step.type === "content" || step.type === "phase") {
@@ -1073,11 +1138,13 @@ function runtimeExtrasArtifacts(item: RuntimeMessage): AgentArtifact[] | undefin
   return artifacts.length ? artifacts : undefined;
 }
 
-function mapRuntimeMessage(item: RuntimeMessage, sessionId: string, index: number): ChatItem {
+function mapRuntimeMessage(item: RuntimeMessage, sessionId: string, index: number, contextStartSeq = 0, turnSeq?: number): ChatItem {
   const steps = [
     ...(item.steps?.map(normalizeStep) || []),
     ...runtimeExtrasMediaSteps(item)
   ];
+  const displaySeq = typeof item._seq === "number" ? item._seq : typeof item.seq === "number" ? item.seq : undefined;
+  const contextSeq = item.role === "user" ? displaySeq : (typeof displaySeq === "number" ? displaySeq : turnSeq);
   return {
     id: `${sessionId}-${index}`,
     role: item.role === "user" ? "user" : "assistant",
@@ -1089,9 +1156,19 @@ function mapRuntimeMessage(item: RuntimeMessage, sessionId: string, index: numbe
     artifacts: item.role === "assistant" ? runtimeExtrasArtifacts(item) : undefined,
     toolCalls: item.tool_calls?.map(normalizeToolCall),
     requestId: item.request_id,
-    userSeq: item.user_seq ?? item.seq,
-    botSeq: item.role === "assistant" ? item.seq : undefined
+    userSeq: item.user_seq ?? item._seq ?? item.seq,
+    botSeq: item.role === "assistant" ? item.seq : undefined,
+    contextExcluded: contextStartSeq > 0 && typeof contextSeq === "number" && contextSeq < contextStartSeq
   };
+}
+
+function mapRuntimeHistory(messages: RuntimeMessage[], sessionId: string, contextStartSeq = 0): ChatItem[] {
+  let currentTurnSeq: number | undefined;
+  return messages.map((item, index) => {
+    const seq = typeof item._seq === "number" ? item._seq : typeof item.seq === "number" ? item.seq : undefined;
+    if (item.role === "user" && typeof seq === "number") currentTurnSeq = seq;
+    return mapRuntimeMessage(item, sessionId, index, contextStartSeq, currentTurnSeq);
+  });
 }
 
 function toolEnabled(tools: RuntimeTool[] | undefined, name: string) {
@@ -1101,6 +1178,83 @@ function toolEnabled(tools: RuntimeTool[] | undefined, name: string) {
 function skillEnabled(skills: RuntimeSkill[] | undefined, name: string) {
   const skill = (skills || []).find((item) => item.name === name);
   return Boolean(skill && skill.enabled !== false);
+}
+
+type SkillDisplayRow = {
+  key: string;
+  name: string;
+  displayName: string;
+  display_name?: string;
+  description?: string;
+  source?: string;
+  path?: string;
+  enabled: boolean;
+  installed: boolean;
+  status?: string;
+  origin?: string;
+  policy?: string;
+  toggleable: boolean;
+};
+
+function skillNameFromExtension(extension: RuntimeExtension) {
+  const id = String(extension.id || "");
+  return id.startsWith("skill:") ? id.slice("skill:".length) : "";
+}
+
+function extensionSkillEnabled(snapshot: RuntimeSnapshot, name: string) {
+  const extension = (snapshot.extensions || []).find((item) => skillNameFromExtension(item) === name);
+  if (extension) return extension.enabled !== false && extension.installed !== false;
+  return skillEnabled(snapshot.skills, name);
+}
+
+function buildSkillDisplayRows(snapshot: RuntimeSnapshot): SkillDisplayRow[] {
+  const legacyByName = new Map((snapshot.skills || []).map((skill) => [skill.name || skill.display_name || "", skill]));
+  const rows: SkillDisplayRow[] = [];
+  const seen = new Set<string>();
+  for (const extension of snapshot.extensions || []) {
+    if (extension.type !== "builtin_skill" && extension.type !== "user_skill") continue;
+    const name = skillNameFromExtension(extension) || extension.displayName || extension.id;
+    if (!name) continue;
+    const legacy = legacyByName.get(name);
+    seen.add(name);
+    rows.push({
+      key: extension.id || `skill:${name}`,
+      name,
+      displayName: extension.displayName || legacy?.display_name || name,
+      display_name: extension.displayName || legacy?.display_name || name,
+      description: extension.description || legacy?.description,
+      source: extension.origin || legacy?.source,
+      path: extension.sourcePath || legacy?.path,
+      enabled: extension.enabled !== false && (legacy?.enabled ?? true) !== false,
+      installed: extension.installed !== false,
+      status: extension.status,
+      origin: extension.origin,
+      policy: extension.policy,
+      toggleable: Boolean(legacy?.name)
+    });
+  }
+  for (const skill of snapshot.skills || []) {
+    const name = skill.name || skill.display_name || "";
+    if (!name || seen.has(name)) continue;
+    rows.push({
+      key: `legacy:${name}`,
+      name,
+      displayName: skill.display_name || name,
+      display_name: skill.display_name || name,
+      description: skill.description,
+      source: skill.source,
+      path: skill.path,
+      enabled: skill.enabled !== false,
+      installed: true,
+      status: skill.enabled === false ? "disabled" : "ready",
+      toggleable: Boolean(skill.name)
+    });
+  }
+  return rows.sort((a, b) => {
+    const originDiff = String(a.origin || a.source || "").localeCompare(String(b.origin || b.source || ""));
+    if (originDiff) return originDiff;
+    return a.displayName.localeCompare(b.displayName);
+  });
 }
 
 function memoryFileName(file: MemoryFile) {
@@ -1218,6 +1372,9 @@ export function App() {
   const autoScrollRef = useRef(true);
   const completedRequestIds = useRef<StringBoolMap>({});
   const streamRetryCounts = useRef<Record<string, number>>({});
+  const sendGenerationRef = useRef(0);
+  const preflightAbortRef = useRef<AbortController | null>(null);
+  const phaseTimersRef = useRef<Record<string, number[]>>({});
   const preloadDone = useRef(false);
   const bootHistoryRefreshDone = useRef(false);
   const releaseNotesDismissedVersion = useRef("");
@@ -1327,11 +1484,14 @@ export function App() {
     setSessionUiState((current) => ({
       ...current,
       [activeSessionId]: {
+        ...(current[activeSessionId] || {}),
         title: activeSessionTitle,
         projectId,
         messages,
         composerText,
-        attachments
+        attachments,
+        contextStartSeq: current[activeSessionId]?.contextStartSeq,
+        lastActivityAt: latestMessageMs(messages) || current[activeSessionId]?.lastActivityAt || Date.now()
       }
     }));
   }, [activeSessionId, activeSessionTitle, sessionProjects, messages, composerText, attachments]);
@@ -1595,10 +1755,11 @@ export function App() {
     startNewSession(project);
   };
   const currentModelName = displayModelName(runtimeSnapshot.currentModel);
+  const skillDisplayRows = useMemo(() => buildSkillDisplayRows(runtimeSnapshot), [runtimeSnapshot]);
   const mentionMatch = /@([\w\u4e00-\u9fa5-]*)$/.exec(composerText);
   const skillMentions = mentionMatch
-    ? (runtimeSnapshot.skills || []).filter((skill) => {
-        const label = skill.display_name || skill.name || "";
+    ? skillDisplayRows.filter((skill) => {
+        const label = skill.displayName || skill.name || "";
         return label && label.toLowerCase().includes(mentionMatch[1].toLowerCase());
       }).slice(0, 6)
     : [];
@@ -1686,20 +1847,20 @@ export function App() {
     setToast(enabled ? `${pack.name} 已启用` : `${pack.name} 已关闭`);
   }
 
-  async function toggleRuntimeSkill(skill: RuntimeSkill, enabled: boolean) {
+  async function toggleRuntimeSkill(skill: Pick<SkillDisplayRow, "name" | "displayName">, enabled: boolean) {
     const name = skill.name || "";
     if (!name) return;
     try {
       await setSkillEnabled(name, enabled);
       setRuntimeSnapshot(await loadRuntimeSnapshot());
-      setToast(enabled ? `${skill.display_name || name} 已启用` : `${skill.display_name || name} 已关闭`);
+      setToast(enabled ? `${skill.displayName || name} 已启用` : `${skill.displayName || name} 已关闭`);
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Skill 开关失败");
     }
   }
 
-  function insertSkillMention(skill: RuntimeSkill) {
-    const label = skill.display_name || skill.name || "";
+  function insertSkillMention(skill: Pick<SkillDisplayRow, "name" | "displayName">) {
+    const label = skill.displayName || skill.name || "";
     if (!label) return;
     setComposerText((current) => current.replace(/@([\w\u4e00-\u9fa5-]*)$/, `@${label} `));
     window.setTimeout(() => composerRef.current?.focus(), 0);
@@ -1876,11 +2037,11 @@ export function App() {
     setAttachments([]);
     focusComposerSoon();
     try {
-      const history = await loadSessionHistory(row.id);
+      const history = await loadSessionHistoryWithMeta(row.id);
       if (sessionSwitchSeq.current !== switchSeq || activeSessionIdRef.current !== row.id) {
         return;
       }
-      const mapped = normalizePausedMessages(history.map((item, index) => mapRuntimeMessage(item, row.id, index)));
+      const mapped = normalizePausedMessages(mapRuntimeHistory(history.messages, row.id, history.contextStartSeq));
       setSessionUiState((current) => ({
         ...current,
         [row.id]: {
@@ -1890,7 +2051,9 @@ export function App() {
             attachments: []
           }),
           projectId: nextProjectId,
-          messages: mapped
+          messages: mapped,
+          contextStartSeq: history.contextStartSeq,
+          lastActivityAt: latestMessageMs(mapped) || current[row.id]?.lastActivityAt || row.activityAt || Date.now()
         }
       }));
       if (activeSessionIdRef.current === row.id) {
@@ -2134,12 +2297,15 @@ export function App() {
         composerText: "",
         attachments: []
       };
+      const nextMessages = updater(existing.messages);
+      const activityAt = latestMessageMs(nextMessages) || existing.lastActivityAt || Date.now();
       return {
         ...current,
         [sessionId]: {
           ...existing,
           projectId: sessionProjects[sessionId] || null,
-          messages: updater(existing.messages)
+          messages: nextMessages,
+          lastActivityAt: activityAt
         }
       };
     });
@@ -2168,8 +2334,8 @@ export function App() {
 
   async function refreshSessionFromHistory(sessionId: string) {
     try {
-      const history = await loadSessionHistory(sessionId);
-      const mapped = normalizePausedMessages(history.map((item, index) => mapRuntimeMessage(item, sessionId, index)));
+      const history = await loadSessionHistoryWithMeta(sessionId);
+      const mapped = normalizePausedMessages(mapRuntimeHistory(history.messages, sessionId, history.contextStartSeq));
       const hasFinalAssistant = mapped.some((message) => (
         message.role === "assistant"
         && !message.pending
@@ -2186,6 +2352,20 @@ export function App() {
         : sessionUiState[sessionId]?.messages || [];
       const merged = mergeHistoryWithLocalMessages(mapped, localMessages);
       updateSessionMessages(sessionId, () => merged);
+      setSessionUiState((current) => ({
+        ...current,
+        [sessionId]: {
+          ...(current[sessionId] || {
+            title: sessionTitles[sessionId] || activeSessionTitle,
+            projectId: sessionProjects[sessionId] || null,
+            composerText: "",
+            attachments: []
+          }),
+          messages: merged,
+          contextStartSeq: history.contextStartSeq,
+          lastActivityAt: latestMessageMs(merged) || current[sessionId]?.lastActivityAt || Date.now()
+        }
+      }));
       if (activeSessionIdRef.current === sessionId) {
         setMessages(merged);
       } else {
@@ -2221,9 +2401,72 @@ export function App() {
       ...message,
       steps: (message.steps || []).filter((step) => (
         step.type !== "phase"
-        || (step.content !== "正在发送" && step.content !== "正在连接响应")
+        || !isTransientPhaseContent(step.content)
       ))
     };
+  }
+
+  function isTransientPhaseContent(content?: string) {
+    const value = String(content || "").trim();
+    if (!value) return true;
+    return [
+      "正在发送",
+      "正在连接响应",
+      "正在连接后台任务",
+      "已收到，正在准备响应",
+      "正在检查额度",
+      "正在建立响应通道",
+      "正在组织上下文",
+      "正在连接模型响应",
+      "正在恢复响应通道"
+    ].some((prefix) => value === prefix || value.startsWith(`${prefix} `) || value.startsWith(`${prefix} ·`))
+      || value.startsWith("等待本机工具授权");
+  }
+
+  function replaceCurrentPhase(message: ChatItem, rawContent: string): ChatItem {
+    const content = redactInternalPromptText(rawContent || "").trim();
+    if (!content) return message;
+    const steps = (message.steps || []).filter((step) => (
+      step.type !== "phase" || !isTransientPhaseContent(step.content)
+    ));
+    const last = steps[steps.length - 1];
+    if (last?.type === "phase") {
+      if ((last.content || "") === content) {
+        return { ...message, pending: true, paused: false };
+      }
+      steps[steps.length - 1] = { ...last, content };
+    } else {
+      steps.push({ type: "phase", content });
+    }
+    return {
+      ...message,
+      pending: true,
+      paused: false,
+      phaseStartedAt: message.phaseStartedAt || Date.now(),
+      steps
+    };
+  }
+
+  function clearAssistantPhaseTimers(assistantId?: string) {
+    if (!assistantId) return;
+    const timers = phaseTimersRef.current[assistantId] || [];
+    timers.forEach((timer) => window.clearTimeout(timer));
+    delete phaseTimersRef.current[assistantId];
+  }
+
+  function clearAllPhaseTimers() {
+    Object.keys(phaseTimersRef.current).forEach((assistantId) => clearAssistantPhaseTimers(assistantId));
+  }
+
+  function queuePreflightPhase(sessionId: string, assistantId: string, generation: number, delayMs: number, content: string) {
+    const timer = window.setTimeout(() => {
+      if (sendGenerationRef.current !== generation) return;
+      updateAssistantMessage(sessionId, assistantId, (message) => {
+        if (!message.pending || message.requestId || message.cancelled) return message;
+        return replaceCurrentPhase(message, content);
+      });
+    }, delayMs);
+    phaseTimersRef.current[assistantId] = [...(phaseTimersRef.current[assistantId] || []), timer];
   }
 
   function markSessionRequestsPaused(sessionId: string) {
@@ -2334,7 +2577,7 @@ export function App() {
     return { ...message, pending: true, steps };
   }
 
-  function appendMediaStep(message: ChatItem, item: StreamItem): ChatItem {
+  function appendMediaStep(message: ChatItem, item: StreamItem, pending = true): ChatItem {
     const next = finishRunningSteps(message);
     const type = item.type === "image" || item.file_type === "image"
       ? "image"
@@ -2345,7 +2588,8 @@ export function App() {
           : "file";
     return {
       ...next,
-      pending: true,
+      pending,
+      paused: false,
       steps: [
         ...(next.steps || []),
         {
@@ -2362,7 +2606,7 @@ export function App() {
     return (artifact.path || artifact.relativePath || artifact.url || artifact.id).replace(/\\/g, "/").toLowerCase();
   }
 
-  function appendArtifact(message: ChatItem, item: StreamItem): ChatItem {
+  function appendArtifact(message: ChatItem, item: StreamItem, pending = true): ChatItem {
     const incoming = item.artifact
       ? normalizeArtifactEntry(item.artifact, 0, item.request_id || message.requestId)
       : Array.isArray(item.artifacts)
@@ -2380,7 +2624,7 @@ export function App() {
         nextArtifacts.push(artifact);
       }
     }
-    return { ...message, pending: true, artifacts: nextArtifacts };
+    return { ...message, pending, paused: false, artifacts: nextArtifacts };
   }
 
   function isCurrentSessionRequest(sessionId: string, requestId?: string) {
@@ -2388,7 +2632,13 @@ export function App() {
   }
 
   function isPostDoneTailItem(item: StreamItem) {
-    return item.type === "voice_attach";
+    return item.type === "voice_attach"
+      || item.type === "artifact"
+      || item.type === "file"
+      || item.type === "image"
+      || item.type === "video"
+      || item.type === "audio"
+      || Boolean(item.artifact || item.artifacts);
   }
 
   function streamItemText(item: StreamItem) {
@@ -2506,6 +2756,9 @@ export function App() {
   function scheduleStreamReconnect(sessionId: string, assistantId: string, requestId: string) {
     if (!isCurrentSessionRequest(sessionId, requestId)) return;
     const attempts = streamRetryCounts.current[sessionId] || 0;
+    updateAssistantMessage(sessionId, assistantId, (message) => (
+      message.pending ? replaceCurrentPhase(message, attempts ? `正在恢复响应通道 · 第 ${attempts + 1} 次` : "正在恢复响应通道") : message
+    ));
     if (attempts >= 5) {
       void (async () => {
         const snapshot = await loadRuntimeSnapshot().catch(() => null);
@@ -2613,6 +2866,9 @@ export function App() {
             };
           });
           completedRequestIds.current[requestId] = true;
+          window.setTimeout(() => {
+            delete completedRequestIds.current[requestId];
+          }, 70_000);
           markSessionOutputReady(sessionId);
           clearSessionRequestState(sessionId, requestId);
           window.setTimeout(() => {
@@ -2675,16 +2931,9 @@ export function App() {
             ]
           });
           updateAssistantMessage(sessionId, assistantId, (message) => ({
-            ...message,
+            ...replaceCurrentPhase(message, `等待本机工具授权：${item.tool || "tool"}`),
             pending: true,
-            paused: false,
-            steps: [
-              ...(message.steps || []),
-              {
-                type: "phase",
-                content: `等待本机工具授权：${item.tool || "tool"}`
-              }
-            ]
+            paused: false
           }));
           return;
         }
@@ -2697,30 +2946,33 @@ export function App() {
           return;
         }
         if (item.type === "artifact") {
-          updateAssistantMessage(sessionId, assistantId, (message) => appendArtifact(message, item));
+          const postDoneTail = Boolean(completedRequestIds.current[requestId]);
+          updateAssistantMessage(sessionId, assistantId, (message) => (
+            postDoneTail
+              ? clearTransientSendSteps(appendArtifact(finishRunningSteps(message), item, false))
+              : appendArtifact(message, item)
+          ));
+          if (postDoneTail) markSessionOutputReady(sessionId);
           return;
         }
-        if (item.type === "image" || item.type === "video" || item.type === "file" || item.type === "voice_attach") {
+        if (item.type === "image" || item.type === "video" || item.type === "audio" || item.type === "file" || item.type === "voice_attach") {
+          const postDoneTail = Boolean(completedRequestIds.current[requestId]);
           updateAssistantMessage(sessionId, assistantId, (message) => {
-            const next = appendMediaStep(message, item);
-            return item.type === "voice_attach" ? { ...finishRunningSteps(next), pending: false, paused: false } : next;
+            const next = appendMediaStep(message, item, !postDoneTail);
+            return postDoneTail || item.type === "voice_attach"
+              ? { ...clearTransientSendSteps(finishRunningSteps(next)), pending: false, paused: false }
+              : next;
           });
-          if (item.type === "voice_attach") {
+          if (postDoneTail || item.type === "voice_attach") {
             markSessionOutputReady(sessionId);
             finishSessionRequest(sessionId, requestId);
-            delete completedRequestIds.current[requestId];
           }
           return;
         }
             if (item.type === "phase" && (item.content || item.message)) {
               const phaseContent = redactInternalPromptText(item.content || item.message || "");
               if (!phaseContent) return;
-              updateAssistantMessage(sessionId, assistantId, (message) => ({
-                ...message,
-                pending: true,
-                paused: false,
-                steps: [...(message.steps || []), { type: "phase", content: phaseContent }]
-              }));
+              updateAssistantMessage(sessionId, assistantId, (message) => replaceCurrentPhase(message, phaseContent));
               return;
             }
             if (item.type === "message_update" || item.type === "delta") {
@@ -2743,6 +2995,73 @@ export function App() {
     streamCleanupRequestIds.current[sessionId] = requestId;
   }
 
+  function isCompactCommand(text: string) {
+    return /^\/(?:compact|context\s+clear)$/i.test(text.trim());
+  }
+
+  async function runCompactCommand(text: string) {
+    const requestSessionId = activeSessionId;
+    const createdAt = new Date().toISOString();
+    const userMessage: ChatItem = {
+      id: `u-compact-${Date.now()}`,
+      role: "user",
+      content: text || "/compact",
+      createdAt
+    };
+    const assistantId = `a-compact-${Date.now()}`;
+    setComposerText("");
+    setAttachments([]);
+    updateSessionMessages(requestSessionId, (current) => [
+      ...current,
+      userMessage,
+      {
+        id: assistantId,
+        role: "assistant",
+        content: "",
+        pending: true,
+        createdAt,
+        steps: [{ type: "phase", content: "正在压缩上下文" }]
+      }
+    ]);
+    try {
+      const contextStartSeq = await clearRuntimeContext(requestSessionId);
+      updateSessionMessages(requestSessionId, (current) => current.map((message) => {
+        if (message.id === userMessage.id) return message;
+        if (message.id === assistantId) {
+          return {
+            ...finishRunningSteps(message),
+            content: "已压缩上下文。",
+            pending: false,
+            paused: false
+          };
+        }
+        return { ...message, contextExcluded: true };
+      }));
+      setSessionUiState((current) => ({
+        ...current,
+        [requestSessionId]: {
+          ...(current[requestSessionId] || {
+            title: activeSessionTitle,
+            projectId: sessionProjects[requestSessionId] || null,
+            messages: [],
+            composerText: "",
+            attachments: []
+          }),
+          contextStartSeq,
+          lastActivityAt: Date.now()
+        }
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "压缩上下文失败";
+      updateAssistantMessage(requestSessionId, assistantId, (entry) => ({
+        ...finishRunningSteps(entry, "error"),
+        content: message,
+        pending: false,
+        paused: false
+      }));
+    }
+  }
+
   async function sendNow(skipCapabilityCheck = false) {
     const text = composerText.trim();
     if (!text && !attachments.length) return;
@@ -2756,23 +3075,13 @@ export function App() {
       markSessionRequestsPaused(activeSessionId);
     }
 
-    const enabledPacks = packs.filter((pack) => capabilityPackEnabled(pack.id));
-    const neededPack = skipCapabilityCheck ? null : detectNeededPack(text, attachments, enabledPacks);
-    if (neededPack) {
-      const resumeSessionId = activeSessionIdRef.current;
-      if (shouldOpenCapabilitySettings(neededPack)) {
-        setSettingsSection("abilities");
-        setSettingsOpen(true);
-      }
-      void handleInstallPack(neededPack, () => {
-        if (activeSessionIdRef.current !== resumeSessionId) {
-          setToast(`${neededPack.name} 已安装，请回到原会话继续发送`);
-          return;
-        }
-        void sendNow(true);
-      });
+    if (isCompactCommand(text) && !attachments.length) {
+      await runCompactCommand(text);
       return;
     }
+
+    const enabledPacks = packs.filter((pack) => capabilityPackEnabled(pack.id));
+    const neededPack = skipCapabilityCheck ? null : detectNeededPack(text, attachments, enabledPacks);
 
     const projectAttachment: FileAttachment | null = activeProject
       ? {
@@ -2785,9 +3094,9 @@ export function App() {
       ? [projectAttachment, ...attachments.filter((file) => file.file_path !== projectAttachment.file_path)]
       : attachments;
     const displayText = text || "请处理这些附件";
-    const hiddenContext = activeProject ? projectContextPrompt(activeProject) : "";
+    let hiddenContext = activeProject ? projectContextPrompt(activeProject) : "";
 
-    const estimatedTokens = estimateTokens(`${hiddenContext}\n\n${displayText}`.trim(), outboundAttachments);
+    let estimatedTokens = estimateTokens(`${hiddenContext}\n\n${displayText}`.trim(), outboundAttachments);
     let streamTextChars = 0;
     let streamToolChars = 0;
     let streamSawDelta = false;
@@ -2824,6 +3133,11 @@ export function App() {
     };
     const assistantId = `a-${Date.now()}`;
     const requestSessionId = activeSessionId;
+    const sendGeneration = sendGenerationRef.current + 1;
+    sendGenerationRef.current = sendGeneration;
+    preflightAbortRef.current?.abort();
+    const preflightController = new AbortController();
+    preflightAbortRef.current = preflightController;
     updateSessionMessages(requestSessionId, (current) => [
       ...current,
       userMessage,
@@ -2836,6 +3150,10 @@ export function App() {
         steps: [{ type: "phase", content: "正在发送" }]
       }
     ]);
+    queuePreflightPhase(requestSessionId, assistantId, sendGeneration, 800, "已收到，正在准备响应");
+    queuePreflightPhase(requestSessionId, assistantId, sendGeneration, 1800, "正在检查额度");
+    queuePreflightPhase(requestSessionId, assistantId, sendGeneration, 3600, "正在建立响应通道");
+    queuePreflightPhase(requestSessionId, assistantId, sendGeneration, 6500, "正在组织上下文");
     setActiveSessionTitle((current) => {
       const nextTitle = current === "新对话" ? shortTitle(text) : current;
       setSessionTitles((titles) => ({ ...titles, [requestSessionId]: nextTitle }));
@@ -2848,10 +3166,72 @@ export function App() {
     setAttachments([]);
     setApproval(null);
 
+    if (neededPack?.policyMode === "disabled") {
+      updateAssistantMessage(requestSessionId, assistantId, (message) => ({
+        ...finishRunningSteps(message, "error"),
+        content: `${neededPack.name} is disabled by policy. Please ask an administrator to enable or preinstall it.`,
+        pending: false
+      }));
+      clearAssistantPhaseTimers(assistantId);
+      if (preflightAbortRef.current === preflightController) preflightAbortRef.current = null;
+      markSessionOutputReady(requestSessionId);
+      return;
+    }
+
+    if (neededPack) {
+      updateAssistantMessage(requestSessionId, assistantId, (message) => replaceCurrentPhase(
+        message,
+        neededPack.discoveryOnly
+          ? `Preparing find-skill discovery for ${neededPack.name}`
+          : `Preparing capability setup for ${neededPack.name}`
+      ));
+      try {
+        const request = await requestAgentInstallRequest({
+          packId: neededPack.id,
+          packName: neededPack.name,
+          sessionId: requestSessionId
+        });
+        if (request.status === "error" || !request.prompt) {
+          throw new Error(request.message || "Failed to prepare capability setup task");
+        }
+        const capabilityContext = [
+          "Internal capability preflight:",
+          "The visible user turn has already been recorded and must remain the only user request.",
+          "Do not restate this preflight as user-authored content.",
+          "Run required discovery or install steps as assistant/tool progress, then continue the original user request.",
+          request.prompt
+        ].join("\n");
+        hiddenContext = [hiddenContext, capabilityContext].filter(Boolean).join("\n\n");
+        estimatedTokens = estimateTokens(`${hiddenContext}\n\n${displayText}`.trim(), outboundAttachments);
+        setInstallNotice({
+          packId: neededPack.id,
+          packName: neededPack.name,
+          message: neededPack.discoveryOnly
+            ? `${neededPack.name} will be handled through find skill in this response.`
+            : `${neededPack.name} setup will run inside this response.`
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to prepare capability setup task";
+        updateAssistantMessage(requestSessionId, assistantId, (assistant) => ({
+          ...finishRunningSteps(assistant, "error"),
+          content: message,
+          pending: false
+        }));
+        clearAssistantPhaseTimers(assistantId);
+        if (preflightAbortRef.current === preflightController) preflightAbortRef.current = null;
+        markSessionOutputReady(requestSessionId);
+        return;
+      }
+    }
+
     const quota = await checkEnterpriseQuota(estimatedTokens).catch((error) => {
       setToast(error instanceof Error ? `额度检查暂不可用，已继续发送：${error.message}` : "额度检查暂不可用，已继续发送");
       return { ok: true, quota: { allowed: true } } as EnterpriseQuotaCheckResult;
     });
+    if (sendGenerationRef.current !== sendGeneration || preflightController.signal.aborted) {
+      clearAssistantPhaseTimers(assistantId);
+      return;
+    }
     if (quota.quota) {
       setQuotaSnapshot(quota.quota);
     }
@@ -2879,6 +3259,8 @@ export function App() {
         content: authFailure ? "登录状态异常，请重新登录后继续。" : quotaMessage,
         pending: false
       }));
+      clearAssistantPhaseTimers(assistantId);
+      if (preflightAbortRef.current === preflightController) preflightAbortRef.current = null;
       markSessionOutputReady(requestSessionId);
       return;
     }
@@ -2929,6 +3311,13 @@ export function App() {
         hiddenContext,
         attachments: outboundAttachments
       });
+      if (sendGenerationRef.current !== sendGeneration || preflightController.signal.aborted) {
+        clearAssistantPhaseTimers(assistantId);
+        if (result.request_id) {
+          void cancelChatRequest({ requestId: result.request_id, sessionId: requestSessionId }).catch(() => undefined);
+        }
+        return;
+      }
       if (result.status === "error") throw new Error(result.message || "发送失败");
       if (result.inline_reply) {
         const inlineReply = redactInternalPromptText(result.inline_reply || "");
@@ -2940,19 +3329,20 @@ export function App() {
         } : item));
         markSessionOutputReady(requestSessionId);
         reportChatUsage(result.usage, usageTotal(result.usage) ? "provider" : "estimated");
+        clearAssistantPhaseTimers(assistantId);
+        if (preflightAbortRef.current === preflightController) preflightAbortRef.current = null;
       }
       if (result.request_id && result.stream) {
         const requestId = result.request_id;
+        clearAssistantPhaseTimers(assistantId);
+        if (preflightAbortRef.current === preflightController) preflightAbortRef.current = null;
         setActiveRequestId(requestId);
         sessionRequestIdsRef.current = { ...sessionRequestIdsRef.current, [requestSessionId]: requestId };
         setSessionRequestIds((current) => ({ ...current, [requestSessionId]: requestId }));
         streamRetryCounts.current[requestSessionId] = 0;
         updateAssistantMessage(requestSessionId, assistantId, (message) => ({
-          ...message,
-          requestId,
-          steps: message.steps?.length
-            ? message.steps.map((step, index) => index === 0 && step.type === "phase" ? { ...step, content: "正在连接响应" } : step)
-            : [{ type: "phase", content: "正在连接响应" }]
+          ...replaceCurrentPhase(message, "正在连接响应"),
+          requestId
         }));
         const cleanup = openMessageStream({
           requestId,
@@ -2994,6 +3384,9 @@ export function App() {
                 return message;
               }));
               completedRequestIds.current[requestId] = true;
+              window.setTimeout(() => {
+                delete completedRequestIds.current[requestId];
+              }, 70_000);
               markSessionOutputReady(requestSessionId);
               clearSessionRequestState(requestSessionId, requestId);
               window.setTimeout(() => {
@@ -3058,15 +3451,8 @@ export function App() {
                 ]
               });
               updateAssistantMessage(requestSessionId, assistantId, (message) => ({
-                ...message,
-                pending: true,
-                steps: [
-                  ...(message.steps || []),
-                  {
-                    type: "phase",
-                    content: `等待本机工具授权：${item.tool || "tool"}`
-                  }
-                ]
+                ...replaceCurrentPhase(message, `等待本机工具授权：${item.tool || "tool"}`),
+                pending: true
               }));
               return;
             }
@@ -3079,29 +3465,33 @@ export function App() {
               return;
             }
             if (item.type === "artifact") {
-              updateAssistantMessage(requestSessionId, assistantId, (message) => appendArtifact(message, item));
+              const postDoneTail = Boolean(completedRequestIds.current[requestId]);
+              updateAssistantMessage(requestSessionId, assistantId, (message) => (
+                postDoneTail
+                  ? clearTransientSendSteps(appendArtifact(finishRunningSteps(message), item, false))
+                  : appendArtifact(message, item)
+              ));
+              if (postDoneTail) markSessionOutputReady(requestSessionId);
               return;
             }
-            if (item.type === "image" || item.type === "video" || item.type === "file" || item.type === "voice_attach") {
+            if (item.type === "image" || item.type === "video" || item.type === "audio" || item.type === "file" || item.type === "voice_attach") {
+              const postDoneTail = Boolean(completedRequestIds.current[requestId]);
               updateAssistantMessage(requestSessionId, assistantId, (message) => {
-                const next = appendMediaStep(message, item);
-                return item.type === "voice_attach" ? { ...finishRunningSteps(next), pending: false, paused: false } : next;
+                const next = appendMediaStep(message, item, !postDoneTail);
+                return postDoneTail || item.type === "voice_attach"
+                  ? { ...clearTransientSendSteps(finishRunningSteps(next)), pending: false, paused: false }
+                  : next;
               });
-              if (item.type === "voice_attach") {
+              if (postDoneTail || item.type === "voice_attach") {
                 markSessionOutputReady(requestSessionId);
                 finishSessionRequest(requestSessionId, requestId);
-                delete completedRequestIds.current[requestId];
               }
               return;
             }
             if (item.type === "phase" && (item.content || item.message)) {
               const phaseContent = redactInternalPromptText(item.content || item.message || "");
               if (!phaseContent) return;
-              updateAssistantMessage(requestSessionId, assistantId, (message) => ({
-                ...message,
-                pending: true,
-                steps: [...(message.steps || []), { type: "phase", content: phaseContent }]
-              }));
+              updateAssistantMessage(requestSessionId, assistantId, (message) => replaceCurrentPhase(message, phaseContent));
               return;
             }
             if (item.type === "message_update" || item.type === "delta") {
@@ -3124,6 +3514,8 @@ export function App() {
         streamCleanupRequestIds.current[requestSessionId] = requestId;
       } else if (!result.inline_reply) {
         reportChatUsage(result.usage, usageTotal(result.usage) ? "provider" : "estimated");
+        clearAssistantPhaseTimers(assistantId);
+        if (preflightAbortRef.current === preflightController) preflightAbortRef.current = null;
       }
       generateSessionTitle({ sessionId: requestSessionId, userMessage: text || activeProject?.name || "项目会话" }).then((title) => {
         if (!title) return;
@@ -3146,6 +3538,12 @@ export function App() {
       }).catch(() => undefined);
     } catch (error) {
       const message = error instanceof Error ? error.message : "发送失败";
+      if (sendGenerationRef.current !== sendGeneration || preflightController.signal.aborted) {
+        clearAssistantPhaseTimers(assistantId);
+        return;
+      }
+      clearAssistantPhaseTimers(assistantId);
+      if (preflightAbortRef.current === preflightController) preflightAbortRef.current = null;
       updateSessionMessages(requestSessionId, (current) => current.map((item) => item.id === assistantId ? { ...finishRunningSteps(item), content: message, pending: false } : item));
       markSessionOutputReady(requestSessionId);
       finishSessionRequest(requestSessionId);
@@ -3154,6 +3552,10 @@ export function App() {
   }
 
   async function stopActiveRequest() {
+    sendGenerationRef.current += 1;
+    preflightAbortRef.current?.abort();
+    preflightAbortRef.current = null;
+    clearAllPhaseTimers();
     const requestId = activeSessionRequestId;
     try {
       if (requestId) {
@@ -3174,16 +3576,6 @@ export function App() {
     }
   }
 
-  async function undoLastTurn() {
-    const lastUser = [...messages].reverse().find((message) => message.role === "user");
-    if (!lastUser) return;
-    const index = messages.findIndex((message) => message.id === lastUser.id);
-    setMessages((current) => current.slice(0, index));
-    if (typeof lastUser.userSeq === "number") {
-      await deleteMessagePair({ sessionId: activeSessionId, userSeq: lastUser.userSeq }).catch(() => undefined);
-    }
-  }
-
   function handleComposerKey(event: KeyboardEvent<HTMLTextAreaElement>) {
     const isMeta = event.metaKey || event.ctrlKey;
     if (event.key === "Enter" && isMeta) {
@@ -3196,10 +3588,6 @@ export function App() {
       void sendNow();
       return;
     }
-    if (isMeta && event.key.toLowerCase() === "z" && !composerText) {
-      event.preventDefault();
-      void undoLastTurn();
-    }
   }
 
   async function syncRuntimeUiStateNow() {
@@ -3207,11 +3595,14 @@ export function App() {
     const mergedState = pruneSessionUiState({
       ...sessionUiState,
       [activeSessionId]: {
+        ...(sessionUiState[activeSessionId] || {}),
         title: activeSessionTitle,
         projectId,
         messages,
         composerText,
-        attachments
+        attachments,
+        contextStartSeq: sessionUiState[activeSessionId]?.contextStartSeq,
+        lastActivityAt: latestMessageMs(messages) || sessionUiState[activeSessionId]?.lastActivityAt || Date.now()
       }
     });
     writeStorage(SESSION_UI_STORAGE_KEY, mergedState);
@@ -3317,17 +3708,17 @@ export function App() {
   async function startAgentInstallChatTask(pack: CapabilityPack, prompt: string, sessionId: string) {
     const requestSessionId = sessionId;
     const taskLabel = pack.discoveryOnly ? `用 find skill 发现能力：${pack.name}` : `安装能力包：${pack.name}`;
-    const userMessage: ChatItem = {
-      id: `u-install-${Date.now()}`,
-      role: "user",
-      content: taskLabel,
-      createdAt: new Date().toISOString()
-    };
     const assistantId = `a-install-${Date.now()}`;
     updateSessionMessages(requestSessionId, (current) => [
       ...current,
-      userMessage,
-      { id: assistantId, role: "assistant", content: "", pending: true, createdAt: new Date().toISOString() }
+      {
+        id: assistantId,
+        role: "assistant",
+        content: "",
+        pending: true,
+        createdAt: new Date().toISOString(),
+        steps: [{ type: "phase", content: taskLabel }]
+      }
     ]);
     const currentTitle = sessionTitles[requestSessionId]
       || sessionUiState[requestSessionId]?.title
@@ -3339,10 +3730,11 @@ export function App() {
     }
     const result = await sendChatMessage({
       sessionId: requestSessionId,
-      message: userMessage.content,
-      visibleMessage: userMessage.content,
+      message: taskLabel,
+      visibleMessage: "",
       hiddenContext: prompt,
-      attachments: []
+      attachments: [],
+      internalAction: true
     });
     if (result.status === "error") {
       throw new Error(result.message || "发送安装任务失败");
@@ -3676,8 +4068,8 @@ export function App() {
     {
       id: "image-generation",
       name: "Image Gen",
-      detail: skillEnabled(runtimeSnapshot.skills, "image-generation") ? "图像生成 Skill 已开启" : "等待开启图像生成 Skill",
-      enabled: skillEnabled(runtimeSnapshot.skills, "image-generation"),
+      detail: extensionSkillEnabled(runtimeSnapshot, "image-generation") ? "图像生成 Skill 已开启" : "等待开启图像生成 Skill",
+      enabled: extensionSkillEnabled(runtimeSnapshot, "image-generation"),
       icon: <WandSparkles aria-hidden="true" />
     },
     {
@@ -4039,9 +4431,9 @@ export function App() {
             {skillMentions.length > 0 && (
               <div className="skill-mention-popover" role="listbox" aria-label="可提及的 Skill">
                 {skillMentions.map((skill) => (
-                  <button key={skill.name || skill.display_name} type="button" onClick={() => insertSkillMention(skill)} title={skill.path || skill.source || "Skill"}>
+                  <button key={skill.key} type="button" onClick={() => insertSkillMention(skill)} title={skill.path || skill.source || "Skill"}>
                     <AtSign aria-hidden="true" />
-                    <span>{skill.display_name || skill.name}</span>
+                    <span>{skill.displayName || skill.name}</span>
                     <em>{skill.enabled === false ? "未启用" : "已启用"}</em>
                   </button>
                 ))}
@@ -4247,18 +4639,18 @@ export function App() {
                     </div>
                     <div className="skill-toggle-list">
                       <div className="toggle-list-head"><strong>Skill 生效开关</strong><span>可在聊天框用 @ 提及，关闭后不参与调用</span></div>
-                      {(runtimeSnapshot.skills || []).map((skill) => {
-                        const name = skill.name || skill.display_name || "";
-                        const enabled = skill.enabled !== false;
+                      {skillDisplayRows.map((skill) => {
+                        const name = skill.name || "";
+                        const enabled = skill.enabled;
                         return (
-                          <label key={name || skill.path} className="toggle-row" title={skill.path || skill.source || name}>
-                            <input type="checkbox" checked={enabled} onChange={(event) => void toggleRuntimeSkill(skill, event.currentTarget.checked)} />
-                            <span><strong>{skill.display_name || name || "未命名 Skill"}</strong><small>{skill.source || "skill"}</small></span>
+                          <label key={skill.key} className={`toggle-row${skill.toggleable ? "" : " is-readonly"}`} title={skill.path || skill.source || name}>
+                            <input type="checkbox" checked={enabled} disabled={!skill.toggleable} onChange={(event) => void toggleRuntimeSkill(skill, event.currentTarget.checked)} />
+                            <span><strong>{skill.displayName || name || "未命名 Skill"}</strong><small>{[skill.origin || skill.source || "skill", skill.status || (enabled ? "ready" : "disabled"), skill.policy].filter(Boolean).join(" · ")}</small></span>
                             <em>{enabled ? "已启用" : "已关闭"}</em>
                           </label>
                         );
                       })}
-                      {!(runtimeSnapshot.skills || []).length && <div className="session-empty">运行时暂未返回 Skill 列表</div>}
+                      {!skillDisplayRows.length && <div className="session-empty">运行时暂未返回 Skill 列表</div>}
                     </div>
                     <div className="pack-list">
                       {packs.map((pack) => (
@@ -4343,7 +4735,7 @@ export function App() {
                     <div className="settings-list">
                       <article><div><strong>运行时</strong><span>{runtimeSnapshot.message}</span></div><button onClick={() => loadRuntimeSnapshot().then(setRuntimeSnapshot)}>重新检查</button></article>
                       <article><div><strong>模型策略</strong><span>{runtimeSnapshot.modelsCount} 个企业模型映射</span></div><button onClick={() => loadRuntimeSnapshot().then(setRuntimeSnapshot)}>刷新</button></article>
-                      <article><div><strong>Skill / MCP</strong><span>{runtimeSnapshot.skillsCount} 个 Skill，{runtimeSnapshot.toolsCount} 个工具通道</span></div><button onClick={() => loadRuntimeSnapshot().then(setRuntimeSnapshot)}>重新检查</button></article>
+                      <article><div><strong>Skill / MCP</strong><span>{runtimeSnapshot.skillsCount} 个 Skill，{runtimeSnapshot.toolsCount} 个工具通道，{runtimeSnapshot.extensionsCount || 0} 个扩展登记</span></div><button onClick={() => loadRuntimeSnapshot().then(setRuntimeSnapshot)}>重新检查</button></article>
                     </div>
                   </section>
                 )}

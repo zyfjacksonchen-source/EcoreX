@@ -728,11 +728,20 @@ class McpClientRegistry:
             client = McpClient(cfg)
             ok = client.initialize()
             if ok:
-                with self._registry_lock:
-                    self._clients[name] = client
+                self.register(name, client)
                 logger.info(f"[MCP] Server '{name}' initialized successfully")
             else:
                 logger.warning(f"[MCP] Server '{name}' failed to initialize — skipping")
+
+    def register(self, server_name: str, client: McpClient) -> None:
+        """Register an initialized MCP client by server name."""
+        with self._registry_lock:
+            self._clients[server_name] = client
+
+    def unregister(self, server_name: str) -> Optional[McpClient]:
+        """Remove and return a client without shutting it down."""
+        with self._registry_lock:
+            return self._clients.pop(server_name, None)
 
     def get(self, server_name: str) -> Optional[McpClient]:
         """Return the initialized client for server_name, or None."""

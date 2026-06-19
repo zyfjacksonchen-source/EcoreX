@@ -18,9 +18,9 @@ from config import conf
 
 
 RUNTIME_ROOT = Path(__file__).resolve().parents[3]
-FEISHU_LARK_SOURCE_URL = "https://github.com/larksuite/oapi-sdk-python"
-FEISHU_LARK_MIRROR_URLS = ["https://gitcode.com/gh_mirrors/oa/oapi-sdk-python.git"]
-FEISHU_LARK_PYPI_MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
+FEISHU_LARK_SOURCE_URL = "https://github.com/larksuite/cli"
+FEISHU_LARK_MIRROR_URLS = ["https://registry.npmmirror.com/@larksuite/cli"]
+FEISHU_LARK_NPM_MIRROR = "https://registry.npmmirror.com"
 
 _LIVE_PROVIDER_CONFIG_KEYS = {
     "model",
@@ -333,10 +333,10 @@ def _ability_defs() -> Dict[str, Dict[str, Any]]:
             "mirrorUrls": FEISHU_LARK_MIRROR_URLS,
             "installHint": (
                 "Agent should use the built-in find skill first (gated as find-skill) to discover Feishu/Lark connector sources, "
-                "then fall back to GitHub, the domestic GitCode mirror, "
-                f"or PyPI mirror {FEISHU_LARK_PYPI_MIRROR}."
+                "then install official @larksuite/cli on demand. If npmjs.org times out, retry with "
+                f"the domestic npm mirror {FEISHU_LARK_NPM_MIRROR}."
             ),
-            "notes": "The connector is only discovered here; the current agent uses the find skill/find-skill gate before any SDK fallback.",
+            "notes": "The connector is only discovered here; the current agent uses the find skill/find-skill gate before any on-demand CLI install.",
         },
         "scheduler": {
             "label": "Scheduler background service",
@@ -592,13 +592,12 @@ class OptionalAbilities(BaseTool):
             "mirrorUrls": FEISHU_LARK_MIRROR_URLS,
             "installHint": (
                 "Use the built-in find skill first (gated as find-skill) to discover and install the Feishu/Lark skill or connector. "
-                f"If the find skill falls back to the official GitHub source, run: python -m pip install --upgrade \"git+{FEISHU_LARK_SOURCE_URL}.git\". "
-                f"If GitHub times out, use the domestic Git mirror: python -m pip install --upgrade \"git+{FEISHU_LARK_MIRROR_URLS[0]}\". "
-                f"If that still fails, use the PyPI mirror: python -m pip install -i {FEISHU_LARK_PYPI_MIRROR} --upgrade lark-oapi."
+                "For real Feishu/Lark CLI work, install official @larksuite/cli on demand. "
+                f"If npmjs.org times out, retry with the domestic npm mirror: npm install --registry={FEISHU_LARK_NPM_MIRROR} @larksuite/cli@1.0.56."
             ),
             "message": (
                 "feishu-lark is discovery-only. Use the built-in find skill/find-skill gate first, then fall back to "
-                "GitHub/domestic Git/PyPI mirrors if discovery or GitHub times out."
+                "official npm or a domestic npm mirror if discovery or npmjs.org times out."
             ),
         })
 
@@ -653,6 +652,8 @@ class OptionalAbilities(BaseTool):
             str(target_dir),
             "--timeout",
             str(timeout),
+            "--fallback-index-url",
+            os.environ.get("ECOREX_PIP_FALLBACK_INDEX_URL", "https://pypi.tuna.tsinghua.edu.cn/simple"),
         ]
         try:
             result = subprocess.run(

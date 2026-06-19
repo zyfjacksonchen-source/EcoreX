@@ -59,7 +59,7 @@
       "persistent": true
     },
     "feishu_cli": {
-      "package": "@larksuite/cli@1.0.40",
+      "package": "@larksuite/cli@1.0.56",
       "auto_install": false
     }
   },

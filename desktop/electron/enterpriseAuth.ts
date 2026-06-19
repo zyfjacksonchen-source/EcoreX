@@ -48,6 +48,19 @@ function compactText(value: unknown, limit = 500) {
   return String(value).trim().slice(0, limit);
 }
 
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: init.signal || controller.signal
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export class EnterpriseAuthManager {
   constructor(private readonly runtimeRoot: string) {}
 
@@ -237,7 +250,7 @@ export class EnterpriseAuthManager {
     let lastResponse: Response | null = null;
     let lastPayload = {} as T;
     for (const [index, clientEventKey] of keys.entries()) {
-      const response = await fetch(url, buildInit(clientEventKey));
+      const response = await fetchWithTimeout(url, buildInit(clientEventKey));
       const payload = (await response.json().catch(() => ({}))) as T;
       lastResponse = response;
       lastPayload = payload;

@@ -411,7 +411,8 @@ def _ensure_ecorex_runtime_defaults(cfg: dict):
     if not isinstance(feishu_cli, dict):
         feishu_cli = {}
         tools["feishu_cli"] = feishu_cli
-    feishu_cli.setdefault("package", "@larksuite/cli@1.0.40")
+    if feishu_cli.get("package") in (None, "", "@larksuite/cli@1.0.40"):
+        feishu_cli["package"] = "@larksuite/cli@1.0.56"
     feishu_cli.setdefault("auto_install", False)
 
     mcp_servers = cfg.get("mcp_servers")

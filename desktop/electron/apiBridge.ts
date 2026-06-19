@@ -39,6 +39,7 @@ function isAllowedPath(pathname: string, method: string) {
     "POST /api/ui-state",
     "POST /api/open-path",
     "GET /api/capabilities",
+    "GET /api/extensions",
     "POST /api/agent-install-request",
     "POST /api/project-folder",
     "GET /api/subagents",

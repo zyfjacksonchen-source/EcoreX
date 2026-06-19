@@ -302,7 +302,8 @@ if [[ -n "$PREINSTALL_PACKS" ]]; then
     "$RUNTIME_PYTHON" "$RUNTIME_DIR/scripts/install-capability.py" \
       --pack-id "$pack" \
       --runtime-dir "$RUNTIME_DIR" \
-      --manifest "$RUNTIME_DIR/capabilities.json"
+      --manifest "$RUNTIME_DIR/capabilities.json" \
+      --fallback-index-url "https://pypi.tuna.tsinghua.edu.cn/simple"
   done
 fi
 

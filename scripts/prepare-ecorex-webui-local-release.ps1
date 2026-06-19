@@ -64,31 +64,12 @@ function Sync-DesktopWebBuild {
 
 function Copy-OptionalLarkCliWindows {
     param([Parameter(Mandatory = $true)][string]$RuntimeDir)
-    $candidates = @()
-    if ($env:ECOREX_LARK_CLI_EXE) {
-        $candidates += $env:ECOREX_LARK_CLI_EXE
-    }
-    $candidates += "C:\cli-main\bin\lark-cli.exe"
-    foreach ($candidate in $candidates) {
-        if ($candidate -and (Test-Path -LiteralPath $candidate)) {
-            $targetDir = Join-Path $RuntimeDir "tools\bin"
-            New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
-            Copy-Item -LiteralPath $candidate -Destination (Join-Path $targetDir "lark-cli.exe") -Force
-            Write-Host "Bundled lark-cli for Windows WebUI runtime: $candidate"
-            return
-        }
-    }
-    Write-Host "lark-cli.exe was not found; WebUI runtime will use npm auto-install fallback."
+    Write-Host "Skipping bundled lark-cli for Windows WebUI runtime; Feishu/Lark connector is discovery-only and installs through find-skill plus on-demand @larksuite/cli."
 }
 
 function Copy-OptionalLarkCliMac {
     param([Parameter(Mandatory = $true)][string]$RuntimeDir)
-    if ($env:ECOREX_LARK_CLI_DARWIN -and (Test-Path -LiteralPath $env:ECOREX_LARK_CLI_DARWIN)) {
-        $targetDir = Join-Path $RuntimeDir "tools/bin"
-        New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
-        Copy-Item -LiteralPath $env:ECOREX_LARK_CLI_DARWIN -Destination (Join-Path $targetDir "lark-cli") -Force
-        Write-Host "Bundled lark-cli for macOS WebUI runtime: $env:ECOREX_LARK_CLI_DARWIN"
-    }
+    Write-Host "Skipping bundled lark-cli for macOS WebUI runtime; Feishu/Lark connector is discovery-only and installs through find-skill plus on-demand @larksuite/cli."
 }
 
 function Save-Download {
@@ -381,31 +362,7 @@ function Ensure-LarkCli {
         [Parameter(Mandatory = $true)][string]$RuntimeDir,
         [Parameter(Mandatory = $true)][string]$StateDir
     )
-    $pathCandidates = @((Join-Path $RuntimeDir "tools\bin"))
-    foreach ($base in @($env:APPDATA, $env:LOCALAPPDATA)) {
-        if ($base) { $pathCandidates += (Join-Path $base "npm") }
-    }
-    if ($env:ProgramFiles) { $pathCandidates += (Join-Path $env:ProgramFiles "nodejs") }
-    $pathParts = $pathCandidates | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
-    if ($pathParts.Count -gt 0) {
-        $env:Path = ($pathParts -join [System.IO.Path]::PathSeparator) + [System.IO.Path]::PathSeparator + $env:Path
-    }
-    if (Get-Command lark-cli -ErrorAction SilentlyContinue) {
-        return
-    }
-    $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
-    if (-not $npm) {
-        $npm = Get-Command npm -ErrorAction SilentlyContinue
-    }
-    if (-not $npm) {
-        "npm not found; lark-cli will be installed by runtime fallback if possible." | Out-File -FilePath (Join-Path $StateDir "lark-cli-install.log") -Encoding utf8 -Append
-        return
-    }
-    try {
-        & $npm.Source install -g "@larksuite/cli@1.0.40" *> (Join-Path $StateDir "lark-cli-install.log")
-    } catch {
-        "lark-cli install failed: $($_.Exception.Message)" | Out-File -FilePath (Join-Path $StateDir "lark-cli-install.log") -Encoding utf8 -Append
-    }
+    "lark-cli preinstall skipped. Use find-skill first, then install @larksuite/cli@1.0.56 on demand; npmjs.org timeout should fall back to https://registry.npmmirror.com." | Out-File -FilePath (Join-Path $StateDir "lark-cli-install.log") -Encoding utf8 -Append
 }
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -449,7 +406,7 @@ $config = [ordered]@{
             persistent = $true
         }
         feishu_cli = [ordered]@{
-            package = "@larksuite/cli@1.0.40"
+            package = "@larksuite/cli@1.0.56"
             auto_install = $false
         }
     }
@@ -615,13 +572,7 @@ if [[ ! -f "$DEPS_STAMP" ]]; then
 fi
 
 export PATH="$RUNTIME_DIR/tools/bin:$HOME/.npm-global/bin:$HOME/.npm/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
-if ! command -v lark-cli >/dev/null 2>&1; then
-  if command -v npm >/dev/null 2>&1; then
-    npm install -g "@larksuite/cli@1.0.40" >> "$STATE_DIR/lark-cli-install.log" 2>&1 || true
-  else
-    echo "npm not found; lark-cli will be installed by runtime fallback if possible." >> "$STATE_DIR/lark-cli-install.log"
-  fi
-fi
+echo "lark-cli preinstall skipped. Use find-skill first, then install @larksuite/cli@1.0.56 on demand; npmjs.org timeout should fall back to https://registry.npmmirror.com." >> "$STATE_DIR/lark-cli-install.log"
 
 EFFECTIVE_PORT="$("$PYTHON" - "$PORT" <<'PY'
 import socket
@@ -676,7 +627,7 @@ payload = {
             "persistent": True,
         },
         "feishu_cli": {
-            "package": "@larksuite/cli@1.0.40",
+            "package": "@larksuite/cli@1.0.56",
             "auto_install": False,
         }
     },
@@ -752,8 +703,7 @@ Compress-ZipWithUnixPermissions `
     -DestinationPath $macZip `
     -ExecutableRelativePaths @(
         "Install EcoreX WebUI.app/Contents/MacOS/Install EcoreX WebUI",
-        "Install EcoreX WebUI.app/Contents/Resources/package/scripts/install-ecorex-webui-mac.sh",
-        "Install EcoreX WebUI.app/Contents/Resources/package/runtime/tools/bin/lark-cli"
+        "Install EcoreX WebUI.app/Contents/Resources/package/scripts/install-ecorex-webui-mac.sh"
     )
 
 $combinedWindows = Join-Path $combinedStage "windows"

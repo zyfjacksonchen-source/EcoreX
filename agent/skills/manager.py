@@ -4,8 +4,6 @@ Skill manager for managing skill lifecycle and operations.
 
 import os
 import json
-import shutil
-import time
 from typing import Dict, List, Optional
 from pathlib import Path
 from common.log import logger
@@ -82,13 +80,14 @@ class SkillManager:
 
     def _refresh_managed_builtin_overlays(self) -> None:
         """
-        Replace stale workspace copies of official built-in skills.
+        Detect stale workspace copies of official built-in skills.
 
         Same-name workspace skills normally override built-ins. That remains
         useful for explicit user overrides, but older EcoreX builds also copied
-        selected built-ins into the workspace. Those stale managed copies then
-        mask release fixes forever. For a small allowlist of official skills we
-        refresh the workspace copy when it misses release-critical markers.
+        selected built-ins into the workspace. Starting with the follow-up
+        v0.1.15 iteration, startup must not mutate or replace user/workspace
+        skills. We only log diagnostics here; users can explicitly fork or
+        repair skills through the registry/skill UI.
         """
         if not self.builtin_dir or not self.custom_dir:
             return
@@ -123,17 +122,11 @@ class SkillManager:
             if all(marker in custom_text for marker in markers):
                 continue
 
-            try:
-                self._replace_workspace_skill_from_builtin(
-                    skill_name,
-                    builtin_skill_dir,
-                    custom_skill_dir,
-                    custom_root,
-                )
-            except Exception as exc:
-                logger.warning(
-                    f"[SkillManager] Failed refreshing managed built-in skill '{skill_name}': {exc}"
-                )
+            logger.warning(
+                f"[SkillManager] Workspace skill '{skill_name}' appears to be a stale "
+                "copy of a built-in skill. It is left untouched; use the registry UI "
+                "to inspect, disable, or fork/repair it explicitly."
+            )
 
     @staticmethod
     def _read_skill_tree_text(skill_dir: Path) -> str:
@@ -150,35 +143,6 @@ class SkillManager:
             except Exception:
                 continue
         return "\n".join(parts)
-
-    @staticmethod
-    def _replace_workspace_skill_from_builtin(
-        skill_name: str,
-        builtin_skill_dir: Path,
-        custom_skill_dir: Path,
-        custom_root: Path,
-    ) -> None:
-        custom_root.mkdir(parents=True, exist_ok=True)
-        backup_root = custom_root / ".ecorex-backups"
-        backup_root.mkdir(parents=True, exist_ok=True)
-        stamp = time.strftime("%Y%m%d%H%M%S")
-        backup_dir = backup_root / f"{skill_name}-{stamp}"
-        tmp_dir = custom_root / f".{skill_name}.refresh-{stamp}.tmp"
-
-        if tmp_dir.exists():
-            shutil.rmtree(tmp_dir)
-        shutil.copytree(builtin_skill_dir, tmp_dir)
-
-        if custom_skill_dir.exists():
-            if backup_dir.exists():
-                shutil.rmtree(backup_dir)
-            shutil.move(str(custom_skill_dir), str(backup_dir))
-
-        shutil.move(str(tmp_dir), str(custom_skill_dir))
-        logger.info(
-            f"[SkillManager] Refreshed managed built-in skill '{skill_name}' "
-            f"from {builtin_skill_dir}; backup saved to {backup_dir}"
-        )
 
     def get_load_diagnostics(self, limit: Optional[int] = None) -> List[str]:
         diagnostics = list(self.last_load_diagnostics or [])
@@ -446,39 +410,6 @@ class SkillManager:
             resolved_skills=resolved_skills,
             version=version,
         )
-    
-    def sync_skills_to_workspace(self, target_workspace_dir: str):
-        """
-        Sync all loaded skills to a target workspace directory.
-        
-        This is useful for sandbox environments where skills need to be copied.
-        
-        :param target_workspace_dir: Target workspace directory
-        """
-        import shutil
-        
-        target_skills_dir = os.path.join(target_workspace_dir, 'skills')
-        
-        # Remove existing skills directory
-        if os.path.exists(target_skills_dir):
-            shutil.rmtree(target_skills_dir)
-        
-        # Create new skills directory
-        os.makedirs(target_skills_dir, exist_ok=True)
-        
-        # Copy each skill
-        for entry in self.skills.values():
-            skill_name = entry.skill.name
-            source_dir = entry.skill.base_dir
-            target_dir = os.path.join(target_skills_dir, skill_name)
-            
-            try:
-                shutil.copytree(source_dir, target_dir)
-                logger.debug(f"Synced skill '{skill_name}' to {target_dir}")
-            except Exception as e:
-                logger.warning(f"Failed to sync skill '{skill_name}': {e}")
-        
-        logger.info(f"Synced {len(self.skills)} skills to {target_skills_dir}")
     
     def get_skill_by_key(self, skill_key: str) -> Optional[SkillEntry]:
         """

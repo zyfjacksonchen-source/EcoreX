@@ -2,7 +2,8 @@
 
 This tool keeps Feishu access out of ad-hoc shell commands. It resolves an
 already available `lark-cli`, reports auth state, starts split-flow user auth,
-and runs CLI commands with bounded timeouts. It does not install the CLI.
+and runs CLI commands with bounded timeouts. It only installs the official CLI
+after a structured find-skill discovery gate requests that on-demand setup.
 """
 
 from __future__ import annotations
@@ -22,10 +23,11 @@ from agent.tools.base_tool import BaseTool, ToolResult
 from common.log import logger
 
 
-DEFAULT_LARK_CLI_PACKAGE = os.environ.get("ECOREX_LARK_CLI_PACKAGE", "@larksuite/cli@1.0.40")
-FEISHU_LARK_SOURCE_URL = "https://github.com/larksuite/oapi-sdk-python"
-FEISHU_LARK_MIRROR_URLS = ["https://gitcode.com/gh_mirrors/oa/oapi-sdk-python.git"]
-FEISHU_LARK_PYPI_MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
+DEFAULT_LARK_CLI_PACKAGE = os.environ.get("ECOREX_LARK_CLI_PACKAGE", "@larksuite/cli@1.0.56")
+FEISHU_LARK_SOURCE_URL = "https://github.com/larksuite/cli"
+FEISHU_LARK_MIRROR_URLS = ["https://registry.npmmirror.com/@larksuite/cli"]
+DEFAULT_NPM_REGISTRY = "https://registry.npmjs.org"
+DOMESTIC_NPM_REGISTRY = "https://registry.npmmirror.com"
 DEFAULT_TIMEOUT_SECONDS = 45
 
 
@@ -91,6 +93,7 @@ def _candidate_bin_dirs() -> List[Path]:
         runtime_root / "tools" / "bin",
         runtime_root / "node" / "bin",
         runtime_root / "tools" / "lark-cli" / "bin",
+        runtime_root / "tools" / "lark-cli" / "node_modules" / ".bin",
     ])
     return dirs
 
@@ -120,6 +123,7 @@ def _find_local_lark_runner(env: Dict[str, str]) -> Optional[List[str]]:
     candidates = [
         Path("C:/EcoreX Artifact Desk/cli-main/scripts/run.js"),
         Path(__file__).resolve().parents[3] / "tools" / "lark-cli" / "scripts" / "run.js",
+        Path(__file__).resolve().parents[3] / "tools" / "lark-cli" / "node_modules" / "@larksuite" / "cli" / "scripts" / "run.js",
         Path(__file__).resolve().parents[3] / "node_modules" / "@larksuite" / "cli" / "scripts" / "run.js",
     ]
     for script in candidates:
@@ -262,20 +266,63 @@ def _check_expected_paths(paths: Iterable[str]) -> Dict[str, Any]:
     return {"checked": checked, "missing": missing, "emptyDirs": empty_dirs}
 
 
+def _has_find_skill_gate(args: Dict[str, Any]) -> bool:
+    for key in ("discovery_source", "source", "via", "gate", "resolved_by"):
+        value = str(args.get(key) or "").strip().lower().replace("_", "-")
+        if value in {"find", "find-skill", "find skill"} or "find-skill" in value:
+            return True
+    result = args.get("find_skill_result")
+    if result is None:
+        result = args.get("findSkillResult")
+    if result is None:
+        return False
+    if not isinstance(result, dict):
+        return True
+    status = str(result.get("status") or result.get("state") or "").strip().lower()
+    if status in {"error", "failed", "failure", "blocked"}:
+        return False
+    try:
+        text = json.dumps(result, ensure_ascii=False, sort_keys=True).lower()
+    except Exception:
+        text = str(result).lower()
+    return any(hint in text for hint in ("feishu", "lark", "飞书", "@larksuite", "lark-cli"))
+
+
+def _find_skill_gate_error(package: str) -> Dict[str, Any]:
+    return {
+        "status": "error",
+        "available": False,
+        "discoveryOnly": True,
+        "package": package,
+        "sourceUrl": FEISHU_LARK_SOURCE_URL,
+        "mirrorUrls": FEISHU_LARK_MIRROR_URLS,
+        "message": (
+            "Feishu/Lark CLI installation must be discovered through the built-in "
+            "find skill / find-skill gate first. Retry feishu_cli install with "
+            "discovery_source='find-skill' or a find_skill_result payload."
+        ),
+        "nextAction": {
+            "skill": "find",
+            "ability": "find-skill",
+            "query": "official Feishu Lark CLI @larksuite/cli install source",
+        },
+    }
+
+
 class FeishuCli(BaseTool):
     name: str = "feishu_cli"
     description: str = (
         "Use this instead of bash for Feishu/Lark operations when lark-cli is already "
-        "available. It checks user auth, starts split-flow auth with --no-wait, and runs "
-        "lark-cli commands with bounded timeouts. It never installs lark-cli; if missing, "
-        "use the built-in find skill first (gated as find-skill), then the discovery-only connector guidance returned by this tool."
+        "available. It checks user auth, starts split-flow auth with --no-wait, runs "
+        "bounded lark-cli commands, and can install the official @larksuite/cli only after "
+        "a find-skill/on-demand flow requests it."
     )
     params: dict = {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
-                "description": "One of: status, ensure, auth_login, run",
+                "description": "One of: status, ensure, diagnose, install, config_init, auth_login, run",
             },
             "args": {
                 "type": "array",
@@ -296,7 +343,19 @@ class FeishuCli(BaseTool):
             },
             "install_if_missing": {
                 "type": "boolean",
-                "description": "Deprecated. Ignored because Feishu/Lark connector installation is discovery-only.",
+                "description": "Deprecated for ensure. Use action=install after find-skill discovery and user permission.",
+            },
+            "registry": {
+                "type": "string",
+                "description": "Optional npm registry for action=install. Defaults to npmjs, then npmmirror fallback.",
+            },
+            "discovery_source": {
+                "type": "string",
+                "description": "Required for action=install. Must be find-skill after built-in skill discovery.",
+            },
+            "find_skill_result": {
+                "type": "object",
+                "description": "Structured result returned by the built-in find skill/find-skill gate.",
             },
             "expected_paths": {
                 "type": "array",
@@ -324,8 +383,19 @@ class FeishuCli(BaseTool):
 
         if action == "status":
             return ToolResult.success(self._status(env))
+        if action == "diagnose":
+            return ToolResult.success(self._diagnose(env))
         if action == "ensure":
             return self._ensure(env, timeout, install_if_missing=install_if_missing)
+        if action == "install":
+            if not _has_find_skill_gate(args):
+                return ToolResult.fail(_find_skill_gate_error(self.package))
+            return self._install(env, timeout, registry=str(args.get("registry") or "").strip())
+        if action == "config_init":
+            ensure = self._ensure_payload(env, timeout, install_if_missing)
+            if not ensure.get("available"):
+                return ToolResult.fail(ensure)
+            return self._config_init(args, env, timeout)
         if action == "auth_login":
             ensure = self._ensure_payload(env, timeout, install_if_missing)
             if not ensure.get("available"):
@@ -336,7 +406,7 @@ class FeishuCli(BaseTool):
             if not ensure.get("available"):
                 return ToolResult.fail(ensure)
             return self._run_cli(args, env, timeout)
-        return ToolResult.fail({"status": "error", "message": "action must be one of: status, ensure, auth_login, run"})
+        return ToolResult.fail({"status": "error", "message": "action must be one of: status, ensure, diagnose, install, config_init, auth_login, run"})
 
     def _status(self, env: Dict[str, str]) -> Dict[str, Any]:
         command = _resolve_lark_command(env)
@@ -346,6 +416,9 @@ class FeishuCli(BaseTool):
             "command": command,
             "npm": _which("npm", env),
             "npx": _which("npx", env),
+            "package": self.package,
+            "sourceUrl": FEISHU_LARK_SOURCE_URL,
+            "mirrorUrls": FEISHU_LARK_MIRROR_URLS,
             "pathHints": [str(path) for path in _candidate_bin_dirs() if path.exists()],
         }
         if command:
@@ -364,6 +437,89 @@ class FeishuCli(BaseTool):
             return {"status": "success", "available": True, "command": command, "installedNow": False}
         return self._missing_payload(env)
 
+    def _install_root(self) -> Path:
+        return Path(__file__).resolve().parents[3] / "tools" / "lark-cli"
+
+    def _diagnose(self, env: Dict[str, str]) -> Dict[str, Any]:
+        status = self._status(env)
+        status.update({
+            "action": "diagnose",
+            "installRoot": str(self._install_root()),
+            "officialRegistry": DEFAULT_NPM_REGISTRY,
+            "domesticRegistry": DOMESTIC_NPM_REGISTRY,
+        })
+        node = _which("node", env)
+        if node:
+            status["nodeVersion"] = self._safe_run([node, "--version"], env, 10)
+        return status
+
+    def _install(self, env: Dict[str, str], timeout: int, registry: str = "") -> ToolResult:
+        existing = _resolve_lark_command(env)
+        if existing:
+            return ToolResult.success({
+                "status": "success",
+                "available": True,
+                "installedNow": False,
+                "command": existing,
+                "message": "lark-cli is already available.",
+            })
+
+        npm = _which("npm", env)
+        if not npm:
+            return ToolResult.fail({
+                **self._missing_payload(env, "npm is not available; cannot install @larksuite/cli on demand."),
+                "nextAction": "Install Node.js/npm or ask an administrator to preinstall @larksuite/cli.",
+            })
+
+        install_root = self._install_root()
+        install_root.mkdir(parents=True, exist_ok=True)
+        registries = [registry] if registry else [DEFAULT_NPM_REGISTRY, DOMESTIC_NPM_REGISTRY]
+        attempts: List[Dict[str, Any]] = []
+        for npm_registry in [item for item in registries if item]:
+            command = [
+                npm,
+                "install",
+                "--prefix",
+                str(install_root),
+                self.package,
+                "--registry",
+                npm_registry,
+            ]
+            result = self._safe_run(command, env, timeout)
+            attempts.append({
+                "registry": npm_registry,
+                "exitCode": result.get("exitCode"),
+                "status": result.get("status"),
+                "output": result.get("output", "")[-1200:],
+            })
+            if result.get("exitCode") == 0:
+                next_env = _tool_env()
+                resolved = _resolve_lark_command(next_env)
+                return ToolResult.success({
+                    "status": "success",
+                    "available": bool(resolved),
+                    "installedNow": True,
+                    "command": resolved,
+                    "package": self.package,
+                    "installRoot": str(install_root),
+                    "sourceUrl": FEISHU_LARK_SOURCE_URL,
+                    "registry": npm_registry,
+                    "fallbackUsed": npm_registry != DEFAULT_NPM_REGISTRY,
+                    "attempts": attempts,
+                    "message": "Installed official @larksuite/cli on demand.",
+                })
+
+        return ToolResult.fail({
+            "status": "error",
+            "available": False,
+            "package": self.package,
+            "installRoot": str(install_root),
+            "sourceUrl": FEISHU_LARK_SOURCE_URL,
+            "mirrorUrls": FEISHU_LARK_MIRROR_URLS,
+            "attempts": attempts,
+            "message": "Failed to install official @larksuite/cli from npmjs.org and domestic npm mirror.",
+        })
+
     def _missing_payload(self, env: Dict[str, str], message: str = "") -> Dict[str, Any]:
         return {
             "status": "error",
@@ -375,12 +531,24 @@ class FeishuCli(BaseTool):
             "mirrorUrls": FEISHU_LARK_MIRROR_URLS,
             "installHint": (
                 "Use the built-in find skill first (gated as find-skill) to discover and install the Feishu/Lark skill or connector. "
-                f"If the find skill falls back to the official GitHub source, run: python -m pip install --upgrade \"git+{FEISHU_LARK_SOURCE_URL}.git\". "
-                f"If GitHub times out, use the domestic Git mirror: python -m pip install --upgrade \"git+{FEISHU_LARK_MIRROR_URLS[0]}\". "
-                f"If that still fails, use the PyPI mirror: python -m pip install -i {FEISHU_LARK_PYPI_MIRROR} --upgrade lark-oapi."
+                f"For real CLI work, run feishu_cli action=install with discovery_source='find-skill' to install official {self.package}. "
+                f"If npmjs.org times out, EcoreX retries with domestic npm mirror {DOMESTIC_NPM_REGISTRY}."
             ),
             "pathHints": [str(path) for path in _candidate_bin_dirs() if path.exists()],
         }
+
+    def _config_init(self, args: Dict[str, Any], env: Dict[str, str], timeout: int) -> ToolResult:
+        command = _resolve_lark_command(env)
+        if not command:
+            return ToolResult.fail(self._missing_payload(env))
+        cli_args = ["config", "init", "--new"]
+        extra = _as_args(args.get("args"))
+        if extra:
+            cli_args.extend(extra)
+        result = self._safe_run(command + cli_args, env, timeout)
+        if result.get("exitCode") != 0:
+            return ToolResult.fail(result)
+        return ToolResult.success(result)
 
     def _auth_login(self, args: Dict[str, Any], env: Dict[str, str], timeout: int) -> ToolResult:
         command = _resolve_lark_command(env)

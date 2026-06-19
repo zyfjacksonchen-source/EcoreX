@@ -1177,12 +1177,32 @@ class WebChannel(ChatChannel):
                 break
             time.sleep(0.1)
         if not active_request_ids:
-            raise SessionBusyError(f"session is busy: {session_id}")
+            # The worker may have already unregistered its cancel token while
+            # the WebChannel callback is still finalizing and releasing the
+            # session lock. In that narrow window, waiting for the lock is
+            # friendlier than surfacing a silent busy state to the UI.
+            deadline = time.time() + 4
+            last_error = None
+            while time.time() < deadline:
+                try:
+                    return SessionLock(_get_workspace_root(), session_id).acquire()
+                except SessionBusyError as e:
+                    last_error = e
+                    time.sleep(0.2)
+            raise last_error or SessionBusyError(f"session is busy: {session_id}")
 
         cancelled = get_cancel_registry().cancel_session(session_id)
         subagent_cancel = self._cancel_subagents_for_parent(session_id)
         if cancelled <= 0:
-            raise SessionBusyError(f"session is busy: {session_id}")
+            deadline = time.time() + 4
+            last_error = None
+            while time.time() < deadline:
+                try:
+                    return SessionLock(_get_workspace_root(), session_id).acquire()
+                except SessionBusyError as e:
+                    last_error = e
+                    time.sleep(0.2)
+            raise last_error or SessionBusyError(f"session is busy: {session_id}")
 
         self._push_cancelled_events_for_session(session_id, active_request_ids, lang=lang)
         logger.info(
@@ -1308,6 +1328,20 @@ class WebChannel(ChatChannel):
         except Exception:
             pass
         return artifact
+
+    def _record_local_reply_artifact(self, request_id: str, reply_type, content: str) -> None:
+        if not request_id or not content.startswith("file://"):
+            return
+        local_path = content[len("file://"):].strip()
+        file_type = "image" if reply_type == ReplyType.IMAGE_URL else "file"
+        artifact = self._artifact_from_file_event(request_id, {
+            "path": local_path,
+            "file_path": local_path,
+            "file_name": os.path.basename(local_path) or "artifact",
+            "file_type": file_type,
+            "tool_name": "reply",
+        })
+        self._record_request_artifact(request_id, artifact)
 
     def _record_request_artifact(self, request_id: str, artifact: Dict[str, Any]) -> None:
         if not request_id or not artifact:
@@ -1541,13 +1575,13 @@ class WebChannel(ChatChannel):
                 # Files are already pushed via on_event (file_to_send) during agent execution.
                 # Skip duplicate file pushes here; just let the done event through.
                 if reply.type in (ReplyType.IMAGE_URL, ReplyType.FILE) and content.startswith("file://"):
+                    self._record_local_reply_artifact(request_id, reply.type, content)
                     text_content = getattr(reply, 'text_content', '')
-                    if text_content:
-                        self._push_done_event_once(
-                            request_id,
-                            self._build_done_event(request_id, session_id, text_content)
-                        )
-                    logger.debug(f"SSE skipped duplicate file for request {request_id}")
+                    self._push_done_event_once(
+                        request_id,
+                        self._build_done_event(request_id, session_id, text_content or "")
+                    )
+                    logger.debug(f"SSE done sent for local file reply {request_id}")
                     return
 
                 # Skip http-URL FILE/IMAGE_URL replies produced by chat_channel's media extraction:
@@ -1632,7 +1666,32 @@ class WebChannel(ChatChannel):
             event_type = event.get("type")
             data = event.get("data", {})
 
-            if event_type == "reasoning_update":
+            if event_type == "agent_start":
+                self._push_sse_event(request_id, {
+                    "type": "phase",
+                    "content": "已收到，正在准备响应",
+                    "request_id": request_id,
+                    "timestamp": time.time(),
+                })
+
+            elif event_type == "turn_start":
+                turn = data.get("turn")
+                self._push_sse_event(request_id, {
+                    "type": "phase",
+                    "content": f"正在组织上下文{f' · 第 {turn} 步' if turn else ''}",
+                    "request_id": request_id,
+                    "timestamp": time.time(),
+                })
+
+            elif event_type == "message_start":
+                self._push_sse_event(request_id, {
+                    "type": "phase",
+                    "content": "正在连接模型响应",
+                    "request_id": request_id,
+                    "timestamp": time.time(),
+                })
+
+            elif event_type == "reasoning_update":
                 delta = data.get("delta", "")
                 if not delta:
                     return
@@ -2056,9 +2115,11 @@ class WebChannel(ChatChannel):
             json_data = json.loads(data)
             session_id = json_data.get('session_id', f'session_{int(time.time())}')
             visible_prompt = str(json_data.get('message') or '')
-            visible_message = str(json_data.get('visible_message') or visible_prompt or '')
+            visible_message_raw = json_data.get('visible_message') if 'visible_message' in json_data else None
+            visible_message = str(visible_message_raw) if visible_message_raw is not None else visible_prompt
             prompt = visible_prompt
             hidden_context = json_data.get('hidden_context') or json_data.get('project_context') or ''
+            internal_action = bool(json_data.get('internal_action', False))
             use_sse = json_data.get('stream', True)
             attachments = json_data.get('attachments', [])
             lang = (json_data.get('lang') or 'zh').lower()
@@ -2139,6 +2200,12 @@ class WebChannel(ChatChannel):
 
             if use_sse:
                 self._ensure_sse_state(request_id)
+                self._push_sse_event(request_id, {
+                    "type": "phase",
+                    "content": "已收到，正在准备响应",
+                    "request_id": request_id,
+                    "timestamp": time.time(),
+                })
 
             trigger_prefixs = conf().get("single_chat_prefix", [""])
             if check_prefix(prompt, trigger_prefixs) is None:
@@ -2169,6 +2236,8 @@ class WebChannel(ChatChannel):
             context["request_id"] = request_id
             context["session_lock"] = session_lock
             context["visible_message"] = (visible_message or "Please handle these attachments.").strip()
+            if internal_action:
+                context["internal_action"] = True
             if isinstance(attachments, list):
                 context["attachments"] = attachments
             if is_voice_input:
@@ -2517,6 +2586,7 @@ class WebChannel(ChatChannel):
             '/api/file-stat', 'FileStatHandler',
             '/api/open-path', 'OpenPathHandler',
             '/api/project-folder', 'ProjectFolderHandler',
+            '/api/extensions', 'ExtensionsHandler',
             '/api/capabilities', 'CapabilitiesHandler',
             '/api/agent-install-request', 'AgentInstallRequestHandler',
             '/api/subagents', 'SubagentsHandler',
@@ -3300,6 +3370,18 @@ class CapabilitiesHandler:
             return json.dumps({"status": "error", "message": str(exc)}, ensure_ascii=False)
 
 
+class ExtensionsHandler:
+    def GET(self):
+        _require_auth()
+        web.header("Content-Type", "application/json; charset=utf-8")
+        try:
+            from agent.extensions import ExtensionRegistry
+
+            return json.dumps(ExtensionRegistry(_get_workspace_root()).list_extensions(), ensure_ascii=False)
+        except Exception as exc:
+            logger.exception("[WebChannel] extensions status failed")
+            return json.dumps({"status": "error", "message": str(exc), "extensions": []}, ensure_ascii=False)
+
 class AgentInstallRequestHandler:
     def POST(self):
         _require_auth()
@@ -3315,21 +3397,21 @@ class AgentInstallRequestHandler:
             return json.dumps({"status": "error", "message": "packId is required"}, ensure_ascii=False)
         normalized_pack_id = pack_id.strip().lower().replace("_", "-")
         if normalized_pack_id in {"feishu", "lark", "feishu-lark", "lark-feishu"}:
-            source_url = "https://github.com/larksuite/oapi-sdk-python"
-            mirror_url = "https://gitcode.com/gh_mirrors/oa/oapi-sdk-python.git"
-            pypi_mirror = "https://pypi.tuna.tsinghua.edu.cn/simple"
+            source_url = "https://github.com/larksuite/cli"
+            mirror_url = "https://registry.npmmirror.com/@larksuite/cli"
+            npm_mirror = "https://registry.npmmirror.com"
             prompt = (
                 f"当前用户需要 EcoreX 飞书 / Lark 连接器 `{pack_id}`（{pack_name}）。"
                 "该能力包现在是 discovery-only：不要调用 "
                 f"`{{\"action\":\"install_pack\",\"pack_id\":\"{pack_id}\"}}`，也不要触发旧的预置安装。"
                 "所有飞书 CLI / Lark / skill 安装入口必须先走内置 `find` skill（能力 gate 名称为 `find-skill`）做发现和安装方案选择。"
                 "请先用 `agent_capability` 的 `diagnose` 确认 `find` skill / `find-skill` 能力已加载；如未加载，先启用/安装它，再继续。"
-                "通过 `find` skill 查找飞书/Lark 相关 skill、connector 或官方 SDK 源，并优先按它返回的 GitHub 地址安装。"
+                "通过 `find` skill 查找飞书/Lark 相关 skill、connector 或官方 CLI 源，并优先使用官方 `https://github.com/larksuite/cli` / `@larksuite/cli`。"
                 "如果最终调用 `agent_capability` 的 `install_skill`，必须带上 `discovery_source: \"find-skill\"` 或 `find_skill_result`。"
-                f"如果 `find` skill 发现链路中的 GitHub 网络超时或不可达，降级使用国内 Git 镜像：`python -m pip install --upgrade \"git+{mirror_url}\"`。"
-                f"如果 Git 镜像仍不可用，再降级使用 PyPI 国内镜像：`python -m pip install -i {pypi_mirror} --upgrade lark-oapi`。"
-                f"如果 `find` skill 没有返回可安装 skill，再使用官方 GitHub 源兜底：`python -m pip install --upgrade \"git+{source_url}.git\"`。"
+                "如果真实任务需要本机 CLI，调用 `feishu_cli` 的 `install` action 按需安装官方 `@larksuite/cli@1.0.56`，并必须带上 `discovery_source: \"find-skill\"` 或结构化 `find_skill_result`。"
+                f"如果 npm 官方源超时或不可达，降级使用国内 npm 镜像：`npm install --registry={npm_mirror} @larksuite/cli@1.0.56`。"
                 "每个来源最多重试一次，避免长时间卡住。"
+                "不要要求用户输入“同意安装”；如果需要授权，等待权限弹窗/权限工具。不要反复诊断同一个失败状态。"
                 "完成后再调用一次 `agent_capability` 的 `diagnose`，给用户正文只保留安装结论、使用状态和必要下一步；详细 stdout/stderr/log path 放在调用过程里。"
             )
             extra_fields = {
@@ -3337,7 +3419,7 @@ class AgentInstallRequestHandler:
                 "sourceUrl": source_url,
                 "mirrorUrls": [mirror_url],
                 "installHint": (
-                    "先通过内置 find skill / find-skill 能力发现和安装；GitHub 超时后使用 GitCode 国内镜像；仍失败时使用清华 PyPI 镜像安装 lark-oapi。"
+                    "先通过内置 find skill / find-skill 能力发现；真实任务需要 CLI 时按需安装 @larksuite/cli；npm 官方源超时后使用国内 npm 镜像。"
                 ),
             }
         else:
@@ -5666,8 +5748,9 @@ class FeishuRegisterHandler:
                 with cls._lock:
                     cls._state["status"] = "error"
                     cls._state["error"] = (
-                        "lark-oapi SDK 未安装。请先让当前 agent 通过内置 find skill / find-skill 能力发现飞书/Lark 连接器；"
-                        "GitHub 超时后再降级使用 GitCode 国内镜像或清华 PyPI 镜像安装 lark-oapi。"
+                        "飞书应用一键注册是 legacy SDK 通道，当前运行时未包含 lark-oapi，因此不自动安装。"
+                        "飞书/Lark CLI、skill 和 connector 安装请统一先走内置 find skill / find-skill；"
+                        "真实 CLI 操作按需安装官方 @larksuite/cli，npmjs.org 超时后降级到 https://registry.npmmirror.com。"
                     )
                 return
 

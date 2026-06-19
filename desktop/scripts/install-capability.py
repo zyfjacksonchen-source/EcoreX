@@ -103,6 +103,7 @@ def main() -> int:
     parser.add_argument("--target-dir", default="")
     parser.add_argument("--playwright-browsers-dir", default="")
     parser.add_argument("--index-url", default="")
+    parser.add_argument("--fallback-index-url", default=os.environ.get("ECOREX_PIP_FALLBACK_INDEX_URL", "https://pypi.tuna.tsinghua.edu.cn/simple"))
     parser.add_argument("--find-links", default="")
     parser.add_argument("--no-index", action="store_true")
     parser.add_argument("--timeout", type=int, default=600)
@@ -219,7 +220,7 @@ def main() -> int:
             if target_dir:
                 log_file.write(f"Target: {target_dir}\n")
             for requirement in pack.get("requirements", []):
-                command = [
+                base_command = [
                     str(python),
                     "-m",
                     "pip",
@@ -227,6 +228,7 @@ def main() -> int:
                     "--no-cache-dir",
                     "--no-warn-script-location",
                 ]
+                command = list(base_command)
                 if args.index_url:
                     command.extend(["--index-url", args.index_url])
                 if args.find_links:
@@ -236,7 +238,20 @@ def main() -> int:
                 if target_dir:
                     command.extend(["--target", str(target_dir), "--upgrade"])
                 command.append(str(requirement))
-                run_logged(command, log_file, env, timeout)
+                try:
+                    run_logged(command, log_file, env, timeout)
+                except Exception:
+                    if args.no_index or args.index_url or not args.fallback_index_url:
+                        raise
+                    fallback_command = list(base_command)
+                    fallback_command.extend(["--index-url", args.fallback_index_url])
+                    if args.find_links:
+                        fallback_command.extend(["--find-links", args.find_links])
+                    if target_dir:
+                        fallback_command.extend(["--target", str(target_dir), "--upgrade"])
+                    fallback_command.append(str(requirement))
+                    log_file.write(f"[{utc_stamp()}] Primary pip install failed; retrying with fallback index {args.fallback_index_url}\n")
+                    run_logged(fallback_command, log_file, env, timeout)
 
             for command in pack.get("postInstallCommands", []) or []:
                 if command == "python -m playwright install chromium":

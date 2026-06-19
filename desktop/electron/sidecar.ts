@@ -43,6 +43,19 @@ type EnterpriseModelRefresh = {
 
 const DEFAULT_WEB_PORT = 9899;
 
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: init.signal || controller.signal
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export class SidecarManager {
   private child: ChildProcessWithoutNullStreams | null = null;
   private enterpriseEnv: NodeJS.ProcessEnv = {};
@@ -282,7 +295,7 @@ export class SidecarManager {
   private async fetchModelPolicyWithKeyFallback(modelConfigUrl: string, policy: EnterprisePolicy, session: EnterpriseSession) {
     const keys = enterpriseClientEventKeys(policy);
     for (const [index, clientEventKey] of keys.entries()) {
-      const response = await fetch(modelConfigUrl, {
+      const response = await fetchWithTimeout(modelConfigUrl, {
         headers: enterpriseRequestHeaders({
           clientEventKey,
           userEmail: session?.user?.email || policy.userEmail,
@@ -501,8 +514,8 @@ export class SidecarManager {
       const feishuCli = typeof tools.feishu_cli === "object" && tools.feishu_cli !== null && !Array.isArray(tools.feishu_cli)
         ? tools.feishu_cli as Record<string, unknown>
         : {};
-      if (!feishuCli.package) {
-        feishuCli.package = "@larksuite/cli@1.0.40";
+      if (!feishuCli.package || feishuCli.package === "@larksuite/cli@1.0.40") {
+        feishuCli.package = "@larksuite/cli@1.0.56";
         changed = true;
       }
       if (feishuCli.auto_install === undefined || feishuCli.auto_install === true) {

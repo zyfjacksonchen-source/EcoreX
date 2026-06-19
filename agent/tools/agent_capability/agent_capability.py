@@ -69,9 +69,9 @@ _PACK_ALIASES = {
     "lark-cli": "feishu-cli",
 }
 
-FEISHU_LARK_SOURCE_URL = "https://github.com/larksuite/oapi-sdk-python"
-FEISHU_LARK_MIRROR_URLS = ["https://gitcode.com/gh_mirrors/oa/oapi-sdk-python.git"]
-FEISHU_LARK_PYPI_MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
+FEISHU_LARK_SOURCE_URL = "https://github.com/larksuite/cli"
+FEISHU_LARK_MIRROR_URLS = ["https://registry.npmmirror.com/@larksuite/cli"]
+FEISHU_LARK_NPM_MIRROR = "https://registry.npmmirror.com"
 
 
 def _normalize_pack_id(value: str) -> str:
@@ -111,8 +111,6 @@ _FEISHU_LARK_SKILL_HINTS = (
     "lark",
     "飞书",
     "@larksuite",
-    "lark-oapi",
-    "oapi-sdk-python",
     "lark-cli",
 )
 
@@ -189,7 +187,7 @@ class AgentCapabilityTool(BaseTool):
         return ToolResult.fail({"status": "error", "message": "unknown action"})
 
     def _install_pack(self, pack_id: str, timeout: Any) -> ToolResult:
-        if pack_id == "feishu-lark":
+        if pack_id in {"feishu-lark", "feishu-cli"}:
             return ToolResult.fail({
                 "status": "error",
                 "packId": pack_id,
@@ -199,13 +197,12 @@ class AgentCapabilityTool(BaseTool):
                 "installHint": (
                     "feishu-lark is discovery-only. Do not use install_pack. "
                     "Use the built-in find skill first (gated as find-skill) to discover and choose the Feishu/Lark connector install source. "
-                    f"If the find skill returns the official GitHub source, install it with: python -m pip install --upgrade \"git+{FEISHU_LARK_SOURCE_URL}.git\". "
-                    f"If GitHub times out, use the domestic Git mirror: python -m pip install --upgrade \"git+{FEISHU_LARK_MIRROR_URLS[0]}\". "
-                    f"If that still fails, use the PyPI mirror: python -m pip install -i {FEISHU_LARK_PYPI_MIRROR} --upgrade lark-oapi."
+                    "For real Feishu/Lark CLI work, install official @larksuite/cli on demand. "
+                    f"If npmjs.org times out, retry with the domestic npm mirror: npm install --registry={FEISHU_LARK_NPM_MIRROR} @larksuite/cli@1.0.56."
                 ),
                 "message": (
                     "feishu-lark is discovery-only. Use the built-in find skill/find-skill gate first, then fall back to "
-                    "GitHub, a domestic Git mirror, or a PyPI mirror as needed."
+                    "official npm or a domestic npm mirror as needed."
                 ),
                 "nextAction": {"action": "diagnose"},
             })

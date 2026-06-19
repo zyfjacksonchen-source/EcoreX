@@ -13,6 +13,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+Write-Warning "This script prepares the internal/site public-release bundle and is NOT safe for the open installer-only GitHub repository. Use scripts/prepare-ecorex-installer-repo.ps1 for the public GitHub installer repo; that repo must not contain source code."
+
 function Resolve-RequiredPath {
     param([Parameter(Mandatory = $true)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) {

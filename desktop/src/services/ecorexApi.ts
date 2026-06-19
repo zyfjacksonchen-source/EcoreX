@@ -2,6 +2,7 @@ export type RuntimeSession = {
   session_id?: string;
   id?: string;
   title?: string;
+  created_at?: string | number;
   last_active?: string | number;
   updatedAt?: string | number;
   msg_count?: number;
@@ -44,6 +45,26 @@ export type RuntimeSkill = {
   path?: string;
   enabled?: boolean;
   category?: string;
+};
+
+export type RuntimeExtension = {
+  id: string;
+  type: "builtin_skill" | "user_skill" | "connector" | "mcp_server" | "capability_pack" | "plugin" | string;
+  displayName?: string;
+  description?: string;
+  origin?: string;
+  sourceUrl?: string;
+  sourcePath?: string;
+  version?: string;
+  enabled?: boolean;
+  installed?: boolean;
+  policy?: string;
+  permissions?: string[];
+  requires?: unknown;
+  provides?: string[];
+  configRefs?: unknown;
+  status?: string;
+  lastError?: string;
 };
 
 export type RuntimeToolCall = {
@@ -101,6 +122,7 @@ export type RuntimeMessage = {
   content?: string;
   created_at?: number;
   seq?: number;
+  _seq?: number;
   user_seq?: number;
   reasoning?: string;
   steps?: RuntimeStep[];
@@ -116,6 +138,15 @@ export type RuntimeMessage = {
     artifacts?: unknown;
     [key: string]: unknown;
   };
+};
+
+export type RuntimeHistoryResult = {
+  messages: RuntimeMessage[];
+  contextStartSeq: number;
+  total?: number;
+  page?: number;
+  pageSize?: number;
+  hasMore?: boolean;
 };
 
 export type FileAttachment = {
@@ -187,6 +218,9 @@ export type RuntimeSnapshot = {
   modelsCount: number;
   tools?: RuntimeTool[];
   skills?: RuntimeSkill[];
+  extensions?: RuntimeExtension[];
+  extensionsCount?: number;
+  extensionSummary?: Record<string, number>;
   modelCapabilities?: Record<string, unknown>;
 };
 
@@ -400,18 +434,26 @@ export async function loadRuntimeSnapshot(): Promise<RuntimeSnapshot> {
       stale_locks?: RuntimeSessionLock[];
     }>("/api/active-requests")
       .catch(() => ({ status: "unavailable", requests: [], staleLocks: [], stale_locks: [] }));
-    const [version, sessions, tools, skills, models, activeRequests] = await Promise.all([
+    const extensionsPromise = apiJson<{
+      extensions?: RuntimeExtension[];
+      count?: number;
+      summary?: Record<string, number>;
+    }>("/api/extensions").catch(() => ({ extensions: [], count: 0, summary: {} }));
+    const skillsPromise = apiJson<{ skills?: RuntimeSkill[] }>("/api/skills").catch(() => ({ skills: [] }));
+    const [version, sessions, tools, skills, models, activeRequests, extensions] = await Promise.all([
       apiJson<{ version?: string; releaseNotes?: RuntimeReleaseNotes }>("/api/version"),
       apiJson<{ sessions?: RuntimeSession[]; total?: number; message?: string }>("/api/sessions?page=1&page_size=40"),
       apiJson<{ tools?: RuntimeTool[] }>("/api/tools"),
-      apiJson<{ skills?: RuntimeSkill[] }>("/api/skills"),
+      skillsPromise,
       apiJson<{ providers?: unknown[]; capabilities?: Record<string, unknown> | unknown[] }>("/api/models"),
-      activeRequestsPromise
+      activeRequestsPromise,
+      extensionsPromise
     ]);
 
     const runtimeSessions = Array.isArray(sessions.sessions) ? sessions.sessions : [];
     const runtimeTools = Array.isArray(tools.tools) ? tools.tools : [];
     const runtimeSkills = Array.isArray(skills.skills) ? skills.skills : [];
+    const runtimeExtensions = Array.isArray(extensions.extensions) ? extensions.extensions : [];
     const runtimeActiveRequests = Array.isArray(activeRequests.requests) ? activeRequests.requests : [];
     const staleLocks = Array.isArray(activeRequests.staleLocks)
       ? activeRequests.staleLocks
@@ -435,6 +477,9 @@ export async function loadRuntimeSnapshot(): Promise<RuntimeSnapshot> {
       totalSessions: typeof sessions.total === "number" ? sessions.total : runtimeSessions.length,
       toolsCount: runtimeTools.length,
       skillsCount: runtimeSkills.length,
+      extensions: runtimeExtensions,
+      extensionsCount: typeof extensions.count === "number" ? extensions.count : runtimeExtensions.length,
+      extensionSummary: extensions.summary || {},
       modelsCount: countArray(models.providers) || capabilityCount,
       currentModel: inferCurrentModel(models),
       tools: runtimeTools,
@@ -452,6 +497,9 @@ export async function loadRuntimeSnapshot(): Promise<RuntimeSnapshot> {
       totalSessions: 0,
       toolsCount: 0,
       skillsCount: 0,
+      extensions: [],
+      extensionsCount: 0,
+      extensionSummary: {},
       modelsCount: 0,
       tools: [],
       skills: [],
@@ -502,6 +550,7 @@ export async function sendChatMessage(input: {
   hiddenContext?: string;
   attachments?: FileAttachment[];
   lang?: string;
+  internalAction?: boolean;
 }): Promise<ChatSendResult> {
   if (!window.ecorexDesktop?.apiJson) {
     return {
@@ -527,8 +576,9 @@ export async function sendChatMessage(input: {
     body: {
       session_id: input.sessionId,
       message: input.message,
-      visible_message: input.visibleMessage || input.message,
+      visible_message: input.visibleMessage ?? input.message,
       hidden_context: input.hiddenContext || "",
+      internal_action: Boolean(input.internalAction),
       stream: true,
       timestamp: new Date().toISOString(),
       attachments: input.attachments || [],
@@ -559,14 +609,32 @@ export async function decideToolPermission(input: {
   });
 }
 
-export async function loadSessionHistory(sessionId: string): Promise<RuntimeMessage[]> {
+export async function loadSessionHistoryWithMeta(sessionId: string): Promise<RuntimeHistoryResult> {
   if (!sessionId) {
-    return [];
+    return { messages: [], contextStartSeq: 0 };
   }
-  const result = await apiJson<{ messages?: RuntimeMessage[] }>(
+  const result = await apiJson<{
+    messages?: RuntimeMessage[];
+    context_start_seq?: number;
+    total?: number;
+    page?: number;
+    page_size?: number;
+    has_more?: boolean;
+  }>(
     `/api/history?session_id=${encodeURIComponent(sessionId)}&page=1&page_size=50`
   );
-  return Array.isArray(result.messages) ? result.messages : [];
+  return {
+    messages: Array.isArray(result.messages) ? result.messages : [],
+    contextStartSeq: typeof result.context_start_seq === "number" ? result.context_start_seq : 0,
+    total: result.total,
+    page: result.page,
+    pageSize: result.page_size,
+    hasMore: result.has_more
+  };
+}
+
+export async function loadSessionHistory(sessionId: string): Promise<RuntimeMessage[]> {
+  return (await loadSessionHistoryWithMeta(sessionId)).messages;
 }
 
 export async function generateSessionTitle(input: { sessionId: string; userMessage: string; assistantReply?: string }) {
@@ -603,6 +671,21 @@ export async function deleteMessagePair(input: { sessionId: string; userSeq: num
     delete_user: true,
     cascade: false
   });
+}
+
+export async function clearRuntimeContext(sessionId: string) {
+  if (!sessionId) {
+    throw new Error("session_id required");
+  }
+  const result = await apiJson<{ status?: string; context_start_seq?: number; message?: string }>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/clear_context`,
+    "POST",
+    {}
+  );
+  if (result.status && result.status !== "success") {
+    throw new Error(result.message || "clear context failed");
+  }
+  return typeof result.context_start_seq === "number" ? result.context_start_seq : 0;
 }
 
 export async function chooseLocalFiles(webPort = 9899): Promise<FileAttachment[]> {

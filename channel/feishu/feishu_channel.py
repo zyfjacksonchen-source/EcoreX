@@ -45,8 +45,9 @@ URL_VERIFICATION = "url_verification"
 LARK_SDK_AVAILABLE = importlib.util.find_spec("lark_oapi") is not None
 lark = None  # will be populated on first use via _ensure_lark_imported()
 LARK_OAPI_DISCOVERY_GUIDANCE = (
-    "请先让当前 agent 通过内置 find skill / find-skill 能力发现飞书/Lark 连接器；"
-    "GitHub 超时后再降级使用 GitCode 国内镜像或清华 PyPI 镜像安装 lark-oapi。"
+    "legacy 飞书消息通道需要 lark-oapi SDK，当前运行时不会自动安装该旧依赖。"
+    "飞书/Lark CLI、skill 和 connector 安装请统一先走内置 find skill / find-skill；"
+    "真实 CLI 操作按需安装官方 @larksuite/cli，npmjs.org 超时后降级到 https://registry.npmmirror.com。"
 )
 
 

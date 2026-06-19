@@ -526,6 +526,7 @@ class AgentBridge:
             pre_persisted = self._pre_persist_user_message(
                 session_id, query, context, clear_history
             )
+            internal_action = bool(context and context.get("internal_action"))
 
             try:
                 # Use agent's run_stream method with event handler
@@ -557,7 +558,7 @@ class AgentBridge:
                 sanitize_messages_identity(new_messages)
                 # The leading user turn was already persisted eagerly above;
                 # drop it here so it isn't stored twice.
-                if pre_persisted and new_messages and new_messages[0].get("role") == "user":
+                if (pre_persisted or internal_action) and new_messages and new_messages[0].get("role") == "user":
                     new_messages = new_messages[1:]
                 elif (not pre_persisted and new_messages and new_messages[0].get("role") == "user"
                       and context and context.get("visible_message")):
@@ -585,7 +586,7 @@ class AgentBridge:
             # scheduler-injected / scheduled-task sessions so internal runs do
             # not count as user activity.
             if conf().get("self_evolution_enabled", False) and session_id and not session_id.startswith("scheduler_") and not (
-                context and context.get("is_scheduled_task")
+                context and (context.get("is_scheduled_task") or context.get("internal_action"))
             ):
                 try:
                     from agent.evolution.trigger import note_user_turn
@@ -805,6 +806,8 @@ class AgentBridge:
         if session_id.startswith("scheduler_") or (
             context and context.get("is_scheduled_task")
         ):
+            return False
+        if context and context.get("internal_action"):
             return False
         try:
             from config import conf

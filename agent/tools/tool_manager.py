@@ -453,9 +453,7 @@ class ToolManager:
         """Shut down one MCP server and drop its tools from the registry."""
         if self._mcp_registry is None:
             return
-        client = None
-        with self._mcp_registry._registry_lock:
-            client = self._mcp_registry._clients.pop(server_name, None)
+        client = self._mcp_registry.unregister(server_name)
         if client is not None:
             try:
                 client.shutdown()
@@ -509,8 +507,7 @@ class ToolManager:
 
                     # Register client into the shared registry only after its
                     # tools are visible, so callers never see a half-loaded server.
-                    with registry._registry_lock:
-                        registry._clients[server_name] = client
+                    registry.register(server_name, client)
                     self._mcp_status[server_name] = "ready"
                     logger.info(
                         f"[MCP] Server '{server_name}' ready — "

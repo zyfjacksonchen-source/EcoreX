@@ -8,13 +8,13 @@
       "summary": "仅发现飞书/Lark 需求；由当前 agent 会话先走内置 find skill / find-skill 能力，再按需从 GitHub 或国内镜像安装连接器。",
       "installMode": "user-or-admin",
       "discoveryOnly": true,
-      "sourceUrl": "https://github.com/larksuite/oapi-sdk-python",
-      "mirrorUrls": ["https://gitcode.com/gh_mirrors/oa/oapi-sdk-python.git"],
-      "installHint": "优先让 agent 通过内置 find skill / find-skill 能力发现并安装；GitHub 超时后使用国内 Git 镜像或 PyPI 镜像（例如 https://pypi.tuna.tsinghua.edu.cn/simple）安装 lark-oapi。",
+      "sourceUrl": "https://github.com/larksuite/cli",
+      "mirrorUrls": ["https://registry.npmmirror.com/@larksuite/cli"],
+      "installHint": "优先让 agent 通过内置 find skill / find-skill 能力发现；真实飞书任务需要 CLI 时再按需安装 @larksuite/cli。npm 官方源超时后降级使用 https://registry.npmmirror.com。",
       "estimatedSizeMb": 58,
-      "requirements": ["lark-oapi>=1.5.5"],
-      "moduleChecks": ["lark_oapi"],
-      "failureHint": "请让当前 agent 会话优先通过内置 find skill / find-skill 能力发现安装源；GitHub 超时后切换国内 Git/PyPI 镜像。"
+      "requirements": ["@larksuite/cli@1.0.56"],
+      "moduleChecks": ["lark-cli"],
+      "failureHint": "请让当前 agent 会话优先通过内置 find skill / find-skill 能力发现安装源；npm 官方源超时后切换国内 npm 镜像。"
     },
     {
       "id": "office-pdf",

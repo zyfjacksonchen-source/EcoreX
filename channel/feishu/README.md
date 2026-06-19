@@ -74,11 +74,9 @@ python3 app.py
 
 ## 模式二: WebSocket模式(推荐本地开发)
 
-### 1. 安装依赖
+### 1. 依赖说明
 
-```bash
-pip install lark-oapi
-```
+WebSocket 模式属于 legacy 飞书消息通道，历史上依赖 `lark-oapi` SDK。v0.1.15 起不会在运行时自动安装该旧依赖；飞书/Lark CLI、skill 和 connector 安装统一先走内置 find skill / find-skill，再按需安装官方 `@larksuite/cli`。
 
 ### 2. 配置
 
@@ -138,7 +136,7 @@ python3 app.py
 [FeiShu] lark_oapi not installed
 ```
 
-**解决**: 安装依赖 `pip install lark-oapi`
+**解决**: 先确认是否确实需要 legacy WebSocket 通道。普通飞书/Lark CLI、skill 和 connector 场景请走 find skill / find-skill；真实 CLI 操作按需安装官方 `@larksuite/cli`，npmjs.org 超时后降级到 `https://registry.npmmirror.com`。
 
 ### SSL证书验证失败
 
@@ -181,4 +179,4 @@ Address already in use
 ## 参考文档
 
 - [飞书开放平台 - 事件订阅](https://open.feishu.cn/document/ukTMukTMukTM/uUTNz4SN1MjL1UzM)
-- [飞书SDK - Python](https://github.com/larksuite/oapi-sdk-python)
+- [Lark CLI](https://github.com/larksuite/cli)

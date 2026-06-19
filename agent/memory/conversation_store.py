@@ -1066,10 +1066,14 @@ class ConversationStore:
         # Each pair of display turns (user+assistant) corresponds to a visible user seq.
         # Mark which turns are before the context boundary.
         user_turn_idx = 0
+        current_visible_user_seq: Optional[int] = None
         for turn in visible:
             if turn["role"] == "user" and user_turn_idx < len(visible_user_seqs):
-                turn["_seq"] = visible_user_seqs[user_turn_idx]
+                current_visible_user_seq = visible_user_seqs[user_turn_idx]
+                turn["_seq"] = current_visible_user_seq
                 user_turn_idx += 1
+            elif turn["role"] == "assistant" and current_visible_user_seq is not None:
+                turn["_seq"] = current_visible_user_seq
 
         total = len(visible)
         offset = (page - 1) * page_size
