@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+    tags:
+      - "v*"
     paths:
       - ".github/workflows/ecorex-desktop-release.yml"
       - "desktop/**"
@@ -66,7 +68,7 @@ jobs:
         run: npm ci
 
       - name: Require macOS signing and notarization secrets
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.notarize }}
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.notarize) }}
         run: |
           missing=0
           for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
@@ -89,7 +91,7 @@ jobs:
           npm run "package:mac:${{ matrix.arch }}"
 
       - name: Notarize and staple DMG
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.notarize }}
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.notarize) }}
         run: |
           if [[ -z "${CSC_LINK}" || -z "${APPLE_ID}" || -z "${APPLE_APP_SPECIFIC_PASSWORD}" || -z "${APPLE_TEAM_ID}" ]]; then
             echo "Code signing or Apple notarization secrets are not configured; refusing unsigned public DMG." >&2
@@ -106,7 +108,7 @@ jobs:
           done
 
       - name: Validate notarized artifacts
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.notarize }}
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.notarize) }}
         run: |
           if [[ -z "${APPLE_ID}" || -z "${APPLE_APP_SPECIFIC_PASSWORD}" || -z "${APPLE_TEAM_ID}" || -z "${CSC_LINK}" ]]; then
             echo "Signing/notarization secrets are incomplete; strict validation cannot be skipped for a public DMG." >&2
@@ -119,11 +121,11 @@ jobs:
           shasum -a 256 release/EcoreX_*_${{ matrix.arch }}.dmg > "release/EcoreX_${{ matrix.arch }}.sha256"
           cat "release/EcoreX_${{ matrix.arch }}.sha256"
 
-      - name: Publish workflow-dispatched DMG to GitHub Release
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+      - name: Publish macOS DMG to GitHub Release
+        if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
         run: |
           if ! gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
             gh release create "${RELEASE_TAG}" \
