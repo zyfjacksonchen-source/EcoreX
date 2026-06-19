@@ -61,10 +61,10 @@
       "variant": "WebUI one-click local package",
       "fileName": "EcoreX_0.1.15-webui-windows-x64.zip",
       "href": "downloads/EcoreX_0.1.15-webui-windows-x64.zip",
-      "size": 64528302,
-      "sha256": "F82DD225F3394696A060AB0EC8CDA5CF081B14BE65CF566347A2F3D55177795E",
+      "size": 64527732,
+      "sha256": "0184668BA9B3C1D9A26CA9AE19388A5277D8EE98ED4D379DFDFAA8C3E2CBB897",
       "status": "ready",
-      "source": "Rebuilt v0.1.15 Windows WebUI local package from the sanitized EcoreX runtime. Artifact scan passed with no legacy product-name strings and no original project build/source paths.",
+      "source": "Rebuilt v0.1.15 Windows WebUI local package from the sanitized EcoreX runtime. Artifact scan passed with no legacy product-name/CLI strings and no original project build/source paths.",
       "updatedAt": "2026-06-19T11:44:00Z"
     },
     {
@@ -74,10 +74,10 @@
       "variant": "WebUI one-click local package",
       "fileName": "EcoreX_0.1.15-webui-macos-universal.zip",
       "href": "downloads/EcoreX_0.1.15-webui-macos-universal.zip",
-      "size": 157940390,
-      "sha256": "60246BAD3D9D435F568B6EBEB9375BB5B3C0D3F43CE859BFC0689B0893AFB16D",
+      "size": 157939821,
+      "sha256": "51A7578577BA1BABEE97D8EDB3CD0E199D64F0CE31FA5D4D8859E22D1868527F",
       "status": "ready",
-      "source": "Rebuilt v0.1.15 macOS WebUI local package from the sanitized EcoreX runtime. Artifact scan passed with no legacy product-name strings and no original project build/source paths.",
+      "source": "Rebuilt v0.1.15 macOS WebUI local package from the sanitized EcoreX runtime. Artifact scan passed with no legacy product-name/CLI strings and no original project build/source paths.",
       "updatedAt": "2026-06-19T11:44:00Z"
     },
     {
@@ -115,11 +115,11 @@
       "variant": "Web service deployment package",
       "fileName": "EcoreX_0.1.15-web-linux-service.tar.gz",
       "href": "downloads/EcoreX_0.1.15-web-linux-service.tar.gz",
-      "size": 3216373,
-      "sha256": "70C830D17D23CD92EBEC7D35B7C520DA6DDB02CB8CA2E2BDB011FB62DDD7DE4C",
+      "size": 3215588,
+      "sha256": "55748254B95CE27B16EE9EC7C81896E489103DF4C4F68028DC3A444D58F59E81",
       "status": "ready",
       "visible": false,
-      "source": "Rebuilt v0.1.15 Linux Web service package from the sanitized EcoreX runtime. Artifact scan passed with no legacy product-name strings and no original project build/source paths.",
+      "source": "Rebuilt v0.1.15 Linux Web service package from the sanitized EcoreX runtime. Artifact scan passed with no legacy product-name/CLI strings and no original project build/source paths.",
       "updatedAt": "2026-06-19T11:44:00Z"
     }
   ],
