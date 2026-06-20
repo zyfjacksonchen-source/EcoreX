@@ -7,6 +7,7 @@ import logging
 import mimetypes
 import os
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -18,7 +19,7 @@ import urllib.request
 import uuid
 from queue import Queue, Empty
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import web
 
@@ -1019,6 +1020,8 @@ class WebChannel(ChatChannel):
             sessions = {}
             for row in get_cancel_registry().snapshot():
                 request_id = row.get("request_id", "")
+                if request_id in self.sse_done_sent:
+                    continue
                 session_id = row.get("session_id") or self.request_to_session.get(request_id, "")
                 item = {
                     **row,
@@ -1408,19 +1411,59 @@ class WebChannel(ChatChannel):
         )
         if not artifact_tool and result_type not in {"file_to_send", "artifact", "generated_file", "output_file"}:
             return []
-        raw_paths = []
+        raw_items: List[Dict[str, Any]] = []
+        seen_paths = set()
+
+        def add_artifact_candidate(value: Any, meta: Optional[Dict[str, Any]] = None, collection_key: str = "") -> None:
+            path_value = ""
+            item_meta = meta if isinstance(meta, dict) else {}
+            if isinstance(value, str):
+                path_value = value.strip()
+            elif isinstance(value, dict):
+                item_meta = value
+                for nested_key in ("path", "file_path", "filePath", "output_path", "outputPath", "url"):
+                    nested_value = value.get(nested_key)
+                    if isinstance(nested_value, str) and nested_value.strip():
+                        path_value = nested_value.strip()
+                        break
+            if not path_value:
+                return
+            normalized_key = path_value.replace("\\", "/").lower()
+            if normalized_key in seen_paths:
+                return
+            seen_paths.add(normalized_key)
+            inferred_type = str(
+                item_meta.get("file_type")
+                or item_meta.get("fileType")
+                or item_meta.get("kind")
+                or item_meta.get("type")
+                or ("image" if collection_key == "images" else "")
+            ).strip()
+            raw_items.append({
+                "path": path_value,
+                "file_name": item_meta.get("file_name") or item_meta.get("fileName") or item_meta.get("name"),
+                "file_type": inferred_type,
+            })
+
         for key in ("path", "file_path", "filePath", "output_path", "outputPath"):
-            value = result.get(key)
-            if isinstance(value, str) and value.strip():
-                raw_paths.append(value.strip())
-        if not raw_paths:
+            add_artifact_candidate(result.get(key), result)
+        for key in ("images", "files", "outputs", "artifacts", "generated_files", "generatedFiles"):
+            collection = result.get(key)
+            if isinstance(collection, list):
+                for entry in collection:
+                    add_artifact_candidate(entry, entry if isinstance(entry, dict) else None, key)
+            elif isinstance(collection, dict):
+                add_artifact_candidate(collection, collection, key)
+
+        if not raw_items:
             return []
         artifacts: List[Dict[str, Any]] = []
-        for raw_path in raw_paths[:4]:
+        for raw_item in raw_items[:8]:
+            raw_path = str(raw_item.get("path") or "").strip()
             if not self._artifact_path_available(raw_path):
                 continue
-            file_name = str(result.get("file_name") or result.get("fileName") or os.path.basename(raw_path) or raw_path)
-            raw_type = str(result.get("file_type") or result.get("fileType") or "file")
+            file_name = str(raw_item.get("file_name") or result.get("file_name") or result.get("fileName") or os.path.basename(raw_path) or raw_path)
+            raw_type = str(raw_item.get("file_type") or result.get("file_type") or result.get("fileType") or "file")
             kind = self._artifact_kind(raw_type, raw_path)
             is_edit = "edit" in tool_key or "patch" in tool_key
             stats = self._diff_stats(str(result.get("diff") or "")) if result.get("diff") else {}
@@ -2331,6 +2374,7 @@ class WebChannel(ChatChannel):
                 pass
 
         start_index = 0
+        terminal_consumed = False
         try:
             raw_last_id = getattr(web, "ctx", None)
             raw_last_id = getattr(raw_last_id, "env", {}).get("HTTP_LAST_EVENT_ID", "") if raw_last_id else ""
@@ -2340,7 +2384,16 @@ class WebChannel(ChatChannel):
             if raw_last_id != "":
                 with self.sse_lock:
                     event_offset = self.sse_event_offsets.get(request_id, 0)
+                    events = self.sse_events.get(request_id, [])
                 start_index = max(0, int(raw_last_id) + 1 - event_offset)
+                try:
+                    last_event_number = int(raw_last_id)
+                    for offset, event in enumerate(events):
+                        if event.get("type") in ("done", "cancelled") and last_event_number >= event_offset + offset:
+                            terminal_consumed = True
+                            break
+                except Exception:
+                    terminal_consumed = False
         except Exception:
             start_index = 0
         index = start_index
@@ -2349,9 +2402,9 @@ class WebChannel(ChatChannel):
         # After the main reply is done we keep the stream open for a short
         # tail so async post-processing (TTS auto-synthesis) can deliver a
         # `voice_attach` event before the client disconnects.
-        POST_DONE_TAIL_SECONDS = 60
-        post_done = False
-        post_deadline = 0.0
+        POST_DONE_TAIL_SECONDS = 12
+        post_done = terminal_consumed
+        post_deadline = time.time() + POST_DONE_TAIL_SECONDS if terminal_consumed else 0.0
 
         try:
             while time.time() < deadline:
@@ -2650,6 +2703,7 @@ class WebChannel(ChatChannel):
             '/api/messages/delete', 'MessageDeleteHandler',
             '/api/ui-state', 'UiStateHandler',
             '/api/installations', 'InstallationsHandler',
+            '/api/diagnostics/bundle', 'DiagnosticsBundleHandler',
             '/api/logs/snapshot', 'LogsSnapshotHandler',
             '/api/logs', 'LogsHandler',
             '/api/version', 'VersionHandler',
@@ -6324,6 +6378,120 @@ def _log_snapshot_payload(max_lines: int = 200) -> Dict[str, Any]:
         }
 
 
+def _diagnostic_event_summary(line: str) -> Dict[str, Any]:
+    raw = str(line or "").replace("\r", "").strip()
+    lower = raw.lower()
+    if "traceback" in lower or "exception" in lower or "error" in lower:
+        severity = "error"
+    elif "warn" in lower or "warning" in lower:
+        severity = "warning"
+    else:
+        severity = "info"
+    category = "runtime"
+    for label, pattern in (
+        ("permission", r"permission|denied|authorize|授权|权限"),
+        ("sse", r"\bsse\b|eventsource|stream"),
+        ("sidecar", r"sidecar"),
+        ("artifact", r"artifact|preview|thumbnail|file-stat|file stat"),
+        ("session", r"session|request|lock"),
+        ("diagnostics", r"diagnostic|log"),
+    ):
+        if re.search(pattern, raw, re.IGNORECASE):
+            category = label
+            break
+    timestamp_match = re.search(r"\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?Z?", raw)
+    return {
+        "severity": severity,
+        "category": category,
+        "eventHash": hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:16],
+        "timestampHint": timestamp_match.group(0) if timestamp_match else "",
+        "redacted": True,
+    }
+
+
+def _diagnostic_path_summary(path_value: Any) -> Dict[str, Any]:
+    raw = str(path_value or "")
+    return {
+        "present": bool(raw),
+        "pathHash": hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:16] if raw else "",
+        "redacted": True,
+    }
+
+
+def _diagnostic_stale_lock_summary(item: Any) -> Dict[str, Any]:
+    if not isinstance(item, dict):
+        return {"redacted": True}
+    lock_path = item.get("path") or item.get("lock_path") or item.get("file") or item.get("file_path") or ""
+    return {
+        "sessionHash": hashlib.sha256(str(item.get("session_id") or item.get("sessionId") or "").encode("utf-8", errors="replace")).hexdigest()[:16] if (item.get("session_id") or item.get("sessionId")) else "",
+        "pid": item.get("pid", ""),
+        "deadOwner": bool(item.get("dead_owner")),
+        "stale": bool(item.get("stale")),
+        "removed": bool(item.get("removed")),
+        "removeError": bool(item.get("remove_error")),
+        "lockPath": _diagnostic_path_summary(lock_path),
+        "redacted": True,
+    }
+
+
+def _diagnostic_bundle_payload(session_id: str = "", request_id: str = "") -> Dict[str, Any]:
+    from cli import __version__
+    from config import get_root
+
+    log_snapshot = _log_snapshot_payload(120)
+    log_events = [
+        _diagnostic_event_summary(line)
+        for line in (log_snapshot.get("log", {}) or {}).get("lines", [])
+        if re.search(r"\b(error|warn|failed|exception|traceback)\b|错误|失败|异常", str(line or ""), re.IGNORECASE)
+    ][-50:]
+    workspace_root = _get_workspace_root()
+    runtime_root = str(get_root())
+    channel = WebChannel()
+    active = channel.active_requests_snapshot()
+    active_requests = []
+    for item in active.get("requests", []) if isinstance(active, dict) else []:
+        active_requests.append({
+            "request_id": item.get("request_id", ""),
+            "session_id": item.get("session_id", ""),
+            "cancelled": bool(item.get("cancelled")),
+            "created_at": item.get("created_at", ""),
+            "stream_available": bool(item.get("stream_available", False)),
+        })
+    return {
+        "status": "success",
+        "type": "diagnostic_bundle",
+        "generatedAt": datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "version": __version__,
+        "runtime": {
+            "surface": "desktop" if os.environ.get("ECOREX_DESKTOP") == "1" else "webui",
+            "bootId": os.environ.get("ECOREX_DESKTOP_BOOT_ID", ""),
+            "pid": os.getpid(),
+            "workspaceRoot": _diagnostic_path_summary(workspace_root),
+            "runtimeRoot": _diagnostic_path_summary(runtime_root),
+        },
+        "current": {
+            "session_id": session_id,
+            "request_id": request_id,
+        },
+        "activeRequests": active_requests,
+        "staleLocks": [
+            _diagnostic_stale_lock_summary(item)
+            for item in (active.get("stale_locks", []) if isinstance(active, dict) else [])
+        ],
+        "logs": {
+            "path": _diagnostic_path_summary((log_snapshot.get("log", {}) or {}).get("path", "")),
+            "exists": bool((log_snapshot.get("log", {}) or {}).get("exists")),
+            "recentEvents": log_events,
+            "note": "Recent events and local paths are category/hash summaries only; prompts, file contents, artifact contents, and raw log lines are intentionally omitted.",
+        },
+        "privacy": {
+            "includesPromptText": False,
+            "includesFileContents": False,
+            "includesArtifactContents": False,
+        },
+    }
+
+
 def _resolve_run_log_path(runtime_root: Path) -> Path:
     try:
         from agent.tools.host_diagnostics.host_diagnostics import _candidate_log_paths
@@ -6352,6 +6520,20 @@ class LogsSnapshotHandler:
         web.header('Content-Type', 'application/json; charset=utf-8')
         params = web.input(lines="200")
         return json.dumps(_log_snapshot_payload(_parse_log_line_limit(params.lines)), ensure_ascii=False)
+
+
+class DiagnosticsBundleHandler:
+    def GET(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        params = web.input(session_id="", request_id="")
+        return json.dumps(
+            _diagnostic_bundle_payload(
+                session_id=str(params.session_id or "").strip(),
+                request_id=str(params.request_id or "").strip(),
+            ),
+            ensure_ascii=False,
+        )
 
 
 class LogsHandler:
@@ -6520,7 +6702,8 @@ class VersionHandler:
         from cli import __version__
         from common.ecorex_release_notes import get_current_release_notes
         runtime_token = os.environ.get("ECOREX_DESKTOP_RUNTIME_TOKEN", "")
-        header_token = web.ctx.env.get("HTTP_X_ECOREX_RUNTIME_TOKEN", "")
+        web_ctx = getattr(web, "ctx", None)
+        header_token = getattr(web_ctx, "env", {}).get("HTTP_X_ECOREX_RUNTIME_TOKEN", "") if web_ctx else ""
         verified = bool(runtime_token and header_token and runtime_token == header_token)
 
         payload = {

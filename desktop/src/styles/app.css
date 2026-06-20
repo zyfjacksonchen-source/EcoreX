@@ -2068,10 +2068,14 @@ html[data-platform="web"] .window-brand {
   gap: 4px;
   margin-bottom: 2px;
   padding: 6px;
+  max-height: min(260px, 38vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-surface-raised);
   box-shadow: var(--shadow-popover);
+  scrollbar-gutter: stable;
 }
 
 .skill-mention-popover button {
@@ -2821,8 +2825,12 @@ html[data-platform="web"] .window-brand {
 }
 
 .image-preview-popover {
-  width: min(720px, calc(100vw - 48px));
-  max-height: calc(100vh - 116px);
+  top: 18px;
+  right: 18px;
+  bottom: 18px;
+  left: min(340px, 26vw);
+  width: auto;
+  max-height: none;
   overflow: hidden;
   grid-template-rows: auto minmax(180px, 1fr) auto;
   border-radius: var(--radius-lg);
@@ -2837,22 +2845,24 @@ html[data-platform="web"] .window-brand {
 .preview-image-frame {
   min-width: 0;
   min-height: 220px;
-  height: min(64vh, 620px);
+  height: auto;
   display: grid;
   place-items: center;
-  overflow: hidden;
+  overflow: auto;
+  overscroll-behavior: contain;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-surface-raised);
+  scrollbar-gutter: stable both-edges;
 }
 
 .preview-image-frame img {
-  max-width: 100%;
-  max-height: 100%;
+  width: var(--preview-width, 100%);
+  max-width: none;
+  max-height: none;
+  height: auto;
   object-fit: contain;
-  transform: scale(var(--preview-zoom, 1));
-  transform-origin: center;
-  transition: transform var(--motion-fast) var(--ease-standard);
+  transition: width var(--motion-fast) var(--ease-standard);
 }
 
 .toast {
@@ -2915,11 +2925,15 @@ html[data-platform="web"] .window-brand {
   }
 
   .image-preview-popover {
+    left: 12px;
+    right: 12px;
+    top: 12px;
+    bottom: 12px;
     max-height: calc(100vh - 72px);
   }
 
   .preview-image-frame {
     min-height: 180px;
-    height: min(58vh, 520px);
+    height: auto;
   }
 }

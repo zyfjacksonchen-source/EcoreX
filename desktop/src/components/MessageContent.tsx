@@ -88,6 +88,7 @@ function escapeHtml(value: unknown) {
 
 function safeUrl(value: string, localFilePreviewUrl?: (filePath: string) => string) {
   if (isRuntimeHttpPath(value)) {
+    if (localFilePreviewUrl) return localFilePreviewUrl(value);
     return runtimeHttpUrl(value);
   }
   const localPath = localPathFromSource(value) || relativeArtifactPathFromSource(value);
@@ -104,6 +105,7 @@ function safeUrl(value: string, localFilePreviewUrl?: (filePath: string) => stri
 
 function safeImageUrl(value: string, localFilePreviewUrl?: (filePath: string) => string) {
   if (isRuntimeHttpPath(value)) {
+    if (localFilePreviewUrl) return localFilePreviewUrl(value);
     return runtimeHttpUrl(value);
   }
   const localPath = localPathFromSource(value) || relativeArtifactPathFromSource(value);
@@ -120,6 +122,7 @@ function safeImageUrl(value: string, localFilePreviewUrl?: (filePath: string) =>
 
 function safeMediaUrl(value: string, localFilePreviewUrl?: (filePath: string) => string) {
   if (isRuntimeHttpPath(value)) {
+    if (localFilePreviewUrl) return localFilePreviewUrl(value);
     return runtimeHttpUrl(value);
   }
   const localPath = localPathFromSource(value) || relativeArtifactPathFromSource(value);

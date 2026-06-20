@@ -224,6 +224,33 @@ export type RuntimeSnapshot = {
   modelCapabilities?: Record<string, unknown>;
 };
 
+export type DiagnosticsBundle = {
+  [key: string]: unknown;
+  status?: string;
+  type?: string;
+  generatedAt?: string;
+  version?: string;
+  runtime?: Record<string, unknown>;
+  current?: {
+    session_id?: string;
+    request_id?: string;
+  };
+  activeRequests?: unknown[];
+  staleLocks?: unknown[];
+  logs?: {
+    path?: Record<string, unknown>;
+    exists?: boolean;
+    recentEvents?: Array<Record<string, unknown>>;
+    note?: string;
+  };
+  privacy?: {
+    includesPromptText?: boolean;
+    includesFileContents?: boolean;
+    includesArtifactContents?: boolean;
+  };
+  message?: string;
+};
+
 export type DesktopUpdateStatus = {
   state: "idle" | "checking" | "available" | "not-available" | "downloading" | "downloaded" | "blocked" | "installing" | "error";
   platform: string;
@@ -954,6 +981,14 @@ export async function reportDesktopEvent(event: {
   } catch {
     // Telemetry is best-effort and must not affect the user task.
   }
+}
+
+export async function exportDiagnosticsBundle(input: { sessionId?: string; requestId?: string } = {}) {
+  const params = new URLSearchParams();
+  if (input.sessionId) params.set("session_id", input.sessionId);
+  if (input.requestId) params.set("request_id", input.requestId);
+  const suffix = params.toString();
+  return apiJson<DiagnosticsBundle>(`/api/diagnostics/bundle${suffix ? `?${suffix}` : ""}`);
 }
 
 export function filePreviewUrl(filePath: string, webPort: number) {

@@ -63,16 +63,46 @@ Each feature records implementation owner, independent review agents, evidence, 
 - `npm run package:dir`: PASS.
 - `npm run package:win`: PASS.
 - `python -m py_compile ...`: PASS.
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/test_ecorex_web_parallel_backend.py -q`: PASS, 107 passed.
 - `python scripts/validate-ecorex-release-artifacts.py --desktop-dir desktop/release/win-unpacked --desktop-only --version 0.1.16`: PASS.
 - `python scripts/validate-ecorex-release-artifacts.py --version 0.1.16`: PASS.
 - Unpacked desktop smoke: PASS.
 - Unsigned installer smoke: PASS.
 - Trim-boundary smoke: PASS.
 - Public release zip generated: `release-artifacts/EcoreX_0.1.16-public-release.zip`.
+- Final public release zip SHA256: `966942A3660F2573155973965FCEB1580D04E25F520164095E9FFFC679BCFD02`.
+- Final Windows installer SHA256: `A7984AA3EBA379A8ED4B1553DBD38481DBD82487B0A460E1FC131DCDC0E65D18`.
+- Packaged API hand-test: PASS after final package for `/auth/check`, `/api/version`, Windows image POST `/api/file-stat` + `/api/file`, `/api/diagnostics/bundle` path redaction/no image-path leak, and empty `/api/active-requests`.
+- Production online verify: BLOCKED because `https://www.ecoreai.cn/ecorex-agent/manifest.json` still serves `0.1.15`.
+
+## Slice 4: Hand-Test Fixes and Promotion Gate Follow-Up
+
+- Developer: parent thread implementation.
+- Scope: user-reported hand-test issues plus promotion gate follow-up.
+- Files changed: `desktop/src/App.tsx`, `desktop/src/components/MessageContent.tsx`, `desktop/src/services/ecorexApi.ts`, `desktop/src/styles/app.css`, `desktop/electron/apiBridge.ts`, `channel/web/web_channel.py`, release docs, README files, and `deploy/ecorex-site/manifest.json`.
+- Fixes applied:
+  - Runtime `/api/file` preview paths now use the desktop sidecar preview URL instead of Electron `file://` origin.
+  - Image preview uses a large scrollable frame; zoom changes real image width instead of clipping via transform.
+  - `@skill` mention results have a max height and vertical scrolling.
+  - Done handlers clear assistant `requestId`, suppress locally completed request ids from active UI state, and keep a post-done tail stream for late artifacts/TTS without showing a running state.
+  - Backend SSE reconnects after consumed terminal events use a short tail, not a long keepalive.
+  - Tool result artifact extraction now recognizes nested `images`/`files`/`outputs`/`artifacts`.
+  - Diagnostic bundle API and desktop export button added; bundle emits runtime/request metadata and hash/category log summaries only.
+  - Final P2 cleanup: cached-only session rows now ignore locally completed request ids, diagnostic bundles hash local paths/stale locks, and terminal reconnect post-done tails match the 12s backend tail.
+- Independent review:
+  - Artifact/preview explorer `019ee241-3e1f-7da1-a0d2-eb775fdbab0b`: identified `/api/file` origin bug and nested `images[].url`; fixes implemented.
+  - Runtime/SSE explorer `019ee241-88cd-7ee3-8874-334769638075`: identified pending resume placeholder and terminal cursor keepalive risks; fixes implemented.
+  - Frontend reviewer `019ee258-46be-7e23-bc08-01e26ded143f`: PASS, no P0/P1 after frontend fixes.
+  - Backend/runtime reviewer `019ee258-9195-75f3-b0d9-cc85ccbd5d87`: initially FAIL on diagnostic privacy and short TTS tail; both P1s fixed, backend pytest PASS.
+  - Production/release reviewer `019ee258-e8d2-7270-80c1-2149f9659140`: FAIL for public production promotion due to unsigned Windows installer, pending non-Windows artifacts, production download page still on v0.1.15, and remaining UI perf/focus traces. Local artifact hash mismatch was fixed by regenerating manifest/public zip after final package.
+- Final re-review after current hand-test fixes:
+  - UI/desktop reviewer `019ee27e-1f32-74a2-aa91-f785a850f305`: PASS, no P0/P1; P2 cached-only live row issue fixed in this slice.
+  - Backend/privacy reviewer `019ee27e-343a-78f2-a25a-c05b4d2c52ae`: PASS, no P0/P1; P2 path/stale-lock metadata and terminal reconnect tail issues fixed in this slice.
+  - Production gate reviewer `019ee27e-491d-7cf2-8bd8-3a9c4015bf4a`: PARTIAL/BLOCK for public production, acceptable as internal Windows hand-test candidate. Current goal explicitly defers signing and prioritizes GitHub push.
 
 ## Current Decision
 
-Local v0.1.16 Windows hand-test candidate is ready for manual testing.
+Local v0.1.16 Windows hand-test candidate is ready for manual testing and internal installation. Current scope defers signing and public production promotion; code push is the active delivery gate.
 
 Final independent re-review convergence:
 
@@ -81,4 +111,4 @@ Final independent re-review convergence:
 - QA/release agent `019ee053-ee5e-7951-8114-1d7b05672109`: PASS for prior QA/release P1, with public promotion blockers documented.
 - Production/SRE agent `019ee054-b608-7e22-82c9-09ab1b247d28`: PASS for local hand-test candidate, with public promotion blockers documented.
 
-Public production promotion remains BLOCKED until code signing, non-Windows artifacts, pytest/dependency availability, full diagnostic bundle, and automated UI performance/focus traces are completed.
+Public production promotion remains BLOCKED until code signing, non-Windows artifacts, production download-page deployment, and automated UI performance/focus traces are completed. This is not blocking the current "先不签名, 先推 GitHub" hand-test scope.

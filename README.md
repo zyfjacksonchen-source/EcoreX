@@ -3,7 +3,7 @@
 EcoreX is a desktop and WebUI AI agent product maintained in the
 `zhangyifanjackson-dotcom/EcoreX` GitHub repository.
 
-The v0.1.14 distribution is built as:
+The v0.1.16 distribution is built as:
 
 - Electron desktop application
 - Local React frontend
@@ -18,18 +18,15 @@ handling.
 
 ## Release Notes
 
-Current development target: `v0.1.14`.
+Current development target: `v0.1.16`.
 
 Main areas in this release:
 
-- Windows desktop update detection/download and safe install handoff
-- macOS/WebUI update prompt and device-aware download page
-- Session, message, upload, pasted-file, and artifact preservation across update
-- Subagent v1 with explicit start/status/list/collect/cancel actions
-- Agent-owned Skill/MCP/capability installation and diagnostics
-- Inline image artifact previews and local open actions
-- WebUI project-folder, knowledge-link, and local artifact opening fixes
-- Internal system/tool-chain guidance redaction
+- Desktop streaming stability, completion-state cleanup, and safer SSE recovery
+- Artifact thumbnails, large image preview, local file stat/open, and diagnostics hardening
+- Broader global/plugin Skill discovery and scrollable `@skill` mention results
+- Windows local hand-test package plus release manifest validation
+- Production promotion gates for signing, non-Windows packages, and deployment evidence
 
 ## Repository
 

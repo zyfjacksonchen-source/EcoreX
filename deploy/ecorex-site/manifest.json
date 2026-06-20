@@ -47,12 +47,13 @@
                           "variant":  "Desktop x64 installer",
                           "fileName":  "EcoreX_0.1.16_x64-setup.exe",
                           "href":  "downloads/EcoreX_0.1.16_x64-setup.exe",
-                          "size":  143298882,
-                          "sha256":  "90E45AFF3DE797B57D21D79C688C79DD3E697F5C3E1EE94EC191B951810BA5C0",
+                          "size":  143301336,
+                          "sha256":  "A7984AA3EBA379A8ED4B1553DBD38481DBD82487B0A460E1FC131DCDC0E65D18",
                           "status":  "ready",
                           "source":  "Unsigned local v0.1.16 Windows installer built from codex/ecorex-v0.1.16 for production-grade hand testing; signing/notarized public promotion remains a release gate.",
                           "updatedAt":  "2026-06-19T15:15:49Z",
-                          "signature":  "unsigned-local-handtest"
+                          "signature":  "unsigned-local-handtest",
+                          "notes":  "Windows local hand-test build regenerated for v0.1.16; production promotion still requires Authenticode signing."
                       },
                       {
                           "id":  "webui-windows-x64",

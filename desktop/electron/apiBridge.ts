@@ -33,6 +33,7 @@ function isAllowedPath(pathname: string, method: string) {
     "GET /api/version",
     "GET /api/logs",
     "GET /api/logs/snapshot",
+    "GET /api/diagnostics/bundle",
     "POST /api/file-stat",
     "GET /api/knowledge/list",
     "GET /api/knowledge/read",

@@ -57,6 +57,7 @@ import {
   enableDefaultSkills,
   enterpriseLogin,
   enterpriseLogout,
+  exportDiagnosticsBundle,
   filePreviewUrl,
   generateSessionTitle,
   getEnterpriseSession,
@@ -468,13 +469,15 @@ function mapSessions(
   sessionTitles: StringMap,
   pinnedSessions: StringBoolMap,
   projects: ProjectFolder[],
-  sessionUiState: Record<string, SessionUiState>
+  sessionUiState: Record<string, SessionUiState>,
+  locallyCompletedRequestIds: StringBoolMap = {}
 ): SessionRow[] {
   const projectById = new Map(projects.map((project) => [project.id, project]));
   const activeRequestBySession = new Map<string, RuntimeActiveRequest>(
     (snapshot.activeRequests || [])
       .filter((request) => request.session_id && request.request_id)
       .filter(isRuntimeRequestUiActive)
+      .filter((request) => !locallyCompletedRequestIds[String(request.request_id || "")])
       .map((request) => [String(request.session_id), request])
   );
   const rows: SessionRow[] = snapshot.sessions.map((session, index) => {
@@ -509,7 +512,10 @@ function mapSessions(
     if (!hasContent) continue;
     const projectId = sessionProjects[sessionId] || null;
     const project = projectId ? projectById.get(projectId) : undefined;
-    const live = (cached.messages || []).some(isLiveAssistantMessage);
+    const live = (cached.messages || []).some((message) => (
+      isLiveAssistantMessage(message)
+      && !(message.requestId && locallyCompletedRequestIds[message.requestId])
+    ));
     const activeRequest = activeRequestBySession.get(sessionId);
     const activeRequestId = activeRequest?.request_id ? String(activeRequest.request_id) : undefined;
     const isCancelling = Boolean(activeRequest?.cancelled);
@@ -900,6 +906,17 @@ function messageContentKey(message: ChatItem) {
 
 function mergeHistoryWithLocalMessages(history: ChatItem[], local: ChatItem[]) {
   if (!history.length || !local.length) return history.length ? history : local;
+  const historyHasFinalAssistant = history.some((message) => (
+    message.role === "assistant"
+    && !message.pending
+    && (
+      Boolean(redactInternalPromptText(message.content || "").trim())
+      || Boolean(message.steps?.length)
+      || Boolean(message.toolCalls?.length)
+      || Boolean(message.artifacts?.length)
+      || typeof message.botSeq === "number"
+    )
+  ));
   const sequenceKeys = new Set(history.map(messageSequenceKey).filter(Boolean));
   const requestKeys = new Set(history.map(messageRequestKey).filter(Boolean));
   const contentKeys = new Set(history.map(messageContentKey).filter(Boolean));
@@ -907,6 +924,9 @@ function mergeHistoryWithLocalMessages(history: ChatItem[], local: ChatItem[]) {
   let skipPendingAssistantAfterMatchedUser = false;
 
   for (const message of local) {
+    if (historyHasFinalAssistant && message.role === "assistant" && message.pending && message.id.startsWith("a-resume-")) {
+      continue;
+    }
     const sequenceKey = messageSequenceKey(message);
     if (sequenceKey && sequenceKeys.has(sequenceKey)) {
       skipPendingAssistantAfterMatchedUser = message.role === "user";
@@ -1367,6 +1387,7 @@ export function App() {
   const [sessionUiState, setSessionUiState] = useState<Record<string, SessionUiState>>(() => readStorage<Record<string, SessionUiState>>(SESSION_UI_STORAGE_KEY, {}));
   const [enabledCapabilityPacks, setEnabledCapabilityPacks] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(CAPABILITY_ENABLED_STORAGE_KEY, {}));
   const [sessionRequestIds, setSessionRequestIds] = useState<StringMap>({});
+  const [locallyCompletedRequestIds, setLocallyCompletedRequestIds] = useState<StringBoolMap>({});
   const [activeProjectId, setActiveProjectId] = useState<string | null>(bootSession?.id ? bootSessionProjects[bootSession.id] || null : null);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("account");
   const [projectMenu, setProjectMenu] = useState<ProjectContextMenu>(null);
@@ -1394,6 +1415,9 @@ export function App() {
   const autoScrollRef = useRef(true);
   const appBootMs = useRef(Date.now());
   const completedRequestIds = useRef<StringBoolMap>({});
+  const completedRequestCleanupTimers = useRef<Record<string, number>>({});
+  const locallyCompletedRequestIdsRef = useRef<StringBoolMap>({});
+  const postDoneStreamCloseTimers = useRef<Record<string, number>>({});
   const streamRetryCounts = useRef<Record<string, number>>({});
   const sendGenerationRef = useRef(0);
   const preflightAbortRef = useRef<AbortController | null>(null);
@@ -1477,6 +1501,10 @@ export function App() {
     activeSessionIdRef.current = activeSessionId;
     window.localStorage.setItem(LAST_ACTIVE_SESSION_STORAGE_KEY, activeSessionId);
   }, [activeSessionId]);
+
+  useEffect(() => {
+    locallyCompletedRequestIdsRef.current = locallyCompletedRequestIds;
+  }, [locallyCompletedRequestIds]);
 
   useEffect(() => {
     const projectId = sessionProjects[activeSessionId] || null;
@@ -1575,6 +1603,10 @@ export function App() {
         if (buffer.timer !== null) window.clearTimeout(buffer.timer);
       });
       streamDeltaBuffers.current = {};
+      Object.values(postDoneStreamCloseTimers.current).forEach((timer) => window.clearTimeout(timer));
+      postDoneStreamCloseTimers.current = {};
+      Object.values(completedRequestCleanupTimers.current).forEach((timer) => window.clearTimeout(timer));
+      completedRequestCleanupTimers.current = {};
       Object.values(historyRecoveryTimersRef.current).forEach((timers) => {
         timers.forEach((timer) => window.clearTimeout(timer));
       });
@@ -1689,6 +1721,7 @@ export function App() {
       (runtimeSnapshot.activeRequests || [])
         .filter(isRuntimeRequestUiActive)
         .map((request) => request.request_id ? String(request.request_id) : "")
+        .filter((requestId) => !locallyCompletedRequestIds[requestId])
         .filter(Boolean)
     );
     const staleSessionIds = new Set(
@@ -1734,11 +1767,11 @@ export function App() {
       finishSessionRequest(sessionId);
       void refreshSessionFromHistory(sessionId);
     });
-  }, [runtimeSnapshot, sessionUiState]);
+  }, [runtimeSnapshot, sessionUiState, locallyCompletedRequestIds]);
 
   const allSessions = useMemo(() => (
-    mapSessions(runtimeSnapshot, activeSessionId, activeSessionTitle, sessionProjects, sessionTitles, pinnedSessions, projects, sessionUiState)
-  ), [runtimeSnapshot, activeSessionId, activeSessionTitle, sessionProjects, sessionTitles, pinnedSessions, projects, sessionUiState]);
+    mapSessions(runtimeSnapshot, activeSessionId, activeSessionTitle, sessionProjects, sessionTitles, pinnedSessions, projects, sessionUiState, locallyCompletedRequestIds)
+  ), [runtimeSnapshot, activeSessionId, activeSessionTitle, sessionProjects, sessionTitles, pinnedSessions, projects, sessionUiState, locallyCompletedRequestIds]);
   const visibleSessions = useMemo(() => {
     const needle = searchQuery.trim().toLowerCase();
     return needle ? allSessions.filter((row) => `${row.title} ${row.detail}`.toLowerCase().includes(needle)) : allSessions;
@@ -1852,7 +1885,7 @@ export function App() {
       const sessionMessages = item.sessionId === activeSessionId
         ? messages
         : sessionUiState[item.sessionId]?.messages || [];
-      return !sessionMessages.some((message) => message.pending);
+      return !sessionMessages.some(isUiLiveAssistantMessage);
     });
     if (nextIndex < 0) return;
     const [queued] = queue.splice(nextIndex, 1);
@@ -2040,7 +2073,11 @@ export function App() {
     const cached = sessionUiState[sessionId];
     if (!cached) return false;
     const projectId = sessionProjects[sessionId] || null;
-    const nextMessages = normalizePausedMessages(cached.messages);
+    const nextMessages = normalizePausedMessages(cached.messages, {
+      sessionId,
+      activeRequestIds: activeRequestId ? new Set([activeRequestId]) : new Set(),
+      inactiveRequestGraceMs: 0
+    });
     setMessages(nextMessages);
     setComposerText(cached.composerText);
     setAttachments(cached.attachments);
@@ -2055,7 +2092,7 @@ export function App() {
       }
     }));
     const liveMessage = nextMessages.find((message) => isLiveAssistantMessage(message) && message.requestId);
-    if (liveMessage?.requestId && streamAvailable) {
+    if (liveMessage?.requestId && activeRequestId && liveMessage.requestId === activeRequestId && streamAvailable) {
       setSessionRequestIds((current) => ({ ...current, [sessionId]: liveMessage.requestId || "" }));
       window.setTimeout(() => attachMessageStream(sessionId, liveMessage.id, liveMessage.requestId || ""), 0);
     } else if (activeRequestId) {
@@ -2720,6 +2757,11 @@ export function App() {
     return !requestId || sessionRequestIdsRef.current[sessionId] === requestId;
   }
 
+  function isUiLiveAssistantMessage(message: ChatItem) {
+    return isLiveAssistantMessage(message)
+      && !(message.requestId && locallyCompletedRequestIdsRef.current[message.requestId]);
+  }
+
   function isPostDoneTailItem(item: StreamItem) {
     return item.type === "voice_attach"
       || item.type === "artifact"
@@ -2810,6 +2852,13 @@ export function App() {
     if (!cleanup) return;
     const cleanupRequestId = streamCleanupRequestIds.current[sessionId];
     if (requestId && cleanupRequestId && cleanupRequestId !== requestId) return;
+    if (requestId) {
+      const postDoneKey = `${sessionId}::${requestId}`;
+      if (postDoneStreamCloseTimers.current[postDoneKey]) {
+        window.clearTimeout(postDoneStreamCloseTimers.current[postDoneKey]);
+        delete postDoneStreamCloseTimers.current[postDoneKey];
+      }
+    }
     flushStreamDeltaBuffers(sessionId, requestId);
     cleanup();
     delete streamCleanups.current[sessionId];
@@ -2818,6 +2867,39 @@ export function App() {
       streamCleanup.current = null;
     }
     clearStreamDeltaBuffers(sessionId, requestId);
+  }
+
+  function markRequestLocallyCompleted(requestId: string, ttlMs = 70_000) {
+    if (!requestId) return;
+    completedRequestIds.current[requestId] = true;
+    locallyCompletedRequestIdsRef.current = {
+      ...locallyCompletedRequestIdsRef.current,
+      [requestId]: true
+    };
+    setLocallyCompletedRequestIds((current) => current[requestId] ? current : { ...current, [requestId]: true });
+    if (completedRequestCleanupTimers.current[requestId]) {
+      window.clearTimeout(completedRequestCleanupTimers.current[requestId]);
+    }
+    completedRequestCleanupTimers.current[requestId] = window.setTimeout(() => {
+      delete completedRequestIds.current[requestId];
+      const nextCompleted = { ...locallyCompletedRequestIdsRef.current };
+      delete nextCompleted[requestId];
+      locallyCompletedRequestIdsRef.current = nextCompleted;
+      setLocallyCompletedRequestIds(nextCompleted);
+      delete completedRequestCleanupTimers.current[requestId];
+    }, ttlMs);
+  }
+
+  function schedulePostDoneStreamClose(sessionId: string, requestId: string, delayMs = 13_000) {
+    if (!sessionId || !requestId) return;
+    const key = `${sessionId}::${requestId}`;
+    if (postDoneStreamCloseTimers.current[key]) {
+      window.clearTimeout(postDoneStreamCloseTimers.current[key]);
+    }
+    postDoneStreamCloseTimers.current[key] = window.setTimeout(() => {
+      closeSessionStream(sessionId, requestId);
+      delete postDoneStreamCloseTimers.current[key];
+    }, delayMs);
   }
 
   function clearSessionRequestState(sessionId: string, requestId?: string) {
@@ -2964,17 +3046,16 @@ export function App() {
               ...clearTransientSendSteps(nextMessage),
               content: redactInternalPromptText(item.content || message.content),
               pending: false,
+              requestId: undefined,
               userSeq: typeof item.user_seq === "number" ? item.user_seq : message.userSeq,
               botSeq: typeof item.bot_seq === "number" ? item.bot_seq : message.botSeq
             };
           });
-          completedRequestIds.current[requestId] = true;
-          window.setTimeout(() => {
-            delete completedRequestIds.current[requestId];
-          }, 70_000);
+          markRequestLocallyCompleted(requestId);
           markSessionOutputReady(sessionId);
           clearHistoryRecovery(sessionId, requestId);
           clearSessionRequestState(sessionId, requestId);
+          schedulePostDoneStreamClose(sessionId, requestId);
           window.setTimeout(() => {
             void refreshSessionFromHistory(sessionId);
           }, 300);
@@ -3494,19 +3575,18 @@ export function App() {
                     ...clearTransientSendSteps(nextMessage),
                     content: redactInternalPromptText(item.content || message.content),
                     pending: false,
+                    requestId: undefined,
                     userSeq: typeof item.user_seq === "number" ? item.user_seq : message.userSeq,
                     botSeq: typeof item.bot_seq === "number" ? item.bot_seq : message.botSeq
                   };
                 }
                 return message;
               }));
-              completedRequestIds.current[requestId] = true;
-              window.setTimeout(() => {
-                delete completedRequestIds.current[requestId];
-              }, 70_000);
+              markRequestLocallyCompleted(requestId);
               markSessionOutputReady(requestSessionId);
               clearHistoryRecovery(requestSessionId, requestId);
               clearSessionRequestState(requestSessionId, requestId);
+              schedulePostDoneStreamClose(requestSessionId, requestId);
               window.setTimeout(() => {
                 void refreshSessionFromHistory(requestSessionId);
               }, 300);
@@ -3890,7 +3970,7 @@ export function App() {
     const targetMessages = requestSessionId === activeSessionIdRef.current
       ? messagesRef.current
       : sessionUiState[requestSessionId]?.messages || [];
-    if (targetRequestId || targetMessages.some((message) => message.pending)) {
+    if (targetRequestId || targetMessages.some(isUiLiveAssistantMessage)) {
       const alreadyQueued = queuedInstallRef.current.some((item) => item.sessionId === requestSessionId && item.pack.id === pack.id);
       if (!alreadyQueued) {
         queuedInstallRef.current.push({ pack, onInstalled, sessionId: requestSessionId });
@@ -4021,6 +4101,33 @@ export function App() {
     }
     setCopiedMessageId(message.id);
     window.setTimeout(() => setCopiedMessageId((current) => current === message.id ? "" : current), 1400);
+  }
+
+  function downloadJsonFile(fileName: string, payload: unknown) {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = fileName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  async function handleExportDiagnostics() {
+    try {
+      const bundle = await exportDiagnosticsBundle({
+        sessionId: activeSessionId,
+        requestId: activeSessionRequestId || undefined
+      });
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      downloadJsonFile(`ecorex-diagnostics-${stamp}.json`, bundle);
+      await navigator.clipboard?.writeText(JSON.stringify(bundle, null, 2)).catch(() => undefined);
+      setToast("诊断包已生成并复制到剪贴板");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "诊断包生成失败");
+    }
   }
 
   async function openArtifactFile(file: { file_path: string; file_name: string; file_type?: FileAttachment["file_type"]; open_action?: "preview" | "open" | "reveal" | "copy" | "openWith" }) {
@@ -4228,7 +4335,7 @@ export function App() {
     }
   ];
   const activeProjectMemoryPath = activeProject?.memoryPath || (activeProject ? `${activeProject.path}\\.ecorex\\project-memory.md` : "");
-  const hasPendingAssistantMessage = messages.some(isLiveAssistantMessage);
+  const hasPendingAssistantMessage = messages.some(isUiLiveAssistantMessage);
   const visibleMessages = messages.filter((message) => !isSilentPausedAssistantMessage(message));
   const composerHasPayload = Boolean(composerText.trim() || attachments.length);
   const currentComposerPermissionMode: PermissionMode = permissionState?.mode || "smart-ask";
@@ -4249,7 +4356,7 @@ export function App() {
   ];
   const renderSessionRow = (row: SessionRow) => {
     const cachedMessages = sessionUiState[row.id]?.messages || [];
-    const isRunning = row.status === "waiting" || row.status === "cancelling" || Boolean(row.requestId) || Boolean(sessionRequestIds[row.id]) || cachedMessages.some(isLiveAssistantMessage) || (row.id === activeSessionId && hasPendingAssistantMessage);
+    const isRunning = row.status === "waiting" || row.status === "cancelling" || Boolean(row.requestId) || Boolean(sessionRequestIds[row.id]) || cachedMessages.some(isUiLiveAssistantMessage) || (row.id === activeSessionId && hasPendingAssistantMessage);
     const isActive = row.id === activeSessionId;
     const hasUnread = Boolean(unreadSessionIds[row.id]) && !isActive && !isRunning;
     const waitingReply = isActive && Boolean(approval);
@@ -4871,6 +4978,7 @@ export function App() {
                       <article><div><strong>运行时</strong><span>{runtimeSnapshot.message}</span></div><button onClick={() => loadRuntimeSnapshot().then(setRuntimeSnapshot)}>重新检查</button></article>
                       <article><div><strong>模型策略</strong><span>{runtimeSnapshot.modelsCount} 个企业模型映射</span></div><button onClick={() => loadRuntimeSnapshot().then(setRuntimeSnapshot)}>刷新</button></article>
                       <article><div><strong>Skill / MCP</strong><span>{runtimeSnapshot.skillsCount} 个 Skill，{runtimeSnapshot.toolsCount} 个工具通道，{runtimeSnapshot.extensionsCount || 0} 个扩展登记</span></div><button onClick={() => loadRuntimeSnapshot().then(setRuntimeSnapshot)}>重新检查</button></article>
+                      <article><div><strong>诊断包</strong><span>导出运行状态、活动请求和脱敏日志摘要</span></div><button onClick={() => void handleExportDiagnostics()}>生成</button></article>
                     </div>
                   </section>
                 )}
@@ -4933,7 +5041,7 @@ export function App() {
       )}
 
       {previewFile && isImageAttachment(previewFile) && (
-        <div className="preview-popover image-preview-popover" style={{ "--preview-zoom": previewZoom } as CSSProperties}>
+        <div className="preview-popover image-preview-popover" style={{ "--preview-zoom": previewZoom, "--preview-width": `${previewZoom * 100}%` } as CSSProperties}>
           <header>
             <strong>{previewFile.file_name}</strong>
             <span className="preview-actions">

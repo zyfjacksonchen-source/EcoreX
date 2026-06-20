@@ -519,6 +519,47 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertIn("macos", notes["updatePolicy"])
         self.assertIn("webui", notes["updatePolicy"])
 
+    def test_diagnostic_bundle_redacts_local_paths_and_log_lines(self):
+        import config
+        from channel.web import web_channel
+
+        raw_workspace = r"C:\Users\private-user\EcoreX\workspace"
+        raw_runtime = r"C:\Users\private-user\.ecorex"
+        raw_log = r"C:\Users\private-user\EcoreX\logs\run.log"
+        raw_lock = r"C:\Users\private-user\EcoreX\.locks\session-private.json"
+        raw_line = f"2026-06-20 ERROR secret prompt text from {raw_workspace}"
+
+        class FakeChannel:
+            def active_requests_snapshot(self):
+                return {
+                    "requests": [],
+                    "stale_locks": [{
+                        "session_id": "session-private",
+                        "pid": 1234,
+                        "dead_owner": True,
+                        "stale": True,
+                        "removed": False,
+                        "path": raw_lock,
+                    }],
+                }
+
+        with patch.object(web_channel, "_log_snapshot_payload", return_value={
+            "log": {"path": raw_log, "exists": True, "lines": [raw_line]},
+        }):
+            with patch.object(web_channel, "_get_workspace_root", return_value=raw_workspace):
+                with patch.object(config, "get_root", return_value=Path(raw_runtime)):
+                    with patch.object(web_channel, "WebChannel", return_value=FakeChannel()):
+                        payload = web_channel._diagnostic_bundle_payload("session-current", "request-current")
+
+        rendered = json.dumps(payload, ensure_ascii=False)
+        for secret in (raw_workspace, raw_runtime, raw_log, raw_lock, raw_line, "secret prompt text", "session-private"):
+            self.assertNotIn(secret, rendered)
+        self.assertTrue(payload["runtime"]["workspaceRoot"]["redacted"])
+        self.assertTrue(payload["runtime"]["runtimeRoot"]["redacted"])
+        self.assertTrue(payload["logs"]["path"]["redacted"])
+        self.assertTrue(payload["staleLocks"][0]["redacted"])
+        self.assertTrue(payload["logs"]["recentEvents"][0]["redacted"])
+
     def test_public_web_bind_requires_password(self):
         from channel.web import web_channel
 
