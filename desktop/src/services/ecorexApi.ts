@@ -382,6 +382,16 @@ export type TokenUsage = {
 
 export type StreamItem = {
   type?: string;
+  protocol_version?: string;
+  event_type?: string;
+  state?: string;
+  terminal?: boolean;
+  terminal_reason?: string;
+  error_code?: string;
+  recoverable?: boolean;
+  requested_last_event_id?: number;
+  retained_from_event_id?: number;
+  next_event_id?: number;
   content?: string;
   text?: string;
   delta?: string;
@@ -1073,7 +1083,7 @@ export function openMessageStream(input: {
     try {
       rememberStreamCursor(input.requestId, event.lastEventId);
       const item = JSON.parse(event.data) as StreamItem;
-      if (item.type === "done" || item.type === "cancelled" || item.type === "voice_attach") {
+      if (item.type === "done" || item.type === "error" || item.type === "cancelled" || item.type === "voice_attach") {
         scheduleStreamCursorCleanup(input.requestId);
       }
       input.onItem(item);

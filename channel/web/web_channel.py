@@ -974,6 +974,7 @@ class WebMessage(ChatMessage):
 class WebChannel(ChatChannel):
     NOT_SUPPORT_REPLYTYPE = [ReplyType.VOICE]
     _instance = None
+    SSE_PROTOCOL_VERSION = "ecorex.stream.v1"
     SSE_MAX_REPLAY_EVENTS = 2000
     SSE_ORPHAN_TTL_SECONDS = 120
 
@@ -992,7 +993,7 @@ class WebChannel(ChatChannel):
         self.sse_event_offsets = {}  # request_id -> absolute event id for sse_events[0]
         self.sse_conditions = {}  # request_id -> threading.Condition
         self.sse_subscribers = {}  # request_id -> active EventSource connection count
-        self.sse_done_sent = set()  # request_id values that already emitted a done event
+        self.sse_done_sent = set()  # request_id values that already emitted a terminal event
         self.sse_cleanup_timers = {}  # request_id -> guarded orphan cleanup Timer
         self.sse_lock = threading.RLock()
         self.request_artifacts = {}  # request_id -> list of structured artifact dicts
@@ -1068,8 +1069,8 @@ class WebChannel(ChatChannel):
             self._mark_run_terminal(
                 request_id,
                 "failed",
-                reason="stream_error",
-                error_code="STREAM_ERROR",
+                reason=str(event.get("terminal_reason") or "stream_error"),
+                error_code=str(event.get("error_code") or "STREAM_ERROR"),
                 error_message=str(event.get("message") or event.get("content") or ""),
             )
         elif etype == "tool_permission_request":
@@ -1160,12 +1161,81 @@ class WebChannel(ChatChannel):
                 request_id in self.sse_queues or request_id in self.sse_events
             )
 
+    def _normalize_sse_event(self, request_id: str, item: Dict[str, Any]) -> Dict[str, Any]:
+        event = dict(item or {})
+        legacy_type = str(event.get("type") or "")
+        event.setdefault("request_id", request_id)
+        event.setdefault("timestamp", time.time())
+        event["protocol_version"] = self.SSE_PROTOCOL_VERSION
+
+        if legacy_type == "done":
+            event.setdefault("event_type", "run.completed")
+            event.setdefault("state", "completed")
+            event.setdefault("terminal", True)
+            event.setdefault("terminal_reason", event.get("terminal_reason") or "completed")
+        elif legacy_type == "error":
+            event.setdefault("event_type", "run.failed")
+            event.setdefault("state", "failed")
+            event.setdefault("terminal", True)
+            event.setdefault("terminal_reason", event.get("terminal_reason") or "failed")
+            event.setdefault("error_code", event.get("error_code") or "STREAM_ERROR")
+        elif legacy_type == "cancelled":
+            event.setdefault("event_type", "run.cancelled")
+            event.setdefault("state", "cancelled")
+            event.setdefault("terminal", True)
+            event.setdefault("terminal_reason", event.get("terminal_reason") or "cancelled")
+        elif legacy_type == "replay_gap":
+            event.setdefault("event_type", "stream.replay_gap")
+            event.setdefault("state", "recovering")
+            event.setdefault("recoverable", True)
+        elif legacy_type in ("delta", "message_update"):
+            event.setdefault("event_type", "model.delta")
+            event.setdefault("state", "running")
+        elif legacy_type in ("reasoning", "thinking"):
+            event.setdefault("event_type", "reasoning.update")
+            event.setdefault("state", "running")
+        elif legacy_type == "tool_permission_request":
+            event.setdefault("event_type", "approval.requested")
+            event.setdefault("state", "waiting_permission")
+        elif legacy_type == "tool_start":
+            event.setdefault("event_type", "tool.started")
+            event.setdefault("state", "running")
+        elif legacy_type == "tool_end":
+            status = str(event.get("status") or "").lower()
+            event.setdefault("event_type", "tool.failed" if status in ("failed", "error") else "tool.completed")
+            event.setdefault("state", "running")
+        elif legacy_type in ("artifact", "file", "image", "video", "audio", "voice_attach"):
+            event.setdefault("event_type", "artifact.updated")
+            event.setdefault("state", "finalizing" if legacy_type == "voice_attach" else "running")
+        elif legacy_type == "message_end":
+            event.setdefault("event_type", "message.finalizing")
+            event.setdefault("state", "finalizing")
+        else:
+            event.setdefault("event_type", f"legacy.{legacy_type or 'unknown'}")
+            event.setdefault("state", "running")
+        return event
+
+    def _build_replay_gap_event(
+        self,
+        request_id: str,
+        requested_last_event_id: int,
+        retained_from_event_id: int,
+    ) -> Dict[str, Any]:
+        return self._normalize_sse_event(request_id, {
+            "type": "replay_gap",
+            "request_id": request_id,
+            "requested_last_event_id": requested_last_event_id,
+            "retained_from_event_id": retained_from_event_id,
+            "next_event_id": retained_from_event_id,
+            "message": "SSE replay cursor is older than the retained event window.",
+        })
+
     def _push_sse_event(self, request_id: str, item: Dict[str, Any]) -> bool:
         """Append one SSE event for every subscriber and keep legacy queue parity."""
         if not self._sse_request_exists(request_id):
             return False
         self._ensure_sse_state(request_id)
-        event = dict(item or {})
+        event = self._normalize_sse_event(request_id, item)
         with self.sse_lock:
             if not self._sse_request_exists(request_id):
                 return False
@@ -1244,11 +1314,11 @@ class WebChannel(ChatChannel):
             self.sse_cleanup_timers[request_id] = cleanup_timer
             cleanup_timer.start()
 
-    def _push_done_event_once(self, request_id: str, item: Dict[str, Any]) -> bool:
-        """Emit one terminal done event per request while preserving replay."""
+    def _push_terminal_event_once(self, request_id: str, item: Dict[str, Any]) -> bool:
+        """Emit one terminal stream event per request while preserving replay."""
         with self.sse_lock:
             if request_id in self.sse_done_sent:
-                logger.debug(f"[WebChannel] duplicate done skipped for request {request_id}")
+                logger.debug(f"[WebChannel] duplicate terminal event skipped for request {request_id}")
                 return False
             self.sse_done_sent.add(request_id)
         pushed = self._push_sse_event(request_id, item)
@@ -1263,13 +1333,44 @@ class WebChannel(ChatChannel):
                 self._schedule_sse_cleanup(request_id, reason="terminal-without-subscriber")
         return pushed
 
+    def _push_done_event_once(self, request_id: str, item: Dict[str, Any]) -> bool:
+        """Emit one successful terminal done event per request."""
+        payload = dict(item or {})
+        payload["type"] = "done"
+        return self._push_terminal_event_once(request_id, payload)
+
+    def _push_error_event_once(
+        self,
+        request_id: str,
+        message: str,
+        *,
+        error_code: str = "STREAM_ERROR",
+        usage: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        return self._push_terminal_event_once(request_id, {
+            "type": "error",
+            "content": message or "Worker failed before producing a response.",
+            "message": message or "Worker failed before producing a response.",
+            "request_id": request_id,
+            "timestamp": time.time(),
+            "error_code": error_code,
+            "terminal_reason": "failed",
+            "usage": usage,
+        })
+
+    def _push_cancelled_event_once(self, request_id: str, item: Dict[str, Any]) -> bool:
+        """Emit one cancellation terminal event per request."""
+        payload = dict(item or {})
+        payload["type"] = "cancelled"
+        return self._push_terminal_event_once(request_id, payload)
+
     def _push_cancelled_events_for_session(self, session_id: str, request_ids: List[str], lang: str = "zh") -> None:
         content = "Interrupted by a new message." if str(lang).lower().startswith("en") else "已被新消息中断"
         for request_id in request_ids:
             self._mark_run_phase(request_id, "cancelling", status="cancelling")
             if not self._sse_request_exists(request_id):
                 continue
-            self._push_sse_event(request_id, {
+            self._push_cancelled_event_once(request_id, {
                 "type": "cancelled",
                 "content": content,
                 "request_id": request_id,
@@ -1722,6 +1823,12 @@ class WebChannel(ChatChannel):
         if worker_exception is not None and self._sse_request_exists(request_id):
             try:
                 message = str(worker_exception) or "Worker failed before producing a response."
+                self._push_error_event_once(
+                    request_id,
+                    message,
+                    error_code="WORKER_EXCEPTION",
+                    usage=self._fetch_agent_usage(session_id),
+                )
                 self._push_done_event_once(request_id, {
                     "type": "done",
                     "content": f"❌ {message}",
@@ -1980,6 +2087,12 @@ class WebChannel(ChatChannel):
                 # Remember it so the agent_end handler below knows not to
                 # rewrite the message into a generic empty-response notice.
                 streamed_error.append(err_msg)
+                self._push_error_event_once(
+                    request_id,
+                    err_msg,
+                    error_code=str(data.get("error_code") or "AGENT_STREAM_ERROR"),
+                    usage=data.get("usage") or self._fetch_agent_usage(self.request_to_session.get(request_id, "")),
+                )
                 self._push_done_event_once(request_id, {
                     "type": "done",
                     "content": f"❌ {err_msg}",
@@ -1990,10 +2103,9 @@ class WebChannel(ChatChannel):
 
             elif event_type == "agent_cancelled":
                 # Push an explicit cancelled SSE event so the frontend
-                # marks the bubble as stopped. A trailing "done" still
-                # arrives with the partial answer.
+                # marks the bubble as stopped with a single terminal event.
                 final_response = data.get("final_response", "")
-                self._push_sse_event(request_id, {
+                self._push_cancelled_event_once(request_id, {
                     "type": "cancelled",
                     "content": final_response,
                     "request_id": request_id,
@@ -2545,6 +2657,7 @@ class WebChannel(ChatChannel):
                 pass
 
         start_index = 0
+        replay_gap_event = None
         terminal_consumed = False
         try:
             raw_last_id = getattr(web, "ctx", None)
@@ -2559,8 +2672,15 @@ class WebChannel(ChatChannel):
                 start_index = max(0, int(raw_last_id) + 1 - event_offset)
                 try:
                     last_event_number = int(raw_last_id)
+                    if last_event_number + 1 < event_offset:
+                        replay_gap_event = self._build_replay_gap_event(
+                            request_id,
+                            last_event_number,
+                            event_offset,
+                        )
+                        start_index = 0
                     for offset, event in enumerate(events):
-                        if event.get("type") in ("done", "cancelled") and last_event_number >= event_offset + offset:
+                        if event.get("type") in ("done", "cancelled", "error") and last_event_number >= event_offset + offset:
                             terminal_consumed = True
                             break
                 except Exception:
@@ -2578,6 +2698,11 @@ class WebChannel(ChatChannel):
         post_deadline = time.time() + POST_DONE_TAIL_SECONDS if terminal_consumed else 0.0
 
         try:
+            if replay_gap_event is not None:
+                gap_event_id = max(0, int(replay_gap_event.get("retained_from_event_id") or 0) - 1)
+                payload = json.dumps(replay_gap_event, ensure_ascii=False)
+                yield f"id: {gap_event_id}\ndata: {payload}\n\n".encode("utf-8")
+
             while time.time() < deadline:
                 item = None
                 event_id = None
@@ -2604,6 +2729,9 @@ class WebChannel(ChatChannel):
                 if itype == "done":
                     post_done = True
                     post_deadline = time.time() + POST_DONE_TAIL_SECONDS
+                elif itype == "error":
+                    post_done = True
+                    post_deadline = time.time() + 3
                 elif itype == "cancelled":
                     # Close SSE tail quickly after cancel; don't wait for the
                     # full TTS tail since the user already pressed Stop.
@@ -2679,7 +2807,7 @@ class WebChannel(ChatChannel):
             }
 
             if request_id and self._sse_request_exists(request_id):
-                self._push_sse_event(request_id, {
+                self._push_cancelled_event_once(request_id, {
                     "type": "cancelled",
                     "content": "🛑 Cancelled" if lang.startswith("en") else "🛑 已中止",
                     "request_id": request_id,

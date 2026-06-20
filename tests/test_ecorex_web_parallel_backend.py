@@ -911,6 +911,27 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertEqual(event["request_id"], request_id)
         self.assertTrue(str(event["content"]).strip())
 
+    def test_agent_stream_error_emits_error_not_done(self):
+        from channel.web import web_channel
+
+        channel = web_channel.WebChannel()
+        request_id = "req-agent-stream-error"
+        session_id = "session-agent-stream-error"
+        channel.request_to_session = {request_id: session_id}
+        channel.sse_queues = {request_id: Queue()}
+        callback = channel._make_sse_callback(request_id)
+
+        with patch.object(channel, "_fetch_agent_usage", return_value=None):
+            callback({"type": "error", "data": {"error": "upstream timeout", "error_code": "MODEL_TIMEOUT"}})
+
+        event = channel.sse_queues[request_id].get(timeout=1)
+        self.assertEqual(event["type"], "error")
+        self.assertEqual(event["event_type"], "run.failed")
+        self.assertEqual(event["state"], "failed")
+        self.assertTrue(event["terminal"])
+        self.assertEqual(event["error_code"], "MODEL_TIMEOUT")
+        self.assertIn("upstream timeout", event["content"])
+
     def test_worker_completion_unregisters_cancel_token_but_keeps_sse_queue(self):
         from agent.protocol import get_cancel_registry
         from bridge.context import Context, ContextType
@@ -938,7 +959,7 @@ class TestWebParallelHandlers(unittest.TestCase):
             finally:
                 registry.unregister(request_id)
 
-    def test_worker_exception_emits_done_and_unregisters_cancel_token(self):
+    def test_worker_exception_emits_error_and_unregisters_cancel_token(self):
         from agent.protocol import get_cancel_registry
         from bridge.context import Context, ContextType
         from channel.web import web_channel
@@ -960,14 +981,18 @@ class TestWebParallelHandlers(unittest.TestCase):
                     channel._finalize_request_after_worker(context, worker_exception=RuntimeError("boom"))
 
                 event = channel.sse_queues[request_id].get(timeout=1)
-                self.assertEqual(event["type"], "done")
+                self.assertEqual(event["type"], "error")
+                self.assertEqual(event["event_type"], "run.failed")
+                self.assertTrue(event["terminal"])
+                self.assertEqual(event["state"], "failed")
+                self.assertEqual(event["error_code"], "WORKER_EXCEPTION")
                 self.assertEqual(event["request_id"], request_id)
                 self.assertIn("boom", event["content"])
                 self.assertIsNone(registry.get_event(request_id))
             finally:
                 registry.unregister(request_id)
 
-    def test_produce_exception_emits_done_and_unregisters_cancel_token(self):
+    def test_produce_exception_emits_error_and_unregisters_cancel_token(self):
         from agent.protocol import get_cancel_registry
         from bridge.context import Context, ContextType
         from channel.web import web_channel
@@ -998,7 +1023,11 @@ class TestWebParallelHandlers(unittest.TestCase):
                         channel._produce_with_session_lock(context, lock)
 
                 event = channel.sse_queues[request_id].get(timeout=1)
-                self.assertEqual(event["type"], "done")
+                self.assertEqual(event["type"], "error")
+                self.assertEqual(event["event_type"], "run.failed")
+                self.assertTrue(event["terminal"])
+                self.assertEqual(event["state"], "failed")
+                self.assertEqual(event["error_code"], "WORKER_EXCEPTION")
                 self.assertEqual(event["request_id"], request_id)
                 self.assertIn("produce boom", event["content"])
                 self.assertIsNone(registry.get_event(request_id))
@@ -1029,6 +1058,8 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertIn(b'id: 0', first_chunk)
         self.assertIn(b'id: 0', second_chunk)
         self.assertIn(b'"type": "done"', first_chunk)
+        self.assertIn(b'"event_type": "run.completed"', first_chunk)
+        self.assertIn(b'"terminal": true', first_chunk)
         self.assertIn(b'"type": "done"', second_chunk)
         self.assertIn(b'"content": "ok"', first_chunk)
         self.assertIn(b'"content": "ok"', second_chunk)
@@ -1063,6 +1094,35 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertIn(b'"content": "second"', chunk)
         resumed.close()
 
+    def test_sse_replay_gap_is_explicit_when_cursor_is_too_old(self):
+        from channel.web import web_channel
+
+        channel = web_channel.WebChannel()
+        request_id = "req-test-sse-gap"
+        channel.request_to_session = {request_id: "session-test-sse-gap"}
+        channel._ensure_sse_state(request_id)
+        channel.sse_events[request_id] = [{
+            "type": "phase",
+            "content": "retained",
+            "request_id": request_id,
+            "protocol_version": channel.SSE_PROTOCOL_VERSION,
+            "event_type": "legacy.phase",
+        }]
+        channel.sse_event_offsets[request_id] = 10
+
+        with patch.object(web_channel.web, "input", return_value=types.SimpleNamespace(last_event_id="2")):
+            resumed = channel.stream_response(request_id)
+            gap_chunk = next(resumed)
+            retained_chunk = next(resumed)
+
+        self.assertIn(b"id: 9", gap_chunk)
+        self.assertIn(b'"type": "replay_gap"', gap_chunk)
+        self.assertIn(b'"event_type": "stream.replay_gap"', gap_chunk)
+        self.assertIn(b'"recoverable": true', gap_chunk)
+        self.assertIn(b"id: 10", retained_chunk)
+        self.assertIn(b'"content": "retained"', retained_chunk)
+        resumed.close()
+
     def test_done_event_is_emitted_once_per_request(self):
         from channel.web import web_channel
 
@@ -1087,6 +1147,36 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertEqual(len(channel.sse_events[request_id]), 1)
         event = channel.sse_queues[request_id].get(timeout=1)
         self.assertEqual(event["content"], "first")
+        self.assertEqual(event["event_type"], "run.completed")
+        self.assertTrue(event["terminal"])
+
+    def test_sse_cancelled_event_is_terminal_once(self):
+        from channel.web import web_channel
+
+        channel = web_channel.WebChannel()
+        request_id = "req-test-cancelled-once"
+        channel.request_to_session = {request_id: "session-test-cancelled-once"}
+        channel._ensure_sse_state(request_id)
+
+        cancelled = channel._push_cancelled_event_once(request_id, {
+            "type": "cancelled",
+            "content": "stopped",
+            "request_id": request_id,
+        })
+        done = channel._push_done_event_once(request_id, {
+            "type": "done",
+            "content": "should not replace cancellation",
+            "request_id": request_id,
+        })
+
+        self.assertTrue(cancelled)
+        self.assertFalse(done)
+        self.assertEqual(len(channel.sse_events[request_id]), 1)
+        event = channel.sse_queues[request_id].get(timeout=1)
+        self.assertEqual(event["type"], "cancelled")
+        self.assertEqual(event["event_type"], "run.cancelled")
+        self.assertEqual(event["state"], "cancelled")
+        self.assertTrue(event["terminal"])
 
     def test_local_image_reply_emits_done_with_artifact(self):
         from bridge.context import Context, ContextType

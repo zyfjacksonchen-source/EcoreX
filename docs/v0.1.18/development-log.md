@@ -18,3 +18,15 @@
     prefers ledger state in `active_requests_snapshot()`.
   - Focused pytest passed: 8 run-ledger/active-request/finalize/busy-session
     tests.
+- Added the first P0 SSE contract slice:
+  - WebChannel now normalizes stream events with `protocol_version`,
+    `event_type`, `state`, `terminal`, and terminal reason/error fields.
+  - Worker exceptions, pre-worker produce exceptions, and agent stream errors now
+    emit machine-readable `type=error` / `event_type=run.failed` terminal events
+    before legacy fallback code can emit a success-shaped `done`.
+  - `stream_response()` emits `type=replay_gap` when `last_event_id` is older
+    than the retained replay window.
+  - Renderer `StreamItem` types include the new protocol fields and EventSource
+    cursor cleanup treats `error` as terminal.
+  - Focused pytest passed: 14 SSE/terminal/replay/active-request tests; desktop
+    `npm run typecheck` passed.
