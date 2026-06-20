@@ -1,0 +1,30 @@
+# v0.1.18 Acceptance Checklist
+
+Status values: TODO, PARTIAL, PASS, BLOCKED.
+
+| ID | Area | Acceptance Standard | Status | Evidence |
+| --- | --- | --- | --- | --- |
+| R18-01-A | Run Ledger | Every `/message` request creates or updates a durable run row with `request_id`, `session_id`, `status`, `phase`, timestamps, and terminal reason. | PARTIAL | `agent/protocol/run_ledger.py` added; `/message` creates durable message runs; focused pytest covers active and terminal state |
+| R18-01-B | Run Ledger | Worker success, exception, cancel, pre-worker failure, and sidecar interruption all write exactly one terminal state. | PARTIAL | Worker success/exception and cancel paths write terminal/cancelling state; sidecar interruption still pending |
+| R18-01-C | Run Ledger | `/api/active-requests` or successor endpoint reads backend run truth and distinguishes queued/running/cancelling/finalizing/completed/failed/cancelled/interrupted. | PARTIAL | `active_requests_snapshot()` now prefers durable run ledger and falls back to cancel registry |
+| R18-02-A | SSE Contract | Stream events have a versioned schema and distinct terminal events for completed, failed, cancelled, and replay gap. | TODO | Pending implementation |
+| R18-02-B | SSE Contract | `done` is not used as the failure terminal; failure and cancellation remain machine-readable. | TODO | Pending implementation |
+| R18-02-C | SSE Recovery | SSE reconnect after cursor loss emits or exposes replay-gap recovery instead of silently continuing from a truncated log. | TODO | Pending implementation |
+| R18-03-A | Cancellation | Cancel during model stream, permission wait, subprocess/tool call, and subagent execution releases locks, unregisters tokens, and writes terminal state. | TODO | Pending implementation |
+| R18-03-B | Concurrency | Same-session runs remain single-writer; rapid resends cancel or queue deterministically without exposing raw `session_busy`. | TODO | Pending implementation |
+| R18-03-C | Subagents | Subagents use bounded coordination with atomic slot reservation and visible queued/running/cancelling/completed states. | TODO | Pending implementation |
+| R18-03-D | Backpressure | Global pending jobs, per-session jobs, SSE replay, tool stdout/stderr, and artifact metadata have explicit limits with typed errors. | TODO | Pending implementation |
+| R18-04-A | Model Capabilities | OpenAI-compatible calls use a provider/model capability catalog rather than model-name hardcoding for tokens, reasoning, verbosity, stream usage, and unsupported params. | TODO | Pending implementation |
+| R18-04-B | Model Telemetry | Every model call records model/provider, first-token latency, total latency, input/output/reasoning/cached tokens when available, retry count, and error taxonomy. | TODO | Pending implementation |
+| R18-04-C | Retry/Fallback | 408/429/5xx/timeouts respect retry-after/backoff; non-retryable 4xx fail closed with typed evidence. | TODO | Pending implementation |
+| R18-04-D | Responses Adapter | OpenAI official provider has a v1 Responses API adapter plan or implementation path for `previous_response_id`, compaction, prompt caching, and service tier. | TODO | Pending implementation |
+| R18-05-A | Context Budget | Prompt/tool/reasoning/artifact budgets are included in context estimates and overflow recovery does not drop the current run. | TODO | Pending implementation |
+| R18-05-B | Tool Schema Budget | Tool definitions can be grouped or deferred so ordinary turns do not always pay the full tool schema cost. | TODO | Pending implementation |
+| R18-06-A | Desktop Run Center | UI exposes active/stale/failed/cancelling runs with cancel/retry/recover/diagnostics affordances. | TODO | Pending implementation |
+| R18-07-A | Evidence Gates | v0.1.18 promotion gate includes run ledger, SSE contract, cancellation, concurrency, and model-call smoke evidence. | PARTIAL | Run ledger focused pytest recorded; dedicated promotion gate script still pending |
+
+## Deferred From v0.1.17
+
+The following remain v0.1.17 release-production blockers unless explicitly moved
+into this release scope: Windows Authenticode installed smoke, macOS DMG
+artifacts, GitHub workflow authentication, and privileged symlink execution.

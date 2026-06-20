@@ -1023,6 +1023,66 @@ class WebChannel(ChatChannel):
             logger.debug(f"[WebChannel] active request lookup failed for session {session_id}: {e}")
             return []
 
+    def _mark_run_phase(self, request_id: str, phase: str, status: Optional[str] = None) -> None:
+        if not request_id or not phase:
+            return
+        try:
+            from agent.protocol import get_run_ledger
+
+            get_run_ledger().mark_phase(request_id, phase, status=status)
+        except Exception as e:
+            logger.debug(f"[WebChannel] run ledger phase update skipped for {request_id}: {e}")
+
+    def _mark_run_terminal(
+        self,
+        request_id: str,
+        status: str,
+        reason: str = "",
+        error_code: str = "",
+        error_message: str = "",
+    ) -> None:
+        if not request_id:
+            return
+        try:
+            from agent.protocol import get_run_ledger
+
+            get_run_ledger().mark_terminal(
+                request_id,
+                status,
+                reason=reason,
+                error_code=error_code,
+                error_message=error_message,
+            )
+        except Exception as e:
+            logger.debug(f"[WebChannel] run ledger terminal update skipped for {request_id}: {e}")
+
+    def _record_run_event_phase(self, request_id: str, event: Dict[str, Any]) -> None:
+        etype = str((event or {}).get("type") or "")
+        if not request_id or not etype:
+            return
+        if etype == "done":
+            self._mark_run_terminal(request_id, "completed", reason="done")
+        elif etype == "cancelled":
+            self._mark_run_terminal(request_id, "cancelled", reason="cancelled")
+        elif etype == "error":
+            self._mark_run_terminal(
+                request_id,
+                "failed",
+                reason="stream_error",
+                error_code="STREAM_ERROR",
+                error_message=str(event.get("message") or event.get("content") or ""),
+            )
+        elif etype == "tool_permission_request":
+            self._mark_run_phase(request_id, "waiting_permission", status="running")
+        elif etype == "tool_execution_start":
+            self._mark_run_phase(request_id, "tool_running", status="running")
+        elif etype == "tool_execution_end":
+            self._mark_run_phase(request_id, "tool_completed", status="running")
+        elif etype in ("agent_start", "turn_start", "message_start", "phase"):
+            self._mark_run_phase(request_id, etype, status="running")
+        elif etype == "message_end":
+            self._mark_run_phase(request_id, "finalizing", status="finalizing")
+
     def active_requests_snapshot(self):
         """Return backend-authoritative active request state for UI recovery.
 
@@ -1032,12 +1092,13 @@ class WebChannel(ChatChannel):
         tool output or message content.
         """
         try:
-            from agent.protocol import get_cancel_registry
+            from agent.protocol import get_cancel_registry, get_run_ledger
             from common.ecorex_workspace import cleanup_stale_session_locks
 
             requests = []
             sessions = {}
-            for row in get_cancel_registry().snapshot():
+            seen_request_ids = set()
+            for row in get_run_ledger().active_snapshot():
                 request_id = row.get("request_id", "")
                 if request_id in self.sse_done_sent:
                     continue
@@ -1046,6 +1107,21 @@ class WebChannel(ChatChannel):
                     **row,
                     "session_id": session_id,
                     "stream_available": request_id in self.sse_queues,
+                }
+                requests.append(item)
+                seen_request_ids.add(request_id)
+                if session_id and not item.get("cancelled"):
+                    sessions.setdefault(session_id, []).append(request_id)
+            for row in get_cancel_registry().snapshot():
+                request_id = row.get("request_id", "")
+                if not request_id or request_id in seen_request_ids or request_id in self.sse_done_sent:
+                    continue
+                session_id = row.get("session_id") or self.request_to_session.get(request_id, "")
+                item = {
+                    **row,
+                    "session_id": session_id,
+                    "stream_available": request_id in self.sse_queues,
+                    "source": "cancel_registry",
                 }
                 requests.append(item)
                 if session_id and not item.get("cancelled"):
@@ -1108,6 +1184,7 @@ class WebChannel(ChatChannel):
                 del events[:excess]
                 self.sse_event_offsets[request_id] = self.sse_event_offsets.get(request_id, 0) + excess
             cond.notify_all()
+        self._record_run_event_phase(request_id, event)
         return True
 
     def _cleanup_sse_request(self, request_id: str) -> None:
@@ -1189,6 +1266,7 @@ class WebChannel(ChatChannel):
     def _push_cancelled_events_for_session(self, session_id: str, request_ids: List[str], lang: str = "zh") -> None:
         content = "Interrupted by a new message." if str(lang).lower().startswith("en") else "已被新消息中断"
         for request_id in request_ids:
+            self._mark_run_phase(request_id, "cancelling", status="cancelling")
             if not self._sse_request_exists(request_id):
                 continue
             self._push_sse_event(request_id, {
@@ -1614,15 +1692,32 @@ class WebChannel(ChatChannel):
         if not request_id:
             return
 
+        was_cancelled = False
         try:
             from agent.protocol import get_cancel_registry
 
-            get_cancel_registry().unregister(request_id)
+            registry = get_cancel_registry()
+            event = registry.get_event(request_id)
+            was_cancelled = bool(event and event.is_set())
+            registry.unregister(request_id)
         except Exception as e:
             logger.debug(f"[WebChannel] cancel token unregister skipped for {request_id}: {e}")
 
         session_id = context.get("session_id") or self.request_to_session.get(request_id, "")
         self._persist_request_artifacts(request_id, session_id)
+
+        if worker_exception is not None:
+            self._mark_run_terminal(
+                request_id,
+                "cancelled" if was_cancelled else "failed",
+                reason="worker_cancelled" if was_cancelled else "worker_exception",
+                error_code="" if was_cancelled else "WORKER_EXCEPTION",
+                error_message="" if was_cancelled else str(worker_exception),
+            )
+        elif was_cancelled:
+            self._mark_run_terminal(request_id, "cancelled", reason="cancelled")
+        else:
+            self._mark_run_terminal(request_id, "completed", reason="worker_completed")
 
         if worker_exception is not None and self._sse_request_exists(request_id):
             try:
@@ -2224,6 +2319,8 @@ class WebChannel(ChatChannel):
         Supports optional attachments (file paths from /upload).
         """
         session_lock = None
+        request_id = ""
+        session_id = ""
         try:
             data = web.data()
             json_data = json.loads(data)
@@ -2308,6 +2405,23 @@ class WebChannel(ChatChannel):
                 get_cancel_registry().register(request_id, session_id=session_id)
             except Exception as e:
                 logger.debug(f"[WebChannel] pre-register cancel token skipped: {e}")
+            try:
+                from agent.protocol import get_run_ledger
+
+                get_run_ledger().create_run(
+                    request_id,
+                    session_id,
+                    run_type="message",
+                    phase="accepted",
+                    status="running",
+                    metadata={
+                        "stream": bool(use_sse),
+                        "internal_action": bool(internal_action),
+                        "attachments": len(attachments) if isinstance(attachments, list) else 0,
+                    },
+                )
+            except Exception as e:
+                logger.debug(f"[WebChannel] run ledger create skipped for {request_id}: {e}")
 
             if session_id not in self.session_queues:
                 self.session_queues[session_id] = Queue()
@@ -2341,6 +2455,13 @@ class WebChannel(ChatChannel):
                     get_cancel_registry().unregister(request_id)
                 except Exception:
                     pass
+                self._mark_run_terminal(
+                    request_id,
+                    "failed",
+                    reason="context_filtered",
+                    error_code="CONTEXT_FILTERED",
+                    error_message="Message was filtered",
+                )
                 if session_lock:
                     session_lock.release()
                 return json.dumps({"status": "error", "message": "Message was filtered"})
@@ -2373,6 +2494,14 @@ class WebChannel(ChatChannel):
                     session_lock.release()
             except Exception:
                 pass
+            if request_id:
+                self._mark_run_terminal(
+                    request_id,
+                    "failed",
+                    reason="post_message_exception",
+                    error_code="POST_MESSAGE_EXCEPTION",
+                    error_message=str(e),
+                )
             logger.error(f"Error processing message: {e}")
             return json.dumps({"status": "error", "message": str(e)})
 
@@ -2537,9 +2666,12 @@ class WebChannel(ChatChannel):
             if request_id:
                 if registry.cancel_request(request_id):
                     cancelled = 1
+                    self._mark_run_phase(request_id, "cancelling", status="cancelling")
 
             if cancelled == 0 and session_id:
                 cancelled = registry.cancel_session(session_id)
+                for active_request_id in active_request_ids:
+                    self._mark_run_phase(active_request_id, "cancelling", status="cancelling")
             subagent_cancel = self._cancel_subagents_for_parent(session_id) if session_id else {
                 "cancelledTasks": 0,
                 "cancelledRequests": 0,

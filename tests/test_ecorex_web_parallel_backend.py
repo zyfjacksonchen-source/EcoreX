@@ -10,6 +10,7 @@ import time
 import types
 import unittest
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path
 from queue import Queue
 from unittest.mock import patch
@@ -34,6 +35,18 @@ if "web" not in sys.modules:
         WSGIServer=lambda *args, **kwargs: types.SimpleNamespace(serve_forever=lambda: None),
     )
     sys.modules["web"] = web_stub
+
+
+@contextmanager
+def isolated_run_ledger():
+    from agent.protocol import reset_run_ledger_for_tests
+
+    with tempfile.TemporaryDirectory() as workspace:
+        reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+        try:
+            yield
+        finally:
+            reset_run_ledger_for_tests(Path(tempfile.gettempdir()) / "ecorex-run-ledger-test-reset.db")
 
 
 class TestEcoreXWorkspaceState(unittest.TestCase):
@@ -687,51 +700,109 @@ class TestWebParallelHandlers(unittest.TestCase):
         session_id = "session-test-active-snapshot"
         channel.request_to_session = {request_id: session_id}
         channel.sse_queues = {request_id: Queue()}
-        registry = get_cancel_registry()
-        registry.register(request_id, session_id=session_id)
-        try:
-            with tempfile.TemporaryDirectory() as workspace:
-                with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
-                    snapshot = channel.active_requests_snapshot()
-            self.assertEqual(snapshot["status"], "success")
-            active = [item for item in snapshot["requests"] if item["request_id"] == request_id]
-            self.assertEqual(len(active), 1)
-            self.assertEqual(active[0]["session_id"], session_id)
-            self.assertFalse(active[0]["cancelled"])
-            self.assertEqual(active[0]["state"], "running")
-            self.assertTrue(active[0]["stream_available"])
-            self.assertEqual(snapshot["sessions"][session_id], [request_id])
-        finally:
-            registry.unregister(request_id)
+        with isolated_run_ledger():
+            registry = get_cancel_registry()
+            registry.register(request_id, session_id=session_id)
+            try:
+                with tempfile.TemporaryDirectory() as workspace:
+                    with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                        snapshot = channel.active_requests_snapshot()
+                self.assertEqual(snapshot["status"], "success")
+                active = [item for item in snapshot["requests"] if item["request_id"] == request_id]
+                self.assertEqual(len(active), 1)
+                self.assertEqual(active[0]["session_id"], session_id)
+                self.assertFalse(active[0]["cancelled"])
+                self.assertEqual(active[0]["state"], "running")
+                self.assertTrue(active[0]["stream_available"])
+                self.assertEqual(snapshot["sessions"][session_id], [request_id])
+            finally:
+                registry.unregister(request_id)
 
     def test_active_request_snapshot_cleans_dead_session_locks(self):
         from channel.web import web_channel
         from common.ecorex_workspace import SessionLock
 
         channel = web_channel.WebChannel()
+        with isolated_run_ledger():
+            with tempfile.TemporaryDirectory() as workspace:
+                lock = SessionLock(workspace, "session-dead-active-snapshot")
+                lock.path.parent.mkdir(parents=True, exist_ok=True)
+                lock.path.write_text(
+                    json.dumps({
+                        "sessionId": "session-dead-active-snapshot",
+                        "pid": 999999999,
+                        "host": socket.gethostname(),
+                        "createdAt": 1,
+                    }),
+                    encoding="utf-8",
+                )
+
+                with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                    snapshot = channel.active_requests_snapshot()
+
+                self.assertEqual(snapshot["status"], "success")
+                self.assertEqual(snapshot["requests"], [])
+                stale = snapshot["staleLocks"]
+                self.assertEqual(len(stale), 1)
+                self.assertEqual(stale[0]["session_id"], "session-dead-active-snapshot")
+                self.assertTrue(stale[0]["removed"])
+                self.assertFalse(lock.path.exists())
+
+    def test_run_ledger_records_active_and_terminal_state_once(self):
+        from agent.protocol import reset_run_ledger_for_tests
+
         with tempfile.TemporaryDirectory() as workspace:
-            lock = SessionLock(workspace, "session-dead-active-snapshot")
-            lock.path.parent.mkdir(parents=True, exist_ok=True)
-            lock.path.write_text(
-                json.dumps({
-                    "sessionId": "session-dead-active-snapshot",
-                    "pid": 999999999,
-                    "host": socket.gethostname(),
-                    "createdAt": 1,
-                }),
-                encoding="utf-8",
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            ledger.create_run("req-ledger", "session-ledger", phase="accepted")
+            ledger.mark_phase("req-ledger", "tool_running")
+
+            active = ledger.active_snapshot()
+            self.assertEqual(len(active), 1)
+            self.assertEqual(active[0]["request_id"], "req-ledger")
+            self.assertEqual(active[0]["phase"], "tool_running")
+            self.assertEqual(active[0]["state"], "running")
+
+            ledger.mark_terminal(
+                "req-ledger",
+                "failed",
+                reason="worker_exception",
+                error_code="WORKER_EXCEPTION",
+                error_message="boom",
             )
+            ledger.mark_terminal("req-ledger", "completed", reason="late_done")
 
-            with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
-                snapshot = channel.active_requests_snapshot()
+            final = ledger.get_run("req-ledger")
+            self.assertEqual(final["status"], "failed")
+            self.assertEqual(final["terminal_reason"], "worker_exception")
+            self.assertEqual(final["error_code"], "WORKER_EXCEPTION")
+            self.assertEqual(ledger.active_snapshot(), [])
 
-            self.assertEqual(snapshot["status"], "success")
-            self.assertEqual(snapshot["requests"], [])
-            stale = snapshot["staleLocks"]
-            self.assertEqual(len(stale), 1)
-            self.assertEqual(stale[0]["session_id"], "session-dead-active-snapshot")
-            self.assertTrue(stale[0]["removed"])
-            self.assertFalse(lock.path.exists())
+    def test_active_request_snapshot_prefers_durable_run_ledger(self):
+        from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests
+        from channel.web import web_channel
+
+        channel = web_channel.WebChannel()
+        request_id = "req-ledger-active"
+        session_id = "session-ledger-active"
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            ledger.create_run(request_id, session_id, phase="accepted")
+            ledger.mark_phase(request_id, "waiting_permission")
+            channel.request_to_session = {}
+            channel.sse_queues = {request_id: Queue()}
+            registry = get_cancel_registry()
+            registry.register(request_id, session_id=session_id)
+            try:
+                with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                    snapshot = channel.active_requests_snapshot()
+                active = [item for item in snapshot["requests"] if item["request_id"] == request_id]
+                self.assertEqual(len(active), 1)
+                self.assertEqual(active[0]["session_id"], session_id)
+                self.assertEqual(active[0]["phase"], "waiting_permission")
+                self.assertEqual(active[0]["state"], "running")
+                self.assertTrue(active[0]["stream_available"])
+            finally:
+                registry.unregister(request_id)
 
     def test_cancel_registry_snapshot_marks_cancelled_request(self):
         from agent.protocol.cancel import CancelTokenRegistry
@@ -754,71 +825,72 @@ class TestWebParallelHandlers(unittest.TestCase):
         from channel.web import web_channel
         from common.ecorex_workspace import SessionLock
 
-        channel = web_channel.WebChannel()
-        session_id = "session-busy-interrupt"
-        old_request_id = "req-old-busy"
-        new_request_id = "req-new-busy"
-        old_queue = Queue()
-        registry = get_cancel_registry()
+        with isolated_run_ledger():
+            channel = web_channel.WebChannel()
+            session_id = "session-busy-interrupt"
+            old_request_id = "req-old-busy"
+            new_request_id = "req-new-busy"
+            old_queue = Queue()
+            registry = get_cancel_registry()
 
-        with tempfile.TemporaryDirectory() as workspace:
-            old_lock = SessionLock(workspace, session_id).acquire()
-            old_event = registry.register(old_request_id, session_id=session_id)
-            channel.request_to_session = {old_request_id: session_id}
-            channel.sse_queues = {old_request_id: old_queue}
-            channel.sse_stream_tokens = {}
-            channel.session_queues = {}
-            produced_contexts = []
+            with tempfile.TemporaryDirectory() as workspace:
+                old_lock = SessionLock(workspace, session_id).acquire()
+                old_event = registry.register(old_request_id, session_id=session_id)
+                channel.request_to_session = {old_request_id: session_id}
+                channel.sse_queues = {old_request_id: old_queue}
+                channel.sse_stream_tokens = {}
+                channel.session_queues = {}
+                produced_contexts = []
 
-            def release_old_after_cancel():
-                if old_event.wait(timeout=3):
+                def release_old_after_cancel():
+                    if old_event.wait(timeout=3):
+                        old_lock.release()
+
+                releaser = threading.Thread(target=release_old_after_cancel, daemon=True)
+                releaser.start()
+
+                def fake_compose_context(ctype, content, **kwargs):
+                    context = Context(ctype, content)
+                    context.kwargs = kwargs
+                    return context
+
+                def fake_produce(context):
+                    produced_contexts.append(context)
+                    lock = context.get("session_lock")
+                    if lock:
+                        lock.release()
+
+                payload = {
+                    "session_id": session_id,
+                    "message": "continue with new instructions",
+                    "stream": True,
+                    "lang": "zh",
+                }
+                try:
+                    with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                        with patch.object(channel, "_generate_request_id", return_value=new_request_id):
+                            with patch.object(channel, "_compose_context", side_effect=fake_compose_context):
+                                with patch.object(channel, "produce", side_effect=fake_produce):
+                                    with patch.object(
+                                        web_channel.web,
+                                        "data",
+                                        return_value=json.dumps(payload).encode("utf-8"),
+                                    ):
+                                        result = json.loads(channel.post_message())
+
+                    cancelled = old_queue.get(timeout=2)
+                    self.assertEqual(result["status"], "success")
+                    self.assertNotEqual(result.get("code"), "session_busy")
+                    self.assertEqual(result["request_id"], new_request_id)
+                    self.assertEqual(cancelled["type"], "cancelled")
+                    self.assertEqual(cancelled["request_id"], old_request_id)
+                    self.assertEqual(channel.request_to_session[new_request_id], session_id)
+                    self.assertIn(new_request_id, channel.sse_queues)
+                    self.assertTrue(produced_contexts)
+                finally:
                     old_lock.release()
-
-            releaser = threading.Thread(target=release_old_after_cancel, daemon=True)
-            releaser.start()
-
-            def fake_compose_context(ctype, content, **kwargs):
-                context = Context(ctype, content)
-                context.kwargs = kwargs
-                return context
-
-            def fake_produce(context):
-                produced_contexts.append(context)
-                lock = context.get("session_lock")
-                if lock:
-                    lock.release()
-
-            payload = {
-                "session_id": session_id,
-                "message": "continue with new instructions",
-                "stream": True,
-                "lang": "zh",
-            }
-            try:
-                with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
-                    with patch.object(channel, "_generate_request_id", return_value=new_request_id):
-                        with patch.object(channel, "_compose_context", side_effect=fake_compose_context):
-                            with patch.object(channel, "produce", side_effect=fake_produce):
-                                with patch.object(
-                                    web_channel.web,
-                                    "data",
-                                    return_value=json.dumps(payload).encode("utf-8"),
-                                ):
-                                    result = json.loads(channel.post_message())
-
-                cancelled = old_queue.get(timeout=2)
-                self.assertEqual(result["status"], "success")
-                self.assertNotEqual(result.get("code"), "session_busy")
-                self.assertEqual(result["request_id"], new_request_id)
-                self.assertEqual(cancelled["type"], "cancelled")
-                self.assertEqual(cancelled["request_id"], old_request_id)
-                self.assertEqual(channel.request_to_session[new_request_id], session_id)
-                self.assertIn(new_request_id, channel.sse_queues)
-                self.assertTrue(produced_contexts)
-            finally:
-                old_lock.release()
-                registry.unregister(old_request_id)
-                registry.unregister(new_request_id)
+                    registry.unregister(old_request_id)
+                    registry.unregister(new_request_id)
 
     def test_empty_agent_end_emits_done_so_sse_does_not_hang(self):
         from channel.web import web_channel
@@ -844,54 +916,56 @@ class TestWebParallelHandlers(unittest.TestCase):
         from bridge.context import Context, ContextType
         from channel.web import web_channel
 
-        channel = web_channel.WebChannel()
-        request_id = "req-worker-complete"
-        session_id = "session-worker-complete"
-        context = Context(ContextType.TEXT, "hello")
-        context["request_id"] = request_id
-        context["session_id"] = session_id
-        channel.request_to_session = {request_id: session_id}
-        channel.sse_queues = {request_id: Queue()}
+        with isolated_run_ledger():
+            channel = web_channel.WebChannel()
+            request_id = "req-worker-complete"
+            session_id = "session-worker-complete"
+            context = Context(ContextType.TEXT, "hello")
+            context["request_id"] = request_id
+            context["session_id"] = session_id
+            channel.request_to_session = {request_id: session_id}
+            channel.sse_queues = {request_id: Queue()}
 
-        registry = get_cancel_registry()
-        registry.register(request_id, session_id=session_id)
-        try:
-            self.assertIsNotNone(registry.get_event(request_id))
-            channel._finalize_request_after_worker(context, worker_exception=None)
+            registry = get_cancel_registry()
+            registry.register(request_id, session_id=session_id)
+            try:
+                self.assertIsNotNone(registry.get_event(request_id))
+                channel._finalize_request_after_worker(context, worker_exception=None)
 
-            self.assertIsNone(registry.get_event(request_id))
-            self.assertEqual(channel.request_to_session[request_id], session_id)
-            self.assertIn(request_id, channel.sse_queues)
-        finally:
-            registry.unregister(request_id)
+                self.assertIsNone(registry.get_event(request_id))
+                self.assertEqual(channel.request_to_session[request_id], session_id)
+                self.assertIn(request_id, channel.sse_queues)
+            finally:
+                registry.unregister(request_id)
 
     def test_worker_exception_emits_done_and_unregisters_cancel_token(self):
         from agent.protocol import get_cancel_registry
         from bridge.context import Context, ContextType
         from channel.web import web_channel
 
-        channel = web_channel.WebChannel()
-        request_id = "req-worker-error"
-        session_id = "session-worker-error"
-        context = Context(ContextType.TEXT, "hello")
-        context["request_id"] = request_id
-        context["session_id"] = session_id
-        channel.request_to_session = {request_id: session_id}
-        channel.sse_queues = {request_id: Queue()}
+        with isolated_run_ledger():
+            channel = web_channel.WebChannel()
+            request_id = "req-worker-error"
+            session_id = "session-worker-error"
+            context = Context(ContextType.TEXT, "hello")
+            context["request_id"] = request_id
+            context["session_id"] = session_id
+            channel.request_to_session = {request_id: session_id}
+            channel.sse_queues = {request_id: Queue()}
 
-        registry = get_cancel_registry()
-        registry.register(request_id, session_id=session_id)
-        try:
-            with patch.object(channel, "_fetch_agent_usage", return_value=None):
-                channel._finalize_request_after_worker(context, worker_exception=RuntimeError("boom"))
+            registry = get_cancel_registry()
+            registry.register(request_id, session_id=session_id)
+            try:
+                with patch.object(channel, "_fetch_agent_usage", return_value=None):
+                    channel._finalize_request_after_worker(context, worker_exception=RuntimeError("boom"))
 
-            event = channel.sse_queues[request_id].get(timeout=1)
-            self.assertEqual(event["type"], "done")
-            self.assertEqual(event["request_id"], request_id)
-            self.assertIn("boom", event["content"])
-            self.assertIsNone(registry.get_event(request_id))
-        finally:
-            registry.unregister(request_id)
+                event = channel.sse_queues[request_id].get(timeout=1)
+                self.assertEqual(event["type"], "done")
+                self.assertEqual(event["request_id"], request_id)
+                self.assertIn("boom", event["content"])
+                self.assertIsNone(registry.get_event(request_id))
+            finally:
+                registry.unregister(request_id)
 
     def test_produce_exception_emits_done_and_unregisters_cancel_token(self):
         from agent.protocol import get_cancel_registry
@@ -905,31 +979,32 @@ class TestWebParallelHandlers(unittest.TestCase):
             def release(self):
                 self.released = True
 
-        channel = web_channel.WebChannel()
-        request_id = "req-produce-error"
-        session_id = "session-produce-error"
-        context = Context(ContextType.TEXT, "hello")
-        context["request_id"] = request_id
-        context["session_id"] = session_id
-        lock = FakeLock()
-        channel.request_to_session = {request_id: session_id}
-        channel.sse_queues = {request_id: Queue()}
+        with isolated_run_ledger():
+            channel = web_channel.WebChannel()
+            request_id = "req-produce-error"
+            session_id = "session-produce-error"
+            context = Context(ContextType.TEXT, "hello")
+            context["request_id"] = request_id
+            context["session_id"] = session_id
+            lock = FakeLock()
+            channel.request_to_session = {request_id: session_id}
+            channel.sse_queues = {request_id: Queue()}
 
-        registry = get_cancel_registry()
-        registry.register(request_id, session_id=session_id)
-        try:
-            with patch.object(channel, "_fetch_agent_usage", return_value=None):
-                with patch.object(channel, "produce", side_effect=RuntimeError("produce boom")):
-                    channel._produce_with_session_lock(context, lock)
+            registry = get_cancel_registry()
+            registry.register(request_id, session_id=session_id)
+            try:
+                with patch.object(channel, "_fetch_agent_usage", return_value=None):
+                    with patch.object(channel, "produce", side_effect=RuntimeError("produce boom")):
+                        channel._produce_with_session_lock(context, lock)
 
-            event = channel.sse_queues[request_id].get(timeout=1)
-            self.assertEqual(event["type"], "done")
-            self.assertEqual(event["request_id"], request_id)
-            self.assertIn("produce boom", event["content"])
-            self.assertIsNone(registry.get_event(request_id))
-            self.assertTrue(lock.released)
-        finally:
-            registry.unregister(request_id)
+                event = channel.sse_queues[request_id].get(timeout=1)
+                self.assertEqual(event["type"], "done")
+                self.assertEqual(event["request_id"], request_id)
+                self.assertIn("produce boom", event["content"])
+                self.assertIsNone(registry.get_event(request_id))
+                self.assertTrue(lock.released)
+            finally:
+                registry.unregister(request_id)
 
     def test_multiple_sse_connections_receive_same_request_events(self):
         from channel.web import web_channel
