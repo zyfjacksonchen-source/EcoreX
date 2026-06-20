@@ -33,6 +33,109 @@ _WINDOWS_RESERVED_NAMES = {
 }
 
 
+def _normalize_skill_text(value) -> str:
+    return str(value or "").strip().lower()
+
+
+def _optional_bool(value) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    text = _normalize_skill_text(value)
+    if text in {"1", "true", "yes", "y", "on", "enabled"}:
+        return True
+    if text in {"0", "false", "no", "n", "off", "disabled"}:
+        return False
+    return None
+
+
+def _first_present(row: dict, *keys: str):
+    for key in keys:
+        if key in row and row.get(key) is not None:
+            return row.get(key)
+    return None
+
+
+def _is_lark_cli_skill(row: dict) -> bool:
+    name = _normalize_skill_text(row.get("name") or row.get("display_name"))
+    path = _normalize_skill_text(row.get("path") or row.get("file_path"))
+    primary_env = _normalize_skill_text(row.get("primary_env"))
+    description = _normalize_skill_text(row.get("description"))
+    if re.match(r"^(lark|feishu)([-_:]|$)", name):
+        return True
+    if re.search(r"(^|[\\/])(lark|feishu)-[^\\/]+[\\/]skill\.md$", path):
+        return True
+    if primary_env.startswith(("lark_", "feishu_")):
+        return True
+    return "lark-cli" in description or "飞书" in description and "cli" in description
+
+
+def _is_test_fixture_skill(row: dict) -> bool:
+    name = _normalize_skill_text(row.get("name") or row.get("display_name"))
+    path = _normalize_skill_text(row.get("path") or row.get("file_path"))
+    return bool(re.match(r"^good-skill($|-)", name)) or "skill-format-check" in path
+
+
+def _mention_category_for(row: dict) -> str:
+    explicit = _normalize_skill_text(_first_present(row, "mention_category", "mention-category", "category")).replace("_", "-").replace(" ", "-")
+    if explicit in {"creative", "creation", "content", "media", "design"}:
+        return "creative"
+    if explicit in {"document", "documents", "doc", "pdf", "office", "spreadsheet", "slides"}:
+        return "document"
+    if explicit in {"automation", "browser", "computer-use", "workflow"}:
+        return "automation"
+    if explicit in {"developer", "dev", "coding", "github", "figma", "macos"}:
+        return "developer"
+    if explicit in {"background", "cli", "system", "internal", "tooling", "connector"}:
+        return "background"
+
+    text = " ".join(
+        _normalize_skill_text(row.get(key))
+        for key in ("name", "display_name", "description", "source", "path", "primary_env")
+    )
+    if re.search(r"xiaohongshu|image|design|figma|hallmark|remotion|presentation|video|creative|生成|设计", text):
+        return "creative"
+    if re.search(r"document|documents|pdf|spreadsheet|slides|docx|pptx|xlsx|office|文档|表格|幻灯片", text):
+        return "document"
+    if re.search(r"browser|chrome|computer-use|automation|workflow|calendar|attendance|自动化|浏览器", text):
+        return "automation"
+    if re.search(r"github|build-macos|openai|plugin|skill|codex|cli|developer|swift|xcode|开发", text):
+        return "developer"
+    return "general"
+
+
+def _decorate_mention_metadata(row: dict) -> None:
+    category = _mention_category_for(row)
+    explicit_mentionable = _optional_bool(_first_present(row, "mentionable", "mention-able"))
+    explicit_hidden_reason = str(_first_present(row, "mention_hidden_reason", "mention-hidden-reason") or "").strip()
+    mentionable = explicit_mentionable if explicit_mentionable is not None else category != "background"
+    hidden_reason = explicit_hidden_reason
+
+    if row.get("user_invocable") is False or row.get("disable_model_invocation") is True:
+        mentionable = False
+        hidden_reason = hidden_reason or "background-triggered"
+    if explicit_mentionable is False:
+        mentionable = False
+        hidden_reason = hidden_reason or "background-triggered"
+    if category == "background":
+        mentionable = False
+        hidden_reason = hidden_reason or "background-triggered"
+    if _is_lark_cli_skill(row):
+        category = "background"
+        mentionable = False
+        hidden_reason = hidden_reason or "lark-cli-triggered"
+    if _is_test_fixture_skill(row):
+        category = "background"
+        mentionable = False
+        hidden_reason = hidden_reason or "test-fixture"
+
+    row["mentionable"] = bool(mentionable)
+    row["mention_category"] = category if mentionable else "background"
+    if hidden_reason:
+        row["mention_hidden_reason"] = hidden_reason
+
+
 class SkillService:
     """
     High-level service for skill lifecycle management.
@@ -58,7 +161,20 @@ class SkillService:
         """
         self.manager.refresh_skills()
         config = self.manager.get_skills_config()
-        result = list(config.values())
+        result = []
+        for name, item in config.items():
+            row = dict(item)
+            entry = self.manager.skills.get(name)
+            if entry:
+                row["user_invocable"] = bool(entry.user_invocable)
+                row["disable_model_invocation"] = bool(entry.skill.disable_model_invocation)
+                row["path"] = entry.skill.file_path
+                if entry.metadata:
+                    row["always"] = bool(entry.metadata.always)
+                    row["primary_env"] = entry.metadata.primary_env
+                    row["os"] = list(entry.metadata.os or [])
+            _decorate_mention_metadata(row)
+            result.append(row)
         logger.info(f"[SkillService] query: {len(result)} skills found")
         return result
 

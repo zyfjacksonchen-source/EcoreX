@@ -8,6 +8,7 @@ import base64
 import hashlib
 import json
 import os
+import random
 import subprocess
 import sys
 import time
@@ -20,6 +21,7 @@ OPENAI_IMAGE_MODEL_ALIASES = {
     "image-2-pro": "gpt-image-2-pro",
     "image-2": "gpt-image-2",
 }
+MAX_IMAGE_GENERATION_RETRIES = 4
 
 
 def normalize_openai_image_model(model: str) -> str:
@@ -41,8 +43,83 @@ def prompt_hash(prompt: str, size: str) -> str:
 
 def write_status(path: Path, payload: dict[str, Any]) -> None:
     payload["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    payload["heartbeat_at"] = time.time()
+    payload["pid"] = os.getpid()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{random.randint(1000, 9999)}.tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def image_metadata(image_bytes: bytes) -> dict[str, Any]:
+    if len(image_bytes) < 32:
+        raise RuntimeError("image output is too small")
+    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        width = int.from_bytes(image_bytes[16:20], "big")
+        height = int.from_bytes(image_bytes[20:24], "big")
+        return {"mime": "image/png", "width": width, "height": height}
+    if image_bytes.startswith(b"\xff\xd8"):
+        index = 2
+        while index + 9 < len(image_bytes):
+            if image_bytes[index] != 0xff:
+                index += 1
+                continue
+            marker = image_bytes[index + 1]
+            length = int.from_bytes(image_bytes[index + 2:index + 4], "big")
+            if marker in {0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf}:
+                height = int.from_bytes(image_bytes[index + 5:index + 7], "big")
+                width = int.from_bytes(image_bytes[index + 7:index + 9], "big")
+                return {"mime": "image/jpeg", "width": width, "height": height}
+            index += max(length + 2, 2)
+        raise RuntimeError("could not read jpeg dimensions")
+    if image_bytes.startswith(b"RIFF") and image_bytes[8:12] == b"WEBP":
+        return {"mime": "image/webp"}
+    raise RuntimeError("image output is not a supported image format")
+
+
+def write_validated_image(output: Path, image_bytes: bytes) -> dict[str, Any]:
+    metadata = image_metadata(image_bytes)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    tmp = output.with_name(f".{output.name}.{os.getpid()}.tmp")
+    tmp.write_bytes(image_bytes)
+    os.replace(tmp, output)
+    stat = output.stat()
+    digest = hashlib.sha256(image_bytes).hexdigest()
+    return {
+        **metadata,
+        "sha256": digest,
+        "size_bytes": stat.st_size,
+    }
+
+
+def validate_existing_image(path: Path) -> dict[str, Any]:
+    data = path.read_bytes()
+    metadata = image_metadata(data)
+    return {
+        **metadata,
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "size_bytes": len(data),
+    }
+
+
+def is_retryable_error(message: str) -> bool:
+    text = message.lower()
+    return any(marker in text for marker in (
+        "http 408",
+        "http 409",
+        "http 425",
+        "http 429",
+        "http 500",
+        "http 502",
+        "http 503",
+        "http 504",
+        "timed out",
+        "timeout",
+        "temporarily unavailable",
+        "connection reset",
+        "connection aborted",
+        "remote end closed",
+    ))
 
 
 def decode_response_image(response: Any) -> bytes:
@@ -159,45 +236,53 @@ def generate_with_fallback(args: argparse.Namespace, prompt: str, output: Path, 
     for model in model_candidates:
         if not model:
             continue
-        write_status(
-            status_path,
-            {
-                "status": "running",
-                "model": model,
-                "fallback_model": fallback_model,
-                "prompt_hash": h,
-                "output": str(output),
-                "attempts": attempts,
-            },
-        )
-        try:
-            image_bytes = generate_once(
-                model,
-                prompt,
-                args.size,
-                args.timeout,
-                quality=args.quality,
-                output_format=args.output_format,
-                background=args.background,
-                moderation=args.moderation,
+        for retry_index in range(max(1, args.retries + 1)):
+            write_status(
+                status_path,
+                {
+                    "ok": True,
+                    "status": "running" if retry_index == 0 else "retrying",
+                    "model": model,
+                    "fallback_model": fallback_model,
+                    "prompt_hash": h,
+                    "output": str(output),
+                    "attempts": attempts,
+                    "job_id": h,
+                    "retry_index": retry_index,
+                },
             )
-            output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_bytes(image_bytes)
-            result = {
-                "ok": True,
-                "status": "completed",
-                "model": model,
-                "fallback_used": model != original_model,
-                "fallback_model": fallback_model,
-                "prompt_hash": h,
-                "output": str(output.resolve()),
-                "attempts": attempts,
-            }
-            write_status(status_path, result)
-            return result
-        except Exception as exc:
-            attempts.append({"model": model, "error": str(exc)})
-            if model == fallback_model:
+            try:
+                image_bytes = generate_once(
+                    model,
+                    prompt,
+                    args.size,
+                    args.timeout,
+                    quality=args.quality,
+                    output_format=args.output_format,
+                    background=args.background,
+                    moderation=args.moderation,
+                )
+                metadata = write_validated_image(output, image_bytes)
+                result = {
+                    "ok": True,
+                    "status": "completed",
+                    "model": model,
+                    "fallback_used": model != original_model,
+                    "fallback_model": fallback_model,
+                    "prompt_hash": h,
+                    "job_id": h,
+                    "output": str(output.resolve()),
+                    "attempts": attempts,
+                    **metadata,
+                }
+                write_status(status_path, result)
+                return result
+            except Exception as exc:
+                error = str(exc)
+                attempts.append({"model": model, "retry": str(retry_index), "error": error})
+                if retry_index < args.retries and is_retryable_error(error):
+                    time.sleep(min(2 ** retry_index + random.random(), 8))
+                    continue
                 break
 
     result = {
@@ -206,6 +291,7 @@ def generate_with_fallback(args: argparse.Namespace, prompt: str, output: Path, 
         "model": original_model,
         "fallback_model": fallback_model,
         "prompt_hash": h,
+        "job_id": h,
         "output": str(output),
         "attempts": attempts,
     }
@@ -244,17 +330,21 @@ def spawn_worker(args: argparse.Namespace, prompt: str, output: Path, status_pat
         args.moderation,
         "--timeout",
         str(args.timeout),
+        "--retries",
+        str(args.retries),
     ]
     creationflags = 0
     if os.name == "nt":
         creationflags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, creationflags=creationflags)
+    process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, creationflags=creationflags)
     result = {
         "ok": True,
         "status": "pending",
         "model": args.model,
         "fallback_model": args.fallback_model,
         "prompt_hash": h,
+        "job_id": h,
+        "pid": process.pid,
         "output": str(output),
         "status_path": str(status_path),
         "message": "image generation queued; keep updating status and do not mark final complete until the image preview exists",
@@ -278,6 +368,7 @@ def main() -> int:
     parser.add_argument("--background", default="auto", choices=["auto", "opaque", "transparent"])
     parser.add_argument("--moderation", default="auto", choices=["auto", "low"])
     parser.add_argument("--timeout", type=float, default=240.0)
+    parser.add_argument("--retries", type=int, default=2)
     parser.add_argument("--async", dest="async_mode", action="store_true", help="Queue generation in a background process")
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--dry-run", action="store_true")
@@ -285,6 +376,7 @@ def main() -> int:
     args = parser.parse_args()
     args.model = normalize_openai_image_model(args.model)
     args.fallback_model = normalize_openai_image_model(args.fallback_model)
+    args.retries = max(0, min(args.retries, MAX_IMAGE_GENERATION_RETRIES))
 
     try:
         prompt = load_prompt(args)
@@ -295,18 +387,25 @@ def main() -> int:
         status_path = Path(args.status_path) if args.status_path else cache_dir / f"{h}.status.json"
 
         if output.exists():
-            result = {
-                "ok": True,
-                "status": "cached",
-                "model": args.model,
-                "fallback_model": args.fallback_model,
-                "prompt_hash": h,
-                "output": str(output.resolve()),
-                "status_path": str(status_path),
-            }
-            write_status(status_path, result)
-            print(json.dumps(result, ensure_ascii=False))
-            return 0
+            try:
+                metadata = validate_existing_image(output)
+            except Exception:
+                output.unlink(missing_ok=True)
+            else:
+                result = {
+                    "ok": True,
+                    "status": "cached",
+                    "model": args.model,
+                    "fallback_model": args.fallback_model,
+                    "prompt_hash": h,
+                    "job_id": h,
+                    "output": str(output.resolve()),
+                    "status_path": str(status_path),
+                    **metadata,
+                }
+                write_status(status_path, result)
+                print(json.dumps(result, ensure_ascii=False))
+                return 0
 
         if args.dry_run:
             result = {
@@ -336,7 +435,16 @@ def main() -> int:
         print(json.dumps(result, ensure_ascii=False))
         return 0 if result.get("ok") else 2
     except Exception as exc:
-        print(json.dumps({"ok": False, "status": "failed", "error": str(exc)}, ensure_ascii=False))
+        failure = {"ok": False, "status": "failed", "error": str(exc)}
+        try:
+            target_status = locals().get("status_path")
+            if not target_status and getattr(args, "status_path", ""):
+                target_status = Path(args.status_path)
+            if isinstance(target_status, Path):
+                write_status(target_status, failure)
+        except Exception:
+            pass
+        print(json.dumps(failure, ensure_ascii=False))
         return 2
 
 

@@ -1,0 +1,115 @@
+{
+  "status": "pass",
+  "version": "0.1.17",
+  "generatedAt": "2026-06-20T14:07:18Z",
+  "changeIds": [
+    "MEM-001"
+  ],
+  "checks": [
+    {
+      "name": "root config-template self-evolution enabled",
+      "status": "pass",
+      "evidence": "C:\\CowAgent\\config-template.json"
+    },
+    {
+      "name": "root config-template scheduler remains disabled",
+      "status": "pass",
+      "evidence": "C:\\CowAgent\\config-template.json"
+    },
+    {
+      "name": "root config-template MCP auto-start remains disabled",
+      "status": "pass",
+      "evidence": "C:\\CowAgent\\config-template.json"
+    },
+    {
+      "name": "root config-template Feishu CLI remains on-demand",
+      "status": "pass",
+      "evidence": "{\"auto_install\": false, \"package\": \"@larksuite/cli@1.0.56\"}"
+    },
+    {
+      "name": "evolution module default enabled",
+      "status": "pass",
+      "evidence": "DEFAULT_ENABLED=True"
+    },
+    {
+      "name": "evolution trigger thresholds conservative",
+      "status": "pass",
+      "evidence": "{\"enabled\": true, \"idleMinutes\": 10, \"maxSteps\": 12, \"minTurns\": 6}"
+    },
+    {
+      "name": "config.py fallback enables proactive memory",
+      "status": "pass",
+      "evidence": "config.py default and minimal-config fallback"
+    },
+    {
+      "name": "desktop sidecar default enables proactive memory",
+      "status": "pass",
+      "evidence": "desktop/electron/sidecar.ts desktop runtime defaults"
+    },
+    {
+      "name": "WebUI local release enables proactive memory",
+      "status": "pass",
+      "evidence": "scripts/prepare-ecorex-webui-local-release.ps1"
+    },
+    {
+      "name": "idle trigger records one eligible session",
+      "status": "pass",
+      "evidence": "{\"calls\": [[\"session-a\", \"web\", \"session-a\"]], \"remainingTurns\": 0}"
+    },
+    {
+      "name": "note_user_turn increments future proactive review signal",
+      "status": "pass",
+      "evidence": "{\"turns\": 1, \"receiver\": \"session-a\"}"
+    },
+    {
+      "name": "evolution tool allowlist remains narrow",
+      "status": "pass",
+      "evidence": "[\"bash\", \"edit\", \"ls\", \"memory_get\", \"memory_search\", \"read\", \"write\"]"
+    },
+    {
+      "name": "evolution concurrency remains bounded",
+      "status": "pass",
+      "evidence": "_MAX_CONCURRENT=2"
+    },
+    {
+      "name": "evolution background safety guards present",
+      "status": "pass",
+      "evidence": "missing=[]"
+    },
+    {
+      "name": "evolution bash workspace guard blocks Windows escapes",
+      "status": "pass",
+      "evidence": "{\"allowedAbsolute\": \"success\", \"allowedRelative\": \"success\", \"blocked\": {\"bash home env\": \"error\", \"cmd home env\": \"error\", \"parent traversal\": \"error\", \"powershell temp env\": \"error\", \"tilde\": \"error\", \"windows drive absolute\": \"error\", \"windows drive relative\": \"error\", \"windows unc\": \"error\"}}"
+    },
+    {
+      "name": "packaged runtime config-template self-evolution enabled",
+      "status": "pass",
+      "evidence": "C:\\CowAgent\\desktop\\release\\win-unpacked\\resources\\ecorex-runtime\\config-template.json"
+    },
+    {
+      "name": "packaged runtime config-template scheduler remains disabled",
+      "status": "pass",
+      "evidence": "C:\\CowAgent\\desktop\\release\\win-unpacked\\resources\\ecorex-runtime\\config-template.json"
+    },
+    {
+      "name": "packaged runtime config-template MCP auto-start remains disabled",
+      "status": "pass",
+      "evidence": "C:\\CowAgent\\desktop\\release\\win-unpacked\\resources\\ecorex-runtime\\config-template.json"
+    },
+    {
+      "name": "packaged runtime config-template Feishu CLI remains on-demand",
+      "status": "pass",
+      "evidence": "{\"auto_install\": false, \"package\": \"@larksuite/cli@1.0.56\"}"
+    },
+    {
+      "name": "runtime manifest present",
+      "status": "pass",
+      "evidence": "{\"dependencyInstall\": true, \"preinstalledPacks\": [\"office-pdf\"], \"product\": \"EcoreX\", \"pythonDistribution\": \"python-embed-3.11.9\", \"runtime\": \"compatible-agent-runtime\", \"stagedAt\": \"2026-06-20T14:04:57Z\"}"
+    },
+    {
+      "name": "unpacked Electron sidecar enables proactive memory",
+      "status": "pass",
+      "evidence": "C:\\CowAgent\\desktop\\release\\win-unpacked\\resources\\app.asar!/dist-electron/sidecar.js"
+    }
+  ]
+}

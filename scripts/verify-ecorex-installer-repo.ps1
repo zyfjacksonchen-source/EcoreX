@@ -123,4 +123,81 @@ foreach ($file in $files) {
     }
 }
 
+foreach ($exe in $files | Where-Object { $_.Extension.ToLowerInvariant() -eq ".exe" }) {
+    if (-not (Get-Command Get-AuthenticodeSignature -ErrorAction SilentlyContinue)) {
+        throw "Get-AuthenticodeSignature is required to verify Windows installers: $($exe.FullName)"
+    }
+    $signature = Get-AuthenticodeSignature -LiteralPath $exe.FullName
+    if ($signature.Status -ne "Valid") {
+        throw "Windows installer is not Authenticode signed for public release: $($exe.FullName) (status=$($signature.Status))"
+    }
+}
+
+$manifestPath = Join-Path $rootResolved "manifest.json"
+if (Test-Path -LiteralPath $manifestPath) {
+    $manifest = Get-Content -Raw -Encoding UTF8 -LiteralPath $manifestPath | ConvertFrom-Json
+    $version = [string]$manifest.version
+    $windowsInstaller = @($manifest.files | Where-Object { $_.id -eq "windows-x64-installer" }) | Select-Object -First 1
+    if ($windowsInstaller) {
+        $installerPath = Join-Path $rootResolved ([string]$windowsInstaller.fileName)
+        if (-not (Test-Path -LiteralPath $installerPath)) {
+            throw "Manifest Windows installer is missing: $installerPath"
+        }
+        $installerItem = Get-Item -LiteralPath $installerPath
+        if ([int64]$windowsInstaller.size -ne [int64]$installerItem.Length) {
+            throw "Manifest Windows installer size does not match file: $($windowsInstaller.fileName)"
+        }
+        $actualSha256 = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash.ToUpperInvariant()
+        if ($actualSha256 -ne ([string]$windowsInstaller.sha256).ToUpperInvariant()) {
+            throw "Manifest Windows installer sha256 does not match file: $($windowsInstaller.fileName)"
+        }
+        $latestPath = Join-Path $rootResolved "latest.yml"
+        if (-not (Test-Path -LiteralPath $latestPath)) {
+            throw "latest.yml is required when a Windows installer is present."
+        }
+        $latest = Get-Content -Raw -Encoding UTF8 -LiteralPath $latestPath
+        if ($latest -notmatch "(?m)^version:\s*['""]?$([regex]::Escape($version))['""]?\s*$") {
+            throw "latest.yml version does not match manifest version $version."
+        }
+        if ($latest -notmatch [regex]::Escape([string]$windowsInstaller.fileName)) {
+            throw "latest.yml does not reference Windows installer $($windowsInstaller.fileName)."
+        }
+        if ($latest -notmatch "(?m)^\s*size:\s*$([int64]$installerItem.Length)\s*$") {
+            throw "latest.yml size does not match Windows installer size."
+        }
+        $sha512 = [System.Security.Cryptography.SHA512]::Create()
+        try {
+            $stream = [System.IO.File]::OpenRead($installerPath)
+            try {
+                $expectedSha512 = [Convert]::ToBase64String($sha512.ComputeHash($stream))
+            }
+            finally {
+                $stream.Dispose()
+            }
+        }
+        finally {
+            $sha512.Dispose()
+        }
+        if ($latest -notmatch [regex]::Escape($expectedSha512)) {
+            throw "latest.yml sha512 does not match Windows installer."
+        }
+        $windowsBlockmap = @($manifest.files | Where-Object { $_.id -eq "windows-blockmap" }) | Select-Object -First 1
+        if (-not $windowsBlockmap) {
+            throw "Windows blockmap is required when a Windows installer is present."
+        }
+        $blockmapPath = Join-Path $rootResolved ([string]$windowsBlockmap.fileName)
+        if (-not (Test-Path -LiteralPath $blockmapPath)) {
+            throw "Manifest Windows blockmap is missing: $($windowsBlockmap.fileName)"
+        }
+        $blockmapItem = Get-Item -LiteralPath $blockmapPath
+        if ([int64]$windowsBlockmap.size -ne [int64]$blockmapItem.Length) {
+            throw "Manifest Windows blockmap size does not match file: $($windowsBlockmap.fileName)"
+        }
+        $actualBlockmapSha256 = (Get-FileHash -LiteralPath $blockmapPath -Algorithm SHA256).Hash.ToUpperInvariant()
+        if ($actualBlockmapSha256 -ne ([string]$windowsBlockmap.sha256).ToUpperInvariant()) {
+            throw "Manifest Windows blockmap sha256 does not match file: $($windowsBlockmap.fileName)"
+        }
+    }
+}
+
 Write-Host "PASS installer-only repo validation: $rootResolved"

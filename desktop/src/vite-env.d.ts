@@ -7,9 +7,19 @@ interface Window {
     setWindowTheme?: (theme: "light" | "dark") => Promise<unknown>;
     getSidecarStatus: () => Promise<{
       state: "starting" | "running" | "stopped" | "failed" | "skipped";
+      phase?: "idle" | "spawning" | "probing" | "ready" | "degraded" | "restarting" | "failed" | "stopped" | "skipped";
       message: string;
       pid?: number;
       webPort: number;
+      diagnostics?: {
+        bootId: string;
+        restartAttempts: number;
+        consecutiveHealthFailures: number;
+        startupInFlight: boolean;
+        lastProbeOkAt?: string;
+        lastProbeErrorAt?: string;
+        recentEvents?: Array<{ ts: string; state: string; phase: string; message: string; reason?: string }>;
+      };
     }>;
     checkForUpdates?: () => Promise<{
       state: "idle" | "checking" | "available" | "not-available" | "downloading" | "downloaded" | "blocked" | "installing" | "error";

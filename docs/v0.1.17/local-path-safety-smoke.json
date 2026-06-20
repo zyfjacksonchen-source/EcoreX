@@ -1,0 +1,57 @@
+{
+  "status": "fail",
+  "version": "0.1.17",
+  "generatedAt": "2026-06-20T16:58:47.748Z",
+  "changeIds": [
+    "STAB-003"
+  ],
+  "distFresh": true,
+  "checks": [
+    {
+      "name": "managed Chinese and space path",
+      "status": "pass",
+      "evidence": "C:\\Users\\user\\AppData\\Local\\Temp\\ecorex-local-path-safety-BU2xGr\\home\\EcoreX\\中文 空格.txt"
+    },
+    {
+      "name": "selected path stat",
+      "status": "pass",
+      "evidence": "C:\\Users\\user\\AppData\\Local\\Temp\\ecorex-local-path-safety-BU2xGr\\selected 项目\\chosen file.txt"
+    },
+    {
+      "name": "outside path denied",
+      "status": "pass",
+      "evidence": "C:\\Users\\user\\AppData\\Local\\Temp\\ecorex-local-path-safety-BU2xGr\\outside\\outside.txt"
+    },
+    {
+      "name": "missing path",
+      "status": "pass",
+      "evidence": "C:\\Users\\user\\AppData\\Local\\Temp\\ecorex-local-path-safety-BU2xGr\\home\\EcoreX\\missing.txt"
+    },
+    {
+      "name": "relative path invalid",
+      "status": "pass",
+      "evidence": "relative.txt"
+    },
+    {
+      "name": "dangerous open blocked",
+      "status": "pass",
+      "evidence": "C:\\Users\\user\\AppData\\Local\\Temp\\ecorex-local-path-safety-BU2xGr\\home\\EcoreX\\run.ps1"
+    },
+    {
+      "name": "dangerous reveal allowed",
+      "status": "pass",
+      "evidence": "C:\\Users\\user\\AppData\\Local\\Temp\\ecorex-local-path-safety-BU2xGr\\home\\EcoreX\\run.ps1"
+    },
+    {
+      "name": "symlink realpath guard",
+      "status": "fail",
+      "evidence": "file symlink unavailable: EPERM: operation not permitted, symlink 'C:\\Users\\user\\AppData\\Local\\Temp\\ecorex-local-path-safety-BU2xGr\\outside\\real-script.ps1' -> 'C:\\Users\\user\\AppData\\Local\\Temp\\ecorex-local-path-safety-BU2xGr\\home\\EcoreX\\looks-safe.txt'",
+      "symlinkAvailable": false
+    },
+    {
+      "name": "full-access stat allowed",
+      "status": "pass",
+      "evidence": "C:\\Users\\user\\AppData\\Local\\Temp\\ecorex-local-path-safety-BU2xGr\\outside\\outside.txt"
+    }
+  ]
+}

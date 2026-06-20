@@ -1,0 +1,13 @@
+{
+    "ok":  true,
+    "version":  "0.1.17",
+    "generatedAt":  "2026-06-20T09:51:56Z",
+    "validation":  "prepare-ecorex-web-release.ps1 PASS; package sanitized twice and built from desktop renderer build",
+    "artifact":  {
+                     "fileName":  "EcoreX_0.1.17-web-linux-service.tar.gz",
+                     "path":  "C:\\CowAgent\\release-artifacts\\EcoreX_0.1.17-web-linux-service.tar.gz",
+                     "size":  3237857,
+                     "sha256":  "5822EF937F25AE671C3315AA27F01515F4E84619639FFF9CE005A70312CB857A",
+                     "sha256File":  "C:\\CowAgent\\release-artifacts\\EcoreX_0.1.17-web-linux-service.tar.gz.sha256"
+                 }
+}

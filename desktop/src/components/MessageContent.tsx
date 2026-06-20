@@ -8,7 +8,7 @@ import {
   MoreHorizontal,
   MonitorUp
 } from "lucide-react";
-import type { AgentArtifact, LocalPathStat } from "../services/ecorexApi";
+import type { AgentArtifact, LocalJsonResult, LocalPathStat } from "../services/ecorexApi";
 import { redactInternalPromptText } from "../utils/redaction";
 
 export type ToolCallDisclosure = {
@@ -63,6 +63,8 @@ export type LocalFilePayload = {
   file_name: string;
   file_type?: "image" | "video" | "audio" | "file" | "directory";
   open_action?: "preview" | "open" | "reveal" | "copy" | "openWith";
+  previewDataUrl?: string;
+  preview_url?: string;
 };
 
 const REASONING_RENDER_CAP = 4 * 1024;
@@ -71,6 +73,11 @@ const LONG_REPLY_COLLAPSE_CHARS = 1400;
 const LONG_REPLY_PREVIEW_CHARS = 520;
 const STREAM_RENDER_THROTTLE_CHARS = 12000;
 const STREAM_MARKDOWN_CHUNK_CHARS = 8000;
+const STREAM_LIVE_FULL_RENDER_CHARS = 32000;
+const STREAM_LIVE_HEAD_CHARS = 7000;
+const STREAM_LIVE_TAIL_CHARS = 4200;
+const STREAM_LIVE_ARIA_CHARS = 12000;
+const ARTIFACT_PENDING_MAX_RETRIES = 180;
 const ARTIFACT_PREVIEW_LIMIT = 6;
 const ARTIFACT_RELATIVE_ROOTS = "deliverables|output|outputs|artifacts|images|assets";
 const ARTIFACT_ABSOLUTE_POSIX_ROOTS = "Users|Volumes|home|tmp|var|mnt|opt|srv|workspace";
@@ -252,6 +259,10 @@ type DisplayArtifact = AgentArtifact & {
 };
 
 type ArtifactAvailability = "pending" | "ready" | "missing" | "denied" | "error";
+type ArtifactStatusJsonState = "pending" | "ready" | "failed" | "unknown";
+
+const ARTIFACT_STATUS_READY = new Set(["complete", "completed", "done", "ready", "success", "saved", "cached"]);
+const ARTIFACT_STATUS_FAILED = new Set(["failed", "error", "cancelled", "canceled", "aborted", "timeout", "timed_out"]);
 
 function useThrottledStreamingContent(content: string, pending?: boolean) {
   const [visible, setVisible] = useState(content);
@@ -319,6 +330,23 @@ function artifactAvailabilityLabel(status: ArtifactAvailability) {
   if (status === "error") return "could not verify local file";
   if (status === "missing") return "local file not found";
   return "";
+}
+
+function artifactStatusJsonState(result: LocalJsonResult): ArtifactStatusJsonState {
+  const transportStatus = String(result.status || "").toLowerCase();
+  if (transportStatus === "denied") return "failed";
+  if (transportStatus === "missing") return "pending";
+  if (transportStatus === "error" && !result.data) return "failed";
+  const data = result.data;
+  if (!data || typeof data !== "object") return "unknown";
+  const record = data as Record<string, unknown>;
+  const status = String(record.status || record.state || record.phase || "").trim().toLowerCase();
+  if (record.ok === false) return "failed";
+  if (ARTIFACT_STATUS_FAILED.has(status)) return "failed";
+  if (ARTIFACT_STATUS_READY.has(status)) return "ready";
+  if (status) return "pending";
+  if (record.ok === true) return "ready";
+  return "pending";
 }
 
 function artifactKindFromFileType(fileType: ArtifactFileType): AgentArtifact["kind"] {
@@ -623,18 +651,24 @@ function ArtifactShelf({
   artifacts,
   legacyArtifacts = [],
   localFilePreviewUrl,
+  localFileJson,
   localFileStat,
   onOpenLocalFile
 }: {
   artifacts?: AgentArtifact[];
   legacyArtifacts?: ArtifactItem[];
   localFilePreviewUrl?: (filePath: string) => string;
+  localFileJson?: (filePath: string) => Promise<LocalJsonResult>;
   localFileStat?: (filePath: string) => Promise<LocalPathStat>;
   onOpenLocalFile?: (file: LocalFilePayload) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [openMenuId, setOpenMenuId] = useState("");
   const [availability, setAvailability] = useState<Record<string, ArtifactAvailability>>({});
+  const statRetryCounts = useRef<Record<string, number>>({});
+  const statRetryTimers = useRef<Record<string, number>>({});
+  const statusRetryCounts = useRef<Record<string, number>>({});
+  const statusRetryTimers = useRef<Record<string, number>>({});
   const rawItems = useMemo(() => mergeAgentArtifacts(artifacts, legacyArtifacts), [artifacts, legacyArtifacts]);
   useEffect(() => {
     if (!localFileStat) return;
@@ -646,16 +680,98 @@ function ArtifactShelf({
       setAvailability((current) => current[key] ? current : { ...current, [key]: "pending" });
       localFileStat(source)
         .then((stat) => {
+          const nextStatus = artifactAvailabilityFromStat(stat, artifact.kind);
+          if (nextStatus === "ready") {
+            statRetryCounts.current[key] = 0;
+          }
           setAvailability((current) => ({
             ...current,
-            [key]: artifactAvailabilityFromStat(stat, artifact.kind)
+            [key]: nextStatus
           }));
+          if (nextStatus === "missing" && artifact.status === "pending") {
+            const attempts = statRetryCounts.current[key] || 0;
+            if (attempts < ARTIFACT_PENDING_MAX_RETRIES && !statRetryTimers.current[key]) {
+              statRetryCounts.current[key] = attempts + 1;
+              statRetryTimers.current[key] = window.setTimeout(() => {
+                delete statRetryTimers.current[key];
+                setAvailability((current) => {
+                  const next = { ...current };
+                  delete next[key];
+                  return next;
+                });
+              }, Math.min(1000 + attempts * 500, 6000));
+            }
+          }
         })
         .catch(() => {
           setAvailability((current) => ({ ...current, [key]: "error" }));
         });
     });
   }, [availability, localFileStat, rawItems]);
+  useEffect(() => {
+    if (!localFileJson) return;
+    const scheduleStatusRetry = (availabilityKey: string, timerKey: string) => {
+      const attempts = statusRetryCounts.current[timerKey] || 0;
+      if (attempts >= ARTIFACT_PENDING_MAX_RETRIES || statusRetryTimers.current[timerKey]) return;
+      statusRetryCounts.current[timerKey] = attempts + 1;
+      statusRetryTimers.current[timerKey] = window.setTimeout(() => {
+        delete statusRetryTimers.current[timerKey];
+        setAvailability((current) => {
+          const value = current[availabilityKey];
+          if (value === "ready" || value === "error" || value === "denied") return current;
+          const next = { ...current };
+          delete next[availabilityKey];
+          return next;
+        });
+      }, Math.min(1000 + attempts * 500, 6000));
+    };
+
+    rawItems.forEach((artifact) => {
+      if (!shouldVerifyArtifact(artifact) || artifact.status !== "pending" || !artifact.statusPath) return;
+      const source = artifactPath(artifact);
+      const key = artifactSourceKey(artifact);
+      const timerKey = `${key}:status:${artifact.statusPath}`;
+      const currentStatus = availability[key];
+      if (currentStatus === "ready" || currentStatus === "error" || currentStatus === "denied") return;
+      if (statusRetryTimers.current[timerKey]) return;
+      setAvailability((current) => current[key] ? current : { ...current, [key]: "pending" });
+      localFileJson(artifact.statusPath)
+        .then(async (result) => {
+          const statusState = artifactStatusJsonState(result);
+          if (statusState === "failed") {
+            statusRetryCounts.current[timerKey] = 0;
+            const transportStatus = String(result.status || "").toLowerCase();
+            setAvailability((current) => ({ ...current, [key]: transportStatus === "denied" ? "denied" : "error" }));
+            return;
+          }
+          if (statusState === "ready") {
+            if (localFileStat && source) {
+              const stat = await localFileStat(source);
+              const nextStatus = artifactAvailabilityFromStat(stat, artifact.kind);
+              if (nextStatus === "ready" || nextStatus === "denied" || nextStatus === "error") {
+                statusRetryCounts.current[timerKey] = 0;
+                setAvailability((current) => ({ ...current, [key]: nextStatus }));
+                return;
+              }
+            } else {
+              statusRetryCounts.current[timerKey] = 0;
+              setAvailability((current) => ({ ...current, [key]: "ready" }));
+              return;
+            }
+          }
+          scheduleStatusRetry(key, timerKey);
+        })
+        .catch(() => {
+          scheduleStatusRetry(key, timerKey);
+        });
+    });
+  }, [availability, localFileJson, localFileStat, rawItems]);
+  useEffect(() => () => {
+    Object.values(statRetryTimers.current).forEach((timer) => window.clearTimeout(timer));
+    statRetryTimers.current = {};
+    Object.values(statusRetryTimers.current).forEach((timer) => window.clearTimeout(timer));
+    statusRetryTimers.current = {};
+  }, []);
   const items = rawItems;
   if (!items.length) return null;
 
@@ -688,7 +804,11 @@ function ArtifactShelf({
       file_path: source,
       file_name: displayArtifactTitle(artifact),
       file_type: artifactFileTypeFromKind(artifact.kind),
-      open_action: action
+      open_action: action,
+      previewDataUrl: action === "preview" && /^data:image\//i.test(artifact.previewUrl || artifact.thumbnailUrl || "")
+        ? artifact.previewUrl || artifact.thumbnailUrl
+        : undefined,
+      preview_url: action === "preview" ? artifact.previewUrl || artifact.thumbnailUrl : undefined
     });
     setOpenMenuId("");
   };
@@ -710,9 +830,19 @@ function ArtifactShelf({
           const previewUrl = artifact.kind === "image" && previewSource
             ? safeImageUrl(previewSource, localFilePreviewUrl)
             : "";
-          const availabilityStatus = localFileStat && shouldVerifyArtifact(artifact)
-            ? availability[artifactSourceKey(artifact)] || "pending"
+          const artifactStatus = String(artifact.status || "").toLowerCase();
+          const artifactKey = artifactSourceKey(artifact);
+          const statStatus = localFileStat && shouldVerifyArtifact(artifact)
+            ? availability[artifactKey] || "pending"
             : "ready";
+          const pendingRetryExhausted = artifactStatus === "pending"
+            && statStatus === "missing"
+            && (statRetryCounts.current[artifactKey] || 0) >= ARTIFACT_PENDING_MAX_RETRIES;
+          const availabilityStatus = artifactStatus === "failed"
+            ? "error"
+            : artifactStatus === "pending" && statStatus !== "ready" && !pendingRetryExhausted
+              ? "pending"
+              : statStatus;
           const availabilityText = artifactAvailabilityLabel(availabilityStatus);
           const blocked = availabilityStatus !== "ready";
           const displayPreviewUrl = blocked ? "" : previewUrl;
@@ -905,8 +1035,23 @@ function renderTable(lines: string[], out: string[], localFilePreviewUrl?: (file
   lines.length = 0;
 }
 
-function renderMarkdown(markdown: string, localFilePreviewUrl?: (filePath: string) => string) {
+function normalizeMarkdownForRender(markdown: string) {
   const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
+  let inFence = false;
+  return lines.map((raw) => {
+    if (/^```[\w-]*\s*$/.test(raw.trim())) {
+      inFence = !inFence;
+      return raw;
+    }
+    if (inFence) return raw;
+    const wrappedHeading = raw.match(/^\s*-{3,}\s*(#{1,6}.+?)\s*-{3,}\s*$/);
+    if (wrappedHeading) return wrappedHeading[1].replace(/^(#{1,6})(\S)/, "$1 $2");
+    return raw.replace(/^(\s{0,3}#{1,6})(\S)/, "$1 $2");
+  }).join("\n");
+}
+
+function renderMarkdown(markdown: string, localFilePreviewUrl?: (filePath: string) => string) {
+  const lines = normalizeMarkdownForRender(markdown).split("\n");
   const out: string[] = [];
   const paragraph: string[] = [];
   const bullets: string[] = [];
@@ -944,6 +1089,12 @@ function renderMarkdown(markdown: string, localFilePreviewUrl?: (filePath: strin
 
     if (!raw.trim()) {
       flushAll();
+      continue;
+    }
+
+    if (/^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/.test(raw)) {
+      flushAll();
+      out.push("<hr />");
       continue;
     }
 
@@ -1002,7 +1153,7 @@ function countMatches(value: string, pattern: RegExp) {
 }
 
 function splitStreamingMarkdown(markdown: string) {
-  const source = String(markdown || "").replace(/\r\n/g, "\n");
+  const source = normalizeMarkdownForRender(markdown);
   const fenceMatches = [...source.matchAll(/^```[\w-]*\s*$/gm)];
   if (fenceMatches.length % 2 === 1) {
     const lastFence = fenceMatches[fenceMatches.length - 1];
@@ -1104,7 +1255,7 @@ function resultHasExplicitArtifactFields(value: unknown) {
   }
   try {
     return Object.keys(value as Record<string, unknown>).some((key) => (
-      /^(?:artifacts?|deliverables?|outputs?|files?|generatedFiles|generated_files|media|attachments?)$/i.test(key)
+      /^(?:artifacts?|deliverables?|outputs?|output|outputPath|output_path|files?|generatedFiles|generated_files|media|attachments?)$/i.test(key)
     ));
   } catch {
     return false;
@@ -1127,7 +1278,7 @@ function extractArtifactsFromStructured(value: unknown): ArtifactItem[] {
     }
     if (typeof entry !== "object") return;
     const record = entry as Record<string, unknown>;
-    const rawPath = String(record.file_path || record.filePath || record.path || record.url || "").trim();
+    const rawPath = String(record.file_path || record.filePath || record.path || record.output || record.output_path || record.outputPath || record.url || "").trim();
     if (rawPath) {
       const path = localPathFromSource(rawPath) || relativeArtifactPathFromSource(rawPath, false);
       if (path) {
@@ -1256,14 +1407,151 @@ function splitStableMarkdownChunks(content: string) {
       boundary = source.lastIndexOf("\n\n", Math.max(start, boundary - 2));
     }
     if (boundary <= minBoundary) {
-      chunks.push(source.slice(start));
-      break;
+      boundary = source.lastIndexOf("\n", target);
+    }
+    if (boundary <= minBoundary) {
+      boundary = Math.max(
+        source.lastIndexOf("。", target),
+        source.lastIndexOf("；", target),
+        source.lastIndexOf("，", target),
+        source.lastIndexOf(".", target)
+      );
+    }
+    if (boundary <= minBoundary) {
+      boundary = target;
     }
     chunks.push(source.slice(start, boundary).trimEnd());
     start = boundary;
     while (source[start] === "\n") start += 1;
   }
   return chunks.filter(Boolean);
+}
+
+function markdownPreviewContent(content: string) {
+  const source = normalizeMarkdownForRender(content);
+  if (source.length <= LONG_REPLY_PREVIEW_CHARS) return source;
+  const minBoundary = Math.floor(LONG_REPLY_PREVIEW_CHARS / 2);
+  const softLimit = Math.min(source.length, LONG_REPLY_PREVIEW_CHARS + 220);
+  let boundary = source.lastIndexOf("\n\n", softLimit);
+  if (boundary < minBoundary) boundary = source.lastIndexOf("\n", softLimit);
+  if (boundary < minBoundary) {
+    boundary = Math.max(
+      source.lastIndexOf("。", softLimit),
+      source.lastIndexOf("；", softLimit),
+      source.lastIndexOf(".", softLimit)
+    );
+  }
+  if (boundary < minBoundary) boundary = LONG_REPLY_PREVIEW_CHARS;
+  return `${source.slice(0, boundary).trimEnd()}\n\n...`;
+}
+
+function splitStableMarkdownChunksV2(content: string) {
+  const source = normalizeMarkdownForRender(content);
+  if (source.length <= STREAM_MARKDOWN_CHUNK_CHARS) return [source];
+  const chunks: string[] = [];
+  let start = 0;
+  const hasBalancedFences = (value: string) => (
+    [...value.matchAll(/^```[\w-]*\s*$/gm)].length % 2 === 0
+  );
+  const acceptBoundary = (candidate: number, minBoundary: number) => (
+    candidate > minBoundary && hasBalancedFences(source.slice(start, candidate))
+  );
+  while (start < source.length) {
+    const remaining = source.length - start;
+    if (remaining <= STREAM_MARKDOWN_CHUNK_CHARS) {
+      chunks.push(source.slice(start));
+      break;
+    }
+    const target = start + STREAM_MARKDOWN_CHUNK_CHARS;
+    const minBoundary = start + Math.floor(STREAM_MARKDOWN_CHUNK_CHARS / 3);
+    let boundary = source.lastIndexOf("\n\n", target);
+    while (boundary > minBoundary && !hasBalancedFences(source.slice(start, boundary))) {
+      boundary = source.lastIndexOf("\n\n", Math.max(start, boundary - 2));
+    }
+    if (!acceptBoundary(boundary, minBoundary)) {
+      const lineBoundary = source.lastIndexOf("\n", target);
+      boundary = acceptBoundary(lineBoundary, minBoundary) ? lineBoundary : 0;
+    }
+    if (!acceptBoundary(boundary, minBoundary)) {
+      const punctuationBoundary = Math.max(
+        source.lastIndexOf(".", target),
+        source.lastIndexOf("!", target),
+        source.lastIndexOf("?", target)
+      );
+      boundary = acceptBoundary(punctuationBoundary, minBoundary) ? punctuationBoundary : 0;
+    }
+    if (!acceptBoundary(boundary, minBoundary)) {
+      const nextFence = source.slice(target).search(/^```[\w-]*\s*$/m);
+      if (nextFence >= 0) {
+        const fenceIndex = target + nextFence;
+        const fenceEnd = source.indexOf("\n", fenceIndex);
+        const nextBoundary = fenceEnd >= 0 ? fenceEnd : source.length;
+        boundary = hasBalancedFences(source.slice(start, nextBoundary)) ? nextBoundary : 0;
+      }
+    }
+    if (!acceptBoundary(boundary, minBoundary)) {
+      boundary = hasBalancedFences(source.slice(start, target)) ? target : source.length;
+    }
+    chunks.push(source.slice(start, boundary).trimEnd());
+    start = boundary;
+    while (source[start] === "\n") start += 1;
+  }
+  return chunks.filter(Boolean);
+}
+
+function markdownPreviewContentSafe(content: string) {
+  const raw = String(content || "");
+  const source = normalizeMarkdownForRender(raw.slice(0, Math.min(raw.length, LONG_REPLY_PREVIEW_CHARS + 240)));
+  if (source.length <= LONG_REPLY_PREVIEW_CHARS) return source;
+  const minBoundary = Math.floor(LONG_REPLY_PREVIEW_CHARS / 2);
+  const softLimit = Math.min(source.length, LONG_REPLY_PREVIEW_CHARS + 220);
+  let boundary = source.lastIndexOf("\n\n", softLimit);
+  if (boundary < minBoundary) boundary = source.lastIndexOf("\n", softLimit);
+  if (boundary < minBoundary) {
+    boundary = Math.max(source.lastIndexOf(".", softLimit), source.lastIndexOf("!", softLimit), source.lastIndexOf("?", softLimit));
+  }
+  if (boundary < minBoundary) boundary = LONG_REPLY_PREVIEW_CHARS;
+  let preview = source.slice(0, boundary).trimEnd();
+  const fenceMatches = [...preview.matchAll(/^```[\w-]*\s*$/gm)];
+  if (fenceMatches.length % 2 === 1) {
+    const lastFence = fenceMatches[fenceMatches.length - 1];
+    preview = preview.slice(0, lastFence.index).trimEnd();
+  }
+  return `${preview}\n\n...`;
+}
+
+function streamingWindowHeadEnd(source: string) {
+  const paragraphEnd = source.lastIndexOf("\n\n", STREAM_LIVE_HEAD_CHARS);
+  if (paragraphEnd > STREAM_LIVE_HEAD_CHARS * 0.6) return paragraphEnd;
+  const lineEnd = source.lastIndexOf("\n", STREAM_LIVE_HEAD_CHARS);
+  if (lineEnd > STREAM_LIVE_HEAD_CHARS * 0.6) return lineEnd;
+  return STREAM_LIVE_HEAD_CHARS;
+}
+
+function trimUnbalancedFenceTail(segment: string) {
+  const fenceMatches = [...segment.matchAll(/^```[\w-]*\s*$/gm)];
+  if (fenceMatches.length % 2 === 0) return segment;
+  const lastFence = fenceMatches[fenceMatches.length - 1];
+  return segment.slice(0, lastFence.index).trimEnd();
+}
+
+function streamingWindowMarkdown(content: string) {
+  const source = redactInternalPromptText(content || "").replace(/\r\n/g, "\n");
+  if (source.length <= STREAM_LIVE_FULL_RENDER_CHARS) return source;
+  const rawHead = trimUnbalancedFenceTail(source.slice(0, streamingWindowHeadEnd(source)).trimEnd());
+  const rawTailStart = Math.max(STREAM_LIVE_HEAD_CHARS, source.length - STREAM_LIVE_TAIL_CHARS);
+  const paragraphTailStart = source.indexOf("\n\n", rawTailStart);
+  const lineTailStart = source.indexOf("\n", rawTailStart);
+  const tailStart = paragraphTailStart >= 0 && paragraphTailStart - rawTailStart < 1200
+    ? paragraphTailStart + 2
+    : lineTailStart >= 0 && lineTailStart - rawTailStart < 1200
+      ? lineTailStart + 1
+      : rawTailStart;
+  const rawTail = source.slice(tailStart).trimStart();
+  const head = normalizeMarkdownForRender(rawHead);
+  const tail = normalizeMarkdownForRender(rawTail);
+  const omitted = Math.max(source.length - rawHead.length - rawTail.length, 0);
+  return `${head}\n\n[... ${omitted} chars streaming ...]\n\n${tail}`;
 }
 
 function StreamingStableMarkdown({
@@ -1275,7 +1563,7 @@ function StreamingStableMarkdown({
   localFilePreviewUrl?: (filePath: string) => string;
   onOpenLocalFile?: (file: LocalFilePayload) => void;
 }) {
-  const chunks = useMemo(() => splitStableMarkdownChunks(content), [content]);
+  const chunks = useMemo(() => splitStableMarkdownChunksV2(content), [content]);
   return (
     <>
       {chunks.map((chunk, index) => (
@@ -1299,10 +1587,11 @@ function StreamingMarkdownBlock({
   localFilePreviewUrl?: (filePath: string) => string;
   onOpenLocalFile?: (file: LocalFilePayload) => void;
 }) {
+  const liveContent = useMemo(() => streamingWindowMarkdown(content), [content]);
   const { stable, tail, tailKind, cleanedTail } = useMemo(() => {
-    const split = splitStreamingMarkdown(redactInternalPromptText(content));
+    const split = splitStreamingMarkdown(redactInternalPromptText(liveContent));
     return { ...split, cleanedTail: cleanStreamingTail(split.tail) };
-  }, [content]);
+  }, [liveContent]);
   return (
     <div className="streaming-markdown">
       {stable && <StreamingStableMarkdown content={stable} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />}
@@ -1511,13 +1800,14 @@ function splitSteps(steps: AgentStepDisclosure[], content: string) {
   return { mainContent, visibleSteps };
 }
 
-function MainAnswer({ content, pending, collapsible, artifacts = [], extraArtifacts = [], localFilePreviewUrl, localFileStat, onOpenLocalFile }: {
+function MainAnswer({ content, pending, collapsible, artifacts = [], extraArtifacts = [], localFilePreviewUrl, localFileJson, localFileStat, onOpenLocalFile }: {
   content: string;
   pending?: boolean;
   collapsible?: boolean;
   artifacts?: AgentArtifact[];
   extraArtifacts?: ArtifactItem[];
   localFilePreviewUrl?: (filePath: string) => string;
+  localFileJson?: (filePath: string) => Promise<LocalJsonResult>;
   localFileStat?: (filePath: string) => Promise<LocalPathStat>;
   onOpenLocalFile?: (file: LocalFilePayload) => void;
 }) {
@@ -1526,7 +1816,7 @@ function MainAnswer({ content, pending, collapsible, artifacts = [], extraArtifa
     () => pending ? mergeArtifacts(extraArtifacts) : mergeArtifacts(extractArtifacts(content, { allowBareFiles: false }), extraArtifacts),
     [content, pending, extraArtifacts]
   );
-  const artifactShelf = <ArtifactShelf artifacts={artifacts} legacyArtifacts={legacyArtifacts} localFilePreviewUrl={localFilePreviewUrl} localFileStat={localFileStat} onOpenLocalFile={onOpenLocalFile} />;
+  const artifactShelf = <ArtifactShelf artifacts={artifacts} legacyArtifacts={legacyArtifacts} localFilePreviewUrl={localFilePreviewUrl} localFileJson={localFileJson} localFileStat={localFileStat} onOpenLocalFile={onOpenLocalFile} />;
   if (!content) return artifactShelf;
   if (!collapsible || pending || content.length <= LONG_REPLY_COLLAPSE_CHARS) {
     return (
@@ -1556,7 +1846,7 @@ function MainAnswer({ content, pending, collapsible, artifacts = [], extraArtifa
   return (
     <div className="long-answer-disclosure">
       <div className="long-answer-preview">
-        <MarkdownBlock content={`${content.slice(0, LONG_REPLY_PREVIEW_CHARS).trimEnd()}...`} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />
+        <MarkdownBlock content={markdownPreviewContentSafe(content)} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />
         {artifactShelf}
       </div>
       <button className="long-answer-toggle long-answer-expand-bottom" type="button" onClick={() => setExpanded(true)} title="长回复已默认收起，点击展开完整内容">
@@ -1578,6 +1868,7 @@ export const MessageContent = memo(function MessageContent(props: {
   artifacts?: AgentArtifact[];
   onOpenLocalFile?: (file: LocalFilePayload) => void;
   localFilePreviewUrl?: (filePath: string) => string;
+  localFileJson?: (filePath: string) => Promise<LocalJsonResult>;
   localFileStat?: (filePath: string) => Promise<LocalPathStat>;
 }) {
   const steps = props.steps || [];
@@ -1596,7 +1887,7 @@ export const MessageContent = memo(function MessageContent(props: {
   }
 
   return (
-    <div className="message-content" aria-live={props.pending ? "polite" : undefined}>
+    <div className="message-content" aria-live={props.pending && visibleContent.length <= STREAM_LIVE_ARIA_CHARS ? "polite" : undefined}>
       <ProcessDisclosure
         pending={props.pending}
         steps={compactedSteps}
@@ -1604,7 +1895,7 @@ export const MessageContent = memo(function MessageContent(props: {
         onOpenLocalFile={props.onOpenLocalFile}
         localFilePreviewUrl={props.localFilePreviewUrl}
       />
-      <MainAnswer content={mainContent} pending={props.pending} collapsible={props.role !== "user"} artifacts={props.artifacts} extraArtifacts={stepArtifacts} localFilePreviewUrl={props.localFilePreviewUrl} localFileStat={props.localFileStat} onOpenLocalFile={props.onOpenLocalFile} />
+      <MainAnswer content={mainContent} pending={props.pending} collapsible={props.role !== "user"} artifacts={props.artifacts} extraArtifacts={stepArtifacts} localFilePreviewUrl={props.localFilePreviewUrl} localFileJson={props.localFileJson} localFileStat={props.localFileStat} onOpenLocalFile={props.onOpenLocalFile} />
       {props.cancelled ? (
         <div className="agent-cancelled-tag">已中止</div>
       ) : props.pending ? (

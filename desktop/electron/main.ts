@@ -6,6 +6,7 @@ import path from "node:path";
 import { fetchSidecarJson } from "./apiBridge.js";
 import { CapabilityManager } from "./capabilities.js";
 import { EnterpriseAuthManager } from "./enterpriseAuth.js";
+import { openLocalPath, statLocalPath, type OpenPathAction } from "./localPathBroker.js";
 import { PermissionManager, type PermissionMode } from "./permissions.js";
 import { resolveRepoRoot, SidecarManager } from "./sidecar.js";
 import { TelemetryReporter } from "./telemetry.js";
@@ -30,27 +31,6 @@ if (!hasSingleInstanceLock) {
 const imageExtensions = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"]);
 const videoExtensions = new Set([".mp4", ".webm", ".avi", ".mov", ".mkv"]);
 const externalUrlProtocols = new Set(["http:", "https:", "mailto:"]);
-
-function mimeTypeForLocalPath(filePath: string) {
-  const ext = path.extname(filePath).toLowerCase();
-  const imageMime: Record<string, string> = {
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".png": "image/png",
-    ".gif": "image/gif",
-    ".webp": "image/webp",
-    ".bmp": "image/bmp",
-    ".svg": "image/svg+xml"
-  };
-  const videoMime: Record<string, string> = {
-    ".mp4": "video/mp4",
-    ".webm": "video/webm",
-    ".mov": "video/quicktime",
-    ".m4v": "video/x-m4v"
-  };
-  return imageMime[ext] || videoMime[ext] || "";
-}
-
 function toAttachment(filePath: string) {
   const ext = path.extname(filePath).toLowerCase();
   const fileType = imageExtensions.has(ext) ? "image" : videoExtensions.has(ext) ? "video" : "file";
@@ -102,6 +82,24 @@ function safeOpenExternal(rawUrl: string) {
   }
 }
 
+function shouldAttachRuntimeToken(rawUrl: string) {
+  try {
+    const parsed = new URL(rawUrl);
+    const loopback = parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost" || parsed.hostname === "::1";
+    if (!loopback || Number(parsed.port || "0") !== sidecar.getStatus().webPort) return false;
+    return parsed.pathname === "/stream"
+      || parsed.pathname === "/cancel"
+      || parsed.pathname === "/message"
+      || parsed.pathname === "/upload"
+      || parsed.pathname.startsWith("/api/")
+      || parsed.pathname.startsWith("/uploads/")
+      || parsed.pathname.startsWith("/static/")
+      || parsed.pathname.startsWith("/app/");
+  } catch {
+    return false;
+  }
+}
+
 function createMainWindow() {
   const win = new BrowserWindow({
     width: 1200,
@@ -139,6 +137,17 @@ function createMainWindow() {
     safeOpenExternal(url);
     return { action: "deny" };
   });
+
+  win.webContents.session.webRequest.onBeforeSendHeaders(
+    { urls: ["http://127.0.0.1:*/*", "http://localhost:*/*"] },
+    (details, callback) => {
+      const requestHeaders = { ...details.requestHeaders };
+      if (shouldAttachRuntimeToken(details.url)) {
+        requestHeaders["X-EcoreX-Runtime-Token"] = sidecar.getRuntimeToken();
+      }
+      callback({ requestHeaders });
+    }
+  );
 
   if (isDev && process.env.VITE_DEV_SERVER_URL) {
     void win.loadURL(process.env.VITE_DEV_SERVER_URL);
@@ -340,49 +349,31 @@ app.whenReady().then(async () => {
     return toAttachment(filePath);
   });
   ipcMain.handle("ecorex:stat-path", async (_event, filePath: string) => {
-    const target = String(filePath || "").trim();
-    if (!target || !path.isAbsolute(target)) {
-      return { status: "error", path: target, exists: false, message: "invalid path" };
-    }
-    try {
-      const resolved = path.resolve(target);
-      const stat = await fsp.stat(resolved);
-      return {
-        status: "success",
-        path: resolved,
-        exists: true,
-        isFile: stat.isFile(),
-        isDirectory: stat.isDirectory(),
-        mimeType: stat.isFile() ? mimeTypeForLocalPath(resolved) : "",
-        sizeBytes: stat.isFile() ? stat.size : undefined
-      };
-    } catch {
-      return { status: "missing", path: target, exists: false, message: "path not found" };
-    }
+    return statLocalPath(permissions, filePath);
   });
-  ipcMain.handle("ecorex:open-path", async (event, filePath: string, action: "open" | "reveal" | "openWith" = "open") => {
-    if (!filePath || !path.isAbsolute(filePath)) {
-      return "invalid path";
-    }
-    const decision = await permissions.authorizeOpenPath(event, filePath);
-    if (!decision.allowed) {
-      return `denied: ${decision.reason}`;
-    }
-    let result = "";
-    if (action === "reveal") {
-      shell.showItemInFolder(filePath);
-    } else if (action === "openWith" && process.platform === "win32") {
-      const { spawn } = await import("node:child_process");
-      spawn("rundll32.exe", ["shell32.dll,OpenAs_RunDLL", filePath], {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true
-      }).unref();
-    } else {
-      result = await shell.openPath(filePath);
-    }
-    await permissions.writeOpenResult(filePath, result);
-    return result;
+  ipcMain.handle("ecorex:open-path", async (event, filePath: string, action: OpenPathAction = "open") => {
+    return openLocalPath(
+      permissions,
+      {
+        showItemInFolder: (target) => shell.showItemInFolder(target),
+        openPath: (target) => shell.openPath(target),
+        openWith: async (target) => {
+          if (process.platform === "win32") {
+            const { spawn } = await import("node:child_process");
+            spawn("rundll32.exe", ["shell32.dll,OpenAs_RunDLL", target], {
+              detached: true,
+              stdio: "ignore",
+              windowsHide: true
+            }).unref();
+            return;
+          }
+          await shell.openPath(target);
+        }
+      },
+      event,
+      filePath,
+      action
+    );
   });
 
   await sidecar.refreshEnterpriseModelConfig();

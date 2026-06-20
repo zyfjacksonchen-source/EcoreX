@@ -1,0 +1,25 @@
+{
+  "status": "pass",
+  "version": "0.1.17",
+  "generatedAt": "2026-06-20T14:27:51Z",
+  "changeIds": [
+    "REL-002"
+  ],
+  "checks": [
+    {
+      "name": "server release rejects macOS unsigned smoke without auth-negative matrix",
+      "status": "pass",
+      "evidence": {
+        "exitCode": 1,
+        "authNegativeFailureCount": 1,
+        "publicManifestValidated": true,
+        "matchingLines": [
+          "FAIL macos-arm64-dmg installSmoke requires authNegativeStatuses"
+        ],
+        "failLines": [
+          "FAIL macos-arm64-dmg installSmoke requires authNegativeStatuses"
+        ]
+      }
+    }
+  ]
+}

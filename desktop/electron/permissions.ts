@@ -1,6 +1,8 @@
-import { app, BrowserWindow, dialog, type IpcMainInvokeEvent, type MessageBoxOptions } from "electron";
+import electron, { type IpcMainInvokeEvent, type MessageBoxOptions } from "electron";
 import fsp from "node:fs/promises";
 import path from "node:path";
+
+const { app, BrowserWindow, dialog } = electron;
 
 export type PermissionMode = "full-access" | "smart-ask" | "always-ask" | "read-only" | "custom";
 
@@ -21,6 +23,12 @@ type PermissionDecision = {
   allowed: boolean;
   reason: string;
   remember?: boolean;
+};
+
+export type PermissionManagerOptions = {
+  appGetPath?: (name: Parameters<typeof app.getPath>[0]) => string;
+  showMessageBox?: typeof dialog.showMessageBox;
+  browserWindowFromWebContents?: typeof BrowserWindow.fromWebContents;
 };
 
 const allowedModes = new Set<PermissionMode>(["full-access", "smart-ask", "always-ask", "read-only", "custom"]);
@@ -53,14 +61,14 @@ function isInside(parent: string, child: string) {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-function defaultOpenRoots() {
+function defaultOpenRoots(appGetPath: (name: Parameters<typeof app.getPath>[0]) => string) {
   const roots = [
-    app.getPath("userData"),
-    path.join(app.getPath("home"), "EcoreX"),
-    path.join(app.getPath("home"), "cow"),
-    path.join(app.getPath("home"), ".cow"),
-    path.join(app.getPath("appData"), "ecorex-agent"),
-    path.join(app.getPath("appData"), "ecorex-desktop", "pasted-files")
+    appGetPath("userData"),
+    path.join(appGetPath("home"), "EcoreX"),
+    path.join(appGetPath("home"), "cow"),
+    path.join(appGetPath("home"), ".cow"),
+    path.join(appGetPath("appData"), "ecorex-agent"),
+    path.join(appGetPath("appData"), "ecorex-desktop", "pasted-files")
   ];
   return roots.map((root) => path.resolve(root));
 }
@@ -72,13 +80,22 @@ function safeJson(value: unknown) {
 export class PermissionManager {
   private settings: PermissionSettings | null = null;
   private readonly selectedPaths = new Set<string>();
+  private readonly appGetPath: (name: Parameters<typeof app.getPath>[0]) => string;
+  private readonly showMessageBox: typeof dialog.showMessageBox;
+  private readonly browserWindowFromWebContents: typeof BrowserWindow.fromWebContents;
+
+  constructor(options: PermissionManagerOptions = {}) {
+    this.appGetPath = options.appGetPath ?? ((name) => app.getPath(name));
+    this.showMessageBox = options.showMessageBox ?? dialog.showMessageBox.bind(dialog);
+    this.browserWindowFromWebContents = options.browserWindowFromWebContents ?? BrowserWindow.fromWebContents.bind(BrowserWindow);
+  }
 
   private get settingsPath() {
-    return path.join(app.getPath("userData"), "permissions.json");
+    return path.join(this.appGetPath("userData"), "permissions.json");
   }
 
   private get auditPath() {
-    return path.join(app.getPath("userData"), "permission-audit.jsonl");
+    return path.join(this.appGetPath("userData"), "permission-audit.jsonl");
   }
 
   async getState(): Promise<PermissionState> {
@@ -177,7 +194,7 @@ export class PermissionManager {
       return { allowed: true, reason: "selected-by-user" };
     }
 
-    if (settings.mode === "smart-ask" && defaultOpenRoots().some((root) => isInside(root, target))) {
+    if (settings.mode === "smart-ask" && defaultOpenRoots(this.appGetPath).some((root) => isInside(root, target))) {
       await this.writeAudit("open-local-path", "allow", {
         mode: settings.mode,
         pathClass,
@@ -201,6 +218,69 @@ export class PermissionManager {
       remember: Boolean(decision.remember)
     });
     return decision;
+  }
+
+  async authorizeStatPath(filePath: string): Promise<PermissionDecision> {
+    const target = path.resolve(filePath);
+    const settings = await this.loadSettings();
+    const pathClass = this.classifyPathByExtension(target);
+    const grantKey = `open-local-path:${pathClass}`;
+
+    if (!path.isAbsolute(filePath)) {
+      await this.writeAudit("stat-local-path", "deny", { reason: "relative-path" });
+      return { allowed: false, reason: "EcoreX only checks absolute local paths." };
+    }
+
+    if (settings.mode === "full-access") {
+      await this.writeAudit("stat-local-path", "allow", {
+        mode: settings.mode,
+        pathClass,
+        target,
+        reason: "full-access"
+      });
+      return { allowed: true, reason: "full-access" };
+    }
+
+    if (settings.alwaysAllow?.[grantKey]) {
+      await this.writeAudit("stat-local-path", "allow", {
+        mode: settings.mode,
+        pathClass,
+        target,
+        reason: "remembered-open-grant"
+      });
+      return { allowed: true, reason: "remembered-open-grant" };
+    }
+
+    if (this.isPreviouslySelected(target)) {
+      await this.writeAudit("stat-local-path", "allow", {
+        mode: settings.mode,
+        pathClass,
+        target,
+        reason: "selected-by-user"
+      });
+      return { allowed: true, reason: "selected-by-user" };
+    }
+
+    if (defaultOpenRoots(this.appGetPath).some((root) => isInside(root, target))) {
+      await this.writeAudit("stat-local-path", "allow", {
+        mode: settings.mode,
+        pathClass,
+        target,
+        reason: "ecorex-managed-workspace"
+      });
+      return { allowed: true, reason: "ecorex-managed-workspace" };
+    }
+
+    await this.writeAudit("stat-local-path", "deny", {
+      mode: settings.mode,
+      pathClass,
+      target,
+      reason: "untrusted-path"
+    });
+    return {
+      allowed: false,
+      reason: "Local path metadata is only available for selected or EcoreX-managed paths."
+    };
   }
 
   async authorizeHostCapability(
@@ -316,6 +396,14 @@ export class PermissionManager {
     return ext ? `file:${ext}` : "file";
   }
 
+  private classifyPathByExtension(filePath: string) {
+    const ext = path.extname(filePath).toLowerCase();
+    if (dangerousExtensions.has(ext)) {
+      return "dangerous";
+    }
+    return ext ? `file:${ext}` : "file";
+  }
+
   private isPreviouslySelected(filePath: string) {
     for (const selectedPath of this.selectedPaths) {
       if (filePath === selectedPath || isInside(selectedPath, filePath)) {
@@ -326,7 +414,7 @@ export class PermissionManager {
   }
 
   private async promptOpenPath(event: IpcMainInvokeEvent, filePath: string, mode: PermissionMode, pathClass: string) {
-    const owner = BrowserWindow.fromWebContents(event.sender) || undefined;
+    const owner = this.browserWindowFromWebContents(event.sender) || undefined;
     const message =
       pathClass === "dangerous"
         ? "EcoreX wants to open an executable or script-like local file."
@@ -342,7 +430,7 @@ export class PermissionManager {
       message,
       detail
     };
-    const result = owner ? await dialog.showMessageBox(owner, options) : await dialog.showMessageBox(options);
+    const result = owner ? await this.showMessageBox(owner, options) : await this.showMessageBox(options);
     if (result.response === 0) {
       return { allowed: true, reason: "user-allowed-once" };
     }
@@ -359,7 +447,7 @@ export class PermissionManager {
     mode: PermissionMode,
     detail: Record<string, unknown>
   ) {
-    const owner = BrowserWindow.fromWebContents(event.sender) || undefined;
+    const owner = this.browserWindowFromWebContents(event.sender) || undefined;
     const options: MessageBoxOptions = {
       type: "warning",
       buttons: ["Allow once", "Always allow this capability", "Deny"],
@@ -377,7 +465,7 @@ export class PermissionManager {
         typeof detail.summary === "string" ? detail.summary : ""
       ].filter(Boolean).join("\n")
     };
-    const result = owner ? await dialog.showMessageBox(owner, options) : await dialog.showMessageBox(options);
+    const result = owner ? await this.showMessageBox(owner, options) : await this.showMessageBox(options);
     if (result.response === 0) {
       return { allowed: true, reason: "user-allowed-once" };
     }

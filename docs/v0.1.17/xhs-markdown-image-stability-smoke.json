@@ -1,0 +1,144 @@
+{
+  "product": "EcoreX",
+  "version": "0.1.17",
+  "changeIds": [
+    "XHS-001",
+    "PERF-002",
+    "IMG-001",
+    "ART-002"
+  ],
+  "generatedAt": "2026-06-20T16:41:04Z",
+  "status": "pass",
+  "checks": [
+    {
+      "name": "history reload preserves local terminal turn",
+      "status": "pass",
+      "evidence": "terminal local content is protected by requestId/botSeq/userSeq during history reload"
+    },
+    {
+      "name": "history final requires payload not botSeq only",
+      "status": "pass",
+      "evidence": "refreshSessionFromHistory no longer treats botSeq-only rows as final payload"
+    },
+    {
+      "name": "completed request resume is guarded",
+      "status": "pass",
+      "evidence": "resumeRuntimeRequest and attachMessageStream reject stale active requests after local completion"
+    },
+    {
+      "name": "voice attach does not preempt final done",
+      "status": "pass",
+      "evidence": "voice_attach is terminal only with explicit terminal/done flags"
+    },
+    {
+      "name": "stream markdown has compact-output normalizer",
+      "status": "pass",
+      "evidence": "compact markdown headings are normalized before render/stream split"
+    },
+    {
+      "name": "long markdown chunk fallback is fence-aware",
+      "status": "pass",
+      "evidence": "streaming chunks avoid cutting inside fenced code blocks"
+    },
+    {
+      "name": "streaming long markdown uses live window",
+      "status": "pass",
+      "evidence": "100k+ pending markdown renders a bounded head/tail window before terminal collapse"
+    },
+    {
+      "name": "streaming long markdown normalizes bounded window",
+      "status": "pass",
+      "evidence": "Long pending streams slice head/tail before markdown normalization to keep CPU bounded"
+    },
+    {
+      "name": "long reply preview is markdown-boundary aware",
+      "status": "pass",
+      "evidence": "collapsed final previews normalize a bounded prefix and avoid unbalanced code fences"
+    },
+    {
+      "name": "pending artifact stat retry closes",
+      "status": "pass",
+      "evidence": "pending image artifacts retry for long-running jobs and eventually exit permanent pending state"
+    },
+    {
+      "name": "backend keeps pending artifacts",
+      "status": "pass",
+      "evidence": "WebChannel emits pending artifact records instead of dropping missing async outputs"
+    },
+    {
+      "name": "backend extracts async output artifacts",
+      "status": "pass",
+      "evidence": "WebChannel recognizes XHS async output/status_path payloads as pending artifacts"
+    },
+    {
+      "name": "frontend preserves artifact statusPath",
+      "status": "pass",
+      "evidence": "Renderer keeps statusPath metadata for pending artifact lifecycle inspection"
+    },
+    {
+      "name": "frontend consumes pending artifact statusPath",
+      "status": "pass",
+      "evidence": "Pending async artifacts consume status JSON through an authenticated endpoint and converge ready/error without session switching"
+    },
+    {
+      "name": "pending status json does not early-ready on ok true",
+      "status": "pass",
+      "evidence": "running/retrying status JSON remains pending even if the worker writes ok=true"
+    },
+    {
+      "name": "artifact merge upserts duplicate status",
+      "status": "pass",
+      "evidence": "Duplicate artifact merges update status metadata without downgrading ready/failed to pending"
+    },
+    {
+      "name": "file_to_send skips empty artifact",
+      "status": "pass",
+      "evidence": "file_to_send no longer pushes an empty artifact payload"
+    },
+    {
+      "name": "structured tool output recognizes output path",
+      "status": "pass",
+      "evidence": "Legacy structured tool results with output/output_path still render artifact entries"
+    },
+    {
+      "name": "xhs image worker validates image outputs and writes atomically",
+      "status": "pass",
+      "evidence": "XHS cover generator validates image bytes and writes atomically"
+    },
+    {
+      "name": "xhs image retry metadata",
+      "status": "pass",
+      "evidence": "XHS cover generator records job metadata and bounded retry attempts"
+    },
+    {
+      "name": "xhs image retries are clamped",
+      "status": "pass",
+      "evidence": "XHS image generation retries have a hard upper bound to prevent queue starvation"
+    },
+    {
+      "name": "xhs status writes are atomic and bootstrap failures close",
+      "status": "pass",
+      "evidence": "XHS status JSON is atomic and top-level failures write failed status"
+    },
+    {
+      "name": "generic image generation rejects empty or invalid success",
+      "status": "pass",
+      "evidence": "Generic image-generation script cannot return success with empty paths or invalid image bytes"
+    },
+    {
+      "name": "invalid cached image is rejected",
+      "status": "pass",
+      "evidence": "{\"exitCode\": 0, \"invalidFileRemoved\": true, \"statusExists\": false, \"stderrTail\": \"\", \"stdout\": {\"async\": false, \"background\": \"auto\", \"fallback_model\": \"gpt-image-2\", \"model\": \"gpt-image-2-pro\", \"moderation\": \"auto\", \"ok\": true, \"output\": \"C:\\\\CowAgent\\\\docs\\\\v0.1.17\\\\tmp\\\\xhs-image-cache-smoke\\\\invalid-cache.png\", \"output_format\": \"png\", \"prompt_hash\": \"510960380c8de7da\", \"quality\": \"auto\", \"size\": \"1080x1440\", \"status\": \"dry_run\", \"status_path\": \"C:\\\\CowAgent\\\\docs\\\\v0.1.17\\\\tmp\\\\xhs-image-cache-smoke\\\\invalid-cache.status.json\"}}"
+    },
+    {
+      "name": "xhs bootstrap failure writes failed status",
+      "status": "pass",
+      "evidence": "{\"exitCode\": 2, \"hasHeartbeat\": true, \"ok\": false, \"status\": \"failed\", \"statusExists\": true}"
+    },
+    {
+      "name": "generic invalid image bytes are rejected",
+      "status": "pass",
+      "evidence": "{\"exitCode\": 0, \"finalFiles\": [], \"stdout\": \"ValueError\"}"
+    }
+  ]
+}

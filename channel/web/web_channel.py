@@ -64,8 +64,9 @@ def _web_app_bridge_script() -> str:
 (function () {
   if (window.ecorexDesktop) return;
 
-  var DEFAULT_WEB_CLIENT_KEY = "ecorex-web-v0.1.16-web.1";
+  var DEFAULT_WEB_CLIENT_KEY = "ecorex-web-v0.1.17-web.1";
   var DEFAULT_WEB_COMPAT_CLIENT_KEYS = [
+    "ecorex-web-v0.1.17-web.1",
     "ecorex-web-v0.1.16-web.1",
     "ecorex-web-v0.1.15-web.1",
     "ecorex-web-v0.1.14-web.1",
@@ -493,7 +494,7 @@ def _web_app_bridge_script() -> str:
   var updateStatus = {
     state: "idle",
     platform: desktopPlatform,
-    currentVersion: "0.1.16-web.1",
+    currentVersion: "0.1.17-web.1",
     message: "尚未检查更新"
   };
 
@@ -503,7 +504,7 @@ def _web_app_bridge_script() -> str:
       updateStatus = {
         state: payload.hasUpdate ? "available" : "not-available",
         platform: desktopPlatform,
-        currentVersion: payload.currentVersion || "0.1.16-web.1",
+        currentVersion: payload.currentVersion || "0.1.17-web.1",
         version: payload.latestVersion || payload.version,
         downloadUrl: payload.downloadUrl,
         message: payload.message || (payload.hasUpdate ? "发现新版本，请前往下载页安装" : "当前已经是最新版本"),
@@ -514,7 +515,7 @@ def _web_app_bridge_script() -> str:
       updateStatus = {
         state: "error",
         platform: desktopPlatform,
-        currentVersion: "0.1.16-web.1",
+        currentVersion: "0.1.17-web.1",
         message: error && error.message ? error.message : String(error),
         checkedAt: new Date().toISOString()
       };
@@ -624,7 +625,7 @@ def _web_app_bridge_script() -> str:
           email: input.email,
           password: input.password,
           deviceId: currentDeviceId,
-          appVersion: "0.1.16-web.1"
+          appVersion: "0.1.17-web.1"
         }, false);
       } catch (error) {
         adminError = error;
@@ -806,8 +807,26 @@ def _verify_auth_token(token):
     return hmac.compare_digest(sig, expected)
 
 
+def _desktop_runtime_token_matches() -> bool:
+    runtime_token = os.environ.get("ECOREX_DESKTOP_RUNTIME_TOKEN", "")
+    web_ctx = getattr(web, "ctx", None)
+    env = getattr(web_ctx, "env", {}) if web_ctx else {}
+    header_token = env.get("HTTP_X_ECOREX_RUNTIME_TOKEN", "")
+    return bool(runtime_token and header_token and hmac.compare_digest(runtime_token, header_token))
+
+
+def _desktop_runtime_token_required() -> bool:
+    if os.environ.get("ECOREX_DESKTOP_RUNTIME_TOKEN"):
+        return True
+    return str(os.environ.get("ECOREX_DESKTOP", "")).strip().lower() in {"1", "true", "yes"}
+
+
 def _check_auth():
     """Return True if request is authenticated or password not enabled."""
+    if _desktop_runtime_token_matches():
+        return True
+    if _desktop_runtime_token_required():
+        return False
     if not _is_password_enabled():
         return not _is_public_bind_host(_effective_web_host())
     return _verify_auth_token(web.cookies().get("cow_auth_token", ""))
@@ -1323,11 +1342,19 @@ class WebChannel(ChatChannel):
 
     def _artifact_from_file_event(self, request_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
         file_path = str(data.get("path") or data.get("file_path") or "").strip()
-        if file_path and not self._artifact_path_available(file_path):
+        if not file_path:
             return {}
+        path_available = self._artifact_path_available(file_path)
         file_name = str(data.get("file_name") or os.path.basename(file_path) or "artifact").strip()
         file_type = str(data.get("file_type") or "file").strip()
         kind = self._artifact_kind(file_type, file_path)
+        raw_status = str(data.get("status") or "").strip().lower()
+        if raw_status in ("failed", "error"):
+            artifact_status = "failed"
+        elif raw_status in ("pending", "queued", "running", "retrying"):
+            artifact_status = "pending"
+        else:
+            artifact_status = "ready" if path_available else "pending"
         from urllib.parse import quote
         preview_url = f"/api/file?path={quote(file_path)}" if file_path else ""
         artifact = {
@@ -1336,7 +1363,7 @@ class WebChannel(ChatChannel):
             "kind": kind,
             "intent": "deliverable",
             "operation": "exported",
-            "status": "ready",
+            "status": artifact_status,
             "title": file_name,
             "path": file_path,
             "previewUrl": preview_url if kind in ("image", "video", "audio", "file") else "",
@@ -1346,9 +1373,10 @@ class WebChannel(ChatChannel):
             },
         }
         try:
-            if file_path and os.path.exists(file_path):
-                artifact["sizeBytes"] = os.path.getsize(file_path)
-                mime_type = mimetypes.guess_type(file_path)[0]
+            resolved_path = self._resolve_artifact_local_path(file_path)
+            if path_available and os.path.exists(resolved_path):
+                artifact["sizeBytes"] = os.path.getsize(resolved_path)
+                mime_type = mimetypes.guess_type(resolved_path)[0]
                 if mime_type:
                     artifact["mimeType"] = mime_type
         except Exception:
@@ -1421,7 +1449,7 @@ class WebChannel(ChatChannel):
                 path_value = value.strip()
             elif isinstance(value, dict):
                 item_meta = value
-                for nested_key in ("path", "file_path", "filePath", "output_path", "outputPath", "url"):
+                for nested_key in ("path", "file_path", "filePath", "output", "output_path", "outputPath", "url"):
                     nested_value = value.get(nested_key)
                     if isinstance(nested_value, str) and nested_value.strip():
                         path_value = nested_value.strip()
@@ -1445,7 +1473,7 @@ class WebChannel(ChatChannel):
                 "file_type": inferred_type,
             })
 
-        for key in ("path", "file_path", "filePath", "output_path", "outputPath"):
+        for key in ("path", "file_path", "filePath", "output", "output_path", "outputPath"):
             add_artifact_candidate(result.get(key), result)
         for key in ("images", "files", "outputs", "artifacts", "generated_files", "generatedFiles"):
             collection = result.get(key)
@@ -1460,12 +1488,18 @@ class WebChannel(ChatChannel):
         artifacts: List[Dict[str, Any]] = []
         for raw_item in raw_items[:8]:
             raw_path = str(raw_item.get("path") or "").strip()
-            if not self._artifact_path_available(raw_path):
-                continue
             file_name = str(raw_item.get("file_name") or result.get("file_name") or result.get("fileName") or os.path.basename(raw_path) or raw_path)
             raw_type = str(raw_item.get("file_type") or result.get("file_type") or result.get("fileType") or "file")
             kind = self._artifact_kind(raw_type, raw_path)
             is_edit = "edit" in tool_key or "patch" in tool_key
+            path_available = self._artifact_path_available(raw_path)
+            result_status = str(result.get("status") or status or "").strip().lower()
+            if result_status in ("failed", "error"):
+                artifact_status = "failed"
+            elif result_status in ("pending", "queued", "running", "retrying"):
+                artifact_status = "pending"
+            else:
+                artifact_status = "ready" if path_available else "pending"
             stats = self._diff_stats(str(result.get("diff") or "")) if result.get("diff") else {}
             if not stats and isinstance(result.get("added_lines"), int):
                 stats = {
@@ -1478,7 +1512,7 @@ class WebChannel(ChatChannel):
                 "kind": kind,
                 "intent": "changed-file" if is_edit else "deliverable",
                 "operation": "modified" if is_edit else "created",
-                "status": "ready" if status in ("success", "done", "ok", "") else "failed",
+                "status": artifact_status,
                 "title": file_name,
                 "path": raw_path,
                 "source": {
@@ -1487,6 +1521,12 @@ class WebChannel(ChatChannel):
                     "createdAt": time.time(),
                 },
             }
+            status_path = result.get("status_path") or result.get("statusPath")
+            if isinstance(status_path, str) and status_path:
+                artifact["statusPath"] = status_path
+            if kind in ("image", "video", "audio", "file") and raw_path:
+                from urllib.parse import quote
+                artifact["previewUrl"] = f"/api/file?path={quote(raw_path)}"
             if stats:
                 artifact["stats"] = stats
             if isinstance(result.get("bytes_written"), int):
@@ -1895,6 +1935,8 @@ class WebChannel(ChatChannel):
 
             elif event_type == "file_to_send":
                 artifact = self._artifact_from_file_event(request_id, data)
+                if not artifact:
+                    return
                 self._record_request_artifact(request_id, artifact)
                 self._push_sse_event(request_id, {
                     "type": "artifact",
@@ -2672,6 +2714,7 @@ class WebChannel(ChatChannel):
             '/api/tool-permissions', 'ToolPermissionHandler',
             '/api/update-check', 'UpdateCheckHandler',
             '/api/file-stat', 'FileStatHandler',
+            '/api/file-json', 'FileJsonHandler',
             '/api/open-path', 'OpenPathHandler',
             '/api/project-folder', 'ProjectFolderHandler',
             '/api/extensions', 'ExtensionsHandler',
@@ -2873,6 +2916,13 @@ class WebAppAssetHandler:
 class AuthCheckHandler:
     def GET(self):
         web.header('Content-Type', 'application/json; charset=utf-8')
+        if _desktop_runtime_token_required():
+            return json.dumps({
+                "status": "success",
+                "auth_required": True,
+                "auth_type": "desktop-runtime-token",
+                "authenticated": _desktop_runtime_token_matches(),
+            })
         if not _is_password_enabled():
             return json.dumps({"status": "success", "auth_required": False})
         if _check_auth():
@@ -3063,7 +3113,8 @@ class FileServeHandler:
             ]
             if serve_root:
                 allowed_roots.append(os.path.realpath(os.path.expanduser(serve_root)))
-            if not raw_was_absolute and not any(_is_within_directory(root, file_path) for root in allowed_roots):
+            within_preview_root = any(_is_within_directory(root, file_path) for root in allowed_roots)
+            if not within_preview_root and not (raw_was_absolute and _desktop_runtime_token_matches()):
                 raise web.notfound()
             try:
                 from common.ecorex_tool_permissions import get_tool_permission_broker
@@ -3160,6 +3211,60 @@ class FileStatHandler:
         except Exception as e:
             logger.error(f"[WebChannel] file stat error: {e}")
             return json.dumps({"status": "error", "path": "", "exists": False, "message": str(e)}, ensure_ascii=False)
+
+
+class FileJsonHandler:
+    def POST(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            raw = web.data() or b"{}"
+            if len(raw) > 64 * 1024:
+                return json.dumps({"status": "error", "path": "", "message": "payload too large"}, ensure_ascii=False)
+            body = json.loads(raw)
+            path_value = str(body.get("path") or body.get("file_path") or "").strip()
+            if not path_value:
+                return json.dumps({"status": "error", "path": "", "message": "path is required"}, ensure_ascii=False)
+            if path_value.startswith("/api/file"):
+                parsed = urllib.parse.urlparse(path_value)
+                query = urllib.parse.parse_qs(parsed.query)
+                path_value = (query.get("path") or [""])[0] or path_value
+            if path_value.startswith("http://") or path_value.startswith("https://"):
+                return json.dumps({"status": "error", "path": path_value, "message": "remote JSON status is not supported"}, ensure_ascii=False)
+
+            resolved = _resolve_web_local_path(path_value)
+            try:
+                from common.ecorex_tool_permissions import get_tool_permission_broker
+
+                decision = get_tool_permission_broker().authorize_file_access(
+                    "read",
+                    resolved,
+                    cwd=_get_workspace_root(),
+                )
+                if not decision.get("allowed", True):
+                    return json.dumps({
+                        "status": "denied",
+                        "path": path_value,
+                        "message": decision.get("reason") or "file JSON read blocked by permissions",
+                    }, ensure_ascii=False)
+            except Exception as exc:
+                logger.warning(f"[WebChannel] file JSON permission check failed: {exc}")
+                return json.dumps({"status": "error", "path": path_value, "message": "file JSON permission check failed"}, ensure_ascii=False)
+
+            if not os.path.isfile(resolved):
+                return json.dumps({"status": "missing", "path": path_value, "message": "path not found"}, ensure_ascii=False)
+            if os.path.getsize(resolved) > 256 * 1024:
+                return json.dumps({"status": "error", "path": path_value, "message": "JSON file too large"}, ensure_ascii=False)
+            if not resolved.lower().endswith(".json"):
+                return json.dumps({"status": "error", "path": path_value, "message": "only JSON files can be read"}, ensure_ascii=False)
+            with open(resolved, "r", encoding="utf-8-sig") as fh:
+                data = json.load(fh)
+            return json.dumps({"status": "success", "path": resolved, "data": data}, ensure_ascii=False)
+        except json.JSONDecodeError as exc:
+            return json.dumps({"status": "error", "path": "", "message": f"invalid JSON: {exc}"}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] file JSON read error: {e}")
+            return json.dumps({"status": "error", "path": "", "message": str(e)}, ensure_ascii=False)
 
 
 class PollHandler:
@@ -3326,15 +3431,6 @@ class OpenPathHandler:
             if not os.path.isabs(expanded_path):
                 expanded_path = os.path.join(workspace_root, expanded_path.lstrip("/\\"))
             path_value = os.path.realpath(expanded_path)
-            if not os.path.exists(path_value):
-                return json.dumps({"status": "error", "message": f"path not found: {path_value}"}, ensure_ascii=False)
-            if action != "reveal":
-                ext = os.path.splitext(path_value.rstrip("/\\"))[1].lower()
-                if ext in DANGEROUS_OPEN_EXTENSIONS:
-                    return json.dumps({
-                        "status": "error",
-                        "message": "Refusing to launch executable or script files from WebUI. Use reveal/show in folder and open it manually if you trust it.",
-                    }, ensure_ascii=False)
 
             try:
                 from common.ecorex_tool_permissions import get_tool_permission_broker
@@ -3352,6 +3448,16 @@ class OpenPathHandler:
             except Exception as exc:
                 logger.warning(f"[WebChannel] open path permission check failed: {exc}")
                 return json.dumps({"status": "error", "message": "open path permission check failed"}, ensure_ascii=False)
+
+            if not os.path.exists(path_value):
+                return json.dumps({"status": "error", "message": f"path not found: {path_value}"}, ensure_ascii=False)
+            if action != "reveal":
+                ext = os.path.splitext(path_value.rstrip("/\\"))[1].lower()
+                if ext in DANGEROUS_OPEN_EXTENSIONS:
+                    return json.dumps({
+                        "status": "error",
+                        "message": "Refusing to launch executable or script files from WebUI. Use reveal/show in folder and open it manually if you trust it.",
+                    }, ensure_ascii=False)
 
             self._open_path(path_value, action)
             return json.dumps({"status": "success", "message": "", "path": path_value}, ensure_ascii=False)
@@ -3590,6 +3696,18 @@ class SubagentActionHandler:
 class StreamHandler:
     def GET(self):
         _require_auth()
+        env = getattr(getattr(web, "ctx", None), "env", {}) or {}
+        origin = str(env.get("HTTP_ORIGIN") or "")
+        desktop_runtime = _desktop_runtime_token_matches()
+        if origin and not desktop_runtime:
+            try:
+                origin_host = urllib.parse.urlparse(origin).netloc
+            except Exception:
+                origin_host = ""
+            if origin_host and origin_host != str(env.get("HTTP_HOST") or ""):
+                raise web.HTTPError("401 Unauthorized",
+                                    {"Content-Type": "application/json; charset=utf-8"},
+                                    json.dumps({"status": "error", "message": "Unauthorized"}))
         params = web.input(request_id='')
         request_id = params.request_id
         if not request_id:
@@ -3598,7 +3716,8 @@ class StreamHandler:
         web.header('Content-Type', 'text/event-stream; charset=utf-8')
         web.header('Cache-Control', 'no-cache')
         web.header('X-Accel-Buffering', 'no')
-        web.header('Access-Control-Allow-Origin', '*')
+        if desktop_runtime:
+            web.header('Access-Control-Allow-Origin', origin or '*')
 
         return WebChannel().stream_response(request_id)
 
@@ -3649,7 +3768,7 @@ class ClientProxyHandler:
         return target
 
     def _forward_headers(self) -> dict:
-        headers = {"User-Agent": "EcoreX-WebUI/0.1.16"}
+        headers = {"User-Agent": "EcoreX-WebUI/0.1.17"}
         for key, value in web.ctx.env.items():
             if key == "CONTENT_TYPE":
                 name = "Content-Type"

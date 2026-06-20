@@ -1,7 +1,7 @@
 param(
     [string]$Version = "",
     [string]$OutputDir = "release-installers",
-    [string]$ReadmeTemplate = "docs/ecorex/v0.1.16/installer-repo-README.md",
+    [string]$ReadmeTemplate = "docs/ecorex/v0.1.17/installer-repo-README.md",
     [string]$WindowsInstaller = "",
     [string]$WindowsLatestYml = "",
     [string]$WindowsBlockmap = "",
@@ -22,6 +22,17 @@ function Resolve-OptionalFile {
 function Get-Sha256 {
     param([Parameter(Mandatory = $true)][string]$Path)
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToUpperInvariant()
+}
+
+function Assert-WindowsInstallerSigned {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not (Get-Command Get-AuthenticodeSignature -ErrorAction SilentlyContinue)) {
+        throw "Get-AuthenticodeSignature is required to stage Windows installers."
+    }
+    $signature = Get-AuthenticodeSignature -LiteralPath $Path
+    if ($signature.Status -ne "Valid") {
+        throw "Windows installer must be Authenticode signed before public staging: $Path (status=$($signature.Status))"
+    }
 }
 
 function Write-Utf8NoBom {
@@ -92,6 +103,9 @@ $manifestFiles = @()
 $sumLines = @()
 foreach ($input in $inputs) {
     $source = [string]$input.path
+    if ($input.id -eq "windows-x64-installer") {
+        Assert-WindowsInstallerSigned -Path $source
+    }
     $fileName = Split-Path -Leaf $source
     $dest = Join-Path $targetRoot $fileName
     Copy-Item -LiteralPath $source -Destination $dest -Force

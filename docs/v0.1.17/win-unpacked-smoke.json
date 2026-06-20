@@ -1,0 +1,29 @@
+{
+    "appDir":  "C:\\CowAgent\\desktop\\release\\win-unpacked",
+    "appExe":  "C:\\CowAgent\\desktop\\release\\win-unpacked\\EcoreX.exe",
+    "webPort":  19132,
+    "appSignatureStatus":  "NotSigned",
+    "appSignatureMessage":  "The file C:\\CowAgent\\desktop\\release\\win-unpacked\\EcoreX.exe is not digitally signed. You cannot run this script on the current system. For more information about running scripts and setting execution policy, see about_Execution_Policies at https:/go.microsoft.com/fwlink/?LinkID=135170",
+    "appStarted":  true,
+    "sidecarReady":  true,
+    "authReady":  true,
+    "authRequired":  true,
+    "authNegativeReady":  true,
+    "cleaned":  true,
+    "runtimeVersion":  "0.1.17",
+    "authStatus":  "success",
+    "authNegativeStatuses":  {
+                                 "messageNoToken":  401,
+                                 "messageWrongToken":  401,
+                                 "messageQueryTokenRejected":  401,
+                                 "streamNoToken":  401,
+                                 "streamWrongToken":  401,
+                                 "streamQueryTokenRejected":  401,
+                                 "fileStatNoToken":  401,
+                                 "fileStatWrongToken":  401,
+                                 "fileServeNoToken":  401,
+                                 "fileServeWrongToken":  401,
+                                 "openPathNoToken":  401,
+                                 "openPathWrongToken":  401
+                             }
+}

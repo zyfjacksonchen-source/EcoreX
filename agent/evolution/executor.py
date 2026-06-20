@@ -203,8 +203,9 @@ class _BashWorkspaceGuard:
     Evolution needs bash for skill-creator's init script, but it runs
     unattended in the background, so a raw shell is too broad. This guard:
       - forces the command to execute with cwd = workspace,
-      - rejects commands that reference an absolute path or ``..`` segment
-        pointing OUTSIDE the workspace (the common ways to escape it).
+      - rejects commands that reference absolute paths, Windows drive/UNC
+        paths, external path env vars, ``~``, or ``..`` segments pointing
+        OUTSIDE the workspace.
     It is a coarse textual check, not a sandbox — paired with the model's
     instruction to only run skill-creator scripts, it keeps writes local.
     """
@@ -232,22 +233,55 @@ class _BashWorkspaceGuard:
             from agent.tools.base_tool import ToolResult
             return ToolResult.fail(f"Error: {e}")
 
-    def _escapes_workspace(self, command: str) -> bool:
-        # Absolute paths that are not under the workspace.
-        for tok in re.findall(r'(?:^|\s)(/[^\s\'";|&]+)', command):
-            try:
-                resolved = Path(tok).resolve()
-            except Exception:
-                continue
-            if self._ws != resolved and self._ws not in resolved.parents:
+    def _inside_workspace(self, path_text: str) -> bool:
+        try:
+            raw = path_text.strip().strip("'\"")
+            if not raw:
                 return True
+            candidate = Path(raw)
+            if getattr(candidate, "drive", "") and not candidate.is_absolute():
+                return False
+            if not candidate.is_absolute():
+                candidate = self._ws / raw
+            resolved = candidate.resolve()
+            return self._ws == resolved or self._ws in resolved.parents
+        except Exception:
+            return False
+
+    def _escapes_workspace(self, command: str) -> bool:
+        # External path environment variables can expand outside the workspace
+        # after this textual guard runs; background evolution should not need
+        # them. Leave $PWD/%CD% usable for workspace-local helpers.
+        env_path_ref = re.compile(
+            r"(%(?:USERPROFILE|HOME|HOMEDRIVE|HOMEPATH|TEMP|TMP|APPDATA|LOCALAPPDATA|PROGRAMDATA|SYSTEMROOT|WINDIR)%"
+            r"|\$(?:env:)?(?:USERPROFILE|HOME|TEMP|TMP|TMPDIR|APPDATA|LOCALAPPDATA|PROGRAMDATA|SYSTEMROOT|WINDIR)\b"
+            r"|\$\{(?:USERPROFILE|HOME|TEMP|TMP|TMPDIR|APPDATA|LOCALAPPDATA|PROGRAMDATA|SYSTEMROOT|WINDIR)\})",
+            re.IGNORECASE,
+        )
+        if env_path_ref.search(command):
+            return True
+
+        # Home expansion is outside the pinned workspace in most production
+        # installs, so block it instead of trying to infer a safe expansion.
+        if re.search(r'(^|[\s=<>|&;])~(?:[\\/]|$)', command):
+            return True
+
+        path_patterns = [
+            # POSIX absolute paths, including redirection targets.
+            r'(?:^|[\s=<>|&;])(/[^\s\'";|&<>]+)',
+            # Windows drive-qualified paths: C:\x, C:/x, or C:relative-on-drive.
+            r'(?<![\w/\\])([A-Za-z]:(?:[\\/][^\s\'";|&<>]+|[^\s\'";|&<>]+))',
+            # UNC and extended-length Windows paths.
+            r'(?:^|[\s=<>|&;])(\\\\[^\s\'";|&<>]+)',
+        ]
+        for pattern in path_patterns:
+            for tok in re.findall(pattern, command):
+                if tok and not self._inside_workspace(tok):
+                    return True
+
         # Parent-dir traversal that climbs above the workspace.
-        for tok in re.findall(r'[^\s\'";|&]*\.\.[^\s\'";|&]*', command):
-            try:
-                resolved = (self._ws / tok).resolve()
-            except Exception:
-                continue
-            if self._ws != resolved and self._ws not in resolved.parents:
+        for tok in re.findall(r'[^\s\'";|&<>]*\.\.[^\s\'";|&<>]*', command):
+            if not self._inside_workspace(tok):
                 return True
         return False
 

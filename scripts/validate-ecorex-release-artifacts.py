@@ -15,6 +15,21 @@ import zipfile
 
 
 PUBLISHABLE_STATUSES = {"ready"}
+MACOS_UNSIGNED_STATUS = "ready-unsigned"
+REQUIRED_AUTH_NEGATIVE_STATUSES = {
+    "messageNoToken",
+    "messageWrongToken",
+    "messageQueryTokenRejected",
+    "streamNoToken",
+    "streamWrongToken",
+    "streamQueryTokenRejected",
+    "fileStatNoToken",
+    "fileStatWrongToken",
+    "fileServeNoToken",
+    "fileServeWrongToken",
+    "openPathNoToken",
+    "openPathWrongToken",
+}
 FORBIDDEN_WEB_ASSETS = (
     "index-dSHNqlZq.js",
     "index-DBjPv6j0.css",
@@ -288,6 +303,90 @@ def is_external_artifact(artifact: dict) -> bool:
     return bool(artifact.get("external")) or href.startswith(("http://", "https://"))
 
 
+def is_macos_artifact(artifact_id: str) -> bool:
+    return artifact_id.startswith("macos-")
+
+
+def is_publishable_artifact(artifact: dict) -> bool:
+    artifact_id = str(artifact.get("id") or artifact.get("fileName") or "")
+    status = str(artifact.get("status") or "")
+    if status == "ready" and is_macos_artifact(artifact_id) and str(artifact.get("signature") or "").lower() == "unsigned":
+        raise ValidationError(f"{artifact_id} unsigned macOS artifact must use status=ready-unsigned with installSmoke evidence")
+    if status in PUBLISHABLE_STATUSES:
+        return True
+    if status == MACOS_UNSIGNED_STATUS and is_macos_artifact(artifact_id):
+        return str(artifact.get("signature") or "").lower() == "unsigned"
+    return False
+
+
+def validate_macos_unsigned_install_smoke(manifest: dict, artifact_id: str, artifact: dict) -> None:
+    smoke = artifact.get("installSmoke") or artifact.get("install_smoke")
+    require(isinstance(smoke, dict), f"{artifact_id} ready-unsigned requires installSmoke evidence")
+    require(str(smoke.get("status") or "").lower() == "pass", f"{artifact_id} installSmoke.status must be pass")
+    expected_version = str(manifest.get("version") or "")
+    require(str(smoke.get("version") or "") == expected_version, f"{artifact_id} installSmoke.version must be {expected_version}")
+    expected_digest = str(artifact.get("sha256") or "").upper()
+    require(str(smoke.get("sha256") or "").upper() == expected_digest, f"{artifact_id} installSmoke.sha256 must match artifact SHA256")
+    evidence = smoke.get("runId") or smoke.get("run_id") or smoke.get("evidenceUrl") or smoke.get("evidence_url") or smoke.get("evidence")
+    require(bool(str(evidence or "").strip()), f"{artifact_id} installSmoke requires runId or evidenceUrl")
+    arch = {"macos-arm64-dmg": "arm64", "macos-x64-dmg": "x64"}.get(artifact_id)
+    if arch:
+        expected_file = f"EcoreX_{expected_version}_{arch}.dmg"
+        require(str(artifact.get("fileName") or "") == expected_file, f"{artifact_id} fileName must be {expected_file}")
+        require(str(smoke.get("artifact") or "") == expected_file, f"{artifact_id} installSmoke.artifact must be {expected_file}")
+        require(str(smoke.get("arch") or "") == arch, f"{artifact_id} installSmoke.arch must be {arch}")
+        require(int(smoke.get("bytes") or 0) == int(artifact.get("size") or 0), f"{artifact_id} installSmoke.bytes must match artifact size")
+    required_true = [
+        "mounted",
+        "appFound",
+        "copied",
+        "launched",
+        "versionOk",
+        "sidecarReady",
+        "authReady",
+        "authRequired",
+        "authNegativeReady",
+        "gatekeeperInstructionShown",
+    ]
+    missing = [key for key in required_true if not smoke.get(key)]
+    require(not missing, f"{artifact_id} installSmoke missing passed flags: {', '.join(missing)}")
+    validate_auth_negative_statuses(smoke, f"{artifact_id} installSmoke")
+    instructions = smoke.get("gatekeeperInstructions") or smoke.get("instructions") or smoke.get("instructionsUrl") or smoke.get("instructions_url")
+    require(bool(str(instructions or "").strip()), f"{artifact_id} installSmoke requires Gatekeeper instructions evidence")
+
+
+def validate_auth_negative_statuses(smoke: dict, evidence_name: str) -> None:
+    negative = smoke.get("authNegativeStatuses")
+    require(isinstance(negative, dict), f"{evidence_name} requires authNegativeStatuses")
+    missing = sorted(REQUIRED_AUTH_NEGATIVE_STATUSES - set(negative))
+    bad = sorted(f"{key}={negative.get(key)}" for key in REQUIRED_AUTH_NEGATIVE_STATUSES & set(negative) if int(negative.get(key) or 0) != 401)
+    require(not missing and not bad, f"{evidence_name} authNegativeStatuses invalid missing={missing} bad={bad}")
+
+
+def validate_windows_installed_smoke(manifest: dict, artifact: dict) -> None:
+    version = str(manifest.get("version") or "")
+    smoke_path = pathlib.Path("docs") / f"v{version}" / "win-installed-smoke.json"
+    smoke = read_json_no_bom(smoke_path)
+    required_true = [
+        "installed",
+        "appStarted",
+        "sidecarReady",
+        "authReady",
+        "authRequired",
+        "authNegativeReady",
+        "cleaned",
+    ]
+    missing = [key for key in required_true if not smoke.get(key)]
+    require(not missing, f"windows-x64 installed smoke missing passed flags: {', '.join(missing)}")
+    require(str(smoke.get("runtimeVersion") or "") == version, f"windows-x64 installed smoke runtimeVersion must be {version}")
+    require(str(smoke.get("installerFileName") or "") == str(artifact.get("fileName") or ""), "windows-x64 installed smoke fileName must match manifest")
+    require(str(smoke.get("installerSha256") or "").upper() == str(artifact.get("sha256") or "").upper(), "windows-x64 installed smoke sha256 must match manifest")
+    require(int(smoke.get("installerSize") or 0) == int(artifact.get("size") or 0), "windows-x64 installed smoke size must match manifest")
+    for key in ("installerSignatureStatus", "appSignatureStatus", "runtimePythonSignatureStatus"):
+        require(str(smoke.get(key) or "") == "Valid", f"windows-x64 installed smoke requires {key}=Valid")
+    validate_auth_negative_statuses(smoke, "windows-x64 installed smoke")
+
+
 def validate_external_artifact_metadata(artifact_id: str, artifact: dict) -> None:
     href = artifact_href(artifact)
     expected_size = int(artifact.get("size") or 0)
@@ -303,9 +402,17 @@ def validate_manifest_artifacts(manifest: dict, artifact_dir: pathlib.Path) -> l
     for artifact in manifest.get("artifacts") or []:
         artifact_id = str(artifact.get("id") or artifact.get("fileName") or "unknown")
         status = str(artifact.get("status") or "")
-        if status not in PUBLISHABLE_STATUSES:
+        if not is_publishable_artifact(artifact):
             print(f"SKIP artifact {artifact_id} status={status}")
             continue
+        if artifact_id == "windows-x64":
+            signature = str(artifact.get("signature") or "").lower()
+            require(signature == "valid", "windows-x64 publishable artifact requires signature=Valid")
+            validate_windows_installed_smoke(manifest, artifact)
+        if status == MACOS_UNSIGNED_STATUS:
+            require(is_macos_artifact(artifact_id), f"{status} is only allowed for macOS artifacts")
+            require(str(artifact.get("signature") or "").lower() == "unsigned", f"{artifact_id} ready-unsigned requires signature=unsigned")
+            validate_macos_unsigned_install_smoke(manifest, artifact_id, artifact)
         if is_external_artifact(artifact):
             validate_external_artifact_metadata(artifact_id, artifact)
             ready.append(artifact)
@@ -441,7 +548,7 @@ def validate_public_zip(
         public_ready_by_id = {
             str(item.get("id")): item
             for item in (public_manifest.get("artifacts") or [])
-            if str(item.get("status") or "") in PUBLISHABLE_STATUSES
+            if is_publishable_artifact(item)
         }
         require(set(public_ready_by_id) == set(ready_by_id), "public manifest ready artifact ids mismatch")
         for artifact_id, artifact in ready_by_id.items():
@@ -628,7 +735,7 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
     require_contains(broker, "\"filesystem-access\"", f"{label} permission broker")
 
     release_notes = read_text_by_suffix("common/ecorex_release_notes.py")
-    require_contains(release_notes, "\"version\": \"0.1.16\"", f"{label} release notes")
+    require_contains(release_notes, "\"version\": \"0.1.17\"", f"{label} release notes")
     require_contains(release_notes, "\"updatePolicy\"", f"{label} release notes")
     require_contains(release_notes, "\"webui\"", f"{label} release notes")
 

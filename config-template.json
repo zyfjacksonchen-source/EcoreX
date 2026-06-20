@@ -48,7 +48,7 @@
   "enable_thinking": false,
   "reasoning_effort": "high",
   "knowledge": true,
-  "self_evolution_enabled": false,
+  "self_evolution_enabled": true,
   "scheduler_enabled": false,
   "mcp_auto_start": false,
   "tools": {

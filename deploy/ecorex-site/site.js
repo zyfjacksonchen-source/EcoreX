@@ -151,8 +151,23 @@ function shortSha(sha256) {
   return `${sha256.slice(0, 12)}...`;
 }
 
+function installSmokeReady(artifact) {
+  const smoke = artifact?.installSmoke || artifact?.install_smoke;
+  return Boolean(smoke
+    && smoke.status === "pass"
+    && smoke.version === manifest.version
+    && String(smoke.sha256 || "").toUpperCase() === String(artifact.sha256 || "").toUpperCase()
+    && (smoke.runId || smoke.run_id || smoke.evidenceUrl || smoke.evidence_url || smoke.evidence));
+}
+
 function ready(artifact) {
-  return artifact?.status === "ready";
+  if (artifact?.id === "windows-x64" && artifact.signature !== "Valid") return false;
+  if (String(artifact?.id || "").startsWith("macos-") && artifact.signature === "unsigned" && artifact.status === "ready") return false;
+  if (artifact?.status === "ready") return true;
+  return artifact?.status === "ready-unsigned"
+    && String(artifact.id || "").startsWith("macos-")
+    && artifact.signature === "unsigned"
+    && installSmokeReady(artifact);
 }
 
 function isExternalHref(href) {
@@ -166,11 +181,16 @@ function artifactHref(artifact) {
 
 function artifactMeta(artifact) {
   if (!artifact) return "";
+  const signature = artifact.signature === "unsigned" ? "<span>unsigned</span>" : "";
+  const smoke = artifact.installSmoke || artifact.install_smoke;
+  const smokeBadge = smoke?.status === "pass" ? "<span>install smoke passed</span>" : "";
   return `
     <div class="meta">
       <span>${artifact.variant || artifact.platform}</span>
       <span>${formatSize(artifact.size)}</span>
       <span title="${artifact.sha256 || ""}">SHA256: ${shortSha(artifact.sha256)}</span>
+      ${signature}
+      ${smokeBadge}
     </div>
   `;
 }
@@ -183,7 +203,7 @@ function buttonForArtifact(artifact, label = "下载") {
     const downloadAttr = isExternalHref(artifact.href) ? "" : " download";
     return `<a class="download-link" href="${artifactHref(artifact)}"${downloadAttr} title="${artifact.source || ""}">${label}</a>`;
   }
-  const pendingText = artifact.status === "pending-signature" || artifact.status === "ready-unsigned" ? "待签名" : "待验证";
+  const pendingText = artifact.status === "pending-signature" ? "待签名" : "待验证";
   return `<span class="download-link is-disabled" title="${artifact.source || ""}">${pendingText}</span>`;
 }
 

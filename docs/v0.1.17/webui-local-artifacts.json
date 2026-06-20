@@ -1,0 +1,26 @@
+{
+    "ok":  true,
+    "version":  "0.1.17",
+    "generatedAt":  "2026-06-20T09:49:13Z",
+    "validation":  "validate_zip_assets PASS for webui-windows-x64, webui-macos-universal, webui-win-mac",
+    "artifacts":  {
+                      "webui-windows-x64":  {
+                                                "fileName":  "EcoreX_0.1.17-webui-windows-x64.zip",
+                                                "path":  "C:\\CowAgent\\release-artifacts\\EcoreX_0.1.17-webui-windows-x64.zip",
+                                                "size":  64538501,
+                                                "sha256":  "798A545B2450851C7CEE5A2144F7C33B7BCFE70E034348B59853904AE4F28A60"
+                                            },
+                      "webui-macos-universal":  {
+                                                    "fileName":  "EcoreX_0.1.17-webui-macos-universal.zip",
+                                                    "path":  "C:\\CowAgent\\release-artifacts\\EcoreX_0.1.17-webui-macos-universal.zip",
+                                                    "size":  157950593,
+                                                    "sha256":  "F44BE8408B2229B15F636F00F054E2DC8F6D981E3CB32DE96BAE9B541D0805DB"
+                                                },
+                      "webui-win-mac":  {
+                                            "fileName":  "EcoreX_0.1.17-webui-win-mac.zip",
+                                            "path":  "C:\\CowAgent\\release-artifacts\\EcoreX_0.1.17-webui-win-mac.zip",
+                                            "size":  222638869,
+                                            "sha256":  "BD72087954F4F29DBEBADF8416E6F7F172A2C746C8229B020BEFF621ACE42867"
+                                        }
+                  }
+}

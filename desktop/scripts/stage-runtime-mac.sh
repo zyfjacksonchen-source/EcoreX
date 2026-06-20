@@ -8,7 +8,7 @@ PYTHON_ARCH=""
 PYTHON_STANDALONE_URL="${PYTHON_STANDALONE_URL:-}"
 PYTHON_STANDALONE_RELEASE="${PYTHON_STANDALONE_RELEASE:-20260602}"
 PYTHON_MINOR="${PYTHON_MINOR:-3.11}"
-PREINSTALL_PACKS=""
+PREINSTALL_PACKS="${ECOREX_PREINSTALL_PACKS:-office-pdf}"
 SKIP_DEPENDENCY_INSTALL=0
 
 while [[ $# -gt 0 ]]; do
@@ -214,9 +214,11 @@ import os
 import sys
 
 out = sys.argv[1]
-client_event_key = os.environ.get("ECOREX_CLIENT_EVENT_KEY") or "ecorex-desktop-v0.1.16"
+client_event_key = os.environ.get("ECOREX_CLIENT_EVENT_KEY") or "ecorex-desktop-v0.1.17"
 compat_client_event_keys = list(dict.fromkeys([
     client_event_key,
+    "ecorex-desktop-v0.1.17",
+    "ecorex-desktop-v0.1.16",
     "ecorex-desktop-v0.1.15",
     "ecorex-desktop-v0.1.14",
     "ecorex-desktop-v0.1.13",
@@ -310,13 +312,13 @@ fi
 
 find "$RUNTIME_DIR" -type d -name "__pycache__" -prune -exec rm -rf {} +
 
-"$RUNTIME_PYTHON" - "$RUNTIME_DIR/runtime-manifest.json" "$BUILDER_ARCH" "$PYTHON_STANDALONE_RELEASE" <<'PY'
+"$RUNTIME_PYTHON" - "$RUNTIME_DIR/runtime-manifest.json" "$BUILDER_ARCH" "$PYTHON_STANDALONE_RELEASE" "$PREINSTALL_PACKS" <<'PY'
 import json
 import sys
 import time
 from pathlib import Path
 
-out, arch, release = sys.argv[1:4]
+out, arch, release, preinstall_packs = sys.argv[1:5]
 manifest = {
     "product": "EcoreX",
     "runtime": "compatible-agent-runtime",
@@ -324,6 +326,7 @@ manifest = {
     "pythonDistribution": f"python-build-standalone-{release}",
     "pythonArch": arch,
     "dependencyInstall": True,
+    "preinstalledPacks": [item.strip() for item in preinstall_packs.split(",") if item.strip()],
 }
 Path(out).write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 PY

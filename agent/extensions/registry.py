@@ -63,19 +63,13 @@ class ExtensionRegistry:
 
     def _skills(self) -> List[ExtensionEntry]:
         try:
-            from agent.skills.loader import SkillLoader
-            from agent.skills.manager import SKILLS_CONFIG_FILE
+            from agent.skills.manager import SkillManager
+            from agent.skills.service import _decorate_mention_metadata
 
-            project_root = Path(__file__).resolve().parents[2]
-            builtin_dir = project_root / "skills"
             custom_dir = Path(self.workspace_root) / "skills"
-            loader = SkillLoader()
-            skills = loader.load_all_skills(
-                builtin_dir=str(builtin_dir),
-                custom_dir=str(custom_dir),
-            )
-            config_path = custom_dir / SKILLS_CONFIG_FILE
-            saved = self._read_json_dict(config_path)
+            manager = SkillManager(custom_dir=str(custom_dir))
+            skills = manager.skills
+            saved = manager.get_skills_config()
             entries: List[ExtensionEntry] = []
             for name, skill_entry in sorted(skills.items()):
                 skill = skill_entry.skill if skill_entry else None
@@ -84,20 +78,41 @@ class ExtensionRegistry:
                 default_enabled = getattr(metadata, "default_enabled", True)
                 source = str(previous.get("source") or getattr(skill, "source", "") or "custom")
                 kind = "builtin_skill" if source == "builtin" else "user_skill"
+                origin = "builtin" if source == "builtin" else "workspace" if source == "custom" else "global"
+                policy = "catalog" if source == "builtin" else "user-overlay" if source == "custom" else "global-skill"
+                row = {
+                    **previous,
+                    "name": name,
+                    "display_name": previous.get("display_name") or name,
+                    "description": previous.get("description") or getattr(skill, "description", ""),
+                    "source": source,
+                    "path": getattr(skill, "file_path", "") if skill else "",
+                    "primary_env": getattr(metadata, "primary_env", None) if metadata else None,
+                    "user_invocable": bool(getattr(skill_entry, "user_invocable", True)),
+                    "disable_model_invocation": bool(getattr(skill, "disable_model_invocation", False)),
+                }
+                _decorate_mention_metadata(row)
                 entries.append({
                     "id": f"skill:{name}",
                     "type": kind,
                     "displayName": previous.get("display_name") or name,
                     "description": previous.get("description") or getattr(skill, "description", ""),
-                    "origin": "builtin" if source == "builtin" else "workspace",
+                    "origin": origin,
                     "sourcePath": self._normalize_path(getattr(skill, "base_dir", "")) if skill else "",
                     "enabled": bool(previous.get("enabled", default_enabled)),
                     "installed": True,
-                    "policy": "catalog" if source == "builtin" else "user-overlay",
+                    "policy": policy,
                     "requires": getattr(metadata, "requires", {}) if metadata else {},
                     "provides": ["skill"],
                     "configRefs": [{"path": "skills_config.json", "key": name}],
                     "status": "ready" if previous.get("enabled", default_enabled) else "disabled",
+                    "category": row.get("category"),
+                    "primary_env": row.get("primary_env"),
+                    "user_invocable": row.get("user_invocable"),
+                    "disable_model_invocation": row.get("disable_model_invocation"),
+                    "mentionable": row.get("mentionable"),
+                    "mention_category": row.get("mention_category"),
+                    "mention_hidden_reason": row.get("mention_hidden_reason"),
                 })
             return entries
         except Exception as exc:

@@ -1,0 +1,50 @@
+{
+  "status": "pass",
+  "version": "0.1.17",
+  "generatedAt": "2026-06-20T13:04:22.382Z",
+  "changeIds": [
+    "STAB-004"
+  ],
+  "checks": [
+    {
+      "name": "single-flight startup",
+      "status": "pass",
+      "evidence": "two start calls spawned one child"
+    },
+    {
+      "name": "startup waiters share startup latch",
+      "status": "pass",
+      "evidence": "two waitUntilReady calls before spawn made zero direct probes and resolved from one startup promise"
+    },
+    {
+      "name": "stale child isolation",
+      "status": "pass",
+      "evidence": "old stderr/exit did not overwrite replacement ready status"
+    },
+    {
+      "name": "diagnostic redaction",
+      "status": "pass",
+      "evidence": "token, API key, email, and user path absent from current status"
+    },
+    {
+      "name": "health degraded restart",
+      "status": "pass",
+      "evidence": "three failed health checks moved degraded -> restarting and terminated child"
+    },
+    {
+      "name": "api bridge body cap",
+      "status": "pass",
+      "evidence": "oversized sidecar response rejected"
+    },
+    {
+      "name": "api bridge parse redaction",
+      "status": "pass",
+      "evidence": "invalid JSON response snippet redacted secrets"
+    },
+    {
+      "name": "api bridge timeout degrades ready status",
+      "status": "pass",
+      "evidence": "AbortError returned sidecarPhase=degraded instead of stale ready"
+    }
+  ]
+}

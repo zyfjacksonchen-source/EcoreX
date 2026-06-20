@@ -1,6 +1,6 @@
 param(
     [string]$PublicBaseUrl = "https://www.ecoreai.cn/ecorex-agent",
-    [string]$ExpectedVersion = "0.1.16",
+    [string]$ExpectedVersion = "0.1.17",
     [string]$LocalWindowsInstaller = "",
     [string]$LocalMacArm64Dmg = "",
     [string]$LocalMacX64Dmg = "",
@@ -8,7 +8,7 @@ param(
     [string]$ClientUserToken = "",
     [string]$ClientDeviceId = "verify-device",
     [string]$GitRemoteUrl = "https://github.com/zhangyifanjackson-dotcom/EcoreX.git",
-    [string]$GitProductBranch = "codex/ecorex-v0.1.16",
+    [string]$GitProductBranch = "codex/ecorex-v0.1.17",
     [string]$ExpectedGitHubCommit = "",
     [switch]$SkipMacArtifacts = $true,
     [switch]$SkipGitRemoteCheck
@@ -32,6 +32,18 @@ function New-Check {
         severity = $Severity
         evidence = $Evidence
     }
+}
+
+function Test-PublishableArtifact($Artifact) {
+    $status = [string]$Artifact.status
+    $id = [string]$Artifact.id
+    if (-not $status) {
+        $status = "ready"
+    }
+    if ($status -eq "ready") {
+        return $true
+    }
+    return ($status -eq "ready-unsigned" -and $id.StartsWith("macos-") -and [string]$Artifact.signature -eq "unsigned")
 }
 
 function Invoke-Head {
@@ -288,8 +300,16 @@ foreach ($artifact in $manifest.artifacts) {
     if (-not $status) {
         $status = "ready"
     }
-    if (($status -ne "ready") -or ($SkipMacArtifacts -and $artifact.id -like "macos-*")) {
+    if ($artifact.id -like "macos-*" -and $status -eq "ready" -and [string]$artifact.signature -eq "unsigned") {
+        $checks.Add((New-Check "macOS unsigned manifest status: $($artifact.id)" "fail" "Unsigned macOS artifact must use status=ready-unsigned with installSmoke evidence." "blocker"))
+        continue
+    }
+    if ((-not (Test-PublishableArtifact $artifact)) -or ($SkipMacArtifacts -and $artifact.id -like "macos-*")) {
         $checks.Add((New-Check "Public download: $($artifact.fileName)" "skipped" "Artifact status is $($artifact.status); not required in this verification pass." "warn"))
+        continue
+    }
+    if ($artifact.id -eq "windows-x64" -and [string]$artifact.signature -ne "Valid") {
+        $checks.Add((New-Check "Windows manifest signature" "fail" "Publishable Windows artifact requires signature=Valid, got '$($artifact.signature)'." "blocker"))
         continue
     }
     $downloadUrl = "$base/$($artifact.href)"
@@ -371,8 +391,10 @@ if ($ClientEventKey) {
     $checks.Add((New-Check "Client authenticated policy checks" "skipped" "Pass -ClientEventKey to verify authenticated model and capability policy endpoints." "warn"))
 }
 
-if ($LocalWindowsInstaller) {
-    $checks.Add((Assert-Hash $LocalWindowsInstaller $artifacts["windows-x64"].sha256))
+$windowsArtifact = if ($artifacts.ContainsKey("windows-x64")) { $artifacts["windows-x64"] } else { $null }
+$windowsPublishable = $windowsArtifact -and (Test-PublishableArtifact $windowsArtifact)
+if ($windowsPublishable -and $LocalWindowsInstaller) {
+    $checks.Add((Assert-Hash $LocalWindowsInstaller $windowsArtifact.sha256))
     if (Test-Path -LiteralPath $LocalWindowsInstaller) {
         $signature = Get-AuthenticodeSignature -LiteralPath $LocalWindowsInstaller
         if ($signature.Status -eq "Valid") {
@@ -381,8 +403,11 @@ if ($LocalWindowsInstaller) {
             $checks.Add((New-Check "Windows Authenticode signature" "fail" "$($signature.Status): $($signature.StatusMessage)" "blocker"))
         }
     }
+} elseif ($windowsPublishable) {
+    $checks.Add((New-Check "Windows local installer signature" "fail" "Publishable Windows artifact requires -LocalWindowsInstaller for Authenticode verification." "blocker"))
 } else {
-    $checks.Add((New-Check "Windows local installer signature" "skipped" "Pass -LocalWindowsInstaller to verify local Authenticode signature." "warn"))
+    $status = if ($windowsArtifact) { [string]$windowsArtifact.status } else { "missing" }
+    $checks.Add((New-Check "Windows local installer signature" "skipped" "Windows artifact is not publishable in this manifest (status=$status)." "warn"))
 }
 
 if ($SkipMacArtifacts) {

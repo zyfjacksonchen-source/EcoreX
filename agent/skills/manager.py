@@ -10,6 +10,7 @@ from common.log import logger
 from agent.skills.types import Skill, SkillEntry, SkillSnapshot
 from agent.skills.loader import SkillLoader
 from agent.skills.formatter import format_skill_diagnostics_for_prompt, format_skill_entries_for_prompt
+from agent.skills.frontmatter import get_frontmatter_value, parse_boolean_value
 
 SKILLS_CONFIG_FILE = "skills_config.json"
 CUSTOM_OVERRIDE_MARKER = ".ecorex-custom-override"
@@ -217,7 +218,7 @@ class SkillManager:
         for name, entry in self.skills.items():
             skill = entry.skill
             prev = saved.get(name, {})
-            category = prev.get("category", "skill")
+            category = prev.get("category") or get_frontmatter_value(skill.frontmatter, "category") or "skill"
 
             if name in saved:
                 enabled = prev.get("enabled", True)
@@ -231,6 +232,28 @@ class SkillManager:
                 "enabled": enabled,
                 "category": category,
             }
+            mentionable_raw = get_frontmatter_value(skill.frontmatter, "mentionable")
+            if mentionable_raw is not None:
+                entry_dict["mentionable"] = parse_boolean_value(mentionable_raw, default=True)
+            elif "mentionable" in prev:
+                entry_dict["mentionable"] = parse_boolean_value(prev.get("mentionable"), default=True)
+
+            mention_category = (
+                prev.get("mention_category")
+                or get_frontmatter_value(skill.frontmatter, "mention-category")
+                or get_frontmatter_value(skill.frontmatter, "mention_category")
+            )
+            if mention_category:
+                entry_dict["mention_category"] = str(mention_category)
+
+            mention_hidden_reason = (
+                prev.get("mention_hidden_reason")
+                or get_frontmatter_value(skill.frontmatter, "mention-hidden-reason")
+                or get_frontmatter_value(skill.frontmatter, "mention_hidden_reason")
+            )
+            if mention_hidden_reason:
+                entry_dict["mention_hidden_reason"] = str(mention_hidden_reason)
+
             display_name = prev.get("display_name")
             if display_name:
                 entry_dict["display_name"] = display_name

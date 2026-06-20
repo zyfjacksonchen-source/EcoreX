@@ -72,6 +72,7 @@ import {
   openRuntimePath,
   openDownloadPage,
   openMessageStream,
+  readLocalJson,
   reportDesktopEvent,
   requestAgentInstallRequest,
   resetPermissionGrants,
@@ -90,6 +91,7 @@ import {
   type EnterpriseQuotaCheckResult,
   type EnterpriseSession,
   type FileAttachment,
+  type LocalJsonResult,
   type LocalPathStat,
   type MemoryFile,
   type PermissionMode,
@@ -114,9 +116,36 @@ import { redactInternalPromptText } from "./utils/redaction";
 type ThemeMode = "light" | "dark";
 type SidecarStatus = {
   state: "starting" | "running" | "stopped" | "failed" | "skipped";
+  phase?: "idle" | "spawning" | "probing" | "ready" | "degraded" | "restarting" | "failed" | "stopped" | "skipped";
   message: string;
   pid?: number;
   webPort: number;
+  diagnostics?: {
+    bootId: string;
+    restartAttempts: number;
+    consecutiveHealthFailures: number;
+    startupInFlight: boolean;
+    lastProbeOkAt?: string;
+    lastProbeErrorAt?: string;
+    recentEvents?: Array<{ ts: string; state: string; phase: string; message: string; reason?: string }>;
+  };
+};
+type StreamRequestPhase =
+  | "connecting"
+  | "streaming"
+  | "stalled"
+  | "flushing"
+  | "text_done_tail_open"
+  | "completed"
+  | "failed"
+  | "cancelled";
+type StreamRequestState = {
+  sessionId: string;
+  requestId: string;
+  phase: StreamRequestPhase;
+  updatedAt: number;
+  terminalAt?: number;
+  lastEventAt?: number;
 };
 type SessionRow = {
   id: string;
@@ -229,6 +258,18 @@ function isLocalAbsolutePath(value?: string) {
   const source = normalizeLocalSource(value);
   const platform = window.ecorexDesktop?.platform || "";
   return /^[a-zA-Z]:[\\/]/.test(source) || source.startsWith("\\\\") || (platform !== "win32" && /^\//.test(source) && !isRuntimePreviewPath(source));
+}
+
+function isOpenPathNotFoundMessage(value?: string) {
+  return /path not found|not found|找不到|不存在/i.test(String(value || ""));
+}
+
+function isOpenPathDeniedMessage(value?: string) {
+  return /denied|blocked|forbidden|permission|refusing to launch|not allowed|拒绝|阻止|权限|危险/i.test(String(value || ""));
+}
+
+function isOpenPathBridgeFailure(value?: string) {
+  return /desktop bridge is not available|local runtime is unavailable|failed to fetch|networkerror|econnrefused|sidecar|runtime/i.test(String(value || ""));
 }
 
 function joinLocalPath(base: string, child: string) {
@@ -871,13 +912,14 @@ function normalizePausedMessages(
   const inactiveGraceMs = options?.inactiveRequestGraceMs ?? 0;
   const next = items.map((item) => {
     if (!item.pending) return item;
+    const createdAtMs = item.createdAt ? new Date(item.createdAt).getTime() : 0;
+    const inGrace = Boolean(createdAtMs && Number.isFinite(createdAtMs) && nowMs - createdAtMs < inactiveGraceMs);
     if (!item.requestId || staleSession) {
+      if (!staleSession && !item.requestId && inGrace) return item;
       changed = true;
       return pausePendingMessage(item, Boolean(staleSession));
     }
     if (activeRequestIds && !activeRequestIds.has(item.requestId)) {
-      const createdAtMs = item.createdAt ? new Date(item.createdAt).getTime() : 0;
-      const inGrace = Boolean(createdAtMs && Number.isFinite(createdAtMs) && nowMs - createdAtMs < inactiveGraceMs);
       if (!inGrace) {
         changed = true;
         return finishInactivePendingMessage(item);
@@ -904,24 +946,139 @@ function messageContentKey(message: ChatItem) {
   return `${message.role}:${content}`;
 }
 
+function artifactMergeKey(artifact: AgentArtifact) {
+  return String(artifact.path || artifact.relativePath || artifact.url || artifact.title || artifact.id || "")
+    .replace(/\\/g, "/")
+    .toLowerCase();
+}
+
+function artifactStatusPriority(status?: AgentArtifact["status"]) {
+  if (status === "ready" || status === "failed") return 3;
+  if (status === "superseded") return 2;
+  if (status === "pending") return 1;
+  return 0;
+}
+
+function mergeAgentArtifactRecord(existing: AgentArtifact, incoming: AgentArtifact): AgentArtifact {
+  const existingPriority = artifactStatusPriority(existing.status);
+  const incomingPriority = artifactStatusPriority(incoming.status);
+  const merged = { ...existing, ...incoming };
+  merged.status = incomingPriority >= existingPriority ? incoming.status : existing.status;
+  merged.statusPath = incoming.statusPath || existing.statusPath;
+  merged.previewUrl = incoming.previewUrl || existing.previewUrl;
+  merged.thumbnailUrl = incoming.thumbnailUrl || existing.thumbnailUrl;
+  merged.mimeType = incoming.mimeType || existing.mimeType;
+  merged.path = incoming.path || existing.path;
+  merged.relativePath = incoming.relativePath || existing.relativePath;
+  merged.url = incoming.url || existing.url;
+  merged.sizeBytes = typeof incoming.sizeBytes === "number" ? incoming.sizeBytes : existing.sizeBytes;
+  return merged;
+}
+
+function mergeLocalTailArtifacts(historyMessage: ChatItem, localMessage?: ChatItem) {
+  return mergeHistoryAndLocalRequestMessage(historyMessage, localMessage);
+}
+
+function mergeArtifactsIntoMessage(message: ChatItem, artifacts: AgentArtifact[]) {
+  if (!artifacts.length) return message;
+  const nextArtifacts = [...(message.artifacts || [])];
+  const seen = new Set(nextArtifacts.map(artifactMergeKey).filter(Boolean));
+  let changed = false;
+  for (const artifact of artifacts) {
+    const key = artifactMergeKey(artifact);
+    const index = key ? nextArtifacts.findIndex((entry) => artifactMergeKey(entry) === key) : -1;
+    if (index >= 0) {
+      const merged = mergeAgentArtifactRecord(nextArtifacts[index], artifact);
+      if (JSON.stringify(merged) !== JSON.stringify(nextArtifacts[index])) {
+        nextArtifacts[index] = merged;
+        changed = true;
+      }
+      continue;
+    }
+    nextArtifacts.push(artifact);
+    if (key) seen.add(key);
+    changed = true;
+  }
+  return changed ? { ...message, artifacts: nextArtifacts } : message;
+}
+
+function messageHasTerminalPayload(message: ChatItem) {
+  return Boolean(redactInternalPromptText(message.content || "").trim())
+    || Boolean(message.steps?.length)
+    || Boolean(message.toolCalls?.length)
+    || Boolean(message.artifacts?.length);
+}
+
+function isTerminalAssistantMessage(message?: ChatItem) {
+  return Boolean(message
+    && message.role === "assistant"
+    && !message.pending
+    && !message.paused
+    && !message.cancelled
+    && messageHasTerminalPayload(message));
+}
+
+function isSameAssistantTurn(left: ChatItem, right: ChatItem) {
+  if (left.role !== "assistant" || right.role !== "assistant") return false;
+  if (left.requestId && right.requestId && left.requestId === right.requestId) return true;
+  if (typeof left.botSeq === "number" && typeof right.botSeq === "number" && left.botSeq === right.botSeq) return true;
+  if (typeof left.userSeq === "number" && typeof right.userSeq === "number" && left.userSeq === right.userSeq) return true;
+  return false;
+}
+
+function mergeHistoryAndLocalRequestMessage(historyMessage: ChatItem, localMessage?: ChatItem) {
+  if (!localMessage) return historyMessage;
+  const historyWithLocalArtifacts = mergeArtifactsIntoMessage(historyMessage, localMessage.artifacts || []);
+  if (historyMessage.role !== "assistant" || localMessage.role !== "assistant") {
+    return historyWithLocalArtifacts;
+  }
+  if (!isSameAssistantTurn(historyMessage, localMessage)) {
+    return historyWithLocalArtifacts;
+  }
+  const historyText = redactInternalPromptText(historyMessage.content || "").trim();
+  const localText = redactInternalPromptText(localMessage.content || "").trim();
+  if (!isTerminalAssistantMessage(localMessage) || !localText) {
+    return historyWithLocalArtifacts;
+  }
+  const historyHasSameText = Boolean(historyText) && historyText === localText;
+  const historyIsClearlyStronger = historyText.length > localText.length + 64;
+  if (historyHasSameText || historyIsClearlyStronger) {
+    return historyWithLocalArtifacts;
+  }
+  const mergedLocal = mergeArtifactsIntoMessage(localMessage, historyMessage.artifacts || []);
+  return {
+    ...mergedLocal,
+    id: historyMessage.id || mergedLocal.id,
+    createdAt: historyMessage.createdAt || mergedLocal.createdAt,
+    requestId: mergedLocal.requestId || historyMessage.requestId,
+    userSeq: typeof historyMessage.userSeq === "number" ? historyMessage.userSeq : mergedLocal.userSeq,
+    botSeq: typeof historyMessage.botSeq === "number" ? historyMessage.botSeq : mergedLocal.botSeq,
+    steps: mergedLocal.steps?.length ? mergedLocal.steps : historyMessage.steps,
+    toolCalls: mergedLocal.toolCalls?.length ? mergedLocal.toolCalls : historyMessage.toolCalls
+  };
+}
+
 function mergeHistoryWithLocalMessages(history: ChatItem[], local: ChatItem[]) {
   if (!history.length || !local.length) return history.length ? history : local;
   const historyHasFinalAssistant = history.some((message) => (
     message.role === "assistant"
     && !message.pending
-    && (
-      Boolean(redactInternalPromptText(message.content || "").trim())
-      || Boolean(message.steps?.length)
-      || Boolean(message.toolCalls?.length)
-      || Boolean(message.artifacts?.length)
-      || typeof message.botSeq === "number"
-    )
+    && messageHasTerminalPayload(message)
   ));
   const sequenceKeys = new Set(history.map(messageSequenceKey).filter(Boolean));
   const requestKeys = new Set(history.map(messageRequestKey).filter(Boolean));
   const contentKeys = new Set(history.map(messageContentKey).filter(Boolean));
+  const localByRequestKey = new Map(local.map((message) => [messageRequestKey(message), message]).filter(([key]) => Boolean(key)) as [string, ChatItem][]);
+  const localBySequenceKey = new Map(local
+    .filter((message) => isTerminalAssistantMessage(message))
+    .map((message) => [messageSequenceKey(message), message])
+    .filter(([key]) => Boolean(key)) as [string, ChatItem][]);
   const preserved: ChatItem[] = [];
   let skipPendingAssistantAfterMatchedUser = false;
+  const mergedHistory = history.map((message) => mergeLocalTailArtifacts(
+    message,
+    localByRequestKey.get(messageRequestKey(message)) || localBySequenceKey.get(messageSequenceKey(message))
+  ));
 
   for (const message of local) {
     if (historyHasFinalAssistant && message.role === "assistant" && message.pending && message.id.startsWith("a-resume-")) {
@@ -962,7 +1119,7 @@ function mergeHistoryWithLocalMessages(history: ChatItem[], local: ChatItem[]) {
     if (contentKey) contentKeys.add(contentKey);
   }
 
-  return preserved.length ? [...history, ...preserved] : history;
+  return preserved.length ? [...mergedHistory, ...preserved] : mergedHistory;
 }
 
 function plainTextForMessage(message: ChatItem) {
@@ -1157,6 +1314,7 @@ function normalizeArtifactEntry(entry: unknown, index: number, requestId?: strin
     sizeBytes: typeof raw.sizeBytes === "number" ? raw.sizeBytes : typeof raw.size_bytes === "number" ? raw.size_bytes : undefined,
     previewUrl: String(raw.previewUrl || raw.preview_url || "").trim() || undefined,
     thumbnailUrl: String(raw.thumbnailUrl || raw.thumbnail_url || "").trim() || undefined,
+    statusPath: String(raw.statusPath || raw.status_path || "").trim() || undefined,
     stats: Object.keys(stats).length ? {
       addedLines: typeof stats.addedLines === "number" ? stats.addedLines : typeof stats.added_lines === "number" ? stats.added_lines : undefined,
       removedLines: typeof stats.removedLines === "number" ? stats.removedLines : typeof stats.removed_lines === "number" ? stats.removed_lines : undefined,
@@ -1222,6 +1380,8 @@ function skillEnabled(skills: RuntimeSkill[] | undefined, name: string) {
   return Boolean(skill && skill.enabled !== false);
 }
 
+type SkillMentionCategory = "creative" | "document" | "automation" | "developer" | "general" | "background";
+
 type SkillDisplayRow = {
   key: string;
   name: string;
@@ -1236,7 +1396,126 @@ type SkillDisplayRow = {
   origin?: string;
   policy?: string;
   toggleable: boolean;
+  mentionable: boolean;
+  category: SkillMentionCategory;
+  categoryLabel: string;
+  mentionHiddenReason?: string;
 };
+
+const SKILL_CATEGORY_LABELS: Record<SkillMentionCategory, string> = {
+  creative: "创作",
+  document: "文档",
+  automation: "自动化",
+  developer: "开发",
+  general: "通用",
+  background: "后台 / CLI"
+};
+
+type RawSkillDisplayRow = Omit<SkillDisplayRow, "mentionable" | "category" | "categoryLabel" | "mentionHiddenReason"> & {
+  rawCategory?: string;
+  rawMentionCategory?: string;
+  primaryEnv?: string;
+  userInvocable?: boolean;
+  disableModelInvocation?: boolean;
+  explicitMentionable?: boolean;
+  explicitMentionHiddenReason?: string;
+};
+
+const SKILL_CATEGORY_ORDER: SkillMentionCategory[] = ["creative", "document", "automation", "developer", "general", "background"];
+
+function normalizeSkillText(value: unknown) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function mapExplicitSkillCategory(value?: string): SkillMentionCategory | "" {
+  const category = normalizeSkillText(value).replace(/[_\s]+/g, "-");
+  if (!category) return "";
+  if (["creative", "creation", "content", "media", "design"].includes(category)) return "creative";
+  if (["document", "documents", "doc", "pdf", "office", "spreadsheet", "slides"].includes(category)) return "document";
+  if (["automation", "browser", "computer-use", "workflow"].includes(category)) return "automation";
+  if (["developer", "dev", "coding", "github", "figma", "macos"].includes(category)) return "developer";
+  if (["background", "cli", "system", "internal", "tooling", "connector"].includes(category)) return "background";
+  if (category === "skill" || category === "general") return "general";
+  return "";
+}
+
+function isBackgroundCliSkill(row: RawSkillDisplayRow) {
+  const name = normalizeSkillText(row.name || row.displayName);
+  const pathText = normalizeSkillText(row.path);
+  const primaryEnv = normalizeSkillText(row.primaryEnv);
+  const description = normalizeSkillText(row.description);
+  const sourceText = normalizeSkillText(`${row.source || ""} ${row.origin || ""}`);
+  if (/^(?:lark|feishu)(?:[-_:]|$)/.test(name)) return true;
+  if (/(?:^|[\\/])(?:lark|feishu)-[^\\/]+[\\/]skill\.md$/.test(pathText)) return true;
+  if (/^(?:lark|feishu)_/.test(primaryEnv)) return true;
+  if (description.includes("lark-cli") || sourceText.includes("lark-cli")) return true;
+  if ((description.includes("飞书") || sourceText.includes("飞书")) && (description.includes("cli") || sourceText.includes("cli"))) return true;
+  return false;
+}
+
+function isTestFixtureSkill(row: RawSkillDisplayRow) {
+  const name = normalizeSkillText(row.name || row.displayName);
+  const pathText = normalizeSkillText(row.path);
+  return /^good-skill(?:-|$)/.test(name) || pathText.includes("skill-format-check");
+}
+
+function skillMentionHiddenReason(value?: string) {
+  const reason = normalizeSkillText(value);
+  if (!reason) return "";
+  if (reason.includes("lark") || reason.includes("feishu")) return "由飞书/Lark CLI 自动触发";
+  if (reason.includes("test")) return "测试样例";
+  if (reason.includes("background") || reason.includes("disable") || reason.includes("model")) return "后台触发";
+  return value || "";
+}
+
+function inferSkillCategory(row: RawSkillDisplayRow): SkillMentionCategory {
+  const mentionCategory = mapExplicitSkillCategory(row.rawMentionCategory);
+  if (mentionCategory) return mentionCategory;
+  const explicit = mapExplicitSkillCategory(row.rawCategory);
+  if (explicit) return explicit;
+  const text = [
+    row.name,
+    row.displayName,
+    row.description,
+    row.source,
+    row.origin,
+    row.path
+  ].map(normalizeSkillText).join(" ");
+  if (/(xiaohongshu|image|design|figma|hallmark|remotion|presentation|video|creative|生成|设计)/.test(text)) return "creative";
+  if (/(document|documents|pdf|spreadsheet|slides|docx|pptx|xlsx|office|文档|表格|幻灯片)/.test(text)) return "document";
+  if (/(browser|chrome|computer-use|automation|workflow|calendar|attendance|自动化|浏览器)/.test(text)) return "automation";
+  if (/(github|build-macos|openai|plugin|skill|codex|cli|developer|swift|xcode|开发)/.test(text)) return "developer";
+  return "general";
+}
+
+function finalizeSkillDisplayRow(row: RawSkillDisplayRow): SkillDisplayRow {
+  const category = inferSkillCategory(row);
+  let mentionable = category !== "background";
+  let mentionHiddenReason = "";
+  const explicitHiddenReason = skillMentionHiddenReason(row.explicitMentionHiddenReason);
+
+  if (row.explicitMentionable === false || row.userInvocable === false || row.disableModelInvocation) {
+    mentionable = false;
+    mentionHiddenReason = explicitHiddenReason || "后台触发";
+  }
+  if (isBackgroundCliSkill(row)) {
+    mentionable = false;
+    mentionHiddenReason = explicitHiddenReason || "由飞书/Lark CLI 自动触发";
+  }
+  if (isTestFixtureSkill(row)) {
+    mentionable = false;
+    mentionHiddenReason = explicitHiddenReason || "测试样例";
+  }
+
+  const finalCategory: SkillMentionCategory = mentionable ? category : "background";
+  return {
+    ...row,
+    mentionable,
+    category: finalCategory,
+    categoryLabel: SKILL_CATEGORY_LABELS[finalCategory],
+    mentionHiddenReason: mentionable ? undefined : mentionHiddenReason || "后台触发"
+  };
+}
 
 function skillNameFromExtension(extension: RuntimeExtension) {
   const id = String(extension.id || "");
@@ -1259,7 +1538,7 @@ function buildSkillDisplayRows(snapshot: RuntimeSnapshot): SkillDisplayRow[] {
     if (!name) continue;
     const legacy = legacyByName.get(name);
     seen.add(name);
-    rows.push({
+    rows.push(finalizeSkillDisplayRow({
       key: extension.id || `skill:${name}`,
       name,
       displayName: extension.displayName || legacy?.display_name || name,
@@ -1272,13 +1551,20 @@ function buildSkillDisplayRows(snapshot: RuntimeSnapshot): SkillDisplayRow[] {
       status: extension.status,
       origin: extension.origin,
       policy: extension.policy,
-      toggleable: Boolean(legacy?.name)
-    });
+      toggleable: Boolean(legacy?.name),
+      rawCategory: legacy?.category || extension.category,
+      rawMentionCategory: legacy?.mention_category || extension.mention_category,
+      primaryEnv: legacy?.primary_env || extension.primary_env,
+      userInvocable: legacy?.user_invocable ?? extension.user_invocable,
+      disableModelInvocation: legacy?.disable_model_invocation ?? extension.disable_model_invocation,
+      explicitMentionable: legacy?.mentionable ?? extension.mentionable,
+      explicitMentionHiddenReason: legacy?.mention_hidden_reason || extension.mention_hidden_reason
+    }));
   }
   for (const skill of snapshot.skills || []) {
     const name = skill.name || skill.display_name || "";
     if (!name || seen.has(name)) continue;
-    rows.push({
+    rows.push(finalizeSkillDisplayRow({
       key: `legacy:${name}`,
       name,
       displayName: skill.display_name || name,
@@ -1289,10 +1575,19 @@ function buildSkillDisplayRows(snapshot: RuntimeSnapshot): SkillDisplayRow[] {
       enabled: skill.enabled !== false,
       installed: true,
       status: skill.enabled === false ? "disabled" : "ready",
-      toggleable: Boolean(skill.name)
-    });
+      toggleable: Boolean(skill.name),
+      rawCategory: skill.category,
+      rawMentionCategory: skill.mention_category,
+      primaryEnv: skill.primary_env,
+      userInvocable: skill.user_invocable,
+      disableModelInvocation: skill.disable_model_invocation,
+      explicitMentionable: skill.mentionable,
+      explicitMentionHiddenReason: skill.mention_hidden_reason
+    }));
   }
   return rows.sort((a, b) => {
+    const categoryDiff = SKILL_CATEGORY_ORDER.indexOf(a.category) - SKILL_CATEGORY_ORDER.indexOf(b.category);
+    if (categoryDiff) return categoryDiff;
     const originDiff = String(a.origin || a.source || "").localeCompare(String(b.origin || b.source || ""));
     if (originDiff) return originDiff;
     return a.displayName.localeCompare(b.displayName);
@@ -1418,9 +1713,12 @@ export function App() {
   const completedRequestCleanupTimers = useRef<Record<string, number>>({});
   const locallyCompletedRequestIdsRef = useRef<StringBoolMap>({});
   const postDoneStreamCloseTimers = useRef<Record<string, number>>({});
+  const postDoneTailArtifactsRef = useRef<Record<string, AgentArtifact[]>>({});
   const streamRetryCounts = useRef<Record<string, number>>({});
-  const sendGenerationRef = useRef(0);
-  const preflightAbortRef = useRef<AbortController | null>(null);
+  const streamRequestStates = useRef<Record<string, StreamRequestState>>({});
+  const streamStallTimers = useRef<Record<string, number>>({});
+  const sendGenerationRef = useRef<Record<string, number>>({});
+  const preflightAbortRef = useRef<Record<string, AbortController>>({});
   const phaseTimersRef = useRef<Record<string, number[]>>({});
   const historyRecoveryTimersRef = useRef<Record<string, number[]>>({});
   const preloadDone = useRef(false);
@@ -1429,6 +1727,34 @@ export function App() {
   const uiStateLocalSyncTimer = useRef<number | null>(null);
   const pendingUiStateStorage = useRef<Record<string, SessionUiState> | null>(null);
   const uiStateSyncTimer = useRef<number | null>(null);
+
+  function beginSessionPreflight(sessionId: string) {
+    const generation = (sendGenerationRef.current[sessionId] || 0) + 1;
+    sendGenerationRef.current = { ...sendGenerationRef.current, [sessionId]: generation };
+    preflightAbortRef.current[sessionId]?.abort();
+    const controller = new AbortController();
+    preflightAbortRef.current = { ...preflightAbortRef.current, [sessionId]: controller };
+    return { generation, controller };
+  }
+
+  function isSessionPreflightCurrent(sessionId: string, generation: number, controller: AbortController) {
+    return sendGenerationRef.current[sessionId] === generation && !controller.signal.aborted;
+  }
+
+  function clearSessionPreflight(sessionId: string, controller: AbortController) {
+    if (preflightAbortRef.current[sessionId] !== controller) return;
+    const next = { ...preflightAbortRef.current };
+    delete next[sessionId];
+    preflightAbortRef.current = next;
+  }
+
+  function abortSessionPreflight(sessionId: string) {
+    sendGenerationRef.current = { ...sendGenerationRef.current, [sessionId]: (sendGenerationRef.current[sessionId] || 0) + 1 };
+    preflightAbortRef.current[sessionId]?.abort();
+    const next = { ...preflightAbortRef.current };
+    delete next[sessionId];
+    preflightAbortRef.current = next;
+  }
 
   useEffect(() => {
     applyTheme(theme);
@@ -1806,6 +2132,14 @@ export function App() {
     const resolvedPath = resolveArtifactPathForSession(sessionId, raw);
     return statLocalPath(resolvedPath);
   };
+  const readArtifactStatusJson = async (filePath: string, sessionId = activeSessionIdRef.current): Promise<LocalJsonResult> => {
+    const raw = normalizeLocalSource(filePath);
+    if (!raw || /^https?:\/\//i.test(raw)) {
+      return { path: raw, status: "error", message: raw ? "remote status JSON is not supported" : "path is required" };
+    }
+    const resolvedPath = resolveArtifactPathForSession(sessionId, raw);
+    return readLocalJson(resolvedPath);
+  };
   const attachmentPreviewUrl = (file: FileAttachment) => {
     if (file.previewDataUrl) return file.previewDataUrl;
     if (file.preview_url) return filePreviewUrl(file.preview_url, sidecarStatus.webPort);
@@ -1835,20 +2169,39 @@ export function App() {
   };
   const currentModelName = displayModelName(runtimeSnapshot.currentModel);
   const skillDisplayRows = useMemo(() => buildSkillDisplayRows(runtimeSnapshot), [runtimeSnapshot]);
+  const mentionableSkillRows = useMemo(() => skillDisplayRows.filter((skill) => skill.mentionable), [skillDisplayRows]);
+  const backgroundSkillRows = useMemo(() => skillDisplayRows.filter((skill) => !skill.mentionable), [skillDisplayRows]);
+  const skillMentionCandidates = useMemo(
+    () => mentionableSkillRows.filter((skill) => skill.enabled && skill.installed),
+    [mentionableSkillRows]
+  );
   const mentionMatch = /@([\w\u4e00-\u9fa5-]*)$/.exec(composerText);
+  const skillMentionNeedle = mentionMatch ? mentionMatch[1].toLowerCase() : "";
+  const skillMatchesNeedle = (skill: SkillDisplayRow) => {
+    const haystack = [
+      skill.displayName,
+      skill.name,
+      skill.description,
+      skill.source,
+      skill.path,
+      skill.categoryLabel
+    ].filter(Boolean).join(" ").toLowerCase();
+    return haystack.includes(skillMentionNeedle);
+  };
   const skillMentions = mentionMatch
-    ? skillDisplayRows.filter((skill) => {
-        const needle = mentionMatch[1].toLowerCase();
-        const haystack = [
-          skill.displayName,
-          skill.name,
-          skill.description,
-          skill.source,
-          skill.path
-        ].filter(Boolean).join(" ").toLowerCase();
-        return haystack.includes(needle);
-      }).slice(0, 24)
+    ? skillMentionCandidates.filter(skillMatchesNeedle)
     : [];
+  const hiddenSkillMentions = mentionMatch && skillMentionNeedle
+    ? backgroundSkillRows.filter(skillMatchesNeedle)
+    : [];
+  const skillMentionGroups = SKILL_CATEGORY_ORDER
+    .map((category) => ({
+      category,
+      label: SKILL_CATEGORY_LABELS[category],
+      items: skillMentions.filter((skill) => skill.category === category)
+    }))
+    .filter((group) => group.items.length > 0);
+  const skillMentionNoResults = Boolean(mentionMatch && mentionMatch[1] && !skillMentions.length);
   const activeSessionRequestId = sessionRequestIds[activeSessionId] || "";
   const dailyUsed = quotaNumber(quotaSnapshot, "dailyUsed");
   const weeklyUsed = quotaNumber(quotaSnapshot, "weeklyUsed");
@@ -2024,6 +2377,11 @@ export function App() {
       ? messagesRef.current
       : sessionUiState[sessionId]?.messages || [];
     const existing = cachedMessages.find((message) => message.role === "assistant" && message.requestId === requestId);
+    if (completedRequestIds.current[requestId] || locallyCompletedRequestIdsRef.current[requestId] || isTerminalAssistantMessage(existing)) {
+      markRequestLocallyCompleted(requestId);
+      clearSessionRequestState(sessionId, requestId);
+      return;
+    }
     const assistantId = existing?.id || `a-resume-${requestId}`;
     updateSessionMessages(sessionId, (current) => {
       const hasExisting = current.some((message) => message.id === assistantId || message.requestId === requestId);
@@ -2076,7 +2434,7 @@ export function App() {
     const nextMessages = normalizePausedMessages(cached.messages, {
       sessionId,
       activeRequestIds: activeRequestId ? new Set([activeRequestId]) : new Set(),
-      inactiveRequestGraceMs: 0
+      inactiveRequestGraceMs: 45_000
     });
     setMessages(nextMessages);
     setComposerText(cached.composerText);
@@ -2092,7 +2450,7 @@ export function App() {
       }
     }));
     const liveMessage = nextMessages.find((message) => isLiveAssistantMessage(message) && message.requestId);
-    if (liveMessage?.requestId && activeRequestId && liveMessage.requestId === activeRequestId && streamAvailable) {
+    if (liveMessage?.requestId && streamAvailable && (!activeRequestId || liveMessage.requestId === activeRequestId)) {
       setSessionRequestIds((current) => ({ ...current, [sessionId]: liveMessage.requestId || "" }));
       window.setTimeout(() => attachMessageStream(sessionId, liveMessage.id, liveMessage.requestId || ""), 0);
     } else if (activeRequestId) {
@@ -2430,19 +2788,39 @@ export function App() {
     updateSessionMessages(sessionId, (current) => current.map((message) => message.id === assistantId ? updater(message) : message));
   }
 
+  function updateAssistantMessageForRequest(sessionId: string, assistantId: string, requestId: string, updater: (message: ChatItem) => ChatItem) {
+    updateSessionMessages(sessionId, (current) => {
+      let updated = false;
+      const next = current.map((message) => {
+        if (message.id === assistantId || (requestId && message.role === "assistant" && message.requestId === requestId)) {
+          updated = true;
+          return updater({ ...message, requestId: requestId || message.requestId });
+        }
+        return message;
+      });
+      if (updated) return next;
+      const fallback: ChatItem = {
+        id: assistantId || `a-resume-${requestId || Date.now()}`,
+        role: "assistant",
+        content: "",
+        pending: true,
+        requestId,
+        createdAt: new Date().toISOString(),
+        steps: [{ type: "phase", content: "正在连接响应" }]
+      };
+      return [...current, updater(fallback)];
+    });
+  }
+
   async function refreshSessionFromHistory(sessionId: string) {
     try {
       const history = await loadSessionHistoryWithMeta(sessionId);
-      const mapped = normalizePausedMessages(mapRuntimeHistory(history.messages, sessionId, history.contextStartSeq));
+      const mapped = normalizePausedMessages(mapRuntimeHistory(history.messages, sessionId, history.contextStartSeq))
+        .map(mergeBufferedPostDoneArtifacts);
       const hasFinalAssistant = mapped.some((message) => (
         message.role === "assistant"
         && !message.pending
-        && (
-          Boolean(message.content.trim())
-          || Boolean(message.steps?.length)
-          || Boolean(message.toolCalls?.length)
-          || typeof message.botSeq === "number"
-        )
+        && messageHasTerminalPayload(message)
       ));
       if (!hasFinalAssistant) return false;
       const localMessages = sessionId === activeSessionIdRef.current
@@ -2586,7 +2964,7 @@ export function App() {
 
   function queuePreflightPhase(sessionId: string, assistantId: string, generation: number, delayMs: number, content: string) {
     const timer = window.setTimeout(() => {
-      if (sendGenerationRef.current !== generation) return;
+      if (sendGenerationRef.current[sessionId] !== generation) return;
       updateAssistantMessage(sessionId, assistantId, (message) => {
         if (!message.pending || message.requestId || message.cancelled) return message;
         return replaceCurrentPhase(message, content);
@@ -2732,20 +3110,25 @@ export function App() {
     return (artifact.path || artifact.relativePath || artifact.url || artifact.id).replace(/\\/g, "/").toLowerCase();
   }
 
-  function appendArtifact(message: ChatItem, item: StreamItem, pending = true): ChatItem {
+  function streamItemArtifacts(item: StreamItem, requestId?: string) {
+    const sourceRequestId = item.request_id || requestId;
     const incoming = item.artifact
-      ? normalizeArtifactEntry(item.artifact, 0, item.request_id || message.requestId)
+      ? normalizeArtifactEntry(item.artifact, 0, sourceRequestId)
       : Array.isArray(item.artifacts)
-        ? item.artifacts.map((entry, index) => normalizeArtifactEntry(entry, index, item.request_id || message.requestId)).filter((entry): entry is AgentArtifact => Boolean(entry))
+        ? item.artifacts.map((entry, index) => normalizeArtifactEntry(entry, index, sourceRequestId)).filter((entry): entry is AgentArtifact => Boolean(entry))
         : [];
-    const artifacts = Array.isArray(incoming) ? incoming : incoming ? [incoming] : [];
+    return Array.isArray(incoming) ? incoming : incoming ? [incoming] : [];
+  }
+
+  function appendArtifact(message: ChatItem, item: StreamItem, pending = true): ChatItem {
+    const artifacts = streamItemArtifacts(item, item.request_id || message.requestId);
     if (!artifacts.length) return message;
     const nextArtifacts = [...(message.artifacts || [])];
     for (const artifact of artifacts) {
       const key = artifactDedupeKey(artifact);
       const index = nextArtifacts.findIndex((entry) => entry.id === artifact.id || artifactDedupeKey(entry) === key);
       if (index >= 0) {
-        nextArtifacts[index] = { ...nextArtifacts[index], ...artifact };
+        nextArtifacts[index] = mergeAgentArtifactRecord(nextArtifacts[index], artifact);
       } else {
         nextArtifacts.push(artifact);
       }
@@ -2753,8 +3136,40 @@ export function App() {
     return { ...message, pending, paused: false, artifacts: nextArtifacts };
   }
 
+  function rememberPostDoneTailArtifacts(requestId: string, item: StreamItem) {
+    const artifacts = streamItemArtifacts(item, requestId);
+    if (!requestId || !artifacts.length) return;
+    const currentMessage: ChatItem = {
+      id: `postdone-buffer-${requestId}`,
+      role: "assistant",
+      content: "",
+      createdAt: new Date().toISOString(),
+      artifacts: postDoneTailArtifactsRef.current[requestId] || []
+    };
+    postDoneTailArtifactsRef.current = {
+      ...postDoneTailArtifactsRef.current,
+      [requestId]: mergeArtifactsIntoMessage(currentMessage, artifacts).artifacts || artifacts
+    };
+  }
+
+  function mergeBufferedPostDoneArtifacts(message: ChatItem) {
+    const requestId = message.requestId || "";
+    return requestId ? mergeArtifactsIntoMessage(message, postDoneTailArtifactsRef.current[requestId] || []) : message;
+  }
+
+  function sessionHasAssistantRequest(sessionId: string, requestId: string) {
+    if (!requestId) return false;
+    const source = activeSessionIdRef.current === sessionId
+      ? messagesRef.current
+      : sessionUiState[sessionId]?.messages || [];
+    return source.some((message) => message.role === "assistant" && message.requestId === requestId);
+  }
+
   function isCurrentSessionRequest(sessionId: string, requestId?: string) {
-    return !requestId || sessionRequestIdsRef.current[sessionId] === requestId;
+    if (!requestId) return true;
+    const currentRequestId = sessionRequestIdsRef.current[sessionId];
+    if (currentRequestId) return currentRequestId === requestId;
+    return sessionHasAssistantRequest(sessionId, requestId);
   }
 
   function isUiLiveAssistantMessage(message: ChatItem) {
@@ -2776,9 +3191,125 @@ export function App() {
     return String(item.content ?? item.text ?? item.delta ?? "");
   }
 
+  function streamRequestKey(sessionId: string, requestId: string) {
+    return `${sessionId}::${requestId}`;
+  }
+
+  function isTerminalStreamPhase(phase?: StreamRequestPhase) {
+    return phase === "completed" || phase === "failed" || phase === "cancelled";
+  }
+
+  function getStreamRequestState(sessionId: string, requestId: string) {
+    return streamRequestStates.current[streamRequestKey(sessionId, requestId)];
+  }
+
+  function setStreamRequestPhase(sessionId: string, requestId: string, phase: StreamRequestPhase) {
+    if (!sessionId || !requestId) return;
+    const key = streamRequestKey(sessionId, requestId);
+    const current = streamRequestStates.current[key];
+    if (isTerminalStreamPhase(current?.phase) && !isTerminalStreamPhase(phase)) return;
+    streamRequestStates.current[key] = {
+      sessionId,
+      requestId,
+      phase,
+      updatedAt: Date.now(),
+      terminalAt: isTerminalStreamPhase(phase) ? current?.terminalAt || Date.now() : current?.terminalAt,
+      lastEventAt: current?.lastEventAt
+    };
+  }
+
+  function clearStreamStallTimer(sessionId: string, requestId: string) {
+    const key = streamRequestKey(sessionId, requestId);
+    const timer = streamStallTimers.current[key];
+    if (timer) {
+      window.clearTimeout(timer);
+      delete streamStallTimers.current[key];
+    }
+  }
+
+  function scheduleStreamStallTimer(sessionId: string, assistantId: string, requestId: string, delayMs: number) {
+    clearStreamStallTimer(sessionId, requestId);
+    const key = streamRequestKey(sessionId, requestId);
+    streamStallTimers.current[key] = window.setTimeout(() => {
+      delete streamStallTimers.current[key];
+      const state = getStreamRequestState(sessionId, requestId);
+      if (isTerminalStreamPhase(state?.phase) || completedRequestIds.current[requestId]) return;
+      setStreamRequestPhase(sessionId, requestId, "stalled");
+      updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => (
+        message.pending ? replaceCurrentPhase(message, "Response stalled; reconnecting") : message
+      ));
+      scheduleStreamReconnect(sessionId, assistantId, requestId);
+    }, delayMs);
+  }
+
+  function beginStreamRequest(sessionId: string, assistantId: string, requestId: string) {
+    setStreamRequestPhase(sessionId, requestId, "connecting");
+    scheduleStreamStallTimer(sessionId, assistantId, requestId, 20_000);
+  }
+
+  function observeStreamItem(sessionId: string, assistantId: string, requestId: string, item: StreamItem) {
+    const key = streamRequestKey(sessionId, requestId);
+    const current = streamRequestStates.current[key];
+    if (isTerminalStreamPhase(current?.phase)) return;
+    streamRequestStates.current[key] = {
+      sessionId,
+      requestId,
+      phase: item.type === "message_update" || item.type === "delta" ? "streaming" : current?.phase || "streaming",
+      updatedAt: Date.now(),
+      lastEventAt: Date.now()
+    };
+    scheduleStreamStallTimer(sessionId, assistantId, requestId, 90_000);
+  }
+
+  function markStreamTerminal(sessionId: string, requestId: string, phase: "completed" | "failed" | "cancelled") {
+    setStreamRequestPhase(sessionId, requestId, phase);
+    clearStreamStallTimer(sessionId, requestId);
+  }
+
+  function flushStreamBoundary(sessionId: string, assistantId: string, requestId: string, item: StreamItem) {
+    observeStreamItem(sessionId, assistantId, requestId, item);
+    const isDeltaItem = item.type === "message_update" || item.type === "delta";
+    if (!isDeltaItem) {
+      setStreamRequestPhase(sessionId, requestId, "flushing");
+      flushStreamDeltaBuffers(sessionId, requestId);
+    }
+  }
+
+  function streamItemExplicitText(item: StreamItem, keys: Array<keyof StreamItem | "final_text">) {
+    const record = item as StreamItem & { final_text?: unknown };
+    for (const key of keys) {
+      if (Object.prototype.hasOwnProperty.call(record, key)) {
+        return String(record[key] ?? "");
+      }
+    }
+    return null;
+  }
+
+  function doneItemContent(item: StreamItem, currentContent: string) {
+    return redactInternalPromptText(streamItemExplicitText(item, ["final_text", "content", "text", "message"]) ?? currentContent);
+  }
+
   function shouldAcceptStreamItem(sessionId: string, requestId: string, item: StreamItem) {
-    if (isCurrentSessionRequest(sessionId, requestId)) return true;
-    return Boolean(completedRequestIds.current[requestId] && isPostDoneTailItem(item));
+    const itemRecord = item as StreamItem & { requestId?: string };
+    const itemRequestId = item.request_id || itemRecord.requestId;
+    if (itemRequestId && itemRequestId !== requestId) return false;
+    if (completedRequestIds.current[requestId]) {
+      const state = getStreamRequestState(sessionId, requestId);
+      const activeTailStream = streamCleanupRequestIds.current[sessionId] === requestId;
+      return isPostDoneTailItem(item)
+        && (Boolean(itemRequestId) || activeTailStream || state?.phase === "text_done_tail_open");
+    }
+    return isCurrentSessionRequest(sessionId, requestId);
+  }
+
+  function isTerminalVoiceAttach(item: StreamItem) {
+    if (item.type !== "voice_attach") return false;
+    const record = item as StreamItem & { terminal?: unknown; final?: unknown; done?: unknown };
+    return record.terminal === true
+      || record.final === true
+      || record.done === true
+      || item.status === "done"
+      || item.status === "completed";
   }
 
   function streamDeltaKey(sessionId: string, assistantId: string, requestId: string) {
@@ -2795,7 +3326,7 @@ export function App() {
     const text = buffer.text;
     buffer.text = "";
     if (!text) return;
-    updateAssistantMessage(buffer.sessionId, buffer.assistantId, (message) => ({
+    updateAssistantMessageForRequest(buffer.sessionId, buffer.assistantId, buffer.requestId, (message) => ({
       ...finishRunningSteps(message),
       content: `${message.content}${text}`,
       pending: true,
@@ -2858,6 +3389,7 @@ export function App() {
         window.clearTimeout(postDoneStreamCloseTimers.current[postDoneKey]);
         delete postDoneStreamCloseTimers.current[postDoneKey];
       }
+      clearStreamStallTimer(sessionId, requestId);
     }
     flushStreamDeltaBuffers(sessionId, requestId);
     cleanup();
@@ -2869,7 +3401,7 @@ export function App() {
     clearStreamDeltaBuffers(sessionId, requestId);
   }
 
-  function markRequestLocallyCompleted(requestId: string, ttlMs = 70_000) {
+  function markRequestLocallyCompleted(requestId: string, ttlMs = 30 * 60_000) {
     if (!requestId) return;
     completedRequestIds.current[requestId] = true;
     locallyCompletedRequestIdsRef.current = {
@@ -2882,6 +3414,15 @@ export function App() {
     }
     completedRequestCleanupTimers.current[requestId] = window.setTimeout(() => {
       delete completedRequestIds.current[requestId];
+      delete postDoneTailArtifactsRef.current[requestId];
+      Object.keys(streamRequestStates.current).forEach((key) => {
+        if (key.endsWith(`::${requestId}`)) delete streamRequestStates.current[key];
+      });
+      Object.keys(streamStallTimers.current).forEach((key) => {
+        if (!key.endsWith(`::${requestId}`)) return;
+        window.clearTimeout(streamStallTimers.current[key]);
+        delete streamStallTimers.current[key];
+      });
       const nextCompleted = { ...locallyCompletedRequestIdsRef.current };
       delete nextCompleted[requestId];
       locallyCompletedRequestIdsRef.current = nextCompleted;
@@ -2890,13 +3431,14 @@ export function App() {
     }, ttlMs);
   }
 
-  function schedulePostDoneStreamClose(sessionId: string, requestId: string, delayMs = 13_000) {
+  function schedulePostDoneStreamClose(sessionId: string, requestId: string, delayMs = 60_000) {
     if (!sessionId || !requestId) return;
     const key = `${sessionId}::${requestId}`;
     if (postDoneStreamCloseTimers.current[key]) {
       window.clearTimeout(postDoneStreamCloseTimers.current[key]);
     }
     postDoneStreamCloseTimers.current[key] = window.setTimeout(() => {
+      setStreamRequestPhase(sessionId, requestId, "completed");
       closeSessionStream(sessionId, requestId);
       delete postDoneStreamCloseTimers.current[key];
     }, delayMs);
@@ -2924,15 +3466,17 @@ export function App() {
   function finishSessionRequest(sessionId: string, requestId?: string) {
     flushStreamDeltaBuffers(sessionId, requestId);
     clearHistoryRecovery(sessionId, requestId);
+    if (requestId) clearStreamStallTimer(sessionId, requestId);
     clearSessionRequestState(sessionId, requestId);
     closeSessionStream(sessionId, requestId);
     clearStreamDeltaBuffers(sessionId, requestId);
   }
 
   function scheduleStreamReconnect(sessionId: string, assistantId: string, requestId: string) {
+    if (completedRequestIds.current[requestId]) return;
     if (!isCurrentSessionRequest(sessionId, requestId)) return;
     const attempts = streamRetryCounts.current[sessionId] || 0;
-    updateAssistantMessage(sessionId, assistantId, (message) => (
+    updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => (
       message.pending ? replaceCurrentPhase(message, attempts ? `正在恢复响应通道 · 第 ${attempts + 1} 次` : "正在恢复响应通道") : message
     ));
     if (attempts >= 5) {
@@ -2945,7 +3489,7 @@ export function App() {
         ));
         if (snapshot) setRuntimeSnapshot(snapshot);
         if (active?.cancelled) {
-          updateAssistantMessage(sessionId, assistantId, (message) => ({
+          updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => ({
             ...message,
             requestId,
             pending: true,
@@ -2960,7 +3504,7 @@ export function App() {
             ? await refreshSessionFromHistory(sessionId)
             : false;
           if (restored) return;
-          updateAssistantMessage(sessionId, assistantId, (message) => ({
+          updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => ({
             ...message,
             requestId,
             pending: true,
@@ -2980,7 +3524,7 @@ export function App() {
           clearSessionRequestState(sessionId, requestId);
           return;
         }
-        updateAssistantMessage(sessionId, assistantId, (message) => ({
+        updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => ({
           ...finishRunningSteps(message),
           requestId,
           pending: false,
@@ -3001,6 +3545,18 @@ export function App() {
 
   function attachMessageStream(sessionId: string, assistantId: string, requestId: string) {
     if (!requestId) return;
+    const cachedMessages = sessionId === activeSessionIdRef.current
+      ? messagesRef.current
+      : sessionUiState[sessionId]?.messages || [];
+    const existingMessage = cachedMessages.find((message) => (
+      message.id === assistantId || (message.role === "assistant" && message.requestId === requestId)
+    ));
+    if (completedRequestIds.current[requestId] || locallyCompletedRequestIdsRef.current[requestId] || isTerminalAssistantMessage(existingMessage)) {
+      markRequestLocallyCompleted(requestId);
+      clearSessionRequestState(sessionId, requestId);
+      markStreamTerminal(sessionId, requestId, "completed");
+      return;
+    }
     const existingRequestId = streamCleanupRequestIds.current[sessionId];
     if (existingRequestId === requestId && streamCleanups.current[sessionId]) return;
     if (existingRequestId && existingRequestId !== requestId) {
@@ -3010,7 +3566,7 @@ export function App() {
     if (!hasCursor) {
       updateAssistantMessage(sessionId, assistantId, (message) => (
         message.pending && message.requestId === requestId && message.content
-          ? { ...message, content: "", steps: message.steps?.length ? message.steps : [{ type: "phase", content: "正在恢复响应通道" }] }
+          ? { ...message, steps: message.steps?.length ? message.steps : [{ type: "phase", content: "正在恢复响应通道" }] }
           : message
       ));
     }
@@ -3018,40 +3574,42 @@ export function App() {
     sessionRequestIdsRef.current = { ...sessionRequestIdsRef.current, [sessionId]: requestId };
     setSessionRequestIds((current) => ({ ...current, [sessionId]: requestId }));
     scheduleHistoryRecovery(sessionId, requestId);
+    beginStreamRequest(sessionId, assistantId, requestId);
     const cleanup = openMessageStream({
       requestId,
       webPort: sidecarStatus.webPort,
       onItem: (item) => {
         if (item.request_id && item.request_id !== requestId) return;
         if (!shouldAcceptStreamItem(sessionId, requestId, item)) return;
-        const isDeltaItem = item.type === "message_update" || item.type === "delta";
-        if (!isDeltaItem) flushStreamDeltaBuffers(sessionId, requestId);
+        flushStreamBoundary(sessionId, assistantId, requestId, item);
         if (item.type === "cancelled") {
-          updateAssistantMessage(sessionId, assistantId, (message) => ({
+          updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => ({
             ...finishRunningSteps(message, "cancelled"),
             content: redactInternalPromptText(item.content || item.message || message.content || "已停止"),
             pending: false,
             cancelled: true
           }));
+          markStreamTerminal(sessionId, requestId, "cancelled");
           markSessionOutputReady(sessionId);
           finishSessionRequest(sessionId, requestId);
           return;
         }
         if (item.type === "done") {
-          updateAssistantMessage(sessionId, assistantId, (message) => {
+          updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => {
             const nextMessage = item.artifact || item.artifacts
               ? appendArtifact(finishRunningSteps(message), item)
               : finishRunningSteps(message);
-            return {
-              ...clearTransientSendSteps(nextMessage),
-              content: redactInternalPromptText(item.content || message.content),
-              pending: false,
-              requestId: undefined,
-              userSeq: typeof item.user_seq === "number" ? item.user_seq : message.userSeq,
-              botSeq: typeof item.bot_seq === "number" ? item.bot_seq : message.botSeq
-            };
+              return {
+                ...clearTransientSendSteps(nextMessage),
+                content: doneItemContent(item, message.content),
+                pending: false,
+                requestId,
+                userSeq: typeof item.user_seq === "number" ? item.user_seq : message.userSeq,
+                botSeq: typeof item.bot_seq === "number" ? item.bot_seq : message.botSeq
+              };
           });
           markRequestLocallyCompleted(requestId);
+          setStreamRequestPhase(sessionId, requestId, "text_done_tail_open");
           markSessionOutputReady(sessionId);
           clearHistoryRecovery(sessionId, requestId);
           clearSessionRequestState(sessionId, requestId);
@@ -3064,11 +3622,12 @@ export function App() {
         if (item.type === "error") {
           const message = redactInternalPromptText(item.content || item.message || "运行时返回错误");
           const staleRequest = /invalid request_id/i.test(message);
+          markStreamTerminal(sessionId, requestId, "failed");
           finishSessionRequest(sessionId, requestId);
           if (staleRequest) {
             recoverStaleRequestFromHistory(sessionId, assistantId, requestId);
           } else {
-            updateAssistantMessage(sessionId, assistantId, (entry) => ({
+            updateAssistantMessageForRequest(sessionId, assistantId, requestId, (entry) => ({
               ...finishRunningSteps(entry, "error"),
               content: message,
               pending: false,
@@ -3082,13 +3641,13 @@ export function App() {
         if (item.type === "reasoning" || item.type === "thinking") {
           const chunk = item.content || item.text || "";
           if (chunk) {
-            updateAssistantMessage(sessionId, assistantId, (message) => appendReasoningStep(message, chunk));
+            updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => appendReasoningStep(message, chunk));
           }
           return;
         }
         if (item.type === "message_end") {
           if (item.has_tool_calls) {
-            updateAssistantMessage(sessionId, assistantId, (message) => flushIntermediateContent(finishRunningSteps(message)));
+            updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => flushIntermediateContent(finishRunningSteps(message)));
           }
           return;
         }
@@ -3115,7 +3674,7 @@ export function App() {
               }
             ]
           });
-          updateAssistantMessage(sessionId, assistantId, (message) => ({
+          updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => ({
             ...replaceCurrentPhase(message, `等待本机工具授权：${item.tool || "tool"}`),
             pending: true,
             paused: false
@@ -3123,16 +3682,17 @@ export function App() {
           return;
         }
         if (item.type === "tool_start") {
-          updateAssistantMessage(sessionId, assistantId, (message) => appendToolStart(message, item));
+          updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => appendToolStart(message, item));
           return;
         }
         if (item.type === "tool_end") {
-          updateAssistantMessage(sessionId, assistantId, (message) => appendToolEnd(message, item));
+          updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => appendToolEnd(message, item));
           return;
         }
         if (item.type === "artifact") {
           const postDoneTail = Boolean(completedRequestIds.current[requestId]);
-          updateAssistantMessage(sessionId, assistantId, (message) => (
+          if (postDoneTail) rememberPostDoneTailArtifacts(requestId, item);
+          updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => (
             postDoneTail
               ? clearTransientSendSteps(appendArtifact(finishRunningSteps(message), item, false))
               : appendArtifact(message, item)
@@ -3142,22 +3702,29 @@ export function App() {
         }
         if (item.type === "image" || item.type === "video" || item.type === "audio" || item.type === "file" || item.type === "voice_attach") {
           const postDoneTail = Boolean(completedRequestIds.current[requestId]);
-          updateAssistantMessage(sessionId, assistantId, (message) => {
+          const terminalVoiceAttach = isTerminalVoiceAttach(item);
+          updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => {
             const next = appendMediaStep(message, item, !postDoneTail);
-            return postDoneTail || item.type === "voice_attach"
+            return postDoneTail || terminalVoiceAttach
               ? { ...clearTransientSendSteps(finishRunningSteps(next)), pending: false, paused: false }
               : next;
           });
-          if (postDoneTail || item.type === "voice_attach") {
+          if (postDoneTail || terminalVoiceAttach) {
             markSessionOutputReady(sessionId);
-            finishSessionRequest(sessionId, requestId);
+            if (!postDoneTail && terminalVoiceAttach) {
+              markRequestLocallyCompleted(requestId);
+              setStreamRequestPhase(sessionId, requestId, "text_done_tail_open");
+              clearHistoryRecovery(sessionId, requestId);
+              clearSessionRequestState(sessionId, requestId);
+              schedulePostDoneStreamClose(sessionId, requestId);
+            }
           }
           return;
         }
             if (item.type === "phase" && (item.content || item.message)) {
               const phaseContent = redactInternalPromptText(item.content || item.message || "");
               if (!phaseContent) return;
-              updateAssistantMessage(sessionId, assistantId, (message) => replaceCurrentPhase(message, phaseContent));
+              updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => replaceCurrentPhase(message, phaseContent));
               return;
             }
             if (item.type === "message_update" || item.type === "delta") {
@@ -3166,11 +3733,12 @@ export function App() {
       },
       onError: () => {
         if (completedRequestIds.current[requestId]) {
-          delete completedRequestIds.current[requestId];
-          finishSessionRequest(sessionId, requestId);
+          markStreamTerminal(sessionId, requestId, "completed");
+          closeSessionStream(sessionId, requestId);
           return;
-        }
+          }
           if (!isCurrentSessionRequest(sessionId, requestId)) return;
+          setStreamRequestPhase(sessionId, requestId, "stalled");
           closeSessionStream(sessionId, requestId);
           scheduleHistoryRecovery(sessionId, requestId, [800, 2400, 5000]);
           scheduleStreamReconnect(sessionId, assistantId, requestId);
@@ -3320,11 +3888,7 @@ export function App() {
     };
     const assistantId = `a-${Date.now()}`;
     const requestSessionId = activeSessionId;
-    const sendGeneration = sendGenerationRef.current + 1;
-    sendGenerationRef.current = sendGeneration;
-    preflightAbortRef.current?.abort();
-    const preflightController = new AbortController();
-    preflightAbortRef.current = preflightController;
+    const { generation: sendGeneration, controller: preflightController } = beginSessionPreflight(requestSessionId);
     updateSessionMessages(requestSessionId, (current) => [
       ...current,
       userMessage,
@@ -3370,7 +3934,7 @@ export function App() {
         pending: false
       }));
       clearAssistantPhaseTimers(assistantId);
-      if (preflightAbortRef.current === preflightController) preflightAbortRef.current = null;
+      clearSessionPreflight(requestSessionId, preflightController);
       markSessionOutputReady(requestSessionId);
       return;
     }
@@ -3415,7 +3979,7 @@ export function App() {
           pending: false
         }));
         clearAssistantPhaseTimers(assistantId);
-        if (preflightAbortRef.current === preflightController) preflightAbortRef.current = null;
+        clearSessionPreflight(requestSessionId, preflightController);
         markSessionOutputReady(requestSessionId);
         return;
       }
@@ -3425,7 +3989,7 @@ export function App() {
       setToast(error instanceof Error ? `额度检查暂不可用，已继续发送：${error.message}` : "额度检查暂不可用，已继续发送");
       return { ok: true, quota: { allowed: true } } as EnterpriseQuotaCheckResult;
     });
-    if (sendGenerationRef.current !== sendGeneration || preflightController.signal.aborted) {
+    if (!isSessionPreflightCurrent(requestSessionId, sendGeneration, preflightController)) {
       clearAssistantPhaseTimers(assistantId);
       return;
     }
@@ -3457,7 +4021,7 @@ export function App() {
         pending: false
       }));
       clearAssistantPhaseTimers(assistantId);
-      if (preflightAbortRef.current === preflightController) preflightAbortRef.current = null;
+      clearSessionPreflight(requestSessionId, preflightController);
       markSessionOutputReady(requestSessionId);
       return;
     }
@@ -3508,7 +4072,7 @@ export function App() {
         hiddenContext,
         attachments: outboundAttachments
       });
-      if (sendGenerationRef.current !== sendGeneration || preflightController.signal.aborted) {
+      if (!isSessionPreflightCurrent(requestSessionId, sendGeneration, preflightController)) {
         clearAssistantPhaseTimers(assistantId);
         if (result.request_id) {
           void cancelChatRequest({ requestId: result.request_id, sessionId: requestSessionId }).catch(() => undefined);
@@ -3527,18 +4091,19 @@ export function App() {
         markSessionOutputReady(requestSessionId);
         reportChatUsage(result.usage, usageTotal(result.usage) ? "provider" : "estimated");
         clearAssistantPhaseTimers(assistantId);
-        if (preflightAbortRef.current === preflightController) preflightAbortRef.current = null;
+        clearSessionPreflight(requestSessionId, preflightController);
       }
       if (result.request_id && result.stream) {
         const requestId = result.request_id;
         clearAssistantPhaseTimers(assistantId);
-        if (preflightAbortRef.current === preflightController) preflightAbortRef.current = null;
+        clearSessionPreflight(requestSessionId, preflightController);
         setActiveRequestId(requestId);
         sessionRequestIdsRef.current = { ...sessionRequestIdsRef.current, [requestSessionId]: requestId };
         setSessionRequestIds((current) => ({ ...current, [requestSessionId]: requestId }));
         streamRetryCounts.current[requestSessionId] = 0;
         scheduleHistoryRecovery(requestSessionId, requestId);
-        updateAssistantMessage(requestSessionId, assistantId, (message) => ({
+        beginStreamRequest(requestSessionId, assistantId, requestId);
+        updateAssistantMessageForRequest(requestSessionId, assistantId, requestId, (message) => ({
           ...replaceCurrentPhase(message, "正在连接响应"),
           requestId
         }));
@@ -3549,40 +4114,40 @@ export function App() {
             if (item.request_id && item.request_id !== requestId) return;
             if (!shouldAcceptStreamItem(requestSessionId, requestId, item)) return;
             observeStreamUsage(item);
-            const isDeltaItem = item.type === "message_update" || item.type === "delta";
-            if (!isDeltaItem) flushStreamDeltaBuffers(requestSessionId, requestId);
+            flushStreamBoundary(requestSessionId, assistantId, requestId, item);
             if (item.type === "cancelled") {
-              updateAssistantMessage(requestSessionId, assistantId, (message) => ({
+              updateAssistantMessageForRequest(requestSessionId, assistantId, requestId, (message) => ({
                 ...finishRunningSteps(message, "cancelled"),
                 content: redactInternalPromptText(item.content || item.message || message.content || "已停止"),
                 pending: false,
                 cancelled: true
               }));
+              markStreamTerminal(requestSessionId, requestId, "cancelled");
               markSessionOutputReady(requestSessionId);
               finishSessionRequest(requestSessionId, requestId);
               return;
             }
             if (item.type === "done") {
-              updateSessionMessages(requestSessionId, (current) => current.map((message) => {
-                if (message.id === userMessage.id && typeof item.user_seq === "number") {
-                  return { ...message, userSeq: item.user_seq };
-                }
-                if (message.id === assistantId) {
-                  const nextMessage = item.artifact || item.artifacts
-                    ? appendArtifact(finishRunningSteps(message), item)
-                    : finishRunningSteps(message);
-                  return {
-                    ...clearTransientSendSteps(nextMessage),
-                    content: redactInternalPromptText(item.content || message.content),
-                    pending: false,
-                    requestId: undefined,
-                    userSeq: typeof item.user_seq === "number" ? item.user_seq : message.userSeq,
-                    botSeq: typeof item.bot_seq === "number" ? item.bot_seq : message.botSeq
-                  };
-                }
-                return message;
-              }));
+              if (typeof item.user_seq === "number") {
+                updateSessionMessages(requestSessionId, (current) => current.map((message) => (
+                  message.id === userMessage.id ? { ...message, userSeq: item.user_seq } : message
+                )));
+              }
+              updateAssistantMessageForRequest(requestSessionId, assistantId, requestId, (message) => {
+                const nextMessage = item.artifact || item.artifacts
+                  ? appendArtifact(finishRunningSteps(message), item)
+                  : finishRunningSteps(message);
+                return {
+                  ...clearTransientSendSteps(nextMessage),
+                  content: doneItemContent(item, message.content),
+                  pending: false,
+                  requestId,
+                  userSeq: typeof item.user_seq === "number" ? item.user_seq : message.userSeq,
+                  botSeq: typeof item.bot_seq === "number" ? item.bot_seq : message.botSeq
+                };
+              });
               markRequestLocallyCompleted(requestId);
+              setStreamRequestPhase(requestSessionId, requestId, "text_done_tail_open");
               markSessionOutputReady(requestSessionId);
               clearHistoryRecovery(requestSessionId, requestId);
               clearSessionRequestState(requestSessionId, requestId);
@@ -3596,16 +4161,17 @@ export function App() {
             if (item.type === "error") {
               const message = redactInternalPromptText(item.content || item.message || "运行时返回错误");
               const staleRequest = /invalid request_id/i.test(message);
+              markStreamTerminal(requestSessionId, requestId, "failed");
               finishSessionRequest(requestSessionId, requestId);
               if (staleRequest) {
                 recoverStaleRequestFromHistory(requestSessionId, assistantId, requestId);
               } else {
-                updateSessionMessages(requestSessionId, (current) => current.map((entry) => entry.id === assistantId ? {
+                updateAssistantMessageForRequest(requestSessionId, assistantId, requestId, (entry) => ({
                   ...finishRunningSteps(entry, "error"),
                   content: message,
                   pending: false,
                   paused: false
-                } : entry));
+                }));
                 markSessionOutputReady(requestSessionId);
               }
               reportChatUsage(item.usage, usageTotal(item.usage) ? "provider" : "estimated");
@@ -3615,13 +4181,13 @@ export function App() {
             if (item.type === "reasoning" || item.type === "thinking") {
               const chunk = item.content || item.text || "";
               if (chunk) {
-                updateAssistantMessage(requestSessionId, assistantId, (message) => appendReasoningStep(message, chunk));
+                updateAssistantMessageForRequest(requestSessionId, assistantId, requestId, (message) => appendReasoningStep(message, chunk));
               }
               return;
             }
             if (item.type === "message_end") {
               if (item.has_tool_calls) {
-                updateAssistantMessage(requestSessionId, assistantId, (message) => flushIntermediateContent(finishRunningSteps(message)));
+                updateAssistantMessageForRequest(requestSessionId, assistantId, requestId, (message) => flushIntermediateContent(finishRunningSteps(message)));
               }
               return;
             }
@@ -3648,23 +4214,24 @@ export function App() {
                   }
                 ]
               });
-              updateAssistantMessage(requestSessionId, assistantId, (message) => ({
+              updateAssistantMessageForRequest(requestSessionId, assistantId, requestId, (message) => ({
                 ...replaceCurrentPhase(message, `等待本机工具授权：${item.tool || "tool"}`),
                 pending: true
               }));
               return;
             }
             if (item.type === "tool_start") {
-              updateAssistantMessage(requestSessionId, assistantId, (message) => appendToolStart(message, item));
+              updateAssistantMessageForRequest(requestSessionId, assistantId, requestId, (message) => appendToolStart(message, item));
               return;
             }
             if (item.type === "tool_end") {
-              updateAssistantMessage(requestSessionId, assistantId, (message) => appendToolEnd(message, item));
+              updateAssistantMessageForRequest(requestSessionId, assistantId, requestId, (message) => appendToolEnd(message, item));
               return;
             }
             if (item.type === "artifact") {
               const postDoneTail = Boolean(completedRequestIds.current[requestId]);
-              updateAssistantMessage(requestSessionId, assistantId, (message) => (
+              if (postDoneTail) rememberPostDoneTailArtifacts(requestId, item);
+              updateAssistantMessageForRequest(requestSessionId, assistantId, requestId, (message) => (
                 postDoneTail
                   ? clearTransientSendSteps(appendArtifact(finishRunningSteps(message), item, false))
                   : appendArtifact(message, item)
@@ -3674,22 +4241,29 @@ export function App() {
             }
             if (item.type === "image" || item.type === "video" || item.type === "audio" || item.type === "file" || item.type === "voice_attach") {
               const postDoneTail = Boolean(completedRequestIds.current[requestId]);
-              updateAssistantMessage(requestSessionId, assistantId, (message) => {
+              const terminalVoiceAttach = isTerminalVoiceAttach(item);
+              updateAssistantMessageForRequest(requestSessionId, assistantId, requestId, (message) => {
                 const next = appendMediaStep(message, item, !postDoneTail);
-                return postDoneTail || item.type === "voice_attach"
+                return postDoneTail || terminalVoiceAttach
                   ? { ...clearTransientSendSteps(finishRunningSteps(next)), pending: false, paused: false }
                   : next;
               });
-              if (postDoneTail || item.type === "voice_attach") {
+              if (postDoneTail || terminalVoiceAttach) {
                 markSessionOutputReady(requestSessionId);
-                finishSessionRequest(requestSessionId, requestId);
+                if (!postDoneTail && terminalVoiceAttach) {
+                  markRequestLocallyCompleted(requestId);
+                  setStreamRequestPhase(requestSessionId, requestId, "text_done_tail_open");
+                  clearHistoryRecovery(requestSessionId, requestId);
+                  clearSessionRequestState(requestSessionId, requestId);
+                  schedulePostDoneStreamClose(requestSessionId, requestId);
+                }
               }
               return;
             }
             if (item.type === "phase" && (item.content || item.message)) {
               const phaseContent = redactInternalPromptText(item.content || item.message || "");
               if (!phaseContent) return;
-              updateAssistantMessage(requestSessionId, assistantId, (message) => replaceCurrentPhase(message, phaseContent));
+              updateAssistantMessageForRequest(requestSessionId, assistantId, requestId, (message) => replaceCurrentPhase(message, phaseContent));
               return;
             }
             if (item.type === "message_update" || item.type === "delta") {
@@ -3698,11 +4272,12 @@ export function App() {
           },
           onError: () => {
             if (completedRequestIds.current[requestId]) {
-              delete completedRequestIds.current[requestId];
-              finishSessionRequest(requestSessionId, requestId);
+              markStreamTerminal(requestSessionId, requestId, "completed");
+              closeSessionStream(requestSessionId, requestId);
               return;
             }
             if (!isCurrentSessionRequest(requestSessionId, requestId)) return;
+            setStreamRequestPhase(requestSessionId, requestId, "stalled");
             closeSessionStream(requestSessionId, requestId);
             scheduleHistoryRecovery(requestSessionId, requestId, [800, 2400, 5000]);
             scheduleStreamReconnect(requestSessionId, assistantId, requestId);
@@ -3714,7 +4289,7 @@ export function App() {
       } else if (!result.inline_reply) {
         reportChatUsage(result.usage, usageTotal(result.usage) ? "provider" : "estimated");
         clearAssistantPhaseTimers(assistantId);
-        if (preflightAbortRef.current === preflightController) preflightAbortRef.current = null;
+        clearSessionPreflight(requestSessionId, preflightController);
       }
       generateSessionTitle({ sessionId: requestSessionId, userMessage: text || activeProject?.name || "项目会话" }).then((title) => {
         if (!title) return;
@@ -3737,12 +4312,12 @@ export function App() {
       }).catch(() => undefined);
     } catch (error) {
       const message = error instanceof Error ? error.message : "发送失败";
-      if (sendGenerationRef.current !== sendGeneration || preflightController.signal.aborted) {
+      if (!isSessionPreflightCurrent(requestSessionId, sendGeneration, preflightController)) {
         clearAssistantPhaseTimers(assistantId);
         return;
       }
       clearAssistantPhaseTimers(assistantId);
-      if (preflightAbortRef.current === preflightController) preflightAbortRef.current = null;
+      clearSessionPreflight(requestSessionId, preflightController);
       updateSessionMessages(requestSessionId, (current) => current.map((item) => item.id === assistantId ? { ...finishRunningSteps(item), content: message, pending: false } : item));
       markSessionOutputReady(requestSessionId);
       finishSessionRequest(requestSessionId);
@@ -3751,9 +4326,7 @@ export function App() {
   }
 
   async function stopActiveRequest() {
-    sendGenerationRef.current += 1;
-    preflightAbortRef.current?.abort();
-    preflightAbortRef.current = null;
+    abortSessionPreflight(activeSessionId);
     clearAllPhaseTimers();
     const requestId = activeSessionRequestId;
     try {
@@ -3776,6 +4349,9 @@ export function App() {
   }
 
   function handleComposerKey(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.nativeEvent.isComposing) {
+      return;
+    }
     const isMeta = event.metaKey || event.ctrlKey;
     if (event.key === "Enter" && isMeta) {
       event.preventDefault();
@@ -3951,7 +4527,7 @@ export function App() {
       sessionRequestIdsRef.current = { ...sessionRequestIdsRef.current, [requestSessionId]: requestId };
       setSessionRequestIds((current) => ({ ...current, [requestSessionId]: requestId }));
       streamRetryCounts.current[requestSessionId] = 0;
-      updateAssistantMessage(requestSessionId, assistantId, (message) => ({ ...message, requestId }));
+      updateAssistantMessageForRequest(requestSessionId, assistantId, requestId, (message) => ({ ...message, requestId }));
       attachMessageStream(requestSessionId, assistantId, requestId);
     }
   }
@@ -4130,12 +4706,15 @@ export function App() {
     }
   }
 
-  async function openArtifactFile(file: { file_path: string; file_name: string; file_type?: FileAttachment["file_type"]; open_action?: "preview" | "open" | "reveal" | "copy" | "openWith" }) {
+  async function openArtifactFile(
+    file: { file_path: string; file_name: string; file_type?: FileAttachment["file_type"]; open_action?: "preview" | "open" | "reveal" | "copy" | "openWith"; previewDataUrl?: string; preview_url?: string },
+    sessionId = activeSessionIdRef.current
+  ) {
     const rawPath = normalizeLocalSource(file.file_path);
     if (!rawPath) return;
     let action = file.open_action || "open";
     const fileType = file.file_type || "file";
-    const artifactSessionId = activeSessionIdRef.current;
+    const artifactSessionId = sessionId;
     const resolvedPath = resolveArtifactPathForSession(artifactSessionId, rawPath);
     if (action === "preview") {
       if (fileType !== "image") {
@@ -4146,7 +4725,8 @@ export function App() {
           file_path: previewPath,
           file_name: file.file_name,
           file_type: "image",
-          previewDataUrl: filePreviewUrl(previewPath, sidecarStatus.webPort)
+          previewDataUrl: file.previewDataUrl || (file.preview_url ? filePreviewUrl(file.preview_url, sidecarStatus.webPort) : filePreviewUrl(previewPath, sidecarStatus.webPort)),
+          preview_url: file.preview_url
         });
         return;
       }
@@ -4171,27 +4751,30 @@ export function App() {
       try {
         result = await openRuntimePath(candidate, openAction);
       } catch (error) {
-        if (!isLocalAbsolutePath(candidate)) {
-          result = error instanceof Error ? error.message : String(error || "");
-        } else {
+        const message = error instanceof Error ? error.message : String(error || "");
+        result = message;
+        if (isOpenPathDeniedMessage(message)) {
+          break;
+        }
+        if (isLocalAbsolutePath(candidate) && isOpenPathBridgeFailure(message)) {
           result = await openLocalPath(candidate, openAction);
         }
       }
-      if (!/path not found|not found|找不到|不存在/i.test(result)) break;
+      if (isOpenPathDeniedMessage(result) || !isOpenPathNotFoundMessage(result)) break;
     }
     if (result) {
       setToast(result.startsWith("denied") ? "已取消打开文件" : result);
     }
   }
 
-  async function legacyOpenArtifactFile(file: { file_path: string; file_name: string; file_type?: FileAttachment["file_type"] }) {
+  async function legacyOpenArtifactFile(file: { file_path: string; file_name: string; file_type?: FileAttachment["file_type"] }, sessionId = activeSessionIdRef.current) {
     const rawPath = normalizeLocalSource(file.file_path);
     if (!rawPath) return;
     if (isRuntimePreviewPath(rawPath)) {
       setToast("该预览链接没有可直接打开的本地路径");
       return;
     }
-    const artifactSessionId = activeSessionIdRef.current;
+    const artifactSessionId = sessionId;
     const resolvedPath = resolveArtifactPathForSession(artifactSessionId, rawPath);
     const candidates = Array.from(new Set([resolvedPath, rawPath].filter(Boolean)));
     const projectPath = projectPathForSession(artifactSessionId);
@@ -4203,13 +4786,16 @@ export function App() {
       try {
         result = await openRuntimePath(candidate);
       } catch (error) {
-        if (!isLocalAbsolutePath(candidate)) {
-          result = error instanceof Error ? error.message : String(error || "");
-        } else {
+        const message = error instanceof Error ? error.message : String(error || "");
+        result = message;
+        if (isOpenPathDeniedMessage(message)) {
+          break;
+        }
+        if (isLocalAbsolutePath(candidate) && isOpenPathBridgeFailure(message)) {
           result = await openLocalPath(candidate);
         }
       }
-      if (!/path not found|not found|找不到|不存在/i.test(result)) break;
+      if (isOpenPathDeniedMessage(result) || !isOpenPathNotFoundMessage(result)) break;
     }
     if (result) {
       setToast(result.startsWith("denied") ? "已取消打开文件" : result);
@@ -4217,7 +4803,7 @@ export function App() {
   }
 
   const handleOpenMessageLocalFile = useCallback((file: LocalFilePayload) => {
-    void openArtifactFile(file);
+    void openArtifactFile(file, activeSessionId);
   }, [activeSessionId, activeProject?.path, sidecarStatus.webPort, sessionProjects, projects]);
 
   const messageLocalFilePreviewUrl = useCallback((filePath: string) => (
@@ -4226,6 +4812,10 @@ export function App() {
 
   const messageLocalFileStat = useCallback((filePath: string) => (
     statArtifactPath(filePath, activeSessionId)
+  ), [activeSessionId, sessionProjects, projects]);
+
+  const messageLocalJson = useCallback((filePath: string) => (
+    readArtifactStatusJson(filePath, activeSessionId)
   ), [activeSessionId, sessionProjects, projects]);
 
   async function logout() {
@@ -4554,7 +5144,9 @@ export function App() {
               <span>{activeProject ? "你可以把任何文件/图片/视频 参考扔到项目文件夹内 我会基于项目文件夹上下文回答你。" : "粘贴图片或文件，输入需求，EcoreX 会在需要能力包或权限时先确认。"}</span>
             </div>
           ) : (
-            visibleMessages.map((message) => (
+            visibleMessages.map((message) => {
+              const messageSessionId = activeSessionId;
+              return (
               <article className={`message ${message.role}`} key={message.id}>
                 <div className="message-body">
                   <button
@@ -4578,12 +5170,13 @@ export function App() {
                     artifacts={message.artifacts}
                     onOpenLocalFile={handleOpenMessageLocalFile}
                     localFilePreviewUrl={messageLocalFilePreviewUrl}
+                    localFileJson={messageLocalJson}
                     localFileStat={messageLocalFileStat}
                   />
                   {message.attachments?.length ? (
                     <div className="message-files">
                       {message.attachments.map((file) => (
-                        <button key={file.file_path} onClick={() => void openArtifactFile(file)} title="点击在本地打开">
+                        <button key={file.file_path} onClick={() => void openArtifactFile(file, messageSessionId)} title="点击在本地打开">
                           {attachmentPreviewUrl(file) ? <img src={attachmentPreviewUrl(file)} alt={file.file_name} loading="lazy" /> : fileIcon(file)}<span>{file.file_name}</span>
                         </button>
                       ))}
@@ -4591,7 +5184,8 @@ export function App() {
                   ) : null}
                 </div>
               </article>
-            ))
+              );
+            })
           )}
         </div>
 
@@ -4670,15 +5264,27 @@ export function App() {
                 ))}
               </div>
             )}
-            {skillMentions.length > 0 && (
-              <div className="skill-mention-popover" role="listbox" aria-label="可提及的 Skill">
-                {skillMentions.map((skill) => (
-                  <button key={skill.key} type="button" onClick={() => insertSkillMention(skill)} title={skill.path || skill.source || "Skill"}>
-                    <AtSign aria-hidden="true" />
-                    <span>{skill.displayName || skill.name}</span>
-                    <em>{skill.enabled === false ? "未启用" : "已启用"}</em>
-                  </button>
+            {(skillMentions.length > 0 || skillMentionNoResults) && (
+              <div className="skill-mention-popover" role="listbox" aria-label="选择 Skill">
+                {skillMentionGroups.map((group) => (
+                  <div className="skill-mention-group" key={group.category}>
+                    <div className="skill-mention-group-label">{group.label}</div>
+                    {group.items.map((skill) => (
+                      <button key={skill.key} type="button" onClick={() => insertSkillMention(skill)} title={skill.path || skill.source || "Skill"}>
+                        <AtSign aria-hidden="true" />
+                        <span>{skill.displayName || skill.name}</span>
+                        <em>{skill.categoryLabel}</em>
+                      </button>
+                    ))}
+                  </div>
                 ))}
+                {skillMentionNoResults && (
+                  <div className="skill-mention-empty" role="option" aria-disabled="true">
+                    <AtSign aria-hidden="true" />
+                    <span>{hiddenSkillMentions.length ? "后台 / CLI 辅助" : "没有匹配的 Skill"}</span>
+                    <em>{hiddenSkillMentions.length ? (hiddenSkillMentions[0].mentionHiddenReason || "后台触发") : "换个关键词试试"}</em>
+                  </div>
+                )}
               </div>
             )}
             <button type="button" className="round-button" onClick={chooseFiles} title="添加本地文件"><Paperclip aria-hidden="true" /></button>
@@ -4881,7 +5487,8 @@ export function App() {
                     </div>
                     <div className="skill-toggle-list">
                       <div className="toggle-list-head"><strong>Skill 生效开关</strong><span>可在聊天框用 @ 提及，关闭后不参与调用</span></div>
-                      {skillDisplayRows.map((skill) => {
+                      <div className="skill-category-heading"><strong>可 @ 提及</strong><span>{mentionableSkillRows.length}</span></div>
+                      {mentionableSkillRows.map((skill) => {
                         const name = skill.name || "";
                         const enabled = skill.enabled;
                         return (
@@ -4892,6 +5499,22 @@ export function App() {
                           </label>
                         );
                       })}
+                      {backgroundSkillRows.length > 0 && (
+                        <details className="skill-background-details">
+                          <summary><strong>后台 / CLI 辅助</strong><span>{backgroundSkillRows.length}</span></summary>
+                          {backgroundSkillRows.map((skill) => {
+                            const name = skill.name || "";
+                            const enabled = skill.enabled;
+                            return (
+                              <label key={skill.key} className={`toggle-row${skill.toggleable ? "" : " is-readonly"}`} title={skill.path || skill.source || name}>
+                                <input type="checkbox" checked={enabled} disabled={!skill.toggleable} onChange={(event) => void toggleRuntimeSkill(skill, event.currentTarget.checked)} />
+                                <span><strong>{skill.displayName || name || "未命名 Skill"}</strong><small>{[skill.mentionHiddenReason, skill.origin || skill.source || "skill", skill.status || (enabled ? "ready" : "disabled"), skill.policy].filter(Boolean).join(" · ")}</small></span>
+                                <em>{enabled ? "已启用" : "已关闭"}</em>
+                              </label>
+                            );
+                          })}
+                        </details>
+                      )}
                       {!skillDisplayRows.length && <div className="session-empty">运行时暂未返回 Skill 列表</div>}
                     </div>
                     <div className="pack-list">

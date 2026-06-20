@@ -258,7 +258,7 @@ available_setting = {
     "reasoning_effort": "high",  # Reasoning depth under thinking mode: "high" or "max"
     "knowledge": True,  # whether to enable the knowledge base feature
     # Self-evolution: review idle conversations to learn memory/skills. Flat keys.
-    "self_evolution_enabled": False,        # switch to enable/disable self-evolution
+    "self_evolution_enabled": True,         # switch to enable/disable self-evolution
     "self_evolution_idle_minutes": 10,      # idle time before a session is reviewed
     "self_evolution_min_turns": 6,          # min user turns (or context pressure) to trigger
     "scheduler_enabled": False,             # start scheduler service at runtime boot
@@ -395,7 +395,7 @@ def _ensure_ecorex_runtime_defaults(cfg: dict):
     if cfg.get("text_to_image") in (None, ""):
         cfg["text_to_image"] = "gpt-image-2-pro"
     if cfg.get("self_evolution_enabled") in (None, ""):
-        cfg["self_evolution_enabled"] = False
+        cfg["self_evolution_enabled"] = True
 
     browser_defaults = {
         "cdp_endpoint": "http://127.0.0.1:9222",

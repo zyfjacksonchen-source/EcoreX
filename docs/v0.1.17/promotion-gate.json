@@ -1,0 +1,157 @@
+{
+  "product": "EcoreX",
+  "version": "0.1.17",
+  "generatedAt": "2026-06-20T17:21:35Z",
+  "status": "no-go",
+  "summary": {
+    "total": 24,
+    "blockers": 5,
+    "warnings": 0
+  },
+  "checks": [
+    {
+      "name": "CLI version",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "cli/VERSION=0.1.17"
+    },
+    {
+      "name": "Desktop package version",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "desktop/package.json=0.1.17"
+    },
+    {
+      "name": "Desktop package-lock version",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "desktop/package-lock.json=0.1.17"
+    },
+    {
+      "name": "Skill classification smoke",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "C:\\CowAgent\\docs\\v0.1.17\\skill-classification-smoke.json: parity=72 lark=27"
+    },
+    {
+      "name": "OFFICE-001 office preinstall smoke",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "C:\\CowAgent\\docs\\v0.1.17\\office-preinstall-smoke.json: 23 office checks"
+    },
+    {
+      "name": "MEM-001 proactive memory smoke",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "C:\\CowAgent\\docs\\v0.1.17\\proactive-memory-smoke.json: 20 proactive-memory checks"
+    },
+    {
+      "name": "REL-002 server release gate smoke",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "C:\\CowAgent\\docs\\v0.1.17\\server-release-gate-smoke.json: auth-negative rejection count=1"
+    },
+    {
+      "name": "Windows unpacked smoke",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "C:\\CowAgent\\docs\\v0.1.17\\win-unpacked-smoke.json: runtime=0.1.17 auth-negative=12 endpoints"
+    },
+    {
+      "name": "Windows signed installed smoke",
+      "status": "fail",
+      "severity": "blocker",
+      "evidence": "C:\\CowAgent\\docs\\v0.1.17\\win-installed-smoke.json: missing win-installed-smoke.json"
+    },
+    {
+      "name": "STAB-004/UX-004/PERF-001 acceptance smoke",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "C:\\CowAgent\\docs\\v0.1.17\\acceptance-smoke.json: scenarios=4 actions=5"
+    },
+    {
+      "name": "XHS-001/PERF-002/IMG-001/ART-002 markdown image stability smoke",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "C:\\CowAgent\\docs\\v0.1.17\\xhs-markdown-image-stability-smoke.json: 26 checks"
+    },
+    {
+      "name": "STAB-003 local path safety smoke",
+      "status": "fail",
+      "severity": "blocker",
+      "evidence": "C:\\CowAgent\\docs\\v0.1.17\\local-path-safety-smoke.json: status=fail version=0.1.17 missing=[] failing=['symlink realpath guard'] symlinkAvailable=False distFresh=True changeIds=['STAB-003']"
+    },
+    {
+      "name": "Sidecar lifecycle contract smoke",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "C:\\CowAgent\\docs\\v0.1.17\\sidecar-contract-smoke.json: 10 checks"
+    },
+    {
+      "name": "Sidecar executable lifecycle smoke",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "C:\\CowAgent\\docs\\v0.1.17\\sidecar-lifecycle-smoke.json: 8 behavioral checks"
+    },
+    {
+      "name": "WebUI local artifacts",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "C:\\CowAgent\\docs\\v0.1.17\\webui-local-artifacts.json: 3 ZIP artifacts built and validate_zip_assets passed"
+    },
+    {
+      "name": "Public manifest version",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "C:\\CowAgent\\deploy\\ecorex-site\\manifest.json: EcoreX 0.1.17"
+    },
+    {
+      "name": "Required public artifacts",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "5 required artifacts listed"
+    },
+    {
+      "name": "Artifact ready: macos-arm64-dmg",
+      "status": "fail",
+      "severity": "blocker",
+      "evidence": "status=pending"
+    },
+    {
+      "name": "Artifact ready: macos-x64-dmg",
+      "status": "fail",
+      "severity": "blocker",
+      "evidence": "status=pending"
+    },
+    {
+      "name": "Artifact metadata: webui-macos-universal",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "status=ready size=157950593"
+    },
+    {
+      "name": "WebUI manifest binding: webui-macos-universal",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "fileName=EcoreX_0.1.17-webui-macos-universal.zip size=157950593"
+    },
+    {
+      "name": "Artifact metadata: webui-windows-x64",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "status=ready size=64538501"
+    },
+    {
+      "name": "WebUI manifest binding: webui-windows-x64",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "fileName=EcoreX_0.1.17-webui-windows-x64.zip size=64538501"
+    },
+    {
+      "name": "Artifact ready: windows-x64",
+      "status": "fail",
+      "severity": "blocker",
+      "evidence": "status=pending-signature"
+    }
+  ]
+}

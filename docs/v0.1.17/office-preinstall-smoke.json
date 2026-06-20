@@ -1,0 +1,125 @@
+{
+  "status": "pass",
+  "version": "0.1.17",
+  "generatedAt": "2026-06-20T14:06:13Z",
+  "changeIds": [
+    "OFFICE-001"
+  ],
+  "checks": [
+    {
+      "name": "office-documents builtin loaded",
+      "status": "pass",
+      "evidence": "C:\\CowAgent\\skills\\office-documents\\SKILL.md"
+    },
+    {
+      "name": "office-documents mention metadata",
+      "status": "pass",
+      "evidence": "{\"enabled\": true, \"mention_category\": \"document\", \"mentionable\": true, \"source\": \"builtin\", \"user_invocable\": true}"
+    },
+    {
+      "name": "office-documents office routing terms",
+      "status": "pass",
+      "evidence": "missing=[]"
+    },
+    {
+      "name": "office-spreadsheets builtin loaded",
+      "status": "pass",
+      "evidence": "C:\\CowAgent\\skills\\office-spreadsheets\\SKILL.md"
+    },
+    {
+      "name": "office-spreadsheets mention metadata",
+      "status": "pass",
+      "evidence": "{\"enabled\": true, \"mention_category\": \"document\", \"mentionable\": true, \"source\": \"builtin\", \"user_invocable\": true}"
+    },
+    {
+      "name": "office-spreadsheets office routing terms",
+      "status": "pass",
+      "evidence": "missing=[]"
+    },
+    {
+      "name": "office-presentations builtin loaded",
+      "status": "pass",
+      "evidence": "C:\\CowAgent\\skills\\office-presentations\\SKILL.md"
+    },
+    {
+      "name": "office-presentations mention metadata",
+      "status": "pass",
+      "evidence": "{\"enabled\": true, \"mention_category\": \"document\", \"mentionable\": true, \"source\": \"builtin\", \"user_invocable\": true}"
+    },
+    {
+      "name": "office-presentations office routing terms",
+      "status": "pass",
+      "evidence": "missing=[]"
+    },
+    {
+      "name": "office-pdf builtin loaded",
+      "status": "pass",
+      "evidence": "C:\\CowAgent\\skills\\office-pdf\\SKILL.md"
+    },
+    {
+      "name": "office-pdf mention metadata",
+      "status": "pass",
+      "evidence": "{\"enabled\": true, \"mention_category\": \"document\", \"mentionable\": true, \"source\": \"builtin\", \"user_invocable\": true}"
+    },
+    {
+      "name": "office-pdf office routing terms",
+      "status": "pass",
+      "evidence": "missing=[]"
+    },
+    {
+      "name": "office-pdf capability manifest",
+      "status": "pass",
+      "evidence": "C:\\CowAgent\\desktop\\runtime-packs\\capabilities.json"
+    },
+    {
+      "name": "office-pdf capability modules",
+      "status": "pass",
+      "evidence": "missing=[] discoveryOnly=None"
+    },
+    {
+      "name": "Windows staging defaults office-pdf",
+      "status": "pass",
+      "evidence": "stage-runtime-win.ps1"
+    },
+    {
+      "name": "macOS staging defaults office-pdf",
+      "status": "pass",
+      "evidence": "stage-runtime-mac.sh"
+    },
+    {
+      "name": "office-documents staged runtime skill",
+      "status": "pass",
+      "evidence": "C:\\CowAgent\\desktop\\release\\win-unpacked\\resources\\ecorex-runtime\\skills\\office-documents\\SKILL.md"
+    },
+    {
+      "name": "office-spreadsheets staged runtime skill",
+      "status": "pass",
+      "evidence": "C:\\CowAgent\\desktop\\release\\win-unpacked\\resources\\ecorex-runtime\\skills\\office-spreadsheets\\SKILL.md"
+    },
+    {
+      "name": "office-presentations staged runtime skill",
+      "status": "pass",
+      "evidence": "C:\\CowAgent\\desktop\\release\\win-unpacked\\resources\\ecorex-runtime\\skills\\office-presentations\\SKILL.md"
+    },
+    {
+      "name": "office-pdf staged runtime skill",
+      "status": "pass",
+      "evidence": "C:\\CowAgent\\desktop\\release\\win-unpacked\\resources\\ecorex-runtime\\skills\\office-pdf\\SKILL.md"
+    },
+    {
+      "name": "runtime manifest preinstalled office-pdf",
+      "status": "pass",
+      "evidence": "[\"office-pdf\"]"
+    },
+    {
+      "name": "office-pdf capability preinstall recorded",
+      "status": "pass",
+      "evidence": "sanitized release runtime has no capability-state file; runtime-manifest preinstalledPacks=['office-pdf']"
+    },
+    {
+      "name": "office-pdf runtime module imports",
+      "status": "pass",
+      "evidence": "{\"missing\": []}"
+    }
+  ]
+}

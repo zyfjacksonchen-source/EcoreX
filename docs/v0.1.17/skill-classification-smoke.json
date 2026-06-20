@@ -1,0 +1,115 @@
+{
+  "status": "pass",
+  "workspace": "C:\\CowAgent\\workspace",
+  "skillsCount": 72,
+  "extensionsCount": 89,
+  "extensionSkillCount": 72,
+  "parityChecked": 72,
+  "larkSkillCount": 27,
+  "larkExtensionCount": 27,
+  "larkSkillExamples": [
+    {
+      "name": "lark-approval",
+      "path": "C:\\Users\\user\\.agents\\skills\\lark-approval\\SKILL.md",
+      "mentionable": false,
+      "mention_category": "background",
+      "mention_hidden_reason": "lark-cli-triggered"
+    },
+    {
+      "name": "lark-apps",
+      "path": "C:\\Users\\user\\.agents\\skills\\lark-apps\\SKILL.md",
+      "mentionable": false,
+      "mention_category": "background",
+      "mention_hidden_reason": "lark-cli-triggered"
+    },
+    {
+      "name": "lark-attendance",
+      "path": "C:\\Users\\user\\.agents\\skills\\lark-attendance\\SKILL.md",
+      "mentionable": false,
+      "mention_category": "background",
+      "mention_hidden_reason": "lark-cli-triggered"
+    },
+    {
+      "name": "lark-base",
+      "path": "C:\\Users\\user\\.agents\\skills\\lark-base\\SKILL.md",
+      "mentionable": false,
+      "mention_category": "background",
+      "mention_hidden_reason": "lark-cli-triggered"
+    },
+    {
+      "name": "lark-calendar",
+      "path": "C:\\Users\\user\\.agents\\skills\\lark-calendar\\SKILL.md",
+      "mentionable": false,
+      "mention_category": "background",
+      "mention_hidden_reason": "lark-cli-triggered"
+    },
+    {
+      "name": "lark-contact",
+      "path": "C:\\Users\\user\\.agents\\skills\\lark-contact\\SKILL.md",
+      "mentionable": false,
+      "mention_category": "background",
+      "mention_hidden_reason": "lark-cli-triggered"
+    },
+    {
+      "name": "lark-doc",
+      "path": "C:\\Users\\user\\.agents\\skills\\lark-doc\\SKILL.md",
+      "mentionable": false,
+      "mention_category": "background",
+      "mention_hidden_reason": "lark-cli-triggered"
+    },
+    {
+      "name": "lark-drive",
+      "path": "C:\\Users\\user\\.agents\\skills\\lark-drive\\SKILL.md",
+      "mentionable": false,
+      "mention_category": "background",
+      "mention_hidden_reason": "lark-cli-triggered"
+    },
+    {
+      "name": "lark-event",
+      "path": "C:\\Users\\user\\.agents\\skills\\lark-event\\SKILL.md",
+      "mentionable": false,
+      "mention_category": "background",
+      "mention_hidden_reason": "lark-cli-triggered"
+    },
+    {
+      "name": "lark-im",
+      "path": "C:\\Users\\user\\.agents\\skills\\lark-im\\SKILL.md",
+      "mentionable": false,
+      "mention_category": "background",
+      "mention_hidden_reason": "lark-cli-triggered"
+    }
+  ],
+  "syntheticCases": [
+    {
+      "name": "explicit-background",
+      "mentionable": false,
+      "mention_category": "background",
+      "mention_hidden_reason": "admin-hidden"
+    },
+    {
+      "name": "frontmatter-document",
+      "mentionable": true,
+      "mention_category": "document",
+      "mention_hidden_reason": ""
+    },
+    {
+      "name": "lark-approval",
+      "mentionable": false,
+      "mention_category": "background",
+      "mention_hidden_reason": "lark-cli-triggered"
+    },
+    {
+      "name": "primary-env-only",
+      "mentionable": false,
+      "mention_category": "background",
+      "mention_hidden_reason": "lark-cli-triggered"
+    },
+    {
+      "name": "good-skill-minimal",
+      "mentionable": false,
+      "mention_category": "background",
+      "mention_hidden_reason": "test-fixture"
+    }
+  ],
+  "failures": []
+}

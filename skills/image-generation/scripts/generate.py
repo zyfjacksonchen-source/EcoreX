@@ -172,18 +172,46 @@ def _compress_image(data: bytes, max_bytes: int = 4 * 1024 * 1024, max_edge: int
     return buf.getvalue()
 
 
+def _validate_image_bytes(data: bytes) -> str:
+    if len(data) < 32:
+        raise ValueError("image output is too small")
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        width = int.from_bytes(data[16:20], "big")
+        height = int.from_bytes(data[20:24], "big")
+        if width <= 0 or height <= 0:
+            raise ValueError("png image dimensions are invalid")
+        return "png"
+    if data.startswith(b"\xff\xd8"):
+        index = 2
+        while index + 9 < len(data):
+            if data[index] != 0xff:
+                index += 1
+                continue
+            marker = data[index + 1]
+            length = int.from_bytes(data[index + 2:index + 4], "big")
+            if marker in {0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf}:
+                height = int.from_bytes(data[index + 5:index + 7], "big")
+                width = int.from_bytes(data[index + 7:index + 9], "big")
+                if width <= 0 or height <= 0:
+                    raise ValueError("jpeg image dimensions are invalid")
+                return "jpg"
+            index += max(length + 2, 2)
+        raise ValueError("could not read jpeg dimensions")
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "webp"
+    raise ValueError("image output is not a supported image format")
+
+
 def _save_image(data: bytes, output_dir: str) -> str:
     """Save image bytes to output_dir and return the path."""
     os.makedirs(output_dir, exist_ok=True)
-    ext = "png"
-    if data[:3] == b"\xff\xd8\xff":
-        ext = "jpg"
-    elif data[:4] == b"RIFF":
-        ext = "webp"
+    ext = _validate_image_bytes(data)
     filename = f"{uuid.uuid4().hex[:12]}.{ext}"
     path = os.path.join(output_dir, filename)
-    with open(path, "wb") as f:
+    tmp = os.path.join(output_dir, f".{filename}.{os.getpid()}.tmp")
+    with open(tmp, "wb") as f:
         f.write(data)
+    os.replace(tmp, path)
     return path
 
 
@@ -1354,6 +1382,8 @@ def main():
                 moderation=moderation,
                 output_dir=output_dir,
             )
+            if not paths:
+                raise RuntimeError(f"{label} image generation produced no image paths")
             elapsed = time.time() - t0
             # Resolved model id (after alias expansion) actually sent to the API
             actual_model = getattr(provider, "model", model)

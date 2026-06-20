@@ -1,0 +1,60 @@
+{
+  "status": "pass",
+  "version": "0.1.17",
+  "generatedAt": "2026-06-20T13:03:47Z",
+  "changeIds": [
+    "STAB-004"
+  ],
+  "checks": [
+    {
+      "name": "single-flight diagnostics contract",
+      "status": "pass",
+      "evidence": "5 markers present"
+    },
+    {
+      "name": "startup latch is created before spawn",
+      "status": "pass",
+      "evidence": "startupPromise assignment precedes spawnProcess call"
+    },
+    {
+      "name": "ready requires legacy running plus ready phase",
+      "status": "pass",
+      "evidence": "waitUntilReady phase gate"
+    },
+    {
+      "name": "degraded watchdog can recover or restart",
+      "status": "pass",
+      "evidence": "4 markers present"
+    },
+    {
+      "name": "stale child events cannot overwrite replacement status",
+      "status": "pass",
+      "evidence": "spawn/error/exit/stderr guarded by current child"
+    },
+    {
+      "name": "sidecar lifecycle dependencies are injectable",
+      "status": "pass",
+      "evidence": "7 markers present"
+    },
+    {
+      "name": "sidecar diagnostics are redacted before IPC",
+      "status": "pass",
+      "evidence": "runtime token, API key, email, and user path redaction markers present"
+    },
+    {
+      "name": "api bridge timeout and byte cap cover response body",
+      "status": "pass",
+      "evidence": "bounded body reader runs inside abort timeout scope"
+    },
+    {
+      "name": "api bridge reports phase diagnostics and runtime token",
+      "status": "pass",
+      "evidence": "3 markers present"
+    },
+    {
+      "name": "api bridge timeout immediately degrades ready sidecar",
+      "status": "pass",
+      "evidence": "6 markers present"
+    }
+  ]
+}

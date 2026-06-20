@@ -1,0 +1,19 @@
+{
+    "ok":  true,
+    "version":  "0.1.17",
+    "generatedAt":  "2026-06-20T09:52:43Z",
+    "validation":  "prepare-ecorex-public-release.ps1 and validate-ecorex-release-artifacts.py PASS for current ready WebUI plus hidden web-linux-service artifact set",
+    "zipPath":  "C:\\CowAgent\\release-artifacts\\EcoreX_0.1.17-public-release.zip",
+    "zipSize":  227851126,
+    "zipSha256":  "E24A1D3CB31A00142B4F0D5C187FAF58DE69CB717BB460CB9D67E851AA3E9688",
+    "includedArtifacts":  [
+                              "webui-windows-x64",
+                              "webui-macos-universal",
+                              "web-linux-service"
+                          ],
+    "skippedArtifacts":  [
+                             "windows-x64",
+                             "macos-arm64-dmg",
+                             "macos-x64-dmg"
+                         ]
+}

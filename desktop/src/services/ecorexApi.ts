@@ -45,6 +45,12 @@ export type RuntimeSkill = {
   path?: string;
   enabled?: boolean;
   category?: string;
+  user_invocable?: boolean;
+  disable_model_invocation?: boolean;
+  mentionable?: boolean;
+  mention_category?: string;
+  mention_hidden_reason?: string;
+  primary_env?: string;
 };
 
 export type RuntimeExtension = {
@@ -65,6 +71,13 @@ export type RuntimeExtension = {
   configRefs?: unknown;
   status?: string;
   lastError?: string;
+  category?: string;
+  primary_env?: string;
+  user_invocable?: boolean;
+  disable_model_invocation?: boolean;
+  mentionable?: boolean;
+  mention_category?: string;
+  mention_hidden_reason?: string;
 };
 
 export type RuntimeToolCall = {
@@ -168,6 +181,13 @@ export type LocalPathStat = {
   sizeBytes?: number;
 };
 
+export type LocalJsonResult = {
+  status?: string;
+  message?: string;
+  path?: string;
+  data?: unknown;
+};
+
 export type AgentArtifactKind = "file" | "image" | "video" | "audio" | "directory" | "url" | "diff";
 export type AgentArtifactIntent = "deliverable" | "changed-file" | "preview";
 export type AgentArtifactOperation = "created" | "modified" | "exported" | "downloaded" | "deployed";
@@ -189,6 +209,7 @@ export type AgentArtifact = {
   sizeBytes?: number;
   previewUrl?: string;
   thumbnailUrl?: string;
+  statusPath?: string;
   stats?: {
     addedLines?: number;
     removedLines?: number;
@@ -788,7 +809,18 @@ export async function statLocalPath(filePath: string): Promise<LocalPathStat> {
   if (!trimmedPath) {
     return { path: "", exists: false, status: "error", message: "path is required" };
   }
+  if (window.ecorexDesktop?.statPath) {
+    return window.ecorexDesktop.statPath(trimmedPath);
+  }
   return apiJson<LocalPathStat>("/api/file-stat", "POST", { path: trimmedPath });
+}
+
+export async function readLocalJson(filePath: string): Promise<LocalJsonResult> {
+  const trimmedPath = String(filePath || "").trim();
+  if (!trimmedPath) {
+    return { status: "error", path: "", message: "path is required" };
+  }
+  return apiJson<LocalJsonResult>("/api/file-json", "POST", { path: trimmedPath });
 }
 
 export async function loadPermissionState(): Promise<PermissionState | null> {
@@ -1032,6 +1064,9 @@ export function openMessageStream(input: {
   const params = new URLSearchParams({ request_id: input.requestId });
   const lastEventId = streamLastEventIds.get(input.requestId);
   if (lastEventId) params.set("last_event_id", lastEventId);
+  // Electron injects X-EcoreX-Runtime-Token for loopback EventSource
+  // requests. Keeping the runtime token out of the URL avoids leaking it via
+  // request logs, devtools, or copied stream URLs.
   const url = `http://127.0.0.1:${input.webPort}/stream?${params.toString()}`;
   const events = new EventSource(url);
   events.onmessage = (event) => {

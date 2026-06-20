@@ -1,6 +1,6 @@
 {
   "name": "ecorex-desktop",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "private": true,
   "description": "EcoreX desktop application with a local agent runtime",
   "author": "EcoreX",
@@ -29,6 +29,12 @@
     "sign:win:setup": "powershell -ExecutionPolicy Bypass -File scripts/sign-win.ps1 -SetupOnly",
     "sign:win:unpacked": "powershell -ExecutionPolicy Bypass -File scripts/sign-win.ps1 -ArtifactsDir release/win-unpacked -CoreAppOnly",
     "smoke:win:installed": "powershell -ExecutionPolicy Bypass -File scripts/smoke-installed-win.ps1",
+    "smoke:win:unpacked": "powershell -ExecutionPolicy Bypass -File scripts/smoke-unpacked-win.ps1",
+    "smoke:sidecar:lifecycle": "npm run build:electron && node scripts/smoke-sidecar-lifecycle.mjs",
+    "smoke:office:preinstall": "python ../scripts/smoke-office-preinstall.py --root .. --output ../docs/v0.1.17/office-preinstall-smoke.json --require-staged-runtime",
+    "smoke:local-path:safety": "npm run build:electron && node scripts/smoke-local-path-safety.mjs",
+    "smoke:local-path:symlink:win": "powershell -ExecutionPolicy Bypass -File scripts/smoke-local-path-symlink-win.ps1",
+    "smoke:renderer:visual": "powershell -ExecutionPolicy Bypass -File scripts/smoke-renderer-visual.ps1",
     "start": "npm run build && electron .",
     "validate:mac": "bash scripts/validate-mac-artifacts.sh",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit"

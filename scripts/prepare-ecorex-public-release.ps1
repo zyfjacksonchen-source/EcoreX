@@ -28,9 +28,13 @@ function Resolve-UnderDirectory {
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)][string]$Base
     )
-    $resolvedBase = [System.IO.Path]::GetFullPath($Base)
+    $resolvedBase = [System.IO.Path]::GetFullPath($Base).TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    )
     $resolvedPath = [System.IO.Path]::GetFullPath($Path)
-    if (-not $resolvedPath.StartsWith($resolvedBase, [System.StringComparison]::OrdinalIgnoreCase)) {
+    $baseWithSeparator = $resolvedBase + [System.IO.Path]::DirectorySeparatorChar
+    if ($resolvedPath -ne $resolvedBase -and -not $resolvedPath.StartsWith($baseWithSeparator, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "Resolved path '$resolvedPath' is outside '$resolvedBase'"
     }
     return $resolvedPath
@@ -129,11 +133,204 @@ $artifactSources["macos-arm64-dmg"] = if ($MacArm64DmgPath) { $MacArm64DmgPath }
 $artifactSources["macos-x64-dmg"] = if ($MacX64DmgPath) { $MacX64DmgPath } else { Join-Path "desktop/release" "EcoreX_${Version}_x64.dmg" }
 $artifactSources["web-linux-service"] = if ($WebTarballPath) { $WebTarballPath } else { Join-Path "release-artifacts" "EcoreX_${Version}-web-linux-service.tar.gz" }
 
-$publishableStatuses = @("ready")
+$requiredAuthNegativeStatuses = @(
+    "messageNoToken",
+    "messageWrongToken",
+    "messageQueryTokenRejected",
+    "streamNoToken",
+    "streamWrongToken",
+    "streamQueryTokenRejected",
+    "fileStatNoToken",
+    "fileStatWrongToken",
+    "fileServeNoToken",
+    "fileServeWrongToken",
+    "openPathNoToken",
+    "openPathWrongToken"
+)
+
+function Test-PublishableArtifact($Artifact) {
+    $status = [string]$Artifact.status
+    $id = [string]$Artifact.id
+    if ($status -eq "ready" -and $id.StartsWith("macos-") -and [string]$Artifact.signature -eq "unsigned") {
+        throw "macOS unsigned artifact '$id' must use status=ready-unsigned with installSmoke evidence."
+    }
+    if ($status -eq "ready") {
+        return $true
+    }
+    return ($status -eq "ready-unsigned" -and $id.StartsWith("macos-") -and [string]$Artifact.signature -eq "unsigned")
+}
+
+function Get-InstallSmoke($Artifact) {
+    if ($Artifact.PSObject.Properties.Name -contains "installSmoke") {
+        return $Artifact.installSmoke
+    }
+    if ($Artifact.PSObject.Properties.Name -contains "install_smoke") {
+        return $Artifact.install_smoke
+    }
+    return $null
+}
+
+function Get-SmokeEvidence($Smoke) {
+    foreach ($name in @("runId", "run_id", "evidenceUrl", "evidence_url", "evidence")) {
+        if ($Smoke.PSObject.Properties.Name -contains $name) {
+            $value = [string]$Smoke.PSObject.Properties[$name].Value
+            if ($value.Trim()) {
+                return $value
+            }
+        }
+    }
+    return ""
+}
+
+function Assert-AuthNegativeStatuses {
+    param(
+        [Parameter(Mandatory = $true)][object]$Smoke,
+        [Parameter(Mandatory = $true)][string]$EvidenceName
+    )
+    if (-not ($Smoke.PSObject.Properties.Name -contains "authNegativeStatuses")) {
+        throw "$EvidenceName requires authNegativeStatuses."
+    }
+    $statuses = $Smoke.authNegativeStatuses
+    if (-not $statuses) {
+        throw "$EvidenceName requires authNegativeStatuses."
+    }
+    $missing = @()
+    $bad = @()
+    foreach ($name in $requiredAuthNegativeStatuses) {
+        if (-not ($statuses.PSObject.Properties.Name -contains $name)) {
+            $missing += $name
+            continue
+        }
+        if ([int]$statuses.PSObject.Properties[$name].Value -ne 401) {
+            $bad += "$name=$($statuses.PSObject.Properties[$name].Value)"
+        }
+    }
+    if ($missing.Count -gt 0 -or $bad.Count -gt 0) {
+        throw "$EvidenceName authNegativeStatuses invalid; missing=$($missing -join ', ') bad=$($bad -join ', ')."
+    }
+}
+
+function Assert-WindowsInstalledSmoke {
+    param([Parameter(Mandatory = $true)][object]$Artifact)
+    $smokePath = Join-Path $repoRoot "docs\v$Version\win-installed-smoke.json"
+    if (-not (Test-Path -LiteralPath $smokePath)) {
+        throw "Windows artifact '$($Artifact.fileName)' requires installed smoke evidence: $smokePath."
+    }
+    $smoke = Get-Content -Raw -Encoding UTF8 -LiteralPath $smokePath | ConvertFrom-Json
+    $requiredTrue = @(
+        "installed",
+        "appStarted",
+        "sidecarReady",
+        "authReady",
+        "authRequired",
+        "authNegativeReady",
+        "cleaned"
+    )
+    $missing = @($requiredTrue | Where-Object { -not [bool]$smoke.$_ })
+    if ($missing.Count -gt 0) {
+        throw "Windows installed smoke missing passed flags: $($missing -join ', ')."
+    }
+    if ([string]$smoke.runtimeVersion -ne $Version) {
+        throw "Windows installed smoke runtimeVersion '$($smoke.runtimeVersion)' must be $Version."
+    }
+    if ([string]$smoke.installerFileName -ne [string]$Artifact.fileName) {
+        throw "Windows installed smoke fileName '$($smoke.installerFileName)' does not match manifest '$($Artifact.fileName)'."
+    }
+    if (([string]$smoke.installerSha256).ToUpperInvariant() -ne ([string]$Artifact.sha256).ToUpperInvariant()) {
+        throw "Windows installed smoke sha256 '$($smoke.installerSha256)' does not match manifest '$($Artifact.sha256)'."
+    }
+    if ([int64]$smoke.installerSize -ne [int64]$Artifact.size) {
+        throw "Windows installed smoke installerSize '$($smoke.installerSize)' does not match manifest '$($Artifact.size)'."
+    }
+    foreach ($name in @("installerSignatureStatus", "appSignatureStatus", "runtimePythonSignatureStatus")) {
+        if ([string]$smoke.$name -ne "Valid") {
+            throw "Windows installed smoke requires $name=Valid."
+        }
+    }
+    Assert-AuthNegativeStatuses -Smoke $smoke -EvidenceName "Windows installed smoke"
+}
+
+function Assert-MacUnsignedInstallSmoke($Artifact) {
+    $smoke = Get-InstallSmoke $Artifact
+    if (-not $smoke) {
+        throw "macOS ready-unsigned artifact '$($Artifact.id)' requires installSmoke evidence."
+    }
+    if ([string]$smoke.status -ne "pass") {
+        throw "macOS ready-unsigned artifact '$($Artifact.id)' requires installSmoke.status=pass."
+    }
+    if ([string]$smoke.version -ne $Version) {
+        throw "macOS ready-unsigned artifact '$($Artifact.id)' installSmoke.version must be $Version."
+    }
+    if (([string]$smoke.sha256).ToUpperInvariant() -ne ([string]$Artifact.sha256).ToUpperInvariant()) {
+        throw "macOS ready-unsigned artifact '$($Artifact.id)' installSmoke.sha256 must match manifest sha256."
+    }
+    if (-not (Get-SmokeEvidence $smoke)) {
+        throw "macOS ready-unsigned artifact '$($Artifact.id)' installSmoke requires runId or evidenceUrl."
+    }
+    $expectedArch = if ([string]$Artifact.id -eq "macos-arm64-dmg") { "arm64" } elseif ([string]$Artifact.id -eq "macos-x64-dmg") { "x64" } else { "" }
+    if ($expectedArch) {
+        $expectedName = "EcoreX_${Version}_${expectedArch}.dmg"
+        if ([string]$Artifact.fileName -ne $expectedName) {
+            throw "macOS ready-unsigned artifact '$($Artifact.id)' fileName must be $expectedName."
+        }
+        if ([string]$smoke.artifact -ne $expectedName) {
+            throw "macOS ready-unsigned artifact '$($Artifact.id)' installSmoke.artifact must be $expectedName."
+        }
+        if ([string]$smoke.arch -ne $expectedArch) {
+            throw "macOS ready-unsigned artifact '$($Artifact.id)' installSmoke.arch must be $expectedArch."
+        }
+        if ([int64]$smoke.bytes -ne [int64]$Artifact.size) {
+            throw "macOS ready-unsigned artifact '$($Artifact.id)' installSmoke.bytes must match artifact size."
+        }
+    }
+    $requiredTrue = @(
+        "mounted",
+        "appFound",
+        "copied",
+        "launched",
+        "versionOk",
+        "sidecarReady",
+        "authReady",
+        "authRequired",
+        "authNegativeReady",
+        "gatekeeperInstructionShown"
+    )
+    $missing = @($requiredTrue | Where-Object { -not [bool]$smoke.$_ })
+    if ($missing.Count -gt 0) {
+        throw "macOS ready-unsigned artifact '$($Artifact.id)' installSmoke missing passed flags: $($missing -join ', ')."
+    }
+    Assert-AuthNegativeStatuses -Smoke $smoke -EvidenceName "macOS ready-unsigned artifact '$($Artifact.id)' installSmoke"
+    $instructions = ""
+    foreach ($name in @("gatekeeperInstructions", "instructions", "instructionsUrl", "instructions_url")) {
+        if ($smoke.PSObject.Properties.Name -contains $name) {
+            $value = [string]$smoke.PSObject.Properties[$name].Value
+            if ($value.Trim()) {
+                $instructions = $value
+                break
+            }
+        }
+    }
+    if (-not $instructions) {
+        throw "macOS ready-unsigned artifact '$($Artifact.id)' installSmoke requires Gatekeeper instructions evidence."
+    }
+}
+
 $readyArtifacts = @()
 foreach ($artifact in $manifest.artifacts) {
-    if ([string]$artifact.status -notin $publishableStatuses) {
+    if (-not (Test-PublishableArtifact $artifact)) {
         continue
+    }
+    if ([string]$artifact.id -eq "windows-x64" -and ([string]$artifact.signature).ToLowerInvariant().Contains("unsigned")) {
+        throw "Windows artifact cannot be published while manifest signature is '$($artifact.signature)'."
+    }
+    if ([string]$artifact.id -eq "windows-x64" -and [string]$artifact.signature -ne "Valid") {
+        throw "Windows artifact '$($artifact.fileName)' requires manifest signature=Valid before publication."
+    }
+    if ([string]$artifact.id -eq "windows-x64") {
+        Assert-WindowsInstalledSmoke $artifact
+    }
+    if ([string]$artifact.status -eq "ready-unsigned") {
+        Assert-MacUnsignedInstallSmoke $artifact
     }
 
     if (Test-ExternalArtifact $artifact) {
@@ -172,6 +369,9 @@ foreach ($artifact in $manifest.artifacts) {
     $signatureStatus = ""
     if ($sourceItem.Extension -in ".exe", ".msi") {
         $signatureStatus = (Get-AuthenticodeSignature -LiteralPath $sourceResolved).Status.ToString()
+    }
+    if ($artifact.id -eq "windows-x64" -and $signatureStatus -ne "Valid") {
+        throw "Windows artifact '$($artifact.fileName)' is not Authenticode signed: $signatureStatus."
     }
 
     $readyArtifacts += [pscustomobject]@{

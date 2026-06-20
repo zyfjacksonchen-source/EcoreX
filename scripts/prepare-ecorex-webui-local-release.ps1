@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.1.16",
+    [string]$Version = "0.1.17",
     [string]$RuntimeRoot = "desktop/runtime/ecorex-runtime",
     [string]$OutputDir = "release-artifacts",
     [switch]$KeepStaging
@@ -390,7 +390,7 @@ $config = [ordered]@{
     web_port = $effectivePort
     web_password = ""
     agent = $true
-    self_evolution_enabled = $false
+    self_evolution_enabled = $true
     scheduler_enabled = $false
     mcp_auto_start = $false
     agent_workspace = $workspaceRoot
@@ -494,7 +494,7 @@ $macInstall = @'
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.1.16"
+VERSION="__ECOREX_VERSION__"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 INSTALL_ROOT="${ECOREX_WEBUI_INSTALL_ROOT:-$HOME/Library/Application Support/EcoreX WebUI}"
@@ -611,7 +611,7 @@ payload = {
     "web_port": port,
     "web_password": "",
     "agent": True,
-    "self_evolution_enabled": False,
+    "self_evolution_enabled": True,
     "scheduler_enabled": False,
     "mcp_auto_start": False,
     "agent_workspace": str(workspace),
@@ -681,6 +681,7 @@ echo "EcoreX WebUI is ready: $URL"
 '@
 
 New-Item -ItemType Directory -Force -Path (Join-Path $macStage "scripts") | Out-Null
+$macInstall = $macInstall.Replace('__ECOREX_VERSION__', $Version)
 Write-Utf8NoBom -Path (Join-Path $macStage "scripts/install-ecorex-webui-mac.sh") -Value $macInstall
 New-MacInstallerApp -AppRoot (Join-Path $macStage "Install EcoreX WebUI.app") -InstallScriptRelative "scripts/install-ecorex-webui-mac.sh"
 Write-Utf8NoBom -Path (Join-Path $macStage "release.json") -Value (New-ReleaseJson -ArtifactId "webui-macos-universal" -Platform "macOS arm64/x64" -InstallEntry "Install EcoreX WebUI.app")

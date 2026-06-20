@@ -2714,16 +2714,56 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertIn("webClientKeys", web_channel_py)
         self.assertIn("invalid client key", web_channel_py)
 
-    def test_v014_sidecar_intentional_restart_does_not_overwrite_new_status(self):
+    def test_v017_sidecar_phase_latch_and_diagnostics_contract(self):
         root = Path(__file__).resolve().parents[1]
         source = (root / "desktop" / "electron" / "sidecar.ts").read_text(encoding="utf-8")
 
-        self.assertIn("const stoppedIntentionally", source)
+        required_markers = [
+            'export type SidecarPhase =',
+            'private startupPromise: Promise<boolean> | null = null;',
+            'this.appendDiagnostic(this.status, "single-flight-startup")',
+            'startupInFlight: Boolean(this.startupPromise)',
+            'recentEvents: this.diagnosticEvents.slice(-this.diagnosticLimit)',
+            'export type SidecarManagerOptions =',
+            'private readonly spawnProcess: typeof spawn;',
+            'this.spawnProcess(python, ["app.py"]',
+            'this.clearTimeoutImpl(this.restartTimer)',
+            'this.fetchImpl(`http://127.0.0.1:${webPort}/api/version`',
+            'this.broadcastStatus(nextStatus);',
+            'private redactDiagnosticText(value: string)',
+            'message: this.redactDiagnosticText(status.message)',
+            'if (this.child !== launchedChild) return;',
+            'this.getState() === "running" && this.phase === "ready"',
+            'state: "running",\n      message: `EcoreX local runtime health check degraded',
+            '}, "degraded", "health-probe-failed");',
+            '}, "restarting", "health-check-failed");',
+            '}, "ready", "health-recovered");',
+            'this.scheduleRestart(webPort, "startup-timeout")',
+        ]
+        for marker in required_markers:
+            self.assertIn(marker, source)
+
         self.assertRegex(
             source,
-            r"if \(stoppedIntentionally\) \{\s*if \(!this\.child\) \{[\s\S]*?state: \"stopped\"[\s\S]*?\}\s*return;"
+            r"if \(this\.startupPromise\) \{[\s\S]*?Promise\.race\(\[this\.startupPromise, timeout\]\)"
         )
-        self.assertIn("this.scheduleRestart(webPort, reason)", source)
+        self.assertRegex(
+            source,
+            r"if \(stoppedIntentionally\) \{\s*if \(this\.stoppingIntentionally && !this\.child\) \{[\s\S]*?state: \"stopped\"[\s\S]*?\}\s*return;"
+        )
+
+    def test_v017_sidecar_bridge_timeout_covers_response_body_and_reports_phase(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "desktop" / "electron" / "apiBridge.ts").read_text(encoding="utf-8")
+
+        self.assertIn("const MAX_SIDECAR_RESPONSE_BYTES", source)
+        self.assertIn("text = await readResponseTextWithLimit(response);", source)
+        self.assertLess(source.index("text = await readResponseTextWithLimit(response);"), source.index("clearTimeout(timeout);"))
+        self.assertIn("sidecar response exceeded", source)
+        self.assertIn("sanitizeBridgeSnippet(text, sidecar.getRuntimeToken()).slice(0, 400)", source)
+        self.assertIn("sidecarPhase: status.phase", source)
+        self.assertIn("sidecarDiagnostics: status.diagnostics", source)
+        self.assertIn('"X-EcoreX-Runtime-Token": sidecar.getRuntimeToken()', source)
 
     def test_legacy_openai_image_payload_supports_gpt_image_base64(self):
         from models.openai.open_ai_image import OpenAIImage

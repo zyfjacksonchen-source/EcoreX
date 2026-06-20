@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from "electron";
+import electron from "electron";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -6,13 +6,59 @@ import os from "node:os";
 import path from "node:path";
 import { enterpriseClientEventKeys, enterpriseRequestHeaders, normalizeEnterpriseDeviceId, resolveEnterprisePolicy, type EnterprisePolicy } from "./enterprisePolicy.js";
 
+const { app, BrowserWindow } = electron;
+
 export type SidecarState = "starting" | "running" | "stopped" | "failed" | "skipped";
+export type SidecarPhase =
+  | "idle"
+  | "spawning"
+  | "probing"
+  | "ready"
+  | "degraded"
+  | "restarting"
+  | "failed"
+  | "stopped"
+  | "skipped";
+
+export type SidecarDiagnosticEvent = {
+  ts: string;
+  state: SidecarState;
+  phase: SidecarPhase;
+  message: string;
+  pid?: number;
+  reason?: string;
+  attempts?: number;
+  webPort: number;
+};
+
+export type SidecarDiagnostics = {
+  bootId: string;
+  restartAttempts: number;
+  consecutiveHealthFailures: number;
+  startupInFlight: boolean;
+  lastProbeOkAt?: string;
+  lastProbeErrorAt?: string;
+  recentEvents: SidecarDiagnosticEvent[];
+};
 
 export type SidecarStatus = {
   state: SidecarState;
+  phase?: SidecarPhase;
   message: string;
   pid?: number;
   webPort: number;
+  diagnostics?: SidecarDiagnostics;
+};
+
+export type SidecarManagerOptions = {
+  appGetPath?: (name: Parameters<typeof app.getPath>[0]) => string;
+  broadcastStatus?: (status: SidecarStatus) => void;
+  clearIntervalFn?: typeof clearInterval;
+  clearTimeoutFn?: typeof clearTimeout;
+  fetchImpl?: typeof fetch;
+  setIntervalFn?: typeof setInterval;
+  setTimeoutFn?: typeof setTimeout;
+  spawnProcess?: typeof spawn;
 };
 
 type EnterpriseSession = {
@@ -44,11 +90,11 @@ type EnterpriseModelRefresh = {
 
 const DEFAULT_WEB_PORT = 9899;
 
-async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 8000) {
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 8000, fetchImpl: typeof fetch = fetch) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, {
+    return await fetchImpl(url, {
       ...init,
       signal: init.signal || controller.signal
     });
@@ -58,6 +104,14 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 8000
 }
 
 export class SidecarManager {
+  private readonly appGetPath: (name: Parameters<typeof app.getPath>[0]) => string;
+  private readonly broadcastStatus: (status: SidecarStatus) => void;
+  private readonly clearIntervalImpl: typeof clearInterval;
+  private readonly clearTimeoutImpl: typeof clearTimeout;
+  private readonly fetchImpl: typeof fetch;
+  private readonly setIntervalImpl: typeof setInterval;
+  private readonly setTimeoutImpl: typeof setTimeout;
+  private readonly spawnProcess: typeof spawn;
   private child: ChildProcessWithoutNullStreams | null = null;
   private enterpriseEnv: NodeJS.ProcessEnv = {};
   private enterpriseConfigHash = "";
@@ -66,19 +120,45 @@ export class SidecarManager {
   private intentionallyStoppedChildren = new WeakSet<ChildProcessWithoutNullStreams>();
   private restartAttempts = 0;
   private restartTimer: NodeJS.Timeout | null = null;
+  private healthTimer: NodeJS.Timeout | null = null;
+  private consecutiveHealthFailures = 0;
   private bootId = randomUUID();
   private runtimeToken = randomUUID();
+  private phase: SidecarPhase = "stopped";
+  private startupPromise: Promise<boolean> | null = null;
+  private lastProbeOkAt: string | undefined;
+  private lastProbeErrorAt: string | undefined;
+  private readonly diagnosticLimit = 80;
+  private diagnosticEvents: SidecarDiagnosticEvent[] = [];
   private readonly maxRestartAttempts = 3;
   private status: SidecarStatus = {
     state: "stopped",
+    phase: "stopped",
     message: "sidecar 未启动",
     webPort: DEFAULT_WEB_PORT
   };
 
-  constructor(private readonly repoRoot: string) {}
+  constructor(private readonly repoRoot: string, options: SidecarManagerOptions = {}) {
+    this.appGetPath = options.appGetPath ?? ((name) => app.getPath(name));
+    this.broadcastStatus = options.broadcastStatus ?? ((status) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        win.webContents.send("ecorex:sidecar-status", status);
+      }
+    });
+    this.clearIntervalImpl = options.clearIntervalFn ?? clearInterval;
+    this.clearTimeoutImpl = options.clearTimeoutFn ?? clearTimeout;
+    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.setIntervalImpl = options.setIntervalFn ?? setInterval;
+    this.setTimeoutImpl = options.setTimeoutFn ?? setTimeout;
+    this.spawnProcess = options.spawnProcess ?? spawn;
+  }
 
-  getStatus() {
-    return this.status;
+  getStatus(): SidecarStatus {
+    return {
+      ...this.status,
+      phase: this.phase,
+      diagnostics: this.getDiagnostics()
+    };
   }
 
   private getState(): SidecarState {
@@ -89,17 +169,31 @@ export class SidecarManager {
     return `http://127.0.0.1:${this.getWebPort()}`;
   }
 
+  getRuntimeToken() {
+    return this.runtimeToken;
+  }
+
   async waitUntilReady(timeoutMs = 30000) {
-    if (this.getState() === "running") {
+    const deadline = Date.now() + timeoutMs;
+    if (this.getState() === "running" && this.phase === "ready") {
       return true;
     }
     if (this.getState() === "failed" || this.getState() === "stopped" || this.getState() === "skipped") {
       return false;
     }
 
-    const deadline = Date.now() + timeoutMs;
+    if (this.startupPromise) {
+      const timeout = this.delay(Math.max(0, deadline - Date.now())).then(() => false);
+      if (await Promise.race([this.startupPromise, timeout])) {
+        return true;
+      }
+      if (Date.now() >= deadline) {
+        return false;
+      }
+    }
+
     while (Date.now() < deadline) {
-      if (this.getState() === "running") {
+      if (this.getState() === "running" && this.phase === "ready") {
         return true;
       }
       if (this.getState() === "failed" || this.getState() === "stopped" || this.getState() === "skipped") {
@@ -111,12 +205,54 @@ export class SidecarManager {
           message: "EcoreX local runtime is ready",
           pid: this.child?.pid,
           webPort: this.getWebPort()
-        });
+        }, "ready", "wait-probe-ready");
         return true;
       }
       await this.delay(300);
     }
-    return this.getState() === "running";
+    return this.getState() === "running" && this.phase === "ready";
+  }
+
+  reportApiFailure(reason: string): SidecarStatus {
+    if (!this.child || this.getState() === "failed" || this.getState() === "stopped" || this.getState() === "skipped") {
+      this.appendDiagnostic(this.status, `api-failure-ignored:${reason}`);
+      return this.getStatus();
+    }
+
+    const webPort = this.getWebPort();
+    const pid = this.child.pid;
+    this.consecutiveHealthFailures += 1;
+    this.updateStatus({
+      state: "running",
+      message: `EcoreX local runtime API did not respond (${this.consecutiveHealthFailures}/3)`,
+      pid,
+      webPort
+    }, "degraded", reason);
+
+    if (this.consecutiveHealthFailures < 3 || !this.child) {
+      return this.getStatus();
+    }
+
+    const childToRestart = this.child;
+    this.child = null;
+    this.clearHealthWatchdog();
+    this.intentionallyStoppedChildren.add(childToRestart);
+    this.updateStatus({
+      state: "starting",
+      message: "EcoreX local runtime API stopped responding; restarting",
+      webPort
+    }, "restarting", reason);
+    this.terminateChild(childToRestart);
+    if (this.restartAttempts < this.maxRestartAttempts) {
+      this.scheduleRestart(webPort, reason);
+    } else {
+      this.updateStatus({
+        state: "failed",
+        message: "EcoreX local runtime API stopped responding after multiple restarts",
+        webPort
+      }, "failed", reason);
+    }
+    return this.getStatus();
   }
 
   start() {
@@ -129,17 +265,27 @@ export class SidecarManager {
       return;
     }
 
+    if (this.startupPromise) {
+      this.appendDiagnostic(this.status, "single-flight-startup");
+      return;
+    }
+
     if (this.child) {
+      this.appendDiagnostic(this.status, "child-already-present");
       return;
     }
 
     this.stoppingIntentionally = false;
     this.bootId = randomUUID();
     this.runtimeToken = randomUUID();
+    this.lastProbeOkAt = undefined;
+    this.lastProbeErrorAt = undefined;
     if (this.restartTimer) {
-      clearTimeout(this.restartTimer);
+      this.clearTimeoutImpl(this.restartTimer);
       this.restartTimer = null;
     }
+    this.startupPromise = null;
+    this.clearHealthWatchdog();
 
     const python = this.resolvePython();
     if (!python) {
@@ -152,6 +298,16 @@ export class SidecarManager {
     }
     const webPort = this.getWebPort();
     this.ensureDesktopRuntimeDefaults();
+    let resolveStartup: (ready: boolean) => void = () => undefined;
+    const startupPromise = new Promise<boolean>((resolve) => {
+      resolveStartup = resolve;
+    });
+    this.startupPromise = startupPromise;
+    startupPromise.finally(() => {
+      if (this.startupPromise === startupPromise) {
+        this.startupPromise = null;
+      }
+    });
 
     this.updateStatus({
       state: "starting",
@@ -159,44 +315,58 @@ export class SidecarManager {
       webPort
     });
 
-    this.child = spawn(python, ["app.py"], {
-      cwd: this.repoRoot,
-      env: {
-        ...process.env,
-        ...this.enterpriseEnv,
-        ECOREX_DESKTOP: "1",
-        ECOREX_DESKTOP_BOOT_ID: this.bootId,
-        ECOREX_DESKTOP_RUNTIME_TOKEN: this.runtimeToken,
-        ECOREX_DESKTOP_USER_DATA: app.getPath("userData"),
-        PATH: [this.resolveExternalCliPath(), process.env.PATH].filter(Boolean).join(path.delimiter),
-        PYTHONPATH: [this.repoRoot, this.resolveCapabilityPythonPath(), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
-        PLAYWRIGHT_BROWSERS_PATH:
-          process.platform === "darwin"
-            ? path.join(app.getPath("userData"), "capabilities", "playwright-browsers")
-            : process.env.PLAYWRIGHT_BROWSERS_PATH,
-        PYTHONNOUSERSITE: "1",
-        WEB_PORT: String(webPort)
-      },
-      detached: process.platform !== "win32",
-      windowsHide: true
-    });
+    try {
+      this.child = this.spawnProcess(python, ["app.py"], {
+        cwd: this.repoRoot,
+        env: {
+          ...process.env,
+          ...this.enterpriseEnv,
+          ECOREX_DESKTOP: "1",
+          ECOREX_DESKTOP_BOOT_ID: this.bootId,
+          ECOREX_DESKTOP_RUNTIME_TOKEN: this.runtimeToken,
+          ECOREX_DESKTOP_USER_DATA: this.appGetPath("userData"),
+          PATH: [this.resolveExternalCliPath(), process.env.PATH].filter(Boolean).join(path.delimiter),
+          PYTHONPATH: [this.repoRoot, this.resolveCapabilityPythonPath(), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
+          PLAYWRIGHT_BROWSERS_PATH:
+            process.platform === "darwin"
+              ? path.join(this.appGetPath("userData"), "capabilities", "playwright-browsers")
+              : process.env.PLAYWRIGHT_BROWSERS_PATH,
+          PYTHONNOUSERSITE: "1",
+          WEB_PORT: String(webPort)
+        },
+        detached: process.platform !== "win32",
+        windowsHide: true
+      });
+    } catch (error) {
+      resolveStartup(false);
+      this.startupPromise = null;
+      this.updateStatus({
+        state: "failed",
+        message: `sidecar spawn failed: ${error instanceof Error ? error.message : String(error)}`,
+        webPort
+      }, "failed", "spawn-threw");
+      return;
+    }
 
     const launchedChild = this.child;
 
     launchedChild.once("spawn", () => {
+      if (this.child !== launchedChild) return;
       this.updateStatus({
         state: "starting",
         message: "EcoreX 兼容运行时已启动",
         pid: launchedChild.pid,
         webPort
       });
-      void this.markReadyWhenAvailable(webPort, launchedChild.pid);
+      void this.markReadyWhenAvailable(webPort, launchedChild.pid)
+        .then((ready) => resolveStartup(ready), () => resolveStartup(false));
     });
 
     launchedChild.once("error", (error) => {
-      if (this.child === launchedChild) {
-        this.child = null;
-      }
+      if (this.child !== launchedChild) return;
+      this.child = null;
+      resolveStartup(false);
+      this.clearHealthWatchdog();
       this.updateStatus({
         state: "failed",
         message: `sidecar 启动失败：${error.message}`,
@@ -207,11 +377,12 @@ export class SidecarManager {
     launchedChild.once("exit", (code, signal) => {
       const reason = signal ? String(signal) : String(code ?? "unknown");
       const stoppedIntentionally = this.stoppingIntentionally || this.intentionallyStoppedChildren.has(launchedChild);
-      if (this.child === launchedChild) {
-        this.child = null;
-      }
+      if (this.child !== launchedChild) return;
+      this.child = null;
+      resolveStartup(false);
+      this.clearHealthWatchdog();
       if (stoppedIntentionally) {
-        if (!this.child) {
+        if (this.stoppingIntentionally && !this.child) {
           this.updateStatus({
             state: "stopped",
             message: "EcoreX local runtime stopped",
@@ -232,6 +403,7 @@ export class SidecarManager {
     });
 
     launchedChild.stderr.on("data", (chunk: Buffer) => {
+      if (this.child !== launchedChild) return;
       const text = chunk.toString("utf8").trim();
       if (text) {
         this.updateStatus({
@@ -245,10 +417,17 @@ export class SidecarManager {
   stop() {
     this.stoppingIntentionally = true;
     if (this.restartTimer) {
-      clearTimeout(this.restartTimer);
+      this.clearTimeoutImpl(this.restartTimer);
       this.restartTimer = null;
     }
+    this.clearHealthWatchdog();
     if (!this.child) {
+      this.startupPromise = null;
+      this.updateStatus({
+        state: "stopped",
+        message: "EcoreX local runtime stopped",
+        webPort: this.getWebPort()
+      }, "stopped", "intentional-stop");
       return;
     }
     const childToStop = this.child;
@@ -259,7 +438,7 @@ export class SidecarManager {
     });
     this.intentionallyStoppedChildren.add(childToStop);
     if (pid && process.platform === "win32") {
-      spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
+      this.spawnProcess("taskkill", ["/PID", String(pid), "/T", "/F"], {
         stdio: "ignore",
         windowsHide: true
       }).on("error", () => {
@@ -271,7 +450,7 @@ export class SidecarManager {
       } catch {
         childToStop.kill();
       }
-      setTimeout(() => {
+      this.setTimeoutImpl(() => {
         if (exited) return;
         try {
           process.kill(-pid, "SIGKILL");
@@ -287,7 +466,7 @@ export class SidecarManager {
       state: "stopped",
       message: "sidecar 已停止",
       webPort: this.getWebPort()
-    });
+    }, "stopped", "intentional-stop");
   }
 
   async refreshEnterpriseModelConfig(): Promise<EnterpriseModelRefresh> {
@@ -341,7 +520,7 @@ export class SidecarManager {
           orgId: policy.orgId,
           authorizationToken: session?.token
         })
-      });
+      }, 8000, this.fetchImpl);
       const payload = (await response.json().catch(() => ({}))) as ModelPolicyPayload & { error?: string; message?: string };
       if (response.status === 403 && this.isInvalidClientKeyPayload(payload) && index < keys.length - 1) {
         continue;
@@ -422,11 +601,11 @@ export class SidecarManager {
     return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_WEB_PORT;
   }
 
-  private async markReadyWhenAvailable(webPort: number, pid?: number) {
+  private async markReadyWhenAvailable(webPort: number, pid?: number): Promise<boolean> {
     const deadline = Date.now() + 60000;
     while (Date.now() < deadline) {
       if (!this.child || (pid && this.child.pid !== pid)) {
-        return;
+        return false;
       }
       if (await this.probeHttpReady(webPort)) {
         this.restartAttempts = 0;
@@ -435,8 +614,9 @@ export class SidecarManager {
           message: "EcoreX local runtime is ready",
           pid,
           webPort
-        });
-        return;
+        }, "ready", "startup-ready");
+        this.startHealthWatchdog(webPort, pid);
+        return true;
       }
       await this.delay(500);
     }
@@ -444,35 +624,154 @@ export class SidecarManager {
     if (this.child && (!pid || this.child.pid === pid)) {
       this.updateStatus({
         state: "starting",
-        message: "EcoreX local runtime is still starting",
+        message: "EcoreX local runtime did not become ready in time; restarting",
         pid,
         webPort
-      });
+      }, "restarting", "startup-timeout");
+      const childToRestart = this.child;
+      this.child = null;
+      this.intentionallyStoppedChildren.add(childToRestart);
+      this.terminateChild(childToRestart);
+      if (this.restartAttempts < this.maxRestartAttempts) {
+        this.scheduleRestart(webPort, "startup-timeout");
+      } else {
+        this.updateStatus({
+          state: "failed",
+          message: "EcoreX local runtime did not become ready after multiple restarts",
+          webPort
+        }, "failed", "startup-timeout");
+      }
     }
+    return false;
   }
 
   private async probeHttpReady(webPort: number) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 1200);
+    const timer = this.setTimeoutImpl(() => controller.abort(), 1200);
     try {
-      const response = await fetch(`http://127.0.0.1:${webPort}/api/version`, {
+      const response = await this.fetchImpl(`http://127.0.0.1:${webPort}/api/version`, {
         headers: {
           "X-EcoreX-Runtime-Token": this.runtimeToken
         },
         signal: controller.signal
       });
-      if (!response.ok) return false;
+      if (!response.ok) {
+        this.lastProbeErrorAt = new Date().toISOString();
+        return false;
+      }
       const payload = await response.json().catch(() => null) as { desktopRuntimeVerified?: boolean } | null;
-      return Boolean(payload?.desktopRuntimeVerified);
+      const ok = Boolean(payload?.desktopRuntimeVerified);
+      if (ok) {
+        this.lastProbeOkAt = new Date().toISOString();
+      } else {
+        this.lastProbeErrorAt = new Date().toISOString();
+      }
+      return ok;
     } catch {
+      this.lastProbeErrorAt = new Date().toISOString();
       return false;
     } finally {
-      clearTimeout(timer);
+      this.clearTimeoutImpl(timer);
     }
   }
 
   private delay(ms: number) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+    return new Promise((resolve) => this.setTimeoutImpl(resolve, ms));
+  }
+
+  private clearHealthWatchdog() {
+    if (this.healthTimer) {
+      this.clearIntervalImpl(this.healthTimer);
+      this.healthTimer = null;
+    }
+    this.consecutiveHealthFailures = 0;
+  }
+
+  private startHealthWatchdog(webPort: number, pid?: number) {
+    this.clearHealthWatchdog();
+    this.healthTimer = this.setIntervalImpl(() => {
+      void this.checkRuntimeHealth(webPort, pid);
+    }, 5000);
+  }
+
+  private async checkRuntimeHealth(webPort: number, pid?: number) {
+    if (!this.child || (pid && this.child.pid !== pid)) {
+      this.clearHealthWatchdog();
+      return;
+    }
+    if (await this.probeHttpReady(webPort)) {
+      this.consecutiveHealthFailures = 0;
+      if (this.getState() !== "running" || this.phase !== "ready") {
+        this.updateStatus({
+          state: "running",
+          message: "EcoreX local runtime is ready",
+          pid,
+          webPort
+        }, "ready", "health-recovered");
+      }
+      return;
+    }
+    this.consecutiveHealthFailures += 1;
+    this.updateStatus({
+      state: "running",
+      message: `EcoreX local runtime health check degraded (${this.consecutiveHealthFailures}/3)`,
+      pid,
+      webPort
+    }, "degraded", "health-probe-failed");
+    if (this.consecutiveHealthFailures < 3 || !this.child) {
+      return;
+    }
+    const childToRestart = this.child;
+    this.child = null;
+    this.clearHealthWatchdog();
+    this.intentionallyStoppedChildren.add(childToRestart);
+    this.updateStatus({
+      state: "starting",
+      message: "EcoreX local runtime health check failed; restarting",
+      webPort
+    }, "restarting", "health-check-failed");
+    this.terminateChild(childToRestart);
+    if (this.restartAttempts < this.maxRestartAttempts) {
+      this.scheduleRestart(webPort, "health-check-failed");
+    } else {
+      this.updateStatus({
+        state: "failed",
+        message: "EcoreX local runtime health check failed after multiple restarts",
+        webPort
+      }, "failed", "health-check-failed");
+    }
+  }
+
+  private terminateChild(childToStop: ChildProcessWithoutNullStreams) {
+    const pid = childToStop.pid;
+    let exited = false;
+    childToStop.once("exit", () => {
+      exited = true;
+    });
+    if (pid && process.platform === "win32") {
+      this.spawnProcess("taskkill", ["/PID", String(pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true
+      }).on("error", () => {
+        if (!exited) childToStop.kill();
+      });
+    } else if (pid) {
+      try {
+        process.kill(-pid, "SIGTERM");
+      } catch {
+        childToStop.kill();
+      }
+      this.setTimeoutImpl(() => {
+        if (exited) return;
+        try {
+          process.kill(-pid, "SIGKILL");
+        } catch {
+          childToStop.kill("SIGKILL");
+        }
+      }, 2500);
+    } else {
+      childToStop.kill();
+    }
   }
 
   private scheduleRestart(webPort: number, reason: string) {
@@ -481,11 +780,11 @@ export class SidecarManager {
       state: "starting",
       message: `EcoreX local runtime exited (${reason}); restarting ${this.restartAttempts}/${this.maxRestartAttempts}`,
       webPort
-    });
+    }, "restarting", reason);
     if (this.restartTimer) {
-      clearTimeout(this.restartTimer);
+      this.clearTimeoutImpl(this.restartTimer);
     }
-    this.restartTimer = setTimeout(() => {
+    this.restartTimer = this.setTimeoutImpl(() => {
       this.restartTimer = null;
       this.start();
     }, 1200);
@@ -503,11 +802,11 @@ export class SidecarManager {
         channel_type: "web",
         agent: true,
         knowledge: true,
-        self_evolution_enabled: false,
+        self_evolution_enabled: true,
         scheduler_enabled: false,
         mcp_auto_start: false,
         agent_max_context_tokens: 258000,
-        appdata_dir: path.join(app.getPath("userData"), "runtime-appdata")
+        appdata_dir: path.join(this.appGetPath("userData"), "runtime-appdata")
       };
       let changed = !fs.existsSync(configPath);
       for (const [key, value] of Object.entries(defaults)) {
@@ -667,7 +966,7 @@ export class SidecarManager {
       return this.policy;
     }
     const candidates = [
-      path.join(app.getPath("userData"), "enterprise-policy.json"),
+      path.join(this.appGetPath("userData"), "enterprise-policy.json"),
       path.join(this.repoRoot, "enterprise-policy.json"),
       process.resourcesPath ? path.join(process.resourcesPath, "enterprise-policy.json") : ""
     ].filter(Boolean);
@@ -677,7 +976,7 @@ export class SidecarManager {
 
   private loadSession(): EnterpriseSession | null {
     try {
-      const raw = fs.readFileSync(path.join(app.getPath("userData"), "enterprise-session.json"), "utf8");
+      const raw = fs.readFileSync(path.join(this.appGetPath("userData"), "enterprise-session.json"), "utf8");
       const session = JSON.parse(raw) as EnterpriseSession;
       if (!session?.token || !session.expiresAt) {
         return null;
@@ -710,7 +1009,7 @@ export class SidecarManager {
   }
 
   private modelPolicyCachePath() {
-    return path.join(app.getPath("userData"), "enterprise-model-policy.json");
+    return path.join(this.appGetPath("userData"), "enterprise-model-policy.json");
   }
 
   private resolveDeviceId(policy: EnterprisePolicy) {
@@ -726,7 +1025,7 @@ export class SidecarManager {
 
   private resolveCapabilityPythonPath() {
     if (process.platform === "darwin") {
-      return path.join(app.getPath("userData"), "capabilities", "python-site");
+      return path.join(this.appGetPath("userData"), "capabilities", "python-site");
     }
     return "";
   }
@@ -765,11 +1064,71 @@ export class SidecarManager {
     }).join(path.delimiter);
   }
 
-  private updateStatus(status: SidecarStatus) {
-    this.status = status;
-    for (const win of BrowserWindow.getAllWindows()) {
-      win.webContents.send("ecorex:sidecar-status", status);
+  private getDiagnostics(): SidecarDiagnostics {
+    return {
+      bootId: this.bootId,
+      restartAttempts: this.restartAttempts,
+      consecutiveHealthFailures: this.consecutiveHealthFailures,
+      startupInFlight: Boolean(this.startupPromise),
+      lastProbeOkAt: this.lastProbeOkAt,
+      lastProbeErrorAt: this.lastProbeErrorAt,
+      recentEvents: this.diagnosticEvents.slice(-this.diagnosticLimit)
+    };
+  }
+
+  private redactDiagnosticText(value: string) {
+    const userHome = os.homedir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return String(value || "")
+      .replace(new RegExp(this.runtimeToken.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"), "[runtime-token]")
+      .replace(/(X-EcoreX-Runtime-Token["':=\s]+)([A-Za-z0-9._~+/=-]{8,})/gi, "$1[redacted]")
+      .replace(/(Authorization["':=\s]+Bearer\s+)([A-Za-z0-9._~+/=-]{8,})/gi, "$1[redacted]")
+      .replace(/\bsk-[A-Za-z0-9_-]{16,}\b/g, "[api-key]")
+      .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[email]")
+      .replace(new RegExp(userHome, "gi"), "[home]")
+      .replace(/C:\\Users\\[^\\\s]+/gi, "C:\\Users\\[user]")
+      .slice(0, 240);
+  }
+
+  private appendDiagnostic(status: SidecarStatus, reason?: string, phase = this.phase) {
+    this.diagnosticEvents.push({
+      ts: new Date().toISOString(),
+      state: status.state,
+      phase,
+      message: this.redactDiagnosticText(status.message),
+      pid: status.pid,
+      reason: reason ? this.redactDiagnosticText(reason) : reason,
+      attempts: this.restartAttempts,
+      webPort: status.webPort
+    });
+    if (this.diagnosticEvents.length > this.diagnosticLimit) {
+      this.diagnosticEvents = this.diagnosticEvents.slice(-this.diagnosticLimit);
     }
+  }
+
+  private inferPhase(status: SidecarStatus): SidecarPhase {
+    if (status.phase) return status.phase;
+    if (status.state === "running") return "ready";
+    if (status.state === "failed") return "failed";
+    if (status.state === "stopped") return "stopped";
+    if (status.state === "skipped") return "skipped";
+    if (/degrad|health/i.test(status.message)) return "degraded";
+    if (/restart/i.test(status.message)) return "restarting";
+    return this.child ? "probing" : "spawning";
+  }
+
+  private updateStatus(status: SidecarStatus, phase: SidecarPhase = this.inferPhase(status), reason?: string) {
+    this.phase = phase;
+    const sanitizedMessage = this.redactDiagnosticText(status.message);
+    const nextStatus: SidecarStatus = {
+      ...status,
+      message: sanitizedMessage,
+      phase,
+      diagnostics: this.getDiagnostics()
+    };
+    this.appendDiagnostic(nextStatus, reason, phase);
+    nextStatus.diagnostics = this.getDiagnostics();
+    this.status = nextStatus;
+    this.broadcastStatus(nextStatus);
   }
 }
 

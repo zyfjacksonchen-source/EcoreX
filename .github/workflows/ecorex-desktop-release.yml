@@ -79,6 +79,7 @@ jobs:
         env:
           NOTARIZE_MAC: ${{ github.event_name == 'workflow_dispatch' && inputs.notarize }}
         run: |
+          rm -rf release
           if [[ "${NOTARIZE_MAC}" != "true" ]]; then
             unset CSC_LINK
             unset CSC_KEY_PASSWORD
@@ -97,26 +98,43 @@ jobs:
             echo "Code signing or Apple notarization secrets are not configured; refusing unsigned public DMG." >&2
             exit 1
           fi
-          for dmg in release/EcoreX_*_${{ matrix.arch }}.dmg; do
-            echo "Submitting $dmg for notarization"
-            xcrun notarytool submit "$dmg" \
-              --apple-id "${APPLE_ID}" \
-              --team-id "${APPLE_TEAM_ID}" \
-              --password "${APPLE_APP_SPECIFIC_PASSWORD}" \
-              --wait
-            xcrun stapler staple "$dmg"
-          done
+          version="$(node -p "require('./package.json').version")"
+          dmg="release/EcoreX_${version}_${{ matrix.arch }}.dmg"
+          test -f "$dmg"
+          echo "Submitting $dmg for notarization"
+          xcrun notarytool submit "$dmg" \
+            --apple-id "${APPLE_ID}" \
+            --team-id "${APPLE_TEAM_ID}" \
+            --password "${APPLE_APP_SPECIFIC_PASSWORD}" \
+            --wait
+          xcrun stapler staple "$dmg"
 
-      - name: Validate notarized artifacts
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.notarize }}
+      - name: Validate macOS artifacts
+        env:
+          ECOREX_MAC_STRICT_SIGNING: ${{ github.event_name == 'workflow_dispatch' && inputs.notarize && '1' || '0' }}
         run: |
-          if [[ -z "${APPLE_ID}" || -z "${APPLE_APP_SPECIFIC_PASSWORD}" || -z "${APPLE_TEAM_ID}" || -z "${CSC_LINK}" ]]; then
-            echo "Signing/notarization secrets are incomplete; strict validation cannot be skipped for a public DMG." >&2
-            exit 1
-          fi
           npm run validate:mac
 
       - name: Hash artifacts
+        env:
+          MAC_ARCH: ${{ matrix.arch }}
+          ECOREX_MAC_STRICT_SIGNING: ${{ github.event_name == 'workflow_dispatch' && inputs.notarize && '1' || '0' }}
         run: |
-          shasum -a 256 release/EcoreX_*_${{ matrix.arch }}.dmg > "release/EcoreX_${{ matrix.arch }}.sha256"
-          cat "release/EcoreX_${{ matrix.arch }}.sha256"
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          dmg="release/EcoreX_${version}_${MAC_ARCH}.dmg"
+          test -f "$dmg"
+          shasum -a 256 "$dmg" > "release/EcoreX_${MAC_ARCH}.sha256"
+          cat "release/EcoreX_${MAC_ARCH}.sha256"
+          chmod +x scripts/smoke-macos-dmg.sh
+          VERSION="$version" MAC_ARCH="${MAC_ARCH}" scripts/smoke-macos-dmg.sh "$dmg" "release/ecorex-macos-${MAC_ARCH}-install-smoke.json"
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ecorex-macos-${{ matrix.arch }}
+          path: |
+            desktop/release/EcoreX_0.1.17_${{ matrix.arch }}.dmg
+            desktop/release/EcoreX_${{ matrix.arch }}.sha256
+            desktop/release/ecorex-macos-${{ matrix.arch }}-install-smoke.json
+          if-no-files-found: error

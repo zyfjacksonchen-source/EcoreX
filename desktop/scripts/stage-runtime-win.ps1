@@ -112,6 +112,15 @@ if (-not $RuntimeCacheDir) {
 $repoRootResolved = Resolve-Path -LiteralPath $RepoRoot
 $runtimeResolved = Resolve-UnderDirectory -Path $RuntimeDir -Base $desktopRoot
 
+if (-not $PSBoundParameters.ContainsKey("PreinstallPacks")) {
+    if ($null -ne $env:ECOREX_PREINSTALL_PACKS) {
+        $PreinstallPacks = @($env:ECOREX_PREINSTALL_PACKS -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    }
+    else {
+        $PreinstallPacks = @("office-pdf")
+    }
+}
+
 if (Test-Path -LiteralPath $runtimeResolved) {
     Remove-Item -LiteralPath $runtimeResolved -Recurse -Force
 }
@@ -183,10 +192,12 @@ if ($env:ECOREX_DISABLE_ENTERPRISE_POLICY -ne "1") {
     $adminBase = $adminBase.TrimEnd("/")
     $clientEventKey = $env:ECOREX_CLIENT_EVENT_KEY
     if (-not $clientEventKey) {
-        $clientEventKey = "ecorex-desktop-v0.1.16"
+        $clientEventKey = "ecorex-desktop-v0.1.17"
     }
     $compatClientEventKeys = @(
         $clientEventKey,
+        "ecorex-desktop-v0.1.17",
+        "ecorex-desktop-v0.1.16",
         "ecorex-desktop-v0.1.15",
         "ecorex-desktop-v0.1.14",
         "ecorex-desktop-v0.1.13",

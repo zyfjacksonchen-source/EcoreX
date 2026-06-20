@@ -6,7 +6,7 @@ on:
       version:
         description: "EcoreX version to verify"
         type: string
-        default: "0.1.16"
+        default: "0.1.17"
       artifact_url:
         description: "macOS WebUI ZIP URL; leave empty to use the public download URL"
         type: string
@@ -14,7 +14,7 @@ on:
       release_tag:
         description: "GitHub Release tag to download from when release_asset_name is set"
         type: string
-        default: "v0.1.16"
+        default: "v0.1.17"
       release_asset_name:
         description: "Private GitHub Release asset name to download with GITHUB_TOKEN"
         type: string
@@ -42,10 +42,10 @@ jobs:
 
       - name: Run macOS WebUI install smoke
         env:
-          VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || '0.1.16' }}
+          VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || '0.1.17' }}
           ARTIFACT_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.artifact_url || '' }}
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || 'v0.1.16' }}
-          RELEASE_ASSET_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.release_asset_name || 'EcoreX_0.1.16-webui-macos-universal.zip' }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || 'v0.1.17' }}
+          RELEASE_ASSET_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.release_asset_name || 'EcoreX_0.1.17-webui-macos-universal.zip' }}
           GITHUB_TOKEN: ${{ github.token }}
           ECOREX_WEB_PORT: "19090"
         run: |

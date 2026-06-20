@@ -1,0 +1,20 @@
+{
+    "ok":  false,
+    "status":  "fail",
+    "output":  "C:\\CowAgent\\docs\\v0.1.17\\local-path-safety-smoke.json",
+    "symlinkPrivilege":  false,
+    "preflight":  {
+                      "powershellSymlink":  {
+                                                "ok":  false,
+                                                "error":  "Administrator privilege required for this operation."
+                                            },
+                      "mklinkSymlink":  {
+                                            "ok":  false,
+                                            "exitCode":  -1,
+                                            "output":  "You do not have sufficient privilege to perform this operation."
+                                        },
+                      "developerMode":  false,
+                      "elevated":  false
+                  },
+    "recovery":  "STAB-003 file symlink evidence is still required for production promotion.\r\nCurrent user cannot create a file symbolic link: Administrator privilege required for this operation.\r\nSmoke status: fail; symlink check: fail; symlinkAvailable: False\r\nRun this smoke from an elevated PowerShell session, or enable Windows Developer Mode for unprivileged symlink creation, then rerun:\r\n  cd \"C:\\CowAgent\\desktop\"\r\n  npm run smoke:local-path:symlink:win -- -OutputPath \"..\\docs\\v0.1.17\\local-path-safety-smoke.json\"\r\nThe script already wrote the partial evidence JSON to: C:\\CowAgent\\docs\\v0.1.17\\local-path-safety-smoke.json"
+}

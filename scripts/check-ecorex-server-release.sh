@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${VERSION:-0.1.16}"
+VERSION="${VERSION:-0.1.17}"
 RELEASE_ROOT="${RELEASE_ROOT:-/srv/ecorex-agent-download}"
 ADMIN_ROOT="${ADMIN_ROOT:-/srv/ecorex-agent-admin}"
 PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-https://www.ecoreai.cn/ecorex-agent}"
@@ -86,8 +86,21 @@ import sys
 manifest = pathlib.Path(sys.argv[1])
 downloads = pathlib.Path(sys.argv[2])
 expected = sys.argv[3]
-publishable = {"ready"}
 failures = 0
+REQUIRED_AUTH_NEGATIVE_STATUSES = {
+    "messageNoToken",
+    "messageWrongToken",
+    "messageQueryTokenRejected",
+    "streamNoToken",
+    "streamWrongToken",
+    "streamQueryTokenRejected",
+    "fileStatNoToken",
+    "fileStatWrongToken",
+    "fileServeNoToken",
+    "fileServeWrongToken",
+    "openPathNoToken",
+    "openPathWrongToken",
+}
 
 def fail(message):
     global failures
@@ -105,6 +118,79 @@ def is_external(artifact):
     href = str(artifact.get("href") or "").lower()
     return bool(artifact.get("external")) or href.startswith(("http://", "https://"))
 
+def is_publishable(artifact):
+    status = artifact.get("status") or ""
+    artifact_id = str(artifact.get("id") or artifact.get("fileName") or "")
+    if status == "ready" and artifact_id.startswith("macos-") and artifact.get("signature") == "unsigned":
+        fail(f"{artifact_id} unsigned macOS artifact must use status=ready-unsigned with installSmoke evidence")
+        return False
+    if status == "ready":
+        return True
+    return (
+        status == "ready-unsigned"
+        and artifact_id.startswith("macos-")
+        and artifact.get("signature") == "unsigned"
+    )
+
+def validate_macos_unsigned_install_smoke(artifact):
+    smoke = artifact.get("installSmoke") or artifact.get("install_smoke") or {}
+    artifact_id = artifact.get("id") or artifact.get("fileName") or "unknown"
+    if not isinstance(smoke, dict):
+        fail(f"{artifact_id} ready-unsigned requires installSmoke evidence")
+        return
+    if str(smoke.get("status") or "").lower() != "pass":
+        fail(f"{artifact_id} installSmoke.status must be pass")
+    if str(smoke.get("version") or "") != str(payload.get("version") or ""):
+        fail(f"{artifact_id} installSmoke.version must match manifest")
+    if str(smoke.get("sha256") or "").upper() != str(artifact.get("sha256") or "").upper():
+        fail(f"{artifact_id} installSmoke.sha256 must match artifact")
+    evidence = smoke.get("runId") or smoke.get("run_id") or smoke.get("evidenceUrl") or smoke.get("evidence_url") or smoke.get("evidence")
+    if not str(evidence or "").strip():
+        fail(f"{artifact_id} installSmoke requires runId or evidenceUrl")
+    arch = {"macos-arm64-dmg": "arm64", "macos-x64-dmg": "x64"}.get(str(artifact_id))
+    if arch:
+        expected_file = f"EcoreX_{payload.get('version')}_{arch}.dmg"
+        if str(artifact.get("fileName") or "") != expected_file:
+            fail(f"{artifact_id} fileName must be {expected_file}")
+        if str(smoke.get("artifact") or "") != expected_file:
+            fail(f"{artifact_id} installSmoke.artifact must be {expected_file}")
+        if str(smoke.get("arch") or "") != arch:
+            fail(f"{artifact_id} installSmoke.arch must be {arch}")
+        if int(smoke.get("bytes") or 0) != int(artifact.get("size") or 0):
+            fail(f"{artifact_id} installSmoke.bytes must match artifact size")
+    missing = [
+        key for key in (
+            "mounted",
+            "appFound",
+            "copied",
+            "launched",
+            "versionOk",
+            "sidecarReady",
+            "authReady",
+            "authRequired",
+            "authNegativeReady",
+            "gatekeeperInstructionShown",
+        )
+        if not smoke.get(key)
+    ]
+    if missing:
+        fail(f"{artifact_id} installSmoke missing passed flags: {', '.join(missing)}")
+    negative = smoke.get("authNegativeStatuses")
+    if not isinstance(negative, dict):
+        fail(f"{artifact_id} installSmoke requires authNegativeStatuses")
+    else:
+        missing_negative = sorted(REQUIRED_AUTH_NEGATIVE_STATUSES - set(negative))
+        bad_negative = sorted(
+            f"{key}={negative.get(key)}"
+            for key in REQUIRED_AUTH_NEGATIVE_STATUSES & set(negative)
+            if int(negative.get(key) or 0) != 401
+        )
+        if missing_negative or bad_negative:
+            fail(f"{artifact_id} installSmoke authNegativeStatuses invalid missing={missing_negative} bad={bad_negative}")
+    instructions = smoke.get("gatekeeperInstructions") or smoke.get("instructions") or smoke.get("instructionsUrl") or smoke.get("instructions_url")
+    if not str(instructions or "").strip():
+        fail(f"{artifact_id} installSmoke requires Gatekeeper instructions evidence")
+
 if not manifest.is_file():
     raise SystemExit(0)
 payload = json.loads(manifest.read_text(encoding="utf-8-sig"))
@@ -118,9 +204,13 @@ for artifact in payload.get("artifacts") or []:
     artifact_id = artifact.get("id") or artifact.get("fileName") or "unknown"
     status = artifact.get("status") or ""
     file_name = artifact.get("fileName") or ""
-    if status not in publishable:
+    if not is_publishable(artifact):
         print(f"SKIP artifact {artifact_id} status={status}")
         continue
+    if artifact_id == "windows-x64" and str(artifact.get("signature") or "").lower() != "valid":
+        fail(f"{artifact_id} requires signature=Valid")
+    if status == "ready-unsigned":
+        validate_macos_unsigned_install_smoke(artifact)
     ready_count += 1
     if is_external(artifact):
         href = artifact.get("href") or ""
@@ -176,7 +266,24 @@ if [[ "$CHECK_PUBLIC" == "1" ]]; then
   done
   check_http "public-admin-auth" "$PUBLIC_BASE_URL/admin/" "401"
   check_http "public-client-gate" "$PUBLIC_BASE_URL/client/model-config" "403"
-  if ! python3 - "$current/manifest.json" "$PUBLIC_BASE_URL" <<'PY'
+  public_manifest_tmp="$(mktemp)"
+  if python3 - "$PUBLIC_BASE_URL/manifest.json" "$public_manifest_tmp" <<'PY'
+import pathlib
+import sys
+import urllib.request
+
+url = sys.argv[1]
+target = pathlib.Path(sys.argv[2])
+with urllib.request.urlopen(url, timeout=20) as response:
+    target.write_bytes(response.read())
+PY
+  then
+    echo "PASS downloaded public manifest $PUBLIC_BASE_URL/manifest.json"
+  else
+    echo "FAIL download public manifest $PUBLIC_BASE_URL/manifest.json"
+    failures=$((failures + 1))
+  fi
+  if ! python3 - "$public_manifest_tmp" "$PUBLIC_BASE_URL" "$VERSION" <<'PY'
 import json
 import pathlib
 import sys
@@ -185,8 +292,22 @@ import urllib.request
 
 manifest = pathlib.Path(sys.argv[1])
 base_url = sys.argv[2].rstrip("/")
-publishable = {"ready"}
+expected_version = sys.argv[3]
 failures = 0
+REQUIRED_AUTH_NEGATIVE_STATUSES = {
+    "messageNoToken",
+    "messageWrongToken",
+    "messageQueryTokenRejected",
+    "streamNoToken",
+    "streamWrongToken",
+    "streamQueryTokenRejected",
+    "fileStatNoToken",
+    "fileStatWrongToken",
+    "fileServeNoToken",
+    "fileServeWrongToken",
+    "openPathNoToken",
+    "openPathWrongToken",
+}
 
 def status_for(url):
     request = urllib.request.Request(url, method="HEAD")
@@ -206,13 +327,112 @@ def status_for(url):
     except Exception as exc:
         return f"error:{exc}"
 
+def is_publishable(artifact):
+    global failures
+    status = artifact.get("status") or ""
+    artifact_id = str(artifact.get("id") or artifact.get("fileName") or "")
+    if status == "ready" and artifact_id.startswith("macos-") and artifact.get("signature") == "unsigned":
+        print(f"FAIL {artifact_id} unsigned macOS artifact must use status=ready-unsigned with installSmoke evidence")
+        failures += 1
+        return False
+    if status == "ready":
+        return True
+    return (
+        status == "ready-unsigned"
+        and artifact_id.startswith("macos-")
+        and artifact.get("signature") == "unsigned"
+    )
+
+def validate_macos_unsigned_install_smoke(artifact):
+    smoke = artifact.get("installSmoke") or artifact.get("install_smoke") or {}
+    artifact_id = artifact.get("id") or artifact.get("fileName") or "unknown"
+    if not isinstance(smoke, dict):
+        print(f"FAIL {artifact_id} ready-unsigned requires installSmoke evidence")
+        return 1
+    failed = 0
+    if str(smoke.get("status") or "").lower() != "pass":
+        print(f"FAIL {artifact_id} installSmoke.status must be pass")
+        failed += 1
+    if str(smoke.get("version") or "") != str(payload.get("version") or ""):
+        print(f"FAIL {artifact_id} installSmoke.version must match manifest")
+        failed += 1
+    if str(smoke.get("sha256") or "").upper() != str(artifact.get("sha256") or "").upper():
+        print(f"FAIL {artifact_id} installSmoke.sha256 must match artifact")
+        failed += 1
+    evidence = smoke.get("runId") or smoke.get("run_id") or smoke.get("evidenceUrl") or smoke.get("evidence_url") or smoke.get("evidence")
+    if not str(evidence or "").strip():
+        print(f"FAIL {artifact_id} installSmoke requires runId or evidenceUrl")
+        failed += 1
+    arch = {"macos-arm64-dmg": "arm64", "macos-x64-dmg": "x64"}.get(str(artifact_id))
+    if arch:
+        expected_file = f"EcoreX_{payload.get('version')}_{arch}.dmg"
+        if str(artifact.get("fileName") or "") != expected_file:
+            print(f"FAIL {artifact_id} fileName must be {expected_file}")
+            failed += 1
+        if str(smoke.get("artifact") or "") != expected_file:
+            print(f"FAIL {artifact_id} installSmoke.artifact must be {expected_file}")
+            failed += 1
+        if str(smoke.get("arch") or "") != arch:
+            print(f"FAIL {artifact_id} installSmoke.arch must be {arch}")
+            failed += 1
+        if int(smoke.get("bytes") or 0) != int(artifact.get("size") or 0):
+            print(f"FAIL {artifact_id} installSmoke.bytes must match artifact size")
+            failed += 1
+    missing = [
+        key for key in (
+            "mounted",
+            "appFound",
+            "copied",
+            "launched",
+            "versionOk",
+            "sidecarReady",
+            "authReady",
+            "authRequired",
+            "authNegativeReady",
+            "gatekeeperInstructionShown",
+        )
+        if not smoke.get(key)
+    ]
+    if missing:
+        print(f"FAIL {artifact_id} installSmoke missing passed flags: {', '.join(missing)}")
+        failed += 1
+    negative = smoke.get("authNegativeStatuses")
+    if not isinstance(negative, dict):
+        print(f"FAIL {artifact_id} installSmoke requires authNegativeStatuses")
+        failed += 1
+    else:
+        missing_negative = sorted(REQUIRED_AUTH_NEGATIVE_STATUSES - set(negative))
+        bad_negative = sorted(
+            f"{key}={negative.get(key)}"
+            for key in REQUIRED_AUTH_NEGATIVE_STATUSES & set(negative)
+            if int(negative.get(key) or 0) != 401
+        )
+        if missing_negative or bad_negative:
+            print(f"FAIL {artifact_id} installSmoke authNegativeStatuses invalid missing={missing_negative} bad={bad_negative}")
+            failed += 1
+    instructions = smoke.get("gatekeeperInstructions") or smoke.get("instructions") or smoke.get("instructionsUrl") or smoke.get("instructions_url")
+    if not str(instructions or "").strip():
+        print(f"FAIL {artifact_id} installSmoke requires Gatekeeper instructions evidence")
+        failed += 1
+    return failed
+
 payload = json.loads(manifest.read_text(encoding="utf-8-sig"))
+if payload.get("product") == "EcoreX" and str(payload.get("version") or "") == expected_version:
+    print(f"PASS public manifest EcoreX {expected_version}")
+else:
+    print(f"FAIL public manifest product={payload.get('product')} version={payload.get('version')} expected={expected_version}")
+    failures += 1
 for artifact in payload.get("artifacts") or []:
     status = artifact.get("status") or ""
     artifact_id = artifact.get("id") or artifact.get("fileName") or "unknown"
-    if status not in publishable:
+    if not is_publishable(artifact):
         print(f"SKIP public artifact {artifact_id} status={status}")
         continue
+    if artifact_id == "windows-x64" and str(artifact.get("signature") or "").lower() != "valid":
+        print(f"FAIL {artifact_id} requires signature=Valid")
+        failures += 1
+    if status == "ready-unsigned":
+        failures += validate_macos_unsigned_install_smoke(artifact)
     href = artifact.get("href") or f"downloads/{artifact.get('fileName', '')}"
     if str(href).lower().startswith(("http://", "https://")):
         url = href
@@ -230,6 +450,7 @@ PY
   then
     failures=$((failures + 1))
   fi
+  rm -f "$public_manifest_tmp"
 fi
 
 if [[ "$failures" -gt 0 ]]; then
