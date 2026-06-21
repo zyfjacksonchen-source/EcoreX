@@ -751,3 +751,25 @@
     control-arg stripping, stream non-200 typed errors, and the full model
     telemetry suite. R18-04-C remains PARTIAL pending the remaining
     non-ModelScope provider-local retry loop migrations.
+- Added the DeepSeek/MiMo native HTTP error normalization slice:
+  - Added `models/model_provider_errors.py` so native HTTP adapters can share
+    tolerant non-200 response parsing, nested provider error extraction, and
+    Retry-After header propagation without duplicating provider-local logic.
+  - DeepSeek and MiMo agent sync/stream paths now return typed provider errors
+    with `error`, `message`, `status_code`, code/type, and `retry_after`
+    evidence for HTTP non-200 responses and SSE error chunks. The normalizer
+    preserves `retry_after`, `retry_after_seconds`, and `retry_after_ms` as
+    distinct fields so the shared gateway keeps millisecond Retry-After values
+    in the correct unit. The existing AgentBridge/native gateway remains the
+    retry owner for those errors.
+  - The slice intentionally leaves direct `reply_text` chat behavior unchanged;
+    provider-local legacy retry loops there remain visible for later migration.
+  - Focused tests cover DeepSeek and MiMo real adapter sync 429 Retry-After
+    retry through `model_retry_sleep`, sync non-JSON 400 fail-closed behavior,
+    stream 429 Retry-After retry before output, pre-output SSE provider errors
+    with `retry_after_ms=500` retrying with a 0.5-second sleep, stream provider
+    errors after output being marked `retry_suppressed=stream_output_started`
+    without a second provider attempt, control-arg stripping, telemetry
+    taxonomy, and adjacent model capability/Responses/gate regression coverage.
+    R18-04-C remains PARTIAL pending the remaining native provider and legacy
+    retry-loop migrations.

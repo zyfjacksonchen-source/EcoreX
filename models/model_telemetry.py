@@ -237,11 +237,9 @@ def extract_error_details(response: Dict[str, Any]) -> Dict[str, Any]:
         "status_code": response.get("status_code"),
         "error_code": str(error_code or ""),
         "error_type": str(error_type or ""),
-        "retry_after": (
-            response.get("retry_after")
-            or response.get("retry_after_seconds")
-            or response.get("retry_after_ms")
-        ),
+        "retry_after": response.get("retry_after"),
+        "retry_after_seconds": response.get("retry_after_seconds"),
+        "retry_after_ms": response.get("retry_after_ms"),
     }
 
 

@@ -541,6 +541,80 @@ class TestModelTelemetry(unittest.TestCase):
 
         return RealModelScopeBot()
 
+    class _FakeHTTPResponse:
+        def __init__(self, status_code, payload=None, *, headers=None, text=None, lines=None, json_error=None):
+            self.status_code = status_code
+            self._payload = payload if payload is not None else {}
+            self.headers = headers or {}
+            self.text = text if text is not None else str(self._payload)
+            self._lines = list(lines or [])
+            self._json_error = json_error
+
+        def json(self):
+            if self._json_error is not None:
+                raise self._json_error
+            return self._payload
+
+        def iter_lines(self):
+            return iter(self._lines)
+
+    def _native_http_provider_bot_for_tests(self, provider):
+        if provider == "deepseek":
+            from models.deepseek.deepseek_bot import DeepSeekBot
+
+            class TestDeepSeekBot(DeepSeekBot):
+                def __init__(self):
+                    self.args = {
+                        "model": "deepseek-v4-flash",
+                        "temperature": 0.7,
+                        "top_p": 1.0,
+                        "frequency_penalty": 0.0,
+                        "presence_penalty": 0.0,
+                    }
+
+                @property
+                def api_key(self):
+                    return "test-key"
+
+                @property
+                def api_base(self):
+                    return "https://deepseek.test/v1"
+
+            return {
+                "bot": TestDeepSeekBot(),
+                "model": "deepseek-v4-flash",
+                "provider": "deepseek",
+                "patch": "models.deepseek.deepseek_bot.requests.post",
+            }
+
+        if provider == "mimo":
+            from models.mimo.mimo_bot import MimoBot
+
+            class TestMimoBot(MimoBot):
+                def __init__(self):
+                    self.args = {
+                        "model": "mimo-v2.5-pro",
+                        "temperature": 1.0,
+                        "top_p": 0.95,
+                    }
+
+                @property
+                def api_key(self):
+                    return "test-key"
+
+                @property
+                def api_base(self):
+                    return "https://mimo.test/v1"
+
+            return {
+                "bot": TestMimoBot(),
+                "model": "mimo-v2.5-pro",
+                "provider": "mimo",
+                "patch": "models.mimo.mimo_bot.requests.post",
+            }
+
+        raise AssertionError("unsupported provider")
+
     def test_agent_bridge_native_sync_gateway_retries_and_records_telemetry(self):
         from agent.protocol.models import LLMRequest
         from models.model_telemetry import get_recent_model_calls
@@ -589,6 +663,308 @@ class TestModelTelemetry(unittest.TestCase):
         self.assertEqual(events[0]["api_path"], "/native/call_with_tools")
         self.assertEqual(events[0]["error_taxonomy"], "rate_limit")
         self.assertEqual(events[1]["total_tokens"], 7)
+
+    def test_native_http_providers_sync_retry_after_uses_shared_gateway(self):
+        from unittest.mock import patch
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import (
+            get_recent_model_calls,
+            reset_model_call_telemetry_for_tests,
+        )
+
+        for provider in ("deepseek", "mimo"):
+            with self.subTest(provider=provider):
+                reset_model_call_telemetry_for_tests()
+                spec = self._native_http_provider_bot_for_tests(provider)
+                responses = [
+                    self._FakeHTTPResponse(
+                        429,
+                        {
+                            "error": {
+                                "message": "rate limit",
+                                "code": "rate_limit_exceeded",
+                                "type": "rate_limit",
+                            }
+                        },
+                        headers={"Retry-After": "0.25"},
+                    ),
+                    self._FakeHTTPResponse(
+                        200,
+                        {
+                            "choices": [{
+                                "message": {"content": "ok"},
+                                "finish_reason": "stop",
+                            }],
+                            "usage": {
+                                "prompt_tokens": 1,
+                                "completion_tokens": 2,
+                                "total_tokens": 3,
+                            },
+                        },
+                    ),
+                ]
+                posts = []
+
+                def fake_post(url, headers=None, json=None, timeout=None, **_kwargs):
+                    posts.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
+                    return responses.pop(0)
+
+                sleeps = []
+                model = self._native_agent_model(
+                    spec["bot"],
+                    model_name=spec["model"],
+                    provider=spec["provider"],
+                )
+
+                with patch(spec["patch"], side_effect=fake_post):
+                    result = model.call(LLMRequest(
+                        messages=[{"role": "user", "content": "hi"}],
+                        model_max_retries=1,
+                        model_retry_sleep=sleeps.append,
+                    ))
+
+                self.assertEqual(result["content"][0]["text"], "ok")
+                self.assertEqual(sleeps, [0.25])
+                self.assertEqual(len(posts), 2)
+                self.assertFalse("retry_count" in posts[0]["json"])
+                self.assertFalse("model_max_retries" in posts[0]["json"])
+                self.assertFalse("model_retry_sleep" in posts[0]["json"])
+                events = get_recent_model_calls()
+                self.assertEqual([event["status"] for event in events], ["failed", "completed"])
+                self.assertEqual([event["retry_count"] for event in events], [0, 1])
+                self.assertEqual([event["provider"] for event in events], [spec["provider"], spec["provider"]])
+                self.assertEqual(events[0]["error_taxonomy"], "rate_limit")
+                self.assertEqual(events[0]["error_code"], "rate_limit_exceeded")
+                self.assertEqual(events[0]["error_type"], "rate_limit")
+
+    def test_native_http_providers_sync_non_json_4xx_fails_closed(self):
+        from unittest.mock import patch
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import (
+            get_recent_model_calls,
+            reset_model_call_telemetry_for_tests,
+        )
+
+        for provider in ("deepseek", "mimo"):
+            with self.subTest(provider=provider):
+                reset_model_call_telemetry_for_tests()
+                spec = self._native_http_provider_bot_for_tests(provider)
+                posts = []
+
+                def fake_post(url, headers=None, json=None, timeout=None, **_kwargs):
+                    posts.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
+                    return self._FakeHTTPResponse(
+                        400,
+                        text="bad request text",
+                        json_error=ValueError("not json"),
+                    )
+
+                sleeps = []
+                model = self._native_agent_model(
+                    spec["bot"],
+                    model_name=spec["model"],
+                    provider=spec["provider"],
+                )
+
+                with patch(spec["patch"], side_effect=fake_post):
+                    result = model.call(LLMRequest(
+                        messages=[{"role": "user", "content": "hi"}],
+                        model_max_retries=2,
+                        model_retry_sleep=sleeps.append,
+                    ))
+
+                self.assertEqual(result["status_code"], 400)
+                self.assertEqual(result["message"], "bad request text")
+                self.assertEqual(result["error_taxonomy"], "client_error")
+                self.assertFalse(result["retryable"])
+                self.assertEqual(sleeps, [])
+                self.assertEqual(len(posts), 1)
+                event = get_recent_model_calls()[0]
+                self.assertEqual(event["status"], "failed")
+                self.assertEqual(event["error_status_code"], 400)
+                self.assertEqual(event["error_taxonomy"], "client_error")
+
+    def test_native_http_providers_stream_retry_after_before_output(self):
+        from unittest.mock import patch
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import (
+            get_recent_model_calls,
+            reset_model_call_telemetry_for_tests,
+        )
+
+        for provider in ("deepseek", "mimo"):
+            with self.subTest(provider=provider):
+                reset_model_call_telemetry_for_tests()
+                spec = self._native_http_provider_bot_for_tests(provider)
+                responses = [
+                    self._FakeHTTPResponse(
+                        429,
+                        {
+                            "error": {
+                                "message": "rate limit",
+                                "code": "rate_limit_exceeded",
+                                "type": "rate_limit",
+                            }
+                        },
+                        headers={"Retry-After": "0.5"},
+                    ),
+                    self._FakeHTTPResponse(
+                        200,
+                        lines=[
+                            b'data: {"choices":[{"delta":{"content":"ok"}}]}',
+                            b'data: [DONE]',
+                        ],
+                    ),
+                ]
+                posts = []
+
+                def fake_post(url, headers=None, json=None, stream=False, timeout=None, **_kwargs):
+                    posts.append({
+                        "url": url,
+                        "headers": headers,
+                        "json": json,
+                        "stream": stream,
+                        "timeout": timeout,
+                    })
+                    return responses.pop(0)
+
+                sleeps = []
+                model = self._native_agent_model(
+                    spec["bot"],
+                    model_name=spec["model"],
+                    provider=spec["provider"],
+                )
+
+                with patch(spec["patch"], side_effect=fake_post):
+                    chunks = list(model.call_stream(LLMRequest(
+                        messages=[{"role": "user", "content": "hi"}],
+                        stream=True,
+                        model_max_retries=1,
+                        model_retry_sleep=sleeps.append,
+                    )))
+
+                self.assertEqual(chunks[0]["choices"][0]["delta"]["content"], "ok")
+                self.assertEqual(sleeps, [0.5])
+                self.assertEqual(len(posts), 2)
+                self.assertEqual([post["stream"] for post in posts], [True, True])
+                self.assertFalse("retry_count" in posts[0]["json"])
+                self.assertFalse("model_max_retries" in posts[0]["json"])
+                self.assertFalse("model_retry_sleep" in posts[0]["json"])
+                events = get_recent_model_calls()
+                self.assertEqual([event["status"] for event in events], ["failed", "completed"])
+                self.assertEqual(events[0]["error_taxonomy"], "rate_limit")
+
+    def test_native_http_providers_stream_error_after_output_is_retry_suppressed(self):
+        from unittest.mock import patch
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import (
+            get_recent_model_calls,
+            reset_model_call_telemetry_for_tests,
+        )
+
+        for provider in ("deepseek", "mimo"):
+            with self.subTest(provider=provider):
+                reset_model_call_telemetry_for_tests()
+                spec = self._native_http_provider_bot_for_tests(provider)
+                posts = []
+
+                def fake_post(url, headers=None, json=None, stream=False, timeout=None, **_kwargs):
+                    posts.append({
+                        "url": url,
+                        "headers": headers,
+                        "json": json,
+                        "stream": stream,
+                        "timeout": timeout,
+                    })
+                    return self._FakeHTTPResponse(
+                        200,
+                        lines=[
+                            b'data: {"choices":[{"delta":{"content":"partial"}}]}',
+                            b'data: {"error":{"message":"server unavailable","code":"server_error","type":"server_error"},"status_code":503,"retry_after":"0.5"}',
+                            b'data: [DONE]',
+                        ],
+                    )
+
+                sleeps = []
+                model = self._native_agent_model(
+                    spec["bot"],
+                    model_name=spec["model"],
+                    provider=spec["provider"],
+                )
+
+                with patch(spec["patch"], side_effect=fake_post):
+                    chunks = list(model.call_stream(LLMRequest(
+                        messages=[{"role": "user", "content": "hi"}],
+                        stream=True,
+                        model_max_retries=1,
+                        model_retry_sleep=sleeps.append,
+                    )))
+
+                self.assertEqual(chunks[0]["choices"][0]["delta"]["content"], "partial")
+                self.assertEqual(chunks[1]["status_code"], 503)
+                self.assertTrue(chunks[1]["retryable"])
+                self.assertTrue(chunks[1]["retry_suppressed"])
+                self.assertEqual(chunks[1]["retry_suppressed_reason"], "stream_output_started")
+                self.assertEqual(sleeps, [])
+                self.assertEqual(len(posts), 1)
+                events = get_recent_model_calls()
+                self.assertEqual(len(events), 1)
+                event = events[0]
+                self.assertEqual(event["status"], "failed")
+                self.assertEqual(event["error_taxonomy"], "server_error")
+
+    def test_native_http_providers_stream_retry_after_ms_keeps_millisecond_units(self):
+        from unittest.mock import patch
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import (
+            get_recent_model_calls,
+            reset_model_call_telemetry_for_tests,
+        )
+
+        for provider in ("deepseek", "mimo"):
+            with self.subTest(provider=provider):
+                reset_model_call_telemetry_for_tests()
+                spec = self._native_http_provider_bot_for_tests(provider)
+                responses = [
+                    self._FakeHTTPResponse(
+                        200,
+                        lines=[
+                            b'data: {"error":{"message":"rate limit","code":"rate_limit_exceeded","type":"rate_limit"},"status_code":429,"retry_after_ms":500}',
+                            b'data: [DONE]',
+                        ],
+                    ),
+                    self._FakeHTTPResponse(
+                        200,
+                        lines=[
+                            b'data: {"choices":[{"delta":{"content":"ok"}}]}',
+                            b'data: [DONE]',
+                        ],
+                    ),
+                ]
+
+                def fake_post(url, headers=None, json=None, stream=False, timeout=None, **_kwargs):
+                    return responses.pop(0)
+
+                sleeps = []
+                model = self._native_agent_model(
+                    spec["bot"],
+                    model_name=spec["model"],
+                    provider=spec["provider"],
+                )
+
+                with patch(spec["patch"], side_effect=fake_post):
+                    chunks = list(model.call_stream(LLMRequest(
+                        messages=[{"role": "user", "content": "hi"}],
+                        stream=True,
+                        model_max_retries=1,
+                        model_retry_sleep=sleeps.append,
+                    )))
+
+                self.assertEqual(chunks[0]["choices"][0]["delta"]["content"], "ok")
+                self.assertEqual(sleeps, [0.5])
+                events = get_recent_model_calls()
+                self.assertEqual([event["status"] for event in events], ["failed", "completed"])
+                self.assertEqual(events[0]["error_taxonomy"], "rate_limit")
 
     def test_agent_bridge_modelscope_real_sync_uses_shared_retry_after_without_local_retry(self):
         from unittest.mock import patch

@@ -27,6 +27,7 @@ from typing import Optional
 import requests
 from models.bot import Bot
 from models.openai_compatible_bot import OpenAICompatibleBot
+from models.model_provider_errors import http_error_response, provider_error_response
 from models.session_manager import SessionManager
 from bridge.context import ContextType
 from bridge.reply import Reply, ReplyType
@@ -301,9 +302,12 @@ class DeepSeekBot(Bot, OpenAICompatibleBot):
             response = requests.post(url, headers=headers, json=request_body, stream=True, timeout=180)
 
             if response.status_code != 200:
-                error_msg = response.text
-                logger.error(f"[DEEPSEEK] API error: status={response.status_code}, msg={error_msg}")
-                yield {"error": True, "message": error_msg, "status_code": response.status_code}
+                error_response = http_error_response(response)
+                logger.error(
+                    f"[DEEPSEEK] API error: status={response.status_code}, "
+                    f"msg={error_response.get('message')}"
+                )
+                yield error_response
                 return
 
             current_tool_calls = {}
@@ -331,9 +335,16 @@ class DeepSeekBot(Bot, OpenAICompatibleBot):
 
                 if chunk.get("error"):
                     error_data = chunk["error"]
-                    error_msg = error_data.get("message", "Unknown error") if isinstance(error_data, dict) else str(error_data)
-                    logger.error(f"[DEEPSEEK] stream error: {error_msg}")
-                    yield {"error": True, "message": error_msg, "status_code": 500}
+                    error_response = provider_error_response(
+                        error_data,
+                        message="Unknown error",
+                        status_code=chunk.get("status_code", 500),
+                        retry_after=chunk.get("retry_after"),
+                        retry_after_seconds=chunk.get("retry_after_seconds"),
+                        retry_after_ms=chunk.get("retry_after_ms"),
+                    )
+                    logger.error(f"[DEEPSEEK] stream error: {error_response.get('message')}")
+                    yield error_response
                     return
 
                 if not chunk.get("choices"):
@@ -416,9 +427,12 @@ class DeepSeekBot(Bot, OpenAICompatibleBot):
             response = requests.post(url, headers=headers, json=request_body, timeout=180)
 
             if response.status_code != 200:
-                error_msg = response.text
-                logger.error(f"[DEEPSEEK] API error: status={response.status_code}, msg={error_msg}")
-                yield {"error": True, "message": error_msg, "status_code": response.status_code}
+                error_response = http_error_response(response)
+                logger.error(
+                    f"[DEEPSEEK] API error: status={response.status_code}, "
+                    f"msg={error_response.get('message')}"
+                )
+                yield error_response
                 return
 
             result = response.json()
