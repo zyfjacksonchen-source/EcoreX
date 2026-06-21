@@ -237,9 +237,15 @@ def extract_error_details(response: Dict[str, Any]) -> Dict[str, Any]:
         "status_code": response.get("status_code"),
         "error_code": str(error_code or ""),
         "error_type": str(error_type or ""),
+        "error_taxonomy": response.get("error_taxonomy"),
         "retry_after": response.get("retry_after"),
         "retry_after_seconds": response.get("retry_after_seconds"),
         "retry_after_ms": response.get("retry_after_ms"),
+        "retryable": response.get("retryable"),
+        "retry_attempt": response.get("retry_attempt"),
+        "retry_attempts": response.get("retry_attempts"),
+        "max_retries": response.get("max_retries"),
+        "retry_exhausted": response.get("retry_exhausted"),
     }
 
 
@@ -307,6 +313,15 @@ class ModelCallSpan:
         status_code: Any = None,
         error_code: Any = "",
         error_type: Any = "",
+        error_taxonomy: Any = "",
+        retry_after: Any = None,
+        retry_after_seconds: Any = None,
+        retry_after_ms: Any = None,
+        retryable: Any = None,
+        retry_attempt: Any = None,
+        retry_attempts: Any = None,
+        max_retries: Any = None,
+        retry_exhausted: Any = None,
         **_ignored: Any,
     ) -> Dict[str, Any]:
         return self._finish(
@@ -315,6 +330,15 @@ class ModelCallSpan:
             status_code=status_code,
             error_code=error_code,
             error_type=error_type,
+            error_taxonomy=error_taxonomy,
+            retry_after=retry_after,
+            retry_after_seconds=retry_after_seconds,
+            retry_after_ms=retry_after_ms,
+            retryable=retryable,
+            retry_attempt=retry_attempt,
+            retry_attempts=retry_attempts,
+            max_retries=max_retries,
+            retry_exhausted=retry_exhausted,
         )
 
     def finish_cancelled(
@@ -339,6 +363,15 @@ class ModelCallSpan:
         status_code: Any = None,
         error_code: Any = "",
         error_type: Any = "",
+        error_taxonomy: Any = "",
+        retry_after: Any = None,
+        retry_after_seconds: Any = None,
+        retry_after_ms: Any = None,
+        retryable: Any = None,
+        retry_attempt: Any = None,
+        retry_attempts: Any = None,
+        max_retries: Any = None,
+        retry_exhausted: Any = None,
     ) -> Dict[str, Any]:
         if self._finished:
             return {}
@@ -367,17 +400,33 @@ class ModelCallSpan:
             "error_message": "",
         }
         if status != "completed":
+            taxonomy = str(error_taxonomy or classify_model_error(
+                status_code=status_int,
+                message=message,
+                error_code=error_code,
+                error_type=error_type,
+            ))
             event.update({
-                "error_taxonomy": classify_model_error(
-                    status_code=status_int,
-                    message=message,
-                    error_code=error_code,
-                    error_type=error_type,
-                ),
+                "error_taxonomy": taxonomy,
                 "error_status_code": status_int,
                 "error_code": str(error_code or ""),
                 "error_type": str(error_type or ""),
                 "error_message": str(message or "")[:500],
+            })
+            retry_fields = {
+                "retry_after": retry_after,
+                "retry_after_seconds": retry_after_seconds,
+                "retry_after_ms": retry_after_ms,
+                "retryable": retryable,
+                "retry_attempt": retry_attempt,
+                "retry_attempts": retry_attempts,
+                "max_retries": max_retries,
+                "retry_exhausted": retry_exhausted,
+            }
+            event.update({
+                key: value
+                for key, value in retry_fields.items()
+                if value not in (None, "")
             })
         return record_model_call(event)
 

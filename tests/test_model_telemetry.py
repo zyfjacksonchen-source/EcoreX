@@ -4540,6 +4540,122 @@ class TestModelTelemetry(unittest.TestCase):
         self.assertEqual(event["error_code"], "local_rate_limit")
         self.assertEqual(event["error_type"], "rate_limit")
 
+    def test_linkai_create_img_retryable_error_exhausts_shared_policy(self):
+        from unittest.mock import MagicMock, patch
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+        from models.linkai.link_ai_bot import LinkAIBot
+        from models.model_telemetry import get_recent_model_calls
+
+        fake_conf = MagicMock()
+        config = {
+            "linkai_api_key": "test-key",
+            "linkai_api_base": "https://api.link-ai.test",
+            "text_to_image": "gpt-image-2-pro",
+            "image_proxy": None,
+            "model_max_retries": 1,
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+
+        response = MagicMock()
+        response.status_code = 503
+        response.headers = {"Retry-After": "0.1"}
+        response.text = '{"error":{"message":"image unavailable","code":"server_error","type":"server_error"}}'
+        response.json.return_value = {
+            "error": {
+                "message": "image unavailable",
+                "code": "server_error",
+                "type": "server_error",
+            }
+        }
+        sleeps = []
+
+        with patch("models.linkai.link_ai_bot.conf", return_value=fake_conf):
+            with patch("models.linkai.link_ai_bot.requests.post", return_value=response) as post:
+                bot = wrap_legacy_create_img(
+                    LinkAIBot.__new__(LinkAIBot),
+                    provider_hint="linkai",
+                    model_hint="gpt-image-2-pro",
+                )
+                result = bot.create_img("draw outage", model_retry_sleep=sleeps.append)
+
+        self.assertFalse(result[0])
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(sleeps, [0.1])
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["provider"], "linkai")
+        self.assertEqual(event["api_path"], "/legacy/create_img")
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_status_code"], 503)
+        self.assertEqual(event["error_taxonomy"], "server_error")
+        self.assertEqual(event["error_code"], "server_error")
+        self.assertEqual(event["error_type"], "server_error")
+        self.assertEqual(event["retry_attempt"], 1)
+        self.assertEqual(event["max_retries"], 1)
+        self.assertTrue(event["retry_exhausted"])
+        self.assertEqual(event["retry_after_seconds"], 0.1)
+
+    def test_zhipu_create_img_uses_shared_retry_after_then_records_success(self):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock, patch
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+        from models.model_telemetry import get_recent_model_calls
+        from models.zhipuai.zhipu_ai_image import ZhipuAIImage
+
+        class FakeSDKError(Exception):
+            status_code = 429
+            headers = {"Retry-After": "0.25"}
+            body = {
+                "error": {
+                    "message": "zhipu image rate limit",
+                    "code": "rate_limit_exceeded",
+                    "type": "rate_limit",
+                }
+            }
+
+        class FakeImages:
+            def __init__(self):
+                self.calls = []
+                self.responses = [
+                    FakeSDKError("zhipu image rate limit"),
+                    SimpleNamespace(data=[SimpleNamespace(url="https://image.test/zhipu-retry.png")]),
+                ]
+
+            def generations(self, **kwargs):
+                self.calls.append(kwargs)
+                response = self.responses.pop(0)
+                if isinstance(response, Exception):
+                    raise response
+                return response
+
+        fake_conf = MagicMock()
+        config = {
+            "rate_limit_dalle": False,
+            "text_to_image": "cogview-3",
+            "image_create_size": "1024x1024",
+            "model_max_retries": 1,
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        bot = ZhipuAIImage.__new__(ZhipuAIImage)
+        bot.client = SimpleNamespace(images=FakeImages())
+        sleeps = []
+
+        with patch("models.zhipuai.zhipu_ai_image.conf", return_value=fake_conf):
+            wrapped = wrap_legacy_create_img(
+                bot,
+                provider_hint="zhipu",
+                model_hint="cogview-3",
+            )
+            result = wrapped.create_img("draw after zhipu retry", model_retry_sleep=sleeps.append)
+
+        self.assertEqual(result, (True, "https://image.test/zhipu-retry.png"))
+        self.assertEqual(len(bot.client.images.calls), 2)
+        self.assertEqual(sleeps, [0.25])
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["provider"], "zhipu")
+        self.assertEqual(event["model"], "cogview-3")
+        self.assertEqual(event["api_path"], "/legacy/create_img")
+        self.assertEqual(event["status"], "completed")
+
     def test_openai_create_img_error_sidecar_is_thread_local(self):
         import threading
         from unittest.mock import MagicMock, patch

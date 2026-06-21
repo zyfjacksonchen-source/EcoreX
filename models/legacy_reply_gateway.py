@@ -241,12 +241,26 @@ def _provider_create_img_error_details(details: Any) -> Optional[Dict[str, Any]]
                 error_value.get("http_code"),
                 error_value.get("status"),
             )
-    return {
+    normalized = {
         "message": str(message or "Legacy create_img failed"),
         "status_code": status_code,
         "error_code": str(error_code or ""),
         "error_type": str(error_type or ""),
     }
+    for key in (
+        "error_taxonomy",
+        "retry_after",
+        "retry_after_seconds",
+        "retry_after_ms",
+        "retryable",
+        "retry_attempt",
+        "retry_attempts",
+        "max_retries",
+        "retry_exhausted",
+    ):
+        if details.get(key) not in (None, ""):
+            normalized[key] = details.get(key)
+    return normalized
 
 
 def _provider_create_img_error_state(bot: Any):

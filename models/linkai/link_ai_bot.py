@@ -18,6 +18,7 @@ import threading
 from common import memory, utils
 import base64
 import os
+from models.model_image_retry import create_img_with_retry, image_error_from_response
 from models.model_telemetry import ModelCallSpan
 from models.model_provider_errors import http_error_response, provider_error_response
 
@@ -434,30 +435,40 @@ class LinkAIBot(Bot, OpenAICompatibleBot):
         else:
             logger.warning(f"[LinkAI] find app info exception, res={res}")
 
-    def create_img(self, query, retry_count=0, api_key=None):
-        try:
-            logger.info("[LinkImage] image_query={}".format(query))
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {conf().get('linkai_api_key')}"
-            }
-            data = {
-                "prompt": query,
-                "n": 1,
-                "model": conf().get("text_to_image") or "gpt-image-2-pro",
-                "response_format": "url",
-                "img_proxy": conf().get("image_proxy")
-            }
-            url = conf().get("linkai_api_base", "https://api.link-ai.tech") + "/v1/images/generations"
-            res = requests.post(url, headers=headers, json=data, timeout=(5, 90))
-            t2 = time.time()
-            image_url = res.json()["data"][0]["url"]
-            logger.info("[OPEN_AI] image_url={}".format(image_url))
-            return True, image_url
+    def create_img(self, query, retry_count=0, api_key=None, model_retry_sleep=None):
+        logger.info("[LINKAI] image_query={}".format(query))
+        model = conf().get("text_to_image") or "gpt-image-2-pro"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer {}".format(api_key or conf().get("linkai_api_key")),
+        }
+        data = {
+            "prompt": query,
+            "n": 1,
+            "model": model,
+            "response_format": "url",
+            "img_proxy": conf().get("image_proxy"),
+        }
+        url = conf().get("linkai_api_base", "https://api.link-ai.tech") + "/v1/images/generations"
 
-        except Exception as e:
-            logger.error(format(e))
-            return False, "画图出现问题，请休息一下再问我吧"
+        def invoke():
+            res = requests.post(url, headers=headers, json=data, timeout=(5, 90))
+            if res.status_code >= 400:
+                raise image_error_from_response(res)
+            image_url = res.json()["data"][0]["url"]
+            logger.info("[LINKAI] image_url={}".format(image_url))
+            return image_url
+
+        return create_img_with_retry(
+            self,
+            invoke,
+            provider="linkai",
+            model=model,
+            retry_count=retry_count,
+            max_model_retries=conf().get("model_max_retries", conf().get("max_model_retries", 1)),
+            retry_sleep=model_retry_sleep,
+            failure_message="\u753b\u56fe\u51fa\u73b0\u95ee\u9898\uff0c\u8bf7\u4f11\u606f\u4e00\u4e0b\u518d\u95ee\u6211\u5427",
+        )
 
 
     def _fetch_knowledge_search_suffix(self, response) -> str:

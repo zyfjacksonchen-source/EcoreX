@@ -941,3 +941,27 @@
     capability exposure, including custom OpenAI-compatible base downgrades.
     R18-04-A remains PARTIAL pending a machine-readable provider capability
     matrix and broader native/direct-call coverage.
+- Migrated LinkAI and Zhipu legacy image retry ownership:
+  - Added `models/model_image_retry.py` as a shared helper for legacy
+    image-generation surfaces. It reuses `models/model_retry.py` for
+    Retry-After parsing/backoff, retryable taxonomy, bounded retry attempts,
+    and thread-local `/legacy/create_img` sidecar evidence.
+  - `models/linkai/link_ai_bot.py` now treats non-2xx image-generation
+    responses as typed provider errors, preserves status/code/type/message and
+    Retry-After evidence, and retries 408/429/5xx/timeout/network failures
+    through the shared helper instead of a single opaque catch-all failure.
+  - `models/zhipuai/zhipu_ai_image.py` now routes SDK image-generation
+    exceptions through the same helper, uses existing Zhipu exception
+    normalization when available, and records local image rate-limit failures
+    as typed 429 sidecar evidence without making an upstream request.
+  - `models/legacy_reply_gateway.py` and `models/model_telemetry.py` now
+    preserve retry metadata (`retry_attempt`, `max_retries`,
+    `retry_exhausted`, `retry_after*`) from provider image sidecars into
+    model-call telemetry, so Run Center/diagnostics can distinguish
+    non-retryable failures from exhausted retryable failures.
+  - Focused tests cover LinkAI image 503 Retry-After retry exhaustion with
+    typed telemetry and Zhipu image 429 Retry-After retry success. Full model
+    telemetry plus Responses/capability/model-handler regressions passed.
+    R18-04-C remains PARTIAL pending ModelScope/remaining image edge coverage,
+    legacy direct-chat retry-loop migration, and provider-specific edges
+    outside the AgentBridge native gateway.
