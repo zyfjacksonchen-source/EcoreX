@@ -102,6 +102,22 @@ def _is_zero_token_text_success(provider: str, result: Dict[str, Any]) -> bool:
 
 
 def _legacy_error_details(result: Any, *, provider: str = "") -> Optional[Dict[str, Any]]:
+    def with_retry_fields(details: Dict[str, Any]) -> Dict[str, Any]:
+        for key in (
+            "error_taxonomy",
+            "retry_after",
+            "retry_after_seconds",
+            "retry_after_ms",
+            "retryable",
+            "retry_attempt",
+            "retry_attempts",
+            "max_retries",
+            "retry_exhausted",
+        ):
+            if isinstance(result, dict) and result.get(key) not in (None, ""):
+                details[key] = result.get(key)
+        return details
+
     if not isinstance(result, dict):
         return {
             "message": f"Legacy reply_text returned unsupported response: {type(result).__name__}",
@@ -123,23 +139,23 @@ def _legacy_error_details(result: Any, *, provider: str = "") -> Optional[Dict[s
             message = error_value.get("message") or message
             error_code = error_value.get("code") or error_code
             error_type = error_value.get("type") or error_type
-        return {
+        return with_retry_fields({
             "message": str(message or ""),
             "status_code": result.get("status_code"),
             "error_code": str(error_code or ""),
             "error_type": str(error_type or ""),
-        }
+        })
 
     if "completion_tokens" in result and _coerce_int(result.get("completion_tokens")) <= 0:
         content = str(result.get("content") or result.get("message") or "")
         if content and _is_zero_token_text_success(provider, result):
             return None
-        return {
+        return with_retry_fields({
             "message": content or "Legacy reply_text returned no completion tokens",
             "status_code": result.get("status_code"),
             "error_code": str(result.get("error_code") or result.get("code") or ""),
             "error_type": str(result.get("error_type") or result.get("type") or ""),
-        }
+        })
 
     return None
 

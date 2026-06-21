@@ -3273,6 +3273,321 @@ class TestModelTelemetry(unittest.TestCase):
         self.assertEqual(event["error_status_code"], 429)
         self.assertEqual(event["error_message"], "rate limit exceeded")
 
+    def test_chatgpt_legacy_reply_text_uses_retry_after_then_records_success(self):
+        from unittest.mock import MagicMock, patch
+        from models.chatgpt.chat_gpt_bot import ChatGPTBot
+        from models.legacy_reply_gateway import wrap_legacy_reply_text
+        from models.model_telemetry import get_recent_model_calls
+        from models.openai.openai_http_client import OpenAIHTTPError
+
+        class RetryThenSuccessClient:
+            def __init__(self):
+                self.calls = 0
+
+            def chat_completions(self, **_kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    raise OpenAIHTTPError(
+                        429,
+                        {
+                            "error": {
+                                "message": "rate limit",
+                                "code": "rate_limit_exceeded",
+                                "type": "rate_limit",
+                            }
+                        },
+                        headers={"Retry-After": "0.2"},
+                    )
+                return {
+                    "choices": [{"message": {"content": "ok after retry"}}],
+                    "usage": {
+                        "prompt_tokens": 3,
+                        "completion_tokens": 2,
+                        "total_tokens": 5,
+                    },
+                }
+
+        fake_conf = MagicMock()
+        fake_conf.get.side_effect = lambda key, default=None: {
+            "model_max_retries": 1,
+            "rate_limit_chatgpt": False,
+        }.get(key, default)
+        bot = ChatGPTBot.__new__(ChatGPTBot)
+        bot.args = {"model": "gpt-test"}
+        bot._http_client = RetryThenSuccessClient()
+        bot.sessions = SimpleNamespace(clear_session=lambda _session_id: None)
+        bot = wrap_legacy_reply_text(
+            bot,
+            provider_hint="openai",
+            model_hint="gpt-test",
+        )
+        sleeps = []
+        session = SimpleNamespace(
+            session_id="s",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        with patch("models.chatgpt.chat_gpt_bot.conf", return_value=fake_conf):
+            with patch("models.openai.legacy_reply_retry.conf", return_value=fake_conf):
+                result = bot.reply_text(session, model_retry_sleep=sleeps.append)
+
+        self.assertEqual(result["content"], "ok after retry")
+        self.assertEqual(bot._http_client.calls, 2)
+        self.assertEqual(sleeps, [0.2])
+        events = get_recent_model_calls()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["status"], "completed")
+        self.assertEqual(events[0]["provider"], "openai")
+        self.assertEqual(events[0]["model"], "gpt-test")
+        self.assertEqual(events[0]["total_tokens"], 5)
+
+    def test_chatgpt_legacy_reply_text_uses_body_retry_after_ms(self):
+        from unittest.mock import MagicMock, patch
+        from models.chatgpt.chat_gpt_bot import ChatGPTBot
+        from models.legacy_reply_gateway import wrap_legacy_reply_text
+        from models.openai.openai_http_client import OpenAIHTTPError
+
+        class RetryThenSuccessClient:
+            def __init__(self):
+                self.calls = 0
+
+            def chat_completions(self, **_kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    raise OpenAIHTTPError(
+                        429,
+                        {
+                            "error": {
+                                "message": "rate limit",
+                                "code": "rate_limit_exceeded",
+                                "type": "rate_limit",
+                            },
+                            "retry_after_ms": 250,
+                        },
+                    )
+                return {
+                    "choices": [{"message": {"content": "ok after retry"}}],
+                    "usage": {
+                        "prompt_tokens": 3,
+                        "completion_tokens": 2,
+                        "total_tokens": 5,
+                    },
+                }
+
+        fake_conf = MagicMock()
+        fake_conf.get.side_effect = lambda key, default=None: {
+            "model_max_retries": 1,
+            "rate_limit_chatgpt": False,
+        }.get(key, default)
+        bot = ChatGPTBot.__new__(ChatGPTBot)
+        bot.args = {"model": "gpt-test"}
+        bot._http_client = RetryThenSuccessClient()
+        bot.sessions = SimpleNamespace(clear_session=lambda _session_id: None)
+        bot = wrap_legacy_reply_text(
+            bot,
+            provider_hint="openai",
+            model_hint="gpt-test",
+        )
+        sleeps = []
+        session = SimpleNamespace(
+            session_id="s",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        with patch("models.chatgpt.chat_gpt_bot.conf", return_value=fake_conf):
+            with patch("models.openai.legacy_reply_retry.conf", return_value=fake_conf):
+                result = bot.reply_text(session, model_retry_sleep=sleeps.append)
+
+        self.assertEqual(result["content"], "ok after retry")
+        self.assertEqual(bot._http_client.calls, 2)
+        self.assertEqual(sleeps, [0.25])
+
+    def test_chatgpt_legacy_reply_text_non_retryable_4xx_records_typed_fail_closed(self):
+        from unittest.mock import MagicMock, patch
+        from models.chatgpt.chat_gpt_bot import ChatGPTBot
+        from models.legacy_reply_gateway import wrap_legacy_reply_text
+        from models.model_telemetry import get_recent_model_calls
+        from models.openai.openai_http_client import OpenAIHTTPError
+
+        class BadRequestClient:
+            def __init__(self):
+                self.calls = 0
+
+            def chat_completions(self, **_kwargs):
+                self.calls += 1
+                raise OpenAIHTTPError(
+                    400,
+                    {
+                        "error": {
+                            "message": "bad chat",
+                            "code": "invalid_request_error",
+                            "type": "invalid_request_error",
+                        }
+                    },
+                )
+
+        fake_conf = MagicMock()
+        fake_conf.get.side_effect = lambda key, default=None: {
+            "model_max_retries": 2,
+            "rate_limit_chatgpt": False,
+        }.get(key, default)
+        bot = ChatGPTBot.__new__(ChatGPTBot)
+        bot.args = {"model": "gpt-test"}
+        bot._http_client = BadRequestClient()
+        bot.sessions = SimpleNamespace(clear_session=lambda _session_id: None)
+        bot = wrap_legacy_reply_text(
+            bot,
+            provider_hint="openai",
+            model_hint="gpt-test",
+        )
+        session = SimpleNamespace(
+            session_id="s",
+            messages=[{"role": "user", "content": "bad"}],
+        )
+        sleeps = []
+
+        with patch("models.chatgpt.chat_gpt_bot.conf", return_value=fake_conf):
+            with patch("models.openai.legacy_reply_retry.conf", return_value=fake_conf):
+                result = bot.reply_text(session, model_retry_sleep=sleeps.append)
+
+        self.assertEqual(bot._http_client.calls, 1)
+        self.assertEqual(sleeps, [])
+        self.assertEqual(result["completion_tokens"], 0)
+        self.assertEqual(result["status_code"], 400)
+        self.assertEqual(result["error_code"], "invalid_request_error")
+        self.assertFalse(result["retryable"])
+        self.assertEqual(result["retry_attempt"], 0)
+        self.assertEqual(result["max_retries"], 2)
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_status_code"], 400)
+        self.assertEqual(event["error_taxonomy"], "client_error")
+        self.assertEqual(event["error_code"], "invalid_request_error")
+        self.assertEqual(event["error_type"], "invalid_request_error")
+        self.assertEqual(event["error_message"], "bad chat")
+        self.assertFalse(event["retryable"])
+
+    def test_chatgpt_legacy_reply_text_unknown_exception_is_not_provider_retryable(self):
+        from unittest.mock import MagicMock, patch
+        from models.chatgpt.chat_gpt_bot import ChatGPTBot
+        from models.legacy_reply_gateway import wrap_legacy_reply_text
+        from models.model_telemetry import get_recent_model_calls
+
+        class BrokenClient:
+            def __init__(self):
+                self.calls = 0
+
+            def chat_completions(self, **_kwargs):
+                self.calls += 1
+                raise ValueError("adapter boom")
+
+        fake_conf = MagicMock()
+        fake_conf.get.side_effect = lambda key, default=None: {
+            "model_max_retries": 2,
+            "rate_limit_chatgpt": False,
+        }.get(key, default)
+        clear_calls = []
+        bot = ChatGPTBot.__new__(ChatGPTBot)
+        bot.args = {"model": "gpt-test"}
+        bot._http_client = BrokenClient()
+        bot.sessions = SimpleNamespace(clear_session=clear_calls.append)
+        bot = wrap_legacy_reply_text(
+            bot,
+            provider_hint="openai",
+            model_hint="gpt-test",
+        )
+        session = SimpleNamespace(
+            session_id="s",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        sleeps = []
+
+        with patch("models.chatgpt.chat_gpt_bot.conf", return_value=fake_conf):
+            with patch("models.openai.legacy_reply_retry.conf", return_value=fake_conf):
+                result = bot.reply_text(session, model_retry_sleep=sleeps.append)
+
+        self.assertEqual(bot._http_client.calls, 1)
+        self.assertEqual(clear_calls, ["s"])
+        self.assertEqual(sleeps, [])
+        self.assertEqual(result["completion_tokens"], 0)
+        self.assertIsNone(result["status_code"])
+        self.assertEqual(result["error_type"], "legacy_adapter_error")
+        self.assertEqual(result["error_taxonomy"], "unknown")
+        self.assertFalse(result["retryable"])
+        self.assertFalse(result["retry_exhausted"])
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "failed")
+        self.assertIsNone(event["error_status_code"])
+        self.assertEqual(event["error_taxonomy"], "unknown")
+        self.assertEqual(event["error_type"], "legacy_adapter_error")
+        self.assertEqual(event["error_message"], "adapter boom")
+        self.assertFalse(event["retryable"])
+
+    def test_openai_legacy_completion_retryable_error_exhausts_shared_policy(self):
+        from unittest.mock import MagicMock, patch
+        from models.legacy_reply_gateway import wrap_legacy_reply_text
+        from models.model_telemetry import get_recent_model_calls
+        from models.openai.open_ai_bot import OpenAIBot
+        from models.openai.openai_http_client import OpenAIHTTPError
+
+        class AlwaysUnavailableClient:
+            def __init__(self):
+                self.calls = 0
+
+            def completions(self, **_kwargs):
+                self.calls += 1
+                raise OpenAIHTTPError(
+                    503,
+                    {
+                        "error": {
+                            "message": "server unavailable",
+                            "code": "server_error",
+                            "type": "server_error",
+                        }
+                    },
+                    headers={"Retry-After": "0.1"},
+                )
+
+        class PromptSession:
+            session_id = "s"
+
+            def __str__(self):
+                return "hello"
+
+        fake_conf = MagicMock()
+        fake_conf.get.side_effect = lambda key, default=None: {
+            "model_max_retries": 1,
+        }.get(key, default)
+        bot = OpenAIBot.__new__(OpenAIBot)
+        bot.args = {"model": "text-davinci-003"}
+        bot._http_client = AlwaysUnavailableClient()
+        bot.sessions = SimpleNamespace(clear_session=lambda _session_id: None)
+        bot = wrap_legacy_reply_text(
+            bot,
+            provider_hint="openai",
+            model_hint="text-davinci-003",
+        )
+        sleeps = []
+
+        with patch("models.openai.legacy_reply_retry.conf", return_value=fake_conf):
+            result = bot.reply_text(PromptSession(), model_retry_sleep=sleeps.append)
+
+        self.assertEqual(bot._http_client.calls, 2)
+        self.assertEqual(sleeps, [0.1])
+        self.assertEqual(result["completion_tokens"], 0)
+        self.assertEqual(result["status_code"], 503)
+        self.assertEqual(result["retry_attempt"], 1)
+        self.assertEqual(result["max_retries"], 1)
+        self.assertTrue(result["retry_exhausted"])
+        self.assertEqual(result["retry_after_seconds"], 0.1)
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_status_code"], 503)
+        self.assertEqual(event["error_taxonomy"], "server_error")
+        self.assertEqual(event["retry_attempt"], 1)
+        self.assertTrue(event["retry_exhausted"])
+        self.assertEqual(event["retry_after_seconds"], 0.1)
+
     def test_legacy_reply_text_gateway_treats_empty_completion_as_failed(self):
         from models.legacy_reply_gateway import wrap_legacy_reply_text
         from models.model_telemetry import get_recent_model_calls

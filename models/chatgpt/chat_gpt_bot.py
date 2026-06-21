@@ -1,10 +1,10 @@
 # encoding:utf-8
 
-import time
 import json
 
 from models.openai.openai_compat import (
     error as openai_error,
+    OpenAIError,
     RateLimitError,
     Timeout,
     APIError,
@@ -17,6 +17,14 @@ from common import const
 from common.i18n import t as _t
 from models.bot import Bot
 from models.openai_compatible_bot import OpenAICompatibleBot
+from models.openai.legacy_reply_retry import (
+    build_retry_decision,
+    legacy_adapter_error_details,
+    legacy_reply_failure_result,
+    legacy_reply_max_retries,
+    openai_legacy_error_details,
+    run_legacy_reply_retry_sleep,
+)
 from models.chatgpt.chat_gpt_session import ChatGPTSession
 from models.openai.open_ai_image import OpenAIImage
 from models.session_manager import SessionManager
@@ -278,7 +286,7 @@ class ChatGPTBot(Bot, OpenAIImage, OpenAICompatibleBot):
             logger.error(traceback.format_exc())
             return Reply(ReplyType.ERROR, _t("图片识别失败: ", "Image recognition failed: ") + str(e))
 
-    def reply_text(self, session: ChatGPTSession, api_key=None, args=None, retry_count=0) -> dict:
+    def reply_text(self, session: ChatGPTSession, api_key=None, args=None, retry_count=0, model_retry_sleep=None) -> dict:
         """
         call openai's ChatCompletion to get the answer
         :param session: a conversation session
@@ -313,44 +321,60 @@ class ChatGPTBot(Bot, OpenAIImage, OpenAICompatibleBot):
             }
         except OpenAIHTTPError as http_err:
             return self._handle_reply_error(
-                wrap_http_error(http_err), session, api_key, args, retry_count
+                wrap_http_error(http_err), session, api_key, args, retry_count, model_retry_sleep
             )
         except Exception as e:
-            return self._handle_reply_error(e, session, api_key, args, retry_count)
+            return self._handle_reply_error(e, session, api_key, args, retry_count, model_retry_sleep)
 
-    def _handle_reply_error(self, e, session, api_key, args, retry_count):
+    def _handle_reply_error(self, e, session, api_key, args, retry_count, model_retry_sleep=None):
         """Map exception to user-facing reply with retry/backoff (mirrors SDK behavior)."""
-        need_retry = retry_count < 2
+        max_retries = legacy_reply_max_retries(default=2)
+        try:
+            attempt = max(0, int(retry_count or 0))
+        except (TypeError, ValueError):
+            attempt = 0
+        details = openai_legacy_error_details(e)
+        decision = build_retry_decision(
+            details,
+            attempt=attempt,
+            max_retries=max_retries,
+        )
         result = {"completion_tokens": 0, "content": _t("我现在有点累了，等会再来吧", "I'm a bit tired right now. Please try again later.")}
         if isinstance(e, RateLimitError):
             logger.warn("[CHATGPT] RateLimitError: {}".format(e))
             result["content"] = _t("提问太快啦，请休息一下再问我吧", "You're asking too fast. Please take a short break and try again.")
-            if need_retry:
-                time.sleep(20)
         elif isinstance(e, Timeout):
             logger.warn("[CHATGPT] Timeout: {}".format(e))
             result["content"] = _t("我没有收到你的消息", "I didn't receive your message")
-            if need_retry:
-                time.sleep(5)
         elif isinstance(e, APIConnectionError):
             logger.warn("[CHATGPT] APIConnectionError: {}".format(e))
             result["content"] = _t("我连接不到你的网络", "I can't reach your network")
-            if need_retry:
-                time.sleep(5)
         elif isinstance(e, APIError):
             logger.warn("[CHATGPT] Bad Gateway: {}".format(e))
             result["content"] = _t("请再问我一次", "Please ask me again")
-            if need_retry:
-                time.sleep(10)
+        elif isinstance(e, OpenAIError):
+            logger.warn("[CHATGPT] OpenAIError: {}".format(e))
         else:
             logger.exception("[CHATGPT] Exception: {}".format(e))
-            need_retry = False
             self.sessions.clear_session(session.session_id)
+            details = legacy_adapter_error_details(e)
+            decision = build_retry_decision(details, attempt=attempt, max_retries=0)
 
-        if need_retry:
+        if decision.should_retry:
             logger.warn("[CHATGPT] 第{}次重试".format(retry_count + 1))
-            return self.reply_text(session, api_key, args, retry_count + 1)
-        return result
+            run_legacy_reply_retry_sleep(decision, model_retry_sleep)
+            return self.reply_text(
+                session,
+                api_key,
+                args,
+                retry_count + 1,
+                model_retry_sleep=model_retry_sleep,
+            )
+        return legacy_reply_failure_result(
+            content=result["content"],
+            details=details,
+            decision=decision,
+        )
 
 class AzureChatGPTBot(ChatGPTBot):
     """Azure OpenAI variant.

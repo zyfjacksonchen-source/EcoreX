@@ -1,8 +1,7 @@
 # encoding:utf-8
 
-import time
-
 from models.openai.openai_compat import (
+    OpenAIError,
     RateLimitError,
     Timeout,
     APIConnectionError,
@@ -10,6 +9,14 @@ from models.openai.openai_compat import (
     wrap_http_error,
 )
 from models.openai.openai_http_client import OpenAIHTTPClient, OpenAIHTTPError
+from models.openai.legacy_reply_retry import (
+    build_retry_decision,
+    legacy_adapter_error_details,
+    legacy_reply_failure_result,
+    legacy_reply_max_retries,
+    openai_legacy_error_details,
+    run_legacy_reply_retry_sleep,
+)
 
 from models.bot import Bot
 from models.openai_compatible_bot import OpenAICompatibleBot
@@ -110,7 +117,7 @@ class OpenAIBot(Bot, OpenAIImage, OpenAICompatibleBot):
                     reply = Reply(ReplyType.ERROR, retstring)
                 return reply
 
-    def reply_text(self, session: OpenAISession, retry_count=0):
+    def reply_text(self, session: OpenAISession, retry_count=0, model_retry_sleep=None):
         try:
             call_args = dict(self.args)
             timeout = call_args.pop("request_timeout", None) or call_args.pop("timeout", None)
@@ -129,37 +136,56 @@ class OpenAIBot(Bot, OpenAIImage, OpenAICompatibleBot):
                 "content": res_content,
             }
         except OpenAIHTTPError as http_err:
-            return self._handle_legacy_error(wrap_http_error(http_err), session, retry_count)
+            return self._handle_legacy_error(
+                wrap_http_error(http_err), session, retry_count, model_retry_sleep
+            )
         except Exception as e:
-            return self._handle_legacy_error(e, session, retry_count)
+            return self._handle_legacy_error(e, session, retry_count, model_retry_sleep)
 
-    def _handle_legacy_error(self, e, session, retry_count):
+    def _handle_legacy_error(self, e, session, retry_count, model_retry_sleep=None):
         """Map exception -> reply for the legacy /completions endpoint."""
-        need_retry = retry_count < 2
+        max_retries = legacy_reply_max_retries(default=2)
+        try:
+            attempt = max(0, int(retry_count or 0))
+        except (TypeError, ValueError):
+            attempt = 0
+        details = openai_legacy_error_details(e)
+        decision = build_retry_decision(
+            details,
+            attempt=attempt,
+            max_retries=max_retries,
+        )
         result = {"completion_tokens": 0, "content": "我现在有点累了，等会再来吧"}
         if isinstance(e, RateLimitError):
             logger.warn("[OPEN_AI] RateLimitError: {}".format(e))
             result["content"] = "提问太快啦，请休息一下再问我吧"
-            if need_retry:
-                time.sleep(20)
         elif isinstance(e, Timeout):
             logger.warn("[OPEN_AI] Timeout: {}".format(e))
             result["content"] = "我没有收到你的消息"
-            if need_retry:
-                time.sleep(5)
         elif isinstance(e, APIConnectionError):
             logger.warn("[OPEN_AI] APIConnectionError: {}".format(e))
-            need_retry = False
             result["content"] = "我连接不到你的网络"
+        elif isinstance(e, OpenAIError):
+            logger.warn("[OPEN_AI] OpenAIError: {}".format(e))
         else:
             logger.warn("[OPEN_AI] Exception: {}".format(e))
-            need_retry = False
             self.sessions.clear_session(session.session_id)
+            details = legacy_adapter_error_details(e)
+            decision = build_retry_decision(details, attempt=attempt, max_retries=0)
 
-        if need_retry:
+        if decision.should_retry:
             logger.warn("[OPEN_AI] 第{}次重试".format(retry_count + 1))
-            return self.reply_text(session, retry_count + 1)
-        return result
+            run_legacy_reply_retry_sleep(decision, model_retry_sleep)
+            return self.reply_text(
+                session,
+                retry_count + 1,
+                model_retry_sleep=model_retry_sleep,
+            )
+        return legacy_reply_failure_result(
+            content=result["content"],
+            details=details,
+            decision=decision,
+        )
 
     # NOTE: Tool-call routing is delegated to OpenAICompatibleBot.call_with_tools,
     # which calls /chat/completions via our shared HTTP client. The previous

@@ -987,3 +987,31 @@
     remains PARTIAL pending remaining image edge coverage, legacy direct-chat
     retry-loop migration, and provider-specific edges outside the AgentBridge
     native gateway.
+- Hardened OpenAI/ChatGPT legacy direct-chat retry ownership:
+  - Added `models/openai/legacy_reply_retry.py` as a shared helper for legacy
+    OpenAI-compatible `reply_text` surfaces. It normalizes compat exceptions
+    into provider error details, reuses the shared retry taxonomy/backoff
+    policy, preserves header and provider-body Retry-After evidence, and
+    builds old-shape failure results with typed retry metadata.
+  - `models/openai/openai_compat.py` now preserves HTTP headers and
+    `retry_after` when mapping `OpenAIHTTPError` into compat exceptions, so
+    direct-chat retry decisions no longer lose upstream backoff hints.
+  - `ChatGPTBot.reply_text` and `OpenAIBot.reply_text` now use the shared
+    retry decision for 408/429/5xx/timeout/network failures and return typed
+    fail-closed evidence for non-retryable 4xx responses instead of falling
+    through to untyped legacy sentinels. Network errors keep status `0` so
+    telemetry classifies them as `network_error`.
+  - `models/legacy_reply_gateway.py` now propagates `error_taxonomy`,
+    `retry_after*`, `retryable`, `retry_attempt`, `max_retries`, and
+    `retry_exhausted` from legacy `reply_text` failure results into
+    `/legacy/reply_text` telemetry.
+  - Focused tests cover ChatGPT 429 Retry-After retry success, ChatGPT 400
+    fail-closed evidence, and OpenAI legacy completion 503 retry exhaustion
+    evidence, body-level `retry_after_ms` backoff, plus a local adapter
+    exception guard that records non-retryable `unknown` /
+    `legacy_adapter_error` telemetry instead of provider retry exhaustion.
+    Full model telemetry and combined capability/model-handler/Responses/
+    promotion-gate regressions passed. R18-04-C remains PARTIAL pending
+    remaining non-OpenAI legacy direct-chat retry-loop migration,
+    remaining image edge coverage, and provider-specific edges outside the
+    AgentBridge native gateway.

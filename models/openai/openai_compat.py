@@ -29,11 +29,13 @@ class OpenAIError(Exception):
     """Base exception for all OpenAI-compatible API errors."""
 
     def __init__(self, message: str = "", status_code: Optional[int] = None,
-                 body=None):
+                 body=None, headers=None, retry_after=None):
         super().__init__(message)
         self.message = message
         self.status_code = status_code
         self.body = body
+        self.headers = dict(headers or {})
+        self.retry_after = retry_after
 
 
 class APIError(OpenAIError):
@@ -142,7 +144,16 @@ def wrap_http_error(http_err) -> OpenAIError:
     sc = getattr(http_err, "status_code", None)
     msg = getattr(http_err, "message", "") or str(http_err)
     body = getattr(http_err, "body", None)
-    return map_http_error(sc, msg, body)
+    headers = getattr(http_err, "headers", None) or {}
+    retry_after = getattr(http_err, "retry_after", None)
+    if retry_after in (None, ""):
+        getter = getattr(headers, "get", None)
+        if callable(getter):
+            retry_after = getter("Retry-After") or getter("retry-after")
+    mapped = map_http_error(sc, msg, body)
+    mapped.headers = dict(headers or {})
+    mapped.retry_after = retry_after
+    return mapped
 
 
 __all__ = [
