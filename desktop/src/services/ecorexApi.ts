@@ -1111,7 +1111,7 @@ export function openMessageStream(input: {
     try {
       rememberStreamCursor(input.requestId, event.lastEventId);
       const item = JSON.parse(event.data) as StreamItem;
-      if (item.type === "done" || item.type === "error" || item.type === "cancelled" || item.type === "voice_attach") {
+      if (item.type === "done" || item.type === "error" || item.type === "cancelled" || item.type === "interrupted" || item.type === "voice_attach") {
         scheduleStreamCursorCleanup(input.requestId);
       }
       input.onItem(item);

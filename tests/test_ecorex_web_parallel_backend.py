@@ -2161,6 +2161,73 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertIn(b'"content": "retained"', retained_chunk)
         resumed.close()
 
+    def test_stream_response_emits_interrupted_terminal_for_lost_sidecar_run(self):
+        from agent.protocol import reset_run_ledger_for_tests
+        from channel.web import web_channel
+        from common.ecorex_workspace import SessionLock
+
+        channel = web_channel.WebChannel()
+        request_id = "req-test-sidecar-stream-interrupted"
+        session_id = "session-test-sidecar-stream-interrupted"
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            ledger.create_run(request_id, session_id, phase="tool_running", status="running")
+            lock = SessionLock(workspace, session_id)
+            lock.path.parent.mkdir(parents=True, exist_ok=True)
+            lock.path.write_text(
+                json.dumps({
+                    "sessionId": session_id,
+                    "pid": 999999999,
+                    "host": socket.gethostname(),
+                    "createdAt": 1,
+                }),
+                encoding="utf-8",
+            )
+
+            with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                stream = channel.stream_response(request_id)
+                chunk = next(stream)
+                second_stream = channel.stream_response(request_id)
+                second_chunk = next(second_stream)
+
+            self.assertIn(b"id: 0", chunk)
+            self.assertIn(b'"type": "interrupted"', chunk)
+            self.assertIn(b'"event_type": "run.interrupted"', chunk)
+            self.assertIn(b'"state": "interrupted"', chunk)
+            self.assertIn(b'"terminal": true', chunk)
+            self.assertIn(b'"terminal_reason": "sidecar_interrupted"', chunk)
+            self.assertIn(b'"error_code": "SIDECAR_INTERRUPTED"', chunk)
+            self.assertIn(request_id.encode("utf-8"), chunk)
+            self.assertIn(session_id.encode("utf-8"), chunk)
+            self.assertIn(b'"type": "interrupted"', second_chunk)
+            self.assertFalse(lock.path.exists())
+            final = ledger.get_run(request_id)
+            self.assertEqual(final["status"], "interrupted")
+            self.assertEqual(final["phase"], "interrupted")
+            self.assertEqual(final["terminal_reason"], "sidecar_interrupted")
+            self.assertEqual(final["error_code"], "SIDECAR_INTERRUPTED")
+
+    def test_sse_reconnect_treats_interrupted_replay_event_as_terminal(self):
+        from channel.web import web_channel
+
+        channel = web_channel.WebChannel()
+        request_id = "req-test-sse-interrupted-terminal"
+        channel.request_to_session = {request_id: "session-test-sse-interrupted-terminal"}
+        channel._ensure_sse_state(request_id)
+        channel._push_sse_event(request_id, {
+            "type": "interrupted",
+            "request_id": request_id,
+            "terminal_reason": "sidecar_interrupted",
+        })
+
+        with patch.object(web_channel.web, "input", return_value=types.SimpleNamespace(last_event_id="0")):
+            resumed = channel.stream_response(request_id)
+            keepalive = next(resumed)
+            resumed.close()
+
+        self.assertTrue(keepalive.startswith(b": keepalive"))
+        self.assertFalse(channel._sse_request_exists(request_id))
+
     def test_done_event_is_emitted_once_per_request(self):
         from channel.web import web_channel
 
@@ -4934,6 +5001,38 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertIn("requested_last_event_id?: number;", api_source)
         self.assertIn("retained_from_event_id?: number;", api_source)
         self.assertIn("next_event_id?: number;", api_source)
+
+    def test_v018_desktop_handles_sidecar_interrupted_stream_recovery(self):
+        root = Path(__file__).resolve().parents[1]
+        app_source = (root / "desktop" / "src" / "App.tsx").read_text(encoding="utf-8")
+        api_source = (root / "desktop" / "src" / "services" / "ecorexApi.ts").read_text(encoding="utf-8")
+
+        helper_start = app_source.index("function handleInterruptedStreamItem")
+        helper_end = app_source.index("function finishRunningSteps", helper_start)
+        helper_source = app_source[helper_start:helper_end]
+
+        for marker in [
+            '"interrupted";',
+            "function isInterruptedStreamItem",
+            'item.type === "interrupted"',
+            'item.event_type === "run.interrupted"',
+            'item.state === "interrupted"',
+            "function handleInterruptedStreamItem",
+        ]:
+            self.assertIn(marker, app_source)
+        for marker in [
+            'markStreamTerminal(sessionId, requestId, "interrupted")',
+            "finishSessionRequest(sessionId, requestId)",
+            "void refreshSessionFromHistoryForRequest(sessionId, requestId).then((restored) =>",
+            "Runtime sidecar restarted before this run reached a terminal state",
+            'label: "stream_interrupted"',
+            "terminalReason",
+            "errorCode",
+        ]:
+            self.assertIn(marker, helper_source)
+        self.assertGreaterEqual(app_source.count("handleInterruptedStreamItem("), 3)
+        self.assertGreaterEqual(app_source.count("if (isInterruptedStreamItem(item))"), 2)
+        self.assertIn('item.type === "interrupted"', api_source)
 
     def test_legacy_openai_image_payload_supports_gpt_image_base64(self):
         from models.openai.open_ai_image import OpenAIImage

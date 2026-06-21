@@ -372,3 +372,30 @@
     cleanup, init-failure cleanup/preservation paths, scheduled skill-call
     owner context wiring, and scheduler agent-task cancellation during the
     post-Agent delivery window.
+- Added the sidecar interruption stream-recovery slice:
+  - `stream_response()` now handles the sidecar-restart window where the
+    durable run ledger still knows about a message run but the new sidecar has
+    no in-memory SSE queue for the request id.
+  - When the ledger row is already terminal `interrupted/sidecar_interrupted`,
+    or a still-active message run has a confirmed dead-owner session lock,
+    reconnecting SSE clients receive a typed `type=interrupted`,
+    `event_type=run.interrupted`, `terminal=true` stream event instead of a
+    vague `invalid request_id` error or a long keepalive wait.
+  - The same stream path marks the run terminal exactly once with
+    `SIDECAR_INTERRUPTED`, re-reads the durable row before emitting the
+    interrupted terminal so another terminal winner cannot be mislabeled,
+    removes the dead lock, leaves stale-live locks alone, and keeps the
+    recovery scoped to primary message runs so subagent and scheduler rows do
+    not masquerade as chat bubbles.
+  - SSE replay cursor handling also treats replay-log `interrupted` events as
+    terminal, matching `done` / `error` / `cancelled` cleanup behavior if a
+    future path stores interrupted events in the replay buffer.
+  - Desktop stream consumers now treat `interrupted` / `run.interrupted` /
+    `state=interrupted` as a first-class terminal phase, clear the active
+    request state, run request-scoped history recovery, and otherwise finish
+    the pending assistant bubble with a non-pending sidecar interruption
+    fallback plus `stream_interrupted` telemetry.
+  - Focused backend and desktop source-contract tests cover the lost-SSE
+    sidecar stream terminal and the request-scoped desktop recovery path;
+    replay-gap and sidecar-interruption recovery tests passed together, and
+    desktop TypeScript still compiles.

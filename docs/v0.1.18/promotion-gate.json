@@ -2,7 +2,7 @@
   "product": "EcoreX",
   "version": "0.1.18",
   "gate": "v0.1.18-production-agent",
-  "generatedAt": "2026-06-21T06:52:03Z",
+  "generatedAt": "2026-06-21T07:32:53Z",
   "status": "no-go",
   "summary": {
     "total": 18,
@@ -20,7 +20,7 @@
       "name": "Acceptance rows: sse-contract",
       "status": "fail",
       "severity": "blocker",
-      "evidence": "docs/v0.1.18/acceptance-checklist.md: missing=[] incomplete=['R18-02-A=PARTIAL', 'R18-02-B=PARTIAL', 'R18-02-C=PARTIAL']"
+      "evidence": "docs/v0.1.18/acceptance-checklist.md: missing=[] incomplete=['R18-02-A=PARTIAL', 'R18-02-B=PARTIAL']"
     },
     {
       "name": "Acceptance rows: cancellation-concurrency",

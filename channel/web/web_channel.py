@@ -1407,6 +1407,13 @@ class WebChannel(ChatChannel):
             event.setdefault("event_type", "stream.replay_gap")
             event.setdefault("state", "recovering")
             event.setdefault("recoverable", True)
+        elif legacy_type == "interrupted":
+            event.setdefault("event_type", "run.interrupted")
+            event.setdefault("state", "interrupted")
+            event.setdefault("terminal", True)
+            event.setdefault("terminal_reason", event.get("terminal_reason") or "interrupted")
+            event.setdefault("error_code", event.get("error_code") or "RUN_INTERRUPTED")
+            event.setdefault("recoverable", True)
         elif legacy_type in ("delta", "message_update"):
             event.setdefault("event_type", "model.delta")
             event.setdefault("state", "running")
@@ -1452,6 +1459,92 @@ class WebChannel(ChatChannel):
             "next_event_id": retained_from_event_id,
             "message": "SSE replay cursor is older than the retained event window.",
         })
+
+    def _build_interrupted_event(
+        self,
+        request_id: str,
+        *,
+        session_id: str = "",
+        terminal_reason: str = "sidecar_interrupted",
+        error_code: str = "SIDECAR_INTERRUPTED",
+        message: str = "Runtime sidecar restarted before this run reached a terminal state.",
+    ) -> Dict[str, Any]:
+        return self._normalize_sse_event(request_id, {
+            "type": "interrupted",
+            "request_id": request_id,
+            "session_id": session_id,
+            "terminal": True,
+            "terminal_reason": terminal_reason or "interrupted",
+            "error_code": error_code or "RUN_INTERRUPTED",
+            "message": message,
+            "content": message,
+            "recoverable": True,
+        })
+
+    def _recover_sidecar_interrupted_stream_event(self, request_id: str) -> Optional[Dict[str, Any]]:
+        """Return a terminal stream event when durable state proves sidecar loss.
+
+        A restarted sidecar loses in-memory SSE queues, but the durable ledger
+        and old session lock can still prove that a message run was interrupted.
+        In that case reconnecting clients should receive a typed terminal
+        event instead of waiting on an invalid request id path.
+        """
+        if not request_id:
+            return None
+        try:
+            from agent.protocol import get_run_ledger
+            from common.ecorex_workspace import list_session_locks
+
+            ledger = get_run_ledger()
+            row = ledger.get_run(request_id)
+            if not row:
+                return None
+            run_type = str(row.get("run_type") or "message").lower()
+            if run_type != "message":
+                return None
+            session_id = str(row.get("session_id") or self.request_to_session.get(request_id, "") or "")
+            if (
+                row.get("status") == "interrupted"
+                and row.get("terminal_reason") == "sidecar_interrupted"
+            ):
+                return self._build_interrupted_event(request_id, session_id=session_id)
+            if row.get("terminal_at") is not None or not session_id:
+                return None
+
+            dead_lock = None
+            for item in list_session_locks(_get_workspace_root(), cleanup=False):
+                if item.get("dead_owner") and str(item.get("session_id") or "") == session_id:
+                    dead_lock = item
+                    break
+            if not dead_lock:
+                return None
+
+            path = str(dead_lock.get("path") or "")
+            if path:
+                try:
+                    Path(path).unlink()
+                except FileNotFoundError:
+                    pass
+                except Exception as exc:
+                    logger.debug(f"[WebChannel] sidecar interruption lock cleanup skipped: {exc}")
+            message = "Runtime session lock owner disappeared before the run reached a terminal state."
+            ledger.mark_terminal(
+                request_id,
+                "interrupted",
+                reason="sidecar_interrupted",
+                error_code="SIDECAR_INTERRUPTED",
+                error_message=message,
+            )
+            final_row = ledger.get_run(request_id) or {}
+            if (
+                final_row.get("status") != "interrupted"
+                or final_row.get("terminal_reason") != "sidecar_interrupted"
+            ):
+                return None
+            return self._build_interrupted_event(request_id, session_id=session_id, message=message)
+        except Exception as exc:
+            logger.debug(f"[WebChannel] sidecar interrupted stream recovery skipped for {request_id}: {exc}")
+            return None
 
     def _push_sse_event(self, request_id: str, item: Dict[str, Any]) -> bool:
         """Append one SSE event for every subscriber and keep legacy queue parity."""
@@ -3215,6 +3308,11 @@ class WebChannel(ChatChannel):
         reads with its own cursor instead of consuming a shared Queue.
         """
         if not self._sse_request_exists(request_id):
+            interrupted_event = self._recover_sidecar_interrupted_stream_event(request_id)
+            if interrupted_event is not None:
+                payload = json.dumps(interrupted_event, ensure_ascii=False)
+                yield f"id: 0\ndata: {payload}\n\n".encode("utf-8")
+                return
             yield b"data: {\"type\": \"error\", \"message\": \"invalid request_id\"}\n\n"
             return
 
@@ -3257,7 +3355,7 @@ class WebChannel(ChatChannel):
                         )
                         start_index = 0
                     for offset, event in enumerate(events):
-                        if event.get("type") in ("done", "cancelled", "error") and last_event_number >= event_offset + offset:
+                        if event.get("type") in ("done", "cancelled", "error", "interrupted") and last_event_number >= event_offset + offset:
                             terminal_consumed = True
                             break
                 except Exception:
@@ -3312,6 +3410,9 @@ class WebChannel(ChatChannel):
                 elif itype == "cancelled":
                     # Close SSE tail quickly after cancel; don't wait for the
                     # full TTS tail since the user already pressed Stop.
+                    post_done = True
+                    post_deadline = time.time() + 3
+                elif itype == "interrupted":
                     post_done = True
                     post_deadline = time.time() + 3
                 elif itype == "voice_attach":

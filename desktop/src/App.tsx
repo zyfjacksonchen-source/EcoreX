@@ -143,7 +143,8 @@ type StreamRequestPhase =
   | "text_done_tail_open"
   | "completed"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "interrupted";
 type StreamRequestState = {
   sessionId: string;
   requestId: string;
@@ -3124,6 +3125,40 @@ export function App() {
     });
   }
 
+  function handleInterruptedStreamItem(sessionId: string, assistantId: string, requestId: string, item: StreamItem) {
+    const message = redactInternalPromptText(
+      item.message
+      || item.content
+      || "Runtime sidecar restarted before this run reached a terminal state. Refreshed saved conversation; retry if the final answer is missing."
+    );
+    markStreamTerminal(sessionId, requestId, "interrupted");
+    finishSessionRequest(sessionId, requestId);
+    void refreshSessionFromHistoryForRequest(sessionId, requestId).then((restored) => {
+      if (restored) return;
+      updateAssistantMessageForRequest(sessionId, assistantId, requestId, (entry) => ({
+        ...finishRunningSteps(entry, "error"),
+        content: message,
+        pending: false,
+        paused: false,
+        cancelled: false
+      }));
+      markSessionOutputReady(sessionId);
+    });
+    void reportDesktopEvent({
+      type: "warn",
+      source: "Desktop",
+      category: "runtime",
+      label: "stream_interrupted",
+      message,
+      sessionId,
+      detail: {
+        requestId,
+        terminalReason: item.terminal_reason || null,
+        errorCode: item.error_code || null
+      }
+    });
+  }
+
   function finishRunningSteps(message: ChatItem, reason: AgentFinishReason = "done"): ChatItem {
     return { ...message, steps: finishAgentSteps(message.steps, reason), toolCalls: message.toolCalls?.map((tool) => ({ ...tool, running: false })) };
   }
@@ -3424,7 +3459,7 @@ export function App() {
   }
 
   function isTerminalStreamPhase(phase?: StreamRequestPhase) {
-    return phase === "completed" || phase === "failed" || phase === "cancelled";
+    return phase === "completed" || phase === "failed" || phase === "cancelled" || phase === "interrupted";
   }
 
   function getStreamRequestState(sessionId: string, requestId: string) {
@@ -3489,7 +3524,7 @@ export function App() {
     scheduleStreamStallTimer(sessionId, assistantId, requestId, 90_000);
   }
 
-  function markStreamTerminal(sessionId: string, requestId: string, phase: "completed" | "failed" | "cancelled") {
+  function markStreamTerminal(sessionId: string, requestId: string, phase: "completed" | "failed" | "cancelled" | "interrupted") {
     setStreamRequestPhase(sessionId, requestId, phase);
     clearStreamStallTimer(sessionId, requestId);
   }
@@ -3519,6 +3554,10 @@ export function App() {
 
   function isReplayGapStreamItem(item: StreamItem) {
     return item.type === "replay_gap" || item.event_type === "stream.replay_gap";
+  }
+
+  function isInterruptedStreamItem(item: StreamItem) {
+    return item.type === "interrupted" || item.event_type === "run.interrupted" || item.state === "interrupted";
   }
 
   function shouldAcceptStreamItem(sessionId: string, requestId: string, item: StreamItem) {
@@ -3816,6 +3855,10 @@ export function App() {
         flushStreamBoundary(sessionId, assistantId, requestId, item);
         if (isReplayGapStreamItem(item)) {
           handleReplayGapStreamItem(sessionId, assistantId, requestId, item);
+          return;
+        }
+        if (isInterruptedStreamItem(item)) {
+          handleInterruptedStreamItem(sessionId, assistantId, requestId, item);
           return;
         }
         if (item.type === "cancelled") {
@@ -4373,6 +4416,10 @@ export function App() {
             flushStreamBoundary(requestSessionId, assistantId, requestId, item);
             if (isReplayGapStreamItem(item)) {
               handleReplayGapStreamItem(requestSessionId, assistantId, requestId, item);
+              return;
+            }
+            if (isInterruptedStreamItem(item)) {
+              handleInterruptedStreamItem(requestSessionId, assistantId, requestId, item);
               return;
             }
             if (item.type === "cancelled") {
