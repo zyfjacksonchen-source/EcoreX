@@ -2389,6 +2389,373 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertIsNone(model.requests[0].tools)
         self.assertFalse(executor._force_text_response_next_turn)
 
+    def test_forced_text_retry_keeps_tool_schema_disabled(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        class FakeModel:
+            model = "fake-model"
+
+            def __init__(self):
+                self.requests = []
+
+            def call_stream(self, request):
+                self.requests.append(request)
+                if len(self.requests) == 1:
+                    raise TimeoutError("timeout")
+                yield {"choices": [{"delta": {"content": "retry summary"}, "finish_reason": "stop"}]}
+
+        model = FakeModel()
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=model,
+            system_prompt="",
+            tools=[
+                types.SimpleNamespace(
+                    name="bash",
+                    description="run shell",
+                    params={"type": "object", "properties": {}},
+                )
+            ],
+            messages=[{"role": "user", "content": [{"type": "text", "text": "summarize"}]}],
+        )
+        executor._sleep_cancelable = lambda _seconds: None
+        executor._force_text_response_once("test")
+
+        content, tool_calls = executor._call_llm_stream(retry_on_empty=False, max_retries=1)
+
+        self.assertEqual(content, "retry summary")
+        self.assertEqual(tool_calls, [])
+        self.assertEqual(len(model.requests), 2)
+        self.assertTrue(all(request.tools is None for request in model.requests))
+        self.assertTrue(all(request.tool_schema_budget["reason"] == "forced_text" for request in model.requests))
+        self.assertFalse(executor._force_text_response_next_turn)
+
+    def test_forced_text_empty_retry_keeps_tool_schema_disabled(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        class FakeModel:
+            model = "fake-model"
+
+            def __init__(self):
+                self.requests = []
+
+            def call_stream(self, request):
+                self.requests.append(request)
+                if len(self.requests) == 1:
+                    yield {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+                    return
+                yield {"choices": [{"delta": {"content": "empty retry summary"}, "finish_reason": "stop"}]}
+
+        model = FakeModel()
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=model,
+            system_prompt="",
+            tools=[
+                types.SimpleNamespace(
+                    name="bash",
+                    description="run shell",
+                    params={"type": "object", "properties": {}},
+                )
+            ],
+            messages=[{"role": "user", "content": [{"type": "text", "text": "summarize"}]}],
+        )
+        executor._force_text_response_once("test")
+
+        content, tool_calls = executor._call_llm_stream(retry_on_empty=True)
+
+        self.assertEqual(content, "empty retry summary")
+        self.assertEqual(tool_calls, [])
+        self.assertEqual(len(model.requests), 2)
+        self.assertTrue(all(request.tools is None for request in model.requests))
+        self.assertTrue(all(request.tool_schema_budget["reason"] == "forced_text" for request in model.requests))
+
+    def test_tool_schema_budget_defers_non_intent_tools_on_plain_turn(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        class FakeModel:
+            model = "fake-model"
+
+            def __init__(self):
+                self.requests = []
+
+            def call_stream(self, request):
+                self.requests.append(request)
+                yield {"choices": [{"delta": {"content": "plain answer"}, "finish_reason": "stop"}]}
+
+        def tool(name):
+            return types.SimpleNamespace(
+                name=name,
+                description=f"{name} tool",
+                params={"type": "object", "properties": {}},
+            )
+
+        events = []
+        model = FakeModel()
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=model,
+            system_prompt="",
+            tools=[
+                tool("read"),
+                tool("bash"),
+                tool("feishu_cli"),
+                tool("browser"),
+                tool("mcp__chrome-devtools__click"),
+            ],
+            on_event=lambda event: events.append(event),
+            messages=[{"role": "user", "content": [{"type": "text", "text": "just explain this codebase/database note"}]}],
+        )
+
+        content, tool_calls = executor._call_llm_stream(retry_on_empty=False)
+
+        self.assertEqual(content, "plain answer")
+        self.assertEqual(tool_calls, [])
+        sent_tools = {entry["name"] for entry in model.requests[0].tools}
+        self.assertEqual(sent_tools, {"read", "bash"})
+        budget = model.requests[0].tool_schema_budget
+        self.assertTrue(budget["enabled"])
+        self.assertEqual(budget["selected_count"], 2)
+        self.assertEqual(budget["deferred_count"], 3)
+        self.assertIn("feishu_cli", budget["deferred_tools"])
+        budget_events = [event for event in events if event["type"] == "tool_schema_budget"]
+        self.assertEqual(len(budget_events), 1)
+        self.assertEqual(budget_events[0]["data"]["selected_tools"], ["bash", "read"])
+
+    def test_tool_schema_budget_expands_matching_intent_groups(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        class FakeModel:
+            model = "fake-model"
+
+            def __init__(self):
+                self.requests = []
+
+            def call_stream(self, request):
+                self.requests.append(request)
+                yield {"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]}
+
+        def tool(name):
+            return types.SimpleNamespace(
+                name=name,
+                description=f"{name} tool",
+                params={"type": "object", "properties": {}},
+            )
+
+        model = FakeModel()
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=model,
+            system_prompt="",
+            tools=[
+                tool("read"),
+                tool("feishu_cli"),
+                tool("browser"),
+                tool("mcp__chrome-devtools__click"),
+                tool("scheduler"),
+            ],
+            messages=[{"role": "user", "content": [{"type": "text", "text": "打开 chrome devtools 看这个飞书 base 页面"}]}],
+        )
+
+        executor._call_llm_stream(retry_on_empty=False)
+
+        sent_tools = {entry["name"] for entry in model.requests[0].tools}
+        self.assertIn("read", sent_tools)
+        self.assertIn("feishu_cli", sent_tools)
+        self.assertIn("browser", sent_tools)
+        self.assertIn("mcp__chrome-devtools__click", sent_tools)
+        self.assertNotIn("scheduler", sent_tools)
+        budget = model.requests[0].tool_schema_budget
+        self.assertIn("browser", budget["intent_groups"])
+        self.assertIn("feishu", budget["intent_groups"])
+
+    def test_tool_schema_budget_inherits_intent_for_short_confirmation(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        class FakeModel:
+            model = "fake-model"
+
+            def __init__(self):
+                self.requests = []
+
+            def call_stream(self, request):
+                self.requests.append(request)
+                yield {"choices": [{"delta": {"content": "scheduled"}, "finish_reason": "stop"}]}
+
+        def tool(name):
+            return types.SimpleNamespace(
+                name=name,
+                description=f"{name} tool",
+                params={"type": "object", "properties": {}},
+            )
+
+        model = FakeModel()
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=model,
+            system_prompt="",
+            tools=[tool("read"), tool("scheduler"), tool("feishu_cli")],
+            messages=[
+                {"role": "user", "content": [{"type": "text", "text": "明天提醒我提交报告"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "要我现在创建提醒吗？"}]},
+                {"role": "user", "content": [{"type": "text", "text": "好的，执行"}]},
+            ],
+        )
+
+        executor._call_llm_stream(retry_on_empty=False)
+
+        sent_tools = {entry["name"] for entry in model.requests[0].tools}
+        self.assertIn("read", sent_tools)
+        self.assertIn("scheduler", sent_tools)
+        self.assertNotIn("feishu_cli", sent_tools)
+        budget = model.requests[0].tool_schema_budget
+        self.assertIn("scheduler", budget["intent_groups"])
+        self.assertTrue(budget["inherited_followup_intent"])
+
+    def test_tool_schema_budget_expands_env_config_for_key_intent(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        class FakeModel:
+            model = "fake-model"
+
+            def __init__(self):
+                self.requests = []
+
+            def call_stream(self, request):
+                self.requests.append(request)
+                yield {"choices": [{"delta": {"content": "configured"}, "finish_reason": "stop"}]}
+
+        def tool(name):
+            return types.SimpleNamespace(
+                name=name,
+                description=f"{name} tool",
+                params={"type": "object", "properties": {}},
+            )
+
+        model = FakeModel()
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=model,
+            system_prompt="",
+            tools=[tool("read"), tool("env_config"), tool("feishu_cli")],
+            messages=[{"role": "user", "content": [{"type": "text", "text": "配置 OpenAI API key"}]}],
+        )
+
+        executor._call_llm_stream(retry_on_empty=False)
+
+        sent_tools = {entry["name"] for entry in model.requests[0].tools}
+        self.assertIn("env_config", sent_tools)
+        self.assertNotIn("feishu_cli", sent_tools)
+        self.assertIn("diagnostics", model.requests[0].tool_schema_budget["intent_groups"])
+
+    def test_tool_schema_budget_expands_env_config_for_api_key_variable_name(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        def tool(name):
+            return types.SimpleNamespace(
+                name=name,
+                description=f"{name} tool",
+                params={"type": "object", "properties": {}},
+            )
+
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=types.SimpleNamespace(),
+            system_prompt="",
+            tools=[tool("read"), tool("env_config"), tool("feishu_cli")],
+            messages=[{"role": "user", "content": [{"type": "text", "text": "set OPENAI_API_KEY"}]}],
+        )
+
+        selected, budget = executor._select_tools_for_schema()
+
+        self.assertIn("env_config", selected)
+        self.assertNotIn("feishu_cli", selected)
+        self.assertIn("diagnostics", budget["intent_groups"])
+
+    def test_tool_schema_budget_keeps_small_custom_toolset_with_core_tool(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        def tool(name):
+            return types.SimpleNamespace(
+                name=name,
+                description=f"{name} tool",
+                params={"type": "object", "properties": {}},
+            )
+
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=types.SimpleNamespace(),
+            system_prompt="",
+            tools=[tool("read"), tool("custom_report")],
+            messages=[{"role": "user", "content": [{"type": "text", "text": "plain"}]}],
+        )
+
+        selected, budget = executor._select_tools_for_schema()
+
+        self.assertEqual(set(selected.keys()), {"read", "custom_report"})
+        self.assertEqual(budget["selection_reasons"]["custom_report"], "small_custom_toolset")
+
+    def test_tool_schema_budget_preserves_recent_non_core_tool_chain(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        def tool(name):
+            return types.SimpleNamespace(
+                name=name,
+                description=f"{name} tool",
+                params={"type": "object", "properties": {}},
+            )
+
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=types.SimpleNamespace(),
+            system_prompt="",
+            tools=[tool("read"), tool("scheduler"), tool("feishu_cli")],
+            messages=[{"role": "user", "content": [{"type": "text", "text": "plain follow-up"}]}],
+        )
+        executor._record_tool_result("scheduler", {"action": "create"}, True)
+
+        selected, budget = executor._select_tools_for_schema()
+
+        self.assertIn("scheduler", selected)
+        self.assertEqual(budget["selection_reasons"]["scheduler"], "recent_tool_chain")
+
+    def test_tool_schema_budget_can_be_disabled_by_config(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        class FakeModel:
+            model = "fake-model"
+
+            def __init__(self):
+                self.requests = []
+
+            def call_stream(self, request):
+                self.requests.append(request)
+                yield {"choices": [{"delta": {"content": "full"}, "finish_reason": "stop"}]}
+
+        def tool(name):
+            return types.SimpleNamespace(
+                name=name,
+                description=f"{name} tool",
+                params={"type": "object", "properties": {}},
+            )
+
+        model = FakeModel()
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=model,
+            system_prompt="",
+            tools=[tool("read"), tool("feishu_cli"), tool("mcp__server__tool")],
+            messages=[{"role": "user", "content": [{"type": "text", "text": "plain"}]}],
+        )
+
+        with patch("config.conf", return_value={"agent_tool_schema_budget_enabled": False}):
+            executor._call_llm_stream(retry_on_empty=False)
+
+        sent_tools = {entry["name"] for entry in model.requests[0].tools}
+        self.assertEqual(sent_tools, {"read", "feishu_cli", "mcp__server__tool"})
+        self.assertFalse(model.requests[0].tool_schema_budget["enabled"])
+        self.assertEqual(model.requests[0].tool_schema_budget["reason"], "disabled_by_config")
+
     def test_raw_lark_cli_bash_is_grouped_with_feishu_chain(self):
         from agent.protocol.agent_stream import AgentStreamExecutor
 

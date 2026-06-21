@@ -37,6 +37,54 @@ MAX_STORED_REASONING_CHARS = 4 * 1024  # 4 KB
 # Marker inserted between head and tail when reasoning is truncated.
 _REASONING_TRUNCATE_MARKER = "\n\n... [reasoning truncated, {omitted} chars omitted] ...\n\n"
 
+TOOL_SCHEMA_BUDGET_ENABLED_DEFAULT = True
+TOOL_SCHEMA_CORE_NAMES = {
+    "read",
+    "ls",
+    "find",
+    "bash",
+    "write",
+    "edit",
+    "send",
+    "host_diagnostics",
+    "optional_abilities",
+    "agent_capability",
+}
+
+TOOL_SCHEMA_INTENT_KEYWORDS = {
+    "browser": (
+        "browser", "chrome", "cdp", "devtools", "playwright", "网页", "浏览器", "打开网页", "点击", "截图",
+    ),
+    "web": (
+        "web", "search", "fetch", "http://", "https://", "latest", "today", "新闻", "搜索", "联网", "查一下",
+    ),
+    "feishu": (
+        "feishu", "lark", "飞书", "多维表格", "妙搭", "妙记", "日历", "审批", "通讯录", "bitable",
+    ),
+    "scheduler": (
+        "schedule", "scheduler", "remind", "cron", "定时", "提醒", "自动化", "每天", "每周",
+    ),
+    "subagent": (
+        "subagent", "sub-agent", "sub agent", "parallel", "并发", "子任务", "多角度", "复审",
+    ),
+    "vision": (
+        "image", "vision", "screenshot", "图片", "图像", "截图", "识别",
+    ),
+    "memory": (
+        "memory", "remember", "recall", "记忆", "回忆",
+    ),
+    "diagnostics": (
+        "diagnostic", "diagnose", "mcp", "permission", "install", "ability", "tool missing",
+        "config", "configure", "api key", "api_key", "_api_key", "apikey", "secret", "env", "environment",
+        "诊断", "权限", "安装", "能力", "工具缺失", "配置", "密钥", "环境变量",
+    ),
+}
+
+TOOL_SCHEMA_FOLLOWUP_CONFIRMATIONS = {
+    "ok", "okay", "yes", "y", "go", "continue", "proceed", "do it", "run it", "execute",
+    "好的", "好", "可以", "继续", "执行", "开始", "确认", "嗯", "行",
+}
+
 
 def _is_real_user_query_message(message: dict, expected_text: str = "") -> bool:
     """True for the user's prompt, false for role=user tool_result messages."""
@@ -680,6 +728,187 @@ class AgentStreamExecutor:
             logger.debug(f"[Agent] Removed {removed} internal hint message(s) from history")
         self._internal_hint_texts.clear()
 
+    def _latest_user_text_for_tool_schema(self) -> str:
+        """Return the latest real user text, ignoring tool_result messages."""
+        texts = self._recent_real_user_texts(limit=1)
+        return texts[0] if texts else ""
+
+    def _recent_real_user_texts(self, limit: int = 4) -> List[str]:
+        """Return recent real user texts newest-first, ignoring tool_result messages."""
+        texts: List[str] = []
+        for message in reversed(self.messages or []):
+            if not isinstance(message, dict) or message.get("role") != "user":
+                continue
+            content = message.get("content")
+            if isinstance(content, str):
+                text = content
+            elif isinstance(content, list):
+                if any(isinstance(block, dict) and block.get("type") == "tool_result" for block in content):
+                    continue
+                parts = [
+                    str(block.get("text") or "")
+                    for block in content
+                    if isinstance(block, dict) and block.get("type") == "text"
+                ]
+                text = "\n".join(parts)
+            else:
+                continue
+            text = str(text or "").strip()
+            if not text:
+                continue
+            texts.append(text)
+            if len(texts) >= limit:
+                break
+        return texts
+
+    @staticmethod
+    def _tool_schema_config_bool(name: str, default: bool) -> bool:
+        try:
+            from config import conf
+            value = conf().get(name, default)
+        except Exception:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() not in {"0", "false", "no", "off"}
+        return bool(value)
+
+    def _tool_schema_group(self, tool_name: str) -> str:
+        name = (tool_name or "").strip().lower()
+        if name.startswith("mcp__chrome-devtools__") or name.startswith("mcp__chrome_devtools__"):
+            return "browser"
+        if name.startswith("mcp__"):
+            return "mcp"
+        if name == "browser":
+            return "browser"
+        if name in {"web_search", "web_fetch"}:
+            return "web"
+        if name == "feishu_cli":
+            return "feishu"
+        if name == "scheduler":
+            return "scheduler"
+        if name == "subagent":
+            return "subagent"
+        if name == "vision":
+            return "vision"
+        if name in {"memory_search", "memory_get"}:
+            return "memory"
+        if name in {"host_diagnostics", "optional_abilities", "agent_capability", "ecorex_cli", "env_config"}:
+            return "diagnostics"
+        return "core" if name in TOOL_SCHEMA_CORE_NAMES else "other"
+
+    def _tool_schema_intent_groups(self, user_text: str) -> set:
+        lowered = (user_text or "").lower()
+        groups = set()
+        for group, keywords in TOOL_SCHEMA_INTENT_KEYWORDS.items():
+            if any(keyword in lowered for keyword in keywords):
+                groups.add(group)
+        if "mcp" in lowered:
+            groups.add("mcp")
+            groups.add("diagnostics")
+        return groups
+
+    @staticmethod
+    def _is_tool_schema_followup_confirmation(user_text: str) -> bool:
+        normalized = re.sub(r"[\s。.!！?？,，]+", " ", str(user_text or "").strip().lower()).strip()
+        if not normalized:
+            return False
+        if normalized in TOOL_SCHEMA_FOLLOWUP_CONFIRMATIONS:
+            return True
+        return len(normalized) <= 12 and any(word in normalized for word in TOOL_SCHEMA_FOLLOWUP_CONFIRMATIONS)
+
+    def _select_tools_for_schema(self, force_text_response: bool = False) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+        if force_text_response or not self.tools:
+            return None, {
+                "enabled": False,
+                "reason": "forced_text" if force_text_response else "no_tools",
+                "selected_count": 0,
+                "deferred_count": len(self.tools or {}),
+                "selected_tools": [],
+                "deferred_tools": sorted((self.tools or {}).keys()),
+            }
+
+        if not self._tool_schema_config_bool("agent_tool_schema_budget_enabled", TOOL_SCHEMA_BUDGET_ENABLED_DEFAULT):
+            all_tools = dict(self.tools)
+            return all_tools, {
+                "enabled": False,
+                "reason": "disabled_by_config",
+                "selected_count": len(all_tools),
+                "deferred_count": 0,
+                "selected_tools": sorted(all_tools.keys()),
+                "deferred_tools": [],
+            }
+
+        user_text = self._latest_user_text_for_tool_schema()
+        lowered = user_text.lower()
+        intent_groups = self._tool_schema_intent_groups(user_text)
+        inherited_followup_intent = False
+        if self._is_tool_schema_followup_confirmation(user_text):
+            for historical_text in self._recent_real_user_texts(limit=4)[1:]:
+                historical_groups = self._tool_schema_intent_groups(historical_text)
+                if historical_groups:
+                    intent_groups.update(historical_groups)
+                    inherited_followup_intent = True
+                    break
+        selected: Dict[str, Any] = {}
+        reasons: Dict[str, str] = {}
+
+        for name, tool in (self.tools or {}).items():
+            lowered_name = (name or "").strip().lower()
+            group = self._tool_schema_group(lowered_name)
+            if lowered_name in TOOL_SCHEMA_CORE_NAMES:
+                selected[name] = tool
+                reasons[name] = "core"
+            elif group in intent_groups:
+                selected[name] = tool
+                reasons[name] = f"intent:{group}"
+            elif lowered_name and lowered_name in lowered:
+                selected[name] = tool
+                reasons[name] = "explicit_tool_name"
+            elif lowered_name.startswith("mcp__"):
+                public_parts = lowered_name.replace("__", " ").replace("_", " ")
+                if public_parts and public_parts in lowered:
+                    selected[name] = tool
+                    reasons[name] = "explicit_mcp_name"
+
+        recent_names = {name for _chain, name, _success in self.tool_chain_history[-4:]}
+        for name in recent_names:
+            if name in self.tools:
+                selected[name] = self.tools[name]
+                reasons[name] = "recent_tool_chain"
+
+        has_deferred_mcp = any(str(name or "").lower().startswith("mcp__") for name in self.tools)
+        if len(self.tools) <= 8 and not has_deferred_mcp:
+            for name, tool in self.tools.items():
+                lowered_name = (name or "").strip().lower()
+                if self._tool_schema_group(lowered_name) == "other" and name not in selected:
+                    selected[name] = tool
+                    reasons[name] = "small_custom_toolset"
+
+        if not selected:
+            if len(self.tools) <= 8 and not has_deferred_mcp:
+                for name, tool in self.tools.items():
+                    selected[name] = tool
+                    reasons[name] = "small_custom_toolset"
+            else:
+                first_name = next(iter(self.tools))
+                selected[first_name] = self.tools[first_name]
+                reasons[first_name] = "fallback_first_tool"
+
+        deferred = {name: tool for name, tool in self.tools.items() if name not in selected}
+        return selected, {
+            "enabled": True,
+            "reason": "budgeted",
+            "intent_groups": sorted(intent_groups),
+            "inherited_followup_intent": inherited_followup_intent,
+            "selected_count": len(selected),
+            "deferred_count": len(deferred),
+            "selected_tools": sorted(selected.keys()),
+            "deferred_tools": sorted(deferred.keys()),
+            "selection_reasons": reasons,
+        }
+
     def _tool_result_user_action_blocker(self, tool_name: str, payload: Any) -> str:
         """Return a convergence blocker that should force a text-only turn."""
         name = (tool_name or "").strip().lower()
@@ -1246,7 +1475,9 @@ class AgentStreamExecutor:
         return final_response
 
     def _call_llm_stream(self, retry_on_empty=True, retry_count=0, max_retries=3,
-                         _overflow_retry: bool = False) -> Tuple[str, List[Dict]]:
+                         _overflow_retry: bool = False,
+                         _force_text_turn: Optional[bool] = None,
+                         _force_text_reason: str = "") -> Tuple[str, List[Dict]]:
         """
         Call LLM with streaming and automatic retry on errors
         
@@ -1279,22 +1510,36 @@ class AgentStreamExecutor:
         except Exception as e:
             logger.debug(f"[Agent] MCP sync skipped: {e}")
 
-        force_text_response = self._force_text_response_next_turn
-        force_text_reason = self._force_text_response_reason
-        if force_text_response:
-            self._force_text_response_next_turn = False
-            self._force_text_response_reason = ""
-            logger.warning(
-                f"[Agent] Tool schemas disabled for one turn to force convergence: {force_text_reason}"
+        if _force_text_turn is None:
+            force_text_response = self._force_text_response_next_turn
+            force_text_reason = self._force_text_response_reason
+            if force_text_response:
+                self._force_text_response_next_turn = False
+                self._force_text_response_reason = ""
+                logger.warning(
+                    f"[Agent] Tool schemas disabled for one turn to force convergence: {force_text_reason}"
+                )
+        else:
+            force_text_response = bool(_force_text_turn)
+            force_text_reason = _force_text_reason
+
+        schema_tools, schema_budget = self._select_tools_for_schema(force_text_response=force_text_response)
+        if schema_budget.get("enabled") or schema_budget.get("deferred_count"):
+            logger.info(
+                "[Agent] Tool schema budget: "
+                f"selected={schema_budget.get('selected_count')} "
+                f"deferred={schema_budget.get('deferred_count')} "
+                f"groups={schema_budget.get('intent_groups', [])}"
             )
+            self._emit_event("tool_schema_budget", schema_budget)
 
         # Prepare tool definitions. Prefer get_json_schema() when it yields
         # real properties (lets tools augment schema at runtime), otherwise
         # fall back to the static `tool.params` (MCP tools rely on this).
         tools_schema = None
-        if self.tools and not force_text_response:
+        if schema_tools:
             tools_schema = []
-            for tool in self.tools.values():
+            for tool in schema_tools.values():
                 input_schema = tool.params
                 try:
                     dynamic = (tool.get_json_schema() or {}).get("parameters") or {}
@@ -1333,6 +1578,7 @@ class AgentStreamExecutor:
             system=self.system_prompt,  # Pass system prompt separately for Claude API
             retry_count=retry_count,
             model_retry_sleep=self._sleep_cancelable,
+            tool_schema_budget=schema_budget,
         )
 
         self._emit_event("message_start", {"role": "assistant"})
@@ -1538,7 +1784,9 @@ class AgentStreamExecutor:
                             retry_on_empty=retry_on_empty,
                             retry_count=retry_count,
                             max_retries=max_retries,
-                            _overflow_retry=True
+                            _overflow_retry=True,
+                            _force_text_turn=force_text_response,
+                            _force_text_reason=force_text_reason,
                         )
 
                 # Aggressive trim didn't help or this is a message format error
@@ -1580,7 +1828,9 @@ class AgentStreamExecutor:
                 return self._call_llm_stream(
                     retry_on_empty=retry_on_empty, 
                     retry_count=retry_count + 1,
-                    max_retries=max_retries
+                    max_retries=max_retries,
+                    _force_text_turn=force_text_response,
+                    _force_text_reason=force_text_reason,
                 )
             else:
                 if retry_count >= max_retries:
@@ -1636,7 +1886,9 @@ class AgentStreamExecutor:
             return self._call_llm_stream(
                 retry_on_empty=False, 
                 retry_count=retry_count,
-                max_retries=max_retries
+                max_retries=max_retries,
+                _force_text_turn=force_text_response,
+                _force_text_reason=force_text_reason,
             )
 
         # Filter full_content one more time (in case tags were split across chunks)

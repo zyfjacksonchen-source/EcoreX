@@ -169,3 +169,17 @@
     request artifact list.
   - Focused pytest passed: 20 backpressure/busy/pre-worker/active snapshot/tool
     budget tests.
+- Added the first R18-05-B tool schema budget slice:
+  - AgentStream now selects a budgeted subset of model-visible tool schemas per
+    call. Plain turns keep core host/file tools, while Feishu, browser/MCP, web,
+    scheduler, subagent, vision, memory, and diagnostics groups are deferred
+    until user intent, explicit tool names, or recent tool-chain recovery require
+    them.
+  - Every model request records `tool_schema_budget` metadata and emits a
+    `tool_schema_budget` event so future Run Center/telemetry work can explain
+    which schemas were selected or deferred.
+  - The budget can be disabled through `agent_tool_schema_budget_enabled=false`
+    to force legacy full-schema behavior.
+  - Focused pytest passed: 10 tool-schema/forced-text budget tests; 13 adjacent
+    convergence/tool-chain tests; 75 AgentHostBoundary tests excluding two
+    existing image-generation fake-byte fixture failures.
