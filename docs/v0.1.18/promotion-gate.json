@@ -2,11 +2,11 @@
   "product": "EcoreX",
   "version": "0.1.18",
   "gate": "v0.1.18-production-agent",
-  "generatedAt": "2026-06-21T13:40:30Z",
+  "generatedAt": "2026-06-21T14:27:41Z",
   "status": "no-go",
   "summary": {
     "total": 18,
-    "blockers": 4,
+    "blockers": 3,
     "warnings": 0
   },
   "checks": [
@@ -36,9 +36,9 @@
     },
     {
       "name": "Acceptance rows: context-budget",
-      "status": "fail",
-      "severity": "blocker",
-      "evidence": "docs/v0.1.18/acceptance-checklist.md: missing=[] incomplete=['R18-05-A=PARTIAL', 'R18-05-B=PARTIAL']"
+      "status": "pass",
+      "severity": "info",
+      "evidence": "2 rows PASS"
     },
     {
       "name": "Acceptance rows: run-center",

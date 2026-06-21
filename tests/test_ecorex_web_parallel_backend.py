@@ -4292,6 +4292,402 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertNotIn("old-0", serialized)
         self.assertLess(len(executor._identify_complete_turns()), 6)
 
+    def test_context_overflow_recovery_retries_text_only_and_preserves_current_run(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        class FakeAgent:
+            memory_manager = None
+            last_usage = {}
+            max_context_tokens = 10000
+
+            @staticmethod
+            def _get_model_context_window():
+                return 6000
+
+            @staticmethod
+            def _get_context_reserve_tokens():
+                return 500
+
+            @staticmethod
+            def _estimate_text_tokens(text):
+                return max(1, len(str(text or "")) // 4)
+
+            @staticmethod
+            def _estimate_message_tokens(message):
+                content = message.get("content", "")
+                if isinstance(content, str):
+                    return max(1, len(content) // 4)
+                if isinstance(content, list):
+                    total = 0
+                    for block in content:
+                        if isinstance(block, dict):
+                            total += len(str(
+                                block.get("text")
+                                or block.get("content")
+                                or block.get("thinking")
+                                or block.get("input")
+                                or ""
+                            ))
+                    return max(1, total // 4)
+                return 1
+
+        class FakeModel:
+            model = "small-window"
+
+            def __init__(self):
+                self.requests = []
+
+            def call_stream(self, request):
+                self.requests.append(request)
+                if len(self.requests) == 1:
+                    yield {
+                        "error": {
+                            "message": "provider rejected the request",
+                            "code": "context_length_exceeded",
+                            "type": "invalid_request_error",
+                        },
+                        "error_taxonomy": "context_overflow",
+                        "status_code": 400,
+                    }
+                    return
+                yield {"choices": [{"delta": {"content": "recovered summary"}, "finish_reason": "stop"}]}
+
+        def tool(name):
+            return types.SimpleNamespace(
+                name=name,
+                description=f"{name} tool",
+                params={"type": "object", "properties": {"path": {"type": "string"}}},
+            )
+
+        current_user_text = "current run ask must survive exactly"
+        messages = []
+        for idx in range(7):
+            messages.extend([
+                {"role": "user", "content": [{"type": "text", "text": f"old-{idx} " + ("x" * 12000)}]},
+                {"role": "assistant", "content": [{"type": "text", "text": f"old answer {idx}"}]},
+            ])
+        messages.extend([
+            {"role": "user", "content": [{"type": "text", "text": current_user_text}]},
+            {"role": "assistant", "content": [{
+                "type": "tool_use",
+                "id": "toolu_current",
+                "name": "read",
+                "input": {"path": "big.log", "content": "z" * 16000},
+            }]},
+            {"role": "user", "content": [{
+                "type": "tool_result",
+                "tool_use_id": "toolu_current",
+                "content": "CURRENT_TOOL_OUTPUT " + ("y" * 18000),
+            }]},
+        ])
+
+        model = FakeModel()
+        events = []
+        executor = AgentStreamExecutor(
+            agent=FakeAgent(),
+            model=model,
+            system_prompt="system",
+            tools=[tool("read"), tool("feishu_cli")],
+            on_event=lambda event: events.append(event),
+            messages=messages,
+            max_context_turns=20,
+        )
+
+        with patch("config.conf", return_value={
+            "agent_context_budget_clamp_to_window": True,
+            "agent_context_budget_response_reserve_tokens": 500,
+        }):
+            content, tool_calls = executor._call_llm_stream(retry_on_empty=False, max_retries=0)
+
+        self.assertEqual(content, "recovered summary")
+        self.assertEqual(tool_calls, [])
+        self.assertEqual(len(model.requests), 2)
+        self.assertIsNotNone(model.requests[0].tools)
+        self.assertIsNone(model.requests[1].tools)
+        self.assertEqual(model.requests[1].tool_schema_budget["reason"], "forced_text")
+        self.assertEqual(
+            model.requests[1].tool_schema_budget["force_text_reason"],
+            "context_overflow_recovery",
+        )
+        self.assertIn(current_user_text, json.dumps(executor.messages, ensure_ascii=False))
+        self.assertNotIn("old-0", json.dumps(executor.messages, ensure_ascii=False))
+        retry_messages = model.requests[1].messages
+        tool_use_index = next(
+            idx for idx, message in enumerate(retry_messages)
+            if message.get("role") == "assistant"
+            and any(
+                isinstance(block, dict)
+                and block.get("type") == "tool_use"
+                and block.get("id") == "toolu_current"
+                for block in message.get("content", [])
+            )
+        )
+        self.assertEqual(retry_messages[tool_use_index + 1]["role"], "user")
+        self.assertTrue(any(
+            isinstance(block, dict)
+            and block.get("type") == "tool_result"
+            and block.get("tool_use_id") == "toolu_current"
+            for block in retry_messages[tool_use_index + 1].get("content", [])
+        ))
+        message_starts = [event for event in events if event["type"] == "message_start"]
+        message_ends = [event for event in events if event["type"] == "message_end"]
+        self.assertEqual(len(message_starts), 2)
+        self.assertEqual(len(message_ends), 2)
+        self.assertTrue(message_ends[0]["data"]["context_overflow_retry"])
+
+        recovery_events = [event["data"] for event in events if event["type"] == "context_overflow_recovery"]
+        self.assertEqual(len(recovery_events), 1)
+        recovery = recovery_events[0]
+        self.assertTrue(recovery["applied"])
+        self.assertTrue(recovery["retry"])
+        self.assertTrue(recovery["force_text_response"])
+        self.assertTrue(recovery["current_turn_preserved"])
+        self.assertGreater(recovery["removed_turns"], 0)
+        self.assertGreater(recovery["truncated_current_run_blocks"], 0)
+        self.assertLess(
+            recovery["after_estimated_input_tokens"],
+            recovery["before_estimated_input_tokens"],
+        )
+
+    def test_context_overflow_schema_only_recovery_does_not_clear_history(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        class FakeAgent:
+            memory_manager = None
+            last_usage = {}
+            max_context_tokens = 10000
+
+            @staticmethod
+            def _get_model_context_window():
+                return 6000
+
+            @staticmethod
+            def _get_context_reserve_tokens():
+                return 500
+
+            @staticmethod
+            def _estimate_text_tokens(text):
+                return max(1, len(str(text or "")) // 4)
+
+        class FakeModel:
+            model = "schema-heavy-model"
+
+            def __init__(self):
+                self.requests = []
+
+            def call_stream(self, request):
+                self.requests.append(request)
+                if len(self.requests) == 1:
+                    yield {
+                        "error": {
+                            "message": "request_too_large",
+                            "code": "context_length_exceeded",
+                            "type": "invalid_request_error",
+                        },
+                        "error_taxonomy": "context_overflow",
+                        "status_code": 400,
+                    }
+                    return
+                yield {"choices": [{"delta": {"content": "schema-only recovered"}, "finish_reason": "stop"}]}
+
+        def tool(name):
+            return types.SimpleNamespace(
+                name=name,
+                description=f"{name} " + ("schema " * 2000),
+                params={"type": "object", "properties": {"value": {"type": "string"}}},
+            )
+
+        events = []
+        model = FakeModel()
+        executor = AgentStreamExecutor(
+            agent=FakeAgent(),
+            model=model,
+            system_prompt="system",
+            tools=[tool("read"), tool("feishu_cli")],
+            on_event=lambda event: events.append(event),
+            messages=[{"role": "user", "content": [{"type": "text", "text": "short current run"}]}],
+        )
+
+        with patch("config.conf", return_value={
+            "agent_context_budget_clamp_to_window": True,
+            "agent_context_budget_response_reserve_tokens": 500,
+        }):
+            content, tool_calls = executor._call_llm_stream(retry_on_empty=False, max_retries=0)
+
+        self.assertEqual(content, "schema-only recovered")
+        self.assertEqual(tool_calls, [])
+        self.assertEqual(len(model.requests), 2)
+        self.assertIsNotNone(model.requests[0].tools)
+        self.assertIsNone(model.requests[1].tools)
+        self.assertIn("short current run", json.dumps(executor.messages, ensure_ascii=False))
+        recovery = [event["data"] for event in events if event["type"] == "context_overflow_recovery"][0]
+        self.assertTrue(recovery["applied"])
+        self.assertFalse(recovery["trim_applied"])
+        self.assertTrue(recovery["schema_only_recovery"])
+        self.assertTrue(recovery["tool_schema_disabled"])
+
+    def test_context_overflow_after_partial_output_does_not_retry_or_clear_history(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        class FakeModel:
+            model = "partial-overflow-model"
+
+            def __init__(self):
+                self.requests = []
+
+            def call_stream(self, request):
+                self.requests.append(request)
+                yield {"choices": [{"delta": {"content": "partial"}, "finish_reason": None}]}
+                yield {
+                    "error": {
+                        "message": "maximum context length exceeded after partial output",
+                        "code": "context_length_exceeded",
+                        "type": "invalid_request_error",
+                    },
+                    "error_taxonomy": "context_overflow",
+                    "status_code": 400,
+                }
+
+        events = []
+        model = FakeModel()
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}, memory_manager=None),
+            model=model,
+            system_prompt="",
+            tools=[],
+            on_event=lambda event: events.append(event),
+            messages=[{"role": "user", "content": [{"type": "text", "text": "partial current run"}]}],
+        )
+
+        with self.assertRaises(Exception) as raised:
+            executor._call_llm_stream(retry_on_empty=False, max_retries=0)
+
+        self.assertIn("after output had started", str(raised.exception))
+        self.assertEqual(len(model.requests), 1)
+        self.assertFalse([event for event in events if event["type"] == "context_overflow_recovery"])
+        self.assertIn("partial current run", json.dumps(executor.messages, ensure_ascii=False))
+        message_ends = [event["data"] for event in events if event["type"] == "message_end"]
+        self.assertEqual(len(message_ends), 1)
+        self.assertTrue(message_ends[0]["error"])
+        self.assertTrue(message_ends[0]["context_overflow_after_output"])
+        self.assertEqual(message_ends[0]["content"], "partial")
+
+    def test_context_overflow_retry_marker_survives_empty_retry(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        class FakeAgent:
+            memory_manager = None
+            last_usage = {}
+            max_context_tokens = 10000
+
+            @staticmethod
+            def _get_model_context_window():
+                return 6000
+
+            @staticmethod
+            def _get_context_reserve_tokens():
+                return 500
+
+            @staticmethod
+            def _estimate_text_tokens(text):
+                return max(1, len(str(text or "")) // 4)
+
+        class FakeModel:
+            model = "overflow-empty-overflow"
+
+            def __init__(self):
+                self.requests = []
+
+            def call_stream(self, request):
+                self.requests.append(request)
+                if len(self.requests) == 1:
+                    yield {
+                        "error": {"message": "request_too_large", "code": "context_length_exceeded"},
+                        "error_taxonomy": "context_overflow",
+                        "status_code": 400,
+                    }
+                    return
+                if len(self.requests) == 2:
+                    yield {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+                    return
+                yield {
+                    "error": {"message": "request_too_large", "code": "context_length_exceeded"},
+                    "error_taxonomy": "context_overflow",
+                    "status_code": 400,
+                }
+
+        def tool(name):
+            return types.SimpleNamespace(
+                name=name,
+                description=f"{name} " + ("schema " * 2000),
+                params={"type": "object", "properties": {}},
+            )
+
+        events = []
+        model = FakeModel()
+        executor = AgentStreamExecutor(
+            agent=FakeAgent(),
+            model=model,
+            system_prompt="system",
+            tools=[tool("read")],
+            on_event=lambda event: events.append(event),
+            messages=[{"role": "user", "content": [{"type": "text", "text": "short current run"}]}],
+        )
+
+        with self.assertRaises(Exception):
+            executor._call_llm_stream(retry_on_empty=True, max_retries=0)
+
+        self.assertEqual(len(model.requests), 3)
+        recovery_events = [event["data"] for event in events if event["type"] == "context_overflow_recovery"]
+        self.assertEqual(len(recovery_events), 1)
+        self.assertTrue(recovery_events[0]["schema_only_recovery"])
+
+    def test_stream_message_format_error_with_generic_too_large_does_not_recover_as_overflow(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        class FakeModel:
+            model = "message-format-model"
+
+            def call_stream(self, _request):
+                yield {
+                    "error": {
+                        "message": "tool_result tool id is not found because payload is too large",
+                        "code": "invalid_request_error",
+                        "type": "invalid_request_error",
+                    },
+                    "status_code": 400,
+                }
+
+        events = []
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}, memory_manager=None),
+            model=FakeModel(),
+            system_prompt="",
+            tools=[],
+            on_event=lambda event: events.append(event),
+            messages=[{"role": "user", "content": [{"type": "text", "text": "repair bad history"}]}],
+        )
+
+        with self.assertRaises(Exception):
+            executor._call_llm_stream(retry_on_empty=False, max_retries=0)
+
+        self.assertFalse([event for event in events if event["type"] == "context_overflow_recovery"])
+        self.assertEqual(executor.messages, [])
+
+    def test_context_overflow_classifier_does_not_treat_generic_too_large_as_overflow(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        self.assertFalse(AgentStreamExecutor._is_context_overflow_error(
+            message="tool_result id not found because payload is too large",
+            status_code=400,
+            error_type="invalid_request_error",
+        ))
+        self.assertTrue(AgentStreamExecutor._is_context_overflow_error(
+            message="request too large for the model context window",
+            status_code=400,
+            error_type="invalid_request_error",
+        ))
+
     def test_tool_schema_budget_expands_matching_intent_groups(self):
         from agent.protocol.agent_stream import AgentStreamExecutor
 

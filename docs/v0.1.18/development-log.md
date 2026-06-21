@@ -218,6 +218,34 @@
     proves old turns are trimmed while the current run remains preserved.
   - Focused pytest passed: 16 context/tool-schema/forced-text/tool-chain budget
     tests.
+- Added the second R18-05-A/B context overflow recovery slice:
+  - AgentStream now recognizes provider `error_taxonomy=context_overflow` in
+    addition to provider text, so overflow recovery is not dependent on one
+    vendor's exact error wording.
+  - On the first context overflow, AgentStream emits a structured
+    `context_overflow_recovery` event with before/after budget estimates,
+    removed turn count, truncated block counts, and
+    `current_turn_preserved` evidence.
+  - Overflow retry now forces a text-only model call with
+    `force_text_reason=context_overflow_recovery`, so recovery does not resend
+    tool schemas into an already over-budget request.
+  - Aggressive overflow trimming keeps the latest user run, removes older
+    turns, truncates historical pasted messages, and marks bulky current-run
+    tool payloads as truncated instead of dropping the current run boundary.
+  - Recovery is limited to the pre-output stream boundary; if an overflow
+    arrives after model text/reasoning/tool output starts, AgentStream fails the
+    attempt without retrying so partial deltas are not duplicated.
+  - Schema-only overflow recovery now retries text-only even when there is no
+    historical message trim to apply, preventing tool-schema bloat from
+    destructive history clearing.
+  - The overflow-recovery marker now survives ordinary retry and empty-response
+    retry recursion, so a second overflow after recovery cannot be mistaken for
+    the first overflow attempt.
+  - Partial-output overflow emits a closing `message_end` and does not retry,
+    and stream message-format failures with generic "too large" text remain in
+    the dirty-history recovery path instead of being promoted to overflow.
+  - Focused pytest passed: 22 context/tool-schema/forced-text/tool-chain
+    tests; adjacent context-overflow taxonomy tests passed.
 - Added the first R18-06-A desktop Run Center slice:
   - Desktop diagnostics settings now surface a Run Center panel backed by the
     existing `/api/active-requests` snapshot.

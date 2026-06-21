@@ -39,6 +39,20 @@ _REASONING_TRUNCATE_MARKER = "\n\n... [reasoning truncated, {omitted} chars omit
 
 TOOL_SCHEMA_BUDGET_ENABLED_DEFAULT = True
 CONTEXT_BUDGET_WARN_RATIO_DEFAULT = 0.85
+CONTEXT_OVERFLOW_KEYWORDS = (
+    "context length exceeded",
+    "maximum context length",
+    "prompt is too long",
+    "context overflow",
+    "context window",
+    "exceeds model context",
+    "request_too_large",
+    "request too large",
+    "prompt too large",
+    "input too large",
+    "request exceeds the maximum size",
+    "tokens exceed",
+)
 TOOL_SCHEMA_CORE_NAMES = {
     "read",
     "ls",
@@ -870,6 +884,39 @@ class AgentStreamExecutor:
             serialized = str(value)
         return self._estimate_text_tokens_for_budget(serialized)
 
+    @staticmethod
+    def _is_context_overflow_error(
+        message: Any = "",
+        status_code: Any = "",
+        error_code: Any = "",
+        error_type: Any = "",
+        taxonomy: Any = "",
+    ) -> bool:
+        evidence = " ".join(
+            str(part or "").lower()
+            for part in (message, status_code, error_code, error_type, taxonomy)
+            if part is not None
+        )
+        if "context_overflow" in evidence:
+            return True
+        return any(keyword in evidence for keyword in CONTEXT_OVERFLOW_KEYWORDS)
+
+    @staticmethod
+    def _is_message_format_error_text(message: Any = "") -> bool:
+        text = str(message or "").lower()
+        return any(keyword in text for keyword in [
+            "tool_use", "tool_result", "tool result", "without", "immediately after",
+            "corresponding", "must have", "each",
+            "tool_call_id", "tool id", "is not found", "not found", "tool_calls",
+            "must be a response to a preceeding message",
+            "2013",
+        ]) and (
+            "400" in text
+            or "status: 400" in text
+            or "invalid_request" in text
+            or "invalidparameter" in text
+        )
+
     def _context_budget_limits(self) -> Dict[str, Any]:
         context_window = 128000
         if self.agent and hasattr(self.agent, "_get_model_context_window"):
@@ -1075,9 +1122,13 @@ class AgentStreamExecutor:
             "runtime_artifact_count": len(self.files_to_send or []),
         }
 
-    def _select_tools_for_schema(self, force_text_response: bool = False) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    def _select_tools_for_schema(
+        self,
+        force_text_response: bool = False,
+        force_text_reason: str = "",
+    ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
         if force_text_response or not self.tools:
-            return None, {
+            budget = {
                 "enabled": False,
                 "reason": "forced_text" if force_text_response else "no_tools",
                 "selected_count": 0,
@@ -1085,6 +1136,9 @@ class AgentStreamExecutor:
                 "selected_tools": [],
                 "deferred_tools": sorted((self.tools or {}).keys()),
             }
+            if force_text_response and force_text_reason:
+                budget["force_text_reason"] = force_text_reason
+            return None, budget
 
         if not self._tool_schema_config_bool("agent_tool_schema_budget_enabled", TOOL_SCHEMA_BUDGET_ENABLED_DEFAULT):
             all_tools = dict(self.tools)
@@ -1780,7 +1834,10 @@ class AgentStreamExecutor:
             force_text_response = bool(_force_text_turn)
             force_text_reason = _force_text_reason
 
-        schema_tools, schema_budget = self._select_tools_for_schema(force_text_response=force_text_response)
+        schema_tools, schema_budget = self._select_tools_for_schema(
+            force_text_response=force_text_response,
+            force_text_reason=force_text_reason,
+        )
         if schema_budget.get("enabled") or schema_budget.get("deferred_count"):
             logger.info(
                 "[Agent] Tool schema budget: "
@@ -1903,10 +1960,16 @@ class AgentStreamExecutor:
                         error_msg = error_data.get("message", chunk.get("message", "Unknown error"))
                         error_code = error_data.get("code", "")
                         error_type = error_data.get("type", "")
+                        error_taxonomy = (
+                            error_data.get("taxonomy")
+                            or error_data.get("error_taxonomy")
+                            or chunk.get("error_taxonomy", "")
+                        )
                     else:
                         error_msg = chunk.get("message", str(error_data))
                         error_code = ""
                         error_type = ""
+                        error_taxonomy = chunk.get("error_taxonomy", "")
                     
                     status_code = chunk.get("status_code", "N/A")
                     retry_stopped = bool(chunk.get("retry_exhausted") or chunk.get("retry_suppressed"))
@@ -1919,14 +1982,34 @@ class AgentStreamExecutor:
                     logger.error(f"   Error Type: {error_type}")
                     logger.error(f"   Full chunk: {chunk}")
                     
-                    # Check if this is a context overflow error (keyword-based, works for all models)
-                    # Don't rely on specific status codes as different providers use different codes
-                    error_msg_lower = error_msg.lower()
-                    is_overflow = any(keyword in error_msg_lower for keyword in [
-                        'context length exceeded', 'maximum context length', 'prompt is too long',
-                        'context overflow', 'context window', 'too large', 'exceeds model context',
-                        'request_too_large', 'request exceeds the maximum size', 'tokens exceed'
-                    ])
+                    # Check if this is a context overflow error. Prefer the
+                    # shared model taxonomy when present; keep keyword fallback
+                    # for providers that only expose free-form text.
+                    is_overflow = self._is_context_overflow_error(
+                        message=error_msg,
+                        status_code=status_code,
+                        error_code=error_code,
+                        error_type=error_type,
+                        taxonomy=error_taxonomy,
+                    )
+                    explicit_overflow = self._is_context_overflow_error(
+                        message="",
+                        status_code=status_code,
+                        error_code=error_code,
+                        error_type=error_type,
+                        taxonomy=error_taxonomy,
+                    ) or self._is_context_overflow_error(
+                        message=error_msg,
+                        status_code="",
+                        error_code="",
+                        error_type="",
+                        taxonomy="",
+                    )
+                    message_format_error = self._is_message_format_error_text(
+                        f"{error_msg} {status_code} {error_code} {error_type}"
+                    )
+                    if is_overflow and message_format_error and not explicit_overflow:
+                        is_overflow = False
                     
                     if is_overflow:
                         # Mark as context overflow for special handling
@@ -2010,11 +2093,15 @@ class AgentStreamExecutor:
             
             # Method 2: Fallback to keyword matching for non-stream errors
             if not is_context_overflow:
-                is_context_overflow = any(keyword in error_str_lower for keyword in [
-                    'context length exceeded', 'maximum context length', 'prompt is too long',
-                    'context overflow', 'context window', 'too large', 'exceeds model context',
-                    'request_too_large', 'request exceeds the maximum size'
-                ])
+                is_context_overflow = self._is_context_overflow_error(message=error_str)
+            context_overflow_is_explicit = (
+                ("context_overflow" in error_str_lower and "[context_overflow]" not in error_str_lower)
+                or "context_length" in error_str_lower
+                or "context length" in error_str_lower
+                or "maximum context" in error_str_lower
+                or "exceeds model context" in error_str_lower
+                or "request_too_large" in error_str_lower
+            )
             
             # Check if error is message format error (incomplete tool_use/tool_result pairs)
             # This happens when previous conversation had tool failures or context trimming
@@ -2022,19 +2109,31 @@ class AgentStreamExecutor:
             # Note: MiniMax returns error 2013 "tool result's tool id(...) not found" for
             # tool_call_id mismatches — the keywords below are intentionally broad to catch
             # both standard (Claude/OpenAI) and provider-specific (MiniMax) variants.
-            is_message_format_error = any(keyword in error_str_lower for keyword in [
-                'tool_use', 'tool_result', 'tool result', 'without', 'immediately after',
-                'corresponding', 'must have', 'each',
-                'tool_call_id', 'tool id', 'is not found', 'not found', 'tool_calls',
-                'must be a response to a preceeding message',
-                '2013',  # MiniMax error code for tool_call_id mismatch
-            ]) and ('400' in error_str_lower or 'status: 400' in error_str_lower
-                     or 'invalid_request' in error_str_lower
-                     or 'invalidparameter' in error_str_lower)
+            is_message_format_error = self._is_message_format_error_text(error_str)
+            if is_message_format_error and is_context_overflow and not context_overflow_is_explicit:
+                is_context_overflow = False
             
             if is_context_overflow or is_message_format_error:
                 error_type = "context overflow" if is_context_overflow else "message format error"
                 logger.error(f"💥 {error_type} detected: {e}")
+
+                stream_output_started = bool(full_content or full_reasoning or tool_calls_buffer)
+                if is_context_overflow and stream_output_started:
+                    logger.warning(
+                        "[Agent] Context overflow arrived after model output started; "
+                        "suppressing recovery retry to avoid duplicate stream output"
+                    )
+                    self._emit_event("message_end", {
+                        "content": sanitize_assistant_identity(self._filter_think_tags(full_content)),
+                        "tool_calls": [],
+                        "error": True,
+                        "context_overflow_after_output": True,
+                        "usage": self.agent.last_usage,
+                    })
+                    raise Exception(_t(
+                        "The model stream reported context overflow after output had started. I stopped instead of retrying to avoid duplicating partial output.",
+                        "The model stream reported context overflow after output had started. I stopped instead of retrying to avoid duplicating partial output.",
+                    ))
 
                 # Flush memory before trimming to preserve context that will be lost
                 if is_context_overflow and self.agent.memory_manager:
@@ -2046,17 +2145,69 @@ class AgentStreamExecutor:
 
                 # Strategy: try aggressive trimming first, only clear as last resort
                 if is_context_overflow and not _overflow_retry:
-                    trimmed = self._aggressive_trim_for_overflow()
-                    if trimmed:
+                    recovery = self._aggressive_trim_for_overflow()
+                    trim_applied = bool(recovery.get("applied"))
+                    schema_only_recovery = bool(tools_schema) and not trim_applied
+                    if trim_applied or schema_only_recovery:
+                        recovery_for_retry = {
+                            **recovery,
+                            "applied": True,
+                            "reason": (
+                                "schema_only_tool_schema_disabled"
+                                if schema_only_recovery else recovery.get("reason")
+                            ),
+                            "trim_applied": trim_applied,
+                            "schema_only_recovery": schema_only_recovery,
+                            "tool_schema_disabled": True,
+                        }
+                        retry_schema_budget = {
+                            "enabled": False,
+                            "reason": "forced_text",
+                            "force_text_reason": "context_overflow_recovery",
+                            "selected_count": 0,
+                            "deferred_count": len(self.tools or {}),
+                            "selected_tools": [],
+                            "deferred_tools": sorted((self.tools or {}).keys()),
+                        }
+                        retry_budget = self._build_context_budget(
+                            self._prepare_messages(),
+                            None,
+                            retry_schema_budget,
+                        )
+                        self._emit_event("context_overflow_recovery", {
+                            **recovery_for_retry,
+                            "retry": True,
+                            "force_text_response": True,
+                            "before_estimated_input_tokens": context_budget.get("estimated_input_tokens"),
+                            "before_effective_context_limit_tokens": context_budget.get("effective_context_limit_tokens"),
+                            "after_estimated_input_tokens": retry_budget.get("estimated_input_tokens"),
+                            "after_effective_context_limit_tokens": retry_budget.get("effective_context_limit_tokens"),
+                            "after_remaining_input_tokens": retry_budget.get("remaining_input_tokens"),
+                            "after_severity": retry_budget.get("severity"),
+                        })
                         logger.warning("🔄 Aggressively trimmed context, retrying...")
+                        self._emit_event("message_end", {
+                            "content": "",
+                            "tool_calls": [],
+                            "context_overflow_retry": True,
+                            "retrying": True,
+                            "usage": self.agent.last_usage,
+                        })
                         return self._call_llm_stream(
                             retry_on_empty=retry_on_empty,
                             retry_count=retry_count,
                             max_retries=max_retries,
                             _overflow_retry=True,
-                            _force_text_turn=force_text_response,
-                            _force_text_reason=force_text_reason,
+                            _force_text_turn=True,
+                            _force_text_reason="context_overflow_recovery",
                         )
+                    self._emit_event("context_overflow_recovery", {
+                        **recovery,
+                        "retry": False,
+                        "force_text_response": False,
+                        "before_estimated_input_tokens": context_budget.get("estimated_input_tokens"),
+                        "before_effective_context_limit_tokens": context_budget.get("effective_context_limit_tokens"),
+                    })
 
                 # Aggressive trim didn't help or this is a message format error
                 # -> clear everything and also purge DB to prevent reload of dirty data
@@ -2098,6 +2249,7 @@ class AgentStreamExecutor:
                     retry_on_empty=retry_on_empty, 
                     retry_count=retry_count + 1,
                     max_retries=max_retries,
+                    _overflow_retry=_overflow_retry,
                     _force_text_turn=force_text_response,
                     _force_text_reason=force_text_reason,
                 )
@@ -2156,6 +2308,7 @@ class AgentStreamExecutor:
                 retry_on_empty=False, 
                 retry_count=retry_count,
                 max_retries=max_retries,
+                _overflow_retry=_overflow_retry,
                 _force_text_turn=force_text_response,
                 _force_text_reason=force_text_reason,
             )
@@ -2590,7 +2743,44 @@ class AgentStreamExecutor:
         if truncated_count > 0:
             logger.info(f"📎 Truncated {truncated_count} historical tool result(s) to {MAX_HISTORY_RESULT_CHARS} chars")
 
-    def _aggressive_trim_for_overflow(self) -> bool:
+    def _context_overflow_recovery_payload(
+        self,
+        *,
+        original_count: int,
+        turns_before: List[Dict[str, Any]],
+        removed_turns: int,
+        truncated_blocks: int,
+        truncated_current_run_blocks: int,
+        truncated_historical_blocks: int,
+        truncated_historical_user_messages: int,
+        current_user_marker: str,
+    ) -> Dict[str, Any]:
+        turns_after = self._identify_complete_turns()
+        serialized_after = json.dumps(self.messages, ensure_ascii=False)
+        current_turn_preserved = bool(
+            turns_after
+            and (
+                not current_user_marker
+                or current_user_marker in serialized_after
+            )
+        )
+        applied = bool(removed_turns or truncated_blocks)
+        return {
+            "applied": applied,
+            "reason": "trimmed" if applied else "nothing_to_trim",
+            "messages_before": original_count,
+            "messages_after": len(self.messages),
+            "turns_before": len(turns_before),
+            "turns_after": len(turns_after),
+            "removed_turns": removed_turns,
+            "truncated_blocks": truncated_blocks,
+            "truncated_current_run_blocks": truncated_current_run_blocks,
+            "truncated_historical_blocks": truncated_historical_blocks,
+            "truncated_historical_user_messages": truncated_historical_user_messages,
+            "current_turn_preserved": current_turn_preserved,
+        }
+
+    def _aggressive_trim_for_overflow(self) -> Dict[str, Any]:
         """
         Aggressively trim context when a real overflow error is returned by the API.
 
@@ -2600,16 +2790,45 @@ class AgentStreamExecutor:
         3. Truncating overly long user messages
 
         Returns:
-            True if messages were trimmed (worth retrying), False if nothing left to trim
+            Structured recovery metadata. ``applied`` indicates whether a retry
+            is worth attempting.
         """
         if not self.messages:
-            return False
+            return {
+                "applied": False,
+                "reason": "no_messages",
+                "messages_before": 0,
+                "messages_after": 0,
+                "turns_before": 0,
+                "turns_after": 0,
+                "removed_turns": 0,
+                "truncated_blocks": 0,
+                "current_turn_preserved": False,
+            }
 
         original_count = len(self.messages)
+        turns_before = self._identify_complete_turns()
+        current_turn_message_ids = (
+            {id(msg) for msg in turns_before[-1]["messages"]}
+            if turns_before else set()
+        )
+        current_user_marker = self._latest_user_text_for_tool_schema()[:200]
 
-        # Step 1: Aggressively truncate ALL tool results to 5K chars
+        # Step 1: Aggressively truncate ALL tool results to 10K chars
         AGGRESSIVE_LIMIT = 10000
         truncated = 0
+        truncated_current_blocks = 0
+        truncated_historical_blocks = 0
+        truncated_historical_user_messages = 0
+
+        def _mark_truncated(msg: Dict[str, Any]) -> None:
+            nonlocal truncated, truncated_current_blocks, truncated_historical_blocks
+            truncated += 1
+            if id(msg) in current_turn_message_ids:
+                truncated_current_blocks += 1
+            else:
+                truncated_historical_blocks += 1
+
         for msg in self.messages:
             content = msg.get("content", [])
             if not isinstance(content, list):
@@ -2626,24 +2845,27 @@ class AgentStreamExecutor:
                             + f"\n\n[Truncated for context recovery: "
                             f"{len(result_str)} -> {AGGRESSIVE_LIMIT} chars]"
                         )
-                        truncated += 1
+                        _mark_truncated(msg)
                 # Truncate tool_use input blocks (e.g. large write content)
                 if block.get("type") == "tool_use" and isinstance(block.get("input"), dict):
                     input_str = json.dumps(block["input"], ensure_ascii=False)
                     if len(input_str) > AGGRESSIVE_LIMIT:
                         # Keep only a summary of the input
+                        input_truncated = False
                         for key, val in block["input"].items():
                             if isinstance(val, str) and len(val) > 1000:
                                 block["input"][key] = (
                                     val[:1000]
                                     + f"... [truncated {len(val)} chars]"
                                 )
-                        truncated += 1
+                                input_truncated = True
+                        if input_truncated:
+                            _mark_truncated(msg)
 
         # Step 2: Truncate overly long user text messages (e.g. pasted content)
         USER_MSG_LIMIT = 10000
         for msg in self.messages:
-            if msg.get("role") != "user":
+            if msg.get("role") != "user" or id(msg) in current_turn_message_ids:
                 continue
             content = msg.get("content", [])
             if isinstance(content, list):
@@ -2656,41 +2878,71 @@ class AgentStreamExecutor:
                                 + f"\n\n[Message truncated for context recovery: "
                                 f"{len(text)} -> {USER_MSG_LIMIT} chars]"
                             )
-                            truncated += 1
+                            truncated_historical_user_messages += 1
+                            _mark_truncated(msg)
             elif isinstance(content, str) and len(content) > USER_MSG_LIMIT:
                 msg["content"] = (
                     content[:USER_MSG_LIMIT]
                     + f"\n\n[Message truncated for context recovery: "
                     f"{len(content)} -> {USER_MSG_LIMIT} chars]"
                 )
-                truncated += 1
+                truncated_historical_user_messages += 1
+                _mark_truncated(msg)
 
         # Step 3: Keep only the last 5 complete turns
         turns = self._identify_complete_turns()
+        removed = 0
         if len(turns) > 5:
-            kept_turns = turns[-5:]
+            kept_turns = turns[-5:-1] + turns[-1:]
             new_messages = []
             for turn in kept_turns:
                 new_messages.extend(turn["messages"])
-            removed = len(turns) - 5
+            removed = len(turns) - len(kept_turns)
             self.messages[:] = new_messages
             logger.info(
                 f"🔧 Aggressive trim: removed {removed} old turns, "
                 f"truncated {truncated} large blocks, "
                 f"{original_count} -> {len(self.messages)} messages"
             )
-            return True
+            return self._context_overflow_recovery_payload(
+                original_count=original_count,
+                turns_before=turns_before,
+                removed_turns=removed,
+                truncated_blocks=truncated,
+                truncated_current_run_blocks=truncated_current_blocks,
+                truncated_historical_blocks=truncated_historical_blocks,
+                truncated_historical_user_messages=truncated_historical_user_messages,
+                current_user_marker=current_user_marker,
+            )
 
         if truncated > 0:
             logger.info(
                 f"🔧 Aggressive trim: truncated {truncated} large blocks "
                 f"(no turns removed, only {len(turns)} turn(s) left)"
             )
-            return True
+            return self._context_overflow_recovery_payload(
+                original_count=original_count,
+                turns_before=turns_before,
+                removed_turns=removed,
+                truncated_blocks=truncated,
+                truncated_current_run_blocks=truncated_current_blocks,
+                truncated_historical_blocks=truncated_historical_blocks,
+                truncated_historical_user_messages=truncated_historical_user_messages,
+                current_user_marker=current_user_marker,
+            )
 
         # Nothing left to trim
         logger.warning("🔧 Aggressive trim: nothing to trim, will clear history")
-        return False
+        return self._context_overflow_recovery_payload(
+            original_count=original_count,
+            turns_before=turns_before,
+            removed_turns=removed,
+            truncated_blocks=truncated,
+            truncated_current_run_blocks=truncated_current_blocks,
+            truncated_historical_blocks=truncated_historical_blocks,
+            truncated_historical_user_messages=truncated_historical_user_messages,
+            current_user_marker=current_user_marker,
+        )
 
     def _build_context_summary_callback(self, discarded_turns: list, kept_turns: list):
         """
