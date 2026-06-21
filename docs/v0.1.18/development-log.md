@@ -525,3 +525,22 @@
     state, scheduler first-visible cancel token registration, pre-boot orphan
     interruption, current-token preservation, and Run Center subagent/scheduler
     source contracts.
+- Added the recent terminal run truth slice:
+  - The run ledger now exposes a bounded `terminal_snapshot()` for recent
+    completed/failed/cancelled/interrupted rows, including
+    `terminal_age_seconds` for diagnostics surfaces.
+  - `/api/active-requests` still keeps `requests` active-only, but now adds
+    `recentTerminalRequests` / `recent_terminal_requests` and
+    `runStatusCounts` / `run_status_counts` so backend recovery surfaces can
+    distinguish queued/running/cancelling/finalizing and recent
+    completed/failed/cancelled/interrupted states from durable truth.
+  - Durable terminal rows now suppress same-request cancel-registry fallback
+    rows, preventing stale in-process registry state from reanimating a run
+    that the ledger already knows is terminal.
+  - Current cancellation remains visible as `cancelling` when a recent
+    `cancelled` terminal event has closed the SSE stream but the request's
+    cancel token is still registered; older durable terminal rows still prevent
+    stale registry rows from being reanimated.
+  - Desktop API typing preserves these fields in `RuntimeSnapshot` for future
+    Run Center/diagnostics affordances without changing the current active-row
+    UI semantics.

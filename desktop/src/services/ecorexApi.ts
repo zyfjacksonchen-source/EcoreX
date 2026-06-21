@@ -25,6 +25,7 @@ export type RuntimeActiveRequest = {
   updated_at?: number;
   terminal_at?: number;
   age_seconds?: number;
+  terminal_age_seconds?: number | null;
   cancel_age_seconds?: number | null;
   stream_available?: boolean;
   metadata?: Record<string, unknown>;
@@ -243,6 +244,8 @@ export type RuntimeSnapshot = {
   currentModel?: string;
   sessions: RuntimeSession[];
   activeRequests?: RuntimeActiveRequest[];
+  recentTerminalRequests?: RuntimeActiveRequest[];
+  runStatusCounts?: Record<string, number>;
   activeRequestsStatus?: string;
   staleLocks?: RuntimeSessionLock[];
   totalSessions: number;
@@ -509,10 +512,23 @@ export async function loadRuntimeSnapshot(): Promise<RuntimeSnapshot> {
     const activeRequestsPromise = apiJson<{
       status?: string;
       requests?: RuntimeActiveRequest[];
+      recentTerminalRequests?: RuntimeActiveRequest[];
+      recent_terminal_requests?: RuntimeActiveRequest[];
+      runStatusCounts?: Record<string, number>;
+      run_status_counts?: Record<string, number>;
       staleLocks?: RuntimeSessionLock[];
       stale_locks?: RuntimeSessionLock[];
     }>("/api/active-requests")
-      .catch(() => ({ status: "unavailable", requests: [], staleLocks: [], stale_locks: [] }));
+      .catch(() => ({
+        status: "unavailable",
+        requests: [],
+        recentTerminalRequests: [],
+        recent_terminal_requests: [],
+        runStatusCounts: {},
+        run_status_counts: {},
+        staleLocks: [],
+        stale_locks: []
+      }));
     const extensionsPromise = apiJson<{
       extensions?: RuntimeExtension[];
       count?: number;
@@ -534,6 +550,16 @@ export async function loadRuntimeSnapshot(): Promise<RuntimeSnapshot> {
     const runtimeSkills = Array.isArray(skills.skills) ? skills.skills : [];
     const runtimeExtensions = Array.isArray(extensions.extensions) ? extensions.extensions : [];
     const runtimeActiveRequests = Array.isArray(activeRequests.requests) ? activeRequests.requests : [];
+    const runtimeRecentTerminalRequests = Array.isArray(activeRequests.recentTerminalRequests)
+      ? activeRequests.recentTerminalRequests
+      : Array.isArray(activeRequests.recent_terminal_requests)
+        ? activeRequests.recent_terminal_requests
+        : [];
+    const runStatusCounts: Record<string, number> = activeRequests.runStatusCounts && typeof activeRequests.runStatusCounts === "object"
+      ? activeRequests.runStatusCounts as Record<string, number>
+      : activeRequests.run_status_counts && typeof activeRequests.run_status_counts === "object"
+        ? activeRequests.run_status_counts as Record<string, number>
+        : {};
     const staleLocks = Array.isArray(activeRequests.staleLocks)
       ? activeRequests.staleLocks
       : Array.isArray(activeRequests.stale_locks)
@@ -551,6 +577,8 @@ export async function loadRuntimeSnapshot(): Promise<RuntimeSnapshot> {
       releaseNotes: version.releaseNotes,
       sessions: runtimeSessions,
       activeRequests: runtimeActiveRequests,
+      recentTerminalRequests: runtimeRecentTerminalRequests,
+      runStatusCounts,
       activeRequestsStatus: activeRequests.status || "success",
       staleLocks,
       totalSessions: typeof sessions.total === "number" ? sessions.total : runtimeSessions.length,

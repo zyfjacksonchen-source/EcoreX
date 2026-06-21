@@ -196,6 +196,22 @@ class RunLedger:
             ).fetchall()
             return [self._row_to_dict(row) for row in rows]
 
+    def terminal_snapshot(self, *, max_age_seconds: int = 30 * 60, limit: int = 50) -> List[Dict[str, Any]]:
+        cutoff = time.time() - max(1, max_age_seconds)
+        capped_limit = min(max(1, int(limit or 1)), 500)
+        with self._lock, self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM agent_runs
+                 WHERE terminal_at IS NOT NULL
+                   AND updated_at >= ?
+                 ORDER BY terminal_at DESC, updated_at DESC
+                 LIMIT ?
+                """,
+                (cutoff, capped_limit),
+            ).fetchall()
+            return [self._row_to_dict(row) for row in rows]
+
     def _init_db(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connection() as conn:
@@ -237,6 +253,12 @@ class RunLedger:
         now = time.time()
         created_at = float(item.get("created_at") or now)
         item["age_seconds"] = max(0, round(now - created_at, 3))
+        terminal_at = item.get("terminal_at")
+        if terminal_at is not None:
+            try:
+                item["terminal_age_seconds"] = max(0, round(now - float(terminal_at), 3))
+            except Exception:
+                item["terminal_age_seconds"] = None
         return item
 
 

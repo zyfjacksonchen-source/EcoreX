@@ -46,6 +46,8 @@ ARTIFACT_METADATA_LIMIT_CODE = "ARTIFACT_METADATA_LIMIT"
 SSE_RUN_TERMINAL_TYPES = {"done", "error", "cancelled", "interrupted"}
 SSE_STREAM_TERMINAL_TYPES = SSE_RUN_TERMINAL_TYPES | {"replay_gap"}
 _RUNTIME_STARTED_AT = time.time()
+RECENT_TERMINAL_RUN_MAX_AGE_SECONDS = 30 * 60
+RECENT_TERMINAL_RUN_LIMIT = 50
 DANGEROUS_OPEN_EXTENSIONS = {
     ".app",
     ".bat",
@@ -1261,7 +1263,9 @@ class WebChannel(ChatChannel):
             from common.ecorex_workspace import list_session_locks
 
             requests = []
+            recent_terminal_requests = []
             sessions = {}
+            run_status_counts = {}
             seen_request_ids = set()
             registry_rows = get_cancel_registry().snapshot()
             registry_by_request = {
@@ -1270,6 +1274,24 @@ class WebChannel(ChatChannel):
                 if row.get("request_id")
             }
             ledger = get_run_ledger()
+            def bump_status_count(item) -> None:
+                status = str((item or {}).get("state") or (item or {}).get("status") or "").strip()
+                if not status:
+                    return
+                run_status_counts[status] = run_status_counts.get(status, 0) + 1
+
+            def is_current_cancelling_registry_row(durable_row, registry_row) -> bool:
+                if not durable_row or not registry_row:
+                    return False
+                if durable_row.get("status") != "cancelled" or not registry_row.get("cancelled"):
+                    return False
+                terminal_age = durable_row.get("terminal_age_seconds")
+                try:
+                    terminal_age_seconds = float(terminal_age)
+                except Exception:
+                    return False
+                return terminal_age_seconds <= RECENT_TERMINAL_RUN_MAX_AGE_SECONDS
+
             def is_primary_chat_request(item, request_id: str, session_id: str) -> bool:
                 run_type = str((item or {}).get("run_type") or "message").lower()
                 return (
@@ -1367,9 +1389,28 @@ class WebChannel(ChatChannel):
                     item["cancelled_at"] = registry_row.get("cancelled_at")
                     item["cancel_age_seconds"] = registry_row.get("cancel_age_seconds")
                 requests.append(item)
+                bump_status_count(item)
                 seen_request_ids.add(request_id)
                 if session_id and not item.get("cancelled") and is_primary_chat_request(item, request_id, session_id):
                     sessions.setdefault(session_id, []).append(request_id)
+            for row in ledger.terminal_snapshot(
+                max_age_seconds=RECENT_TERMINAL_RUN_MAX_AGE_SECONDS,
+                limit=RECENT_TERMINAL_RUN_LIMIT,
+            ):
+                request_id = row.get("request_id", "")
+                if not request_id or request_id in seen_request_ids:
+                    continue
+                session_id = row.get("session_id") or self.request_to_session.get(request_id, "")
+                item = {
+                    **row,
+                    "session_id": session_id,
+                    "stream_available": request_id in self.sse_queues,
+                    "source": "run_ledger",
+                }
+                recent_terminal_requests.append(item)
+                bump_status_count(item)
+                if not is_current_cancelling_registry_row(item, registry_by_request.get(request_id, {})):
+                    seen_request_ids.add(request_id)
             for row in registry_rows:
                 request_id = row.get("request_id", "")
                 if not request_id or request_id in seen_request_ids or request_id in interrupted_request_ids:
@@ -1377,8 +1418,8 @@ class WebChannel(ChatChannel):
                 durable_row = ledger.get_run(request_id)
                 if (
                     durable_row
-                    and durable_row.get("status") == "interrupted"
-                    and durable_row.get("terminal_reason") == "sidecar_interrupted"
+                    and durable_row.get("terminal_at") is not None
+                    and not is_current_cancelling_registry_row(durable_row, row)
                 ):
                     continue
                 session_id = row.get("session_id") or self.request_to_session.get(request_id, "")
@@ -1393,11 +1434,16 @@ class WebChannel(ChatChannel):
                 elif request_id.startswith("scheduler_") or str(session_id).startswith("scheduler_"):
                     item["run_type"] = "scheduler"
                 requests.append(item)
+                bump_status_count(item)
                 if session_id and not item.get("cancelled") and is_primary_chat_request(item, request_id, session_id):
                     sessions.setdefault(session_id, []).append(request_id)
             return {
                 "status": "success",
                 "requests": requests,
+                "recent_terminal_requests": recent_terminal_requests,
+                "recentTerminalRequests": recent_terminal_requests,
+                "run_status_counts": run_status_counts,
+                "runStatusCounts": run_status_counts,
                 "sessions": sessions,
                 "stale_locks": stale_locks,
                 "staleLocks": stale_locks,

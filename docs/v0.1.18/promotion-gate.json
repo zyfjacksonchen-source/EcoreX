@@ -2,7 +2,7 @@
   "product": "EcoreX",
   "version": "0.1.18",
   "gate": "v0.1.18-production-agent",
-  "generatedAt": "2026-06-21T09:49:28Z",
+  "generatedAt": "2026-06-21T10:12:23Z",
   "status": "no-go",
   "summary": {
     "total": 18,
@@ -14,7 +14,7 @@
       "name": "Acceptance rows: run-ledger",
       "status": "fail",
       "severity": "blocker",
-      "evidence": "docs/v0.1.18/acceptance-checklist.md: missing=[] incomplete=['R18-01-A=PARTIAL', 'R18-01-C=PARTIAL']"
+      "evidence": "docs/v0.1.18/acceptance-checklist.md: missing=[] incomplete=['R18-01-A=PARTIAL']"
     },
     {
       "name": "Acceptance rows: sse-contract",

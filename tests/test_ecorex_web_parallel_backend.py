@@ -901,6 +901,32 @@ class TestWebParallelHandlers(unittest.TestCase):
             self.assertEqual(final["error_code"], "WORKER_EXCEPTION")
             self.assertEqual(ledger.active_snapshot(), [])
 
+    def test_run_ledger_terminal_snapshot_reports_recent_terminal_states(self):
+        from agent.protocol import reset_run_ledger_for_tests
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            for status in ["completed", "failed", "cancelled", "interrupted"]:
+                request_id = f"req-terminal-{status}"
+                ledger.create_run(request_id, f"session-terminal-{status}", phase="running")
+                ledger.mark_terminal(
+                    request_id,
+                    status,
+                    reason=f"{status}_reason",
+                    error_code=f"{status.upper()}_CODE" if status in {"failed", "interrupted"} else "",
+                    error_message=f"{status} message",
+                )
+
+            terminal = ledger.terminal_snapshot(max_age_seconds=60, limit=10)
+            by_status = {row["status"]: row for row in terminal}
+            self.assertEqual(set(by_status), {"completed", "failed", "cancelled", "interrupted"})
+            self.assertEqual(by_status["failed"]["state"], "failed")
+            self.assertEqual(by_status["failed"]["terminal_reason"], "failed_reason")
+            self.assertEqual(by_status["failed"]["error_code"], "FAILED_CODE")
+            self.assertIsNotNone(by_status["interrupted"]["terminal_at"])
+            self.assertIn("terminal_age_seconds", by_status["interrupted"])
+            self.assertEqual(ledger.active_snapshot(), [])
+
     def test_active_request_snapshot_prefers_durable_run_ledger(self):
         from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests
         from channel.web import web_channel
@@ -927,6 +953,144 @@ class TestWebParallelHandlers(unittest.TestCase):
                 self.assertTrue(active[0]["stream_available"])
             finally:
                 registry.unregister(request_id)
+
+    def test_active_request_snapshot_reports_active_and_recent_terminal_run_truth(self):
+        from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests
+        from channel.web import web_channel
+
+        channel = web_channel.WebChannel()
+        active_statuses = ["queued", "running", "cancelling", "finalizing"]
+        terminal_statuses = ["completed", "failed", "cancelled", "interrupted"]
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            for status in active_statuses:
+                ledger.create_run(
+                    f"req-active-{status}",
+                    f"session-active-{status}",
+                    phase=status,
+                    status=status,
+                )
+            for status in terminal_statuses:
+                request_id = f"req-terminal-{status}"
+                ledger.create_run(request_id, f"session-terminal-{status}", phase="running")
+                ledger.mark_terminal(
+                    request_id,
+                    status,
+                    reason=f"{status}_reason",
+                    error_code=f"{status.upper()}_CODE" if status in {"failed", "interrupted"} else "",
+                    error_message=f"{status} message",
+                )
+
+            registry = get_cancel_registry()
+            registry.register("req-terminal-failed", session_id="session-terminal-failed")
+            try:
+                with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                    snapshot = channel.active_requests_snapshot()
+            finally:
+                registry.unregister("req-terminal-failed")
+
+            active_by_id = {row["request_id"]: row for row in snapshot["requests"]}
+            terminal_by_id = {
+                row["request_id"]: row
+                for row in snapshot["recentTerminalRequests"]
+            }
+            self.assertEqual(
+                {row["status"] for row in snapshot["requests"] if row["request_id"].startswith("req-active-")},
+                set(active_statuses),
+            )
+            self.assertFalse([
+                row for row in snapshot["requests"]
+                if str(row.get("request_id", "")).startswith("req-terminal-")
+            ])
+            self.assertEqual(
+                {row["status"] for row in snapshot["recent_terminal_requests"] if row["request_id"].startswith("req-terminal-")},
+                set(terminal_statuses),
+            )
+            self.assertEqual(snapshot["recentTerminalRequests"], snapshot["recent_terminal_requests"])
+            for status in active_statuses:
+                self.assertEqual(active_by_id[f"req-active-{status}"]["state"], status)
+            for status in terminal_statuses:
+                terminal = terminal_by_id[f"req-terminal-{status}"]
+                self.assertEqual(terminal["state"], status)
+                self.assertEqual(terminal["terminal_reason"], f"{status}_reason")
+                self.assertEqual(terminal["source"], "run_ledger")
+                self.assertIsNotNone(terminal["terminal_at"])
+            for status in [*active_statuses, *terminal_statuses]:
+                self.assertEqual(snapshot["runStatusCounts"].get(status), 1)
+                self.assertEqual(snapshot["run_status_counts"].get(status), 1)
+
+    def test_active_request_snapshot_suppresses_registry_fallback_for_old_terminal_run(self):
+        from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests
+        from channel.web import web_channel
+
+        channel = web_channel.WebChannel()
+        terminal_statuses = ["completed", "failed", "cancelled", "interrupted"]
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            registry = get_cancel_registry()
+            request_ids = []
+            with patch("agent.protocol.run_ledger.time.time", return_value=1000.0):
+                for status in terminal_statuses:
+                    request_id = f"req-old-terminal-{status}"
+                    session_id = f"session-old-terminal-{status}"
+                    request_ids.append(request_id)
+                    ledger.create_run(request_id, session_id, phase="running")
+                    ledger.mark_terminal(
+                        request_id,
+                        status,
+                        reason=f"old_{status}",
+                        error_code=f"OLD_{status.upper()}",
+                        error_message=f"old {status}",
+                    )
+                    registry.register(request_id, session_id=session_id)
+                    if status == "cancelled":
+                        self.assertTrue(registry.cancel_request(request_id))
+            try:
+                with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                    snapshot = channel.active_requests_snapshot()
+            finally:
+                for request_id in request_ids:
+                    registry.unregister(request_id)
+
+            active_ids = {row.get("request_id") for row in snapshot["requests"]}
+            terminal_ids = {row.get("request_id") for row in snapshot["recentTerminalRequests"]}
+            self.assertTrue(set(request_ids).isdisjoint(active_ids))
+            self.assertTrue(set(request_ids).isdisjoint(terminal_ids))
+            for status in terminal_statuses:
+                final = ledger.get_run(f"req-old-terminal-{status}")
+                self.assertEqual(final["status"], status)
+                self.assertEqual(final["terminal_reason"], f"old_{status}")
+
+    def test_active_request_snapshot_keeps_recent_cancelled_terminal_visible_while_stopping(self):
+        from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests
+        from channel.web import web_channel
+
+        channel = web_channel.WebChannel()
+        request_id = "req-recent-cancelled-still-stopping"
+        session_id = "session-recent-cancelled-still-stopping"
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            ledger.create_run(request_id, session_id, phase="running")
+            ledger.mark_terminal(request_id, "cancelled", reason="cancelled")
+            registry = get_cancel_registry()
+            registry.register(request_id, session_id=session_id)
+            try:
+                self.assertTrue(registry.cancel_request(request_id))
+                with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                    snapshot = channel.active_requests_snapshot()
+            finally:
+                registry.unregister(request_id)
+
+            active = [row for row in snapshot["requests"] if row.get("request_id") == request_id]
+            self.assertEqual(len(active), 1)
+            self.assertEqual(active[0]["source"], "cancel_registry")
+            self.assertTrue(active[0]["cancelled"])
+            self.assertEqual(active[0]["state"], "cancelling")
+            terminal = [row for row in snapshot["recentTerminalRequests"] if row.get("request_id") == request_id]
+            self.assertEqual(len(terminal), 1)
+            self.assertEqual(terminal[0]["status"], "cancelled")
+            self.assertEqual(snapshot["runStatusCounts"].get("cancelled"), 1)
+            self.assertEqual(snapshot["runStatusCounts"].get("cancelling"), 1)
 
     def test_active_request_snapshot_marks_dead_lock_message_run_interrupted(self):
         from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests
