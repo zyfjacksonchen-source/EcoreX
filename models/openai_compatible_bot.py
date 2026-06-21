@@ -145,8 +145,39 @@ class OpenAICompatibleBot:
                 kwargs.get("model_max_retries", kwargs.get("max_model_retries", None))
             )
             retry_sleep = kwargs.get("model_retry_sleep")
+            responses_plan = self.plan_responses_api_call(
+                messages,
+                tools=tools,
+                stream=stream,
+                **{
+                    **kwargs,
+                    "model": model_name,
+                    "temperature": request_params.get("temperature"),
+                    "top_p": request_params.get("top_p"),
+                    "max_tokens": request_params.get("max_tokens"),
+                },
+            )
+
+            if responses_plan is not None and not stream:
+                return self._responses_sync_response_with_retry(
+                    responses_plan,
+                    api_key,
+                    api_base,
+                    capabilities.provider,
+                    model_name,
+                    retry_count,
+                    max_model_retries,
+                    retry_sleep,
+                    session_id=str(kwargs.get("session_id") or ""),
+                    workspace=kwargs.get("workspace") or kwargs.get("workspace_dir"),
+                )
 
             if stream:
+                if responses_plan is not None:
+                    logger.info(
+                        f"[{self.__class__.__name__}] Responses API stream requested; "
+                        "falling back to /chat/completions until stream mapping is enabled"
+                    )
                 response_stream = self._handle_stream_response(request_params, api_key, api_base)
                 if isinstance(response_stream, dict):
                     return self._record_single_response_attempt(
@@ -210,9 +241,9 @@ class OpenAICompatibleBot:
     def plan_responses_api_call(self, messages, tools=None, stream=False, **kwargs):
         """Build a Responses API request plan when explicitly enabled.
 
-        This is intentionally a planning hook, not a traffic switch. Production
-        calls stay on /chat/completions until state persistence and stream-event
-        mapping are wired with separate evidence.
+        The adapter is still gated to official OpenAI hosts. Streaming traffic
+        stays on /chat/completions until Responses stream events are normalized
+        into the existing agent stream contract.
         """
         from models.openai.responses_adapter import (
             build_responses_plan,
@@ -230,7 +261,30 @@ class OpenAICompatibleBot:
         plan_kwargs = dict(kwargs)
         plan_kwargs.pop("model", None)
         plan_kwargs.pop("use_responses_api", None)
-        state = self._coerce_responses_state(api_config, plan_kwargs.pop("responses_state", None), plan_kwargs)
+        raw_state = plan_kwargs.pop("responses_state", None)
+        session_id = str(plan_kwargs.get("session_id") or "")
+        workspace = plan_kwargs.get("workspace") or plan_kwargs.get("workspace_dir")
+        input_scope = str(plan_kwargs.pop("responses_input_scope", "") or "").strip().lower()
+        if raw_state is None and session_id:
+            from models.openai.responses_state_store import load_responses_state
+
+            loaded_state = load_responses_state(
+                session_id=session_id,
+                provider=decision.provider or api_config.get("provider") or "openai",
+                model=model_name,
+                workspace=workspace,
+            )
+            if input_scope == "fresh":
+                raw_state = loaded_state
+            else:
+                raw_state = {
+                    "prompt_cache_key": loaded_state.prompt_cache_key,
+                    "prompt_cache_retention": loaded_state.prompt_cache_retention,
+                    "service_tier": loaded_state.service_tier,
+                    "truncation": loaded_state.truncation,
+                    "store": loaded_state.store,
+                }
+        state = self._coerce_responses_state(api_config, raw_state, plan_kwargs)
         return build_responses_plan(
             model=model_name,
             messages=converted_messages,
@@ -244,8 +298,6 @@ class OpenAICompatibleBot:
     def _coerce_responses_state(api_config, raw_state, kwargs):
         from models.openai.responses_adapter import ResponsesState
 
-        if isinstance(raw_state, ResponsesState):
-            return raw_state
         allowed_keys = {
             "previous_response_id",
             "prompt_cache_key",
@@ -256,23 +308,26 @@ class OpenAICompatibleBot:
             "compacted_input",
         }
         values = {}
-        if isinstance(raw_state, dict):
+        if isinstance(raw_state, ResponsesState):
+            values.update({key: value for key, value in raw_state.to_dict().items() if key in allowed_keys})
+        elif isinstance(raw_state, dict):
             values.update({key: raw_state[key] for key in allowed_keys if key in raw_state})
         for key in allowed_keys:
             if key in kwargs:
                 values[key] = kwargs[key]
-        if "service_tier" not in values and (api_config or {}).get("responses_service_tier"):
+        if not values.get("service_tier") and (api_config or {}).get("responses_service_tier"):
             values["service_tier"] = (api_config or {}).get("responses_service_tier")
-        if "prompt_cache_retention" not in values and (api_config or {}).get("responses_prompt_cache_retention"):
+        if not values.get("prompt_cache_retention") and (api_config or {}).get("responses_prompt_cache_retention"):
             values["prompt_cache_retention"] = (api_config or {}).get("responses_prompt_cache_retention")
         return ResponsesState(**values)
 
-    def _new_model_call_span(self, provider, model_name, *, stream, retry_count):
+    def _new_model_call_span(self, provider, model_name, *, stream, retry_count, api_path="/chat/completions"):
         return ModelCallSpan(
             provider=provider,
             model=model_name,
             stream=bool(stream),
             retry_count=max(0, int(retry_count or 0)),
+            api_path=api_path,
         )
 
     def _record_single_response_attempt(self, response, provider, model_name, *, stream, retry_count):
@@ -288,6 +343,106 @@ class OpenAICompatibleBot:
         else:
             span.finish_completed()
         return response
+
+    def _responses_sync_response_with_retry(
+        self,
+        plan,
+        api_key,
+        api_base,
+        provider,
+        model_name,
+        base_retry_count,
+        max_model_retries,
+        retry_sleep,
+        *,
+        session_id="",
+        workspace=None,
+    ):
+        from models.openai.responses_adapter import (
+            extract_responses_state,
+            normalize_responses_output_to_chat,
+        )
+        from models.openai.responses_state_store import save_responses_state
+
+        last_response = {}
+        for attempt in range(max_model_retries + 1):
+            retry_count = base_retry_count + attempt
+            span = self._new_model_call_span(
+                provider,
+                model_name,
+                stream=False,
+                retry_count=retry_count,
+                api_path=plan.create_path,
+            )
+            raw_response = self._handle_responses_sync_response(
+                plan.create_payload,
+                api_key,
+                api_base,
+            )
+            if is_model_error_response(raw_response):
+                response = raw_response
+            elif self._responses_status_error(raw_response):
+                response = self._responses_status_error(raw_response)
+            else:
+                response = normalize_responses_output_to_chat(raw_response)
+            span.observe_response(response)
+            if not is_model_error_response(response):
+                span.finish_completed()
+                if session_id:
+                    next_state = extract_responses_state(raw_response, plan.state)
+                    save_responses_state(
+                        session_id=session_id,
+                        provider=provider,
+                        model=model_name,
+                        state=next_state,
+                        workspace=workspace,
+                    )
+                return response
+
+            details = extract_error_details(response)
+            decision = build_retry_decision(
+                details,
+                attempt=attempt,
+                max_retries=max_model_retries,
+            )
+            span.finish_error(**details)
+            annotated = annotate_retry_evidence(response, decision)
+            last_response = annotated
+            if decision.should_retry:
+                logger.warning(
+                    f"[{self.__class__.__name__}] retrying Responses model call "
+                    f"after {decision.delay_seconds:.3f}s "
+                    f"(attempt {attempt + 1}/{max_model_retries}, "
+                    f"taxonomy={decision.taxonomy})"
+                )
+                sleep_for_retry(decision.delay_seconds, retry_sleep)
+                continue
+            return annotated
+        return last_response
+
+    @staticmethod
+    def _responses_status_error(response):
+        if not isinstance(response, dict):
+            return None
+        status = str(response.get("status") or "").strip().lower()
+        if status not in {"failed", "cancelled", "incomplete"}:
+            return None
+        error = response.get("error") if isinstance(response.get("error"), dict) else {}
+        incomplete = response.get("incomplete_details") if isinstance(response.get("incomplete_details"), dict) else {}
+        message = (
+            error.get("message")
+            or incomplete.get("reason")
+            or f"Responses API returned status: {status}"
+        )
+        return {
+            "error": {
+                "message": message,
+                "code": error.get("code") or status,
+                "type": error.get("type") or "responses_status",
+            },
+            "message": message,
+            "status_code": response.get("status_code") or 500,
+        }
 
     def _sync_response_with_retry(
         self,
@@ -492,6 +647,50 @@ class OpenAICompatibleBot:
             }
         except Exception as e:
             logger.error(f"[{self.__class__.__name__}] sync response error: {e}")
+            return {
+                "error": True,
+                "message": str(e),
+                "status_code": 500,
+            }
+
+    def _handle_responses_sync_response(self, request_params, api_key, api_base):
+        """Handle a non-streaming official OpenAI Responses API request."""
+        params = dict(request_params)
+        params.pop("stream", None)
+        timeout = params.pop("request_timeout", None) or params.pop("timeout", None)
+        try:
+            client = self._get_http_client()
+            return client.responses_create(
+                api_key=api_key,
+                api_base=api_base,
+                timeout=timeout,
+                stream=False,
+                **params,
+            )
+        except OpenAIHTTPError as e:
+            error_code = ""
+            error_type = ""
+            if isinstance(e.body, dict):
+                err = e.body.get("error") or {}
+                if isinstance(err, dict):
+                    error_code = err.get("code") or ""
+                    error_type = err.get("type") or ""
+            logger.error(
+                f"[{self.__class__.__name__}] Responses sync error: "
+                f"HTTP {e.status_code}: {e.message}"
+            )
+            return {
+                "error": {
+                    "message": e.message,
+                    "code": error_code,
+                    "type": error_type,
+                },
+                "message": e.message,
+                "status_code": e.status_code or 500,
+                "retry_after": e.retry_after,
+            }
+        except Exception as e:
+            logger.error(f"[{self.__class__.__name__}] Responses sync error: {e}")
             return {
                 "error": True,
                 "message": str(e),

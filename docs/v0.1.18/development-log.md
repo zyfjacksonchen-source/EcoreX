@@ -608,3 +608,32 @@
     no-interrupt/no-ignore guard under default session limits, superseded
     replacement waiters, regular successful admission, and global/session
     backpressure regressions. R18-03-B is now PASS.
+- Added the OpenAI Responses runtime-state slice:
+  - Added durable per-workspace Responses state storage at
+    `.ecorex/model-responses-state.json`, keyed by provider/model/session hash
+    so the runtime can carry `previous_response_id`, prompt-cache settings,
+    service tier, truncation, store, and compacted input without writing raw
+    session ids into the state index.
+  - `plan_responses_api_call()` now loads persisted `previous_response_id` only
+    for explicit `responses_input_scope=fresh` calls, so the current full-history
+    agent path does not combine `previous_response_id` with duplicate transcript
+    input. Full-history calls still reuse the stable prompt-cache/service
+    settings, merge config defaults such as `responses_service_tier` and
+    `responses_prompt_cache_retention`, and generate a stable hashed
+    `prompt_cache_key` when none was supplied.
+  - Official OpenAI, explicitly enabled non-stream `use_responses_api=True`
+    calls now execute `/responses`, normalize the response back into the
+    existing chat-completion shape, record model telemetry with
+    `api_path=/responses`, and persist the next-turn state after successful
+    responses. HTTP-200 Responses statuses `failed`, `cancelled`, and
+    `incomplete` fail closed and do not persist next-turn state. Streaming
+    remains on `/chat/completions` until Responses stream event normalization is
+    wired.
+  - Session delete, service/Web clear-context, clear-history, and dirty-session
+    recovery paths now clear stored Responses state so `previous_response_id`
+    cannot cross a user-visible history reset boundary; `clear_history=True`
+    clears the adapter state even when DB conversation persistence is disabled.
+  - Focused pytest passed for Responses state storage privacy, persisted-state
+    planning, cleanup lifecycle, non-stream runtime normalization/state
+    persistence, failure-state fail-closed handling, stream fallback, existing
+    adapter payloads, capability catalog, and model telemetry regressions.

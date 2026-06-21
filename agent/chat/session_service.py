@@ -100,6 +100,16 @@ class SessionService:
         except Exception:
             pass
 
+    def _clear_responses_state(self, session_id: str):
+        try:
+            from models.openai.responses_state_store import clear_responses_state_for_session
+
+            removed = clear_responses_state_for_session(session_id)
+            if removed:
+                logger.info(f"[SessionService] Cleared Responses state: sid={session_id}, removed={removed}")
+        except Exception as e:
+            logger.warning(f"[SessionService] Failed to clear Responses state for {session_id}: {e}")
+
     @staticmethod
     def _normalize_sid(session_id: str) -> str:
         if session_id and not session_id.startswith("session_"):
@@ -126,6 +136,7 @@ class SessionService:
         store = self._get_store()
         store.clear_session(session_id)
         self._remove_agent(session_id)
+        self._clear_responses_state(session_id)
         logger.info(f"[SessionService] Session deleted: {session_id}")
 
     def rename_session(self, session_id: str, title: str) -> None:
@@ -151,6 +162,7 @@ class SessionService:
         store = self._get_store()
         new_seq = store.clear_context(session_id)
         self._remove_agent(session_id)
+        self._clear_responses_state(session_id)
         return new_seq
 
     def gen_title(self, session_id: str, user_message: str,

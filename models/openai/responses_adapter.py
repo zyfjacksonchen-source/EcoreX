@@ -72,8 +72,12 @@ def is_official_openai_provider(provider: Optional[str], api_base: Optional[str]
 
     base = str(api_base or DEFAULT_OPENAI_API_BASE).strip() or DEFAULT_OPENAI_API_BASE
     try:
-        host = (urlparse(base).hostname or "").lower()
+        parsed = urlparse(base)
+        host = (parsed.hostname or "").lower()
+        scheme = (parsed.scheme or "https").lower()
     except Exception:
+        return False
+    if scheme != "https":
         return False
     return host in _OPENAI_API_HOSTS
 

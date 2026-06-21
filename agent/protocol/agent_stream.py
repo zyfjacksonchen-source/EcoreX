@@ -2907,6 +2907,14 @@ class AgentStreamExecutor:
             from agent.memory import get_conversation_store
             store = get_conversation_store()
             store.clear_session(session_id)
+            try:
+                from models.openai.responses_state_store import clear_responses_state_for_session
+
+                removed = clear_responses_state_for_session(session_id)
+                if removed:
+                    logger.info(f"Cleared Responses state for dirty session: {session_id}, removed={removed}")
+            except Exception as e:
+                logger.warning(f"Failed to clear Responses state for dirty session {session_id}: {e}")
             logger.info(f"🗑️ Cleared dirty session data from DB: {session_id}")
         except Exception as e:
             logger.warning(f"Failed to clear session DB: {e}")

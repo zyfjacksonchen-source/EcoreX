@@ -7503,6 +7503,14 @@ class SessionDetailHandler:
             from agent.memory import get_conversation_store
             store = get_conversation_store()
             store.clear_session(session_id)
+            try:
+                from models.openai.responses_state_store import clear_responses_state_for_session
+
+                removed = clear_responses_state_for_session(session_id)
+                if removed:
+                    logger.info(f"[WebChannel] Cleared Responses state for session {session_id}: removed={removed}")
+            except Exception as e:
+                logger.warning(f"[WebChannel] Failed clearing Responses state for {session_id}: {e}")
 
             # Also remove the Agent instance from AgentBridge if exists
             try:
@@ -7583,6 +7591,14 @@ class SessionClearContextHandler:
             from agent.memory import get_conversation_store
             store = get_conversation_store()
             new_seq = store.clear_context(session_id)
+            try:
+                from models.openai.responses_state_store import clear_responses_state_for_session
+
+                removed = clear_responses_state_for_session(session_id)
+                if removed:
+                    logger.info(f"[WebChannel] Cleared Responses state for session {session_id}: removed={removed}")
+            except Exception as e:
+                logger.warning(f"[WebChannel] Failed clearing Responses state for {session_id}: {e}")
 
             # Delete the agent instance so a fresh one is created on the next message
             try:

@@ -21,6 +21,19 @@ from models.model_gateway import call_native_model_with_gateway
 from models.openai_compatible_bot import OpenAICompatibleBot
 
 
+def _clear_responses_state_for_session(session_id: str) -> None:
+    if not session_id:
+        return
+    try:
+        from models.openai.responses_state_store import clear_responses_state_for_session
+
+        removed = clear_responses_state_for_session(session_id)
+        if removed:
+            logger.info(f"[AgentBridge] Cleared Responses state: session={session_id}, removed={removed}")
+    except Exception as e:
+        logger.warning(f"[AgentBridge] Failed to clear Responses state for {session_id}: {e}")
+
+
 def add_openai_compatible_support(bot_instance):
     """
     Dynamically add OpenAI-compatible tool calling support to a bot instance.
@@ -638,6 +651,7 @@ class AgentBridge:
                         try:
                             from agent.memory import get_conversation_store
                             get_conversation_store().clear_session(session_id)
+                            _clear_responses_state_for_session(session_id)
                             logger.info(f"[AgentBridge] Cleared DB for recovered session: {session_id}")
                         except Exception as e:
                             logger.warning(f"[AgentBridge] Failed to clear DB after recovery: {e}")
@@ -694,6 +708,7 @@ class AgentBridge:
                     if msg_count == 0:
                         from agent.memory import get_conversation_store
                         get_conversation_store().clear_session(session_id)
+                        _clear_responses_state_for_session(session_id)
                         logger.info(f"[AgentBridge] Cleared DB for session after error: {session_id}")
                 except Exception as db_err:
                     logger.warning(f"[AgentBridge] Failed to clear DB after error: {db_err}")
@@ -869,6 +884,8 @@ class AgentBridge:
             return False
         if context and context.get("internal_action"):
             return False
+        if clear_history:
+            _clear_responses_state_for_session(session_id)
         try:
             from config import conf
             if not conf().get("conversation_persistence", True):
@@ -1175,6 +1192,7 @@ class AgentBridge:
         if session_id in self.agents:
             logger.info(f"[AgentBridge] Clearing session: {session_id}")
             del self.agents[session_id]
+        _clear_responses_state_for_session(session_id)
     
     def clear_all_sessions(self):
         """Clear all agent sessions"""
