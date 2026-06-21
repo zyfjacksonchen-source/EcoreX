@@ -203,7 +203,10 @@ class TestSubagentTool(unittest.TestCase):
         return tool
 
     def test_subagent_start_enforces_concurrency_limit_without_running_children(self):
+        from agent.protocol import reset_run_ledger_for_tests
+
         with tempfile.TemporaryDirectory() as workspace:
+            reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
             tool = self._tool(workspace)
             with patch("agent.tools.subagent.subagent.threading.Thread.start", lambda _thread: None):
                 for index in range(6):
@@ -214,9 +217,74 @@ class TestSubagentTool(unittest.TestCase):
                 blocked = tool.execute({"action": "start", "task": "one too many"})
                 self.assertEqual(blocked.status, "error")
                 self.assertEqual(blocked.result["maxConcurrency"], 6)
+                self.assertEqual(blocked.result["code"], "SUBAGENT_CONCURRENCY_LIMIT")
+                self.assertTrue(blocked.result["retryable"])
 
             listed = tool.execute({"action": "list"})
             self.assertEqual(len(listed.result["tasks"]), 6)
+
+    def test_subagent_start_records_queued_run_ledger_row(self):
+        from agent.protocol import reset_run_ledger_for_tests
+        from channel.web import web_channel
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            tool = self._tool(workspace)
+            with patch("agent.tools.subagent.subagent.threading.Thread.start", lambda _thread: None):
+                result = tool.execute({"action": "start", "task": "inspect queue state", "role": "worker"})
+
+            self.assertEqual(result.status, "success")
+            task = result.result["task"]
+            run = ledger.get_run(task["childSessionId"])
+            self.assertEqual(run["request_id"], task["childSessionId"])
+            self.assertEqual(run["session_id"], task["childSessionId"])
+            self.assertEqual(run["parent_id"], "parent-session")
+            self.assertEqual(run["run_type"], "subagent")
+            self.assertEqual(run["status"], "queued")
+            self.assertEqual(run["phase"], "queued")
+            self.assertEqual(run["metadata"]["task_id"], task["id"])
+            self.assertEqual(run["metadata"]["role"], "worker")
+            active = ledger.active_snapshot()
+            self.assertEqual([row["request_id"] for row in active], [task["childSessionId"]])
+            with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                snapshot = web_channel.WebChannel().active_requests_snapshot()
+            active_requests = [row for row in snapshot["requests"] if row["request_id"] == task["childSessionId"]]
+            self.assertEqual(len(active_requests), 1)
+            self.assertEqual(active_requests[0]["run_type"], "subagent")
+            self.assertEqual(active_requests[0]["state"], "queued")
+            self.assertEqual(active_requests[0]["parent_id"], "parent-session")
+
+    def test_subagent_child_completion_writes_terminal_run_ledger(self):
+        from agent.protocol import reset_run_ledger_for_tests
+        from agent.tools.subagent import subagent as subagent_module
+
+        class FakeAgentBridge:
+            def agent_reply(self, *args, **kwargs):
+                return "child result"
+
+        class FakeBridge:
+            def get_agent_bridge(self):
+                return FakeAgentBridge()
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            tool = self._tool(workspace)
+            with patch("agent.tools.subagent.subagent.threading.Thread.start", lambda _thread: None):
+                result = tool.execute({"action": "start", "task": "finish child"})
+            task = result.result["task"]
+
+            with patch("bridge.bridge.Bridge", return_value=FakeBridge()):
+                subagent_module._run_child(Path(workspace), task)
+
+            listed = tool.execute({"action": "list"}).result["tasks"]
+            stored = {item["id"]: item for item in listed}[task["id"]]
+            self.assertEqual(stored["status"], "completed")
+            self.assertEqual(stored["result"], "child result")
+            final = ledger.get_run(task["childSessionId"])
+            self.assertEqual(final["status"], "completed")
+            self.assertEqual(final["phase"], "completed")
+            self.assertEqual(final["terminal_reason"], "subagent_completed")
+            self.assertEqual(ledger.active_snapshot(), [])
 
     def test_subagent_start_rejects_recursive_and_depth_overflow(self):
         with tempfile.TemporaryDirectory() as workspace:
@@ -230,10 +298,11 @@ class TestSubagentTool(unittest.TestCase):
             self.assertEqual(depth_result.result["maxDepth"], 1)
 
     def test_cancel_children_for_parent_cascades_running_and_queued_tasks(self):
-        from agent.protocol import get_cancel_registry
+        from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests
         from agent.tools.subagent.subagent import cancel_children_for_parent
 
         with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
             tool = self._tool(workspace, "parent-session")
             with patch("agent.tools.subagent.subagent.threading.Thread.start", lambda _thread: None):
                 running = tool.execute({"action": "start", "task": "running child"})
@@ -255,6 +324,12 @@ class TestSubagentTool(unittest.TestCase):
                 statuses = {task["id"]: task["status"] for task in listed}
                 self.assertEqual(statuses[running.result["task"]["id"]], "cancelling")
                 self.assertEqual(statuses[queued.result["task"]["id"]], "cancelled")
+                running_run = ledger.get_run(running_child_session)
+                self.assertEqual(running_run["status"], "cancelling")
+                self.assertEqual(running_run["phase"], "cancelling")
+                queued_run = ledger.get_run(queued.result["task"]["childSessionId"])
+                self.assertEqual(queued_run["status"], "cancelled")
+                self.assertEqual(queued_run["terminal_reason"], "parent_cancelled_before_start")
             finally:
                 registry.unregister(running_child_session)
 
@@ -715,6 +790,28 @@ class TestWebParallelHandlers(unittest.TestCase):
                 self.assertEqual(active[0]["state"], "running")
                 self.assertTrue(active[0]["stream_available"])
                 self.assertEqual(snapshot["sessions"][session_id], [request_id])
+            finally:
+                registry.unregister(request_id)
+
+    def test_active_request_snapshot_marks_registry_only_subagent_fallback_row(self):
+        from agent.protocol import get_cancel_registry
+        from channel.web import web_channel
+
+        channel = web_channel.WebChannel()
+        request_id = "subagent-registry-only"
+        session_id = "subagent-registry-only"
+        registry = get_cancel_registry()
+        with isolated_run_ledger():
+            registry.register(request_id, session_id=session_id)
+            try:
+                with tempfile.TemporaryDirectory() as workspace:
+                    with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                        snapshot = channel.active_requests_snapshot()
+                active = [item for item in snapshot["requests"] if item["request_id"] == request_id]
+                self.assertEqual(len(active), 1)
+                self.assertEqual(active[0]["source"], "cancel_registry")
+                self.assertEqual(active[0]["run_type"], "subagent")
+                self.assertEqual(active[0]["session_id"], session_id)
             finally:
                 registry.unregister(request_id)
 

@@ -76,9 +76,81 @@ def _task_snapshot(workspace: Path, task_id: str = "") -> Dict[str, Any]:
         return {"tasks": [dict(value) for value in tasks.values()]}
 
 
-def _running_count(workspace: Path) -> int:
-    snapshot = _task_snapshot(workspace)
-    return sum(1 for task in snapshot["tasks"] if task.get("status") in {"queued", "running", "cancelling"})
+def _active_count(tasks: Dict[str, Any]) -> int:
+    return sum(
+        1
+        for task in tasks.values()
+        if isinstance(task, dict) and task.get("status") in {"queued", "running", "cancelling"}
+    )
+
+
+def _reserve_task_slot(workspace: Path, task: Dict[str, Any]) -> tuple[bool, int]:
+    with _LOCK:
+        state = _read_state(workspace)
+        tasks = state.setdefault("tasks", {})
+        if not isinstance(tasks, dict):
+            tasks = {}
+            state["tasks"] = tasks
+        active_count = _active_count(tasks)
+        if active_count >= MAX_CONCURRENT_SUBAGENTS:
+            return False, active_count
+        tasks[task["id"]] = dict(task)
+        _write_state(workspace, state)
+        return True, active_count + 1
+
+
+def _mark_subagent_run_created(task: Dict[str, Any]) -> None:
+    try:
+        from agent.protocol import get_run_ledger
+
+        child_session_id = str(task.get("childSessionId") or "")
+        get_run_ledger().create_run(
+            child_session_id,
+            child_session_id,
+            run_type="subagent",
+            parent_id=str(task.get("parentSessionId") or ""),
+            phase=str(task.get("status") or "queued"),
+            status=str(task.get("status") or "queued"),
+            metadata={
+                "task_id": task.get("id", ""),
+                "role": task.get("role", ""),
+                "parent_session_id": task.get("parentSessionId", ""),
+                "depth": task.get("depth", 0),
+            },
+        )
+    except Exception as exc:
+        logger.debug(f"[Subagent] run ledger create skipped: {exc}")
+
+
+def _mark_subagent_run_phase(task: Dict[str, Any], phase: str, *, status: str | None = None) -> None:
+    try:
+        from agent.protocol import get_run_ledger
+
+        get_run_ledger().mark_phase(str(task.get("childSessionId") or ""), phase, status=status)
+    except Exception as exc:
+        logger.debug(f"[Subagent] run ledger phase skipped: {exc}")
+
+
+def _mark_subagent_run_terminal(
+    task: Dict[str, Any],
+    status: str,
+    *,
+    reason: str = "",
+    error_code: str = "",
+    error_message: str = "",
+) -> None:
+    try:
+        from agent.protocol import get_run_ledger
+
+        get_run_ledger().mark_terminal(
+            str(task.get("childSessionId") or ""),
+            status,
+            reason=reason or status,
+            error_code=error_code,
+            error_message=error_message,
+        )
+    except Exception as exc:
+        logger.debug(f"[Subagent] run ledger terminal skipped: {exc}")
 
 
 def cancel_children_for_parent(workspace: Path | str, parent_session_id: str) -> Dict[str, Any]:
@@ -89,6 +161,7 @@ def cancel_children_for_parent(workspace: Path | str, parent_session_id: str) ->
     workspace_path = Path(os.path.expanduser(str(workspace))).resolve()
     cancelled_tasks = []
     cancelled_requests = 0
+    ledger_updates = []
     now = int(time.time())
     registry = get_cancel_registry()
 
@@ -105,14 +178,26 @@ def cancel_children_for_parent(workspace: Path | str, parent_session_id: str) ->
             child_session_id = str(task.get("childSessionId") or "")
             request_count = registry.cancel_session(child_session_id) if child_session_id else 0
             cancelled_requests += request_count
+            next_status = "cancelling" if request_count else "cancelled"
             task.update({
-                "status": "cancelling" if request_count else "cancelled",
+                "status": next_status,
                 "cancelledAt": now,
                 "parentCancelledAt": now,
             })
-            cancelled_tasks.append(dict(task))
+            task_snapshot = dict(task)
+            if next_status == "cancelling":
+                ledger_updates.append(("phase", task_snapshot))
+            else:
+                ledger_updates.append(("terminal_cancelled", task_snapshot))
+            cancelled_tasks.append(task_snapshot)
         if cancelled_tasks:
             _write_state(workspace_path, state)
+
+    for update_type, task in ledger_updates:
+        if update_type == "phase":
+            _mark_subagent_run_phase(task, "cancelling", status="cancelling")
+        else:
+            _mark_subagent_run_terminal(task, "cancelled", reason="parent_cancelled_before_start")
 
     return {
         "cancelledTasks": len(cancelled_tasks),
@@ -128,8 +213,10 @@ def _run_child(workspace: Path, task: Dict[str, Any]) -> None:
         current = _task_snapshot(workspace, task_id)
         if str(current.get("status") or "") in {"cancelled", "cancelling"}:
             _update_task(workspace, task_id, {"status": "cancelled", "completedAt": int(time.time())})
+            _mark_subagent_run_terminal(task, "cancelled", reason="cancelled_before_start")
             return
         _update_task(workspace, task_id, {"status": "running", "startedAt": int(time.time())})
+        _mark_subagent_run_phase(task, "running", status="running")
         from bridge.bridge import Bridge
         from bridge.context import Context, ContextType
 
@@ -146,12 +233,14 @@ def _run_child(workspace: Path, task: Dict[str, Any]) -> None:
                 "result": str(result or ""),
                 "completedAt": int(time.time()),
             })
+            _mark_subagent_run_terminal(task, "cancelled", reason="cancelled_after_reply")
         else:
             _update_task(workspace, task_id, {
                 "status": "completed",
                 "result": str(result or ""),
                 "completedAt": int(time.time()),
             })
+            _mark_subagent_run_terminal(task, "completed", reason="subagent_completed")
     except Exception as exc:
         logger.exception(f"[Subagent] child task failed: {task_id}")
         current = _task_snapshot(workspace, task_id)
@@ -161,12 +250,20 @@ def _run_child(workspace: Path, task: Dict[str, Any]) -> None:
                 "error": str(exc),
                 "completedAt": int(time.time()),
             })
+            _mark_subagent_run_terminal(task, "cancelled", reason="subagent_cancelled", error_message=str(exc))
             return
         _update_task(workspace, task_id, {
             "status": "failed",
             "error": str(exc),
             "completedAt": int(time.time()),
         })
+        _mark_subagent_run_terminal(
+            task,
+            "failed",
+            reason="subagent_failed",
+            error_code="SUBAGENT_FAILED",
+            error_message=str(exc),
+        )
 
 
 class SubagentTool(BaseTool):
@@ -212,8 +309,6 @@ class SubagentTool(BaseTool):
         depth = int(params.get("depth") or 0)
         if depth >= MAX_SUBAGENT_DEPTH:
             return ToolResult.fail({"status": "error", "message": "subagent max depth reached", "maxDepth": MAX_SUBAGENT_DEPTH})
-        if _running_count(workspace) >= MAX_CONCURRENT_SUBAGENTS:
-            return ToolResult.fail({"status": "error", "message": "subagent concurrency limit reached", "maxConcurrency": MAX_CONCURRENT_SUBAGENTS})
         prompt = str(params.get("task") or "").strip()
         if not prompt:
             return ToolResult.fail({"status": "error", "message": "task is required"})
@@ -230,11 +325,43 @@ class SubagentTool(BaseTool):
             "prompt": prompt,
             "parentSessionId": parent_session_id,
             "childSessionId": child_session_id,
+            "requestId": child_session_id,
             "depth": depth + 1,
             "createdAt": int(time.time()),
         }
-        _update_task(workspace, task_id, task)
-        threading.Thread(target=_run_child, args=(workspace, task), daemon=True, name=f"subagent-{task_id}").start()
+        reserved, active_count = _reserve_task_slot(workspace, task)
+        if not reserved:
+            return ToolResult.fail({
+                "status": "error",
+                "message": "subagent concurrency limit reached",
+                "code": "SUBAGENT_CONCURRENCY_LIMIT",
+                "error_type": "concurrency_limit",
+                "retryable": True,
+                "maxConcurrency": MAX_CONCURRENT_SUBAGENTS,
+                "activeCount": active_count,
+            })
+        _mark_subagent_run_created(task)
+        try:
+            threading.Thread(target=_run_child, args=(workspace, task), daemon=True, name=f"subagent-{task_id}").start()
+        except Exception as exc:
+            task = _update_task(workspace, task_id, {
+                "status": "failed",
+                "error": str(exc),
+                "completedAt": int(time.time()),
+            })
+            _mark_subagent_run_terminal(
+                task,
+                "failed",
+                reason="subagent_thread_start_failed",
+                error_code="SUBAGENT_THREAD_START_FAILED",
+                error_message=str(exc),
+            )
+            return ToolResult.fail({
+                "status": "error",
+                "message": str(exc),
+                "code": "SUBAGENT_THREAD_START_FAILED",
+                "task": task,
+            })
         return ToolResult.success({"status": "success", "task": task})
 
     def _cancel(self, workspace: Path, task_id: str) -> ToolResult:
@@ -245,4 +372,8 @@ class SubagentTool(BaseTool):
             return ToolResult.success({"status": "success", "cancelled": 0, "task": task})
         cancelled = get_cancel_registry().cancel_session(task.get("childSessionId", ""))
         task = _update_task(workspace, task_id, {"status": "cancelling" if cancelled else "cancelled", "cancelledAt": int(time.time())})
+        if cancelled:
+            _mark_subagent_run_phase(task, "cancelling", status="cancelling")
+        else:
+            _mark_subagent_run_terminal(task, "cancelled", reason="cancelled_before_start")
         return ToolResult.success({"status": "success", "cancelled": cancelled, "task": task})

@@ -1136,6 +1136,8 @@ class WebChannel(ChatChannel):
                     "stream_available": request_id in self.sse_queues,
                     "source": "cancel_registry",
                 }
+                if request_id.startswith("subagent-") or str(session_id).startswith("subagent-"):
+                    item["run_type"] = "subagent"
                 requests.append(item)
                 if session_id and not item.get("cancelled"):
                     sessions.setdefault(session_id, []).append(request_id)

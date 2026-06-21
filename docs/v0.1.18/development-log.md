@@ -89,3 +89,20 @@
     with retry metadata.
   - Focused pytest passed: 6 busy-session/active-request tests; desktop
     `npm run typecheck` passed.
+- Added the first R18-03-C subagent coordination slice:
+  - Subagent start now reserves bounded slots inside the shared state lock, so
+    concurrency checking and queued task creation are atomic.
+  - Subagent queued/running/cancelling/completed/failed/cancelled transitions
+    now mirror into the run ledger with `run_type=subagent` and parent/session
+    metadata.
+  - Queued subagents are visible through backend active request snapshots, and
+    parent cancellation marks running children as `cancelling` while terminally
+    cancelling not-yet-running children.
+  - Existing desktop chat sidebar and stream recovery paths filter out
+    `run_type=subagent` rows so subagents remain backend-visible without being
+    misrepresented as normal chat sessions before the Run Center exists.
+  - Registry-only `subagent-*` active fallback rows are marked as
+    `run_type=subagent`, and the desktop filter also excludes `subagent-`
+    request/session prefixes for older or degraded runtime snapshots.
+  - Focused pytest passed: 5 subagent tests; broader subagent/active/busy
+    regression passed: 12 tests; desktop `npm run typecheck` passed.

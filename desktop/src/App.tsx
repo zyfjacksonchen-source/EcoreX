@@ -439,6 +439,17 @@ function isRuntimeRequestUiActive(request?: RuntimeActiveRequest | null) {
   return !Number.isFinite(ageSeconds) || ageSeconds < 30;
 }
 
+function isPrimaryChatActiveRequest(request?: RuntimeActiveRequest | null) {
+  const requestId = String(request?.request_id || "");
+  const sessionId = String(request?.session_id || "");
+  return (
+    request?.run_type !== "subagent"
+    && !requestId.startsWith("subagent-")
+    && !sessionId.startsWith("subagent-")
+    && isRuntimeRequestUiActive(request)
+  );
+}
+
 function isRetryableConcurrencyResult(result?: ChatSendResult | null) {
   return Boolean(
     result
@@ -538,7 +549,7 @@ function mapSessions(
   const activeRequestBySession = new Map<string, RuntimeActiveRequest>(
     (snapshot.activeRequests || [])
       .filter((request) => request.session_id && request.request_id)
-      .filter(isRuntimeRequestUiActive)
+      .filter(isPrimaryChatActiveRequest)
       .filter((request) => !locallyCompletedRequestIds[String(request.request_id || "")])
       .map((request) => [String(request.session_id), request])
   );
@@ -2066,7 +2077,7 @@ export function App() {
     if (runtimeSnapshot.activeRequestsStatus === "unavailable") return;
     const activeRequestIds = new Set(
       (runtimeSnapshot.activeRequests || [])
-        .filter(isRuntimeRequestUiActive)
+        .filter(isPrimaryChatActiveRequest)
         .map((request) => request.request_id ? String(request.request_id) : "")
         .filter((requestId) => !locallyCompletedRequestIds[requestId])
         .filter(Boolean)
@@ -3506,7 +3517,7 @@ export function App() {
         const active = (snapshot?.activeRequests || []).find((request) => (
           String(request.session_id || "") === sessionId
           && String(request.request_id || "") === requestId
-          && isRuntimeRequestUiActive(request)
+          && isPrimaryChatActiveRequest(request)
         ));
         if (snapshot) setRuntimeSnapshot(snapshot);
         if (active?.cancelled) {
