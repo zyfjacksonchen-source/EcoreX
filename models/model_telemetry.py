@@ -76,6 +76,7 @@ def normalize_usage_tokens(usage: Any) -> Dict[str, int]:
                 "input_tokens",
                 "inputTokens",
                 "promptTokens",
+                "promptTokenCount",
             ),
         )
     )
@@ -87,11 +88,12 @@ def normalize_usage_tokens(usage: Any) -> Dict[str, int]:
                 "output_tokens",
                 "outputTokens",
                 "completionTokens",
+                "candidatesTokenCount",
             ),
         )
     )
     total_tokens = _coerce_int(
-        _first_present(usage, ("total_tokens", "totalTokens"))
+        _first_present(usage, ("total_tokens", "totalTokens", "totalTokenCount"))
     )
     if total_tokens <= 0 and (input_tokens or output_tokens):
         total_tokens = input_tokens + output_tokens
@@ -102,6 +104,7 @@ def normalize_usage_tokens(usage: Any) -> Dict[str, int]:
             (
                 "reasoning_tokens",
                 "reasoningTokens",
+                "thoughtsTokenCount",
                 ("completion_tokens_details", "reasoning_tokens"),
                 ("completionTokensDetails", "reasoningTokens"),
                 ("output_tokens_details", "reasoning_tokens"),
@@ -117,6 +120,7 @@ def normalize_usage_tokens(usage: Any) -> Dict[str, int]:
                 "cachedTokens",
                 "cache_read_input_tokens",
                 "cacheReadInputTokens",
+                "cachedContentTokenCount",
                 ("prompt_tokens_details", "cached_tokens"),
                 ("promptTokensDetails", "cachedTokens"),
                 ("input_token_details", "cached_tokens"),

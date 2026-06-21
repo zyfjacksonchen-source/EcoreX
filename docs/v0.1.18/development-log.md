@@ -420,3 +420,40 @@
     fields, replay-gap terminal metadata is present, agent-stream and worker
     failures emit only machine-readable `run.failed` output without a queued
     `done`, and the desktop replay-gap source contract includes cursor cleanup.
+- Added the AgentBridge native model gateway slice:
+  - `models/model_gateway.py` now wraps native provider `call_with_tools`
+    implementations that do not use `OpenAICompatibleBot.call_with_tools`,
+    giving DashScope/Zhipu/Gemini/Claude/Moonshot-style Agent paths the same
+    bounded `ModelCallSpan`, retry-after/backoff, retry taxonomy, and
+    first-output retry boundary used by the shared OpenAI-compatible path.
+  - `AgentLLMModel.call()` and `call_stream()` now route native bot calls
+    through the gateway while leaving shared OpenAI-compatible calls unwrapped,
+    preventing duplicate telemetry. They also forward explicit
+    `model_max_retries` / `max_model_retries` from `LLMRequest`.
+  - `AgentLLMModel.call_stream()` now closes the inner model stream when the
+    outer consumer closes, so user cancellation or consumer teardown records
+    native model spans as `cancelled` and gives the provider iterator a chance
+    to release network resources.
+  - Native sync calls also accept provider implementations that return a
+    single-result generator for `stream=False` (for example DeepSeek/Moonshot
+    style adapters), converting the first yielded dict into the sync response
+    instead of surfacing an unsupported-response error.
+    If that generator raises while producing the first sync result, the gateway
+    converts the exception into typed retry evidence and finishes telemetry
+    instead of leaking a raw exception past the span.
+  - Native stream iterators that raise exceptions now return typed error
+    chunks instead of raw exceptions. If output already started, retryable
+    exceptions are marked `retry_suppressed=stream_output_started`; if output
+    never started and gateway retries are exhausted, the final error carries
+    `retry_exhausted`, preventing AgentStream's outer string retry from
+    bypassing the model gateway boundary.
+  - Usage normalization now understands Gemini-style
+    `promptTokenCount` / `candidatesTokenCount` / `totalTokenCount`,
+    `thoughtsTokenCount`, and `cachedContentTokenCount`.
+  - Focused tests cover native sync 429 retry with `Retry-After`, native sync
+    400 fail-closed evidence, native single-result generator sync responses,
+    native sync generator exception retry/exhaustion,
+    native stream retry before first token, native stream exception suppression
+    after first output, native stream exhausted exception markers before first
+    output, native stream close/cancel exactly-once telemetry, and no double
+    wrapping of the shared OpenAI-compatible gateway.

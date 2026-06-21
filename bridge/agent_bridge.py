@@ -16,6 +16,7 @@ from common.ecorex_identity import sanitize_assistant_identity, sanitize_message
 from common.log import logger
 from common.utils import expand_path
 from config import conf
+from models.model_gateway import call_native_model_with_gateway
 from models.openai_compatible_bot import OpenAICompatibleBot
 
 
@@ -121,14 +122,56 @@ class AgentLLMModel(LLMModel):
             self._bot_type = cur_bot_type
         return self._bot
 
+    @staticmethod
+    def _uses_shared_openai_gateway(bot) -> bool:
+        return getattr(type(bot), "call_with_tools", None) is OpenAICompatibleBot.call_with_tools
+
+    def _model_max_retries_for_request(self, request: LLMRequest):
+        value = getattr(request, "model_max_retries", None)
+        if value is None:
+            value = getattr(request, "max_model_retries", None)
+        return value
+
+    def _call_bot_with_gateway(self, bot, kwargs, *, stream: bool):
+        if self._uses_shared_openai_gateway(bot):
+            return bot.call_with_tools(**kwargs)
+
+        base_retry_count = kwargs.get("retry_count", 0)
+
+        def invoke(absolute_retry_count):
+            attempt_kwargs = dict(kwargs)
+            attempt_kwargs["retry_count"] = absolute_retry_count
+            return bot.call_with_tools(**attempt_kwargs)
+
+        provider = getattr(self, "_bot_type", None) or self._resolve_bot_type(self.model)
+        return call_native_model_with_gateway(
+            invoke,
+            provider=provider,
+            model=self.model,
+            stream=stream,
+            retry_count=base_retry_count,
+            max_model_retries=kwargs.get("model_max_retries"),
+            retry_sleep=kwargs.get("model_retry_sleep"),
+        )
+
+    @staticmethod
+    def _close_model_stream(stream) -> None:
+        close = getattr(stream, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+
     def call(self, request: LLMRequest):
         """
         Call the model using COW's bot infrastructure
         """
         try:
+            bot = self.bot
             # For non-streaming calls, we'll use the existing reply method
             # This is a simplified implementation
-            if hasattr(self.bot, 'call_with_tools'):
+            if hasattr(bot, 'call_with_tools'):
                 # Use tool-enabled call if available
                 kwargs = {
                     'messages': request.messages,
@@ -143,6 +186,9 @@ class AgentLLMModel(LLMModel):
                 retry_sleep = getattr(request, 'model_retry_sleep', None)
                 if callable(retry_sleep):
                     kwargs['model_retry_sleep'] = retry_sleep
+                max_model_retries = self._model_max_retries_for_request(request)
+                if max_model_retries is not None:
+                    kwargs['model_max_retries'] = max_model_retries
 
                 # Extract system prompt if present
                 system_prompt = getattr(request, 'system', None)
@@ -174,7 +220,7 @@ class AgentLLMModel(LLMModel):
                     if effort in ("high", "max"):
                         kwargs['reasoning_effort'] = effort
 
-                response = self.bot.call_with_tools(**kwargs)
+                response = self._call_bot_with_gateway(bot, kwargs, stream=False)
                 return self._format_response(response)
             else:
                 # Fallback to regular call
@@ -190,7 +236,8 @@ class AgentLLMModel(LLMModel):
         Call the model with streaming using COW's bot infrastructure
         """
         try:
-            if hasattr(self.bot, 'call_with_tools'):
+            bot = self.bot
+            if hasattr(bot, 'call_with_tools'):
                 # Use tool-enabled streaming call if available
                 # Extract system prompt if present
                 system_prompt = getattr(request, 'system', None)
@@ -210,6 +257,9 @@ class AgentLLMModel(LLMModel):
                 retry_sleep = getattr(request, 'model_retry_sleep', None)
                 if callable(retry_sleep):
                     kwargs['model_retry_sleep'] = retry_sleep
+                max_model_retries = self._model_max_retries_for_request(request)
+                if max_model_retries is not None:
+                    kwargs['model_max_retries'] = max_model_retries
 
                 # Add system prompt if present
                 if system_prompt:
@@ -240,13 +290,16 @@ class AgentLLMModel(LLMModel):
                     if effort in ("high", "max"):
                         kwargs['reasoning_effort'] = effort
 
-                stream = self.bot.call_with_tools(**kwargs)
+                stream = self._call_bot_with_gateway(bot, kwargs, stream=True)
                 
                 # Convert stream format to our expected format
-                for chunk in stream:
-                    yield self._format_stream_chunk(chunk)
+                try:
+                    for chunk in stream:
+                        yield self._format_stream_chunk(chunk)
+                finally:
+                    self._close_model_stream(stream)
             else:
-                bot_type = type(self.bot).__name__
+                bot_type = type(bot).__name__
                 raise NotImplementedError(f"Bot {bot_type} does not support call_with_tools. Please add the method.")
                 
         except Exception as e:

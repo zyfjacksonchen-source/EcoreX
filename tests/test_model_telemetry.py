@@ -80,6 +80,19 @@ class TestModelTelemetry(unittest.TestCase):
         self.assertEqual(usage["reasoning_tokens"], 3)
         self.assertEqual(usage["cached_tokens"], 5)
 
+        gemini_usage = normalize_usage_tokens({
+            "promptTokenCount": 11,
+            "candidatesTokenCount": 13,
+            "totalTokenCount": 24,
+            "thoughtsTokenCount": 7,
+            "cachedContentTokenCount": 5,
+        })
+        self.assertEqual(gemini_usage["input_tokens"], 11)
+        self.assertEqual(gemini_usage["output_tokens"], 13)
+        self.assertEqual(gemini_usage["total_tokens"], 24)
+        self.assertEqual(gemini_usage["reasoning_tokens"], 7)
+        self.assertEqual(gemini_usage["cached_tokens"], 5)
+
     def test_openai_compatible_stream_records_latency_usage_and_provider(self):
         from models.model_telemetry import get_recent_model_calls
 
@@ -414,6 +427,392 @@ class TestModelTelemetry(unittest.TestCase):
         self.assertEqual(list(model.call_stream(request)), [])
         self.assertEqual(captured["retry_count"], 3)
         self.assertIs(captured["model_retry_sleep"], retry_sleep)
+
+    def _native_agent_model(self, bot, *, model_name="glm-4", provider="zhipu_ai"):
+        from bridge.agent_bridge import AgentLLMModel
+
+        class NativeModel(AgentLLMModel):
+            def __init__(self):
+                self._capture_bot = bot
+
+            @property
+            def bot(self):
+                return self._capture_bot
+
+            @property
+            def model(self):
+                return model_name
+
+            def _resolve_bot_type(self, _model_name):
+                return provider
+
+        return NativeModel()
+
+    def test_agent_bridge_native_sync_gateway_retries_and_records_telemetry(self):
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import get_recent_model_calls
+
+        class NativeBot:
+            def __init__(self):
+                self.calls = []
+                self.responses = [
+                    {
+                        "error": {"message": "rate limit", "code": "rate_limit_exceeded"},
+                        "message": "rate limit",
+                        "status_code": 429,
+                        "retry_after": "0.25",
+                    },
+                    {
+                        "choices": [{"message": {"content": "ok"}}],
+                        "usage": {
+                            "prompt_tokens": 3,
+                            "completion_tokens": 4,
+                            "total_tokens": 7,
+                        },
+                    },
+                ]
+
+            def call_with_tools(self, **kwargs):
+                self.calls.append(kwargs)
+                return self.responses.pop(0)
+
+        sleeps = []
+        bot = NativeBot()
+        model = self._native_agent_model(bot)
+        result = model.call(LLMRequest(
+            messages=[{"role": "user", "content": "hi"}],
+            retry_count=2,
+            model_max_retries=1,
+            model_retry_sleep=sleeps.append,
+        ))
+
+        self.assertEqual(result["choices"][0]["message"]["content"], "ok")
+        self.assertEqual([call["retry_count"] for call in bot.calls], [2, 3])
+        self.assertEqual(sleeps, [0.25])
+        events = get_recent_model_calls()
+        self.assertEqual([event["status"] for event in events], ["failed", "completed"])
+        self.assertEqual([event["retry_count"] for event in events], [2, 3])
+        self.assertEqual(events[0]["provider"], "zhipu_ai")
+        self.assertEqual(events[0]["api_path"], "/native/call_with_tools")
+        self.assertEqual(events[0]["error_taxonomy"], "rate_limit")
+        self.assertEqual(events[1]["total_tokens"], 7)
+
+    def test_agent_bridge_native_sync_gateway_fails_closed_on_non_retryable_4xx(self):
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import get_recent_model_calls
+
+        class NativeBot:
+            def __init__(self):
+                self.calls = []
+
+            def call_with_tools(self, **kwargs):
+                self.calls.append(kwargs)
+                return {
+                    "error": {"message": "invalid request", "code": "bad_request"},
+                    "message": "invalid request",
+                    "status_code": 400,
+                }
+
+        sleeps = []
+        bot = NativeBot()
+        model = self._native_agent_model(bot)
+        result = model.call(LLMRequest(
+            messages=[{"role": "user", "content": "hi"}],
+            model_max_retries=2,
+            model_retry_sleep=sleeps.append,
+        ))
+
+        self.assertEqual(result["status_code"], 400)
+        self.assertEqual(result["error_taxonomy"], "client_error")
+        self.assertFalse(result["retryable"])
+        self.assertEqual(result["retry_attempt"], 0)
+        self.assertEqual(len(bot.calls), 1)
+        self.assertEqual(sleeps, [])
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_taxonomy"], "client_error")
+
+    def test_agent_bridge_native_sync_gateway_accepts_single_response_generator(self):
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import get_recent_model_calls
+
+        class NativeGeneratorBot:
+            def call_with_tools(self, **kwargs):
+                def generate():
+                    yield {
+                        "choices": [{"message": {"content": "ok"}}],
+                        "usage": {
+                            "prompt_tokens": 5,
+                            "completion_tokens": 6,
+                            "total_tokens": 11,
+                        },
+                    }
+
+                return generate()
+
+        model = self._native_agent_model(NativeGeneratorBot(), model_name="deepseek-v4", provider="deepseek")
+        result = model.call(LLMRequest(
+            messages=[{"role": "user", "content": "hi"}],
+            model_max_retries=0,
+        ))
+
+        self.assertEqual(result["choices"][0]["message"]["content"], "ok")
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["provider"], "deepseek")
+        self.assertFalse(event["stream"])
+        self.assertEqual(event["status"], "completed")
+        self.assertEqual(event["total_tokens"], 11)
+
+    def test_agent_bridge_native_sync_generator_exception_uses_retry_policy(self):
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import get_recent_model_calls
+
+        class NativeGeneratorBot:
+            def __init__(self):
+                self.calls = []
+
+            def call_with_tools(self, **kwargs):
+                self.calls.append(kwargs)
+
+                def generate():
+                    raise TimeoutError("request timeout")
+                    yield {}
+
+                return generate()
+
+        sleeps = []
+        bot = NativeGeneratorBot()
+        model = self._native_agent_model(bot, model_name="deepseek-v4", provider="deepseek")
+        result = model.call(LLMRequest(
+            messages=[{"role": "user", "content": "hi"}],
+            model_max_retries=1,
+            model_retry_sleep=sleeps.append,
+        ))
+
+        self.assertEqual(len(bot.calls), 2)
+        self.assertEqual([call["retry_count"] for call in bot.calls], [0, 1])
+        self.assertEqual(sleeps, [2.0])
+        self.assertTrue(result["error"])
+        self.assertEqual(result["error_taxonomy"], "timeout")
+        self.assertTrue(result["retryable"])
+        self.assertTrue(result["retry_exhausted"])
+        events = get_recent_model_calls()
+        self.assertEqual([event["status"] for event in events], ["failed", "failed"])
+        self.assertEqual([event["error_taxonomy"] for event in events], ["timeout", "timeout"])
+
+    def test_agent_bridge_native_stream_gateway_retries_before_first_token(self):
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import get_recent_model_calls
+
+        class NativeStreamBot:
+            def __init__(self):
+                self.calls = []
+                self.sequences = [
+                    [{
+                        "error": {"message": "server unavailable"},
+                        "message": "server unavailable",
+                        "status_code": 503,
+                        "retry_after": "0.5",
+                    }],
+                    [
+                        {"choices": [{"delta": {"content": "ok"}}]},
+                        {
+                            "choices": [{"delta": {}, "finish_reason": "stop"}],
+                            "usage": {
+                                "promptTokenCount": 2,
+                                "candidatesTokenCount": 3,
+                                "totalTokenCount": 5,
+                            },
+                        },
+                    ],
+                ]
+
+            def call_with_tools(self, **kwargs):
+                self.calls.append(kwargs)
+                return iter(self.sequences.pop(0))
+
+        sleeps = []
+        bot = NativeStreamBot()
+        model = self._native_agent_model(bot, model_name="gemini-3.5-flash", provider="gemini")
+        result = list(model.call_stream(LLMRequest(
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            model_max_retries=1,
+            model_retry_sleep=sleeps.append,
+        )))
+
+        self.assertEqual(result[0]["choices"][0]["delta"]["content"], "ok")
+        self.assertEqual(len(result), 2)
+        self.assertEqual(len(bot.calls), 2)
+        self.assertEqual(sleeps, [0.5])
+        events = get_recent_model_calls()
+        self.assertEqual([event["status"] for event in events], ["failed", "completed"])
+        self.assertEqual(events[0]["provider"], "gemini")
+        self.assertEqual(events[0]["error_taxonomy"], "server_error")
+        self.assertEqual(events[1]["first_token_latency_ms"] is not None, True)
+        self.assertEqual(events[1]["total_tokens"], 5)
+
+    def test_agent_bridge_native_stream_exception_after_first_token_is_retry_suppressed(self):
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import get_recent_model_calls
+
+        class RaisesAfterContent:
+            def __init__(self):
+                self.index = 0
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                self.index += 1
+                if self.index == 1:
+                    return {"choices": [{"delta": {"content": "partial"}}]}
+                raise ConnectionError("connection reset by peer")
+
+        class NativeStreamBot:
+            def __init__(self):
+                self.calls = []
+
+            def call_with_tools(self, **kwargs):
+                self.calls.append(kwargs)
+                return RaisesAfterContent()
+
+        sleeps = []
+        bot = NativeStreamBot()
+        model = self._native_agent_model(bot, model_name="moonshot-v1-8k", provider="moonshot")
+        result = list(model.call_stream(LLMRequest(
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            model_max_retries=2,
+            model_retry_sleep=sleeps.append,
+        )))
+
+        self.assertEqual(result[0]["choices"][0]["delta"]["content"], "partial")
+        self.assertTrue(result[1]["error"])
+        self.assertTrue(result[1]["retryable"])
+        self.assertTrue(result[1]["retry_suppressed"])
+        self.assertEqual(result[1]["retry_suppressed_reason"], "stream_output_started")
+        self.assertEqual(len(bot.calls), 1)
+        self.assertEqual(sleeps, [])
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_taxonomy"], "network_error")
+        self.assertIsNotNone(event["first_token_latency_ms"])
+
+    def test_agent_bridge_native_stream_exception_before_output_exhausts_with_typed_marker(self):
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import get_recent_model_calls
+
+        class RaisesImmediately:
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                raise TimeoutError("request timeout")
+
+        class NativeStreamBot:
+            def __init__(self):
+                self.calls = []
+
+            def call_with_tools(self, **kwargs):
+                self.calls.append(kwargs)
+                return RaisesImmediately()
+
+        sleeps = []
+        bot = NativeStreamBot()
+        model = self._native_agent_model(bot, model_name="qwen3.7-plus", provider="dashscope")
+        result = list(model.call_stream(LLMRequest(
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            model_max_retries=1,
+            model_retry_sleep=sleeps.append,
+        )))
+
+        self.assertEqual(len(bot.calls), 2)
+        self.assertEqual([call["retry_count"] for call in bot.calls], [0, 1])
+        self.assertEqual(sleeps, [2.0])
+        self.assertTrue(result[0]["error"])
+        self.assertEqual(result[0]["error_taxonomy"], "timeout")
+        self.assertTrue(result[0]["retryable"])
+        self.assertTrue(result[0]["retry_exhausted"])
+        events = get_recent_model_calls()
+        self.assertEqual([event["status"] for event in events], ["failed", "failed"])
+        self.assertEqual([event["error_taxonomy"] for event in events], ["timeout", "timeout"])
+
+    def test_agent_bridge_native_stream_close_records_cancelled_once(self):
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import get_recent_model_calls
+
+        class ClosableIterator:
+            def __init__(self, chunks):
+                self._iter = iter(chunks)
+                self.closed = 0
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                return next(self._iter)
+
+            def close(self):
+                self.closed += 1
+
+        class NativeStreamBot:
+            def __init__(self):
+                self.stream = ClosableIterator([
+                    {"choices": [{"delta": {"content": "partial"}}]},
+                    {
+                        "choices": [{"delta": {}, "finish_reason": "stop"}],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                    },
+                ])
+
+            def call_with_tools(self, **kwargs):
+                return self.stream
+
+        bot = NativeStreamBot()
+        model = self._native_agent_model(bot, model_name="glm-4", provider="zhipu_ai")
+
+        stream = model.call_stream(LLMRequest(
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+        ))
+        self.assertEqual(next(stream)["choices"][0]["delta"]["content"], "partial")
+        stream.close()
+        stream.close()
+
+        events = get_recent_model_calls()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["status"], "cancelled")
+        self.assertEqual(events[0]["error_taxonomy"], "cancelled")
+        self.assertEqual(events[0]["first_token_latency_ms"] is not None, True)
+        self.assertGreaterEqual(bot.stream.closed, 1)
+
+    def test_agent_bridge_does_not_double_wrap_shared_openai_gateway(self):
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import get_recent_model_calls
+
+        chunks = [
+            {"choices": [{"delta": {"content": "ok"}}]},
+            {
+                "choices": [{"delta": {}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        ]
+        client = FakeOpenAIClient(chunks=chunks)
+        bot = FakeTelemetryBot.build(client)
+        model = self._native_agent_model(bot, model_name="gpt-5.5", provider="openai")
+
+        result = list(model.call_stream(LLMRequest(
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+        )))
+
+        self.assertEqual(result, chunks)
+        self.assertEqual(len(client.calls), 1)
+        events = get_recent_model_calls()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["api_path"], "/chat/completions")
 
     def test_agent_stream_retry_stopped_marker_skips_outer_retry(self):
         from agent.protocol.agent_stream import AgentStreamExecutor
