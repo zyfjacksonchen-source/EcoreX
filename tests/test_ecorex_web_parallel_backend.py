@@ -819,6 +819,40 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertEqual(snapshot[0]["state"], "cancelling")
         self.assertGreaterEqual(snapshot[0]["age_seconds"], 0)
 
+    def test_active_snapshot_keeps_cancelling_request_after_sse_terminal(self):
+        from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests
+        from channel.web import web_channel
+
+        channel = web_channel.WebChannel()
+        request_id = "req-cancel-terminal-still-active"
+        session_id = "session-cancel-terminal-still-active"
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            ledger.create_run(request_id, session_id, phase="running")
+            channel.request_to_session = {request_id: session_id}
+            channel._ensure_sse_state(request_id)
+            registry = get_cancel_registry()
+            registry.register(request_id, session_id=session_id)
+            try:
+                self.assertTrue(registry.cancel_request(request_id))
+                self.assertTrue(channel._push_cancelled_event_once(request_id, {
+                    "type": "cancelled",
+                    "content": "stopping",
+                    "request_id": request_id,
+                }))
+
+                with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                    snapshot = channel.active_requests_snapshot()
+
+                active = [item for item in snapshot["requests"] if item["request_id"] == request_id]
+                self.assertEqual(len(active), 1)
+                self.assertEqual(active[0]["source"], "cancel_registry")
+                self.assertTrue(active[0]["cancelled"])
+                self.assertEqual(active[0]["state"], "cancelling")
+                self.assertTrue(active[0]["stream_available"])
+            finally:
+                registry.unregister(request_id)
+
     def test_busy_session_message_interrupts_old_request_and_starts_new_one(self):
         from agent.protocol import get_cancel_registry
         from bridge.context import Context, ContextType

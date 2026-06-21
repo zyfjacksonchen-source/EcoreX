@@ -12,10 +12,20 @@ export type RuntimeActiveRequest = {
   request_id?: string;
   session_id?: string;
   cancelled?: boolean;
+  status?: string;
+  phase?: string;
   state?: "running" | "cancelling" | string;
+  source?: "cancel_registry" | string;
+  run_type?: string;
+  terminal_reason?: string;
+  error_code?: string;
+  error_message?: string;
   created_at?: number;
+  updated_at?: number;
+  terminal_at?: number;
   age_seconds?: number;
   stream_available?: boolean;
+  metadata?: Record<string, unknown>;
 };
 
 export type RuntimeSessionLock = {

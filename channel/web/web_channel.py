@@ -1101,8 +1101,6 @@ class WebChannel(ChatChannel):
             seen_request_ids = set()
             for row in get_run_ledger().active_snapshot():
                 request_id = row.get("request_id", "")
-                if request_id in self.sse_done_sent:
-                    continue
                 session_id = row.get("session_id") or self.request_to_session.get(request_id, "")
                 item = {
                     **row,
@@ -1115,7 +1113,7 @@ class WebChannel(ChatChannel):
                     sessions.setdefault(session_id, []).append(request_id)
             for row in get_cancel_registry().snapshot():
                 request_id = row.get("request_id", "")
-                if not request_id or request_id in seen_request_ids or request_id in self.sse_done_sent:
+                if not request_id or request_id in seen_request_ids:
                     continue
                 session_id = row.get("session_id") or self.request_to_session.get(request_id, "")
                 item = {

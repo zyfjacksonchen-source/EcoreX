@@ -30,3 +30,12 @@
     cursor cleanup treats `error` as terminal.
   - Focused pytest passed: 14 SSE/terminal/replay/active-request tests; desktop
     `npm run typecheck` passed.
+- Added the first R18-03 cancellation/concurrency slice:
+  - `active_requests_snapshot()` no longer treats the SSE terminal-once guard as
+    proof that backend work is inactive.
+  - If a cancellation terminal has already been sent to the UI but the cancel
+    token remains registered, `/api/active-requests` still exposes the request
+    as `state=cancelling` from `cancel_registry`.
+  - Desktop `RuntimeActiveRequest` types now include durable run and fallback
+    source fields used by the future Run Center.
+  - Focused pytest passed: 7 active-request/cancel/busy-session tests.
