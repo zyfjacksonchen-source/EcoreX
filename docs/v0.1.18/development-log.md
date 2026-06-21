@@ -559,3 +559,30 @@
     broader admission/run-ledger regression set passed with 15 tests.
   - Descartes, Boole, and Lovelace confirmed no P0/P1 after the final
     same-transaction persistence check and empty-error-request-id contract.
+- Added the subagent execution cancellation hardening slice:
+  - Subagent child runs now register their child-session cancel token before
+    becoming visible as `running` and before entering AgentBridge, closing the
+    race where `/api/subagents/{id}/cancel` or parent-session cancellation could
+    mark the task terminal while the child still proceeded into model/tool work.
+  - Subagent AgentBridge calls now carry `cancel_token_owner=subagent`; the
+    bridge borrows that pre-existing token without unregistering it, and the
+    `_run_child` finalizer unregisters the child token after completed, failed,
+    or cancelled terminal state is written.
+  - Direct subagent cancel and parent cascade cancel both surface `cancelling`
+    while the child is inside AgentBridge, then settle to durable `cancelled`
+    with terminal ledger state and no registry residue after the child exits.
+  - Boole found a P1 interleaving where a direct/parent cancel between the
+    second `_run_child` status check and the delayed `running` phase write could
+    downgrade the ledger from `cancelling` back to `running`. The fix adds a
+    `preserve_cancelling` guard to `RunLedger.mark_phase()` and a regression
+    that forces that interleaving.
+  - Lovelace found a P1 escape hatch where non-Web `/cancel` entrypoints only
+    cancelled the parent session token and left child `subagent-*` tokens
+    running. ChatChannel, Slack, Telegram, Discord, CowCli fallback, and
+    WebChannel now route parent-session stop through the same subagent cascade
+    helper, with ChatChannel and CowCli fallback regressions.
+  - Focused pytest passed for direct running-child cancellation, parent cascade
+    cancellation, phase-downgrade prevention, ChatChannel/CowCli non-Web
+    parent stop cascade, and subagent-owned AgentBridge token preservation.
+    R18-03-A is now PASS; R18-03-B remains PARTIAL because the broader
+    same-session queue policy is still pending.

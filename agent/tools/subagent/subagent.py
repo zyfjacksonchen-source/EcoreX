@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict
 
-from agent.protocol.cancel import get_cancel_registry
+from agent.protocol.cancel import AgentCancelledError, get_cancel_registry
 from agent.tools.base_tool import BaseTool, ToolResult
 from common.log import logger
 from config import conf
@@ -122,11 +122,22 @@ def _mark_subagent_run_created(task: Dict[str, Any]) -> None:
         logger.debug(f"[Subagent] run ledger create skipped: {exc}")
 
 
-def _mark_subagent_run_phase(task: Dict[str, Any], phase: str, *, status: str | None = None) -> None:
+def _mark_subagent_run_phase(
+    task: Dict[str, Any],
+    phase: str,
+    *,
+    status: str | None = None,
+    preserve_cancelling: bool = False,
+) -> None:
     try:
         from agent.protocol import get_run_ledger
 
-        get_run_ledger().mark_phase(str(task.get("childSessionId") or ""), phase, status=status)
+        get_run_ledger().mark_phase(
+            str(task.get("childSessionId") or ""),
+            phase,
+            status=status,
+            preserve_cancelling=preserve_cancelling,
+        )
     except Exception as exc:
         logger.debug(f"[Subagent] run ledger phase skipped: {exc}")
 
@@ -206,6 +217,18 @@ def cancel_children_for_parent(workspace: Path | str, parent_session_id: str) ->
     }
 
 
+def cancel_children_for_default_workspace(
+    parent_session_id: str,
+    workspace: Path | str | None = None,
+) -> Dict[str, Any]:
+    """Cancel non-terminal child agents for a parent session in the runtime workspace."""
+    parent_session_id = str(parent_session_id or "").strip()
+    if not parent_session_id or parent_session_id.startswith("subagent-"):
+        return {"cancelledTasks": 0, "cancelledRequests": 0, "tasks": []}
+    target_workspace = workspace or conf().get("agent_workspace", "~/cow")
+    return cancel_children_for_parent(target_workspace, parent_session_id)
+
+
 def interrupt_orphan_task(
     workspace: Path | str,
     *,
@@ -257,70 +280,114 @@ def interrupt_orphan_task(
 def _run_child(workspace: Path, task: Dict[str, Any]) -> None:
     task_id = task["id"]
     child_session_id = task["childSessionId"]
+    registry = get_cancel_registry()
+    cancel_event = None
+    token_registered = False
+
+    def _cancel_requested() -> bool:
+        return bool(cancel_event and cancel_event.is_set())
+
+    def _pre_reply_cancel_reason(current_task: Dict[str, Any]) -> str:
+        if current_task.get("parentCancelledAt"):
+            return "parent_cancelled_before_start"
+        return "cancelled_before_start"
+
     try:
+        cancel_event = registry.register(child_session_id, session_id=child_session_id)
+        token_registered = bool(child_session_id)
         current = _task_snapshot(workspace, task_id)
         current_status = str(current.get("status") or "")
-        if current_status in {"cancelled", "cancelling"}:
-            _update_task(workspace, task_id, {"status": "cancelled", "completedAt": int(time.time())})
-            _mark_subagent_run_terminal(task, "cancelled", reason="cancelled_before_start")
+        if current_status in {"cancelled", "cancelling"} or _cancel_requested():
+            final_task = _update_task(workspace, task_id, {"status": "cancelled", "completedAt": int(time.time())})
+            _mark_subagent_run_terminal(final_task or task, "cancelled", reason=_pre_reply_cancel_reason(current))
             return
         if current_status in TERMINAL_STATUSES:
             return
-        _update_task(workspace, task_id, {"status": "running", "startedAt": int(time.time())})
-        _mark_subagent_run_phase(task, "running", status="running")
+        running_task = _update_task(workspace, task_id, {"status": "running", "startedAt": int(time.time())})
+        current = _task_snapshot(workspace, task_id)
+        current_status = str(current.get("status") or "")
+        if current_status in {"cancelled", "cancelling"} or _cancel_requested():
+            final_task = _update_task(workspace, task_id, {"status": "cancelled", "completedAt": int(time.time())})
+            _mark_subagent_run_terminal(final_task or task, "cancelled", reason=_pre_reply_cancel_reason(current))
+            return
+        if current_status in TERMINAL_STATUSES:
+            return
+        _mark_subagent_run_phase(
+            running_task or task,
+            "running",
+            status="running",
+            preserve_cancelling=True,
+        )
+        current = _task_snapshot(workspace, task_id)
+        current_status = str(current.get("status") or "")
+        if current_status in {"cancelled", "cancelling"} or _cancel_requested():
+            final_task = _update_task(workspace, task_id, {"status": "cancelled", "completedAt": int(time.time())})
+            _mark_subagent_run_terminal(final_task or task, "cancelled", reason=_pre_reply_cancel_reason(current))
+            return
+        if current_status in TERMINAL_STATUSES:
+            return
         from bridge.bridge import Bridge
         from bridge.context import Context, ContextType
 
         context = Context(ContextType.TEXT, task["prompt"], {
             "session_id": child_session_id,
             "request_id": child_session_id,
+            "cancel_token_owner": "subagent",
             "subagent_parent_id": task.get("parentSessionId", ""),
         })
         result = Bridge().get_agent_bridge().agent_reply(task["prompt"], context=context, clear_history=True)
         current = _task_snapshot(workspace, task_id)
         current_status = str(current.get("status") or "")
-        if current_status in {"cancelled", "cancelling"}:
-            _update_task(workspace, task_id, {
+        if current_status in {"cancelled", "cancelling"} or _cancel_requested():
+            final_task = _update_task(workspace, task_id, {
                 "status": "cancelled",
                 "result": str(result or ""),
                 "completedAt": int(time.time()),
             })
-            _mark_subagent_run_terminal(task, "cancelled", reason="cancelled_after_reply")
+            _mark_subagent_run_terminal(final_task or task, "cancelled", reason="cancelled_after_reply")
         elif current_status in TERMINAL_STATUSES:
             return
         else:
-            _update_task(workspace, task_id, {
+            final_task = _update_task(workspace, task_id, {
                 "status": "completed",
                 "result": str(result or ""),
                 "completedAt": int(time.time()),
             })
-            _mark_subagent_run_terminal(task, "completed", reason="subagent_completed")
+            _mark_subagent_run_terminal(final_task or task, "completed", reason="subagent_completed")
     except Exception as exc:
         logger.exception(f"[Subagent] child task failed: {task_id}")
         current = _task_snapshot(workspace, task_id)
         current_status = str(current.get("status") or "")
-        if current_status in {"cancelled", "cancelling"} or "cancel" in str(exc).lower():
-            _update_task(workspace, task_id, {
+        if (
+            current_status in {"cancelled", "cancelling"}
+            or _cancel_requested()
+            or isinstance(exc, AgentCancelledError)
+            or "cancel" in str(exc).lower()
+        ):
+            final_task = _update_task(workspace, task_id, {
                 "status": "cancelled",
                 "error": str(exc),
                 "completedAt": int(time.time()),
             })
-            _mark_subagent_run_terminal(task, "cancelled", reason="subagent_cancelled", error_message=str(exc))
+            _mark_subagent_run_terminal(final_task or task, "cancelled", reason="subagent_cancelled", error_message=str(exc))
             return
         if current_status in TERMINAL_STATUSES:
             return
-        _update_task(workspace, task_id, {
+        final_task = _update_task(workspace, task_id, {
             "status": "failed",
             "error": str(exc),
             "completedAt": int(time.time()),
         })
         _mark_subagent_run_terminal(
-            task,
+            final_task or task,
             "failed",
             reason="subagent_failed",
             error_code="SUBAGENT_FAILED",
             error_message=str(exc),
         )
+    finally:
+        if token_registered:
+            registry.unregister(child_session_id)
 
 
 class SubagentTool(BaseTool):

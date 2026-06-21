@@ -257,11 +257,17 @@ class TelegramChannel(ChatChannel):
         """Fast-path: /cancel calls cancel_session directly without going through agent."""
         try:
             from agent.protocol import get_cancel_registry
+            from agent.tools.subagent.subagent import cancel_children_for_default_workspace
             session_id = self._compute_session_id(update)
             cancelled = get_cancel_registry().cancel_session(session_id)
-            text = "Current task cancelled." if cancelled else "No running task to cancel."
+            subagent_cancel = cancel_children_for_default_workspace(session_id)
+            total_cancelled = cancelled + int(subagent_cancel.get("cancelledTasks") or 0)
+            text = "Current task cancelled." if total_cancelled else "No running task to cancel."
             await update.effective_message.reply_text(text)
-            logger.info(f"[Telegram] /cancel session={session_id}, cancelled={cancelled}")
+            logger.info(
+                f"[Telegram] /cancel session={session_id}, cancelled={cancelled}, "
+                f"subagents={subagent_cancel}"
+            )
         except Exception as e:
             logger.error(f"[Telegram] /cancel error: {e}", exc_info=True)
             try:

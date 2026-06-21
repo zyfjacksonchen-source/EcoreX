@@ -520,7 +520,7 @@ class AgentBridge:
             registry = get_cancel_registry()
             token_key = request_id or session_id
             if token_key:
-                external_owner = token_owner in {"web_channel", "scheduler"} and bool(request_id)
+                external_owner = token_owner in {"web_channel", "scheduler", "subagent"} and bool(request_id)
                 existing_cancel_event = registry.get_event(token_key) if external_owner else None
                 cancel_event = registry.register(token_key, session_id=session_id)
                 agentbridge_owns_cancel_token = not (external_owner and existing_cancel_event is not None)

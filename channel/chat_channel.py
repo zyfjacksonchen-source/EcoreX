@@ -473,16 +473,21 @@ class ChatChannel(Channel):
         """
         try:
             from agent.protocol import get_cancel_registry
+            from agent.tools.subagent.subagent import cancel_children_for_default_workspace
             from bridge.reply import Reply, ReplyType
 
             cancelled = get_cancel_registry().cancel_session(session_id)
+            workspace = context.get("workspace_dir") or getattr(context, "workspace_dir", None)
+            subagent_cancel = cancel_children_for_default_workspace(session_id, workspace=workspace)
+            total_cancelled = cancelled + int(subagent_cancel.get("cancelledTasks") or 0)
             text = (
                 _t("🛑 已中止", "🛑 Cancelled")
-                if cancelled > 0
+                if total_cancelled > 0
                 else _t("当前没有可中止的任务。", "Nothing to cancel.")
             )
             logger.info(
-                f"[chat_channel] /cancel fast-path: session={session_id}, cancelled={cancelled}"
+                f"[chat_channel] /cancel fast-path: session={session_id}, "
+                f"cancelled={cancelled}, subagents={subagent_cancel}"
             )
             self._send_reply(context, Reply(ReplyType.TEXT, text))
         except Exception as e:

@@ -1791,9 +1791,9 @@ class WebChannel(ChatChannel):
         if not session_id or str(session_id).startswith("subagent-"):
             return {"cancelledTasks": 0, "cancelledRequests": 0, "tasks": []}
         try:
-            from agent.tools.subagent.subagent import cancel_children_for_parent
+            from agent.tools.subagent.subagent import cancel_children_for_default_workspace
 
-            return cancel_children_for_parent(_get_workspace_root(), session_id)
+            return cancel_children_for_default_workspace(session_id, workspace=_get_workspace_root())
         except Exception as e:
             logger.warning(f"[WebChannel] subagent cascade cancel skipped for {session_id}: {e}")
             return {"cancelledTasks": 0, "cancelledRequests": 0, "tasks": [], "error": str(e)}

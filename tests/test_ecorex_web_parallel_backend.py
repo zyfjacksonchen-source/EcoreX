@@ -286,6 +286,206 @@ class TestSubagentTool(unittest.TestCase):
             self.assertEqual(final["terminal_reason"], "subagent_completed")
             self.assertEqual(ledger.active_snapshot(), [])
 
+    def test_subagent_running_cancel_uses_pre_registered_token_and_releases(self):
+        from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests
+        from agent.tools.subagent import subagent as subagent_module
+
+        class FakeAgentBridge:
+            def __init__(self):
+                self.entered = threading.Event()
+                self.release = threading.Event()
+                self.context = None
+                self.cancel_event = None
+
+            def agent_reply(self, _prompt, context=None, **_kwargs):
+                self.context = context
+                self.cancel_event = get_cancel_registry().get_event(context.get("request_id", ""))
+                self.entered.set()
+                self.release.wait(timeout=2)
+                return "child result after cancel"
+
+        class FakeBridge:
+            def __init__(self, agent_bridge):
+                self.agent_bridge = agent_bridge
+
+            def get_agent_bridge(self):
+                return self.agent_bridge
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            registry = get_cancel_registry()
+            tool = self._tool(workspace)
+            with patch("agent.tools.subagent.subagent.threading.Thread.start", lambda _thread: None):
+                result = tool.execute({"action": "start", "task": "cancel running child"})
+            task = result.result["task"]
+            child_session_id = task["childSessionId"]
+            fake_agent_bridge = FakeAgentBridge()
+            worker = threading.Thread(target=subagent_module._run_child, args=(Path(workspace), task))
+
+            try:
+                with patch("bridge.bridge.Bridge", return_value=FakeBridge(fake_agent_bridge)):
+                    worker.start()
+                    self.assertTrue(fake_agent_bridge.entered.wait(timeout=2))
+                    self.assertEqual(fake_agent_bridge.context.get("cancel_token_owner"), "subagent")
+                    self.assertIs(fake_agent_bridge.cancel_event, registry.get_event(child_session_id))
+
+                    cancel_result = tool.execute({"action": "cancel", "id": task["id"]})
+
+                    self.assertEqual(cancel_result.status, "success")
+                    self.assertEqual(cancel_result.result["cancelled"], 1)
+                    self.assertTrue(fake_agent_bridge.cancel_event.is_set())
+                    cancelling_run = ledger.get_run(child_session_id)
+                    self.assertEqual(cancelling_run["status"], "cancelling")
+                    self.assertEqual(cancelling_run["phase"], "cancelling")
+                    fake_agent_bridge.release.set()
+                    worker.join(timeout=2)
+                    self.assertFalse(worker.is_alive())
+
+                listed = tool.execute({"action": "list"}).result["tasks"]
+                stored = {item["id"]: item for item in listed}[task["id"]]
+                self.assertEqual(stored["status"], "cancelled")
+                self.assertEqual(stored["result"], "child result after cancel")
+                final = ledger.get_run(child_session_id)
+                self.assertEqual(final["status"], "cancelled")
+                self.assertEqual(final["terminal_reason"], "cancelled_after_reply")
+                self.assertIsNone(registry.get_event(child_session_id))
+                self.assertEqual(ledger.active_snapshot(), [])
+            finally:
+                fake_agent_bridge.release.set()
+                worker.join(timeout=2)
+                registry.unregister(child_session_id)
+
+    def test_subagent_cancel_between_start_check_and_phase_mark_does_not_downgrade(self):
+        from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests
+        from agent.tools.subagent import subagent as subagent_module
+
+        class FakeAgentBridge:
+            called = False
+
+            def agent_reply(self, *_args, **_kwargs):
+                self.called = True
+                return "should not run"
+
+        class FakeBridge:
+            def __init__(self, agent_bridge):
+                self.agent_bridge = agent_bridge
+
+            def get_agent_bridge(self):
+                return self.agent_bridge
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            registry = get_cancel_registry()
+            tool = self._tool(workspace)
+            with patch("agent.tools.subagent.subagent.threading.Thread.start", lambda _thread: None):
+                result = tool.execute({"action": "start", "task": "cancel during phase mark"})
+            task = result.result["task"]
+            child_session_id = task["childSessionId"]
+            original_mark_phase = subagent_module._mark_subagent_run_phase
+            fake_agent_bridge = FakeAgentBridge()
+            observed = {}
+
+            def cancel_before_running_phase(phase_task, phase, **kwargs):
+                if phase == "running" and not observed.get("cancelled"):
+                    cancel_result = tool.execute({"action": "cancel", "id": task["id"]})
+                    observed["cancelled"] = cancel_result.result["cancelled"]
+                    original_mark_phase(phase_task, phase, **kwargs)
+                    observed["status_after_running_mark"] = ledger.get_run(child_session_id)["status"]
+                    observed["phase_after_running_mark"] = ledger.get_run(child_session_id)["phase"]
+                    return
+                original_mark_phase(phase_task, phase, **kwargs)
+
+            try:
+                with patch("bridge.bridge.Bridge", return_value=FakeBridge(fake_agent_bridge)), \
+                        patch.object(subagent_module, "_mark_subagent_run_phase", side_effect=cancel_before_running_phase):
+                    subagent_module._run_child(Path(workspace), task)
+
+                self.assertEqual(observed["cancelled"], 1)
+                self.assertEqual(observed["status_after_running_mark"], "cancelling")
+                self.assertEqual(observed["phase_after_running_mark"], "cancelling")
+                self.assertFalse(fake_agent_bridge.called)
+                stored = {
+                    item["id"]: item
+                    for item in tool.execute({"action": "list"}).result["tasks"]
+                }[task["id"]]
+                self.assertEqual(stored["status"], "cancelled")
+                final = ledger.get_run(child_session_id)
+                self.assertEqual(final["status"], "cancelled")
+                self.assertEqual(final["terminal_reason"], "cancelled_before_start")
+                self.assertIsNone(registry.get_event(child_session_id))
+                self.assertEqual(ledger.active_snapshot(), [])
+            finally:
+                registry.unregister(child_session_id)
+
+    def test_parent_cancel_running_subagent_uses_pre_registered_token_and_releases(self):
+        from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests
+        from agent.tools.subagent import subagent as subagent_module
+        from agent.tools.subagent.subagent import cancel_children_for_parent
+
+        class FakeAgentBridge:
+            def __init__(self):
+                self.entered = threading.Event()
+                self.release = threading.Event()
+                self.context = None
+                self.cancel_event = None
+
+            def agent_reply(self, _prompt, context=None, **_kwargs):
+                self.context = context
+                self.cancel_event = get_cancel_registry().get_event(context.get("request_id", ""))
+                self.entered.set()
+                self.release.wait(timeout=2)
+                return "child result after parent cancel"
+
+        class FakeBridge:
+            def __init__(self, agent_bridge):
+                self.agent_bridge = agent_bridge
+
+            def get_agent_bridge(self):
+                return self.agent_bridge
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            registry = get_cancel_registry()
+            tool = self._tool(workspace, "parent-session")
+            with patch("agent.tools.subagent.subagent.threading.Thread.start", lambda _thread: None):
+                result = tool.execute({"action": "start", "task": "cancel from parent"})
+            task = result.result["task"]
+            child_session_id = task["childSessionId"]
+            fake_agent_bridge = FakeAgentBridge()
+            worker = threading.Thread(target=subagent_module._run_child, args=(Path(workspace), task))
+
+            try:
+                with patch("bridge.bridge.Bridge", return_value=FakeBridge(fake_agent_bridge)):
+                    worker.start()
+                    self.assertTrue(fake_agent_bridge.entered.wait(timeout=2))
+
+                    summary = cancel_children_for_parent(workspace, "parent-session")
+
+                    self.assertEqual(summary["cancelledTasks"], 1)
+                    self.assertEqual(summary["cancelledRequests"], 1)
+                    self.assertEqual(summary["tasks"][0]["status"], "cancelling")
+                    self.assertTrue(fake_agent_bridge.cancel_event.is_set())
+                    cancelling_run = ledger.get_run(child_session_id)
+                    self.assertEqual(cancelling_run["status"], "cancelling")
+                    self.assertEqual(cancelling_run["phase"], "cancelling")
+                    fake_agent_bridge.release.set()
+                    worker.join(timeout=2)
+                    self.assertFalse(worker.is_alive())
+
+                listed = tool.execute({"action": "list"}).result["tasks"]
+                stored = {item["id"]: item for item in listed}[task["id"]]
+                self.assertEqual(stored["status"], "cancelled")
+                self.assertEqual(stored["result"], "child result after parent cancel")
+                final = ledger.get_run(child_session_id)
+                self.assertEqual(final["status"], "cancelled")
+                self.assertEqual(final["terminal_reason"], "cancelled_after_reply")
+                self.assertIsNone(registry.get_event(child_session_id))
+                self.assertEqual(ledger.active_snapshot(), [])
+            finally:
+                fake_agent_bridge.release.set()
+                worker.join(timeout=2)
+                registry.unregister(child_session_id)
+
     def test_subagent_start_rejects_recursive_and_depth_overflow(self):
         with tempfile.TemporaryDirectory() as workspace:
             recursive = self._tool(workspace, "subagent-existing")
@@ -332,6 +532,127 @@ class TestSubagentTool(unittest.TestCase):
                 self.assertEqual(queued_run["terminal_reason"], "parent_cancelled_before_start")
             finally:
                 registry.unregister(running_child_session)
+
+    def test_chat_cancel_fast_path_cascades_running_subagents(self):
+        from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests
+        from agent.tools.subagent import subagent as subagent_module
+        from channel.chat_channel import ChatChannel
+        from bridge.context import Context, ContextType
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            registry = get_cancel_registry()
+            tool = self._tool(workspace, "parent-session")
+            with patch("agent.tools.subagent.subagent.threading.Thread.start", lambda _thread: None):
+                result = tool.execute({"action": "start", "task": "cancel from chat fast path"})
+            task = result.result["task"]
+            child_session_id = task["childSessionId"]
+            subagent_module._update_task(Path(workspace), task["id"], {
+                "status": "running",
+                "startedAt": int(time.time()),
+            })
+            ledger.mark_phase(child_session_id, "running", status="running")
+            registry.register(child_session_id, session_id=child_session_id)
+            replies = []
+            channel = ChatChannel.__new__(ChatChannel)
+            channel._send_reply = lambda _context, reply: replies.append(reply)
+            context = Context(ContextType.TEXT, "/cancel", {"workspace_dir": workspace})
+
+            try:
+                channel._handle_cancel_command(context, "parent-session")
+
+                self.assertEqual(len(replies), 1)
+                self.assertTrue(str(replies[0].content).strip())
+                stored = {
+                    item["id"]: item
+                    for item in tool.execute({"action": "list"}).result["tasks"]
+                }[task["id"]]
+                self.assertEqual(stored["status"], "cancelling")
+                active = [row for row in registry.snapshot() if row["request_id"] == child_session_id]
+                self.assertEqual(len(active), 1)
+                self.assertTrue(active[0]["cancelled"])
+                run = ledger.get_run(child_session_id)
+                self.assertEqual(run["status"], "cancelling")
+                self.assertEqual(run["phase"], "cancelling")
+            finally:
+                registry.unregister(child_session_id)
+
+    def test_cow_cli_cancel_fallback_cascades_running_subagents(self):
+        from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests
+        from agent.tools.subagent import subagent as subagent_module
+        from bridge.context import Context, ContextType
+        import plugins
+
+        old_plugin_path = plugins.instance.current_plugin_path
+        cow_cli_was_registered = "COW_CLI" in plugins.instance.plugins
+        old_cow_cli_plugin = plugins.instance.plugins.get("COW_CLI")
+        parent_had_cow_cli = hasattr(plugins, "cow_cli")
+        old_parent_cow_cli = getattr(plugins, "cow_cli", None)
+        module_names = ("plugins.cow_cli", "plugins.cow_cli.cow_cli")
+        old_modules = {
+            name: sys.modules[name]
+            for name in module_names
+            if name in sys.modules
+        }
+        plugins.instance.current_plugin_path = os.path.join(
+            os.path.dirname(__file__), "..", "plugins", "cow_cli"
+        )
+        try:
+            import plugins.cow_cli.cow_cli
+            CowCliPlugin = plugins.instance.plugins["COW_CLI"]
+        finally:
+            plugins.instance.current_plugin_path = old_plugin_path
+            if cow_cli_was_registered:
+                plugins.instance.plugins["COW_CLI"] = old_cow_cli_plugin
+            else:
+                plugins.instance.plugins.pop("COW_CLI", None)
+            for name in module_names:
+                if name in old_modules:
+                    sys.modules[name] = old_modules[name]
+                else:
+                    sys.modules.pop(name, None)
+            if parent_had_cow_cli:
+                plugins.cow_cli = old_parent_cow_cli
+            elif hasattr(plugins, "cow_cli"):
+                delattr(plugins, "cow_cli")
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            registry = get_cancel_registry()
+            tool = self._tool(workspace, "parent-session")
+            with patch("agent.tools.subagent.subagent.threading.Thread.start", lambda _thread: None):
+                result = tool.execute({"action": "start", "task": "cancel from cow cli"})
+            task = result.result["task"]
+            child_session_id = task["childSessionId"]
+            subagent_module._update_task(Path(workspace), task["id"], {
+                "status": "running",
+                "startedAt": int(time.time()),
+            })
+            ledger.mark_phase(child_session_id, "running", status="running")
+            registry.register(child_session_id, session_id=child_session_id)
+            plugin = CowCliPlugin.__new__(CowCliPlugin)
+            context = Context(ContextType.TEXT, "/cancel", {
+                "session_id": "parent-session",
+                "workspace_dir": workspace,
+            })
+
+            try:
+                reply = plugin._cmd_cancel("", {"context": context})
+
+                self.assertTrue(str(reply).strip())
+                stored = {
+                    item["id"]: item
+                    for item in tool.execute({"action": "list"}).result["tasks"]
+                }[task["id"]]
+                self.assertEqual(stored["status"], "cancelling")
+                active = [row for row in registry.snapshot() if row["request_id"] == child_session_id]
+                self.assertEqual(len(active), 1)
+                self.assertTrue(active[0]["cancelled"])
+                run = ledger.get_run(child_session_id)
+                self.assertEqual(run["status"], "cancelling")
+                self.assertEqual(run["phase"], "cancelling")
+            finally:
+                registry.unregister(child_session_id)
 
 
 class TestAgentCapabilityPermissions(unittest.TestCase):
@@ -1525,6 +1846,48 @@ class TestWebParallelHandlers(unittest.TestCase):
         context["request_id"] = request_id
         context["cancel_token_owner"] = "scheduler"
         context["is_scheduled_task"] = True
+        try:
+            reply = bridge.agent_reply("hello", context=context)
+
+            self.assertEqual(reply.type, ReplyType.TEXT)
+            self.assertIs(fake_agent.cancel_event, original_event)
+            self.assertIs(registry.get_event(request_id), original_event)
+        finally:
+            registry.unregister(request_id)
+
+    def test_subagent_request_token_survives_agentbridge_for_subagent_owner(self):
+        from agent.protocol import get_cancel_registry
+        from bridge.agent_bridge import AgentBridge
+        from bridge.context import Context, ContextType
+        from bridge.reply import ReplyType
+
+        class FakeAgent:
+            def __init__(self):
+                self.tools = []
+                self.model = types.SimpleNamespace()
+                self.messages_lock = threading.Lock()
+                self.messages = [{"role": "assistant", "content": "ok"}]
+                self._last_run_new_messages = []
+                self.cancel_event = None
+
+            def run_stream(self, user_message, on_event, clear_history=False, cancel_event=None):
+                self.cancel_event = cancel_event
+                return "ok"
+
+        request_id = "subagent-agentbridge-token-owner"
+        session_id = request_id
+        registry = get_cancel_registry()
+        original_event = registry.register(request_id, session_id=session_id)
+        fake_agent = FakeAgent()
+        bridge = AgentBridge.__new__(AgentBridge)
+        bridge.get_agent = lambda session_id=None: fake_agent
+        bridge._pre_persist_user_message = lambda *args, **kwargs: False
+        bridge._persist_messages = lambda *args, **kwargs: None
+        bridge._schedule_mcp_hot_reload = lambda *args, **kwargs: None
+        context = Context(ContextType.TEXT, "hello")
+        context["session_id"] = session_id
+        context["request_id"] = request_id
+        context["cancel_token_owner"] = "subagent"
         try:
             reply = bridge.agent_reply("hello", context=context)
 

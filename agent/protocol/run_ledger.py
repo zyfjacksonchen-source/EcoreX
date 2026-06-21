@@ -108,7 +108,14 @@ class RunLedger:
             conn.commit()
             return bool(persisted)
 
-    def mark_phase(self, request_id: str, phase: str, *, status: Optional[str] = None) -> None:
+    def mark_phase(
+        self,
+        request_id: str,
+        phase: str,
+        *,
+        status: Optional[str] = None,
+        preserve_cancelling: bool = False,
+    ) -> None:
         if not request_id or not phase:
             return
         now = time.time()
@@ -120,6 +127,12 @@ class RunLedger:
             if not row or row["terminal_at"] is not None:
                 return
             next_status = status or row["status"] or "running"
+            if (
+                preserve_cancelling
+                and (row["status"] == "cancelling" or row["phase"] == "cancelling")
+                and next_status != "cancelling"
+            ):
+                return
             if row["phase"] == phase and row["status"] == next_status:
                 return
             conn.execute(

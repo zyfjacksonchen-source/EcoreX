@@ -415,8 +415,16 @@ class CowCliPlugin(Plugin):
     def _cmd_cancel(self, args: str, e_context: EventContext, session_id: str = "", **_) -> str:
         """Signal the running agent to halt at its next checkpoint."""
         from agent.protocol import get_cancel_registry
+        from agent.tools.subagent.subagent import cancel_children_for_default_workspace
 
         target_session = self._get_session_id(e_context, fallback=session_id)
+        workspace = None
+        if e_context is not None:
+            try:
+                ctx = e_context["context"]
+                workspace = ctx.kwargs.get("workspace_dir") or ctx.get("workspace_dir", "")
+            except Exception:
+                workspace = None
         registry = get_cancel_registry()
 
         # Prefer per-turn request_id (matches the key agent_bridge registered)
@@ -436,7 +444,13 @@ class CowCliPlugin(Plugin):
         if cancelled == 0 and target_session:
             cancelled = registry.cancel_session(target_session)
 
-        if cancelled <= 0:
+        subagent_cancel = (
+            cancel_children_for_default_workspace(target_session, workspace=workspace)
+            if target_session else {"cancelledTasks": 0, "cancelledRequests": 0, "tasks": []}
+        )
+        total_cancelled = cancelled + int(subagent_cancel.get("cancelledTasks") or 0)
+
+        if total_cancelled <= 0:
             return _t("当前没有可中止的任务。", "Nothing to cancel.")
 
         return _t("🛑 已中止", "🛑 Cancelled")
