@@ -1043,6 +1043,127 @@ class TestWebParallelHandlers(unittest.TestCase):
                     registry.unregister(old_request_id)
                     registry.unregister(new_request_id)
 
+    def test_post_message_compose_exception_cleans_pre_worker_request(self):
+        from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests
+        from channel.web import web_channel
+        from common.ecorex_workspace import SessionLock
+
+        with tempfile.TemporaryDirectory() as workspace:
+            request_id = "req-compose-pre-worker-abort"
+            session_id = "session-compose-pre-worker-abort"
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            channel = web_channel.WebChannel()
+            payload = {
+                "session_id": session_id,
+                "message": "compose should fail",
+                "stream": True,
+                "lang": "zh",
+            }
+
+            with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                with patch.object(channel, "_generate_request_id", return_value=request_id):
+                    with patch.object(channel, "_compose_context", side_effect=RuntimeError("compose boom")):
+                        with patch.object(
+                            web_channel.web,
+                            "data",
+                            return_value=json.dumps(payload).encode("utf-8"),
+                        ):
+                            result = json.loads(channel.post_message())
+
+            self.assertEqual(result["status"], "error")
+            self.assertIn("compose boom", result["message"])
+            self.assertIsNone(get_cancel_registry().get_event(request_id))
+            self.assertNotIn(request_id, channel.request_to_session)
+            self.assertFalse(channel._sse_request_exists(request_id))
+            self.assertFalse(SessionLock(workspace, session_id).path.exists())
+            final = ledger.get_run(request_id)
+            self.assertEqual(final["status"], "failed")
+            self.assertEqual(final["terminal_reason"], "post_message_exception")
+            self.assertEqual(final["error_code"], "POST_MESSAGE_EXCEPTION")
+
+    def test_post_message_filtered_context_cleans_pre_worker_request(self):
+        from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests
+        from channel.web import web_channel
+        from common.ecorex_workspace import SessionLock
+
+        with tempfile.TemporaryDirectory() as workspace:
+            request_id = "req-filtered-pre-worker-abort"
+            session_id = "session-filtered-pre-worker-abort"
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            channel = web_channel.WebChannel()
+            payload = {
+                "session_id": session_id,
+                "message": "filtered",
+                "stream": True,
+                "lang": "zh",
+            }
+
+            with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                with patch.object(channel, "_generate_request_id", return_value=request_id):
+                    with patch.object(channel, "_compose_context", return_value=None):
+                        with patch.object(
+                            web_channel.web,
+                            "data",
+                            return_value=json.dumps(payload).encode("utf-8"),
+                        ):
+                            result = json.loads(channel.post_message())
+
+            self.assertEqual(result["status"], "error")
+            self.assertEqual(result["message"], "Message was filtered")
+            self.assertIsNone(get_cancel_registry().get_event(request_id))
+            self.assertNotIn(request_id, channel.request_to_session)
+            self.assertFalse(channel._sse_request_exists(request_id))
+            self.assertFalse(SessionLock(workspace, session_id).path.exists())
+            final = ledger.get_run(request_id)
+            self.assertEqual(final["status"], "failed")
+            self.assertEqual(final["terminal_reason"], "context_filtered")
+            self.assertEqual(final["error_code"], "CONTEXT_FILTERED")
+
+    def test_post_message_thread_start_failure_cleans_pre_worker_request(self):
+        from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests
+        from bridge.context import Context, ContextType
+        from channel.web import web_channel
+        from common.ecorex_workspace import SessionLock
+
+        with tempfile.TemporaryDirectory() as workspace:
+            request_id = "req-thread-pre-worker-abort"
+            session_id = "session-thread-pre-worker-abort"
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            channel = web_channel.WebChannel()
+            payload = {
+                "session_id": session_id,
+                "message": "thread should fail",
+                "stream": True,
+                "lang": "zh",
+            }
+
+            def fake_compose_context(ctype, content, **kwargs):
+                context = Context(ctype, content)
+                context.kwargs = kwargs
+                return context
+
+            with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                with patch.object(channel, "_generate_request_id", return_value=request_id):
+                    with patch.object(channel, "_compose_context", side_effect=fake_compose_context):
+                        with patch.object(web_channel.threading.Thread, "start", side_effect=RuntimeError("thread boom")):
+                            with patch.object(
+                                web_channel.web,
+                                "data",
+                                return_value=json.dumps(payload).encode("utf-8"),
+                            ):
+                                result = json.loads(channel.post_message())
+
+            self.assertEqual(result["status"], "error")
+            self.assertIn("thread boom", result["message"])
+            self.assertIsNone(get_cancel_registry().get_event(request_id))
+            self.assertNotIn(request_id, channel.request_to_session)
+            self.assertFalse(channel._sse_request_exists(request_id))
+            self.assertFalse(SessionLock(workspace, session_id).path.exists())
+            final = ledger.get_run(request_id)
+            self.assertEqual(final["status"], "failed")
+            self.assertEqual(final["terminal_reason"], "post_message_exception")
+            self.assertEqual(final["error_code"], "POST_MESSAGE_EXCEPTION")
+
     def test_empty_agent_end_emits_done_so_sse_does_not_hang(self):
         from channel.web import web_channel
 

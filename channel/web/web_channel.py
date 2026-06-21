@@ -1343,6 +1343,7 @@ class WebChannel(ChatChannel):
         message: str,
         *,
         error_code: str = "STREAM_ERROR",
+        terminal_reason: str = "failed",
         usage: Optional[Dict[str, Any]] = None,
     ) -> bool:
         return self._push_terminal_event_once(request_id, {
@@ -1352,7 +1353,7 @@ class WebChannel(ChatChannel):
             "request_id": request_id,
             "timestamp": time.time(),
             "error_code": error_code,
-            "terminal_reason": "failed",
+            "terminal_reason": terminal_reason or "failed",
             "usage": usage,
         })
 
@@ -1757,6 +1758,56 @@ class WebChannel(ChatChannel):
                 pass
         except Exception as e:
             logger.debug(f"[WebChannel] session lock release skipped: {e}")
+
+    def _abort_pre_worker_request(
+        self,
+        request_id: str,
+        session_id: str,
+        *,
+        message: str,
+        reason: str,
+        error_code: str,
+        session_lock=None,
+    ) -> None:
+        """Release request state when `/message` fails before worker ownership.
+
+        Once a request id has been allocated, WebChannel owns the cancel token,
+        session lock, SSE replay state, and ledger row until a worker finalizer
+        takes over. If anything fails before the worker starts, clear those
+        resources here so active snapshots do not show a phantom run.
+        """
+        if request_id:
+            self._mark_run_terminal(
+                request_id,
+                "failed",
+                reason=reason,
+                error_code=error_code,
+                error_message=message,
+            )
+            if self._sse_request_exists(request_id):
+                try:
+                    self._push_error_event_once(
+                        request_id,
+                        message,
+                        error_code=error_code,
+                        terminal_reason=reason,
+                    )
+                except Exception as e:
+                    logger.debug(f"[WebChannel] pre-worker abort SSE error skipped for {request_id}: {e}")
+                self._cleanup_sse_request(request_id)
+            else:
+                self.request_to_session.pop(request_id, None)
+            try:
+                from agent.protocol import get_cancel_registry
+
+                get_cancel_registry().unregister(request_id)
+            except Exception as e:
+                logger.debug(f"[WebChannel] pre-worker abort token unregister skipped for {request_id}: {e}")
+        if session_lock:
+            try:
+                session_lock.release()
+            except Exception as e:
+                logger.debug(f"[WebChannel] pre-worker abort session lock release skipped: {e}")
 
     def _thread_pool_callback(self, session_id, **kwargs):
         parent_callback = super()._thread_pool_callback(session_id, **kwargs)
@@ -2558,22 +2609,15 @@ class WebChannel(ChatChannel):
 
             if context is None:
                 logger.warning(f"[WebChannel] Context is None for session {session_id}, message may be filtered")
-                if self._sse_request_exists(request_id):
-                    self._cleanup_sse_request(request_id)
-                try:
-                    from agent.protocol import get_cancel_registry
-                    get_cancel_registry().unregister(request_id)
-                except Exception:
-                    pass
-                self._mark_run_terminal(
+                self._abort_pre_worker_request(
                     request_id,
-                    "failed",
+                    session_id,
+                    message="Message was filtered",
                     reason="context_filtered",
                     error_code="CONTEXT_FILTERED",
-                    error_message="Message was filtered",
+                    session_lock=session_lock,
                 )
-                if session_lock:
-                    session_lock.release()
+                session_lock = None
                 return json.dumps({"status": "error", "message": "Message was filtered"})
 
             context["session_id"] = session_id
@@ -2600,19 +2644,22 @@ class WebChannel(ChatChannel):
             return json.dumps({"status": "success", "request_id": request_id, "stream": use_sse})
 
         except Exception as e:
-            try:
-                if session_lock:
-                    session_lock.release()
-            except Exception:
-                pass
             if request_id:
-                self._mark_run_terminal(
+                self._abort_pre_worker_request(
                     request_id,
-                    "failed",
+                    session_id,
+                    message=str(e),
                     reason="post_message_exception",
                     error_code="POST_MESSAGE_EXCEPTION",
-                    error_message=str(e),
+                    session_lock=session_lock,
                 )
+                session_lock = None
+            else:
+                try:
+                    if session_lock:
+                        session_lock.release()
+                except Exception:
+                    pass
             logger.error(f"Error processing message: {e}")
             return json.dumps({"status": "error", "message": str(e)})
 

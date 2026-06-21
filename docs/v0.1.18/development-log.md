@@ -59,3 +59,12 @@
   - Non-Web AgentBridge tokens still self-clean, preserving IM/scheduler bounded
     registry behavior.
   - Focused pytest passed: 6 token-owner/active-request/busy-session tests.
+- Added the third R18-03 pre-worker abort cleanup slice:
+  - WebChannel now has a single `_abort_pre_worker_request()` cleanup path for
+    `/message` failures that happen after `request_id` allocation but before a
+    worker owns finalization.
+  - Context composition failures, filtered contexts, and thread-start failures
+    now write a failed ledger terminal, unregister the cancel token, release the
+    session lock, and remove SSE/request replay state.
+  - Focused pytest passed: 7 pre-worker-abort/active-request/worker-completion
+    tests.
