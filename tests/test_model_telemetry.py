@@ -2598,6 +2598,670 @@ class TestModelTelemetry(unittest.TestCase):
         self.assertEqual(event["error_taxonomy"], "timeout")
         self.assertEqual(event["error_status_code"], 500)
 
+    def test_raw_vision_http_gateway_records_success(self):
+        from unittest.mock import MagicMock, patch
+        from agent.tools.vision.vision import RAW_VISION_API_PATH, Vision, VisionProvider
+        from models.model_telemetry import get_recent_model_calls
+
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {
+            "choices": [{"message": {"content": "a red square"}}],
+            "usage": {
+                "prompt_tokens": 11,
+                "completion_tokens": 3,
+                "total_tokens": 14,
+            },
+        }
+        provider = VisionProvider(
+            name="OpenAI",
+            api_key="test-key",
+            api_base="https://api.openai.test/v1",
+        )
+
+        with patch("agent.tools.vision.vision.requests.post", return_value=response) as post:
+            result = Vision({})._call_api(
+                provider,
+                "gpt-4o-mini",
+                "describe",
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+            )
+
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.result["content"], "a red square")
+        self.assertEqual(post.call_args.kwargs["json"]["model"], "gpt-4o-mini")
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["provider"], "OpenAI")
+        self.assertEqual(event["model"], "gpt-4o-mini")
+        self.assertEqual(event["api_path"], RAW_VISION_API_PATH)
+        self.assertEqual(event["status"], "completed")
+        self.assertEqual(event["input_tokens"], 11)
+        self.assertEqual(event["output_tokens"], 3)
+        self.assertEqual(event["total_tokens"], 14)
+
+    def test_raw_vision_http_gateway_records_non_200_failure(self):
+        from unittest.mock import MagicMock, patch
+        from agent.tools.vision.vision import Vision, VisionAPIError, VisionProvider
+        from models.model_telemetry import get_recent_model_calls
+
+        response = MagicMock()
+        response.status_code = 429
+        response.text = "rate limit"
+        provider = VisionProvider(
+            name="LinkAI",
+            api_key="test-key",
+            api_base="https://api.link-ai.test/v1",
+        )
+
+        with patch("agent.tools.vision.vision.requests.post", return_value=response):
+            with self.assertRaises(VisionAPIError):
+                Vision({})._call_api(
+                    provider,
+                    "gpt-4o-mini",
+                    "describe",
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+                )
+
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["provider"], "LinkAI")
+        self.assertEqual(event["model"], "gpt-4o-mini")
+        self.assertEqual(event["api_path"], "/vision/chat/completions")
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_status_code"], 429)
+        self.assertEqual(event["error_taxonomy"], "rate_limit")
+        self.assertEqual(event["error_message"], "HTTP 429: rate limit")
+
+    def test_raw_vision_http_gateway_records_non_200_json_error_body(self):
+        from unittest.mock import MagicMock, patch
+        from agent.tools.vision.vision import Vision, VisionAPIError, VisionProvider
+        from models.model_telemetry import get_recent_model_calls
+
+        response = MagicMock()
+        response.status_code = 429
+        response.text = '{"error":{"message":"too many","code":"rate_limit_exceeded","type":"rate_limit"}}'
+        response.json.return_value = {
+            "error": {
+                "message": "too many",
+                "code": "rate_limit_exceeded",
+                "type": "rate_limit",
+            }
+        }
+        provider = VisionProvider(
+            name="OpenAI",
+            api_key="test-key",
+            api_base="https://api.openai.test/v1",
+        )
+
+        with patch("agent.tools.vision.vision.requests.post", return_value=response):
+            with self.assertRaises(VisionAPIError):
+                Vision({})._call_api(
+                    provider,
+                    "gpt-4o-mini",
+                    "describe",
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+                )
+
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_status_code"], 429)
+        self.assertEqual(event["error_taxonomy"], "rate_limit")
+        self.assertEqual(event["error_code"], "rate_limit_exceeded")
+        self.assertEqual(event["error_type"], "rate_limit")
+        self.assertEqual(event["error_message"], "too many")
+
+    def test_raw_vision_http_gateway_prefers_error_body_http_code(self):
+        from unittest.mock import MagicMock, patch
+        from agent.tools.vision.vision import Vision, VisionAPIError, VisionProvider
+        from models.model_telemetry import get_recent_model_calls
+
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {
+            "error": {
+                "message": "too many vision requests",
+                "code": "rate_limit_exceeded",
+                "type": "rate_limit",
+                "status": "error",
+                "http_code": 429,
+            }
+        }
+        provider = VisionProvider(
+            name="OpenAI",
+            api_key="test-key",
+            api_base="https://api.openai.test/v1",
+        )
+
+        with patch("agent.tools.vision.vision.requests.post", return_value=response):
+            with self.assertRaises(VisionAPIError):
+                Vision({})._call_api(
+                    provider,
+                    "gpt-4o-mini",
+                    "describe",
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+                )
+
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_status_code"], 429)
+        self.assertEqual(event["error_taxonomy"], "rate_limit")
+        self.assertEqual(event["error_code"], "rate_limit_exceeded")
+        self.assertEqual(event["error_type"], "rate_limit")
+        self.assertEqual(event["error_message"], "too many vision requests")
+
+    def test_raw_vision_http_gateway_handles_string_error_body(self):
+        from unittest.mock import MagicMock, patch
+        from agent.tools.vision.vision import Vision, VisionAPIError, VisionProvider
+        from models.model_telemetry import get_recent_model_calls
+
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {
+            "error": "rate limit",
+            "http_code": 429,
+        }
+        provider = VisionProvider(
+            name="OpenAI",
+            api_key="test-key",
+            api_base="https://api.openai.test/v1",
+        )
+
+        with patch("agent.tools.vision.vision.requests.post", return_value=response):
+            with self.assertRaises(VisionAPIError):
+                Vision({})._call_api(
+                    provider,
+                    "gpt-4o-mini",
+                    "describe",
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+                )
+
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_status_code"], 429)
+        self.assertEqual(event["error_taxonomy"], "rate_limit")
+
+    def test_raw_vision_http_gateway_handles_non_dict_usage(self):
+        from unittest.mock import MagicMock, patch
+        from agent.tools.vision.vision import Vision, VisionProvider
+        from models.model_telemetry import get_recent_model_calls
+
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {
+            "choices": [{"message": {"content": "ok"}}],
+            "usage": None,
+        }
+        provider = VisionProvider(
+            name="OpenAI",
+            api_key="test-key",
+            api_base="https://api.openai.test/v1",
+        )
+
+        with patch("agent.tools.vision.vision.requests.post", return_value=response):
+            result = Vision({})._call_api(
+                provider,
+                "gpt-4o-mini",
+                "describe",
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+            )
+
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.result["usage"]["total_tokens"], 0)
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "completed")
+        self.assertEqual(event["total_tokens"], 0)
+
+    def test_raw_vision_http_gateway_records_timeout_and_reraises(self):
+        from unittest.mock import patch
+        import requests
+        from agent.tools.vision.vision import Vision, VisionProvider
+        from models.model_telemetry import get_recent_model_calls
+
+        provider = VisionProvider(
+            name="OpenAI",
+            api_key="test-key",
+            api_base="https://api.openai.test/v1",
+        )
+
+        with patch(
+            "agent.tools.vision.vision.requests.post",
+            side_effect=requests.Timeout("vision timeout"),
+        ):
+            with self.assertRaises(requests.Timeout):
+                Vision({})._call_api(
+                    provider,
+                    "gpt-4o-mini",
+                    "describe",
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+                )
+
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["provider"], "OpenAI")
+        self.assertEqual(event["model"], "gpt-4o-mini")
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_status_code"], 504)
+        self.assertEqual(event["error_taxonomy"], "timeout")
+
+    def test_raw_vision_http_gateway_records_each_fallback_attempt(self):
+        from unittest.mock import MagicMock, patch
+        from agent.tools.vision.vision import Vision, VisionProvider
+        from models.model_telemetry import get_recent_model_calls
+
+        failed = MagicMock()
+        failed.status_code = 500
+        failed.text = "upstream unavailable"
+        succeeded = MagicMock()
+        succeeded.status_code = 200
+        succeeded.json.return_value = {
+            "choices": [{"message": {"content": "fallback ok"}}],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
+        }
+        providers = [
+            VisionProvider("OpenAI", "test-key", "https://api.openai.test/v1"),
+            VisionProvider("LinkAI", "test-key", "https://api.link-ai.test/v1"),
+        ]
+
+        with patch(
+            "agent.tools.vision.vision.requests.post",
+            side_effect=[failed, succeeded],
+        ):
+            result = Vision({})._call_with_fallback(
+                providers,
+                "gpt-4o-mini",
+                "describe",
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+            )
+
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.result["provider"], "LinkAI")
+        events = get_recent_model_calls()
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[0]["provider"], "OpenAI")
+        self.assertEqual(events[0]["status"], "failed")
+        self.assertEqual(events[0]["error_taxonomy"], "server_error")
+        self.assertEqual(events[1]["provider"], "LinkAI")
+        self.assertEqual(events[1]["status"], "completed")
+        self.assertEqual(events[1]["total_tokens"], 5)
+
+    def test_legacy_reply_image_gateway_records_success(self):
+        import tempfile
+        from unittest.mock import MagicMock, patch
+        from bridge.context import Context, ContextType
+        from bridge.reply import ReplyType
+        from common import const
+        from models.chatgpt.chat_gpt_bot import ChatGPTBot
+        from models.model_telemetry import get_recent_model_calls
+
+        class FakeClient:
+            def __init__(self):
+                self.calls = []
+
+            def chat_completions(self, **kwargs):
+                self.calls.append(kwargs)
+                return {
+                    "choices": [{"message": {"content": "legacy image ok"}}],
+                    "usage": {
+                        "prompt_tokens": 7,
+                        "completion_tokens": 4,
+                        "total_tokens": 11,
+                    },
+                }
+
+        fake_conf = MagicMock()
+        config = {
+            "bot_type": const.OPENAI,
+            "model": "gpt-4o",
+            "open_ai_api_key": "test-key",
+            "open_ai_api_base": "https://api.openai.test/v1",
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        bot = ChatGPTBot.__new__(ChatGPTBot)
+        bot._ecorex_route_bot_type = const.OPENAI
+        bot._http_client = FakeClient()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image_path = os.path.join(temp_dir, "image.png")
+            with open(image_path, "wb") as handle:
+                handle.write(b"not-a-real-png")
+            with patch("models.chatgpt.chat_gpt_bot.conf", return_value=fake_conf):
+                reply = bot.reply_image(Context(ContextType.IMAGE, image_path, {"session_id": "s"}))
+
+        self.assertEqual(reply.type, ReplyType.TEXT)
+        self.assertEqual(reply.content, "legacy image ok")
+        self.assertEqual(bot._http_client.calls[0]["model"], "gpt-4o")
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["provider"], "openai")
+        self.assertEqual(event["model"], "gpt-4o")
+        self.assertEqual(event["api_path"], "/legacy/reply_image")
+        self.assertEqual(event["status"], "completed")
+        self.assertEqual(event["total_tokens"], 11)
+
+    def test_legacy_reply_image_gateway_records_http_error(self):
+        import tempfile
+        from unittest.mock import MagicMock, patch
+        from bridge.context import Context, ContextType
+        from bridge.reply import ReplyType
+        from common import const
+        from models.chatgpt.chat_gpt_bot import ChatGPTBot
+        from models.openai.openai_http_client import OpenAIHTTPError
+        from models.model_telemetry import get_recent_model_calls
+
+        class ErrorClient:
+            def chat_completions(self, **kwargs):
+                raise OpenAIHTTPError(
+                    429,
+                    {
+                        "error": {
+                            "message": "rate limit",
+                            "code": "rate_limit_exceeded",
+                            "type": "rate_limit",
+                        }
+                    },
+                )
+
+        fake_conf = MagicMock()
+        config = {
+            "bot_type": const.OPENAI,
+            "model": "gpt-4o",
+            "open_ai_api_key": "test-key",
+            "open_ai_api_base": "https://api.openai.test/v1",
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        bot = ChatGPTBot.__new__(ChatGPTBot)
+        bot._ecorex_route_bot_type = const.OPENAI
+        bot._http_client = ErrorClient()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image_path = os.path.join(temp_dir, "image.png")
+            with open(image_path, "wb") as handle:
+                handle.write(b"not-a-real-png")
+            with patch("models.chatgpt.chat_gpt_bot.conf", return_value=fake_conf):
+                reply = bot.reply_image(Context(ContextType.IMAGE, image_path, {"session_id": "s"}))
+
+        self.assertEqual(reply.type, ReplyType.ERROR)
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["provider"], "openai")
+        self.assertEqual(event["model"], "gpt-4o")
+        self.assertEqual(event["api_path"], "/legacy/reply_image")
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_status_code"], 429)
+        self.assertEqual(event["error_taxonomy"], "rate_limit")
+        self.assertEqual(event["error_code"], "rate_limit_exceeded")
+        self.assertEqual(event["error_type"], "rate_limit")
+        self.assertEqual(event["error_message"], "rate limit")
+
+    def test_legacy_reply_image_gateway_marks_malformed_content_failed(self):
+        import tempfile
+        from unittest.mock import MagicMock, patch
+        from bridge.context import Context, ContextType
+        from bridge.reply import ReplyType
+        from common import const
+        from models.chatgpt.chat_gpt_bot import ChatGPTBot
+        from models.model_telemetry import get_recent_model_calls
+
+        class FakeClient:
+            def chat_completions(self, **kwargs):
+                return {
+                    "choices": [{"message": {"content": None}}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1},
+                }
+
+        fake_conf = MagicMock()
+        config = {
+            "bot_type": const.OPENAI,
+            "model": "gpt-4o",
+            "open_ai_api_key": "test-key",
+            "open_ai_api_base": "https://api.openai.test/v1",
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        bot = ChatGPTBot.__new__(ChatGPTBot)
+        bot._ecorex_route_bot_type = const.OPENAI
+        bot._http_client = FakeClient()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image_path = os.path.join(temp_dir, "image.png")
+            with open(image_path, "wb") as handle:
+                handle.write(b"not-a-real-png")
+            with patch("models.chatgpt.chat_gpt_bot.conf", return_value=fake_conf):
+                reply = bot.reply_image(Context(ContextType.IMAGE, image_path, {"session_id": "s"}))
+
+        self.assertEqual(reply.type, ReplyType.ERROR)
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["api_path"], "/legacy/reply_image")
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["total_tokens"], 1)
+
+    def test_linkai_chat_with_cached_image_records_telemetry(self):
+        from unittest.mock import MagicMock, patch
+        from bridge.context import Context, ContextType
+        from bridge.reply import ReplyType
+        from common import memory
+        from models.linkai.link_ai_bot import LinkAIBot
+        from models.model_telemetry import get_recent_model_calls
+
+        class FakeSessions:
+            def __init__(self):
+                self.replies = []
+
+            def session_msg_query(self, query, session_id):
+                return [{"role": "user", "content": query}]
+
+            def session_reply(self, reply, session_id, total_tokens, query=None):
+                self.replies.append((reply, session_id, total_tokens, query))
+
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {
+            "choices": [{"message": {"content": "image answer"}}],
+            "usage": {"prompt_tokens": 6, "completion_tokens": 4, "total_tokens": 10},
+        }
+        fake_conf = MagicMock()
+        config = {
+            "linkai_api_key": "test-key",
+            "linkai_api_base": "https://api.link-ai.test",
+            "model": "gpt-4o-mini",
+            "temperature": 0.7,
+            "top_p": 1,
+            "frequency_penalty": 0,
+            "presence_penalty": 0,
+            "request_timeout": 180,
+            "channel_type": "web",
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        bot = LinkAIBot.__new__(LinkAIBot)
+        bot.sessions = FakeSessions()
+        bot._find_group_mapping_code = lambda context: None
+        bot._fetch_agent_suffix = lambda response: ""
+        bot._fetch_knowledge_search_suffix = lambda response: ""
+        bot._process_url = lambda text: text
+        multimodal_messages = [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "describe"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+            ],
+        }]
+        bot._process_image_msg = lambda **_kwargs: multimodal_messages
+        session_id = "linkai-image-session"
+        memory.USER_IMAGE_CACHE[session_id] = {"path": "image.png", "msg": MagicMock()}
+
+        try:
+            with patch("models.linkai.link_ai_bot.conf", return_value=fake_conf):
+                with patch("models.linkai.link_ai_bot.requests.post", return_value=response) as post:
+                    reply = bot._chat(
+                        "describe",
+                        Context(ContextType.TEXT, "describe", {"session_id": session_id}),
+                    )
+        finally:
+            memory.USER_IMAGE_CACHE.pop(session_id, None)
+
+        self.assertEqual(reply.type, ReplyType.TEXT)
+        self.assertEqual(reply.content, "image answer")
+        self.assertEqual(post.call_args.kwargs["json"]["messages"], multimodal_messages)
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["provider"], "linkai")
+        self.assertEqual(event["model"], "gpt-4o-mini")
+        self.assertEqual(event["api_path"], "/legacy/linkai_chat")
+        self.assertEqual(event["status"], "completed")
+        self.assertEqual(event["total_tokens"], 10)
+
+    def test_linkai_chat_records_non_200_json_error(self):
+        from unittest.mock import MagicMock, patch
+        from bridge.context import Context, ContextType
+        from bridge.reply import ReplyType
+        from models.linkai.link_ai_bot import LinkAIBot
+        from models.model_telemetry import get_recent_model_calls
+
+        class FakeSessions:
+            def session_msg_query(self, query, session_id):
+                return [{"role": "user", "content": query}]
+
+        response = MagicMock()
+        response.status_code = 429
+        response.text = '{"error":{"message":"too many","code":"rate_limit_exceeded","type":"rate_limit"}}'
+        response.json.return_value = {
+            "error": {
+                "message": "too many",
+                "code": "rate_limit_exceeded",
+                "type": "rate_limit",
+            }
+        }
+        fake_conf = MagicMock()
+        config = {
+            "linkai_api_key": "test-key",
+            "linkai_api_base": "https://api.link-ai.test",
+            "model": "gpt-4o-mini",
+            "temperature": 0.7,
+            "top_p": 1,
+            "frequency_penalty": 0,
+            "presence_penalty": 0,
+            "request_timeout": 180,
+            "channel_type": "web",
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        bot = LinkAIBot.__new__(LinkAIBot)
+        bot.sessions = FakeSessions()
+        bot._find_group_mapping_code = lambda context: None
+
+        with patch("models.linkai.link_ai_bot.conf", return_value=fake_conf):
+            with patch("models.linkai.link_ai_bot.requests.post", return_value=response):
+                reply = bot._chat(
+                    "hello",
+                    Context(ContextType.TEXT, "hello", {"session_id": "linkai-429-session"}),
+                )
+
+        self.assertEqual(reply.type, ReplyType.TEXT)
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["provider"], "linkai")
+        self.assertEqual(event["api_path"], "/legacy/linkai_chat")
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_status_code"], 429)
+        self.assertEqual(event["error_taxonomy"], "rate_limit")
+        self.assertEqual(event["error_code"], "rate_limit_exceeded")
+        self.assertEqual(event["error_type"], "rate_limit")
+        self.assertEqual(event["error_message"], "too many")
+
+    def test_linkai_chat_records_timeout_retry_attempts(self):
+        from unittest.mock import MagicMock, patch
+        import requests
+        from bridge.context import Context, ContextType
+        from bridge.reply import ReplyType
+        from models.linkai.link_ai_bot import LinkAIBot
+        from models.model_telemetry import get_recent_model_calls
+
+        class FakeSessions:
+            def session_msg_query(self, query, session_id):
+                return [{"role": "user", "content": query}]
+
+        fake_conf = MagicMock()
+        config = {
+            "linkai_api_key": "test-key",
+            "linkai_api_base": "https://api.link-ai.test",
+            "model": "gpt-4o-mini",
+            "temperature": 0.7,
+            "top_p": 1,
+            "frequency_penalty": 0,
+            "presence_penalty": 0,
+            "request_timeout": 180,
+            "channel_type": "web",
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        bot = LinkAIBot.__new__(LinkAIBot)
+        bot.sessions = FakeSessions()
+        bot._find_group_mapping_code = lambda context: None
+
+        with patch("models.linkai.link_ai_bot.conf", return_value=fake_conf):
+            with patch("models.linkai.link_ai_bot.time.sleep", lambda _seconds: None):
+                with patch(
+                    "models.linkai.link_ai_bot.requests.post",
+                    side_effect=requests.Timeout("boom"),
+                ):
+                    reply = bot._chat(
+                        "hello",
+                        Context(ContextType.TEXT, "hello", {"session_id": "linkai-timeout-session"}),
+                    )
+
+        self.assertEqual(reply.type, ReplyType.TEXT)
+        events = get_recent_model_calls()
+        self.assertEqual(len(events), 3)
+        self.assertEqual([event["retry_count"] for event in events], [0, 1, 2])
+        for event in events:
+            self.assertEqual(event["provider"], "linkai")
+            self.assertEqual(event["api_path"], "/legacy/linkai_chat")
+            self.assertEqual(event["status"], "failed")
+            self.assertEqual(event["error_status_code"], 504)
+            self.assertEqual(event["error_taxonomy"], "timeout")
+
+    def test_linkai_chat_records_connection_retry_attempts(self):
+        from unittest.mock import MagicMock, patch
+        import requests
+        from bridge.context import Context, ContextType
+        from bridge.reply import ReplyType
+        from models.linkai.link_ai_bot import LinkAIBot
+        from models.model_telemetry import get_recent_model_calls
+
+        class FakeSessions:
+            def session_msg_query(self, query, session_id):
+                return [{"role": "user", "content": query}]
+
+        fake_conf = MagicMock()
+        config = {
+            "linkai_api_key": "test-key",
+            "linkai_api_base": "https://api.link-ai.test",
+            "model": "gpt-4o-mini",
+            "temperature": 0.7,
+            "top_p": 1,
+            "frequency_penalty": 0,
+            "presence_penalty": 0,
+            "request_timeout": 180,
+            "channel_type": "web",
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        bot = LinkAIBot.__new__(LinkAIBot)
+        bot.sessions = FakeSessions()
+        bot._find_group_mapping_code = lambda context: None
+
+        with patch("models.linkai.link_ai_bot.conf", return_value=fake_conf):
+            with patch("models.linkai.link_ai_bot.time.sleep", lambda _seconds: None):
+                with patch(
+                    "models.linkai.link_ai_bot.requests.post",
+                    side_effect=requests.ConnectionError("dns failed"),
+                ):
+                    reply = bot._chat(
+                        "hello",
+                        Context(ContextType.TEXT, "hello", {"session_id": "linkai-connection-session"}),
+                    )
+
+        self.assertEqual(reply.type, ReplyType.TEXT)
+        events = get_recent_model_calls()
+        self.assertEqual(len(events), 3)
+        self.assertEqual([event["retry_count"] for event in events], [0, 1, 2])
+        for event in events:
+            self.assertEqual(event["provider"], "linkai")
+            self.assertEqual(event["api_path"], "/legacy/linkai_chat")
+            self.assertEqual(event["status"], "failed")
+            self.assertEqual(event["error_status_code"], 503)
+            self.assertEqual(event["error_taxonomy"], "network_error")
+
     def test_legacy_create_img_gateway_records_success(self):
         from models.legacy_reply_gateway import (
             LEGACY_CREATE_IMAGE_API_PATH,

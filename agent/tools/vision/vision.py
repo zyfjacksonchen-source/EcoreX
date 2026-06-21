@@ -29,11 +29,13 @@ from agent.tools.base_tool import BaseTool, ToolResult
 from common import const
 from common.log import logger
 from config import conf
+from models.model_telemetry import ModelCallSpan
 
 DEFAULT_MODEL = const.GPT_41_MINI
 DEFAULT_TIMEOUT = 180
 MAX_TOKENS = 4000
 COMPRESS_THRESHOLD = 1_048_576  # 1 MB
+RAW_VISION_API_PATH = "/vision/chat/completions"
 
 SUPPORTED_EXTENSIONS = {
     "jpg": "image/jpeg",
@@ -113,6 +115,59 @@ class VisionProvider:
 class VisionAPIError(Exception):
     """Raised when a Vision API call fails and should trigger fallback."""
     pass
+
+
+def _first_numeric_status(*values: Any) -> Optional[int]:
+    for value in values:
+        if value in (None, ""):
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _raw_vision_error_details(
+    *,
+    message: Any = "",
+    status_code: Any = None,
+    payload: Any = None,
+) -> Dict[str, Any]:
+    """Extract bounded telemetry details from a raw Vision API failure."""
+    error_value = payload.get("error") if isinstance(payload, dict) else None
+    error_payload = error_value if isinstance(error_value, dict) else {}
+    resolved_message = (
+        error_payload.get("message")
+        or (payload.get("message") if isinstance(payload, dict) else None)
+        or message
+        or error_value
+    )
+    resolved_status = _first_numeric_status(
+        status_code,
+        payload.get("status_code") if isinstance(payload, dict) else None,
+        payload.get("http_code") if isinstance(payload, dict) else None,
+        payload.get("status") if isinstance(payload, dict) else None,
+        error_payload.get("status_code"),
+        error_payload.get("http_code"),
+        error_payload.get("status"),
+    )
+    return {
+        "message": str(resolved_message or ""),
+        "status_code": resolved_status,
+        "error_code": str(
+            error_payload.get("code")
+            or (payload.get("error_code") if isinstance(payload, dict) else "")
+            or (payload.get("code") if isinstance(payload, dict) else "")
+            or ""
+        ),
+        "error_type": str(
+            error_payload.get("type")
+            or (payload.get("error_type") if isinstance(payload, dict) else "")
+            or (payload.get("type") if isinstance(payload, dict) else "")
+            or ""
+        ),
+    }
 
 
 class Vision(BaseTool):
@@ -794,55 +849,103 @@ class Vision(BaseTool):
         Raises VisionAPIError on recoverable failures so the caller can try
         the next provider.
         """
-        payload = {
-            "model": model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": question},
-                        image_content,
-                    ],
-                }
-            ],
-        }
-
-        headers = {
-            "Authorization": f"Bearer {provider.api_key}",
-            "Content-Type": "application/json",
-            **provider.extra_headers,
-        }
-
-        resp = requests.post(
-            f"{provider.api_base}/chat/completions",
-            headers=headers,
-            json=payload,
-            timeout=DEFAULT_TIMEOUT,
+        span = ModelCallSpan(
+            provider=provider.name,
+            model=model,
+            stream=False,
+            retry_count=0,
+            api_path=RAW_VISION_API_PATH,
         )
+        try:
+            payload = {
+                "model": model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": question},
+                            image_content,
+                        ],
+                    }
+                ],
+            }
 
-        if resp.status_code != 200:
-            raise VisionAPIError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+            headers = {
+                "Authorization": f"Bearer {provider.api_key}",
+                "Content-Type": "application/json",
+                **provider.extra_headers,
+            }
 
-        data = resp.json()
+            resp = requests.post(
+                f"{provider.api_base}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=DEFAULT_TIMEOUT,
+            )
 
-        if "error" in data:
-            msg = data["error"].get("message", "Unknown API error")
-            raise VisionAPIError(f"API error - {msg}")
+            if resp.status_code != 200:
+                error_payload = None
+                try:
+                    loaded = resp.json()
+                    if isinstance(loaded, dict):
+                        error_payload = loaded
+                except Exception:
+                    error_payload = None
+                span.finish_error(
+                    **_raw_vision_error_details(
+                        message=f"HTTP {resp.status_code}: {resp.text[:200]}",
+                        status_code=resp.status_code,
+                        payload=error_payload,
+                    )
+                )
+                raise VisionAPIError(f"HTTP {resp.status_code}: {resp.text[:200]}")
 
-        content = ""
-        choices = data.get("choices", [])
-        if choices:
-            content = choices[0].get("message", {}).get("content", "")
+            data = resp.json()
 
-        usage = data.get("usage", {})
-        result = {
-            "model": model,
-            "provider": provider.name,
-            "content": content,
-            "usage": {
-                "prompt_tokens": usage.get("prompt_tokens", 0),
-                "completion_tokens": usage.get("completion_tokens", 0),
-                "total_tokens": usage.get("total_tokens", 0),
-            },
-        }
-        return ToolResult.success(result)
+            if "error" in data:
+                error_value = data.get("error")
+                if isinstance(error_value, dict):
+                    msg = error_value.get("message", "Unknown API error")
+                else:
+                    msg = str(error_value or "Unknown API error")
+                span.finish_error(
+                    **_raw_vision_error_details(
+                        message=f"API error - {msg}",
+                        payload=data,
+                    )
+                )
+                raise VisionAPIError(f"API error - {msg}")
+
+            content = ""
+            choices = data.get("choices", [])
+            if choices:
+                content = choices[0].get("message", {}).get("content", "")
+
+            usage = data.get("usage", {})
+            if not isinstance(usage, dict):
+                usage = {}
+            span.observe_usage(usage)
+            result = {
+                "model": model,
+                "provider": provider.name,
+                "content": content,
+                "usage": {
+                    "prompt_tokens": usage.get("prompt_tokens", 0),
+                    "completion_tokens": usage.get("completion_tokens", 0),
+                    "total_tokens": usage.get("total_tokens", 0),
+                },
+            }
+            span.finish_completed()
+            return ToolResult.success(result)
+        except requests.Timeout as exc:
+            if not span.finished:
+                span.finish_error(message=f"Vision request timed out: {exc}", status_code=504)
+            raise
+        except requests.ConnectionError as exc:
+            if not span.finished:
+                span.finish_error(message=f"Vision connection failed: {exc}", status_code=503)
+            raise
+        except Exception as exc:
+            if not span.finished:
+                span.finish_error(message=str(exc), status_code=500)
+            raise

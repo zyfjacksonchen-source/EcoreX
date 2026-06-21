@@ -823,3 +823,26 @@
     raw vision HTTP surface inventory; R18-04-C remains PARTIAL because this
     slice records image generation calls but does not migrate provider-local
     `create_img` retry loops to the shared retry policy.
+- Closed the remaining raw vision telemetry inventory:
+  - `agent/tools/vision/vision.py` now records `/vision/chat/completions`
+    spans around the Vision tool's OpenAI/LinkAI raw HTTP path, including
+    success usage, HTTP non-200 failures, provider error bodies, timeouts,
+    connection failures, and fallback attempts. Bot-backed Vision providers
+    continue to use `bot.call_vision` and therefore remain covered by the
+    legacy `/legacy/call_vision` wrapper instead of double-recording.
+  - `models/chatgpt/chat_gpt_bot.py` now records `/legacy/reply_image`
+    telemetry for the old non-Agent `ContextType.IMAGE` recognition path that
+    calls the OpenAI-compatible HTTP client directly.
+  - `models/linkai/link_ai_bot.py` now records `/legacy/linkai_chat`
+    telemetry for the legacy LinkAI direct chat path, including the production
+    image-cache flow where `ChatChannel` stores an image and LinkAI later sends
+    a multimodal `/v1/chat/completions` request from `_chat()`.
+  - Focused tests cover raw Vision HTTP success, non-200 failure taxonomy with
+    JSON error bodies, error-body `http_code` precedence, non-dict usage,
+    string error bodies, timeout re-raise telemetry, fallback attempts, legacy
+    `reply_image` success/HTTP-error/malformed-content behavior, and LinkAI
+    cached-image multimodal, non-200 JSON, timeout retry, and connection retry
+    telemetry. With the inventory cross-check finding no remaining production
+    raw vision HTTP surfaces, R18-04-B is promoted to PASS. R18-04-C remains
+    PARTIAL because provider-local retry loops and retry policy migration are
+    still pending.

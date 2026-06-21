@@ -2,7 +2,7 @@
   "product": "EcoreX",
   "version": "0.1.18",
   "gate": "v0.1.18-production-agent",
-  "generatedAt": "2026-06-21T17:02:43Z",
+  "generatedAt": "2026-06-21T17:41:22Z",
   "status": "no-go",
   "summary": {
     "total": 21,
@@ -32,7 +32,7 @@
       "name": "Acceptance rows: model-calls",
       "status": "fail",
       "severity": "blocker",
-      "evidence": "docs/v0.1.18/acceptance-checklist.md: missing=[] incomplete=['R18-04-A=PARTIAL', 'R18-04-B=PARTIAL', 'R18-04-C=PARTIAL']"
+      "evidence": "docs/v0.1.18/acceptance-checklist.md: missing=[] incomplete=['R18-04-A=PARTIAL', 'R18-04-C=PARTIAL']"
     },
     {
       "name": "Acceptance rows: context-budget",

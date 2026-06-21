@@ -20,12 +20,15 @@ from models.openai_compatible_bot import OpenAICompatibleBot
 from models.chatgpt.chat_gpt_session import ChatGPTSession
 from models.openai.open_ai_image import OpenAIImage
 from models.session_manager import SessionManager
+from models.model_telemetry import ModelCallSpan
 from bridge.context import ContextType
 from bridge.reply import Reply, ReplyType
 from common.log import logger
 from common.token_bucket import TokenBucket
 from config import conf, load_config
 from models.baidu.baidu_wenxin_session import BaiduWenxinSession
+
+LEGACY_REPLY_IMAGE_API_PATH = "/legacy/reply_image"
 
 # OpenAI对话模型API (可用)
 class ChatGPTBot(Bot, OpenAIImage, OpenAICompatibleBot):
@@ -206,6 +209,7 @@ class ChatGPTBot(Bot, OpenAIImage, OpenAICompatibleBot):
             model = context.get("gpt_model") or conf().get("model", "gpt-4o")
             api_key = context.get("openai_api_key") or (conf().get("custom_api_key") if is_custom else conf().get("open_ai_api_key"))
             api_base = conf().get("custom_api_base") if is_custom else conf().get("open_ai_api_base")
+            provider = "custom" if is_custom else "openai"
             
             # Build vision request
             messages = [
@@ -226,17 +230,39 @@ class ChatGPTBot(Bot, OpenAIImage, OpenAICompatibleBot):
             logger.info(f"[CHATGPT] Calling vision API with model: {model}")
             
             # Call OpenAI-compatible API via HTTP
-            response = self._http_client.chat_completions(
-                api_key=api_key or None,
-                api_base=api_base or None,
+            span = ModelCallSpan(
+                provider=provider,
                 model=model,
-                messages=messages,
-                max_tokens=1000,
+                stream=False,
+                retry_count=0,
+                api_path=LEGACY_REPLY_IMAGE_API_PATH,
             )
+            try:
+                response = self._http_client.chat_completions(
+                    api_key=api_key or None,
+                    api_base=api_base or None,
+                    model=model,
+                    messages=messages,
+                    max_tokens=1000,
+                )
+                span.observe_response(response)
+                content = response["choices"][0]["message"]["content"]
+                logger.info(f"[CHATGPT] Vision API response: {content[:100]}...")
+                span.finish_completed()
+            except Exception as call_error:
+                if isinstance(call_error, OpenAIHTTPError):
+                    error_value = call_error.body.get("error") if isinstance(call_error.body, dict) else {}
+                    error_payload = error_value if isinstance(error_value, dict) else {}
+                    span.finish_error(
+                        message=call_error.message,
+                        status_code=call_error.status_code,
+                        error_code=error_payload.get("code", ""),
+                        error_type=error_payload.get("type", ""),
+                    )
+                else:
+                    span.finish_error(message=str(call_error), status_code=500)
+                raise
 
-            content = response["choices"][0]["message"]["content"]
-            logger.info(f"[CHATGPT] Vision API response: {content[:100]}...")
-            
             # Clean up temp file
             try:
                 os.remove(image_path)

@@ -18,6 +18,66 @@ import threading
 from common import memory, utils
 import base64
 import os
+from models.model_telemetry import ModelCallSpan
+
+LINKAI_CHAT_API_PATH = "/legacy/linkai_chat"
+
+
+def _first_numeric_status(*values):
+    for value in values:
+        if value in (None, ""):
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _response_json_or_empty(response):
+    try:
+        payload = response.json()
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
+def _linkai_error_details(*, message="", status_code=None, payload=None):
+    payload = payload if isinstance(payload, dict) else {}
+    error_value = payload.get("error")
+    error_payload = error_value if isinstance(error_value, dict) else {}
+    resolved_message = (
+        error_payload.get("message")
+        or payload.get("message")
+        or message
+        or error_value
+    )
+    return {
+        "message": str(resolved_message or ""),
+        "status_code": _first_numeric_status(
+            status_code,
+            payload.get("status_code"),
+            payload.get("http_code"),
+            payload.get("status"),
+            payload.get("code"),
+            error_payload.get("status_code"),
+            error_payload.get("http_code"),
+            error_payload.get("status"),
+            error_payload.get("code"),
+        ),
+        "error_code": str(
+            error_payload.get("code")
+            or payload.get("error_code")
+            or payload.get("code")
+            or ""
+        ),
+        "error_type": str(
+            error_payload.get("type")
+            or payload.get("error_type")
+            or payload.get("type")
+            or ""
+        ),
+    }
 
 class LinkAIBot(Bot, OpenAICompatibleBot):
     # authentication failed
@@ -67,6 +127,7 @@ class LinkAIBot(Bot, OpenAICompatibleBot):
         :param retry_count: 当前递归重试次数
         :return: 回复
         """
+        span = None
         if retry_count > 2:
             # exit from retry 2 times
             logger.warn("[LINKAI] failed after maximum number of retry times")
@@ -138,16 +199,32 @@ class LinkAIBot(Bot, OpenAICompatibleBot):
 
             # do http request
             base_url = conf().get("linkai_api_base", "https://api.link-ai.tech")
+            span = ModelCallSpan(
+                provider="linkai",
+                model=str(body.get("model") or ""),
+                stream=False,
+                retry_count=retry_count,
+                api_path=LINKAI_CHAT_API_PATH,
+            )
             res = requests.post(url=base_url + "/v1/chat/completions", json=body, headers=headers,
                                 timeout=conf().get("request_timeout", 180))
             if res.status_code == 200:
                 # execute success
                 response = res.json()
                 reply_content = response["choices"][0]["message"]["content"]
-                total_tokens = response["usage"]["total_tokens"]
+                usage = response.get("usage") if isinstance(response.get("usage"), dict) else {}
+                span.observe_usage(usage)
+                total_tokens = usage.get("total_tokens", 0)
                 res_code = response.get('code')
                 logger.info(f"[LINKAI] reply={reply_content}, total_tokens={total_tokens}, res_code={res_code}")
                 if res_code == 429:
+                    span.finish_error(
+                        **_linkai_error_details(
+                            message=reply_content,
+                            status_code=429,
+                            payload=response,
+                        )
+                    )
                     logger.warn(f"[LINKAI] 用户访问超出限流配置，sender_id={body.get('sender_id')}")
                 else:
                     self.sessions.session_reply(reply_content, session_id, total_tokens, query=query)
@@ -165,13 +242,24 @@ class LinkAIBot(Bot, OpenAICompatibleBot):
                     reply_content = response["choices"][0].get("text_content")
                 if reply_content:
                     reply_content = self._process_url(reply_content)
+                if not span.finished:
+                    span.finish_completed()
                 return Reply(ReplyType.TEXT, reply_content)
 
             else:
-                response = res.json()
+                response = _response_json_or_empty(res)
                 error = response.get("error")
+                error_message = error.get("message") if isinstance(error, dict) else error
+                error_type = error.get("type") if isinstance(error, dict) else response.get("type")
                 logger.error(f"[LINKAI] chat failed, status_code={res.status_code}, "
-                             f"msg={error.get('message')}, type={error.get('type')}")
+                             f"msg={error_message}, type={error_type}")
+                span.finish_error(
+                    **_linkai_error_details(
+                        message=f"HTTP {res.status_code}: {getattr(res, 'text', '')[:200]}",
+                        status_code=res.status_code,
+                        payload=response,
+                    )
+                )
 
                 if res.status_code >= 500:
                     # server error, need retry
@@ -184,7 +272,25 @@ class LinkAIBot(Bot, OpenAICompatibleBot):
                     error_reply = "这个问题我还没有学会，请问我其它问题吧"
                 return Reply(ReplyType.TEXT, error_reply)
 
+        except requests.Timeout as e:
+            if span is not None and not span.finished:
+                span.finish_error(message=f"LinkAI request timed out: {e}", status_code=504)
+            logger.exception(e)
+            # retry
+            time.sleep(2)
+            logger.warn(f"[LINKAI] do retry, times={retry_count}")
+            return self._chat(query, context, retry_count + 1)
+        except requests.ConnectionError as e:
+            if span is not None and not span.finished:
+                span.finish_error(message=f"LinkAI connection failed: {e}", status_code=503)
+            logger.exception(e)
+            # retry
+            time.sleep(2)
+            logger.warn(f"[LINKAI] do retry, times={retry_count}")
+            return self._chat(query, context, retry_count + 1)
         except Exception as e:
+            if span is not None and not span.finished:
+                span.finish_error(message=str(e), status_code=500)
             logger.exception(e)
             # retry
             time.sleep(2)
