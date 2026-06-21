@@ -139,3 +139,20 @@
   - Focused pytest passed: 20 model telemetry/capability tests; Web
     agent-stream error regression passed: 5 tests; Qianfan route subset passed:
     3 tests.
+- Added the first R18-03-D backpressure slice:
+  - Web `/message` now lets `/cancel` bypass pressure and gives the
+    SessionLock/busy-session interrupt path first chance to replace an older
+    same-session request, then checks active run pressure before request id
+    allocation, cancel-token registration, run-ledger creation, and SSE setup.
+  - The admission check enforces configurable global and per-session active-run
+    limits and returns typed `BACKPRESSURE_GLOBAL_LIMIT` or
+    `BACKPRESSURE_SESSION_LIMIT` errors with `retryable`, `recoverable`,
+    `retry_after_ms`, active counts, active request ids, and the current SSE
+    replay retention limit.
+  - Same-session replacement requests ignore the old request id for admission
+    accounting after first giving the busy-session path a chance to cancel it,
+    while different-session requests still see the newly admitted request
+    through the cancel registry/run ledger before they are accepted.
+  - `/cancel` remains a fast path that bypasses admission pressure so users can
+    always stop an overloaded session.
+  - Focused pytest passed: 12 backpressure/busy/pre-worker/active snapshot tests.

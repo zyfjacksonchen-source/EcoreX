@@ -1152,15 +1152,17 @@ class TestWebParallelHandlers(unittest.TestCase):
                 }
                 try:
                     with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
-                        with patch.object(channel, "_generate_request_id", return_value=new_request_id):
-                            with patch.object(channel, "_compose_context", side_effect=fake_compose_context):
-                                with patch.object(channel, "produce", side_effect=fake_produce):
-                                    with patch.object(
-                                        web_channel.web,
-                                        "data",
-                                        return_value=json.dumps(payload).encode("utf-8"),
-                                    ):
-                                        result = json.loads(channel.post_message())
+                        with patch.object(channel, "BACKPRESSURE_GLOBAL_ACTIVE_LIMIT", 1):
+                            with patch.object(channel, "BACKPRESSURE_SESSION_ACTIVE_LIMIT", 1):
+                                with patch.object(channel, "_generate_request_id", return_value=new_request_id):
+                                    with patch.object(channel, "_compose_context", side_effect=fake_compose_context):
+                                        with patch.object(channel, "produce", side_effect=fake_produce):
+                                            with patch.object(
+                                                web_channel.web,
+                                                "data",
+                                                return_value=json.dumps(payload).encode("utf-8"),
+                                            ):
+                                                result = json.loads(channel.post_message())
 
                     cancelled = old_queue.get(timeout=2)
                     self.assertEqual(result["status"], "success")
@@ -1225,6 +1227,277 @@ class TestWebParallelHandlers(unittest.TestCase):
                 finally:
                     old_lock.release()
                     registry.unregister(old_request_id)
+
+    def test_post_message_global_backpressure_rejects_before_request_allocation(self):
+        from agent.protocol import get_cancel_registry
+        from channel.web import web_channel
+        from common.ecorex_workspace import SessionLock
+
+        with isolated_run_ledger():
+            channel = web_channel.WebChannel()
+            channel.request_to_session = {}
+            registry = get_cancel_registry()
+            registry.register("req-backpressure-existing", session_id="session-existing")
+            with tempfile.TemporaryDirectory() as workspace:
+                payload = {
+                    "session_id": "session-new-backpressure",
+                    "message": "should be rejected by global pressure",
+                    "stream": True,
+                }
+                lock_path = SessionLock(workspace, payload["session_id"]).path
+                try:
+                    with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                        with patch.object(channel, "BACKPRESSURE_GLOBAL_ACTIVE_LIMIT", 1):
+                            with patch.object(channel, "BACKPRESSURE_SESSION_ACTIVE_LIMIT", 99):
+                                with patch.object(channel, "_generate_request_id") as generate_request_id:
+                                    with patch.object(
+                                        web_channel.web,
+                                        "data",
+                                        return_value=json.dumps(payload).encode("utf-8"),
+                                    ):
+                                        result = json.loads(channel.post_message())
+
+                    self.assertEqual(result["status"], "error")
+                    self.assertEqual(result["code"], "BACKPRESSURE_GLOBAL_LIMIT")
+                    self.assertEqual(result["error_type"], "backpressure_limit")
+                    self.assertEqual(result["scope"], "global")
+                    self.assertTrue(result["retryable"])
+                    self.assertTrue(result["recoverable"])
+                    self.assertEqual(result["limit"], 1)
+                    self.assertEqual(result["global_active"], 1)
+                    self.assertEqual(result["sse_replay_limit"], channel.SSE_MAX_REPLAY_EVENTS)
+                    generate_request_id.assert_not_called()
+                    self.assertEqual(channel.request_to_session, {})
+                    self.assertFalse(lock_path.exists())
+                finally:
+                    registry.unregister("req-backpressure-existing")
+
+    def test_post_message_backpressure_sees_prior_admitted_request(self):
+        from agent.protocol import get_cancel_registry
+        from bridge.context import Context
+        from channel.web import web_channel
+
+        with isolated_run_ledger():
+            channel = web_channel.WebChannel()
+            channel.request_to_session = {}
+            registry = get_cancel_registry()
+            produced = []
+
+            def fake_compose_context(ctype, content, **kwargs):
+                context = Context(ctype, content)
+                context.kwargs = kwargs
+                return context
+
+            try:
+                with patch.object(channel, "BACKPRESSURE_GLOBAL_ACTIVE_LIMIT", 1):
+                    with patch.object(channel, "BACKPRESSURE_SESSION_ACTIVE_LIMIT", 99):
+                        with patch.object(channel, "_compose_context", side_effect=fake_compose_context):
+                            with patch.object(channel, "produce", side_effect=lambda context: produced.append(context)):
+                                with patch.object(channel, "_generate_request_id", return_value="req-first-admitted"):
+                                    with patch.object(
+                                        web_channel.web,
+                                        "data",
+                                        return_value=json.dumps({
+                                            "session_id": "session-first-admitted",
+                                            "message": "first admitted",
+                                            "stream": True,
+                                        }).encode("utf-8"),
+                                    ):
+                                        first = json.loads(channel.post_message())
+                                with patch.object(channel, "_generate_request_id") as second_request_id:
+                                    with patch.object(
+                                        web_channel.web,
+                                        "data",
+                                        return_value=json.dumps({
+                                            "session_id": "session-second-rejected",
+                                            "message": "second rejected",
+                                            "stream": True,
+                                        }).encode("utf-8"),
+                                    ):
+                                        second = json.loads(channel.post_message())
+
+                self.assertEqual(first["status"], "success")
+                self.assertEqual(first["request_id"], "req-first-admitted")
+                self.assertEqual(second["status"], "error")
+                self.assertEqual(second["code"], "BACKPRESSURE_GLOBAL_LIMIT")
+                self.assertEqual(second["global_active"], 1)
+                second_request_id.assert_not_called()
+                self.assertTrue(produced)
+            finally:
+                registry.unregister("req-first-admitted")
+
+    def test_post_message_session_backpressure_returns_typed_active_ids(self):
+        from agent.protocol import reset_run_ledger_for_tests
+        from channel.web import web_channel
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            channel = web_channel.WebChannel()
+            channel.request_to_session = {}
+            session_id = "session-pressure-existing"
+            request_id = "req-session-pressure-existing"
+            ledger.create_run(request_id, session_id, phase="running", status="running")
+            payload = {
+                "session_id": session_id,
+                "message": "same session should be rejected by session pressure",
+                "stream": True,
+            }
+            try:
+                with patch.object(channel, "BACKPRESSURE_GLOBAL_ACTIVE_LIMIT", 99):
+                    with patch.object(channel, "BACKPRESSURE_SESSION_ACTIVE_LIMIT", 1):
+                        with patch.object(channel, "_generate_request_id") as generate_request_id:
+                            with patch.object(
+                                web_channel.web,
+                                "data",
+                                return_value=json.dumps(payload).encode("utf-8"),
+                            ):
+                                result = json.loads(channel.post_message())
+
+                self.assertEqual(result["status"], "error")
+                self.assertEqual(result["code"], "BACKPRESSURE_SESSION_LIMIT")
+                self.assertEqual(result["error_type"], "backpressure_limit")
+                self.assertEqual(result["scope"], "session")
+                self.assertTrue(result["retryable"])
+                self.assertEqual(result["limit"], 1)
+                self.assertEqual(result["session_active"], 1)
+                self.assertEqual(result["active_request_ids"], [request_id])
+                generate_request_id.assert_not_called()
+                self.assertEqual(channel.request_to_session, {})
+            finally:
+                reset_run_ledger_for_tests(Path(tempfile.gettempdir()) / "ecorex-run-ledger-test-reset.db")
+
+    def test_post_message_backpressure_counts_ledger_only_active_runs(self):
+        from agent.protocol import reset_run_ledger_for_tests
+        from channel.web import web_channel
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            try:
+                channel = web_channel.WebChannel()
+                channel.request_to_session = {}
+                ledger.create_run(
+                    "req-ledger-only-pressure",
+                    "session-ledger-only-pressure",
+                    phase="running",
+                    status="running",
+                )
+                payload = {
+                    "session_id": "session-new-ledger-pressure",
+                    "message": "should count ledger-only active row",
+                    "stream": True,
+                }
+                with patch.object(channel, "BACKPRESSURE_GLOBAL_ACTIVE_LIMIT", 1):
+                    with patch.object(channel, "BACKPRESSURE_SESSION_ACTIVE_LIMIT", 99):
+                        with patch.object(channel, "_generate_request_id") as generate_request_id:
+                            with patch.object(
+                                web_channel.web,
+                                "data",
+                                return_value=json.dumps(payload).encode("utf-8"),
+                            ):
+                                result = json.loads(channel.post_message())
+
+                self.assertEqual(result["status"], "error")
+                self.assertEqual(result["code"], "BACKPRESSURE_GLOBAL_LIMIT")
+                self.assertEqual(result["global_active"], 1)
+                generate_request_id.assert_not_called()
+            finally:
+                reset_run_ledger_for_tests(Path(tempfile.gettempdir()) / "ecorex-run-ledger-test-reset.db")
+
+    def test_post_message_backpressure_uses_configured_limits_over_class_defaults(self):
+        from agent.protocol import get_cancel_registry, get_run_ledger
+        from channel.web import web_channel
+
+        with isolated_run_ledger():
+            channel = web_channel.WebChannel()
+            registry = get_cancel_registry()
+            try:
+                channel.request_to_session = {}
+                registry.register("req-config-global-pressure", session_id="session-config-other")
+                global_payload = {
+                    "session_id": "session-config-new",
+                    "message": "global config limit",
+                    "stream": True,
+                }
+                with patch.object(channel, "BACKPRESSURE_GLOBAL_ACTIVE_LIMIT", 99):
+                    with patch.object(channel, "BACKPRESSURE_SESSION_ACTIVE_LIMIT", 99):
+                        with patch.object(
+                            web_channel,
+                            "conf",
+                            return_value={
+                                "web_max_active_requests": 1,
+                                "web_max_active_requests_per_session": 99,
+                            },
+                        ):
+                            with patch.object(web_channel.web, "data", return_value=json.dumps(global_payload).encode("utf-8")):
+                                global_result = json.loads(channel.post_message())
+
+                self.assertEqual(global_result["code"], "BACKPRESSURE_GLOBAL_LIMIT")
+                self.assertEqual(global_result["scope"], "global")
+                self.assertEqual(global_result["limit"], 1)
+                self.assertEqual(global_result["global_active_limit"], 1)
+
+                registry.unregister("req-config-global-pressure")
+                session_id = "session-config-session-pressure"
+                request_id = "req-config-session-pressure"
+                get_run_ledger().create_run(request_id, session_id, phase="running", status="running")
+                session_payload = {
+                    "session_id": session_id,
+                    "message": "session config limit",
+                    "stream": True,
+                }
+                with patch.object(channel, "BACKPRESSURE_GLOBAL_ACTIVE_LIMIT", 99):
+                    with patch.object(channel, "BACKPRESSURE_SESSION_ACTIVE_LIMIT", 99):
+                        with patch.object(
+                            web_channel,
+                            "conf",
+                            return_value={
+                                "web_max_active_requests": 99,
+                                "web_max_active_requests_per_session": 1,
+                            },
+                        ):
+                            with patch.object(web_channel.web, "data", return_value=json.dumps(session_payload).encode("utf-8")):
+                                session_result = json.loads(channel.post_message())
+
+                self.assertEqual(session_result["code"], "BACKPRESSURE_SESSION_LIMIT")
+                self.assertEqual(session_result["scope"], "session")
+                self.assertEqual(session_result["limit"], 1)
+                self.assertEqual(session_result["session_active_limit"], 1)
+                self.assertEqual(session_result["active_request_ids"], [request_id])
+            finally:
+                registry.unregister("req-config-global-pressure")
+
+    def test_cancel_bypasses_backpressure_admission_limit(self):
+        from agent.protocol import get_cancel_registry
+        from channel.web import web_channel
+
+        with isolated_run_ledger():
+            channel = web_channel.WebChannel()
+            registry = get_cancel_registry()
+            session_id = "session-cancel-bypass-pressure"
+            request_id = "req-cancel-bypass-pressure"
+            channel.request_to_session = {request_id: session_id}
+            registry.register(request_id, session_id=session_id)
+            payload = {
+                "session_id": session_id,
+                "message": "/cancel",
+                "stream": True,
+                "lang": "en",
+            }
+            try:
+                with patch.object(channel, "BACKPRESSURE_GLOBAL_ACTIVE_LIMIT", 1):
+                    with patch.object(channel, "BACKPRESSURE_SESSION_ACTIVE_LIMIT", 1):
+                        with patch.object(
+                            web_channel.web,
+                            "data",
+                            return_value=json.dumps(payload).encode("utf-8"),
+                ):
+                            result = json.loads(channel.post_message())
+
+                self.assertEqual(result["status"], "success")
+                self.assertIn("Cancelled", result["inline_reply"])
+                self.assertTrue(registry.get_event(request_id).is_set())
+            finally:
+                registry.unregister(request_id)
 
     def test_post_message_compose_exception_cleans_pre_worker_request(self):
         from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests

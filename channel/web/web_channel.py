@@ -38,6 +38,9 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
 VIDEO_EXTENSIONS = {".mp4", ".webm", ".avi", ".mov", ".mkv"}
 REQUEST_CONFLICT_RETRYABLE_CODE = "REQUEST_CONFLICT_RETRYABLE"
 REQUEST_CONFLICT_RETRY_AFTER_MS = 1500
+BACKPRESSURE_GLOBAL_LIMIT_CODE = "BACKPRESSURE_GLOBAL_LIMIT"
+BACKPRESSURE_SESSION_LIMIT_CODE = "BACKPRESSURE_SESSION_LIMIT"
+BACKPRESSURE_RETRY_AFTER_MS = 2000
 DANGEROUS_OPEN_EXTENSIONS = {
     ".app",
     ".bat",
@@ -979,6 +982,8 @@ class WebChannel(ChatChannel):
     SSE_PROTOCOL_VERSION = "ecorex.stream.v1"
     SSE_MAX_REPLAY_EVENTS = 2000
     SSE_ORPHAN_TTL_SECONDS = 120
+    BACKPRESSURE_GLOBAL_ACTIVE_LIMIT = 32
+    BACKPRESSURE_SESSION_ACTIVE_LIMIT = 2
 
     # def __new__(cls):
     #     if cls._instance is None:
@@ -998,6 +1003,7 @@ class WebChannel(ChatChannel):
         self.sse_done_sent = set()  # request_id values that already emitted a terminal event
         self.sse_cleanup_timers = {}  # request_id -> guarded orphan cleanup Timer
         self.sse_lock = threading.RLock()
+        self.backpressure_lock = threading.RLock()
         self.request_artifacts = {}  # request_id -> list of structured artifact dicts
         self.sse_stream_tokens = {}  # legacy field; no longer used to supersede streams
         self._http_server = None
@@ -1025,6 +1031,110 @@ class WebChannel(ChatChannel):
         except Exception as e:
             logger.debug(f"[WebChannel] active request lookup failed for session {session_id}: {e}")
             return []
+
+    @staticmethod
+    def _coerce_positive_int(value, fallback: int) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            parsed = int(fallback)
+        return max(0, parsed)
+
+    def _backpressure_limits(self) -> Dict[str, int]:
+        return {
+            "global_active_limit": self._coerce_positive_int(
+                conf().get("web_max_active_requests", self.BACKPRESSURE_GLOBAL_ACTIVE_LIMIT),
+                self.BACKPRESSURE_GLOBAL_ACTIVE_LIMIT,
+            ),
+            "session_active_limit": self._coerce_positive_int(
+                conf().get("web_max_active_requests_per_session", self.BACKPRESSURE_SESSION_ACTIVE_LIMIT),
+                self.BACKPRESSURE_SESSION_ACTIVE_LIMIT,
+            ),
+        }
+
+    def _backpressure_snapshot(self, session_id: str = "", ignore_request_ids=None) -> Dict[str, Any]:
+        limits = self._backpressure_limits()
+        ignored = set(ignore_request_ids or [])
+        active_by_request: Dict[str, Dict[str, Any]] = {}
+        try:
+            from agent.protocol import get_cancel_registry, get_run_ledger
+
+            for row in get_run_ledger().active_snapshot():
+                request_id = row.get("request_id", "")
+                if request_id in ignored:
+                    continue
+                if request_id:
+                    active_by_request[request_id] = row
+            for row in get_cancel_registry().snapshot():
+                request_id = row.get("request_id", "")
+                if request_id in ignored:
+                    continue
+                if request_id:
+                    existing = active_by_request.get(request_id, {})
+                    merged = {**existing, **row}
+                    if existing.get("session_id") and not row.get("session_id"):
+                        merged["session_id"] = existing.get("session_id")
+                    active_by_request[request_id] = merged
+        except Exception as e:
+            logger.debug(f"[WebChannel] backpressure snapshot fallback failed: {e}")
+
+        active_requests = list(active_by_request.values())
+        session_active = [
+            row for row in active_requests
+            if session_id and row.get("session_id") == session_id
+        ]
+        return {
+            **limits,
+            "global_active": len(active_requests),
+            "session_active": len(session_active),
+            "session_id": session_id,
+            "active_request_ids": [
+                row.get("request_id", "")
+                for row in session_active
+                if row.get("request_id")
+            ],
+            "sse_replay_limit": self.SSE_MAX_REPLAY_EVENTS,
+        }
+
+    def _backpressure_rejection_payload(self, session_id: str, ignore_request_ids=None) -> Optional[Dict[str, Any]]:
+        snapshot = self._backpressure_snapshot(session_id, ignore_request_ids=ignore_request_ids)
+        global_limit = snapshot["global_active_limit"]
+        if global_limit and snapshot["global_active"] >= global_limit:
+            return self._backpressure_payload("global", snapshot)
+        session_limit = snapshot["session_active_limit"]
+        if session_limit and snapshot["session_active"] >= session_limit:
+            return self._backpressure_payload("session", snapshot)
+        return None
+
+    def _backpressure_payload(self, scope: str, snapshot: Dict[str, Any]) -> Dict[str, Any]:
+        limit_key = "global_active_limit" if scope == "global" else "session_active_limit"
+        active_key = "global_active" if scope == "global" else "session_active"
+        code = BACKPRESSURE_GLOBAL_LIMIT_CODE if scope == "global" else BACKPRESSURE_SESSION_LIMIT_CODE
+        return {
+            "status": "error",
+            "code": code,
+            "error_type": "backpressure_limit",
+            "state": "backpressure",
+            "scope": scope,
+            "recoverable": True,
+            "retryable": True,
+            "retry_after_ms": BACKPRESSURE_RETRY_AFTER_MS,
+            "reason": "active_request_limit",
+            "limit": snapshot.get(limit_key, 0),
+            "active": snapshot.get(active_key, 0),
+            "global_active": snapshot.get("global_active", 0),
+            "session_active": snapshot.get("session_active", 0),
+            "global_active_limit": snapshot.get("global_active_limit", 0),
+            "session_active_limit": snapshot.get("session_active_limit", 0),
+            "sse_replay_limit": snapshot.get("sse_replay_limit", self.SSE_MAX_REPLAY_EVENTS),
+            "session_id": snapshot.get("session_id", ""),
+            "active_request_ids": snapshot.get("active_request_ids", []),
+            "message": (
+                "Too many active agent runs. Please retry shortly."
+                if scope == "global"
+                else "This session already has too many active runs. Please retry shortly."
+            ),
+        }
 
     def _mark_run_phase(self, request_id: str, phase: str, status: Optional[str] = None) -> None:
         if not request_id or not phase:
@@ -2555,6 +2665,8 @@ class WebChannel(ChatChannel):
                     "subagents": subagent_cancel,
                 })
 
+            replacement_request_ids = self._active_request_ids_for_session(session_id)
+
             try:
                 from common.ecorex_workspace import SessionBusyError, SessionLock
                 session_lock = SessionLock(_get_workspace_root(), session_id).acquire()
@@ -2591,30 +2703,50 @@ class WebChannel(ChatChannel):
             if isinstance(hidden_context, str) and hidden_context.strip():
                 prompt = hidden_context.strip() + "\n\nUser request:\n" + (prompt or "Please handle these attachments.")
 
-            request_id = self._generate_request_id()
-            self.request_to_session[request_id] = session_id
-            try:
-                from agent.protocol import get_cancel_registry
-                get_cancel_registry().register(request_id, session_id=session_id)
-            except Exception as e:
-                logger.debug(f"[WebChannel] pre-register cancel token skipped: {e}")
-            try:
-                from agent.protocol import get_run_ledger
-
-                get_run_ledger().create_run(
-                    request_id,
+            with self.backpressure_lock:
+                backpressure_payload = self._backpressure_rejection_payload(
                     session_id,
-                    run_type="message",
-                    phase="accepted",
-                    status="running",
-                    metadata={
-                        "stream": bool(use_sse),
-                        "internal_action": bool(internal_action),
-                        "attachments": len(attachments) if isinstance(attachments, list) else 0,
-                    },
+                    ignore_request_ids=replacement_request_ids,
                 )
-            except Exception as e:
-                logger.debug(f"[WebChannel] run ledger create skipped for {request_id}: {e}")
+                if backpressure_payload:
+                    logger.warning(
+                        f"[WebChannel] backpressure rejected message: "
+                        f"session={session_id}, scope={backpressure_payload.get('scope')}, "
+                        f"active={backpressure_payload.get('active')}, "
+                        f"limit={backpressure_payload.get('limit')}"
+                    )
+                    if session_lock:
+                        try:
+                            session_lock.release()
+                        except Exception as e:
+                            logger.debug(f"[WebChannel] backpressure session lock release skipped: {e}")
+                        session_lock = None
+                    return json.dumps(backpressure_payload, ensure_ascii=False)
+
+                request_id = self._generate_request_id()
+                self.request_to_session[request_id] = session_id
+                try:
+                    from agent.protocol import get_cancel_registry
+                    get_cancel_registry().register(request_id, session_id=session_id)
+                except Exception as e:
+                    logger.debug(f"[WebChannel] pre-register cancel token skipped: {e}")
+                try:
+                    from agent.protocol import get_run_ledger
+
+                    get_run_ledger().create_run(
+                        request_id,
+                        session_id,
+                        run_type="message",
+                        phase="accepted",
+                        status="running",
+                        metadata={
+                            "stream": bool(use_sse),
+                            "internal_action": bool(internal_action),
+                            "attachments": len(attachments) if isinstance(attachments, list) else 0,
+                        },
+                    )
+                except Exception as e:
+                    logger.debug(f"[WebChannel] run ledger create skipped for {request_id}: {e}")
 
             if session_id not in self.session_queues:
                 self.session_queues[session_id] = Queue()
