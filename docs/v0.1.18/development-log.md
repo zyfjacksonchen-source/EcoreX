@@ -457,3 +457,34 @@
     after first output, native stream exhausted exception markers before first
     output, native stream close/cancel exactly-once telemetry, and no double
     wrapping of the shared OpenAI-compatible gateway.
+- Added the legacy `reply_text` telemetry coverage slice:
+  - `models/legacy_reply_gateway.py` now wraps bot-factory-created legacy
+    provider `reply_text` methods with `/legacy/reply_text` `ModelCallSpan`
+    telemetry, covering normal chat/title-generation paths that still bypass
+    `call_with_tools`.
+  - The wrapper is intentionally transparent: provider-local retry recursion
+    remains owned by the adapter, nested recursive `self.reply_text(...)` calls
+    bypass the wrapper through a thread-local guard, return values/exceptions
+    are preserved, and the top-level public legacy request records one bounded
+    span instead of duplicate retry spans.
+  - Legacy token envelopes using `total_tokens`, `completion_tokens`, and
+    optional `prompt_tokens` are normalized into input/output/total buckets.
+    Explicit `error`/4xx/5xx responses and empty `completion_tokens=0`
+    completions are recorded as failures. The only zero-token non-empty text
+    success exception is currently scoped to ModelScope responses that still
+    have the successful response shape (`total_tokens` is present), because
+    that normal chat path explicitly treats such responses as `ReplyType.TEXT`;
+    ModelScope fallback sentinels without `total_tokens` and other provider
+    failure sentinels remain failed telemetry.
+  - AgentBridge native `call_with_tools` attempts now suppress inner legacy
+    `reply_text` telemetry while the native gateway span is active. This keeps
+    ModelScope-style adapters that implement sync `call_with_tools` via
+    `self.reply_text(...)` from double-recording `/native/call_with_tools` and
+    `/legacy/reply_text` spans for one public model call.
+  - Focused tests cover one-span telemetry for provider-internal recursive
+    retry, failure-sentinel classification, empty completion failures,
+    ModelScope zero-token text success with `total_tokens`, ModelScope fallback
+    failure without `total_tokens`, ModelScope status-error precedence,
+    non-ModelScope zero-token text failure, and native AgentBridge suppression
+    of inner legacy reply spans. Qianfan factory/reply-text payload regressions
+    still pass after bot_factory wrapping.

@@ -814,6 +814,209 @@ class TestModelTelemetry(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["api_path"], "/chat/completions")
 
+    def test_agent_bridge_native_call_suppresses_inner_legacy_reply_span(self):
+        from agent.protocol.models import LLMRequest
+        from models.legacy_reply_gateway import wrap_legacy_reply_text
+        from models.model_telemetry import get_recent_model_calls
+
+        class NativeBot:
+            def __init__(self):
+                self.reply_calls = []
+
+            def reply_text(self, session, retry_count=0):
+                self.reply_calls.append(retry_count)
+                return {
+                    "total_tokens": 7,
+                    "completion_tokens": 3,
+                    "content": "ok",
+                }
+
+            def call_with_tools(self, **kwargs):
+                return self.reply_text(
+                    SimpleNamespace(),
+                    retry_count=kwargs.get("retry_count", 0),
+                )
+
+        bot = wrap_legacy_reply_text(NativeBot(), provider_hint="modelscope")
+        model = self._native_agent_model(bot, model_name="modelscope-agent", provider="modelscope")
+        result = model.call(LLMRequest(
+            messages=[{"role": "user", "content": "hi"}],
+            model_max_retries=0,
+        ))
+
+        self.assertEqual(result["content"], "ok")
+        self.assertEqual(bot.reply_calls, [0])
+        events = get_recent_model_calls()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["api_path"], "/native/call_with_tools")
+        self.assertEqual(events[0]["provider"], "modelscope")
+
+    def test_legacy_reply_text_gateway_records_one_span_for_internal_retry(self):
+        from models.legacy_reply_gateway import LEGACY_REPLY_TEXT_API_PATH, wrap_legacy_reply_text
+        from models.model_telemetry import get_recent_model_calls
+
+        class RecursiveLegacyBot:
+            def __init__(self):
+                self.calls = []
+
+            def get_api_config(self):
+                return {"provider": "legacy-provider", "model": "legacy-model"}
+
+            def reply_text(self, session, retry_count=0):
+                self.calls.append(retry_count)
+                if retry_count == 0:
+                    return self.reply_text(session, retry_count=1)
+                return {
+                    "total_tokens": 9,
+                    "completion_tokens": 4,
+                    "content": "ok",
+                }
+
+        bot = wrap_legacy_reply_text(RecursiveLegacyBot())
+        result = bot.reply_text(SimpleNamespace())
+
+        self.assertEqual(result["content"], "ok")
+        self.assertEqual(bot.calls, [0, 1])
+        events = get_recent_model_calls()
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event["provider"], "legacy-provider")
+        self.assertEqual(event["model"], "legacy-model")
+        self.assertEqual(event["api_path"], LEGACY_REPLY_TEXT_API_PATH)
+        self.assertEqual(event["status"], "completed")
+        self.assertEqual(event["retry_count"], 0)
+        self.assertEqual(event["input_tokens"], 5)
+        self.assertEqual(event["output_tokens"], 4)
+        self.assertEqual(event["total_tokens"], 9)
+
+    def test_legacy_reply_text_gateway_records_failure_sentinel(self):
+        from models.legacy_reply_gateway import wrap_legacy_reply_text
+        from models.model_telemetry import get_recent_model_calls
+
+        class ErrorLegacyBot:
+            def reply_text(self, session):
+                return {
+                    "completion_tokens": 0,
+                    "content": "rate limit exceeded",
+                    "status_code": 429,
+                }
+
+        bot = wrap_legacy_reply_text(
+            ErrorLegacyBot(),
+            provider_hint="custom",
+            model_hint="legacy-chat",
+        )
+        result = bot.reply_text(SimpleNamespace())
+
+        self.assertEqual(result["content"], "rate limit exceeded")
+        events = get_recent_model_calls()
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event["provider"], "custom")
+        self.assertEqual(event["model"], "legacy-chat")
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_taxonomy"], "rate_limit")
+        self.assertEqual(event["error_status_code"], 429)
+        self.assertEqual(event["error_message"], "rate limit exceeded")
+
+    def test_legacy_reply_text_gateway_treats_empty_completion_as_failed(self):
+        from models.legacy_reply_gateway import wrap_legacy_reply_text
+        from models.model_telemetry import get_recent_model_calls
+
+        class EmptyLegacyBot:
+            def reply_text(self, session):
+                return {"completion_tokens": 0, "content": ""}
+
+        bot = wrap_legacy_reply_text(EmptyLegacyBot(), provider_hint="legacy")
+        self.assertEqual(bot.reply_text(SimpleNamespace())["content"], "")
+
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(
+            event["error_message"],
+            "Legacy reply_text returned no completion tokens",
+        )
+
+    def test_legacy_reply_text_gateway_allows_zero_token_text_success(self):
+        from models.legacy_reply_gateway import wrap_legacy_reply_text
+        from models.model_telemetry import get_recent_model_calls
+
+        class ZeroTokenTextBot:
+            def reply_text(self, session):
+                return {
+                    "total_tokens": 0,
+                    "completion_tokens": 0,
+                    "content": "thinking text",
+                }
+
+        bot = wrap_legacy_reply_text(ZeroTokenTextBot(), provider_hint="modelscope")
+        self.assertEqual(bot.reply_text(SimpleNamespace())["content"], "thinking text")
+
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["provider"], "modelscope")
+        self.assertEqual(event["status"], "completed")
+        self.assertEqual(event["error_taxonomy"], "")
+
+    def test_legacy_reply_text_gateway_modelscope_fallback_without_total_tokens_fails(self):
+        from models.legacy_reply_gateway import wrap_legacy_reply_text
+        from models.model_telemetry import get_recent_model_calls
+
+        class ModelScopeFallbackBot:
+            def reply_text(self, session):
+                return {
+                    "completion_tokens": 0,
+                    "content": "Please try again later",
+                }
+
+        bot = wrap_legacy_reply_text(ModelScopeFallbackBot(), provider_hint="modelscope")
+        self.assertEqual(bot.reply_text(SimpleNamespace())["content"], "Please try again later")
+
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["provider"], "modelscope")
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_message"], "Please try again later")
+
+    def test_legacy_reply_text_gateway_modelscope_status_error_overrides_text_success(self):
+        from models.legacy_reply_gateway import wrap_legacy_reply_text
+        from models.model_telemetry import get_recent_model_calls
+
+        class ModelScopeRateLimitBot:
+            def reply_text(self, session):
+                return {
+                    "total_tokens": 0,
+                    "completion_tokens": 0,
+                    "content": "rate limit exceeded",
+                    "status_code": 429,
+                }
+
+        bot = wrap_legacy_reply_text(ModelScopeRateLimitBot(), provider_hint="modelscope")
+        self.assertEqual(bot.reply_text(SimpleNamespace())["content"], "rate limit exceeded")
+
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_taxonomy"], "rate_limit")
+        self.assertEqual(event["error_status_code"], 429)
+
+    def test_legacy_reply_text_gateway_non_modelscope_zero_token_text_fails(self):
+        from models.legacy_reply_gateway import wrap_legacy_reply_text
+        from models.model_telemetry import get_recent_model_calls
+
+        class DeepSeekStyleErrorBot:
+            def reply_text(self, session):
+                return {
+                    "completion_tokens": 0,
+                    "content": "Please try again later",
+                }
+
+        bot = wrap_legacy_reply_text(DeepSeekStyleErrorBot(), provider_hint="deepseek")
+        self.assertEqual(bot.reply_text(SimpleNamespace())["content"], "Please try again later")
+
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["provider"], "deepseek")
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_taxonomy"], "unknown")
+        self.assertEqual(event["error_message"], "Please try again later")
+
     def test_agent_stream_retry_stopped_marker_skips_outer_retry(self):
         from agent.protocol.agent_stream import AgentStreamExecutor
 

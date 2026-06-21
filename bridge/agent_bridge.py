@@ -16,6 +16,7 @@ from common.ecorex_identity import sanitize_assistant_identity, sanitize_message
 from common.log import logger
 from common.utils import expand_path
 from config import conf
+from models.legacy_reply_gateway import suppress_legacy_reply_text_telemetry
 from models.model_gateway import call_native_model_with_gateway
 from models.openai_compatible_bot import OpenAICompatibleBot
 
@@ -141,7 +142,8 @@ class AgentLLMModel(LLMModel):
         def invoke(absolute_retry_count):
             attempt_kwargs = dict(kwargs)
             attempt_kwargs["retry_count"] = absolute_retry_count
-            return bot.call_with_tools(**attempt_kwargs)
+            with suppress_legacy_reply_text_telemetry():
+                return bot.call_with_tools(**attempt_kwargs)
 
         provider = getattr(self, "_bot_type", None) or self._resolve_bot_type(self.model)
         return call_native_model_with_gateway(
