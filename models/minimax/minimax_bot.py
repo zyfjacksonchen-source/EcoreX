@@ -1,12 +1,18 @@
 # encoding:utf-8
 
-import time
 import json
 from typing import Optional
 
 import requests
 
 from models.bot import Bot
+from models.legacy_direct_chat_retry import (
+    legacy_direct_chat_decision,
+    legacy_direct_chat_exception_details,
+    legacy_direct_chat_failure_result,
+    legacy_direct_chat_response_details,
+    run_legacy_direct_chat_retry_sleep,
+)
 from models.model_provider_errors import http_error_response, provider_error_response
 from models.minimax.minimax_session import MinimaxSession
 from models.session_manager import SessionManager
@@ -88,7 +94,7 @@ class MinimaxBot(Bot):
             reply = Reply(ReplyType.ERROR, "Bot不支持处理{}类型的消息".format(context.type))
             return reply
 
-    def reply_text(self, session: MinimaxSession, args=None, retry_count=0) -> dict:
+    def reply_text(self, session: MinimaxSession, args=None, retry_count=0, model_retry_sleep=None) -> dict:
         """
         Call MiniMax API to get the answer using REST API
         :param session: a conversation session
@@ -133,50 +139,71 @@ class MinimaxBot(Bot):
                 }
             else:
                 error_msg = response.text
+                details = legacy_direct_chat_response_details(response)
                 logger.error(f"[MINIMAX] API error: status={response.status_code}, msg={error_msg}")
 
                 # Parse error for better messages
                 result = {"completion_tokens": 0, "content": "我现在有点累了，等会再来吧"}
-                need_retry = False
+                decision = legacy_direct_chat_decision(details, retry_count=retry_count)
 
                 if response.status_code >= 500:
                     logger.warning(f"[MINIMAX] Server error, retry={retry_count}")
-                    need_retry = retry_count < 2
                 elif response.status_code == 401:
                     result["content"] = "授权失败，请检查API Key是否正确"
-                    need_retry = False
                 elif response.status_code == 429:
                     result["content"] = "请求过于频繁，请稍后再试"
-                    need_retry = retry_count < 2
-                else:
-                    need_retry = False
 
-                if need_retry:
-                    time.sleep(3)
-                    return self.reply_text(session, args, retry_count + 1)
+                if decision.should_retry:
+                    run_legacy_direct_chat_retry_sleep(decision, model_retry_sleep)
+                    return self.reply_text(
+                        session,
+                        args,
+                        retry_count + 1,
+                        model_retry_sleep=model_retry_sleep,
+                    )
                 else:
-                    return result
+                    return legacy_direct_chat_failure_result(
+                        content=result["content"],
+                        details=details,
+                        decision=decision,
+                    )
 
-        except requests.exceptions.Timeout:
+        except requests.exceptions.Timeout as e:
             logger.error("[MINIMAX] Request timeout")
-            need_retry = retry_count < 2
-            result = {"completion_tokens": 0, "content": "请求超时，请稍后再试"}
-            if need_retry:
-                time.sleep(3)
-                return self.reply_text(session, args, retry_count + 1)
-            else:
-                return result
+            details = legacy_direct_chat_exception_details(e)
+            decision = legacy_direct_chat_decision(details, retry_count=retry_count)
+            if decision.should_retry:
+                run_legacy_direct_chat_retry_sleep(decision, model_retry_sleep)
+                return self.reply_text(
+                    session,
+                    args,
+                    retry_count + 1,
+                    model_retry_sleep=model_retry_sleep,
+                )
+            return legacy_direct_chat_failure_result(
+                content="legacy direct chat request timed out",
+                details=details,
+                decision=decision,
+            )
         except Exception as e:
             logger.error(f"[MINIMAX] reply_text error: {e}")
             import traceback
             logger.error(traceback.format_exc())
-            need_retry = retry_count < 2
-            result = {"completion_tokens": 0, "content": "我现在有点累了，等会再来吧"}
-            if need_retry:
-                time.sleep(3)
-                return self.reply_text(session, args, retry_count + 1)
-            else:
-                return result
+            details = legacy_direct_chat_exception_details(e)
+            decision = legacy_direct_chat_decision(details, retry_count=retry_count)
+            if decision.should_retry:
+                run_legacy_direct_chat_retry_sleep(decision, model_retry_sleep)
+                return self.reply_text(
+                    session,
+                    args,
+                    retry_count + 1,
+                    model_retry_sleep=model_retry_sleep,
+                )
+            return legacy_direct_chat_failure_result(
+                content="legacy direct chat request failed",
+                details=details,
+                decision=decision,
+            )
 
     def call_vision(self, image_url: str, question: str,
                     model: Optional[str] = None,

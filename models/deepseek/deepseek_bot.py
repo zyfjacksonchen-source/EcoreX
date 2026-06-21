@@ -21,11 +21,17 @@ Thinking mode notes (for V4 models):
 """
 
 import json
-import time
 from typing import Optional
 
 import requests
 from models.bot import Bot
+from models.legacy_direct_chat_retry import (
+    legacy_direct_chat_decision,
+    legacy_direct_chat_exception_details,
+    legacy_direct_chat_failure_result,
+    legacy_direct_chat_response_details,
+    run_legacy_direct_chat_retry_sleep,
+)
 from models.openai_compatible_bot import OpenAICompatibleBot
 from models.model_provider_errors import http_error_response, provider_error_response
 from models.session_manager import SessionManager
@@ -148,7 +154,7 @@ class DeepSeekBot(Bot, OpenAICompatibleBot):
             reply = Reply(ReplyType.ERROR, "Bot不支持处理{}类型的消息".format(context.type))
             return reply
 
-    def reply_text(self, session, args=None, retry_count: int = 0) -> dict:
+    def reply_text(self, session, args=None, retry_count: int = 0, model_retry_sleep=None) -> dict:
         try:
             headers = self._build_headers()
             body = dict(args) if args else dict(self.args)
@@ -174,31 +180,49 @@ class DeepSeekBot(Bot, OpenAICompatibleBot):
                     "content": response["choices"][0]["message"]["content"],
                 }
             else:
-                response = res.json()
-                error = response.get("error", {})
+                details = legacy_direct_chat_response_details(res)
+                error = details.get("error", {}) if isinstance(details.get("error"), dict) else {}
                 logger.error(
                     f"[DEEPSEEK] chat failed, status_code={res.status_code}, "
                     f"msg={error.get('message')}, type={error.get('type')}"
                 )
                 result = {"completion_tokens": 0, "content": "提问太快啦，请休息一下再问我吧"}
-                need_retry = False
-                if res.status_code >= 500:
-                    need_retry = retry_count < 2
-                elif res.status_code == 401:
+                decision = legacy_direct_chat_decision(details, retry_count=retry_count)
+                if res.status_code == 401:
                     result["content"] = "授权失败，请检查API Key是否正确"
                 elif res.status_code == 429:
                     result["content"] = "请求过于频繁，请稍后再试"
-                    need_retry = retry_count < 2
 
-                if need_retry:
-                    time.sleep(3)
-                    return self.reply_text(session, args, retry_count + 1)
-                return result
+                if decision.should_retry:
+                    run_legacy_direct_chat_retry_sleep(decision, model_retry_sleep)
+                    return self.reply_text(
+                        session,
+                        args,
+                        retry_count + 1,
+                        model_retry_sleep=model_retry_sleep,
+                    )
+                return legacy_direct_chat_failure_result(
+                    content=result["content"],
+                    details=details,
+                    decision=decision,
+                )
         except Exception as e:
             logger.exception(e)
-            if retry_count < 2:
-                return self.reply_text(session, args, retry_count + 1)
-            return {"completion_tokens": 0, "content": "我现在有点累了，等会再来吧"}
+            details = legacy_direct_chat_exception_details(e)
+            decision = legacy_direct_chat_decision(details, retry_count=retry_count)
+            if decision.should_retry:
+                run_legacy_direct_chat_retry_sleep(decision, model_retry_sleep)
+                return self.reply_text(
+                    session,
+                    args,
+                    retry_count + 1,
+                    model_retry_sleep=model_retry_sleep,
+                )
+            return legacy_direct_chat_failure_result(
+                content="legacy direct chat request failed",
+                details=details,
+                decision=decision,
+            )
 
     # ==================== Agent mode support ====================
 

@@ -706,6 +706,34 @@ class TestModelTelemetry(unittest.TestCase):
                 "patch": "models.moonshot.moonshot_bot.requests.post",
             }
 
+        if provider == "qianfan":
+            from models.qianfan.qianfan_bot import QianfanBot
+
+            class TestQianfanBot(QianfanBot):
+                def __init__(self):
+                    self.args = {
+                        "model": "ernie-test",
+                        "temperature": 0.7,
+                        "top_p": 1.0,
+                        "frequency_penalty": 0.0,
+                        "presence_penalty": 0.0,
+                    }
+
+                @property
+                def api_key(self):
+                    return "test-key"
+
+                @property
+                def api_base(self):
+                    return "https://qianfan.test/v2"
+
+            return {
+                "bot": TestQianfanBot(),
+                "model": "ernie-test",
+                "provider": "qianfan",
+                "patch": "models.qianfan.qianfan_bot.requests.post",
+            }
+
         raise AssertionError("unsupported provider")
 
     def _special_native_http_provider_bot_for_tests(self, provider):
@@ -3587,6 +3615,271 @@ class TestModelTelemetry(unittest.TestCase):
         self.assertEqual(event["retry_attempt"], 1)
         self.assertTrue(event["retry_exhausted"])
         self.assertEqual(event["retry_after_seconds"], 0.1)
+
+    def test_legacy_http_reply_text_uses_retry_after_then_records_success(self):
+        from unittest.mock import MagicMock, patch
+        from models.legacy_reply_gateway import wrap_legacy_reply_text
+        from models.model_telemetry import (
+            get_recent_model_calls,
+            reset_model_call_telemetry_for_tests,
+        )
+
+        providers = ["deepseek", "doubao", "moonshot", "mimo", "minimax", "qianfan"]
+        session = SimpleNamespace(
+            session_id="s",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        retry_response = self._FakeHTTPResponse(
+            429,
+            {
+                "error": {
+                    "message": "rate limit",
+                    "code": "rate_limit_exceeded",
+                    "type": "rate_limit",
+                }
+            },
+            headers={"Retry-After": "0.2"},
+        )
+        success_response = self._FakeHTTPResponse(
+            200,
+            {
+                "usage": {
+                    "total_tokens": 5,
+                    "completion_tokens": 2,
+                },
+                "choices": [{"message": {"content": "ok after retry"}}],
+            },
+        )
+
+        for provider in providers:
+            with self.subTest(provider=provider):
+                reset_model_call_telemetry_for_tests()
+                spec = self._native_http_provider_bot_for_tests(provider)
+                bot = wrap_legacy_reply_text(
+                    spec["bot"],
+                    provider_hint=spec["provider"],
+                    model_hint=spec["model"],
+                )
+                fake_conf = MagicMock()
+                fake_conf.get.side_effect = lambda key, default=None: {
+                    "model_max_retries": 1,
+                }.get(key, default)
+                calls = []
+                responses = [retry_response, success_response]
+
+                def fake_post(*args, **kwargs):
+                    calls.append((args, kwargs))
+                    return responses.pop(0)
+
+                sleeps = []
+                with patch(spec["patch"], side_effect=fake_post):
+                    with patch("models.legacy_direct_chat_retry.conf", return_value=fake_conf):
+                        result = bot.reply_text(
+                            session,
+                            args=spec["bot"].args,
+                            model_retry_sleep=sleeps.append,
+                        )
+
+                self.assertEqual(result["content"], "ok after retry")
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(sleeps, [0.2])
+                events = get_recent_model_calls()
+                self.assertEqual(len(events), 1)
+                self.assertEqual(events[0]["status"], "completed")
+                self.assertEqual(events[0]["provider"], spec["provider"])
+                self.assertEqual(events[0]["model"], spec["model"])
+                self.assertEqual(events[0]["total_tokens"], 5)
+
+    def test_legacy_http_reply_text_non_retryable_4xx_records_typed_fail_closed(self):
+        from unittest.mock import MagicMock, patch
+        from models.legacy_reply_gateway import wrap_legacy_reply_text
+        from models.model_telemetry import (
+            get_recent_model_calls,
+            reset_model_call_telemetry_for_tests,
+        )
+
+        providers = ["deepseek", "doubao", "moonshot", "mimo", "minimax", "qianfan"]
+        session = SimpleNamespace(
+            session_id="s",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        for provider in providers:
+            with self.subTest(provider=provider):
+                reset_model_call_telemetry_for_tests()
+                spec = self._native_http_provider_bot_for_tests(provider)
+                bot = wrap_legacy_reply_text(
+                    spec["bot"],
+                    provider_hint=spec["provider"],
+                    model_hint=spec["model"],
+                )
+                fake_conf = MagicMock()
+                fake_conf.get.side_effect = lambda key, default=None: {
+                    "model_max_retries": 1,
+                }.get(key, default)
+                response = self._FakeHTTPResponse(
+                    400,
+                    {
+                        "error": {
+                            "message": "bad request",
+                            "code": "invalid_request",
+                            "type": "invalid_request_error",
+                        }
+                    },
+                )
+                calls = []
+
+                def fake_post(*args, **kwargs):
+                    calls.append((args, kwargs))
+                    return response
+
+                sleeps = []
+                with patch(spec["patch"], side_effect=fake_post):
+                    with patch("models.legacy_direct_chat_retry.conf", return_value=fake_conf):
+                        result = bot.reply_text(
+                            session,
+                            args=spec["bot"].args,
+                            model_retry_sleep=sleeps.append,
+                        )
+
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(sleeps, [])
+                self.assertEqual(result["completion_tokens"], 0)
+                self.assertEqual(result["status_code"], 400)
+                self.assertEqual(result["error_taxonomy"], "client_error")
+                self.assertFalse(result["retryable"])
+                self.assertFalse(result["retry_exhausted"])
+                event = get_recent_model_calls()[0]
+                self.assertEqual(event["status"], "failed")
+                self.assertEqual(event["provider"], spec["provider"])
+                self.assertEqual(event["error_status_code"], 400)
+                self.assertEqual(event["error_taxonomy"], "client_error")
+                self.assertFalse(event["retryable"])
+
+    def test_legacy_http_reply_text_timeout_exhausts_shared_policy(self):
+        from unittest.mock import MagicMock, patch
+        import requests
+        from models.legacy_reply_gateway import wrap_legacy_reply_text
+        from models.model_telemetry import (
+            get_recent_model_calls,
+            reset_model_call_telemetry_for_tests,
+        )
+
+        providers = ["deepseek", "doubao", "moonshot", "mimo", "minimax", "qianfan"]
+        session = SimpleNamespace(
+            session_id="s",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        for provider in providers:
+            with self.subTest(provider=provider):
+                reset_model_call_telemetry_for_tests()
+                spec = self._native_http_provider_bot_for_tests(provider)
+                bot = wrap_legacy_reply_text(
+                    spec["bot"],
+                    provider_hint=spec["provider"],
+                    model_hint=spec["model"],
+                )
+                fake_conf = MagicMock()
+                fake_conf.get.side_effect = lambda key, default=None: {
+                    "model_max_retries": 1,
+                }.get(key, default)
+                calls = []
+
+                def fake_post(*args, **kwargs):
+                    calls.append((args, kwargs))
+                    raise requests.exceptions.Timeout("timed out")
+
+                sleeps = []
+                with patch(spec["patch"], side_effect=fake_post):
+                    with patch("models.legacy_direct_chat_retry.conf", return_value=fake_conf):
+                        result = bot.reply_text(
+                            session,
+                            args=spec["bot"].args,
+                            model_retry_sleep=sleeps.append,
+                        )
+
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(sleeps, [2.0])
+                self.assertEqual(result["completion_tokens"], 0)
+                self.assertEqual(result["status_code"], 408)
+                self.assertEqual(result["error_taxonomy"], "timeout")
+                self.assertEqual(result["retry_attempt"], 1)
+                self.assertTrue(result["retry_exhausted"])
+                event = get_recent_model_calls()[0]
+                self.assertEqual(event["status"], "failed")
+                self.assertEqual(event["provider"], spec["provider"])
+                self.assertEqual(event["error_status_code"], 408)
+                self.assertEqual(event["error_taxonomy"], "timeout")
+                self.assertEqual(event["retry_attempt"], 1)
+                self.assertTrue(event["retry_exhausted"])
+
+    def test_legacy_http_reply_text_http_408_exhausts_shared_policy(self):
+        from unittest.mock import MagicMock, patch
+        from models.legacy_reply_gateway import wrap_legacy_reply_text
+        from models.model_telemetry import (
+            get_recent_model_calls,
+            reset_model_call_telemetry_for_tests,
+        )
+
+        providers = ["deepseek", "doubao", "moonshot", "mimo", "minimax", "qianfan"]
+        session = SimpleNamespace(
+            session_id="s",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        for provider in providers:
+            with self.subTest(provider=provider):
+                reset_model_call_telemetry_for_tests()
+                spec = self._native_http_provider_bot_for_tests(provider)
+                bot = wrap_legacy_reply_text(
+                    spec["bot"],
+                    provider_hint=spec["provider"],
+                    model_hint=spec["model"],
+                )
+                fake_conf = MagicMock()
+                fake_conf.get.side_effect = lambda key, default=None: {
+                    "model_max_retries": 1,
+                }.get(key, default)
+                response = self._FakeHTTPResponse(
+                    408,
+                    {
+                        "error": {
+                            "message": "request timeout",
+                            "code": "timeout",
+                            "type": "timeout",
+                        }
+                    },
+                )
+                calls = []
+
+                def fake_post(*args, **kwargs):
+                    calls.append((args, kwargs))
+                    return response
+
+                sleeps = []
+                with patch(spec["patch"], side_effect=fake_post):
+                    with patch("models.legacy_direct_chat_retry.conf", return_value=fake_conf):
+                        result = bot.reply_text(
+                            session,
+                            args=spec["bot"].args,
+                            model_retry_sleep=sleeps.append,
+                        )
+
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(sleeps, [2.0])
+                self.assertEqual(result["completion_tokens"], 0)
+                self.assertEqual(result["status_code"], 408)
+                self.assertEqual(result["error_taxonomy"], "timeout")
+                self.assertEqual(result["retry_attempt"], 1)
+                self.assertTrue(result["retry_exhausted"])
+                event = get_recent_model_calls()[0]
+                self.assertEqual(event["status"], "failed")
+                self.assertEqual(event["provider"], spec["provider"])
+                self.assertEqual(event["error_status_code"], 408)
+                self.assertEqual(event["error_taxonomy"], "timeout")
+                self.assertEqual(event["retry_attempt"], 1)
+                self.assertTrue(event["retry_exhausted"])
 
     def test_legacy_reply_text_gateway_treats_empty_completion_as_failed(self):
         from models.legacy_reply_gateway import wrap_legacy_reply_text

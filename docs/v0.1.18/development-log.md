@@ -1015,3 +1015,25 @@
     remaining non-OpenAI legacy direct-chat retry-loop migration,
     remaining image edge coverage, and provider-specific edges outside the
     AgentBridge native gateway.
+- Migrated REST legacy direct-chat retry ownership:
+  - Added `models/legacy_direct_chat_retry.py` as the shared retry/failure
+    helper for legacy HTTP REST `reply_text` providers. It normalizes HTTP
+    responses and `requests` timeout/network exceptions, reuses the shared
+    Retry-After/backoff policy, and returns old-shape failure dicts with typed
+    retry metadata for `/legacy/reply_text` telemetry.
+  - DeepSeek, Doubao, Moonshot, MiMo, MiniMax, and Qianfan direct-chat
+    `reply_text` paths now route 408/429/5xx/timeouts/network errors through
+    the shared decision helper, accept injectable `model_retry_sleep` for
+    deterministic tests, and fail closed on non-retryable 4xx with status,
+    taxonomy, retryable, and retry-exhaustion evidence.
+  - Qianfan's shared `_error_result()` now avoids retrying text chat from the
+    vision error path when no chat session exists, preserving typed failure
+    evidence instead of creating a follow-on adapter exception.
+  - Focused tests cover REST direct-chat 429 Retry-After retry success,
+    non-retryable 400 fail-closed telemetry, requests timeout retry
+    exhaustion, and HTTP 408 response retry exhaustion across DeepSeek,
+    Doubao, Moonshot, MiMo, MiniMax, and Qianfan. Full model telemetry and
+    combined capability/model-handler/Responses/promotion-gate regressions
+    passed. R18-04-C remains PARTIAL pending SDK/app-code legacy direct-chat
+    retry-loop migration, remaining image edge coverage, and provider-specific
+    edges outside the AgentBridge native gateway.

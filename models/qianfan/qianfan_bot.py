@@ -1,7 +1,5 @@
 # encoding:utf-8
 
-import time
-
 import requests
 from bridge.context import ContextType
 from bridge.reply import Reply, ReplyType
@@ -9,6 +7,13 @@ from common import const
 from common.log import logger
 from config import conf, load_config
 from models.bot import Bot
+from models.legacy_direct_chat_retry import (
+    legacy_direct_chat_decision,
+    legacy_direct_chat_exception_details,
+    legacy_direct_chat_failure_result,
+    legacy_direct_chat_response_details,
+    run_legacy_direct_chat_retry_sleep,
+)
 from models.openai_compatible_bot import OpenAICompatibleBot
 from models.session_manager import SessionManager
 from .qianfan_session import QianfanSession
@@ -128,7 +133,7 @@ class QianfanBot(Bot, OpenAICompatibleBot):
             reply = Reply(ReplyType.ERROR, "Bot不支持处理{}类型的消息".format(context.type))
             return reply
 
-    def reply_text(self, session, args=None, retry_count=0):
+    def reply_text(self, session, args=None, retry_count=0, model_retry_sleep=None):
         try:
             body = dict(args) if args else dict(self.args)
             body["messages"] = session.messages
@@ -145,12 +150,30 @@ class QianfanBot(Bot, OpenAICompatibleBot):
                     "completion_tokens": data["usage"]["completion_tokens"],
                     "content": data["choices"][0]["message"]["content"],
                 }
-            return self._error_result(response, session, args, retry_count)
+            return self._error_result(
+                response,
+                session,
+                args,
+                retry_count,
+                model_retry_sleep=model_retry_sleep,
+            )
         except Exception as e:
             logger.exception(e)
-            if retry_count < 2:
-                return self.reply_text(session, args, retry_count + 1)
-            return {"completion_tokens": 0, "content": "我现在有点累了，等会再来吧"}
+            details = legacy_direct_chat_exception_details(e)
+            decision = legacy_direct_chat_decision(details, retry_count=retry_count)
+            if decision.should_retry:
+                run_legacy_direct_chat_retry_sleep(decision, model_retry_sleep)
+                return self.reply_text(
+                    session,
+                    args,
+                    retry_count + 1,
+                    model_retry_sleep=model_retry_sleep,
+                )
+            return legacy_direct_chat_failure_result(
+                content="legacy direct chat request failed",
+                details=details,
+                decision=decision,
+            )
 
     def call_vision(self, image_url: str, question: str,
                     model: str = None, max_tokens: int = 1000) -> dict:
@@ -200,7 +223,7 @@ class QianfanBot(Bot, OpenAICompatibleBot):
             logger.exception(e)
             return {"error": True, "message": str(e)}
 
-    def _error_result(self, response, session, args=None, retry_count=0):
+    def _error_result(self, response, session, args=None, retry_count=0, model_retry_sleep=None):
         try:
             body = response.json()
         except ValueError:
@@ -222,18 +245,44 @@ class QianfanBot(Bot, OpenAICompatibleBot):
             )
         )
 
-        if response.status_code >= 500 and retry_count < 2:
-            time.sleep(3)
-            return self.reply_text(session, args, retry_count + 1)
+        details = legacy_direct_chat_response_details(response)
+        decision = legacy_direct_chat_decision(details, retry_count=retry_count)
+
+        if session is not None and decision.should_retry:
+            run_legacy_direct_chat_retry_sleep(decision, model_retry_sleep)
+            return self.reply_text(
+                session,
+                args,
+                retry_count + 1,
+                model_retry_sleep=model_retry_sleep,
+            )
+
+        if session is not None and response.status_code >= 500 and decision.should_retry:
+            run_legacy_direct_chat_retry_sleep(decision, model_retry_sleep)
+            return self.reply_text(
+                session,
+                args,
+                retry_count + 1,
+                model_retry_sleep=model_retry_sleep,
+            )
 
         if response.status_code == 401:
             content = "授权失败，请检查 Qianfan API Key 是否正确"
         elif response.status_code == 429:
-            if retry_count < 2:
-                time.sleep(3)
-                return self.reply_text(session, args, retry_count + 1)
+            if session is not None and decision.should_retry:
+                run_legacy_direct_chat_retry_sleep(decision, model_retry_sleep)
+                return self.reply_text(
+                    session,
+                    args,
+                    retry_count + 1,
+                    model_retry_sleep=model_retry_sleep,
+                )
             content = "请求过于频繁，请稍后再试"
         else:
             content = "请求失败：{}".format(message)
 
-        return {"completion_tokens": 0, "content": content}
+        return legacy_direct_chat_failure_result(
+            content=content,
+            details=details,
+            decision=decision,
+        )
