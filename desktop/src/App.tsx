@@ -434,7 +434,7 @@ function displayModelName(value?: string) {
 function isRuntimeRequestUiActive(request?: RuntimeActiveRequest | null) {
   if (!request?.request_id) return false;
   if (!request.cancelled) return true;
-  const ageSeconds = Number(request.age_seconds || 0);
+  const ageSeconds = Number(request.cancel_age_seconds ?? request.age_seconds ?? 0);
   return !Number.isFinite(ageSeconds) || ageSeconds < 30;
 }
 

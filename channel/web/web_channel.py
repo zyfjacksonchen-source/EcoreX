@@ -1099,19 +1099,31 @@ class WebChannel(ChatChannel):
             requests = []
             sessions = {}
             seen_request_ids = set()
+            registry_rows = get_cancel_registry().snapshot()
+            registry_by_request = {
+                row.get("request_id", ""): row
+                for row in registry_rows
+                if row.get("request_id")
+            }
             for row in get_run_ledger().active_snapshot():
                 request_id = row.get("request_id", "")
                 session_id = row.get("session_id") or self.request_to_session.get(request_id, "")
+                registry_row = registry_by_request.get(request_id, {})
                 item = {
                     **row,
                     "session_id": session_id,
                     "stream_available": request_id in self.sse_queues,
                 }
+                if registry_row.get("cancelled"):
+                    item["cancelled"] = True
+                    item["state"] = "cancelling"
+                    item["cancelled_at"] = registry_row.get("cancelled_at")
+                    item["cancel_age_seconds"] = registry_row.get("cancel_age_seconds")
                 requests.append(item)
                 seen_request_ids.add(request_id)
                 if session_id and not item.get("cancelled"):
                     sessions.setdefault(session_id, []).append(request_id)
-            for row in get_cancel_registry().snapshot():
+            for row in registry_rows:
                 request_id = row.get("request_id", "")
                 if not request_id or request_id in seen_request_ids:
                     continue

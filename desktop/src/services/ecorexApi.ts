@@ -21,9 +21,11 @@ export type RuntimeActiveRequest = {
   error_code?: string;
   error_message?: string;
   created_at?: number;
+  cancelled_at?: number | null;
   updated_at?: number;
   terminal_at?: number;
   age_seconds?: number;
+  cancel_age_seconds?: number | null;
   stream_available?: boolean;
   metadata?: Record<string, unknown>;
 };

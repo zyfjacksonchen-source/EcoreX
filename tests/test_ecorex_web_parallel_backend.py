@@ -808,16 +808,18 @@ class TestWebParallelHandlers(unittest.TestCase):
         from agent.protocol.cancel import CancelTokenRegistry
 
         registry = CancelTokenRegistry()
-        registry.register("req-cancel-snapshot", session_id="session-cancel-snapshot")
-        self.assertTrue(registry.cancel_request("req-cancel-snapshot"))
-
-        snapshot = registry.snapshot()
+        with patch("agent.protocol.cancel.time.time", side_effect=[1000.0, 1600.0, 1602.5]):
+            registry.register("req-cancel-snapshot", session_id="session-cancel-snapshot")
+            self.assertTrue(registry.cancel_request("req-cancel-snapshot"))
+            snapshot = registry.snapshot()
         self.assertEqual(len(snapshot), 1)
         self.assertEqual(snapshot[0]["request_id"], "req-cancel-snapshot")
         self.assertEqual(snapshot[0]["session_id"], "session-cancel-snapshot")
         self.assertTrue(snapshot[0]["cancelled"])
         self.assertEqual(snapshot[0]["state"], "cancelling")
-        self.assertGreaterEqual(snapshot[0]["age_seconds"], 0)
+        self.assertEqual(snapshot[0]["age_seconds"], 602.5)
+        self.assertEqual(snapshot[0]["cancelled_at"], 1600.0)
+        self.assertEqual(snapshot[0]["cancel_age_seconds"], 2.5)
 
     def test_web_request_token_survives_agentbridge_until_web_finalizer(self):
         from agent.protocol import get_cancel_registry
@@ -968,6 +970,41 @@ class TestWebParallelHandlers(unittest.TestCase):
                 self.assertTrue(active[0]["stream_available"])
             finally:
                 registry.unregister(request_id)
+
+    def test_active_snapshot_merges_registry_cancel_age_into_ledger_row(self):
+        from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests
+        from channel.web import web_channel
+
+        channel = web_channel.WebChannel()
+        request_id = "req-ledger-cancel-age"
+        session_id = "session-ledger-cancel-age"
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            channel.request_to_session = {request_id: session_id}
+            registry = get_cancel_registry()
+            times = [1000.0, 1001.0, 1002.0, 1600.0]
+
+            def fake_time():
+                return times.pop(0) if times else 1602.5
+
+            with patch("agent.protocol.cancel.time.time", side_effect=fake_time):
+                ledger.create_run(request_id, session_id, phase="running")
+                ledger.mark_phase(request_id, "cancelling", status="cancelling")
+                registry.register(request_id, session_id=session_id)
+                self.assertTrue(registry.cancel_request(request_id))
+                try:
+                    with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                        snapshot = channel.active_requests_snapshot()
+                finally:
+                    registry.unregister(request_id)
+
+            active = [item for item in snapshot["requests"] if item["request_id"] == request_id]
+            self.assertEqual(len(active), 1)
+            self.assertTrue(active[0]["cancelled"])
+            self.assertEqual(active[0]["state"], "cancelling")
+            self.assertEqual(active[0]["cancelled_at"], 1600.0)
+            self.assertEqual(active[0]["cancel_age_seconds"], 2.5)
+            self.assertGreater(active[0]["age_seconds"], active[0]["cancel_age_seconds"])
 
     def test_busy_session_message_interrupts_old_request_and_starts_new_one(self):
         from agent.protocol import get_cancel_registry

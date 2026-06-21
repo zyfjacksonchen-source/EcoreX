@@ -68,3 +68,14 @@
     session lock, and remove SSE/request replay state.
   - Focused pytest passed: 7 pre-worker-abort/active-request/worker-completion
     tests.
+- Added the fourth R18-03 cancellation visibility slice:
+  - `CancelTokenRegistry` now records `cancelled_at` and exposes
+    `cancel_age_seconds` in active snapshots.
+  - Desktop active-request filtering now uses `cancel_age_seconds` before
+    falling back to request `age_seconds`, so a long-running request remains
+    visible during the immediate post-cancel grace window.
+  - Run-ledger active rows merge cancel-registry `cancelled_at` and
+    `cancel_age_seconds` so ledger-preferred snapshots keep the same UI
+    visibility semantics.
+  - Focused pytest passed: 6 cancel-registry/active-request tests; desktop
+    `npm run typecheck` passed.
