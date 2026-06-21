@@ -13,6 +13,12 @@ from typing import Optional
 from common.log import logger
 from agent.protocol.message_utils import drop_orphaned_tool_results_openai
 from models.model_capabilities import get_model_capabilities, sanitize_chat_payload
+from models.model_telemetry import (
+    ModelCallSpan,
+    extract_error_details,
+    instrument_model_stream,
+    is_model_error_response,
+)
 from models.openai.openai_http_client import OpenAIHTTPClient, OpenAIHTTPError
 
 
@@ -68,6 +74,7 @@ class OpenAICompatibleBot:
         Returns:
             Formatted response in OpenAI format or generator for streaming
         """
+        telemetry_span = None
         try:
             # Get API configuration from subclass
             api_config = self.get_api_config()
@@ -122,14 +129,41 @@ class OpenAICompatibleBot:
                     f"[{self.__class__.__name__}] stripped unsupported model params "
                     f"for {capabilities.provider}/{model_name}: {removed_params}"
                 )
-            
+
+            try:
+                retry_count = int(kwargs.get("retry_count") or 0)
+            except (TypeError, ValueError):
+                retry_count = 0
+            telemetry_span = ModelCallSpan(
+                provider=capabilities.provider,
+                model=model_name,
+                stream=bool(stream),
+                retry_count=max(0, retry_count),
+            )
+
             if stream:
-                return self._handle_stream_response(request_params, api_key, api_base)
+                response_stream = self._handle_stream_response(request_params, api_key, api_base)
+                if isinstance(response_stream, dict):
+                    telemetry_span.observe_response(response_stream)
+                    if is_model_error_response(response_stream):
+                        telemetry_span.finish_error(**extract_error_details(response_stream))
+                    else:
+                        telemetry_span.finish_completed()
+                    return response_stream
+                return instrument_model_stream(response_stream, telemetry_span)
             else:
-                return self._handle_sync_response(request_params, api_key, api_base)
+                response = self._handle_sync_response(request_params, api_key, api_base)
+                telemetry_span.observe_response(response)
+                if is_model_error_response(response):
+                    telemetry_span.finish_error(**extract_error_details(response))
+                else:
+                    telemetry_span.finish_completed()
+                return response
                 
         except Exception as e:
             error_msg = str(e)
+            if telemetry_span is not None:
+                telemetry_span.finish_error(message=error_msg, status_code=500)
             logger.error(f"[{self.__class__.__name__}] call_with_tools error: {error_msg}")
             if stream:
                 def error_generator():

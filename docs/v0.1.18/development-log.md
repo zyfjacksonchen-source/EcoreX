@@ -106,3 +106,16 @@
     request/session prefixes for older or degraded runtime snapshots.
   - Focused pytest passed: 5 subagent tests; broader subagent/active/busy
     regression passed: 12 tests; desktop `npm run typecheck` passed.
+- Added the first R18-04-B model telemetry slice:
+  - `models/model_telemetry.py` adds a bounded in-memory model-call event
+    collector, usage normalization for input/output/total/reasoning/cached
+    tokens, and a small error taxonomy for rate limit, timeout, network,
+    server/client, cancellation, and context overflow failures.
+  - The shared OpenAI-compatible sync and streaming tool-call path now records
+    provider/model, stream flag, retry count field, first-token latency, total
+    latency, usage buckets, and failed-call taxonomy without changing the
+    existing chunk/error contract consumed by AgentStream.
+  - Stream telemetry now closes exactly once as `cancelled` when a consumer has
+    already received model output and then cancels/closes the generator before
+    provider completion.
+  - Focused pytest passed: 11 model telemetry/capability tests.
