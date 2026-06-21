@@ -233,6 +233,151 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
             "output": "{\"status\":\"delayed\"}",
         })
 
+    def test_responses_stream_events_normalize_to_chat_chunks(self):
+        from models.openai.responses_adapter import normalize_responses_stream_events_to_chat
+
+        completed = []
+        chunks = list(normalize_responses_stream_events_to_chat(
+            [
+                {
+                    "type": "response.created",
+                    "response": {
+                        "id": "resp_stream",
+                        "model": "gpt-5.5",
+                        "created_at": 123,
+                    },
+                },
+                {"type": "response.output_text.delta", "delta": "Hel"},
+                {"type": "response.output_text.delta", "delta": "lo"},
+                {
+                    "type": "response.output_item.added",
+                    "output_index": 1,
+                    "item": {
+                        "id": "fc_item",
+                        "type": "function_call",
+                        "call_id": "call_weather",
+                        "name": "lookup_weather",
+                    },
+                },
+                {
+                    "type": "response.function_call_arguments.delta",
+                    "output_index": 1,
+                    "item_id": "fc_item",
+                    "delta": "{\"city\"",
+                },
+                {
+                    "type": "response.function_call_arguments.done",
+                    "output_index": 1,
+                    "item_id": "fc_item",
+                    "arguments": "{\"city\":\"SF\"}",
+                },
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_stream",
+                        "model": "gpt-5.5",
+                        "status": "completed",
+                        "service_tier": "priority",
+                        "usage": {
+                            "input_tokens": 7,
+                            "output_tokens": 3,
+                            "total_tokens": 10,
+                        },
+                    },
+                },
+            ],
+            on_completed=completed.append,
+        ))
+
+        self.assertEqual(chunks[0]["choices"][0]["delta"]["content"], "Hel")
+        self.assertEqual(chunks[1]["choices"][0]["delta"]["content"], "lo")
+        tool_start = chunks[2]["choices"][0]["delta"]["tool_calls"][0]
+        self.assertEqual(tool_start["id"], "call_weather")
+        self.assertEqual(tool_start["function"]["name"], "lookup_weather")
+        self.assertEqual(chunks[3]["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"], "{\"city\"")
+        self.assertEqual(chunks[4]["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"], ":\"SF\"}")
+        self.assertEqual(chunks[-1]["choices"][0]["finish_reason"], "stop")
+        self.assertEqual(chunks[-1]["usage"]["total_tokens"], 10)
+        self.assertEqual(completed[0]["id"], "resp_stream")
+
+    def test_responses_stream_done_event_can_start_tool_call(self):
+        from models.openai.responses_adapter import normalize_responses_stream_events_to_chat
+
+        chunks = list(normalize_responses_stream_events_to_chat([
+            {
+                "type": "response.function_call_arguments.done",
+                "output_index": 0,
+                "item_id": "fc_done",
+                "name": "lookup_order",
+                "arguments": "{\"order_id\":\"ORDER-1\"}",
+            },
+        ]))
+
+        tool_delta = chunks[0]["choices"][0]["delta"]["tool_calls"][0]
+        self.assertEqual(tool_delta["function"]["name"], "lookup_order")
+        self.assertEqual(tool_delta["function"]["arguments"], "{\"order_id\":\"ORDER-1\"}")
+
+    def test_responses_stream_error_keeps_code_out_of_status_code(self):
+        from models.openai.responses_adapter import normalize_responses_stream_events_to_chat
+
+        chunks = list(normalize_responses_stream_events_to_chat([
+            {
+                "type": "error",
+                "code": "rate_limit_exceeded",
+                "message": "slow down",
+            },
+        ]))
+
+        self.assertEqual(chunks[0]["error"]["code"], "rate_limit_exceeded")
+        self.assertEqual(chunks[0]["status_code"], 500)
+
+    def test_responses_stream_completed_callback_failure_does_not_drop_output(self):
+        from models.openai.responses_adapter import normalize_responses_stream_events_to_chat
+
+        def raise_on_completed(_response):
+            raise RuntimeError("state store unavailable")
+
+        chunks = list(normalize_responses_stream_events_to_chat(
+            [
+                {"type": "response.output_text.delta", "delta": "done"},
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_done",
+                        "model": "gpt-5.5",
+                        "status": "completed",
+                    },
+                },
+            ],
+            on_completed=raise_on_completed,
+        ))
+
+        self.assertEqual(chunks[0]["choices"][0]["delta"]["content"], "done")
+        self.assertEqual(chunks[-1]["choices"][0]["finish_reason"], "stop")
+
+    def test_responses_stream_refusal_events_emit_content_once(self):
+        from models.openai.responses_adapter import normalize_responses_stream_events_to_chat
+
+        chunks = list(normalize_responses_stream_events_to_chat([
+            {
+                "type": "response.refusal.delta",
+                "item_id": "msg_refusal",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "I can't",
+            },
+            {
+                "type": "response.refusal.done",
+                "item_id": "msg_refusal",
+                "output_index": 0,
+                "content_index": 0,
+                "refusal": "I can't help with that.",
+            },
+        ]))
+
+        self.assertEqual(chunks[0]["choices"][0]["delta"]["content"], "I can't")
+        self.assertEqual(chunks[1]["choices"][0]["delta"]["content"], " help with that.")
+
     def test_decision_gate_requires_explicit_enable_and_official_openai_host(self):
         from models.openai.responses_adapter import decide_responses_adapter
 
@@ -649,23 +794,190 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
         self.assertEqual(events[0]["status"], "failed")
         self.assertEqual(events[0]["error_code"], "tool_limit")
 
-    def test_responses_stream_request_falls_back_to_chat_completions(self):
+    def test_non_stream_responses_incomplete_is_non_retryable(self):
+        from models.model_telemetry import get_recent_model_calls, reset_model_call_telemetry_for_tests
+        from models.openai.responses_state_store import load_responses_state
         from models.openai_compatible_bot import OpenAICompatibleBot
 
-        class StreamFallbackClient:
+        class IncompleteResponsesClient:
+            def __init__(self):
+                self.calls = []
+
+            def responses_create(self, **kwargs):
+                self.calls.append(kwargs)
+                return {
+                    "id": "resp_incomplete_sync",
+                    "model": "gpt-5.5",
+                    "status": "incomplete",
+                    "incomplete_details": {"reason": "max_tokens"},
+                }
+
+        class RuntimeBot(OpenAICompatibleBot):
+            def __init__(self, client):
+                self.client = client
+
+            def get_api_config(self):
+                return {
+                    "provider": "openai",
+                    "api_key": "test-key",
+                    "api_base": "https://api.openai.com/v1",
+                    "model": "gpt-5.5",
+                    "use_responses_api": True,
+                }
+
+            def _get_http_client(self):
+                return self.client
+
+        reset_model_call_telemetry_for_tests()
+        client = IncompleteResponsesClient()
+        with tempfile.TemporaryDirectory() as workspace:
+            result = RuntimeBot(client).call_with_tools(
+                [{"role": "user", "content": "hello"}],
+                stream=False,
+                session_id="session-incomplete-sync",
+                workspace=workspace,
+                model="gpt-5.5",
+                model_max_retries=1,
+            )
+            state = load_responses_state(
+                session_id="session-incomplete-sync",
+                provider="openai",
+                model="gpt-5.5",
+                workspace=workspace,
+            )
+
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(result["status_code"], 400)
+        self.assertFalse(result["retryable"])
+        self.assertEqual(result["error"]["code"], "max_tokens")
+        self.assertIsNone(state.previous_response_id)
+        events = get_recent_model_calls()
+        self.assertEqual(events[0]["api_path"], "/responses")
+        self.assertEqual(events[0]["error_taxonomy"], "client_error")
+
+    def test_responses_stream_request_uses_responses_api_and_persists_state(self):
+        from models.model_telemetry import get_recent_model_calls, reset_model_call_telemetry_for_tests
+        from models.openai.responses_state_store import load_responses_state
+        from models.openai_compatible_bot import OpenAICompatibleBot
+
+        class ResponsesStreamClient:
             def __init__(self):
                 self.chat_calls = []
                 self.responses_calls = []
 
             def responses_create(self, **kwargs):
                 self.responses_calls.append(kwargs)
-                raise AssertionError("stream fallback must not call responses_create")
+                return iter([
+                    {
+                        "type": "response.created",
+                        "response": {
+                            "id": "resp_stream_runtime",
+                            "model": "gpt-5.5",
+                        },
+                    },
+                    {"type": "response.output_text.delta", "delta": "stream"},
+                    {
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp_stream_next",
+                            "model": "gpt-5.5",
+                            "status": "completed",
+                            "service_tier": "priority",
+                            "usage": {
+                                "input_tokens": 11,
+                                "output_tokens": 5,
+                                "total_tokens": 16,
+                                "input_tokens_details": {"cached_tokens": 4},
+                            },
+                        },
+                    },
+                ])
 
             def chat_completions(self, **kwargs):
                 self.chat_calls.append(kwargs)
+                raise AssertionError("Responses-enabled stream calls must not hit chat_completions")
+
+        class RuntimeBot(OpenAICompatibleBot):
+            def __init__(self, client):
+                self.client = client
+
+            def get_api_config(self):
+                return {
+                    "provider": "openai",
+                    "api_key": "test-key",
+                    "api_base": "https://api.openai.com/v1",
+                    "model": "gpt-5.5",
+                    "use_responses_api": True,
+                }
+
+            def _get_http_client(self):
+                return self.client
+
+        reset_model_call_telemetry_for_tests()
+        client = ResponsesStreamClient()
+        with tempfile.TemporaryDirectory() as workspace:
+            chunks = list(RuntimeBot(client).call_with_tools(
+                [{"role": "user", "content": "hello"}],
+                stream=True,
+                session_id="session-stream-runtime",
+                workspace=workspace,
+                model="gpt-5.5",
+            ))
+            state = load_responses_state(
+                session_id="session-stream-runtime",
+                provider="openai",
+                model="gpt-5.5",
+                workspace=workspace,
+            )
+
+        self.assertEqual(chunks[0]["choices"][0]["delta"]["content"], "stream")
+        self.assertEqual(chunks[-1]["choices"][0]["finish_reason"], "stop")
+        self.assertEqual(len(client.responses_calls), 1)
+        self.assertEqual(len(client.chat_calls), 0)
+        self.assertTrue(client.responses_calls[0]["stream"])
+        self.assertEqual(client.responses_calls[0]["model"], "gpt-5.5")
+        self.assertNotIn("messages", client.responses_calls[0])
+        self.assertEqual(state.previous_response_id, "resp_stream_next")
+        self.assertEqual(state.service_tier, "priority")
+        events = get_recent_model_calls()
+        self.assertEqual(events[0]["api_path"], "/responses")
+        self.assertTrue(events[0]["stream"])
+        self.assertEqual(events[0]["status"], "completed")
+        self.assertEqual(events[0]["total_tokens"], 16)
+        self.assertEqual(events[0]["cached_tokens"], 4)
+
+    def test_responses_stream_retries_before_first_output(self):
+        from models.model_telemetry import get_recent_model_calls, reset_model_call_telemetry_for_tests
+        from models.openai_compatible_bot import OpenAICompatibleBot
+
+        class RetryResponsesClient:
+            def __init__(self):
+                self.responses_calls = []
+
+            def responses_create(self, **kwargs):
+                self.responses_calls.append(kwargs)
+                if len(self.responses_calls) == 1:
+                    return iter([{
+                        "type": "error",
+                        "message": "server unavailable",
+                        "status_code": 503,
+                        "retry_after": "0.25",
+                    }])
                 return iter([
-                    {"choices": [{"delta": {"content": "ok"}}]},
-                    {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+                    {"type": "response.output_text.delta", "delta": "retry-ok"},
+                    {
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp_retry_next",
+                            "model": "gpt-5.5",
+                            "status": "completed",
+                            "usage": {
+                                "input_tokens": 2,
+                                "output_tokens": 1,
+                                "total_tokens": 3,
+                            },
+                        },
+                    },
                 ])
 
         class RuntimeBot(OpenAICompatibleBot):
@@ -684,18 +996,158 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
             def _get_http_client(self):
                 return self.client
 
-        client = StreamFallbackClient()
+        reset_model_call_telemetry_for_tests()
+        sleeps = []
+        client = RetryResponsesClient()
         chunks = list(RuntimeBot(client).call_with_tools(
             [{"role": "user", "content": "hello"}],
             stream=True,
-            session_id="session-stream-fallback",
             model="gpt-5.5",
+            model_max_retries=1,
+            model_retry_sleep=sleeps.append,
         ))
 
-        self.assertEqual(chunks[0]["choices"][0]["delta"]["content"], "ok")
-        self.assertEqual(len(client.responses_calls), 0)
-        self.assertEqual(len(client.chat_calls), 1)
-        self.assertTrue(client.chat_calls[0]["stream"])
+        self.assertEqual(chunks[0]["choices"][0]["delta"]["content"], "retry-ok")
+        self.assertEqual(len(client.responses_calls), 2)
+        self.assertEqual(sleeps, [0.25])
+        events = get_recent_model_calls()
+        self.assertEqual([event["api_path"] for event in events], ["/responses", "/responses"])
+        self.assertEqual([event["status"] for event in events], ["failed", "completed"])
+        self.assertEqual(events[0]["error_taxonomy"], "server_error")
+
+    def test_responses_stream_error_after_output_suppresses_retry_and_state(self):
+        from models.model_telemetry import get_recent_model_calls, reset_model_call_telemetry_for_tests
+        from models.openai.responses_state_store import load_responses_state
+        from models.openai_compatible_bot import OpenAICompatibleBot
+
+        class ErrorAfterOutputClient:
+            def __init__(self):
+                self.responses_calls = []
+
+            def responses_create(self, **kwargs):
+                self.responses_calls.append(kwargs)
+                return iter([
+                    {"type": "response.output_text.delta", "delta": "partial"},
+                    {
+                        "type": "error",
+                        "message": "server unavailable",
+                        "status_code": 503,
+                        "retry_after": "0.25",
+                    },
+                ])
+
+        class RuntimeBot(OpenAICompatibleBot):
+            def __init__(self, client):
+                self.client = client
+
+            def get_api_config(self):
+                return {
+                    "provider": "openai",
+                    "api_key": "test-key",
+                    "api_base": "https://api.openai.com/v1",
+                    "model": "gpt-5.5",
+                    "use_responses_api": True,
+                }
+
+            def _get_http_client(self):
+                return self.client
+
+        reset_model_call_telemetry_for_tests()
+        client = ErrorAfterOutputClient()
+        with tempfile.TemporaryDirectory() as workspace:
+            chunks = list(RuntimeBot(client).call_with_tools(
+                [{"role": "user", "content": "hello"}],
+                stream=True,
+                session_id="session-stream-error-after-output",
+                workspace=workspace,
+                model="gpt-5.5",
+                model_max_retries=1,
+                model_retry_sleep=lambda _delay: None,
+            ))
+            state = load_responses_state(
+                session_id="session-stream-error-after-output",
+                provider="openai",
+                model="gpt-5.5",
+                workspace=workspace,
+            )
+
+        self.assertEqual(chunks[0]["choices"][0]["delta"]["content"], "partial")
+        self.assertEqual(chunks[1]["status_code"], 503)
+        self.assertTrue(chunks[1]["retry_suppressed"])
+        self.assertEqual(chunks[1]["retry_suppressed_reason"], "stream_output_started")
+        self.assertEqual(len(client.responses_calls), 1)
+        self.assertIsNone(state.previous_response_id)
+        events = get_recent_model_calls()
+        self.assertEqual(events[0]["api_path"], "/responses")
+        self.assertEqual(events[0]["status"], "failed")
+        self.assertEqual(events[0]["error_taxonomy"], "server_error")
+
+    def test_responses_stream_incomplete_is_non_retryable_and_does_not_persist_state(self):
+        from models.model_telemetry import get_recent_model_calls, reset_model_call_telemetry_for_tests
+        from models.openai.responses_state_store import load_responses_state
+        from models.openai_compatible_bot import OpenAICompatibleBot
+
+        class IncompleteResponsesClient:
+            def __init__(self):
+                self.responses_calls = []
+
+            def responses_create(self, **kwargs):
+                self.responses_calls.append(kwargs)
+                return iter([{
+                    "type": "response.incomplete",
+                    "response": {
+                        "id": "resp_incomplete",
+                        "model": "gpt-5.5",
+                        "status": "incomplete",
+                        "incomplete_details": {"reason": "max_tokens"},
+                    },
+                }])
+
+        class RuntimeBot(OpenAICompatibleBot):
+            def __init__(self, client):
+                self.client = client
+
+            def get_api_config(self):
+                return {
+                    "provider": "openai",
+                    "api_key": "test-key",
+                    "api_base": "https://api.openai.com/v1",
+                    "model": "gpt-5.5",
+                    "use_responses_api": True,
+                }
+
+            def _get_http_client(self):
+                return self.client
+
+        reset_model_call_telemetry_for_tests()
+        client = IncompleteResponsesClient()
+        with tempfile.TemporaryDirectory() as workspace:
+            chunks = list(RuntimeBot(client).call_with_tools(
+                [{"role": "user", "content": "hello"}],
+                stream=True,
+                session_id="session-stream-incomplete",
+                workspace=workspace,
+                model="gpt-5.5",
+                model_max_retries=1,
+                model_retry_sleep=lambda _delay: None,
+            ))
+            state = load_responses_state(
+                session_id="session-stream-incomplete",
+                provider="openai",
+                model="gpt-5.5",
+                workspace=workspace,
+            )
+
+        self.assertEqual(len(client.responses_calls), 1)
+        self.assertEqual(chunks[0]["status_code"], 400)
+        self.assertFalse(chunks[0]["retryable"])
+        self.assertFalse(chunks[0]["retry_exhausted"])
+        self.assertEqual(chunks[0]["error"]["code"], "max_tokens")
+        self.assertIsNone(state.previous_response_id)
+        events = get_recent_model_calls()
+        self.assertEqual(events[0]["api_path"], "/responses")
+        self.assertEqual(events[0]["status"], "failed")
+        self.assertEqual(events[0]["error_taxonomy"], "client_error")
 
     def test_extract_state_and_normalize_response_output(self):
         from models.openai.responses_adapter import (
@@ -733,6 +1185,18 @@ class TestOpenAIResponsesAdapter(unittest.TestCase):
         self.assertEqual(normalized["choices"][0]["message"]["content"], "Done")
         self.assertEqual(normalized["usage"]["prompt_tokens_details"]["cached_tokens"], 4)
         self.assertEqual(normalized["usage"]["completion_tokens_details"]["reasoning_tokens"], 2)
+
+        refusal = normalize_responses_output_to_chat({
+            "id": "resp_refusal",
+            "model": "gpt-5.5",
+            "status": "completed",
+            "output": [{
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "refusal", "refusal": "I can't help."}],
+            }],
+        })
+        self.assertEqual(refusal["choices"][0]["message"]["content"], "I can't help.")
 
     def test_compaction_state_uses_output_without_previous_response_id(self):
         from models.openai.responses_adapter import (

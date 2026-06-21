@@ -123,6 +123,7 @@ def normalize_usage_tokens(usage: Any) -> Dict[str, int]:
                 "cachedContentTokenCount",
                 ("prompt_tokens_details", "cached_tokens"),
                 ("promptTokensDetails", "cachedTokens"),
+                ("input_tokens_details", "cached_tokens"),
                 ("input_token_details", "cached_tokens"),
                 ("inputTokenDetails", "cachedTokens"),
             ),

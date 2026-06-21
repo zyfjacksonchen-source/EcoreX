@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from common import const
+from common.log import logger
 
 
 RESPONSES_CREATE_PATH = "/responses"
@@ -319,8 +320,8 @@ def normalize_responses_output_to_chat(response: Dict[str, Any]) -> Dict[str, An
         item_type = item.get("type")
         if item_type == "message":
             for part in item.get("content") or []:
-                if isinstance(part, dict) and part.get("type") in ("output_text", "text"):
-                    text_parts.append(part.get("text") or "")
+                if isinstance(part, dict) and part.get("type") in ("output_text", "text", "refusal"):
+                    text_parts.append(part.get("text") or part.get("refusal") or "")
         elif item_type in ("function_call", "custom_tool_call"):
             tool_calls.append(_response_function_call_to_chat_tool_call(item))
 
@@ -346,6 +347,426 @@ def normalize_responses_output_to_chat(response: Dict[str, Any]) -> Dict[str, An
             "previous_response_id": response.get("previous_response_id"),
             "service_tier": response.get("service_tier"),
         },
+    }
+
+
+def normalize_responses_stream_events_to_chat(
+    events: Iterable[Dict[str, Any]],
+    *,
+    on_completed: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> Iterator[Dict[str, Any]]:
+    """Normalize Responses stream events into Chat Completions stream chunks.
+
+    The agent runtime already consumes OpenAI chat-completion deltas. Keeping the
+    conversion here lets official OpenAI Responses streaming use the existing
+    retry, telemetry, tool-call, and cancellation paths without widening the
+    agent stream contract.
+    """
+
+    normalizer = _ResponsesStreamNormalizer(on_completed=on_completed)
+    yield from normalizer.normalize(events)
+
+
+class _ResponsesStreamNormalizer:
+    def __init__(self, *, on_completed: Optional[Callable[[Dict[str, Any]], None]] = None):
+        self.on_completed = on_completed
+        self.response_id = ""
+        self.model = ""
+        self.created = None
+        self._next_tool_index = 0
+        self._tool_by_key: Dict[Any, Dict[str, Any]] = {}
+        self._content_by_key: Dict[Any, str] = {}
+        self._emitted_output = False
+
+    def normalize(self, events: Iterable[Dict[str, Any]]) -> Iterator[Dict[str, Any]]:
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            if event.get("choices"):
+                self._emitted_output = True
+                yield event
+                continue
+            if event.get("error"):
+                yield _responses_stream_error_chunk(event)
+                continue
+
+            event_type = str(event.get("type") or event.get("event") or "").strip()
+            response = event.get("response") if isinstance(event.get("response"), dict) else None
+            if response:
+                self._remember_response(response)
+
+            if event_type in ("response.created", "response.in_progress", "response.queued"):
+                continue
+
+            if event_type == "response.output_item.added":
+                chunk = self._handle_output_item(event.get("item"), event)
+                if chunk:
+                    self._emitted_output = True
+                    yield chunk
+                continue
+
+            if event_type == "response.output_text.delta":
+                chunk = self._handle_text_delta(event, category="text")
+                if chunk:
+                    self._emitted_output = True
+                    yield chunk
+                continue
+
+            if event_type == "response.output_text.done":
+                chunk = self._handle_text_done(event, category="text", value_key="text")
+                if chunk:
+                    self._emitted_output = True
+                    yield chunk
+                continue
+
+            if event_type == "response.refusal.delta":
+                chunk = self._handle_text_delta(event, category="refusal")
+                if chunk:
+                    self._emitted_output = True
+                    yield chunk
+                continue
+
+            if event_type == "response.refusal.done":
+                chunk = self._handle_text_done(event, category="refusal", value_key="refusal")
+                if chunk:
+                    self._emitted_output = True
+                    yield chunk
+                continue
+
+            if event_type in (
+                "response.reasoning_text.delta",
+                "response.reasoning_summary_text.delta",
+            ):
+                delta = event.get("delta") or event.get("text") or ""
+                if delta:
+                    self._emitted_output = True
+                    yield self._chunk({"reasoning_content": str(delta)})
+                continue
+
+            if event_type == "response.function_call_arguments.delta":
+                chunk = self._handle_function_arguments_delta(event)
+                if chunk:
+                    self._emitted_output = True
+                    yield chunk
+                continue
+
+            if event_type == "response.function_call_arguments.done":
+                chunk = self._handle_function_arguments_done(event)
+                if chunk:
+                    self._emitted_output = True
+                    yield chunk
+                continue
+
+            if event_type == "response.output_item.done":
+                for chunk in self._handle_output_item_done(event.get("item"), event):
+                    self._emitted_output = True
+                    yield chunk
+                continue
+
+            if event_type in ("response.failed", "response.incomplete", "response.cancelled"):
+                response = response or event
+                yield _responses_status_error_chunk(response)
+                continue
+
+            if event_type == "response.completed":
+                response = response or event
+                self._remember_response(response)
+                if not self._emitted_output:
+                    for chunk in self._chunks_from_final_response(response):
+                        yield chunk
+                if self.on_completed:
+                    self._notify_completed(response)
+                yield self._chunk(
+                    {},
+                    finish_reason=_responses_finish_reason(response),
+                    usage=response.get("usage") or {},
+                    responses_api={
+                        "status": response.get("status"),
+                        "previous_response_id": response.get("previous_response_id"),
+                        "service_tier": response.get("service_tier"),
+                    },
+                )
+                continue
+
+            if event_type == "error":
+                yield _responses_stream_error_chunk(event)
+
+    def _notify_completed(self, response: Dict[str, Any]) -> None:
+        try:
+            self.on_completed(response)
+        except Exception as exc:
+            logger.warning("[ResponsesAdapter] completed-stream state callback failed: %s", exc)
+
+    def _remember_response(self, response: Dict[str, Any]) -> None:
+        if response.get("id"):
+            self.response_id = str(response.get("id") or "")
+        if response.get("model"):
+            self.model = str(response.get("model") or "")
+        if response.get("created_at") is not None:
+            self.created = response.get("created_at")
+
+    def _chunk(
+        self,
+        delta: Dict[str, Any],
+        *,
+        finish_reason: Optional[str] = None,
+        usage: Optional[Dict[str, Any]] = None,
+        responses_api: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        chunk: Dict[str, Any] = {
+            "id": self.response_id,
+            "object": "chat.completion.chunk",
+            "model": self.model,
+            "choices": [{
+                "index": 0,
+                "delta": delta,
+                "finish_reason": finish_reason,
+            }],
+        }
+        if self.created is not None:
+            chunk["created"] = self.created
+        if usage:
+            chunk["usage"] = usage
+        if responses_api:
+            chunk["responses_api"] = responses_api
+        return chunk
+
+    def _handle_output_item(self, item: Any, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not isinstance(item, dict):
+            return None
+        if item.get("type") not in ("function_call", "custom_tool_call"):
+            return None
+        tool = self._remember_tool(item, event)
+        return self._tool_chunk(
+            tool,
+            function={
+                "name": tool.get("name") or "",
+                "arguments": "",
+            },
+            include_id=True,
+        )
+
+    def _handle_text_delta(self, event: Dict[str, Any], *, category: str) -> Optional[Dict[str, Any]]:
+        delta = event.get("delta")
+        if delta is None:
+            delta = event.get("text", "")
+        if not delta:
+            return None
+        key = self._content_key(event, category)
+        self._content_by_key[key] = self._content_by_key.get(key, "") + str(delta)
+        return self._chunk({"content": str(delta)})
+
+    def _handle_text_done(self, event: Dict[str, Any], *, category: str, value_key: str) -> Optional[Dict[str, Any]]:
+        final_text = str(event.get(value_key) or event.get("text") or "")
+        if not final_text:
+            return None
+        key = self._content_key(event, category)
+        emitted = self._content_by_key.get(key, "")
+        if final_text == emitted:
+            return None
+        delta = final_text[len(emitted):] if final_text.startswith(emitted) else final_text
+        self._content_by_key[key] = emitted + delta
+        return self._chunk({"content": delta})
+
+    @staticmethod
+    def _content_key(event: Dict[str, Any], category: str) -> Any:
+        return (
+            category,
+            str(event.get("item_id") or ""),
+            str(event.get("output_index") if event.get("output_index") is not None else ""),
+            str(event.get("content_index") if event.get("content_index") is not None else ""),
+        )
+
+    def _handle_output_item_done(self, item: Any, event: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
+        if not isinstance(item, dict):
+            return
+        if item.get("type") not in ("function_call", "custom_tool_call"):
+            return
+        tool = self._remember_tool(item, event)
+        name = item.get("name") or tool.get("name") or ""
+        if name and name != tool.get("emitted_name"):
+            tool["emitted_name"] = name
+            yield self._tool_chunk(tool, function={"name": name}, include_id=not tool.get("emitted_id"))
+
+        arguments = str(item.get("arguments") or "")
+        emitted_args = str(tool.get("arguments") or "")
+        if arguments and arguments != emitted_args:
+            delta = arguments[len(emitted_args):] if arguments.startswith(emitted_args) else arguments
+            tool["arguments"] = emitted_args + delta
+            yield self._tool_chunk(tool, function={"arguments": delta}, include_id=False)
+
+    def _handle_function_arguments_delta(self, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        tool = self._tool_for_event(event)
+        delta = event.get("delta")
+        if delta is None:
+            delta = event.get("arguments_delta", "")
+        if not delta:
+            return None
+        tool["arguments"] = str(tool.get("arguments") or "") + str(delta)
+        return self._tool_chunk(tool, function={"arguments": str(delta)}, include_id=False)
+
+    def _handle_function_arguments_done(self, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        tool = self._tool_for_event(event)
+        function_delta: Dict[str, str] = {}
+        include_id = not bool(tool.get("emitted_id"))
+        name = str(event.get("name") or "")
+        if name and name != tool.get("emitted_name"):
+            tool["name"] = name
+            tool["emitted_name"] = name
+            function_delta["name"] = name
+        arguments = str(event.get("arguments") or "")
+        emitted_args = str(tool.get("arguments") or "")
+        if arguments and arguments != emitted_args:
+            delta = arguments[len(emitted_args):] if arguments.startswith(emitted_args) else arguments
+            tool["arguments"] = emitted_args + delta
+            function_delta["arguments"] = delta
+        if not function_delta:
+            return None
+        return self._tool_chunk(tool, function=function_delta, include_id=include_id)
+
+    def _tool_for_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        key = self._tool_key(event)
+        tool = self._tool_by_key.get(key)
+        if tool is not None:
+            return tool
+        tool = {
+            "index": self._coerce_tool_index(event.get("output_index")),
+            "id": str(event.get("call_id") or event.get("item_id") or ""),
+            "name": str(event.get("name") or ""),
+            "arguments": "",
+            "emitted_id": False,
+            "emitted_name": "",
+        }
+        self._tool_by_key[key] = tool
+        return tool
+
+    def _remember_tool(self, item: Dict[str, Any], event: Dict[str, Any]) -> Dict[str, Any]:
+        key = self._tool_key(event, item)
+        tool = self._tool_by_key.get(key)
+        if tool is None:
+            tool = {
+                "index": self._coerce_tool_index(event.get("output_index")),
+                "arguments": "",
+                "emitted_id": False,
+                "emitted_name": "",
+            }
+            self._tool_by_key[key] = tool
+        tool["id"] = str(item.get("call_id") or item.get("id") or event.get("item_id") or tool.get("id") or "")
+        tool["name"] = str(item.get("name") or tool.get("name") or "")
+        return tool
+
+    def _tool_key(self, event: Dict[str, Any], item: Optional[Dict[str, Any]] = None) -> Any:
+        item = item or {}
+        for value in (
+            event.get("item_id"),
+            item.get("id"),
+            item.get("call_id"),
+            event.get("call_id"),
+        ):
+            if value:
+                return ("id", str(value))
+        if event.get("output_index") is not None:
+            return ("index", self._coerce_tool_index(event.get("output_index")))
+        key = ("index", self._next_tool_index)
+        self._next_tool_index += 1
+        return key
+
+    @staticmethod
+    def _coerce_tool_index(value: Any) -> int:
+        try:
+            return max(0, int(value or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def _tool_chunk(
+        self,
+        tool: Dict[str, Any],
+        *,
+        function: Dict[str, str],
+        include_id: bool,
+    ) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "index": self._coerce_tool_index(tool.get("index")),
+            "type": "function",
+            "function": function,
+        }
+        if include_id and tool.get("id"):
+            payload["id"] = tool.get("id")
+            tool["emitted_id"] = True
+        if function.get("name"):
+            tool["emitted_name"] = function["name"]
+        return self._chunk({"tool_calls": [payload]})
+
+    def _chunks_from_final_response(self, response: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
+        normalized = normalize_responses_output_to_chat(response)
+        message = ((normalized.get("choices") or [{}])[0].get("message") or {})
+        content = message.get("content") or ""
+        if content:
+            self._emitted_output = True
+            yield self._chunk({"content": content})
+        for index, call in enumerate(message.get("tool_calls") or []):
+            function = call.get("function") if isinstance(call.get("function"), dict) else {}
+            tool = {
+                "index": index,
+                "id": call.get("id") or "",
+                "name": function.get("name") or "",
+                "arguments": function.get("arguments") or "",
+                "emitted_id": False,
+                "emitted_name": "",
+            }
+            self._emitted_output = True
+            yield self._tool_chunk(
+                tool,
+                function={
+                    "name": tool["name"],
+                    "arguments": tool["arguments"],
+                },
+                include_id=True,
+            )
+
+
+def _responses_stream_error_chunk(event: Dict[str, Any]) -> Dict[str, Any]:
+    error = event.get("error")
+    if isinstance(error, dict):
+        message = error.get("message") or event.get("message") or "Responses API stream error"
+        code = error.get("code") or ""
+        error_type = error.get("type") or ""
+    else:
+        message = event.get("message") or str(error or "Responses API stream error")
+        code = event.get("code") or event.get("error_code") or ""
+        error_type = event.get("error_type") or ""
+    return {
+        "error": {
+            "message": message,
+            "code": code,
+            "type": error_type,
+        },
+        "message": message,
+        "status_code": event.get("status_code") or 500,
+        "retry_after": event.get("retry_after"),
+    }
+
+
+def _responses_status_error_chunk(response: Dict[str, Any]) -> Dict[str, Any]:
+    status = str(response.get("status") or response.get("type") or "failed").split(".")[-1]
+    error = response.get("error") if isinstance(response.get("error"), dict) else {}
+    incomplete = response.get("incomplete_details") if isinstance(response.get("incomplete_details"), dict) else {}
+    message = (
+        error.get("message")
+        or incomplete.get("reason")
+        or f"Responses API returned status: {status}"
+    )
+    status_code = response.get("status_code")
+    if not status_code:
+        status_code = 400 if status == "incomplete" else 499 if status == "cancelled" else 500
+    return {
+        "error": {
+            "message": message,
+            "code": error.get("code") or incomplete.get("reason") or status,
+            "type": error.get("type") or f"responses_{status}",
+        },
+        "message": message,
+        "status_code": status_code,
     }
 
 

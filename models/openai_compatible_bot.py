@@ -174,10 +174,38 @@ class OpenAICompatibleBot:
 
             if stream:
                 if responses_plan is not None:
-                    logger.info(
-                        f"[{self.__class__.__name__}] Responses API stream requested; "
-                        "falling back to /chat/completions until stream mapping is enabled"
+                    on_completed = self._responses_stream_state_callback(
+                        responses_plan,
+                        provider=capabilities.provider,
+                        model_name=model_name,
+                        session_id=str(kwargs.get("session_id") or ""),
+                        workspace=kwargs.get("workspace") or kwargs.get("workspace_dir"),
                     )
+                    response_stream = self._handle_responses_stream_response(
+                        responses_plan,
+                        api_key,
+                        api_base,
+                        on_completed=on_completed,
+                    )
+                    return self._stream_response_with_retry(
+                        response_stream,
+                        request_params,
+                        api_key,
+                        api_base,
+                        capabilities.provider,
+                        model_name,
+                        retry_count,
+                        max_model_retries,
+                        retry_sleep,
+                        api_path=responses_plan.create_path,
+                        stream_factory=lambda: self._handle_responses_stream_response(
+                            responses_plan,
+                            api_key,
+                            api_base,
+                            on_completed=on_completed,
+                        ),
+                    )
+
                 response_stream = self._handle_stream_response(request_params, api_key, api_base)
                 if isinstance(response_stream, dict):
                     return self._record_single_response_attempt(
@@ -420,6 +448,25 @@ class OpenAICompatibleBot:
             return annotated
         return last_response
 
+    def _responses_stream_state_callback(self, plan, *, provider, model_name, session_id="", workspace=None):
+        if not session_id:
+            return None
+
+        def persist_completed_response(raw_response):
+            from models.openai.responses_adapter import extract_responses_state
+            from models.openai.responses_state_store import save_responses_state
+
+            next_state = extract_responses_state(raw_response, plan.state)
+            save_responses_state(
+                session_id=session_id,
+                provider=provider,
+                model=model_name,
+                state=next_state,
+                workspace=workspace,
+            )
+
+        return persist_completed_response
+
     @staticmethod
     def _responses_status_error(response):
         if not isinstance(response, dict):
@@ -434,14 +481,17 @@ class OpenAICompatibleBot:
             or incomplete.get("reason")
             or f"Responses API returned status: {status}"
         )
+        status_code = response.get("status_code")
+        if not status_code:
+            status_code = 400 if status == "incomplete" else 499 if status == "cancelled" else 500
         return {
             "error": {
                 "message": message,
-                "code": error.get("code") or status,
-                "type": error.get("type") or "responses_status",
+                "code": error.get("code") or incomplete.get("reason") or status,
+                "type": error.get("type") or f"responses_{status}",
             },
             "message": message,
-            "status_code": response.get("status_code") or 500,
+            "status_code": status_code,
         }
 
     def _sync_response_with_retry(
@@ -500,6 +550,9 @@ class OpenAICompatibleBot:
         base_retry_count,
         max_model_retries,
         retry_sleep,
+        *,
+        api_path="/chat/completions",
+        stream_factory=None,
     ):
         def retrying_stream():
             attempt = 0
@@ -507,13 +560,18 @@ class OpenAICompatibleBot:
                 raw_stream = (
                     first_stream
                     if attempt == 0
-                    else self._handle_stream_response(request_params, api_key, api_base)
+                    else (
+                        stream_factory()
+                        if stream_factory is not None
+                        else self._handle_stream_response(request_params, api_key, api_base)
+                    )
                 )
                 span = self._new_model_call_span(
                     provider,
                     model_name,
                     stream=True,
                     retry_count=base_retry_count + attempt,
+                    api_path=api_path,
                 )
                 stream = instrument_model_stream(raw_stream, span)
                 buffered_chunks = []
@@ -692,6 +750,49 @@ class OpenAICompatibleBot:
         except Exception as e:
             logger.error(f"[{self.__class__.__name__}] Responses sync error: {e}")
             return {
+                "error": True,
+                "message": str(e),
+                "status_code": 500,
+            }
+
+    def _handle_responses_stream_response(self, plan, api_key, api_base, *, on_completed=None):
+        """Handle official OpenAI Responses streaming and normalize events."""
+        from models.openai.responses_adapter import normalize_responses_stream_events_to_chat
+
+        params = dict(plan.create_payload)
+        params.pop("stream", None)
+        timeout = params.pop("request_timeout", None) or params.pop("timeout", None)
+        try:
+            client = self._get_http_client()
+            stream = client.responses_create(
+                api_key=api_key,
+                api_base=api_base,
+                timeout=timeout,
+                stream=True,
+                **params,
+            )
+            yield from normalize_responses_stream_events_to_chat(
+                stream,
+                on_completed=on_completed,
+            )
+        except OpenAIHTTPError as e:
+            logger.error(
+                f"[{self.__class__.__name__}] Responses stream error: "
+                f"HTTP {e.status_code}: {e.message}"
+            )
+            yield {
+                "error": {
+                    "message": e.message,
+                    "code": "",
+                    "type": "",
+                },
+                "message": e.message,
+                "status_code": e.status_code or 500,
+                "retry_after": e.retry_after,
+            }
+        except Exception as e:
+            logger.error(f"[{self.__class__.__name__}] Responses stream error: {e}")
+            yield {
                 "error": True,
                 "message": str(e),
                 "status_code": 500,

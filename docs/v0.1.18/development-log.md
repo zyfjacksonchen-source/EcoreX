@@ -677,6 +677,28 @@
     planning, cleanup lifecycle, non-stream runtime normalization/state
     persistence, failure-state fail-closed handling, stream fallback, existing
     adapter payloads, capability catalog, and model telemetry regressions.
+- Added the Responses streaming runtime slice:
+  - `normalize_responses_stream_events_to_chat()` maps official Responses
+    streaming events into the existing chat-completion stream chunk contract,
+    including text/refusal deltas, reasoning deltas, function-call argument
+    delta/done events, failed/incomplete/error terminals, completed usage, and
+    final-response fallback content when no prior output delta was emitted.
+  - Explicitly enabled official OpenAI `stream=True` calls now use
+    `/responses` instead of falling back to `/chat/completions`, while keeping
+    non-official or disabled providers on the existing chat-completions path.
+  - Responses streams reuse the shared model retry/telemetry wrapper with
+    `api_path=/responses`, so Retry-After backoff is honored before first output
+    and retry remains suppressed after output starts through the existing stream
+    state machine.
+  - `response.completed` is the only streaming terminal that persists
+    next-turn Responses state; failed/incomplete/error streams do not advance
+    `previous_response_id`.
+  - Model telemetry now recognizes official Responses
+    `input_tokens_details.cached_tokens` usage buckets.
+  - Focused pytest passed: 25 Responses adapter/runtime tests and 67 adjacent
+    model telemetry/capability/Responses tests. R18-04-D is now PASS; R18-04-A,
+    R18-04-B, and R18-04-C remain PARTIAL pending capability inventory,
+    vision/image telemetry coverage, and provider-local retry ownership.
 - Added the explicit model fallback routing slice:
   - Added `models/model_fallback.py` to parse a default-off `model_fallbacks`
     chain from config. Entries can be simple model names or objects with
