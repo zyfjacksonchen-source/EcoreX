@@ -1340,6 +1340,111 @@ class TestWebParallelHandlers(unittest.TestCase):
                 self.assertEqual(snapshot["runStatusCounts"].get(status), 1)
                 self.assertEqual(snapshot["run_status_counts"].get(status), 1)
 
+    def test_active_request_snapshot_attaches_run_center_action_policy(self):
+        from agent.protocol import reset_run_ledger_for_tests
+        from channel.web import web_channel
+
+        channel = web_channel.WebChannel()
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            ledger.create_run("req-message-failed", "session-message", phase="running")
+            ledger.mark_terminal(
+                "req-message-failed",
+                "failed",
+                reason="worker_exception",
+                error_code="WORKER_EXCEPTION",
+                error_message="worker failed",
+            )
+            ledger.create_run("req-invalid-failed", "session-invalid", phase="running")
+            ledger.mark_terminal(
+                "req-invalid-failed",
+                "failed",
+                reason="bad_request",
+                error_code="INVALID_REQUEST",
+                error_message="invalid request",
+            )
+            ledger.create_run("req-cancelled-terminal", "session-cancelled", phase="running")
+            ledger.mark_terminal(
+                "req-cancelled-terminal",
+                "cancelled",
+                reason="user_cancelled",
+                error_code="",
+                error_message="",
+            )
+            ledger.create_run(
+                "subagent-child-1",
+                "subagent-child-1",
+                phase="running",
+                run_type="subagent",
+                metadata={"task_id": "child-1"},
+            )
+            ledger.mark_terminal(
+                "subagent-child-1",
+                "failed",
+                reason="subagent_failed",
+                error_code="SUBAGENT_FAILED",
+                error_message="child failed",
+            )
+            ledger.create_run(
+                "scheduler_task_1",
+                "scheduler_task_1",
+                phase="running",
+                run_type="scheduler",
+            )
+            ledger.mark_terminal(
+                "scheduler_task_1",
+                "failed",
+                reason="scheduler_failed",
+                error_code="SCHEDULER_FAILED",
+                error_message="scheduler failed",
+            )
+
+            with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                snapshot = channel.active_requests_snapshot()
+
+        terminal = {
+            row["request_id"]: row
+            for row in snapshot["recentTerminalRequests"]
+        }
+        message = terminal["req-message-failed"]
+        self.assertTrue(message["actions"]["open"])
+        self.assertTrue(message["actions"]["recover"])
+        self.assertTrue(message["actions"]["retry"])
+        self.assertTrue(message["retryable"])
+        self.assertEqual(message["retry_mode"], "manual_retry_prepare")
+        self.assertEqual(message["retry_disabled_reason"], "")
+        self.assertFalse(message["actions"]["stop"])
+
+        invalid = terminal["req-invalid-failed"]
+        self.assertTrue(invalid["actions"]["open"])
+        self.assertTrue(invalid["actions"]["recover"])
+        self.assertFalse(invalid["actions"]["retry"])
+        self.assertFalse(invalid["retryable"])
+        self.assertEqual(invalid["retry_disabled_reason"], "non_retryable_terminal")
+        self.assertFalse(invalid["actions"]["stop"])
+
+        cancelled = terminal["req-cancelled-terminal"]
+        self.assertTrue(cancelled["actions"]["open"])
+        self.assertTrue(cancelled["actions"]["recover"])
+        self.assertFalse(cancelled["actions"]["retry"])
+        self.assertFalse(cancelled["retryable"])
+        self.assertEqual(cancelled["retry_disabled_reason"], "not_failed")
+        self.assertFalse(cancelled["actions"]["stop"])
+
+        subagent = terminal["subagent-child-1"]
+        self.assertFalse(subagent["actions"]["open"])
+        self.assertFalse(subagent["actions"]["recover"])
+        self.assertFalse(subagent["actions"]["retry"])
+        self.assertFalse(subagent["retryable"])
+        self.assertEqual(subagent["retry_disabled_reason"], "subagent_replay_unavailable")
+
+        scheduler = terminal["scheduler_task_1"]
+        self.assertFalse(scheduler["actions"]["open"])
+        self.assertFalse(scheduler["actions"]["recover"])
+        self.assertFalse(scheduler["actions"]["retry"])
+        self.assertFalse(scheduler["retryable"])
+        self.assertEqual(scheduler["retry_disabled_reason"], "scheduler_replay_unavailable")
+
     def test_active_request_snapshot_suppresses_registry_fallback_for_old_terminal_run(self):
         from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests
         from channel.web import web_channel
@@ -6551,22 +6656,40 @@ class TestAgentHostBoundary(unittest.TestCase):
         required_markers = [
             "const runCenterRequests = useMemo",
             "runtimeSnapshot.activeRequests",
+            "runtimeSnapshot.recentTerminalRequests",
             "runtimeSnapshot.staleLocks",
             "function isSubagentRuntimeRequest",
             "function isSchedulerRuntimeRequest",
             "!isSchedulerRuntimeRequest(request)",
             "function runCenterState",
             "function isRunCenterVisibleRequest",
-            ".filter(isRunCenterVisibleRequest)",
+            "if (!isRunCenterVisibleRequest(request)) return false",
             "function isRunCenterSubagentRequest",
             "function isRunCenterSchedulerRequest",
             "function getRunCenterSubagentTaskId",
+            "const [runCenterOpen, setRunCenterOpen] = useState(false)",
+            "function openRunCenterSurface",
+            "setRunCenterOpen(true)",
+            "function runCenterRetryPolicy",
+            "request.actions && request.actions.retry === false",
+            "request.actions?.retry === true",
+            "request.retryable === false && request.recoverable === false",
+            "function retryRunCenterRequest",
+            "Run Center retry prepared; review and send.",
+            "function renderRunCenterPanel",
+            "data-run-center-surface={surface}",
             "async function openRunCenterSession",
+            "options: { closeSurface?: boolean } = {}",
+            "if (options.closeSurface) {",
+            "async function openRunCenterStaleLockSession",
+            "openRunCenterSession(request, { closeSurface: surface === \"primary\" })",
+            "openRunCenterStaleLockSession(lock, { closeSurface: surface === \"primary\" })",
             "if (isRunCenterSubagentRequest(request))",
             "if (isRunCenterSchedulerRequest(request))",
             "const scopedRow: SessionRow = {",
             "...(existing || {",
             "const requestId = request.request_id ? String(request.request_id) : undefined",
+            "streamAvailable: state !== \"failed\" && request.stream_available !== false",
             "await selectSession(scopedRow)",
             "resumeRuntimeRequest(row.id, row.requestId, row.streamAvailable !== false)",
             "async function stopRunCenterRequest",
@@ -6576,14 +6699,23 @@ class TestAgentHostBoundary(unittest.TestCase):
             "cancelChatRequest({ requestId, sessionId })",
             "async function exportRunCenterDiagnostics",
             "exportDiagnosticsBundle({ sessionId, requestId })",
-            'className="run-center-panel"',
+            'className={`run-center-panel is-${surface}`',
+            'className={`run-center-nav-button${runCenterOpen ? " is-active" : ""}`}',
+            'aria-label="Open Run Center"',
+            'className="modal-backdrop run-center-backdrop"',
+            'className="run-center-sheet"',
+            'renderRunCenterPanel("primary")',
             "Run Center",
             "runCenterStats.cancelling",
             "runCenterStats.failed",
             "runCenterStats.stale",
             "const diagnosticsOnly = isSubagent || isScheduler",
-            "disabled={diagnosticsOnly}",
-            "disabled={runCenterState(request) === \"failed\" || (isSubagent && !subagentTaskId)}",
+            "const openAllowed = request.actions?.open ?? !diagnosticsOnly",
+            "const stopAllowed = request.actions?.stop ?? !(runCenterState(request) === \"failed\" || (isSubagent && !subagentTaskId))",
+            "disabled={!openAllowed}",
+            "disabled={!retryPolicy.enabled}",
+            "disabled={!stopAllowed}",
+            "Run Center stop found no cancellable runtime row",
             "Scheduler runs are visible in Run Center; export diagnostics for details",
             "Stop scheduler run",
             "Scheduler stop requested",
@@ -6594,9 +6726,12 @@ class TestAgentHostBoundary(unittest.TestCase):
 
         for marker in [
             ".run-center-panel",
+            ".run-center-panel.is-primary",
             ".run-center-stats",
             ".run-center-row",
             ".run-center-actions",
+            ".run-center-nav-button",
+            ".run-center-sheet",
             ".run-center-row.is-cancelling .run-center-state",
             ".run-center-row.is-failed .run-center-state",
             ".run-center-row.is-stale .run-center-state",
@@ -6604,6 +6739,21 @@ class TestAgentHostBoundary(unittest.TestCase):
             self.assertIn(marker, css_source)
 
         self.assertIn('"/api/active-requests"', api_source)
+        for marker in [
+            "actions?: {",
+            "retry_mode?: string",
+            "retry_disabled_reason?: string",
+        ]:
+            self.assertIn(marker, api_source)
+        web_source = (root / "channel" / "web" / "web_channel.py").read_text(encoding="utf-8")
+        for marker in [
+            "def attach_run_center_policy",
+            "\"retry_mode\"",
+            "\"manual_retry_prepare\"",
+            "\"retry_disabled_reason\"",
+            "\"actions\"",
+        ]:
+            self.assertIn(marker, web_source)
         self.assertIn("export async function cancelSubagentTask", api_source)
         self.assertIn('`/api/subagents/${encodeURIComponent(taskId)}/cancel`', api_source)
         self.assertIn('"GET /api/active-requests"', bridge_source)

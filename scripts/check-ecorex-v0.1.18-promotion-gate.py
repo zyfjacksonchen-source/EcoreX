@@ -57,6 +57,8 @@ EVIDENCE_REQUIREMENTS: dict[str, list[str]] = {
     "run center evidence": [
         "r18-run-center",
         "run center",
+        "first-class navigation",
+        "retry/recover policy",
         "/api/active-requests",
         "diagnostics",
     ],
@@ -68,7 +70,7 @@ REVIEW_MARKERS: dict[str, list[str]] = {
     "cancellation/concurrency multi-agent review": ["multi-agent cross-review", "typed busy/retry", "consensus: submit"],
     "model gateway multi-agent review": ["multi-agent cross-review", "model telemetry", "consensus: submit"],
     "context budget multi-agent review": ["multi-agent cross-review", "context overflow recovery", "consensus: submit"],
-    "run center multi-agent review": ["multi-agent cross-review", "desktop run center", "consensus: submit"],
+    "run center multi-agent review": ["multi-agent cross-review", "run center first-class navigation", "retry/recover policy", "consensus: submit"],
     "promotion gate multi-agent review": ["multi-agent cross-review", "promotion-gate hardening", "consensus: submit"],
 }
 

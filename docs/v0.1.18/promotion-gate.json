@@ -2,11 +2,11 @@
   "product": "EcoreX",
   "version": "0.1.18",
   "gate": "v0.1.18-production-agent",
-  "generatedAt": "2026-06-21T22:36:49Z",
+  "generatedAt": "2026-06-21T23:14:46Z",
   "status": "no-go",
   "summary": {
     "total": 21,
-    "blockers": 2,
+    "blockers": 1,
     "warnings": 0
   },
   "checks": [
@@ -42,9 +42,9 @@
     },
     {
       "name": "Acceptance rows: run-center",
-      "status": "fail",
-      "severity": "blocker",
-      "evidence": "docs/v0.1.18/acceptance-checklist.md: missing=[] incomplete=['R18-06-A=PARTIAL']"
+      "status": "pass",
+      "severity": "info",
+      "evidence": "1 rows PASS"
     },
     {
       "name": "Acceptance rows: evidence-gates",
@@ -86,7 +86,7 @@
       "name": "run center evidence",
       "status": "pass",
       "severity": "info",
-      "evidence": "docs/v0.1.18/evidence-ledger.md: markers=['r18-run-center', 'run center', '/api/active-requests', 'diagnostics']"
+      "evidence": "docs/v0.1.18/evidence-ledger.md: markers=['r18-run-center', 'run center', 'first-class navigation', 'retry/recover policy', '/api/active-requests', 'diagnostics']"
     },
     {
       "name": "run ledger multi-agent review",

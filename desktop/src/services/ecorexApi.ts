@@ -20,6 +20,18 @@ export type RuntimeActiveRequest = {
   terminal_reason?: string;
   error_code?: string;
   error_message?: string;
+  recoverable?: boolean;
+  retryable?: boolean;
+  retry_after_ms?: number;
+  retry_mode?: string;
+  retry_disabled_reason?: string;
+  actions?: {
+    open?: boolean;
+    recover?: boolean;
+    retry?: boolean;
+    stop?: boolean;
+    diagnostics?: boolean;
+  };
   created_at?: number;
   cancelled_at?: number | null;
   updated_at?: number;

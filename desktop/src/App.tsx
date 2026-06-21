@@ -103,6 +103,7 @@ import {
   type PermissionState,
   type ProjectFolder,
   type RuntimeActiveRequest,
+  type RuntimeSessionLock,
   type RuntimeExtension,
   type RuntimeMessage,
   type RuntimeSkill,
@@ -474,6 +475,7 @@ function isPrimaryChatActiveRequest(request?: RuntimeActiveRequest | null) {
 
 function runCenterState(request?: RuntimeActiveRequest | null) {
   const raw = String(request?.state || request?.status || request?.phase || "").toLowerCase();
+  if (raw === "cancelled" && request?.terminal_at != null) return "cancelled";
   if (request?.cancelled || raw.includes("cancell")) return "cancelling";
   if (raw.includes("complete") || raw === "done") return "completed";
   if (raw.includes("fail") || raw.includes("error") || raw.includes("interrupt")) return "failed";
@@ -486,6 +488,7 @@ function runCenterStateLabel(request?: RuntimeActiveRequest | null) {
   const state = runCenterState(request);
   if (state === "cancelling") return "Stopping";
   if (state === "failed") return "Failed";
+  if (state === "cancelled") return "Stopped";
   if (state === "queued") return "Queued";
   if (state === "finalizing") return "Finalizing";
   return "Running";
@@ -494,6 +497,7 @@ function runCenterStateLabel(request?: RuntimeActiveRequest | null) {
 function runCenterStateClass(request?: RuntimeActiveRequest | null) {
   const state = runCenterState(request);
   if (state === "cancelling") return "is-cancelling";
+  if (state === "cancelled") return "is-cancelling";
   if (state === "failed") return "is-failed";
   if (state === "queued") return "is-queued";
   if (state === "finalizing") return "is-finalizing";
@@ -1794,6 +1798,7 @@ export function App() {
   const [, setActiveRequestId] = useState("");
   const [approval, setApproval] = useState<ApprovalState | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [runCenterOpen, setRunCenterOpen] = useState(false);
   const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [permissionMenuOpen, setPermissionMenuOpen] = useState(false);
@@ -2231,16 +2236,25 @@ export function App() {
     const needle = searchQuery.trim().toLowerCase();
     return needle ? allSessions.filter((row) => `${row.title} ${row.detail}`.toLowerCase().includes(needle)) : allSessions;
   }, [allSessions, searchQuery]);
-  const runCenterRequests = useMemo(() => (
-    (runtimeSnapshot.activeRequests || [])
-      .filter(isRunCenterVisibleRequest)
-  ), [runtimeSnapshot.activeRequests]);
+  const runCenterRequests = useMemo(() => {
+    const seen = new Set<string>();
+    return [
+      ...(runtimeSnapshot.activeRequests || []),
+      ...(runtimeSnapshot.recentTerminalRequests || [])
+    ].filter((request) => {
+      if (!isRunCenterVisibleRequest(request)) return false;
+      const key = String(request.request_id || `${request.session_id || ""}-${request.run_type || request.source || ""}`);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [runtimeSnapshot.activeRequests, runtimeSnapshot.recentTerminalRequests]);
   const runCenterStaleLocks = useMemo(() => (
     (runtimeSnapshot.staleLocks || [])
       .filter((lock) => lock.removed || lock.dead_owner || lock.stale)
   ), [runtimeSnapshot.staleLocks]);
   const runCenterStats = useMemo(() => {
-    const cancelling = runCenterRequests.filter((request) => runCenterState(request) === "cancelling").length;
+    const cancelling = runCenterRequests.filter((request) => ["cancelling", "cancelled"].includes(runCenterState(request))).length;
     const failed = runCenterRequests.filter(isRunCenterFailedRequest).length;
     return {
       running: runCenterRequests.length - cancelling - failed,
@@ -2249,6 +2263,7 @@ export function App() {
       stale: runCenterStaleLocks.length
     };
   }, [runCenterRequests, runCenterStaleLocks]);
+  const runCenterNavCount = runCenterRequests.length + runCenterStaleLocks.length;
 
   const activeProject = useMemo(
     () => projects.find((project) => project.id === activeProjectId) || null,
@@ -5013,13 +5028,18 @@ export function App() {
     }
   }
 
-  async function refreshRunCenter() {
+  async function refreshRunCenter(showToast = true) {
     const snapshot = await loadRuntimeSnapshot();
     setRuntimeSnapshot(snapshot);
-    setToast("Run Center refreshed");
+    if (showToast) setToast("Run Center refreshed");
   }
 
-  async function openRunCenterSession(request: RuntimeActiveRequest) {
+  function openRunCenterSurface() {
+    setRunCenterOpen(true);
+    void refreshRunCenter(false).catch(() => undefined);
+  }
+
+  async function openRunCenterSession(request: RuntimeActiveRequest, options: { closeSurface?: boolean } = {}) {
     if (isRunCenterSubagentRequest(request)) {
       setToast("Subagent runs are visible in Run Center; export diagnostics for details");
       return;
@@ -5048,11 +5068,105 @@ export function App() {
       }),
       id: sessionId,
       requestId,
-      streamAvailable: request.stream_available !== false,
+      streamAvailable: state !== "failed" && request.stream_available !== false,
       cancelling: state === "cancelling",
       status: state === "failed" ? "failed" : state === "cancelling" ? "cancelling" : existing?.status || "waiting"
     };
     await selectSession(scopedRow);
+    if (options.closeSurface) {
+      setRunCenterOpen(false);
+    }
+  }
+
+  async function openRunCenterStaleLockSession(lock: RuntimeSessionLock, options: { closeSurface?: boolean } = {}) {
+    if (!lock.session_id) return;
+    await selectSession({
+      id: String(lock.session_id),
+      title: String(lock.session_id),
+      detail: "stale lock",
+      activityAt: Date.now(),
+      updatedAt: Date.now(),
+      status: "failed"
+    });
+    if (options.closeSurface) {
+      setRunCenterOpen(false);
+    }
+  }
+
+  function runCenterRetryPolicy(request: RuntimeActiveRequest) {
+    const sessionId = String(request.session_id || "");
+    const state = runCenterState(request);
+    const retryAfterMs = Number(request.retry_after_ms || 0);
+    if (request.actions && request.actions.retry === false) {
+      return {
+        enabled: false,
+        title: request.retry_disabled_reason || "Retry is unavailable for this run"
+      };
+    }
+    if (request.actions?.retry === true) {
+      return {
+        enabled: true,
+        title: retryAfterMs > 0
+          ? `Prepare a retry after ${Math.ceil(retryAfterMs / 1000)}s`
+          : "Open the session and prepare a retry prompt"
+      };
+    }
+    if (isRunCenterSubagentRequest(request)) {
+      return {
+        enabled: false,
+        title: "Subagent runs are stop/diagnostics-only until subagent replay is available"
+      };
+    }
+    if (isRunCenterSchedulerRequest(request)) {
+      return {
+        enabled: false,
+        title: "Scheduler runs are stop/diagnostics-only until scheduler replay is available"
+      };
+    }
+    if (!sessionId) {
+      return {
+        enabled: false,
+        title: "Retry requires a chat session id"
+      };
+    }
+    if (state !== "failed") {
+      return {
+        enabled: false,
+        title: state === "cancelling" ? "Retry is available after stopping finishes" : "Retry is available for failed chat runs"
+      };
+    }
+    if (request.retryable === false && request.recoverable === false) {
+      return {
+        enabled: false,
+        title: "This failed run is marked non-retryable"
+      };
+    }
+    return {
+      enabled: true,
+      title: retryAfterMs > 0
+        ? `Prepare a retry after ${Math.ceil(retryAfterMs / 1000)}s`
+        : "Open the session and prepare a retry prompt"
+    };
+  }
+
+  async function retryRunCenterRequest(request: RuntimeActiveRequest) {
+    const policy = runCenterRetryPolicy(request);
+    if (!policy.enabled) {
+      setToast(policy.title);
+      return;
+    }
+    await openRunCenterSession(request);
+    const requestId = String(request.request_id || "");
+    const prompt = [
+      "Retry the failed Run Center request.",
+      requestId ? `Request id: ${requestId}.` : "",
+      "Continue from the latest saved conversation state and produce the missing final answer."
+    ].filter(Boolean).join(" ");
+    setComposerText(prompt);
+    setAttachments([]);
+    setRunCenterOpen(false);
+    focusComposerSoon();
+    setToast("Run Center retry prepared; review and send.");
   }
 
   async function stopRunCenterRequest(request: RuntimeActiveRequest) {
@@ -5081,7 +5195,10 @@ export function App() {
         setToast("Subagent stop requested");
         return;
       }
-      await cancelChatRequest({ requestId, sessionId });
+      const result = await cancelChatRequest({ requestId, sessionId });
+      if (Number(result.cancelled || 0) <= 0) {
+        throw new Error("Run Center stop found no cancellable runtime row");
+      }
       setRuntimeSnapshot(await loadRuntimeSnapshot());
       setToast(isRunCenterSchedulerRequest(request) ? "Scheduler stop requested" : "Stop requested");
     } catch (error) {
@@ -5340,6 +5457,97 @@ export function App() {
     { id: "memory", label: "记忆", icon: <Brain aria-hidden="true" /> },
     { id: "diagnostics", label: "诊断", icon: <Database aria-hidden="true" /> }
   ];
+
+  function renderRunCenterPanel(surface: "settings" | "primary" = "settings") {
+    return (
+      <div className={`run-center-panel is-${surface}`} aria-label="Run Center" data-run-center-surface={surface}>
+        <div className="run-center-head">
+          <div>
+            <strong>Run Center</strong>
+            <span>{runCenterRequests.length} active/recent / {runCenterStaleLocks.length} stale</span>
+          </div>
+          <button type="button" onClick={() => void refreshRunCenter()} title="Refresh Run Center">
+            <RefreshCw aria-hidden="true" />
+            Refresh
+          </button>
+        </div>
+        <div className="run-center-stats" aria-label="Run state summary">
+          <span><Activity aria-hidden="true" />{runCenterStats.running} running</span>
+          <span className="is-cancelling"><Square aria-hidden="true" />{runCenterStats.cancelling} stopping</span>
+          <span className="is-failed"><AlertTriangle aria-hidden="true" />{runCenterStats.failed} failed</span>
+          <span className="is-stale"><HardDrive aria-hidden="true" />{runCenterStats.stale} stale</span>
+        </div>
+        <div className="run-center-list">
+          {runCenterRequests.map((request) => {
+            const requestId = String(request.request_id || "");
+            const sessionId = String(request.session_id || "");
+            const isSubagent = isRunCenterSubagentRequest(request);
+            const isScheduler = isRunCenterSchedulerRequest(request);
+            const diagnosticsOnly = isSubagent || isScheduler;
+            const subagentTaskId = isSubagent ? getRunCenterSubagentTaskId(request) : "";
+            const age = formatRunAge(request.cancelled ? request.cancel_age_seconds ?? request.age_seconds : request.age_seconds);
+            const diagnosticsOnlyTitle = isScheduler ? "Scheduler runs are diagnostics-only here" : "Subagent runs are diagnostics-only here";
+            const retryPolicy = runCenterRetryPolicy(request);
+            const openAllowed = request.actions?.open ?? !diagnosticsOnly;
+            const stopAllowed = request.actions?.stop ?? !(runCenterState(request) === "failed" || (isSubagent && !subagentTaskId));
+            return (
+              <article className={`run-center-row ${runCenterStateClass(request)}`} key={requestId || `${sessionId}-${request.source || "request"}`}>
+                <div className="run-center-row-main">
+                  <span className="run-center-state">{runCenterStateLabel(request)}</span>
+                  <strong>{sessionId || request.run_type || request.source || "runtime run"}</strong>
+                  <small>{shortRequestId(requestId)}{request.phase ? ` · ${request.phase}` : ""}{age ? ` · ${age}` : ""}</small>
+                </div>
+                <div className="run-center-actions">
+                  <button type="button" onClick={() => void openRunCenterSession(request, { closeSurface: surface === "primary" })} disabled={!openAllowed} title={!openAllowed ? diagnosticsOnlyTitle : "Open or recover session"}>
+                    <FolderOpen aria-hidden="true" />
+                    Open
+                  </button>
+                  <button type="button" onClick={() => void retryRunCenterRequest(request)} disabled={!retryPolicy.enabled} title={retryPolicy.title}>
+                    <RefreshCw aria-hidden="true" />
+                    Retry
+                  </button>
+                  <button type="button" onClick={() => void exportRunCenterDiagnostics(request)} title="Export diagnostics for this run">
+                    <ArrowDownToLine aria-hidden="true" />
+                    Diagnostics
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void stopRunCenterRequest(request)}
+                    disabled={!stopAllowed}
+                    title={isScheduler ? "Stop scheduler run" : isSubagent ? (subagentTaskId ? "Stop subagent run" : "Subagent task id unavailable") : "Stop run"}
+                  >
+                    <Square aria-hidden="true" />
+                    Stop
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+          {runCenterStaleLocks.map((lock, index) => (
+            <article className="run-center-row is-stale" key={`${lock.path || lock.session_id || "lock"}-${index}`}>
+              <div className="run-center-row-main">
+                <span className="run-center-state">Stale</span>
+                <strong>{lock.session_id || "session lock"}</strong>
+                <small>{lock.removed ? "removed" : lock.dead_owner ? "dead owner" : "stale"}{formatRunAge(lock.age_seconds) ? ` · ${formatRunAge(lock.age_seconds)}` : ""}</small>
+              </div>
+              {lock.session_id && (
+                <div className="run-center-actions">
+                  <button type="button" onClick={() => void openRunCenterStaleLockSession(lock, { closeSurface: surface === "primary" })} title="Open session">
+                    <FolderOpen aria-hidden="true" />
+                    Open
+                  </button>
+                </div>
+              )}
+            </article>
+          ))}
+          {!runCenterRequests.length && !runCenterStaleLocks.length && (
+            <div className="session-empty">No active or stale runs</div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   const renderSessionRow = (row: SessionRow) => {
     const cachedMessages = sessionUiState[row.id]?.messages || [];
     const isRunning = row.status === "waiting" || row.status === "cancelling" || Boolean(row.requestId) || Boolean(sessionRequestIds[row.id]) || cachedMessages.some(isUiLiveAssistantMessage) || (row.id === activeSessionId && hasPendingAssistantMessage);
@@ -5452,6 +5660,11 @@ export function App() {
         </div>
 
         <div className="sidebar-footer">
+          <button className={`run-center-nav-button${runCenterOpen ? " is-active" : ""}`} onClick={() => openRunCenterSurface()} title="Open Run Center" aria-label="Open Run Center">
+            <Activity aria-hidden="true" />
+            <span>Run Center</span>
+            <em>{runCenterNavCount > 99 ? "99+" : runCenterNavCount}</em>
+          </button>
           <button onClick={() => { setSettingsSection("account"); setSettingsOpen(true); }} title="设置、能力包、权限和诊断"><Settings aria-hidden="true" />设置</button>
           <button onClick={() => { setSettingsSection("account"); setSettingsOpen(true); }} title={`${session.user.name} / ${session.user.email}`}><UserRound aria-hidden="true" />{session.user.name}</button>
         </div>
@@ -5993,91 +6206,7 @@ export function App() {
                       <strong>诊断</strong>
                       <span>{sidecarStatus.message}</span>
                     </div>
-                    <div className="run-center-panel" aria-label="Run Center">
-                      <div className="run-center-head">
-                        <div>
-                          <strong>Run Center</strong>
-                          <span>{runCenterRequests.length} active / {runCenterStaleLocks.length} stale</span>
-                        </div>
-                        <button type="button" onClick={() => void refreshRunCenter()} title="Refresh Run Center">
-                          <RefreshCw aria-hidden="true" />
-                          Refresh
-                        </button>
-                      </div>
-                      <div className="run-center-stats" aria-label="Run state summary">
-                        <span><Activity aria-hidden="true" />{runCenterStats.running} running</span>
-                        <span className="is-cancelling"><Square aria-hidden="true" />{runCenterStats.cancelling} stopping</span>
-                        <span className="is-failed"><AlertTriangle aria-hidden="true" />{runCenterStats.failed} failed</span>
-                        <span className="is-stale"><HardDrive aria-hidden="true" />{runCenterStats.stale} stale</span>
-                      </div>
-                      <div className="run-center-list">
-                        {runCenterRequests.map((request) => {
-                          const requestId = String(request.request_id || "");
-                          const sessionId = String(request.session_id || "");
-                          const isSubagent = isRunCenterSubagentRequest(request);
-                          const isScheduler = isRunCenterSchedulerRequest(request);
-                          const diagnosticsOnly = isSubagent || isScheduler;
-                          const subagentTaskId = isSubagent ? getRunCenterSubagentTaskId(request) : "";
-                          const age = formatRunAge(request.cancelled ? request.cancel_age_seconds ?? request.age_seconds : request.age_seconds);
-                          const diagnosticsOnlyTitle = isScheduler ? "Scheduler runs are diagnostics-only here" : "Subagent runs are diagnostics-only here";
-                          return (
-                            <article className={`run-center-row ${runCenterStateClass(request)}`} key={requestId || `${sessionId}-${request.source || "request"}`}>
-                              <div className="run-center-row-main">
-                                <span className="run-center-state">{runCenterStateLabel(request)}</span>
-                                <strong>{sessionId || request.run_type || request.source || "runtime run"}</strong>
-                                <small>{shortRequestId(requestId)}{request.phase ? ` · ${request.phase}` : ""}{age ? ` · ${age}` : ""}</small>
-                              </div>
-                              <div className="run-center-actions">
-                                <button type="button" onClick={() => void openRunCenterSession(request)} disabled={diagnosticsOnly} title={diagnosticsOnly ? diagnosticsOnlyTitle : "Open or recover session"}>
-                                  <FolderOpen aria-hidden="true" />
-                                  Open
-                                </button>
-                                <button type="button" onClick={() => void exportRunCenterDiagnostics(request)} title="Export diagnostics for this run">
-                                  <ArrowDownToLine aria-hidden="true" />
-                                  Diagnostics
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => void stopRunCenterRequest(request)}
-                                  disabled={runCenterState(request) === "failed" || (isSubagent && !subagentTaskId)}
-                                  title={isScheduler ? "Stop scheduler run" : isSubagent ? (subagentTaskId ? "Stop subagent run" : "Subagent task id unavailable") : "Stop run"}
-                                >
-                                  <Square aria-hidden="true" />
-                                  Stop
-                                </button>
-                              </div>
-                            </article>
-                          );
-                        })}
-                        {runCenterStaleLocks.map((lock, index) => (
-                          <article className="run-center-row is-stale" key={`${lock.path || lock.session_id || "lock"}-${index}`}>
-                            <div className="run-center-row-main">
-                              <span className="run-center-state">Stale</span>
-                              <strong>{lock.session_id || "session lock"}</strong>
-                              <small>{lock.removed ? "removed" : lock.dead_owner ? "dead owner" : "stale"}{formatRunAge(lock.age_seconds) ? ` · ${formatRunAge(lock.age_seconds)}` : ""}</small>
-                            </div>
-                            {lock.session_id && (
-                              <div className="run-center-actions">
-                                <button type="button" onClick={() => void selectSession({
-                                  id: String(lock.session_id),
-                                  title: String(lock.session_id),
-                                  detail: "stale lock",
-                                  activityAt: Date.now(),
-                                  updatedAt: Date.now(),
-                                  status: "failed"
-                                })} title="Open session">
-                                  <FolderOpen aria-hidden="true" />
-                                  Open
-                                </button>
-                              </div>
-                            )}
-                          </article>
-                        ))}
-                        {!runCenterRequests.length && !runCenterStaleLocks.length && (
-                          <div className="session-empty">No active or stale runs</div>
-                        )}
-                      </div>
-                    </div>
+                    {renderRunCenterPanel("settings")}
                     <div className="settings-list">
                       <article><div><strong>运行时</strong><span>{runtimeSnapshot.message}</span></div><button onClick={() => loadRuntimeSnapshot().then(setRuntimeSnapshot)}>重新检查</button></article>
                       <article><div><strong>模型策略</strong><span>{runtimeSnapshot.modelsCount} 个企业模型映射</span></div><button onClick={() => loadRuntimeSnapshot().then(setRuntimeSnapshot)}>刷新</button></article>
@@ -6088,6 +6217,21 @@ export function App() {
                 )}
               </div>
             </div>
+          </section>
+        </div>
+      )}
+
+      {runCenterOpen && (
+        <div className="modal-backdrop run-center-backdrop" onClick={() => setRunCenterOpen(false)}>
+          <section className="run-center-sheet" role="dialog" aria-modal="true" aria-labelledby="run-center-title" onClick={(event) => event.stopPropagation()}>
+            <header>
+              <div>
+                <span>Runtime control</span>
+                <h2 id="run-center-title">Run Center</h2>
+              </div>
+              <button className="icon-button" title="Close Run Center" aria-label="Close Run Center" onClick={() => setRunCenterOpen(false)}><X aria-hidden="true" /></button>
+            </header>
+            {renderRunCenterPanel("primary")}
           </section>
         </div>
       )}

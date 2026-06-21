@@ -1087,3 +1087,26 @@
     adapter-error non-retry. R18-04-C remains
     PARTIAL pending remaining image edge coverage and provider-specific edges
     outside the AgentBridge native gateway.
+- Promoted Run Center from diagnostics panel to first-class runtime control:
+  - `desktop/src/App.tsx` now exposes Run Center from the main sidebar with a
+    count badge and independent modal while retaining the diagnostics-embedded
+    panel for support workflows.
+  - Run Center merges `activeRequests` and `recentTerminalRequests`, so failed
+    and interrupted recent terminal rows remain visible for open/recover,
+    diagnostics, and retry policy decisions instead of disappearing once the
+    live request leaves the active list.
+  - `/api/active-requests` now attaches a backend Run Center action policy to
+    every active/recent row: `actions.open/recover/retry/stop/diagnostics`,
+    `retry_mode`, and `retry_disabled_reason`. Failed ordinary chat-session rows
+    support explicit `manual_retry_prepare`; subagent and scheduler rows remain
+    stop/diagnostics-only until replay contracts are implemented.
+  - Desktop Stop now treats ordinary/scheduler `/cancel` no-op results as
+    failures instead of showing a false success toast; subagent stop continues
+    to use `/api/subagents/{task_id}/cancel` with request-scoped fallback.
+  - The v0.1.18 promotion gate now requires Run Center evidence for
+    first-class navigation and retry/recover policy, so old diagnostics-only
+    evidence cannot satisfy R18-06-A by accident.
+  - Focused tests cover the Run Center source contract, backend action-policy
+    snapshot, active/recent terminal row truth, promotion-gate markers, and
+    Desktop TypeScript typechecking. R18-06-A is promoted to PASS; v0.1.18
+    remains NO-GO only while model-call rows R18-04-A/R18-04-C remain PARTIAL.

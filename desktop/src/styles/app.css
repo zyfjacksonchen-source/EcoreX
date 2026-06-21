@@ -420,6 +420,37 @@ html[data-platform="web"] .window-brand {
   background: var(--color-surface-raised) !important;
 }
 
+.run-center-nav-button {
+  display: grid !important;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.run-center-nav-button.is-active {
+  border-color: var(--color-brand) !important;
+  background: var(--color-brand-soft) !important;
+}
+
+.run-center-nav-button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-center-nav-button em {
+  min-width: 24px;
+  min-height: 20px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  color: var(--color-text);
+  background: var(--color-surface-muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 700;
+}
+
 .search-box {
   border: 1px solid var(--color-border);
   background: var(--color-surface-raised);
@@ -2435,6 +2466,21 @@ html[data-platform="web"] .window-brand {
   box-shadow: var(--shadow-popover);
 }
 
+.run-center-sheet {
+  width: min(900px, calc(100vw - 28px));
+  height: min(660px, calc(100dvh - 28px));
+  max-height: calc(100dvh - 28px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  overflow: hidden;
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-popover);
+}
+
 .release-notes-sheet {
   width: min(640px, calc(100vw - 28px));
   max-height: calc(100dvh - 28px);
@@ -2527,24 +2573,28 @@ html[data-platform="web"] .window-brand {
   background: var(--color-brand);
 }
 
-.settings-sheet header {
+.settings-sheet header,
+.run-center-sheet header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-.settings-sheet header > div {
+.settings-sheet header > div,
+.run-center-sheet header > div {
   display: grid;
   gap: 2px;
 }
 
-.settings-sheet h2 {
+.settings-sheet h2,
+.run-center-sheet h2 {
   margin: 0;
   font-size: 18px;
 }
 
-.settings-sheet header span {
+.settings-sheet header span,
+.run-center-sheet header span {
   color: var(--color-muted);
   font-size: 12px;
 }
@@ -2707,6 +2757,12 @@ html[data-platform="web"] .window-brand {
   background: var(--color-surface-raised);
 }
 
+.run-center-panel.is-primary {
+  min-height: 0;
+  overflow: hidden;
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
 .run-center-head,
 .run-center-stats,
 .run-center-row,
@@ -2794,6 +2850,12 @@ html[data-platform="web"] .window-brand {
 .run-center-list {
   display: grid;
   gap: 8px;
+}
+
+.run-center-panel.is-primary .run-center-list {
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
 }
 
 .run-center-row {

@@ -64,13 +64,13 @@ class TestV018PromotionGate(unittest.TestCase):
             R18-CANCEL-CONCURRENCY backpressure subagent busy fallback
             R18-MODEL-GATEWAY model-call telemetry Retry policy Responses API
             R18-CONTEXT-BUDGET tool_schema_budget context_budget current-turn preservation
-            R18-RUN-CENTER Run Center /api/active-requests diagnostics
+            R18-RUN-CENTER Run Center first-class navigation retry/recover policy /api/active-requests diagnostics
             Multi-agent cross-review sidecar interruption Consensus: submit
             Multi-agent cross-review SSE replay-gap Consensus: submit
             Multi-agent cross-review typed busy/retry Consensus: submit
             Multi-agent cross-review model telemetry Consensus: submit
             Multi-agent cross-review context overflow recovery Consensus: submit
-            Multi-agent cross-review desktop Run Center Consensus: submit
+            Multi-agent cross-review Run Center first-class navigation retry/recover policy Consensus: submit
             Multi-agent cross-review promotion-gate hardening Consensus: submit
             """).strip() + "\n",
             encoding="utf-8",
@@ -143,6 +143,27 @@ class TestV018PromotionGate(unittest.TestCase):
         self.assertEqual(token_check["status"], "fail")
         self.assertEqual(token_check["severity"], "blocker")
 
+    def test_gate_requires_run_center_retry_recover_policy_evidence(self):
+        gate = load_gate_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            self.write_docs(root)
+            evidence_path = root / "docs" / "v0.1.18" / "evidence-ledger.md"
+            evidence_path.write_text(
+                evidence_path.read_text(encoding="utf-8").replace(
+                    " retry/recover policy",
+                    "",
+                ),
+                encoding="utf-8",
+            )
+            report = gate.build_report(root, "0.1.18")
+
+        self.assertEqual(report["status"], "no-go")
+        run_center_check = next(item for item in report["checks"] if item["name"] == "run center evidence")
+        self.assertEqual(run_center_check["status"], "fail")
+        self.assertEqual(run_center_check["severity"], "blocker")
+        self.assertIn("retry/recover policy", run_center_check["evidence"])
+
     def test_gate_requires_context_budget_review_consensus(self):
         self.assert_missing_review_blocks(
             line_to_remove="Multi-agent cross-review context overflow recovery Consensus: submit",
@@ -159,6 +180,12 @@ class TestV018PromotionGate(unittest.TestCase):
         self.assert_missing_review_blocks(
             line_to_remove="Multi-agent cross-review promotion-gate hardening Consensus: submit",
             check_name="promotion gate multi-agent review",
+        )
+
+    def test_gate_requires_run_center_first_class_retry_review_consensus(self):
+        self.assert_missing_review_blocks(
+            line_to_remove="Multi-agent cross-review Run Center first-class navigation retry/recover policy Consensus: submit",
+            check_name="run center multi-agent review",
         )
 
     def test_gate_requires_review_markers_on_same_line(self):

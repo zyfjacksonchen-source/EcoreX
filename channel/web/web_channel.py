@@ -1309,6 +1309,91 @@ class WebChannel(ChatChannel):
                     and not str(session_id or "").startswith(("subagent-", "scheduler_"))
                 )
 
+            def attach_run_center_policy(item) -> dict:
+                row = dict(item or {})
+                request_id = str(row.get("request_id") or "")
+                session_id = str(row.get("session_id") or "")
+                run_type = str(row.get("run_type") or "message").lower()
+                state = str(row.get("state") or row.get("status") or row.get("phase") or "").lower()
+                terminal = row.get("terminal_at") is not None or state in {
+                    "completed",
+                    "failed",
+                    "cancelled",
+                    "interrupted",
+                }
+                is_subagent = (
+                    run_type == "subagent"
+                    or request_id.startswith("subagent-")
+                    or session_id.startswith("subagent-")
+                )
+                is_scheduler = (
+                    run_type == "scheduler"
+                    or request_id.startswith("scheduler_")
+                    or session_id.startswith("scheduler_")
+                )
+                failed = "fail" in state or "error" in state or "interrupt" in state
+                cancelling = bool(row.get("cancelled")) or "cancell" in state
+                metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+                terminal_code = "{} {}".format(
+                    row.get("error_code") or metadata.get("error_code") or "",
+                    row.get("terminal_reason") or metadata.get("terminal_reason") or "",
+                ).lower()
+                non_retryable_terminal = any(
+                    marker in terminal_code
+                    for marker in (
+                        "auth",
+                        "permission",
+                        "policy",
+                        "denied",
+                        "forbidden",
+                        "invalid",
+                        "bad_request",
+                        "badrequest",
+                        "not_retryable",
+                        "non_retryable",
+                    )
+                )
+                retryable = False
+                retry_mode = "unavailable"
+                retry_disabled_reason = ""
+                if is_subagent:
+                    retry_disabled_reason = "subagent_replay_unavailable"
+                elif is_scheduler:
+                    retry_disabled_reason = "scheduler_replay_unavailable"
+                elif not session_id:
+                    retry_disabled_reason = "missing_session_id"
+                elif not failed:
+                    retry_disabled_reason = "not_failed"
+                elif row.get("retryable") is False and row.get("recoverable") is False:
+                    retry_disabled_reason = "non_retryable_terminal"
+                elif non_retryable_terminal:
+                    retry_disabled_reason = "non_retryable_terminal"
+                else:
+                    retryable = True
+                    retry_mode = "manual_retry_prepare"
+                row["retryable"] = retryable
+                row["recoverable"] = bool(session_id) and not is_subagent and not is_scheduler
+                row["retry_mode"] = retry_mode
+                row["retry_disabled_reason"] = retry_disabled_reason
+                row["actions"] = {
+                    "open": bool(session_id) and not is_subagent and not is_scheduler,
+                    "recover": bool(session_id) and not is_subagent and not is_scheduler,
+                    "retry": retryable,
+                    "stop": bool(
+                        (request_id or session_id)
+                        and not failed
+                        and not terminal
+                        and not (is_subagent and not request_id)
+                    ),
+                    "diagnostics": True,
+                }
+                if cancelling and not terminal:
+                    row["actions"]["retry"] = False
+                    row["retryable"] = False
+                    row["retry_mode"] = "unavailable"
+                    row["retry_disabled_reason"] = "stopping"
+                return row
+
             stale_locks = []
             for item in list_session_locks(_get_workspace_root(), cleanup=False):
                 if not (item.get("dead_owner") or item.get("stale")):
@@ -1397,6 +1482,7 @@ class WebChannel(ChatChannel):
                     item["state"] = "cancelling"
                     item["cancelled_at"] = registry_row.get("cancelled_at")
                     item["cancel_age_seconds"] = registry_row.get("cancel_age_seconds")
+                item = attach_run_center_policy(item)
                 requests.append(item)
                 bump_status_count(item)
                 seen_request_ids.add(request_id)
@@ -1416,6 +1502,7 @@ class WebChannel(ChatChannel):
                     "stream_available": request_id in self.sse_queues,
                     "source": "run_ledger",
                 }
+                item = attach_run_center_policy(item)
                 recent_terminal_requests.append(item)
                 bump_status_count(item)
                 if not is_current_cancelling_registry_row(item, registry_by_request.get(request_id, {})):
@@ -1442,6 +1529,7 @@ class WebChannel(ChatChannel):
                     item["run_type"] = "subagent"
                 elif request_id.startswith("scheduler_") or str(session_id).startswith("scheduler_"):
                     item["run_type"] = "scheduler"
+                item = attach_run_center_policy(item)
                 requests.append(item)
                 bump_status_count(item)
                 if session_id and not item.get("cancelled") and is_primary_chat_request(item, request_id, session_id):
