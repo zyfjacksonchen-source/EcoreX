@@ -113,6 +113,17 @@ class TestModelsHandler(unittest.TestCase):
         self.assertFalse(cap["capabilities"]["supports_thinking_param"])
         self.assertEqual(cap["capabilities"]["max_tokens_param"], "max_completion_tokens")
         self.assertTrue(cap["capabilities"]["supports_stream_usage"])
+        self.assertEqual(cap["capability_matrix"]["schema_version"], "ecorex.model-capabilities.v1")
+        self.assertIn("openai", cap["capability_matrix"]["providers"])
+        self.assertIn("deepseek", cap["capability_matrix"]["providers"])
+        self.assertIn("chatGPTOnAzure", cap["capability_matrix"]["providers"])
+        openai_models = cap["capability_matrix"]["providers"]["openai"]["models"]
+        self.assertTrue(any(row["model"] == "gpt-5.5" for row in openai_models))
+        deepseek_models = cap["capability_matrix"]["providers"]["deepseek"]["models"]
+        self.assertTrue(any(row["capabilities"]["supports_thinking_param"] for row in deepseek_models))
+        matrix_text = json.dumps(cap["capability_matrix"], ensure_ascii=False)
+        self.assertNotIn("api_key", matrix_text)
+        self.assertNotIn("api_base", matrix_text)
 
     def test_chat_capability_downgrades_custom_openai_base(self):
         from channel.web.web_channel import ModelsHandler

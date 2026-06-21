@@ -44,6 +44,7 @@ EVIDENCE_REQUIREMENTS: dict[str, list[str]] = {
     ],
     "model-call evidence": [
         "r18-model-gateway",
+        "provider capability matrix",
         "model-call telemetry",
         "retry policy",
         "responses api",

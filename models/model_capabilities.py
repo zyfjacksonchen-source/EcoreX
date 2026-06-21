@@ -8,8 +8,8 @@ calls, model settings, and tests do not each grow their own model-name checks.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from typing import Any, Dict, Iterable, Optional, Tuple
+from dataclasses import asdict, dataclass, field, replace
+from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
 
 from common import const
 
@@ -42,6 +42,55 @@ class ModelCapabilities:
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class ModelCapabilityRule:
+    rule_id: str
+    provider: str = ""
+    exact_models: Tuple[str, ...] = ()
+    model_prefixes: Tuple[str, ...] = ()
+    api_family: str = "native"
+    host_policy: str = "provider_default"
+    system_message_policy: str = "native"
+    surfaces: Tuple[str, ...] = ("agent_bridge",)
+    overrides: Mapping[str, Any] = field(default_factory=dict)
+
+    def matches(self, provider_id: str, model_name: str) -> bool:
+        if self.provider and self.provider != provider_id:
+            return False
+        lowered_model = model_name.lower()
+        if not self.exact_models and not self.model_prefixes:
+            return True
+        if any(lowered_model == exact.lower() for exact in self.exact_models):
+            return True
+        return any(lowered_model.startswith(prefix.lower()) for prefix in self.model_prefixes)
+
+    def to_matrix_dict(self) -> Dict[str, Any]:
+        return {
+            "rule_id": self.rule_id,
+            "provider": self.provider,
+            "match": {
+                "exact_models": list(self.exact_models),
+                "model_prefixes": list(self.model_prefixes),
+                "fallback": not self.exact_models and not self.model_prefixes,
+            },
+            "api_family": self.api_family,
+            "host_policy": self.host_policy,
+            "system_message_policy": self.system_message_policy,
+            "surfaces": list(self.surfaces),
+            "overrides": _matrix_jsonable(dict(self.overrides)),
+        }
+
+
+def _matrix_jsonable(value: Any) -> Any:
+    if isinstance(value, tuple):
+        return [_matrix_jsonable(item) for item in value]
+    if isinstance(value, list):
+        return [_matrix_jsonable(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _matrix_jsonable(item) for key, item in value.items()}
+    return value
 
 
 _FIXED_SAMPLING_PREFIXES = ("gpt-5", "o1", "o3", "o4")
@@ -107,14 +156,6 @@ _PROVIDER_PREFIXES = (
     ("linkai-", const.LINKAI),
 )
 
-_OFFICIAL_OPENAI_CHAT_PROVIDERS = {
-    const.OPENAI,
-    const.OPEN_AI,
-    const.CHATGPT,
-    const.CHATGPTONAZURE,
-    "openai",
-}
-
 _OPENAI_BASE_SENSITIVE_PROVIDERS = {
     const.OPENAI,
     const.OPEN_AI,
@@ -124,6 +165,180 @@ _OPENAI_BASE_SENSITIVE_PROVIDERS = {
 
 _OPENAI_REASONING_EFFORT_VALUES = ("minimal", "low", "medium", "high")
 _DEEPSEEK_REASONING_EFFORT_VALUES = ("high", "max")
+_CAPABILITY_MATRIX_SCHEMA_VERSION = "ecorex.model-capabilities.v1"
+_OFFICIAL_OPENAI_SURFACES = (
+    "openai_compatible_bot",
+    "agent_bridge",
+    "legacy_chatgpt_args",
+    "responses_adapter",
+)
+_AZURE_OPENAI_SURFACES = (
+    "openai_compatible_bot",
+    "agent_bridge",
+    "legacy_chatgpt_args",
+)
+_OPENAI_COMPATIBLE_SURFACES = (
+    "openai_compatible_bot",
+    "agent_bridge",
+    "legacy_chatgpt_args",
+)
+_OPENAI_RULE_PROVIDERS = tuple(dict.fromkeys((
+    const.OPENAI,
+    const.OPEN_AI,
+    const.CHATGPT,
+    "openai",
+)))
+_AZURE_OPENAI_RULE_PROVIDERS = (const.CHATGPTONAZURE,)
+
+_DEFAULT_PROVIDER_CAPABILITY_MODELS: Dict[str, Tuple[str, ...]] = {
+    const.OPENAI: (const.GPT_55, const.GPT_54_MINI, const.GPT_5, "o1-mini"),
+    const.CHATGPTONAZURE: (const.GPT_55, "o1-mini"),
+    const.DEEPSEEK: (const.DEEPSEEK_V4_FLASH, const.DEEPSEEK_CHAT, const.DEEPSEEK_REASONER),
+    const.QWEN_DASHSCOPE: (const.QWEN37_PLUS, const.QWEN37_MAX, const.QWEN36_PLUS),
+    const.ZHIPU_AI: (const.GLM_5_1, const.GLM_5, const.GLM_4_7),
+    const.MOONSHOT: (const.KIMI_K2_6, const.KIMI_K2),
+    const.DOUBAO: (const.DOUBAO_SEED_2_PRO, const.DOUBAO_SEED_2_CODE),
+    const.MIMO: (const.MIMO_V2_5_PRO, const.MIMO_V2_5),
+    const.LINKAI: (const.GPT_54_MINI, const.QWEN37_PLUS, const.KIMI_K2_6),
+    "custom": (),
+}
+
+_CAPABILITY_RULES: Tuple[ModelCapabilityRule, ...] = (
+    ModelCapabilityRule(
+        rule_id="default:native-compatible",
+        api_family="native",
+        host_policy="provider_default",
+    ),
+    *(
+        ModelCapabilityRule(
+            rule_id=f"{provider_id}:official-openai-base",
+            provider=provider_id,
+            api_family="official_openai",
+            host_policy="official_openai_host_required",
+            surfaces=_OFFICIAL_OPENAI_SURFACES,
+            overrides={"supports_stream_usage": True},
+        )
+        for provider_id in _OPENAI_RULE_PROVIDERS
+    ),
+    *(
+        ModelCapabilityRule(
+            rule_id=f"{provider_id}:azure-openai-base",
+            provider=provider_id,
+            api_family="azure_openai",
+            host_policy="azure_deployment",
+            surfaces=_AZURE_OPENAI_SURFACES,
+            overrides={"supports_stream_usage": True},
+        )
+        for provider_id in _AZURE_OPENAI_RULE_PROVIDERS
+    ),
+    ModelCapabilityRule(
+        rule_id="openai_compatible:generic-compatible-base",
+        provider="openai_compatible",
+        api_family="openai_compatible",
+        host_policy="generic_compatible_host",
+        surfaces=_OPENAI_COMPATIBLE_SURFACES,
+    ),
+    ModelCapabilityRule(
+        rule_id="custom:generic-compatible-base",
+        provider="custom",
+        api_family="openai_compatible",
+        host_policy="custom_host",
+        surfaces=_OPENAI_COMPATIBLE_SURFACES,
+    ),
+    *(
+        ModelCapabilityRule(
+            rule_id=f"{provider_id}:fixed-sampling-reasoning-models",
+            provider=provider_id,
+            exact_models=tuple(_FIXED_SAMPLING_EXACT),
+            model_prefixes=_FIXED_SAMPLING_PREFIXES,
+            api_family="official_openai" if provider_id not in _AZURE_OPENAI_RULE_PROVIDERS else "azure_openai",
+            host_policy="official_openai_host_required" if provider_id not in _AZURE_OPENAI_RULE_PROVIDERS else "azure_deployment",
+            surfaces=_OFFICIAL_OPENAI_SURFACES if provider_id not in _AZURE_OPENAI_RULE_PROVIDERS else _AZURE_OPENAI_SURFACES,
+            overrides={
+                "supports_temperature": False,
+                "supports_top_p": False,
+                "supports_penalties": False,
+                "supports_reasoning_effort": True,
+                "supports_verbosity": True,
+                "reasoning_effort_values": _OPENAI_REASONING_EFFORT_VALUES,
+                "reasoning_style": "reasoning_effort",
+                "max_tokens_param": "max_completion_tokens",
+            },
+        )
+        for provider_id in (*_OPENAI_RULE_PROVIDERS, *_AZURE_OPENAI_RULE_PROVIDERS)
+    ),
+    *(
+        ModelCapabilityRule(
+            rule_id=f"{provider_id}:o1-system-message-coercion",
+            provider=provider_id,
+            model_prefixes=("o1",),
+            api_family="official_openai" if provider_id not in _AZURE_OPENAI_RULE_PROVIDERS else "azure_openai",
+            host_policy="official_openai_host_required" if provider_id not in _AZURE_OPENAI_RULE_PROVIDERS else "azure_deployment",
+            system_message_policy="coerce_to_user",
+            surfaces=_OFFICIAL_OPENAI_SURFACES if provider_id not in _AZURE_OPENAI_RULE_PROVIDERS else _AZURE_OPENAI_SURFACES,
+            overrides={"supports_system_messages": False},
+        )
+        for provider_id in (*_OPENAI_RULE_PROVIDERS, *_AZURE_OPENAI_RULE_PROVIDERS)
+    ),
+    ModelCapabilityRule(
+        rule_id="deepseek:v4-thinking",
+        provider=const.DEEPSEEK,
+        model_prefixes=("deepseek-v4",),
+        api_family="native",
+        overrides={
+            "supports_temperature": False,
+            "supports_top_p": False,
+            "supports_penalties": False,
+            "supports_reasoning_effort": True,
+            "supports_thinking_param": True,
+            "reasoning_effort_values": _DEEPSEEK_REASONING_EFFORT_VALUES,
+            "reasoning_style": "thinking",
+        },
+    ),
+    ModelCapabilityRule(
+        rule_id="dashscope:qwen-thinking",
+        provider=const.QWEN_DASHSCOPE,
+        model_prefixes=("qwen3", "qwq"),
+        api_family="native",
+        overrides={"supports_thinking_param": True, "reasoning_style": "thinking"},
+    ),
+    ModelCapabilityRule(
+        rule_id="zhipu:glm-thinking",
+        provider=const.ZHIPU_AI,
+        model_prefixes=("glm-4.7", "glm-5"),
+        api_family="native",
+        overrides={"supports_thinking_param": True, "reasoning_style": "thinking"},
+    ),
+    ModelCapabilityRule(
+        rule_id="moonshot:kimi-thinking",
+        provider=const.MOONSHOT,
+        model_prefixes=("kimi-k2", "kimi-k1.5"),
+        api_family="native",
+        overrides={"supports_thinking_param": True, "reasoning_style": "thinking"},
+    ),
+    ModelCapabilityRule(
+        rule_id="mimo:thinking",
+        provider=const.MIMO,
+        model_prefixes=("mimo-",),
+        api_family="native",
+        overrides={
+            "supports_thinking_param": True,
+            "reasoning_style": "thinking",
+            "max_tokens_param": "max_completion_tokens",
+        },
+    ),
+    ModelCapabilityRule(
+        rule_id="doubao:seed-thinking",
+        provider=const.DOUBAO,
+        model_prefixes=("doubao-seed-",),
+        api_family="native",
+        overrides={
+            "supports_temperature": False,
+            "supports_thinking_param": True,
+            "reasoning_style": "thinking",
+        },
+    ),
+)
 
 
 def normalize_model_name(model: Optional[str]) -> str:
@@ -136,12 +351,15 @@ def infer_provider_id(
     configured_bot_type: Optional[str] = "",
     use_linkai: bool = False,
     has_linkai_key: bool = False,
+    use_azure_chatgpt: bool = False,
 ) -> str:
     """Infer the provider id used by the local runtime for a chat model."""
     if use_linkai and has_linkai_key:
         return const.LINKAI
     if configured_bot_type:
         return const.OPENAI if configured_bot_type == const.CHATGPT else str(configured_bot_type)
+    if use_azure_chatgpt:
+        return const.CHATGPTONAZURE
 
     model_name = normalize_model_name(model)
     if not model_name:
@@ -157,90 +375,20 @@ def infer_provider_id(
     return const.OPENAI
 
 
-def _fixed_sampling_model(model_name: str) -> bool:
-    lowered = model_name.lower()
-    return lowered in _FIXED_SAMPLING_EXACT or lowered.startswith(_FIXED_SAMPLING_PREFIXES)
+def _matching_capability_rules(provider_id: str, model_name: str) -> Tuple[ModelCapabilityRule, ...]:
+    return tuple(rule for rule in _CAPABILITY_RULES if rule.matches(provider_id, model_name))
 
 
 def get_model_capabilities(model: Optional[str], provider: Optional[str] = None) -> ModelCapabilities:
     model_name = normalize_model_name(model)
     provider_id = provider or infer_provider_id(model_name)
-    supports_temperature = True
-    supports_top_p = True
-    supports_penalties = True
-    supports_system_messages = True
-    supports_reasoning_effort = False
-    supports_verbosity = False
-    supports_thinking_param = False
-    reasoning_effort_values: Tuple[str, ...] = ()
-    reasoning_style = "none"
-    max_tokens_param = "max_tokens"
-    official_openai_chat = provider_id in _OFFICIAL_OPENAI_CHAT_PROVIDERS
-    lowered_model = model_name.lower()
-
-    if official_openai_chat and _fixed_sampling_model(model_name):
-        supports_temperature = False
-        supports_top_p = False
-        supports_penalties = False
-        supports_reasoning_effort = True
-        supports_verbosity = True
-        reasoning_effort_values = _OPENAI_REASONING_EFFORT_VALUES
-        reasoning_style = "reasoning_effort"
-        max_tokens_param = "max_completion_tokens"
-    if lowered_model.startswith("o1"):
-        supports_system_messages = False
-
-    if provider_id == const.DEEPSEEK and lowered_model.startswith("deepseek-v4"):
-        supports_temperature = False
-        supports_top_p = False
-        supports_penalties = False
-        supports_reasoning_effort = True
-        supports_thinking_param = True
-        reasoning_effort_values = _DEEPSEEK_REASONING_EFFORT_VALUES
-        reasoning_style = "thinking"
-    elif provider_id == const.QWEN_DASHSCOPE and (
-        lowered_model.startswith("qwen3")
-        or lowered_model.startswith("qwq")
-    ):
-        supports_thinking_param = True
-        reasoning_style = "thinking"
-    elif provider_id == const.ZHIPU_AI and (
-        lowered_model.startswith("glm-4.7")
-        or lowered_model.startswith("glm-5")
-    ):
-        supports_thinking_param = True
-        reasoning_style = "thinking"
-    elif provider_id == const.MOONSHOT and (
-        lowered_model.startswith("kimi-k2")
-        or lowered_model.startswith("kimi-k1.5")
-    ):
-        supports_thinking_param = True
-        reasoning_style = "thinking"
-    elif provider_id == const.MIMO and lowered_model.startswith("mimo-"):
-        supports_thinking_param = True
-        reasoning_style = "thinking"
-        max_tokens_param = "max_completion_tokens"
-    elif provider_id == const.DOUBAO and lowered_model.startswith("doubao-seed-"):
-        supports_temperature = False
-        supports_thinking_param = True
-        reasoning_style = "thinking"
-
-    supports_stream_usage = official_openai_chat
-    return ModelCapabilities(
+    capabilities = ModelCapabilities(
         provider=provider_id,
         model=model_name,
-        supports_temperature=supports_temperature,
-        supports_top_p=supports_top_p,
-        supports_penalties=supports_penalties,
-        supports_stream_usage=supports_stream_usage,
-        supports_system_messages=supports_system_messages,
-        supports_reasoning_effort=supports_reasoning_effort,
-        supports_verbosity=supports_verbosity,
-        supports_thinking_param=supports_thinking_param,
-        reasoning_effort_values=reasoning_effort_values,
-        reasoning_style=reasoning_style,
-        max_tokens_param=max_tokens_param,
     )
+    for rule in _matching_capability_rules(provider_id, model_name):
+        capabilities = replace(capabilities, **dict(rule.overrides))
+    return capabilities
 
 
 def resolve_capability_provider_for_base(provider: str, api_base: Optional[str]) -> str:
@@ -264,10 +412,124 @@ def capabilities_for_config(local_config: Dict[str, Any]) -> ModelCapabilities:
         configured_bot_type=(local_config or {}).get("bot_type") or "",
         use_linkai=bool((local_config or {}).get("use_linkai", False)),
         has_linkai_key=bool((local_config or {}).get("linkai_api_key")),
+        use_azure_chatgpt=bool((local_config or {}).get("use_azure_chatgpt", False)),
     )
     api_base = (local_config or {}).get("open_ai_api_base")
     provider = resolve_capability_provider_for_base(provider, api_base)
     return get_model_capabilities(model_name, provider=provider)
+
+
+def _catalog_model_value(entry: Any) -> str:
+    if isinstance(entry, Mapping):
+        return normalize_model_name(entry.get("value"))
+    return normalize_model_name(entry)
+
+
+def _rule_summary_value(
+    matched_rules: Tuple[ModelCapabilityRule, ...],
+    attr: str,
+    default: str,
+) -> str:
+    for rule in reversed(matched_rules):
+        value = getattr(rule, attr)
+        if value != default:
+            return value
+    return default
+
+
+def _capability_matrix_row(
+    provider_id: str,
+    model_name: str,
+    capabilities: ModelCapabilities,
+    matched_rules: Tuple[ModelCapabilityRule, ...],
+) -> Dict[str, Any]:
+    return {
+        "provider_id": provider_id,
+        "model": model_name,
+        "api_family": _rule_summary_value(matched_rules, "api_family", "native"),
+        "host_policy": _rule_summary_value(matched_rules, "host_policy", "provider_default"),
+        "system_message_policy": "native" if capabilities.supports_system_messages else "coerce_to_user",
+        "supports_tools": capabilities.supports_tools,
+        "supports_stream": capabilities.supports_stream,
+        "supports_stream_usage": capabilities.supports_stream_usage,
+        "sampling": {
+            "temperature": capabilities.supports_temperature,
+            "top_p": capabilities.supports_top_p,
+            "frequency_penalty": capabilities.supports_penalties,
+            "presence_penalty": capabilities.supports_penalties,
+        },
+        "unsupported_params": [
+            name for name, supported in (
+                ("temperature", capabilities.supports_temperature),
+                ("top_p", capabilities.supports_top_p),
+                ("frequency_penalty", capabilities.supports_penalties),
+                ("presence_penalty", capabilities.supports_penalties),
+                ("reasoning_effort", capabilities.supports_reasoning_effort),
+                ("verbosity", capabilities.supports_verbosity),
+            )
+            if not supported
+        ],
+        "token_limit": {
+            "chat_param": capabilities.max_tokens_param,
+            "responses_param": "max_output_tokens",
+        },
+        "reasoning": {
+            "supported": capabilities.supports_reasoning_effort,
+            "style": capabilities.reasoning_style,
+            "field": "reasoning_effort" if capabilities.supports_reasoning_effort else "",
+            "allowed_values": list(capabilities.reasoning_effort_values or ()),
+        },
+        "verbosity": {
+            "supported": capabilities.supports_verbosity,
+            "field": "verbosity" if capabilities.supports_verbosity else "",
+        },
+        "thinking": {
+            "supported": capabilities.supports_thinking_param,
+            "field": "thinking" if capabilities.supports_thinking_param else "",
+            "enabled_shape": {"type": "enabled"} if capabilities.supports_thinking_param else {},
+        },
+        "surfaces": sorted({
+            surface
+            for rule in matched_rules
+            for surface in rule.surfaces
+        }),
+        "capabilities": capabilities.to_dict(),
+        "rule_ids": [rule.rule_id for rule in matched_rules],
+        "rules": [rule.to_matrix_dict() for rule in matched_rules],
+    }
+
+
+def build_provider_capability_matrix(
+    provider_models: Optional[Mapping[str, Iterable[Any]]] = None,
+) -> Dict[str, Any]:
+    """Build a machine-readable provider/model capability matrix."""
+    catalog = provider_models or _DEFAULT_PROVIDER_CAPABILITY_MODELS
+    providers: Dict[str, Any] = {}
+    for provider_id, entries in catalog.items():
+        seen = set()
+        models = []
+        for entry in entries or ():
+            model_name = _catalog_model_value(entry)
+            if not model_name or model_name in seen:
+                continue
+            seen.add(model_name)
+            matched_rules = _matching_capability_rules(str(provider_id), model_name)
+            capabilities = get_model_capabilities(model_name, provider=provider_id)
+            models.append(_capability_matrix_row(
+                str(provider_id),
+                model_name,
+                capabilities,
+                matched_rules,
+            ))
+        providers[str(provider_id)] = {
+            "provider": str(provider_id),
+            "models": models,
+        }
+    return {
+        "schema_version": _CAPABILITY_MATRIX_SCHEMA_VERSION,
+        "source": "models.model_capabilities._CAPABILITY_RULES",
+        "providers": providers,
+    }
 
 
 def _remove(payload: Dict[str, Any], keys: Iterable[str]) -> Tuple[str, ...]:

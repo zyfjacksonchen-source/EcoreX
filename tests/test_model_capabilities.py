@@ -1,4 +1,5 @@
 # encoding:utf-8
+import json
 import os
 import sys
 import unittest
@@ -241,6 +242,108 @@ class TestModelCapabilities(unittest.TestCase):
         self.assertEqual([message["role"] for message in payload["messages"]], ["user", "user"])
         self.assertEqual(payload["messages"][0]["content"], "rules")
 
+    def test_custom_openai_compatible_o1_keeps_system_messages(self):
+        from models.openai_compatible_bot import OpenAICompatibleBot
+
+        class CaptureBot(OpenAICompatibleBot):
+            def get_api_config(self):
+                return {
+                    "provider": "openai",
+                    "api_key": "test-key",
+                    "api_base": "https://coding-plan.test/v1",
+                    "model": "o1-mini",
+                }
+
+            def _sync_response_with_retry(self, request_params, *args, **kwargs):
+                return request_params
+
+        payload = CaptureBot().call_with_tools(
+            [
+                {"role": "system", "content": "rules"},
+                {"role": "user", "content": "hello"},
+            ],
+            stream=False,
+        )
+
+        self.assertEqual([message["role"] for message in payload["messages"]], ["system", "user"])
+        self.assertEqual(payload["messages"][0]["content"], "rules")
+
+    def test_azure_route_uses_azure_capability_rules(self):
+        from common import const
+        from bridge.agent_bridge import AgentLLMModel
+        from models.chatgpt.chat_gpt_bot import ChatGPTBot
+        from models.model_capabilities import build_provider_capability_matrix, capabilities_for_config, get_model_capabilities
+        from models.openai_compatible_bot import OpenAICompatibleBot
+
+        self.assertEqual(
+            OpenAICompatibleBot._capability_provider_id(
+                {"provider": const.CHATGPTONAZURE},
+                "https://example.openai.azure.com/openai/deployments/chat",
+            ),
+            const.CHATGPTONAZURE,
+        )
+        capabilities = get_model_capabilities("gpt-5.5", const.CHATGPTONAZURE)
+        self.assertFalse(capabilities.supports_temperature)
+        self.assertTrue(capabilities.supports_reasoning_effort)
+        self.assertEqual(capabilities.max_tokens_param, "max_completion_tokens")
+
+        matrix = build_provider_capability_matrix({const.CHATGPTONAZURE: ["gpt-5.5", "o1-mini"]})
+        azure_gpt = matrix["providers"][const.CHATGPTONAZURE]["models"][0]
+        self.assertEqual(azure_gpt["api_family"], "azure_openai")
+        self.assertEqual(azure_gpt["host_policy"], "azure_deployment")
+        self.assertIn(f"{const.CHATGPTONAZURE}:azure-openai-base", azure_gpt["rule_ids"])
+        self.assertNotIn("responses_adapter", azure_gpt["surfaces"])
+
+        with patch("models.chatgpt.chat_gpt_bot.conf", return_value={
+            "bot_type": const.OPENAI,
+            "model": "gpt-5.5",
+            "open_ai_api_key": "test-key",
+            "open_ai_api_base": "https://example.openai.azure.com/",
+            "temperature": 0.7,
+            "top_p": 0.9,
+        }):
+            bot = ChatGPTBot()
+            bot.configure_model_route(const.CHATGPTONAZURE)
+            self.assertEqual(bot.get_api_config()["provider"], const.CHATGPTONAZURE)
+
+        legacy_azure_config = {
+            "bot_type": "",
+            "use_azure_chatgpt": True,
+            "model": "gpt-5.5",
+            "open_ai_api_base": "https://example.openai.azure.com/",
+            "use_linkai": False,
+        }
+        legacy_azure_capabilities = capabilities_for_config(legacy_azure_config)
+        self.assertEqual(legacy_azure_capabilities.provider, const.CHATGPTONAZURE)
+        self.assertEqual(legacy_azure_capabilities.max_tokens_param, "max_completion_tokens")
+        self.assertTrue(legacy_azure_capabilities.supports_reasoning_effort)
+
+        with patch("bridge.agent_bridge.conf", return_value=legacy_azure_config):
+            bridge_model = AgentLLMModel(None)
+            self.assertEqual(bridge_model._resolve_bot_type("gpt-5.5"), const.CHATGPTONAZURE)
+
+        with patch("models.chatgpt.chat_gpt_bot.conf", return_value={
+            **legacy_azure_config,
+            "open_ai_api_key": "test-key",
+            "temperature": 0.7,
+            "top_p": 0.9,
+        }):
+            legacy_flag_bot = ChatGPTBot()
+            self.assertEqual(legacy_flag_bot.get_api_config()["provider"], const.CHATGPTONAZURE)
+            self.assertNotIn("temperature", legacy_flag_bot.args)
+            self.assertEqual(legacy_flag_bot.args["model"], "gpt-5.5")
+
+        with patch("models.chatgpt.chat_gpt_bot.conf", return_value={
+            **legacy_azure_config,
+            "open_ai_api_key": "test-key",
+            "azure_deployment_id": "chat-deployment",
+            "azure_api_version": "2024-02-15-preview",
+        }):
+            azure_bot = AgentLLMModel._create_bot(const.CHATGPTONAZURE)
+            self.assertEqual(type(azure_bot._http_client).__name__, "_AzureChatHTTPClient")
+            self.assertIn("/openai/deployments/chat-deployment", azure_bot._http_client.api_base)
+            self.assertEqual(azure_bot._http_client._build_headers(None, None).get("api-key"), "test-key")
+
     def test_responses_adapter_receives_reasoning_verbosity_and_token_limit(self):
         from models.openai_compatible_bot import OpenAICompatibleBot
 
@@ -390,6 +493,67 @@ class TestModelCapabilities(unittest.TestCase):
         self.assertEqual([route.model for route in routes], ["gpt-5.4-mini", "deepseek-v4-flash"])
         self.assertEqual(routes[0].provider, "openai")
         self.assertEqual(routes[1].provider, "deepseek")
+
+    def test_provider_capability_matrix_is_machine_readable_and_catalog_derived(self):
+        from common import const
+        from models.model_capabilities import build_provider_capability_matrix
+
+        matrix = build_provider_capability_matrix({
+            "openai": [const.GPT_55, "o1-mini", const.GPT_4o],
+            "deepseek": [const.DEEPSEEK_V4_FLASH],
+            "custom": [],
+        })
+
+        self.assertEqual(matrix["schema_version"], "ecorex.model-capabilities.v1")
+        self.assertEqual(matrix["source"], "models.model_capabilities._CAPABILITY_RULES")
+        json.dumps(matrix, sort_keys=True)
+        self.assertEqual(
+            [row["model"] for row in matrix["providers"]["openai"]["models"]],
+            [const.GPT_55, "o1-mini", const.GPT_4o],
+        )
+
+        gpt55_row = matrix["providers"]["openai"]["models"][0]
+        gpt55 = gpt55_row["capabilities"]
+        self.assertEqual(gpt55_row["api_family"], "official_openai")
+        self.assertEqual(gpt55_row["host_policy"], "official_openai_host_required")
+        self.assertEqual(gpt55_row["token_limit"]["chat_param"], "max_completion_tokens")
+        self.assertIn("temperature", gpt55_row["unsupported_params"])
+        self.assertIn("openai:official-openai-base", gpt55_row["rule_ids"])
+        self.assertIn("openai:fixed-sampling-reasoning-models", gpt55_row["rule_ids"])
+        self.assertFalse(gpt55["supports_temperature"])
+        self.assertFalse(gpt55["supports_penalties"])
+        self.assertTrue(gpt55["supports_reasoning_effort"])
+        self.assertEqual(gpt55["max_tokens_param"], "max_completion_tokens")
+
+        o1_row = matrix["providers"]["openai"]["models"][1]
+        o1 = o1_row["capabilities"]
+        self.assertEqual(o1_row["system_message_policy"], "coerce_to_user")
+        self.assertIn("openai:o1-system-message-coercion", o1_row["rule_ids"])
+        self.assertFalse(o1["supports_system_messages"])
+
+        deepseek_row = matrix["providers"]["deepseek"]["models"][0]
+        deepseek = deepseek_row["capabilities"]
+        self.assertTrue(deepseek_row["thinking"]["supported"])
+        self.assertEqual(deepseek_row["surfaces"], ["agent_bridge"])
+        self.assertNotIn("responses_adapter", deepseek_row["surfaces"])
+        self.assertIn("deepseek:v4-thinking", deepseek_row["rule_ids"])
+        self.assertTrue(deepseek["supports_thinking_param"])
+        self.assertEqual(tuple(deepseek["reasoning_effort_values"]), ("high", "max"))
+
+        self.assertEqual(matrix["providers"]["custom"]["models"], [])
+
+    def test_provider_capability_matrix_keeps_custom_o1_generic(self):
+        from models.model_capabilities import build_provider_capability_matrix
+
+        matrix = build_provider_capability_matrix({
+            "custom": ["o1-mini"],
+        })
+
+        custom_o1 = matrix["providers"]["custom"]["models"][0]
+        self.assertEqual(custom_o1["api_family"], "openai_compatible")
+        self.assertEqual(custom_o1["system_message_policy"], "native")
+        self.assertNotIn("custom:o1-system-message-coercion", custom_o1["rule_ids"])
+        self.assertTrue(custom_o1["capabilities"]["supports_system_messages"])
 
 
 if __name__ == "__main__":

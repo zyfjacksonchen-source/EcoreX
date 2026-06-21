@@ -129,6 +129,7 @@ class AgentLLMModel(LLMModel):
             configured_bot_type=conf().get("bot_type") or "",
             use_linkai=bool(conf().get("use_linkai", False)),
             has_linkai_key=bool(conf().get("linkai_api_key")),
+            use_azure_chatgpt=bool(conf().get("use_azure_chatgpt", False)),
         )
 
     @property

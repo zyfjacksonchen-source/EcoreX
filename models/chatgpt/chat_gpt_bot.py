@@ -44,7 +44,10 @@ class ChatGPTBot(Bot, OpenAIImage, OpenAICompatibleBot):
     def __init__(self):
         super().__init__()
         # Resolve api key / base from config (no global SDK state anymore).
-        self._ecorex_route_bot_type = conf().get("bot_type") or const.OPENAI
+        self._ecorex_route_bot_type = (
+            conf().get("bot_type")
+            or (const.CHATGPTONAZURE if conf().get("use_azure_chatgpt", False) else const.OPENAI)
+        )
         self._configure_http_client_for_route()
         if conf().get("rate_limit_chatgpt"):
             self.tb4chatgpt = TokenBucket(conf().get("rate_limit_chatgpt", 20))
@@ -76,7 +79,11 @@ class ChatGPTBot(Bot, OpenAIImage, OpenAICompatibleBot):
         return self
 
     def _effective_route_bot_type(self) -> str:
-        return getattr(self, "_ecorex_route_bot_type", None) or conf().get("bot_type") or const.OPENAI
+        return (
+            getattr(self, "_ecorex_route_bot_type", None)
+            or conf().get("bot_type")
+            or (const.CHATGPTONAZURE if conf().get("use_azure_chatgpt", False) else const.OPENAI)
+        )
 
     def _is_custom_route(self) -> bool:
         return self._effective_route_bot_type() == const.CUSTOM
@@ -98,8 +105,10 @@ class ChatGPTBot(Bot, OpenAIImage, OpenAICompatibleBot):
     def get_api_config(self):
         """Get API configuration for OpenAI-compatible base class"""
         is_custom = self._is_custom_route()
+        route = self._effective_route_bot_type()
+        provider = "custom" if is_custom else const.CHATGPTONAZURE if route == const.CHATGPTONAZURE else "openai"
         return {
-            'provider': 'custom' if is_custom else 'openai',
+            'provider': provider,
             'api_key': conf().get("custom_api_key") if is_custom else conf().get("open_ai_api_key"),
             'api_base': conf().get("custom_api_base") if is_custom else conf().get("open_ai_api_base"),
             'model': conf().get("model", "gpt-3.5-turbo"),
@@ -393,7 +402,17 @@ class AzureChatGPTBot(ChatGPTBot):
         self._azure_deployment_id = conf().get("azure_deployment_id")
         # Drop legacy SDK kwarg; Azure deployment is encoded in the URL now.
         self.args.pop("deployment_id", None)
+        self._configure_azure_http_client()
 
+    def configure_model_route(self, bot_type: str):
+        self._ecorex_route_bot_type = bot_type or conf().get("bot_type") or const.CHATGPTONAZURE
+        self._configure_http_client_for_route()
+        self._azure_api_version = conf().get("azure_api_version", "2023-06-01-preview")
+        self._azure_deployment_id = conf().get("azure_deployment_id")
+        self._configure_azure_http_client()
+        return self
+
+    def _configure_azure_http_client(self) -> None:
         endpoint = (self._api_base or "").rstrip("/")
         deployment = self._azure_deployment_id or ""
         # Build a base that already includes /openai/deployments/{deployment}.

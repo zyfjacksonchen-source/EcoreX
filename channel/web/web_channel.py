@@ -5889,9 +5889,14 @@ class ModelsHandler:
     @classmethod
     def _chat_capability(cls, local_config: dict) -> dict:
         """Main chat model — drives the agent. bot_type maps to a provider id."""
-        from models.model_capabilities import capabilities_for_config
+        from models.model_capabilities import build_provider_capability_matrix, capabilities_for_config
 
         capability = capabilities_for_config(local_config or {})
+        provider_models = {
+            provider_id: provider.get("models") or ()
+            for provider_id, provider in ConfigHandler.PROVIDER_MODELS.items()
+        }
+        provider_models.setdefault(const.CHATGPTONAZURE, provider_models.get("openai") or ())
         provider_id = capability.provider
         return {
             "editable": True,
@@ -5900,6 +5905,7 @@ class ModelsHandler:
             "providers": list(ConfigHandler.PROVIDER_MODELS.keys()),
             "use_linkai": bool(local_config.get("use_linkai", False)),
             "capabilities": capability.to_dict(),
+            "capability_matrix": build_provider_capability_matrix(provider_models),
         }
 
     # Auto-fallback order for vision when no explicit model is pinned.

@@ -295,6 +295,8 @@ class OpenAICompatibleBot:
                 return const.OPENAI
             return "openai_compatible"
         official_ids = {const.OPENAI, const.OPEN_AI, const.CHATGPT, "openai"}
+        if provider_id == const.CHATGPTONAZURE:
+            return const.CHATGPTONAZURE
         if provider_id in official_ids:
             base = api_base or DEFAULT_OPENAI_API_BASE
             if not is_official_openai_provider(provider_id, base):

@@ -1110,3 +1110,35 @@
     snapshot, active/recent terminal row truth, promotion-gate markers, and
     Desktop TypeScript typechecking. R18-06-A is promoted to PASS; v0.1.18
     remains NO-GO only while model-call rows R18-04-A/R18-04-C remain PARTIAL.
+- Closed the R18-04-A provider capability matrix gap:
+  - `models/model_capabilities.py` now drives `get_model_capabilities()` from
+    declarative `ModelCapabilityRule` entries instead of a second hardcoded
+    branch chain. The same rule set exports a machine-readable provider
+    capability matrix with schema `ecorex.model-capabilities.v1`.
+  - Matrix rows include provider/model id, API family, host policy,
+    system-message policy, tool/stream/stream-usage support, sampling support,
+    unsupported params, token-limit mapping, reasoning/verbosity/thinking
+    controls, surfaces, rule ids, full rule evidence, and the resolved runtime
+    capability object.
+  - `/api/models` now exposes the chat `capability_matrix` generated from the
+    configured provider catalog without credential fields, giving Desktop,
+    diagnostics, and the v0.1.18 evidence gate a stable machine-readable
+    surface for provider/model behavior.
+  - Official OpenAI fixed-sampling and o1 rules remain explicit, Azure OpenAI
+    has its own API-family/host-policy rule that is reachable from explicit
+    `chatGPTOnAzure` routes and the legacy `use_azure_chatgpt` flag, and custom
+    OpenAI-compatible o1 routes intentionally keep native system messages
+    rather than inheriting official OpenAI coercion semantics. Native provider
+    rows advertise only native/AgentBridge surfaces, so official-only Responses
+    support is not overclaimed for DeepSeek, DashScope, Gemini, or similar
+    providers.
+  - Focused tests cover JSON-serializable matrix shape, shared resolver rule
+    ids, official OpenAI fixed-sampling/o1 behavior, Azure OpenAI explicit and
+    legacy-flag provider resolution plus matrix export, custom-compatible o1
+    non-coercion, DeepSeek thinking controls with native-only surfaces,
+    AgentBridge model-control gating, legacy ChatGPT arg sanitization,
+    ModelsHandler export without credential/base leakage, and the promotion
+    gate's new
+    `provider capability matrix` evidence marker. R18-04-A is promoted to PASS;
+    R18-04-C remains PARTIAL pending Azure legacy DALL-E image retry ownership
+    and image-generation skill provider retry/fail-closed inventory.

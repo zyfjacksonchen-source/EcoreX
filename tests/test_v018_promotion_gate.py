@@ -62,7 +62,7 @@ class TestV018PromotionGate(unittest.TestCase):
             R18-RUN-LEDGER terminal-once confirmed dead-owner registry fallback suppression
             R18-SSE-CONTRACT run.failed stream.replay_gap request-scoped history recovery
             R18-CANCEL-CONCURRENCY backpressure subagent busy fallback
-            R18-MODEL-GATEWAY model-call telemetry Retry policy Responses API
+            R18-MODEL-GATEWAY provider capability matrix model-call telemetry Retry policy Responses API
             R18-CONTEXT-BUDGET tool_schema_budget context_budget current-turn preservation
             R18-RUN-CENTER Run Center first-class navigation retry/recover policy /api/active-requests diagnostics
             Multi-agent cross-review sidecar interruption Consensus: submit
@@ -163,6 +163,27 @@ class TestV018PromotionGate(unittest.TestCase):
         self.assertEqual(run_center_check["status"], "fail")
         self.assertEqual(run_center_check["severity"], "blocker")
         self.assertIn("retry/recover policy", run_center_check["evidence"])
+
+    def test_gate_requires_provider_capability_matrix_evidence(self):
+        gate = load_gate_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            self.write_docs(root)
+            evidence_path = root / "docs" / "v0.1.18" / "evidence-ledger.md"
+            evidence_path.write_text(
+                evidence_path.read_text(encoding="utf-8").replace(
+                    "provider capability matrix ",
+                    "",
+                ),
+                encoding="utf-8",
+            )
+            report = gate.build_report(root, "0.1.18")
+
+        self.assertEqual(report["status"], "no-go")
+        model_check = next(item for item in report["checks"] if item["name"] == "model-call evidence")
+        self.assertEqual(model_check["status"], "fail")
+        self.assertEqual(model_check["severity"], "blocker")
+        self.assertIn("provider capability matrix", model_check["evidence"])
 
     def test_gate_requires_context_budget_review_consensus(self):
         self.assert_missing_review_blocks(
