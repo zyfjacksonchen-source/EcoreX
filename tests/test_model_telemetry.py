@@ -3881,6 +3881,574 @@ class TestModelTelemetry(unittest.TestCase):
                 self.assertEqual(event["retry_attempt"], 1)
                 self.assertTrue(event["retry_exhausted"])
 
+    def test_legacy_special_http_reply_text_uses_retry_after_then_records_success(self):
+        from contextlib import ExitStack
+        from unittest.mock import MagicMock, patch
+        from models.legacy_reply_gateway import wrap_legacy_reply_text
+        from models.model_telemetry import (
+            get_recent_model_calls,
+            reset_model_call_telemetry_for_tests,
+        )
+
+        session = SimpleNamespace(
+            session_id="s",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        for provider in ("claude", "linkai"):
+            with self.subTest(provider=provider):
+                reset_model_call_telemetry_for_tests()
+                spec = self._special_native_http_provider_bot_for_tests(provider)
+                bot = wrap_legacy_reply_text(
+                    spec["bot"],
+                    provider_hint=spec["provider"],
+                    model_hint=spec["model"],
+                )
+                retry_response = self._FakeHTTPResponse(
+                    429,
+                    {
+                        "error": {
+                            "message": "rate limit",
+                            "code": "rate_limit_exceeded",
+                            "type": "rate_limit",
+                        }
+                    },
+                    headers={"Retry-After": "0.2"},
+                )
+                success_response = self._FakeHTTPResponse(200, spec["success_payload"])
+                responses = [retry_response, success_response]
+                calls = []
+
+                def fake_post(*args, **kwargs):
+                    calls.append((args, kwargs))
+                    return responses.pop(0)
+
+                values = dict(spec.get("conf") or {})
+                values.update({
+                    "model": spec["model"],
+                    "character_desc": "",
+                    "model_max_retries": 1,
+                })
+                fake_conf = MagicMock()
+                fake_conf.get.side_effect = lambda key, default=None: values.get(key, default)
+                sleeps = []
+
+                with ExitStack() as stack:
+                    stack.enter_context(patch(spec["patch"], side_effect=fake_post))
+                    stack.enter_context(patch("models.legacy_direct_chat_retry.conf", return_value=fake_conf))
+                    stack.enter_context(patch(
+                        spec.get("conf_patch") or "models.claudeapi.claude_api_bot.conf",
+                        return_value=fake_conf,
+                    ))
+                    if provider == "linkai":
+                        result = bot.reply_text(
+                            session,
+                            app_code="app-code",
+                            model_retry_sleep=sleeps.append,
+                        )
+                    else:
+                        result = bot.reply_text(session, model_retry_sleep=sleeps.append)
+
+                self.assertEqual(result["content"], "ok")
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(sleeps, [0.2])
+                events = get_recent_model_calls()
+                self.assertEqual(len(events), 1)
+                self.assertEqual(events[0]["status"], "completed")
+                self.assertEqual(events[0]["provider"], spec["provider"])
+                self.assertEqual(events[0]["model"], spec["model"])
+
+    def test_legacy_special_http_reply_text_non_retryable_4xx_records_typed_fail_closed(self):
+        from contextlib import ExitStack
+        from unittest.mock import MagicMock, patch
+        from models.legacy_reply_gateway import wrap_legacy_reply_text
+        from models.model_telemetry import (
+            get_recent_model_calls,
+            reset_model_call_telemetry_for_tests,
+        )
+
+        session = SimpleNamespace(
+            session_id="s",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        for provider in ("claude", "linkai"):
+            with self.subTest(provider=provider):
+                reset_model_call_telemetry_for_tests()
+                spec = self._special_native_http_provider_bot_for_tests(provider)
+                bot = wrap_legacy_reply_text(
+                    spec["bot"],
+                    provider_hint=spec["provider"],
+                    model_hint=spec["model"],
+                )
+                response = self._FakeHTTPResponse(
+                    400,
+                    {
+                        "error": {
+                            "message": "bad request",
+                            "code": "invalid_request",
+                            "type": "invalid_request_error",
+                        }
+                    },
+                )
+                calls = []
+
+                def fake_post(*args, **kwargs):
+                    calls.append((args, kwargs))
+                    return response
+
+                values = dict(spec.get("conf") or {})
+                values.update({
+                    "model": spec["model"],
+                    "character_desc": "",
+                    "model_max_retries": 1,
+                })
+                fake_conf = MagicMock()
+                fake_conf.get.side_effect = lambda key, default=None: values.get(key, default)
+                sleeps = []
+
+                with ExitStack() as stack:
+                    stack.enter_context(patch(spec["patch"], side_effect=fake_post))
+                    stack.enter_context(patch("models.legacy_direct_chat_retry.conf", return_value=fake_conf))
+                    stack.enter_context(patch(
+                        spec.get("conf_patch") or "models.claudeapi.claude_api_bot.conf",
+                        return_value=fake_conf,
+                    ))
+                    if provider == "linkai":
+                        result = bot.reply_text(
+                            session,
+                            app_code="app-code",
+                            model_retry_sleep=sleeps.append,
+                        )
+                    else:
+                        result = bot.reply_text(session, model_retry_sleep=sleeps.append)
+
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(sleeps, [])
+                self.assertEqual(result["completion_tokens"], 0)
+                self.assertEqual(result["status_code"], 400)
+                self.assertEqual(result["error_taxonomy"], "client_error")
+                self.assertFalse(result["retryable"])
+                event = get_recent_model_calls()[0]
+                self.assertEqual(event["status"], "failed")
+                self.assertEqual(event["provider"], spec["provider"])
+                self.assertEqual(event["error_status_code"], 400)
+                self.assertEqual(event["error_taxonomy"], "client_error")
+
+    def test_legacy_sdk_reply_text_uses_retry_after_then_records_success(self):
+        import importlib
+        from unittest.mock import MagicMock, patch
+        from models.legacy_reply_gateway import wrap_legacy_reply_text
+        from models.model_telemetry import (
+            get_recent_model_calls,
+            reset_model_call_telemetry_for_tests,
+        )
+
+        class FakeZhipuError(Exception):
+            def __init__(self, message, *, status_code=None, body=None, headers=None):
+                super().__init__(message)
+                self.status_code = status_code
+                self.body = body
+                self.headers = headers or {}
+
+        class FakeCompletions:
+            def __init__(self, responses):
+                self.responses = list(responses)
+                self.calls = []
+
+            def create(self, **kwargs):
+                self.calls.append(kwargs)
+                response = self.responses.pop(0)
+                if isinstance(response, Exception):
+                    raise response
+                return response
+
+        class FakeDashscopeClient:
+            def __init__(self, responses):
+                self.responses = list(responses)
+                self.calls = []
+
+            def call(self, *args, **kwargs):
+                self.calls.append((args, kwargs))
+                response = self.responses.pop(0)
+                if isinstance(response, Exception):
+                    raise response
+                return response
+
+        class FakeDashscopeResponse:
+            def __init__(self, *, status_code, code="", message="", output=None, usage=None, retry_after_ms=None):
+                self.status_code = status_code
+                self.code = code
+                self.message = message
+                self.output = output or {}
+                self.usage = usage or {}
+                if retry_after_ms is not None:
+                    self.retry_after_ms = retry_after_ms
+
+        def zhipu_success():
+            return SimpleNamespace(
+                usage=SimpleNamespace(total_tokens=3, completion_tokens=2),
+                choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))],
+            )
+
+        def dashscope_success():
+            return FakeDashscopeResponse(
+                status_code=200,
+                output={
+                    "choices": [{
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }]
+                },
+                usage={"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
+            )
+
+        fake_conf = MagicMock()
+        fake_conf.get.side_effect = lambda key, default=None: {
+            "model_max_retries": 1,
+        }.get(key, default)
+        session = SimpleNamespace(
+            session_id="s",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        with self.subTest(provider="zhipu_ai"):
+            reset_model_call_telemetry_for_tests()
+            with patch.dict(sys.modules, {"zai": SimpleNamespace(ZhipuAiClient=lambda *args, **kwargs: None)}):
+                from models.zhipuai.zhipuai_bot import ZHIPUAIBot
+
+            completions = FakeCompletions([
+                FakeZhipuError(
+                    "rate limit",
+                    status_code=429,
+                    body={
+                        "error": {
+                            "message": "rate limit",
+                            "code": "rate_limit_exceeded",
+                            "type": "rate_limit",
+                        }
+                    },
+                    headers={"Retry-After": "0.25"},
+                ),
+                zhipu_success(),
+            ])
+            bot = ZHIPUAIBot.__new__(ZHIPUAIBot)
+            bot.args = {"model": "glm-4", "temperature": 0.7, "top_p": 0.9}
+            bot.client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+            bot.sessions = SimpleNamespace(clear_session=lambda _session_id: None)
+            bot = wrap_legacy_reply_text(bot, provider_hint="zhipu_ai", model_hint="glm-4")
+            sleeps = []
+            with patch("models.legacy_direct_chat_retry.conf", return_value=fake_conf):
+                result = bot.reply_text(session, model_retry_sleep=sleeps.append)
+
+            self.assertEqual(result["content"], "ok")
+            self.assertEqual(len(completions.calls), 2)
+            self.assertEqual(sleeps, [0.25])
+            events = get_recent_model_calls()
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0]["status"], "completed")
+            self.assertEqual(events[0]["provider"], "zhipu_ai")
+
+        with self.subTest(provider="dashscope"):
+            reset_model_call_telemetry_for_tests()
+            fake_dashscope = SimpleNamespace(
+                api_key=None,
+                Generation=SimpleNamespace(
+                    Models=SimpleNamespace(
+                        qwen_turbo="qwen-turbo",
+                        qwen_plus="qwen-plus",
+                        qwen_max="qwen-max",
+                        bailian_v1="qwen-bailian-v1",
+                    )
+                ),
+                MultiModalConversation=SimpleNamespace(call=None),
+            )
+            with patch.dict(sys.modules, {"dashscope": fake_dashscope}):
+                dashscope_module = importlib.import_module("models.dashscope.dashscope_bot")
+            client = FakeDashscopeClient([
+                FakeDashscopeResponse(
+                    status_code=429,
+                    code="rate_limit_exceeded",
+                    message="rate limit",
+                    retry_after_ms=500,
+                ),
+                dashscope_success(),
+            ])
+
+            class TestDashscopeBot(dashscope_module.DashscopeBot):
+                def __init__(self):
+                    self.model_name = "qwen-plus"
+                    self.client = client
+
+                @property
+                def api_key(self):
+                    return "test-key"
+
+            bot = wrap_legacy_reply_text(
+                TestDashscopeBot(),
+                provider_hint="dashscope",
+                model_hint="qwen-plus",
+            )
+            sleeps = []
+            with patch("models.legacy_direct_chat_retry.conf", return_value=fake_conf):
+                with patch.object(dashscope_module, "dashscope", fake_dashscope):
+                    result = bot.reply_text(session, model_retry_sleep=sleeps.append)
+
+            self.assertEqual(result["content"], "ok")
+            self.assertEqual(len(client.calls), 2)
+            self.assertEqual(sleeps, [0.5])
+            events = get_recent_model_calls()
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0]["status"], "completed")
+            self.assertEqual(events[0]["provider"], "dashscope")
+
+    def test_legacy_sdk_reply_text_fail_closed_and_adapter_errors_are_typed(self):
+        import importlib
+        from unittest.mock import MagicMock, patch
+        from models.legacy_reply_gateway import wrap_legacy_reply_text
+        from models.model_telemetry import (
+            get_recent_model_calls,
+            reset_model_call_telemetry_for_tests,
+        )
+
+        class FakeZhipuError(Exception):
+            def __init__(self, message, *, status_code=None, body=None):
+                super().__init__(message)
+                self.status_code = status_code
+                self.body = body
+
+        class LocalClientError(Exception):
+            pass
+
+        class LocalRequestError(Exception):
+            pass
+
+        class LocalResponseError(Exception):
+            pass
+
+        class FakeCompletions:
+            def __init__(self, responses):
+                self.responses = list(responses)
+                self.calls = []
+
+            def create(self, **kwargs):
+                self.calls.append(kwargs)
+                response = self.responses.pop(0)
+                if isinstance(response, Exception):
+                    raise response
+                return response
+
+        class FakeDashscopeClient:
+            def __init__(self, responses):
+                self.responses = list(responses)
+                self.calls = []
+
+            def call(self, *args, **kwargs):
+                self.calls.append((args, kwargs))
+                response = self.responses.pop(0)
+                if isinstance(response, Exception):
+                    raise response
+                return response
+
+        class FakeDashscopeResponse:
+            def __init__(self, *, status_code, code="", message=""):
+                self.status_code = status_code
+                self.code = code
+                self.message = message
+                self.output = {}
+                self.usage = {}
+
+        fake_conf = MagicMock()
+        fake_conf.get.side_effect = lambda key, default=None: {
+            "model_max_retries": 2,
+        }.get(key, default)
+        session = SimpleNamespace(
+            session_id="s",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        with patch.dict(sys.modules, {"zai": SimpleNamespace(ZhipuAiClient=lambda *args, **kwargs: None)}):
+            from models.zhipuai.zhipuai_bot import ZHIPUAIBot
+
+        zhipu_cases = (
+            (
+                "client_error",
+                FakeZhipuError(
+                    "bad request",
+                    status_code=400,
+                    body={
+                        "error": {
+                            "message": "bad request",
+                            "code": "invalid_request",
+                            "type": "invalid_request_error",
+                        }
+                    },
+                ),
+                400,
+                "client_error",
+                "invalid_request",
+                "invalid_request_error",
+            ),
+            (
+                "adapter_error",
+                ValueError("adapter server unavailable"),
+                None,
+                "unknown",
+                "",
+                "legacy_adapter_error",
+            ),
+            (
+                "local_client_error",
+                LocalClientError("client adapter server unavailable"),
+                None,
+                "unknown",
+                "",
+                "legacy_adapter_error",
+            ),
+            (
+                "local_request_error",
+                LocalRequestError("request adapter server unavailable"),
+                None,
+                "unknown",
+                "",
+                "legacy_adapter_error",
+            ),
+            (
+                "local_response_error",
+                LocalResponseError("response adapter server unavailable"),
+                None,
+                "unknown",
+                "",
+                "legacy_adapter_error",
+            ),
+        )
+        for mode, failure, status_code, taxonomy, error_code, error_type in zhipu_cases:
+            with self.subTest(provider="zhipu_ai", mode=mode):
+                reset_model_call_telemetry_for_tests()
+                completions = FakeCompletions([failure])
+                bot = ZHIPUAIBot.__new__(ZHIPUAIBot)
+                bot.args = {"model": "glm-4", "temperature": 0.7, "top_p": 0.9}
+                bot.client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+                cleared = []
+                bot.sessions = SimpleNamespace(clear_session=cleared.append)
+                bot = wrap_legacy_reply_text(bot, provider_hint="zhipu_ai", model_hint="glm-4")
+                sleeps = []
+                with patch("models.legacy_direct_chat_retry.conf", return_value=fake_conf):
+                    result = bot.reply_text(session, model_retry_sleep=sleeps.append)
+
+                self.assertEqual(len(completions.calls), 1)
+                self.assertEqual(sleeps, [])
+                self.assertEqual(result["status_code"], status_code)
+                self.assertEqual(result["error_taxonomy"], taxonomy)
+                self.assertEqual(result["error_code"], error_code)
+                self.assertEqual(result["error_type"], error_type)
+                self.assertFalse(result["retryable"])
+                if status_code is None:
+                    self.assertEqual(cleared, ["s"])
+                event = get_recent_model_calls()[0]
+                self.assertEqual(event["status"], "failed")
+                self.assertEqual(event["error_status_code"], status_code)
+                self.assertEqual(event["error_taxonomy"], taxonomy)
+                self.assertEqual(event["error_type"], error_type)
+
+        fake_dashscope = SimpleNamespace(
+            api_key=None,
+            Generation=SimpleNamespace(
+                Models=SimpleNamespace(
+                    qwen_turbo="qwen-turbo",
+                    qwen_plus="qwen-plus",
+                    qwen_max="qwen-max",
+                    bailian_v1="qwen-bailian-v1",
+                )
+            ),
+            MultiModalConversation=SimpleNamespace(call=None),
+        )
+        with patch.dict(sys.modules, {"dashscope": fake_dashscope}):
+            dashscope_module = importlib.import_module("models.dashscope.dashscope_bot")
+
+        dashscope_cases = (
+            (
+                "client_error",
+                FakeDashscopeResponse(
+                    status_code=400,
+                    code="invalid_request",
+                    message="bad request",
+                ),
+                400,
+                "client_error",
+                "invalid_request",
+                "client_error",
+            ),
+            (
+                "adapter_error",
+                ValueError("adapter server unavailable"),
+                None,
+                "unknown",
+                "",
+                "legacy_adapter_error",
+            ),
+            (
+                "local_client_error",
+                LocalClientError("client adapter server unavailable"),
+                None,
+                "unknown",
+                "",
+                "legacy_adapter_error",
+            ),
+            (
+                "local_request_error",
+                LocalRequestError("request adapter server unavailable"),
+                None,
+                "unknown",
+                "",
+                "legacy_adapter_error",
+            ),
+            (
+                "local_response_error",
+                LocalResponseError("response adapter server unavailable"),
+                None,
+                "unknown",
+                "",
+                "legacy_adapter_error",
+            ),
+        )
+        for mode, failure, status_code, taxonomy, error_code, error_type in dashscope_cases:
+            with self.subTest(provider="dashscope", mode=mode):
+                reset_model_call_telemetry_for_tests()
+                client = FakeDashscopeClient([failure])
+
+                class TestDashscopeBot(dashscope_module.DashscopeBot):
+                    def __init__(self):
+                        self.model_name = "qwen-plus"
+                        self.client = client
+
+                    @property
+                    def api_key(self):
+                        return "test-key"
+
+                bot = wrap_legacy_reply_text(
+                    TestDashscopeBot(),
+                    provider_hint="dashscope",
+                    model_hint="qwen-plus",
+                )
+                sleeps = []
+                with patch("models.legacy_direct_chat_retry.conf", return_value=fake_conf):
+                    with patch.object(dashscope_module, "dashscope", fake_dashscope):
+                        result = bot.reply_text(session, model_retry_sleep=sleeps.append)
+
+                self.assertEqual(len(client.calls), 1)
+                self.assertEqual(sleeps, [])
+                self.assertEqual(result["status_code"], status_code)
+                self.assertEqual(result["error_taxonomy"], taxonomy)
+                self.assertEqual(result["error_code"], error_code)
+                self.assertEqual(result["error_type"], error_type)
+                self.assertFalse(result["retryable"])
+                event = get_recent_model_calls()[0]
+                self.assertEqual(event["status"], "failed")
+                self.assertEqual(event["error_status_code"], status_code)
+                self.assertEqual(event["error_taxonomy"], taxonomy)
+                self.assertEqual(event["error_type"], error_type)
+
     def test_legacy_reply_text_gateway_treats_empty_completion_as_failed(self):
         from models.legacy_reply_gateway import wrap_legacy_reply_text
         from models.model_telemetry import get_recent_model_calls
@@ -4608,7 +5176,7 @@ class TestModelTelemetry(unittest.TestCase):
         self.assertEqual(event["status"], "completed")
         self.assertEqual(event["total_tokens"], 10)
 
-    def test_linkai_chat_records_non_200_json_error(self):
+    def test_linkai_chat_records_non_retryable_4xx_json_error(self):
         from unittest.mock import MagicMock, patch
         from bridge.context import Context, ContextType
         from bridge.reply import ReplyType
@@ -4620,13 +5188,13 @@ class TestModelTelemetry(unittest.TestCase):
                 return [{"role": "user", "content": query}]
 
         response = MagicMock()
-        response.status_code = 429
-        response.text = '{"error":{"message":"too many","code":"rate_limit_exceeded","type":"rate_limit"}}'
+        response.status_code = 400
+        response.text = '{"error":{"message":"bad request","code":"invalid_request","type":"invalid_request_error"}}'
         response.json.return_value = {
             "error": {
-                "message": "too many",
-                "code": "rate_limit_exceeded",
-                "type": "rate_limit",
+                "message": "bad request",
+                "code": "invalid_request",
+                "type": "invalid_request_error",
             }
         }
         fake_conf = MagicMock()
@@ -4650,7 +5218,7 @@ class TestModelTelemetry(unittest.TestCase):
             with patch("models.linkai.link_ai_bot.requests.post", return_value=response):
                 reply = bot._chat(
                     "hello",
-                    Context(ContextType.TEXT, "hello", {"session_id": "linkai-429-session"}),
+                    Context(ContextType.TEXT, "hello", {"session_id": "linkai-400-session"}),
                 )
 
         self.assertEqual(reply.type, ReplyType.TEXT)
@@ -4658,11 +5226,95 @@ class TestModelTelemetry(unittest.TestCase):
         self.assertEqual(event["provider"], "linkai")
         self.assertEqual(event["api_path"], "/legacy/linkai_chat")
         self.assertEqual(event["status"], "failed")
-        self.assertEqual(event["error_status_code"], 429)
-        self.assertEqual(event["error_taxonomy"], "rate_limit")
-        self.assertEqual(event["error_code"], "rate_limit_exceeded")
-        self.assertEqual(event["error_type"], "rate_limit")
-        self.assertEqual(event["error_message"], "too many")
+        self.assertEqual(event["error_status_code"], 400)
+        self.assertEqual(event["error_taxonomy"], "client_error")
+        self.assertEqual(event["error_code"], "invalid_request")
+        self.assertEqual(event["error_type"], "invalid_request_error")
+        self.assertEqual(event["error_message"], "bad request")
+
+    def test_linkai_chat_uses_retry_after_then_records_success(self):
+        from unittest.mock import MagicMock, patch
+        from bridge.context import Context, ContextType
+        from bridge.reply import ReplyType
+        from models.linkai.link_ai_bot import LinkAIBot
+        from models.model_telemetry import get_recent_model_calls
+
+        class FakeSessions:
+            def __init__(self):
+                self.replies = []
+
+            def session_msg_query(self, query, session_id):
+                return [{"role": "user", "content": query}]
+
+            def session_reply(self, reply, session_id, total_tokens, query=None):
+                self.replies.append((reply, session_id, total_tokens, query))
+
+        retry_response = self._FakeHTTPResponse(
+            429,
+            {
+                "error": {
+                    "message": "too many",
+                    "code": "rate_limit_exceeded",
+                    "type": "rate_limit",
+                }
+            },
+            headers={"Retry-After": "0.2"},
+        )
+        success_response = self._FakeHTTPResponse(
+            200,
+            {
+                "choices": [{"message": {"content": "ok after retry"}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+            },
+        )
+        fake_conf = MagicMock()
+        config = {
+            "linkai_api_key": "test-key",
+            "linkai_api_base": "https://api.link-ai.test",
+            "model": "gpt-4o-mini",
+            "temperature": 0.7,
+            "top_p": 1,
+            "frequency_penalty": 0,
+            "presence_penalty": 0,
+            "request_timeout": 180,
+            "channel_type": "web",
+            "model_max_retries": 1,
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        bot = LinkAIBot.__new__(LinkAIBot)
+        bot.sessions = FakeSessions()
+        bot._find_group_mapping_code = lambda context: None
+        bot._fetch_agent_suffix = lambda response: ""
+        bot._fetch_knowledge_search_suffix = lambda response: ""
+        bot._process_url = lambda text: text
+        responses = [retry_response, success_response]
+        calls = []
+
+        def fake_post(*args, **kwargs):
+            calls.append((args, kwargs))
+            return responses.pop(0)
+
+        sleeps = []
+        with patch("models.linkai.link_ai_bot.conf", return_value=fake_conf):
+            with patch("models.legacy_direct_chat_retry.conf", return_value=fake_conf):
+                with patch("models.linkai.link_ai_bot.requests.post", side_effect=fake_post):
+                    reply = bot._chat(
+                        "hello",
+                        Context(ContextType.TEXT, "hello", {"session_id": "linkai-retry-after-session"}),
+                        model_retry_sleep=sleeps.append,
+                    )
+
+        self.assertEqual(reply.type, ReplyType.TEXT)
+        self.assertEqual(reply.content, "ok after retry")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(sleeps, [0.2])
+        events = get_recent_model_calls()
+        self.assertEqual([event["status"] for event in events], ["failed", "completed"])
+        self.assertEqual(events[0]["error_status_code"], 429)
+        self.assertEqual(events[0]["error_taxonomy"], "rate_limit")
+        self.assertEqual(events[0]["retry_after_seconds"], 0.2)
+        self.assertFalse(events[0]["retry_exhausted"])
+        self.assertEqual(events[1]["total_tokens"], 3)
 
     def test_linkai_chat_records_timeout_retry_attempts(self):
         from unittest.mock import MagicMock, patch
@@ -4693,8 +5345,9 @@ class TestModelTelemetry(unittest.TestCase):
         bot.sessions = FakeSessions()
         bot._find_group_mapping_code = lambda context: None
 
+        sleeps = []
         with patch("models.linkai.link_ai_bot.conf", return_value=fake_conf):
-            with patch("models.linkai.link_ai_bot.time.sleep", lambda _seconds: None):
+            with patch("models.legacy_direct_chat_retry.conf", return_value=fake_conf):
                 with patch(
                     "models.linkai.link_ai_bot.requests.post",
                     side_effect=requests.Timeout("boom"),
@@ -4702,9 +5355,11 @@ class TestModelTelemetry(unittest.TestCase):
                     reply = bot._chat(
                         "hello",
                         Context(ContextType.TEXT, "hello", {"session_id": "linkai-timeout-session"}),
+                        model_retry_sleep=sleeps.append,
                     )
 
         self.assertEqual(reply.type, ReplyType.TEXT)
+        self.assertEqual(sleeps, [2.0, 4.0])
         events = get_recent_model_calls()
         self.assertEqual(len(events), 3)
         self.assertEqual([event["retry_count"] for event in events], [0, 1, 2])
@@ -4712,7 +5367,7 @@ class TestModelTelemetry(unittest.TestCase):
             self.assertEqual(event["provider"], "linkai")
             self.assertEqual(event["api_path"], "/legacy/linkai_chat")
             self.assertEqual(event["status"], "failed")
-            self.assertEqual(event["error_status_code"], 504)
+            self.assertEqual(event["error_status_code"], 408)
             self.assertEqual(event["error_taxonomy"], "timeout")
 
     def test_linkai_chat_records_connection_retry_attempts(self):
@@ -4744,8 +5399,9 @@ class TestModelTelemetry(unittest.TestCase):
         bot.sessions = FakeSessions()
         bot._find_group_mapping_code = lambda context: None
 
+        sleeps = []
         with patch("models.linkai.link_ai_bot.conf", return_value=fake_conf):
-            with patch("models.linkai.link_ai_bot.time.sleep", lambda _seconds: None):
+            with patch("models.legacy_direct_chat_retry.conf", return_value=fake_conf):
                 with patch(
                     "models.linkai.link_ai_bot.requests.post",
                     side_effect=requests.ConnectionError("dns failed"),
@@ -4753,9 +5409,11 @@ class TestModelTelemetry(unittest.TestCase):
                     reply = bot._chat(
                         "hello",
                         Context(ContextType.TEXT, "hello", {"session_id": "linkai-connection-session"}),
+                        model_retry_sleep=sleeps.append,
                     )
 
         self.assertEqual(reply.type, ReplyType.TEXT)
+        self.assertEqual(sleeps, [2.0, 4.0])
         events = get_recent_model_calls()
         self.assertEqual(len(events), 3)
         self.assertEqual([event["retry_count"] for event in events], [0, 1, 2])
@@ -4763,8 +5421,60 @@ class TestModelTelemetry(unittest.TestCase):
             self.assertEqual(event["provider"], "linkai")
             self.assertEqual(event["api_path"], "/legacy/linkai_chat")
             self.assertEqual(event["status"], "failed")
-            self.assertEqual(event["error_status_code"], 503)
+            self.assertEqual(event["error_status_code"], 0)
             self.assertEqual(event["error_taxonomy"], "network_error")
+
+    def test_linkai_chat_unknown_adapter_error_is_not_retried(self):
+        from unittest.mock import MagicMock, patch
+        from bridge.context import Context, ContextType
+        from bridge.reply import ReplyType
+        from models.linkai.link_ai_bot import LinkAIBot
+        from models.model_telemetry import get_recent_model_calls
+
+        class FakeSessions:
+            def session_msg_query(self, query, session_id):
+                return [{"role": "user", "content": query}]
+
+        fake_conf = MagicMock()
+        config = {
+            "linkai_api_key": "test-key",
+            "linkai_api_base": "https://api.link-ai.test",
+            "model": "gpt-4o-mini",
+            "temperature": 0.7,
+            "top_p": 1,
+            "frequency_penalty": 0,
+            "presence_penalty": 0,
+            "request_timeout": 180,
+            "channel_type": "web",
+            "model_max_retries": 2,
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        bot = LinkAIBot.__new__(LinkAIBot)
+        bot.sessions = FakeSessions()
+        bot._find_group_mapping_code = lambda context: None
+        sleeps = []
+
+        with patch("models.linkai.link_ai_bot.conf", return_value=fake_conf):
+            with patch("models.legacy_direct_chat_retry.conf", return_value=fake_conf):
+                with patch(
+                    "models.linkai.link_ai_bot.requests.post",
+                    side_effect=ValueError("adapter server unavailable"),
+                ):
+                    reply = bot._chat(
+                        "hello",
+                        Context(ContextType.TEXT, "hello", {"session_id": "linkai-adapter-session"}),
+                        model_retry_sleep=sleeps.append,
+                    )
+
+        self.assertEqual(reply.type, ReplyType.TEXT)
+        self.assertEqual(sleeps, [])
+        events = get_recent_model_calls()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["status"], "failed")
+        self.assertIsNone(events[0]["error_status_code"])
+        self.assertEqual(events[0]["error_taxonomy"], "unknown")
+        self.assertEqual(events[0]["error_type"], "legacy_adapter_error")
+        self.assertFalse(events[0]["retryable"])
 
     def test_legacy_create_img_gateway_records_success(self):
         from models.legacy_reply_gateway import (

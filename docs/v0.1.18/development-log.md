@@ -1037,3 +1037,30 @@
     passed. R18-04-C remains PARTIAL pending SDK/app-code legacy direct-chat
     retry-loop migration, remaining image edge coverage, and provider-specific
     edges outside the AgentBridge native gateway.
+- Migrated SDK/app-code legacy direct-chat retry ownership:
+  - Extended `models/legacy_direct_chat_retry.py` with SDK response-object and
+    SDK exception normalization. HTTP-like SDK exceptions still preserve
+    `response.json()` details, DashScope-style proxy objects are read safely
+    without `hasattr()` traps, Retry-After headers/body fields are retained,
+    and unknown local adapter exceptions remain non-retryable
+    `legacy_adapter_error` instead of masquerading as provider 500 failures.
+  - Claude and LinkAI special HTTP/app-code legacy `reply_text` paths now route
+    non-200 responses and transport exceptions through the shared retry
+    decision helper, accept injectable `model_retry_sleep`, and return typed
+    fail-closed evidence for `/legacy/reply_text` telemetry.
+  - Zhipu and DashScope SDK legacy `reply_text` paths now normalize SDK
+    response objects and provider exceptions before retrying, respect
+    Retry-After/backoff, avoid noisy provider-error stack traces, and keep
+    unknown adapter exceptions as non-retryable local failures.
+  - LinkAI's production `_chat()` path, used by `reply()` for text/app-code
+    conversations and `/legacy/linkai_chat` telemetry, now uses the same shared
+    retry decision/failure helper for non-200 responses, timeout/network
+    exceptions, and unknown adapter exceptions while preserving per-attempt
+    model-call spans.
+  - Focused tests cover Claude/LinkAI 429 Retry-After retry success and
+    non-retryable 400 fail-closed telemetry, Zhipu/DashScope SDK Retry-After
+    retry success, SDK 400 fail-closed telemetry, LinkAI `_chat` Retry-After
+    retry success, timeout/network shared backoff, and unknown adapter
+    exceptions that do not retry. R18-04-C remains PARTIAL pending older
+    direct-chat edges such as Baidu Wenxin, remaining image edge coverage, and
+    provider-specific edges outside the AgentBridge native gateway.

@@ -10,6 +10,13 @@ from bridge.reply import Reply, ReplyType
 from common.log import logger
 from config import conf, load_config
 from models.model_provider_errors import provider_error_response
+from models.legacy_direct_chat_retry import (
+    legacy_direct_chat_decision,
+    legacy_direct_chat_failure_result,
+    legacy_direct_chat_sdk_exception_details,
+    legacy_direct_chat_sdk_response_details,
+    run_legacy_direct_chat_retry_sleep,
+)
 from .dashscope_session import DashscopeSession
 import os
 import dashscope
@@ -96,7 +103,7 @@ class DashscopeBot(Bot):
             reply = Reply(ReplyType.ERROR, "Bot不支持处理{}类型的消息".format(context.type))
             return reply
 
-    def reply_text(self, session: DashscopeSession, retry_count=0) -> dict:
+    def reply_text(self, session: DashscopeSession, retry_count=0, model_retry_sleep=None) -> dict:
         """
         call openai's ChatCompletion to get the answer
         :param session: a conversation session
@@ -136,25 +143,52 @@ class DashscopeBot(Bot):
                     "content": content,
                 }
             else:
-                logger.error('Request id: %s, Status code: %s, error code: %s, error message: %s' % (
-                    response.request_id, response.status_code,
-                    response.code, response.message
-                ))
-                result = {"completion_tokens": 0, "content": "我现在有点累了，等会再来吧"}
-                need_retry = retry_count < 2
-                result = {"completion_tokens": 0, "content": "我现在有点累了，等会再来吧"}
-                if need_retry:
-                    return self.reply_text(session, retry_count + 1)
-                else:
-                    return result
+                details = legacy_direct_chat_sdk_response_details(response)
+                error = details.get("error", {}) if isinstance(details.get("error"), dict) else {}
+                logger.error(
+                    "Request id: %s, Status code: %s, error code: %s, error message: %s",
+                    details.get("request_id", ""),
+                    details.get("status_code"),
+                    error.get("code"),
+                    error.get("message") or details.get("message"),
+                )
+                decision = legacy_direct_chat_decision(details, retry_count=retry_count)
+                if decision.should_retry:
+                    run_legacy_direct_chat_retry_sleep(decision, model_retry_sleep)
+                    return self.reply_text(
+                        session,
+                        retry_count + 1,
+                        model_retry_sleep=model_retry_sleep,
+                    )
+                return legacy_direct_chat_failure_result(
+                    content="legacy direct chat request failed",
+                    details=details,
+                    decision=decision,
+                )
         except Exception as e:
-            logger.exception(e)
-            need_retry = retry_count < 2
-            result = {"completion_tokens": 0, "content": "我现在有点累了，等会再来吧"}
-            if need_retry:
-                return self.reply_text(session, retry_count + 1)
+            details = legacy_direct_chat_sdk_exception_details(e)
+            decision = legacy_direct_chat_decision(details, retry_count=retry_count)
+            if details.get("status_code") is None and not decision.retryable:
+                logger.exception(e)
             else:
-                return result
+                logger.warning(
+                    "[DASHSCOPE] request failed, status_code=%s, taxonomy=%s, error=%s",
+                    details.get("status_code"),
+                    decision.taxonomy,
+                    e,
+                )
+            if decision.should_retry:
+                run_legacy_direct_chat_retry_sleep(decision, model_retry_sleep)
+                return self.reply_text(
+                    session,
+                    retry_count + 1,
+                    model_retry_sleep=model_retry_sleep,
+                )
+            return legacy_direct_chat_failure_result(
+                content="legacy direct chat request failed",
+                details=details,
+                decision=decision,
+            )
 
     def call_vision(self, image_url: str, question: str,
                     model: Optional[str] = None,

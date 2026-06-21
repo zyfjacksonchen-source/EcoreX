@@ -21,6 +21,13 @@ import os
 from models.model_image_retry import create_img_with_retry, image_error_from_response
 from models.model_telemetry import ModelCallSpan
 from models.model_provider_errors import http_error_response, provider_error_response
+from models.legacy_direct_chat_retry import (
+    legacy_direct_chat_decision,
+    legacy_direct_chat_exception_details,
+    legacy_direct_chat_failure_result,
+    legacy_direct_chat_response_details,
+    run_legacy_direct_chat_retry_sleep,
+)
 
 LINKAI_CHAT_API_PATH = "/legacy/linkai_chat"
 
@@ -121,7 +128,7 @@ class LinkAIBot(Bot, OpenAICompatibleBot):
             reply = Reply(ReplyType.ERROR, "Bot不支持处理{}类型的消息".format(context.type))
             return reply
 
-    def _chat(self, query, context, retry_count=0) -> Reply:
+    def _chat(self, query, context, retry_count=0, model_retry_sleep=None) -> Reply:
         """
         发起对话请求
         :param query: 请求提示词
@@ -130,10 +137,6 @@ class LinkAIBot(Bot, OpenAICompatibleBot):
         :return: 回复
         """
         span = None
-        if retry_count > 2:
-            # exit from retry 2 times
-            logger.warn("[LINKAI] failed after maximum number of retry times")
-            return Reply(ReplyType.TEXT, "请再问我一次吧")
 
         try:
             # load config
@@ -250,54 +253,115 @@ class LinkAIBot(Bot, OpenAICompatibleBot):
 
             else:
                 response = _response_json_or_empty(res)
-                error = response.get("error")
+                details = legacy_direct_chat_response_details(res)
+                decision = legacy_direct_chat_decision(details, retry_count=retry_count)
+                error = details.get("error", {}) if isinstance(details.get("error"), dict) else response.get("error")
                 error_message = error.get("message") if isinstance(error, dict) else error
                 error_type = error.get("type") if isinstance(error, dict) else response.get("type")
                 logger.error(f"[LINKAI] chat failed, status_code={res.status_code}, "
                              f"msg={error_message}, type={error_type}")
-                span.finish_error(
-                    **_linkai_error_details(
-                        message=f"HTTP {res.status_code}: {getattr(res, 'text', '')[:200]}",
-                        status_code=res.status_code,
-                        payload=response,
-                    )
-                )
-
-                if res.status_code >= 500:
-                    # server error, need retry
-                    time.sleep(2)
-                    logger.warn(f"[LINKAI] do retry, times={retry_count}")
-                    return self._chat(query, context, retry_count + 1)
 
                 error_reply = "提问太快啦，请休息一下再问我吧"
                 if res.status_code == 409:
                     error_reply = "这个问题我还没有学会，请问我其它问题吧"
+                failure = legacy_direct_chat_failure_result(
+                    content=error_reply,
+                    details=details,
+                    decision=decision,
+                )
+                span.finish_error(**failure)
+                if decision.should_retry:
+                    run_legacy_direct_chat_retry_sleep(decision, model_retry_sleep)
+                    logger.warning(f"[LINKAI] do retry, times={retry_count}")
+                    return self._chat(
+                        query,
+                        context,
+                        retry_count + 1,
+                        model_retry_sleep=model_retry_sleep,
+                    )
                 return Reply(ReplyType.TEXT, error_reply)
 
         except requests.Timeout as e:
+            details = legacy_direct_chat_exception_details(e)
+            decision = legacy_direct_chat_decision(details, retry_count=retry_count)
+            failure = legacy_direct_chat_failure_result(
+                content="legacy direct chat request failed",
+                details=details,
+                decision=decision,
+            )
             if span is not None and not span.finished:
-                span.finish_error(message=f"LinkAI request timed out: {e}", status_code=504)
-            logger.exception(e)
-            # retry
-            time.sleep(2)
-            logger.warn(f"[LINKAI] do retry, times={retry_count}")
-            return self._chat(query, context, retry_count + 1)
+                span.finish_error(**failure)
+            logger.warning(
+                "[LINKAI] request failed, status_code=%s, taxonomy=%s, error=%s",
+                details.get("status_code"),
+                decision.taxonomy,
+                e,
+            )
+            if decision.should_retry:
+                run_legacy_direct_chat_retry_sleep(decision, model_retry_sleep)
+                logger.warning(f"[LINKAI] do retry, times={retry_count}")
+                return self._chat(
+                    query,
+                    context,
+                    retry_count + 1,
+                    model_retry_sleep=model_retry_sleep,
+                )
+            return Reply(ReplyType.TEXT, failure["content"])
         except requests.ConnectionError as e:
+            details = legacy_direct_chat_exception_details(e)
+            decision = legacy_direct_chat_decision(details, retry_count=retry_count)
+            failure = legacy_direct_chat_failure_result(
+                content="legacy direct chat request failed",
+                details=details,
+                decision=decision,
+            )
             if span is not None and not span.finished:
-                span.finish_error(message=f"LinkAI connection failed: {e}", status_code=503)
-            logger.exception(e)
-            # retry
-            time.sleep(2)
-            logger.warn(f"[LINKAI] do retry, times={retry_count}")
-            return self._chat(query, context, retry_count + 1)
+                span.finish_error(**failure)
+            logger.warning(
+                "[LINKAI] request failed, status_code=%s, taxonomy=%s, error=%s",
+                details.get("status_code"),
+                decision.taxonomy,
+                e,
+            )
+            if decision.should_retry:
+                run_legacy_direct_chat_retry_sleep(decision, model_retry_sleep)
+                logger.warning(f"[LINKAI] do retry, times={retry_count}")
+                return self._chat(
+                    query,
+                    context,
+                    retry_count + 1,
+                    model_retry_sleep=model_retry_sleep,
+                )
+            return Reply(ReplyType.TEXT, failure["content"])
         except Exception as e:
+            details = legacy_direct_chat_exception_details(e)
+            decision = legacy_direct_chat_decision(details, retry_count=retry_count)
+            failure = legacy_direct_chat_failure_result(
+                content="legacy direct chat request failed",
+                details=details,
+                decision=decision,
+            )
             if span is not None and not span.finished:
-                span.finish_error(message=str(e), status_code=500)
-            logger.exception(e)
-            # retry
-            time.sleep(2)
-            logger.warn(f"[LINKAI] do retry, times={retry_count}")
-            return self._chat(query, context, retry_count + 1)
+                span.finish_error(**failure)
+            if details.get("status_code") is None and not decision.retryable:
+                logger.exception(e)
+            else:
+                logger.warning(
+                    "[LINKAI] request failed, status_code=%s, taxonomy=%s, error=%s",
+                    details.get("status_code"),
+                    decision.taxonomy,
+                    e,
+                )
+            if decision.should_retry:
+                run_legacy_direct_chat_retry_sleep(decision, model_retry_sleep)
+                logger.warning(f"[LINKAI] do retry, times={retry_count}")
+                return self._chat(
+                    query,
+                    context,
+                    retry_count + 1,
+                    model_retry_sleep=model_retry_sleep,
+                )
+            return Reply(ReplyType.TEXT, failure["content"])
 
     def _process_image_msg(self, app_code: str, session_id: str, query:str, img_cache: dict):
         try:
@@ -359,16 +423,7 @@ class LinkAIBot(Bot, OpenAICompatibleBot):
         except Exception as e:
             logger.exception(e)
 
-    def reply_text(self, session: ChatGPTSession, app_code="", retry_count=0) -> dict:
-        if retry_count >= 2:
-            # exit from retry 2 times
-            logger.warn("[LINKAI] failed after maximum number of retry times")
-            return {
-                "total_tokens": 0,
-                "completion_tokens": 0,
-                "content": "请再问我一次吧"
-            }
-
+    def reply_text(self, session: ChatGPTSession, app_code="", retry_count=0, model_retry_sleep=None) -> dict:
         try:
             body = {
                 "app_code": app_code,
@@ -400,29 +455,54 @@ class LinkAIBot(Bot, OpenAICompatibleBot):
                 }
 
             else:
-                response = res.json()
-                error = response.get("error")
+                details = legacy_direct_chat_response_details(res)
+                error = details.get("error", {}) if isinstance(details.get("error"), dict) else {}
                 logger.error(f"[LINKAI] chat failed, status_code={res.status_code}, "
                              f"msg={error.get('message')}, type={error.get('type')}")
 
-                if res.status_code >= 500:
-                    # server error, need retry
-                    time.sleep(2)
-                    logger.warn(f"[LINKAI] do retry, times={retry_count}")
-                    return self.reply_text(session, app_code, retry_count + 1)
+                decision = legacy_direct_chat_decision(details, retry_count=retry_count)
+                if decision.should_retry:
+                    run_legacy_direct_chat_retry_sleep(decision, model_retry_sleep)
+                    logger.warning(f"[LINKAI] do retry, times={retry_count}")
+                    return self.reply_text(
+                        session,
+                        app_code=app_code,
+                        retry_count=retry_count + 1,
+                        model_retry_sleep=model_retry_sleep,
+                    )
 
-                return {
-                    "total_tokens": 0,
-                    "completion_tokens": 0,
-                    "content": "提问太快啦，请休息一下再问我吧"
-                }
+                return legacy_direct_chat_failure_result(
+                    content="legacy direct chat request failed",
+                    details=details,
+                    decision=decision,
+                )
 
         except Exception as e:
-            logger.exception(e)
-            # retry
-            time.sleep(2)
-            logger.warn(f"[LINKAI] do retry, times={retry_count}")
-            return self.reply_text(session, app_code, retry_count + 1)
+            details = legacy_direct_chat_exception_details(e)
+            decision = legacy_direct_chat_decision(details, retry_count=retry_count)
+            if details.get("status_code") is None and not decision.retryable:
+                logger.exception(e)
+            else:
+                logger.warning(
+                    "[LINKAI] request failed, status_code=%s, taxonomy=%s, error=%s",
+                    details.get("status_code"),
+                    decision.taxonomy,
+                    e,
+                )
+            if decision.should_retry:
+                run_legacy_direct_chat_retry_sleep(decision, model_retry_sleep)
+                logger.warning(f"[LINKAI] do retry, times={retry_count}")
+                return self.reply_text(
+                    session,
+                    app_code=app_code,
+                    retry_count=retry_count + 1,
+                    model_retry_sleep=model_retry_sleep,
+                )
+            return legacy_direct_chat_failure_result(
+                content="legacy direct chat request failed",
+                details=details,
+                decision=decision,
+            )
 
     def _fetch_app_info(self, app_code: str):
         headers = {"Authorization": "Bearer " + conf().get("linkai_api_key")}

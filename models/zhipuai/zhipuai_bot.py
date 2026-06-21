@@ -1,6 +1,5 @@
 # encoding:utf-8
 
-import time
 import json
 from typing import Optional
 
@@ -13,6 +12,12 @@ from bridge.reply import Reply, ReplyType
 from common.log import logger
 from config import conf, load_config
 from models.model_provider_errors import http_error_response, provider_error_response, response_retry_after
+from models.legacy_direct_chat_retry import (
+    legacy_direct_chat_decision,
+    legacy_direct_chat_failure_result,
+    legacy_direct_chat_sdk_exception_details,
+    run_legacy_direct_chat_retry_sleep,
+)
 from zai import ZhipuAiClient
 
 
@@ -164,7 +169,7 @@ class ZHIPUAIBot(Bot, ZhipuAIImage):
             reply = Reply(ReplyType.ERROR, "Bot不支持处理{}类型的消息".format(context.type))
             return reply
 
-    def reply_text(self, session: ZhipuAISession, args=None, retry_count=0) -> dict:
+    def reply_text(self, session: ZhipuAISession, args=None, retry_count=0, model_retry_sleep=None) -> dict:
         """
         Call ZhipuAI API to get the answer
         :param session: a conversation session
@@ -185,41 +190,36 @@ class ZHIPUAIBot(Bot, ZhipuAIImage):
                 "content": response.choices[0].message.content,
             }
         except Exception as e:
-            need_retry = retry_count < 2
-            result = {"completion_tokens": 0, "content": "我现在有点累了，等会再来吧"}
-            error_str = str(e).lower()
-            
-            # Check error type by error message content
-            if "rate" in error_str and "limit" in error_str:
-                logger.warn("[ZHIPU_AI] RateLimitError: {}".format(e))
-                result["content"] = "提问太快啦，请休息一下再问我吧"
-                if need_retry:
-                    time.sleep(20)
-            elif "timeout" in error_str or "timed out" in error_str:
-                logger.warn("[ZHIPU_AI] Timeout: {}".format(e))
-                result["content"] = "我没有收到你的消息"
-                if need_retry:
-                    time.sleep(5)
-            elif "api" in error_str and ("error" in error_str or "gateway" in error_str):
-                logger.warn("[ZHIPU_AI] APIError: {}".format(e))
-                result["content"] = "请再问我一次"
-                if need_retry:
-                    time.sleep(10)
-            elif "connection" in error_str or "network" in error_str:
-                logger.warn("[ZHIPU_AI] ConnectionError: {}".format(e))
-                result["content"] = "我连接不到你的网络"
-                if need_retry:
-                    time.sleep(5)
+            details = legacy_direct_chat_sdk_exception_details(e)
+            decision = legacy_direct_chat_decision(details, retry_count=retry_count)
+            if details.get("status_code") is None and not decision.retryable:
+                logger.exception("[ZHIPU_AI] Exception: {}".format(e))
             else:
-                logger.exception("[ZHIPU_AI] Exception: {}".format(e), e)
-                need_retry = False
-                self.sessions.clear_session(session.session_id)
-
-            if need_retry:
-                logger.warn("[ZHIPU_AI] 第{}次重试".format(retry_count + 1))
-                return self.reply_text(session, args, retry_count + 1)
-            else:
-                return result
+                logger.warning(
+                    "[ZHIPU_AI] request failed, status_code=%s, taxonomy=%s, error=%s",
+                    details.get("status_code"),
+                    decision.taxonomy,
+                    e,
+                )
+            if decision.should_retry:
+                run_legacy_direct_chat_retry_sleep(decision, model_retry_sleep)
+                logger.warning("[ZHIPU_AI] 第{}次重试".format(retry_count + 1))
+                return self.reply_text(
+                    session,
+                    args,
+                    retry_count + 1,
+                    model_retry_sleep=model_retry_sleep,
+                )
+            if details.get("status_code") is None:
+                sessions = getattr(self, "sessions", None)
+                clear_session = getattr(sessions, "clear_session", None)
+                if callable(clear_session):
+                    clear_session(session.session_id)
+            return legacy_direct_chat_failure_result(
+                content="legacy direct chat request failed",
+                details=details,
+                decision=decision,
+            )
 
     def call_vision(self, image_url: str, question: str,
                     model: Optional[str] = None,

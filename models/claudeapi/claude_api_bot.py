@@ -17,6 +17,13 @@ from common import const
 from common.log import logger
 from config import conf
 from models.model_provider_errors import http_error_response, provider_error_response
+from models.legacy_direct_chat_retry import (
+    legacy_direct_chat_decision,
+    legacy_direct_chat_exception_details,
+    legacy_direct_chat_failure_result,
+    legacy_direct_chat_response_details,
+    run_legacy_direct_chat_retry_sleep,
+)
 
 # Optional OpenAI image support
 try:
@@ -89,7 +96,7 @@ class ClaudeAPIBot(Bot, OpenAIImage):
                     reply = Reply(ReplyType.ERROR, retstring)
                 return reply
 
-    def reply_text(self, session: BaiduWenxinSession, retry_count=0, tools=None):
+    def reply_text(self, session: BaiduWenxinSession, retry_count=0, tools=None, model_retry_sleep=None):
         try:
             actual_model = self._model_mapping(conf().get("model"))
 
@@ -133,7 +140,28 @@ class ClaudeAPIBot(Bot, OpenAIImage):
             )
 
             if response.status_code != 200:
-                raise Exception(f"API request failed: {response.status_code} - {response.text}")
+                details = legacy_direct_chat_response_details(response)
+                error = details.get("error", {}) if isinstance(details.get("error"), dict) else {}
+                logger.error(
+                    "[CLAUDE_API] chat failed, status_code=%s, msg=%s, type=%s",
+                    response.status_code,
+                    error.get("message"),
+                    error.get("type"),
+                )
+                decision = legacy_direct_chat_decision(details, retry_count=retry_count)
+                if decision.should_retry:
+                    run_legacy_direct_chat_retry_sleep(decision, model_retry_sleep)
+                    return self.reply_text(
+                        session,
+                        retry_count + 1,
+                        tools,
+                        model_retry_sleep=model_retry_sleep,
+                    )
+                return legacy_direct_chat_failure_result(
+                    content="legacy direct chat request failed",
+                    details=details,
+                    decision=decision,
+                )
 
             claude_response = response.json()
             # Handle response content and tool calls
@@ -171,35 +199,35 @@ class ClaudeAPIBot(Bot, OpenAIImage):
 
             return result
         except Exception as e:
-            need_retry = retry_count < 2
-            result = {"total_tokens": 0, "completion_tokens": 0, "content": "我现在有点累了，等会再来吧"}
-
-            # Handle different types of errors
-            error_str = str(e).lower()
-            if "rate" in error_str or "limit" in error_str:
-                logger.warn("[CLAUDE_API] RateLimitError: {}".format(e))
-                result["content"] = "提问太快啦，请休息一下再问我吧"
-                if need_retry:
-                    time.sleep(20)
-            elif "timeout" in error_str:
-                logger.warn("[CLAUDE_API] Timeout: {}".format(e))
-                result["content"] = "我没有收到你的消息"
-                if need_retry:
-                    time.sleep(5)
-            elif "connection" in error_str or "network" in error_str:
-                logger.warn("[CLAUDE_API] APIConnectionError: {}".format(e))
-                need_retry = False
-                result["content"] = "我连接不到你的网络"
+            details = legacy_direct_chat_exception_details(e)
+            decision = legacy_direct_chat_decision(details, retry_count=retry_count)
+            if details.get("status_code") is None and not decision.retryable:
+                logger.exception(e)
             else:
-                logger.warn("[CLAUDE_API] Exception: {}".format(e))
-                need_retry = False
-                self.sessions.clear_session(session.session_id)
-
-            if need_retry:
-                logger.warn("[CLAUDE_API] 第{}次重试".format(retry_count + 1))
-                return self.reply_text(session, retry_count + 1, tools)
-            else:
-                return result
+                logger.warning(
+                    "[CLAUDE_API] request failed, status_code=%s, taxonomy=%s, error=%s",
+                    details.get("status_code"),
+                    decision.taxonomy,
+                    e,
+                )
+            if decision.should_retry:
+                run_legacy_direct_chat_retry_sleep(decision, model_retry_sleep)
+                return self.reply_text(
+                    session,
+                    retry_count + 1,
+                    tools,
+                    model_retry_sleep=model_retry_sleep,
+                )
+            if details.get("status_code") is None:
+                sessions = getattr(self, "sessions", None)
+                clear_session = getattr(sessions, "clear_session", None)
+                if callable(clear_session):
+                    clear_session(session.session_id)
+            return legacy_direct_chat_failure_result(
+                content="legacy direct chat request failed",
+                details=details,
+                decision=decision,
+            )
 
     def _model_mapping(self, model) -> str:
         if model == "claude-3-opus":
