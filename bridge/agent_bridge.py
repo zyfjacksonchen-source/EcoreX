@@ -448,14 +448,16 @@ class AgentBridge:
         agent = None
         request_id = None
         cancel_event = None
-        web_channel_owns_cancel_token = False
+        token_key = None
+        agentbridge_owns_cancel_token = False
         try:
             # Extract session_id from context for user isolation
             if context:
                 session_id = context.kwargs.get("session_id") or context.get("session_id")
                 request_id = context.kwargs.get("request_id") or context.get("request_id")
                 token_owner = context.kwargs.get("cancel_token_owner") or context.get("cancel_token_owner")
-                web_channel_owns_cancel_token = token_owner == "web_channel" and bool(request_id)
+            else:
+                token_owner = None
 
             # Register a cancel token. Prefer per-turn request_id (web),
             # fall back to session_id (IM channels). The Event is polled by
@@ -463,11 +465,19 @@ class AgentBridge:
             registry = get_cancel_registry()
             token_key = request_id or session_id
             if token_key:
+                external_owner = token_owner in {"web_channel", "scheduler"} and bool(request_id)
+                existing_cancel_event = registry.get_event(token_key) if external_owner else None
                 cancel_event = registry.register(token_key, session_id=session_id)
+                agentbridge_owns_cancel_token = not (external_owner and existing_cancel_event is not None)
 
             # Get agent for this session (will auto-initialize if needed)
             agent = self.get_agent(session_id=session_id)
             if not agent:
+                if token_key and agentbridge_owns_cancel_token:
+                    try:
+                        registry.unregister(token_key)
+                    except Exception:
+                        pass
                 return Reply(ReplyType.ERROR, "Failed to initialize super agent")
             
             # Create event handler for logging and channel communication
@@ -540,7 +550,7 @@ class AgentBridge:
                 event_handler.log_summary()
 
                 # Release cancel token; keep registry bounded.
-                if token_key and not web_channel_owns_cancel_token:
+                if token_key and agentbridge_owns_cancel_token:
                     try:
                         registry.unregister(token_key)
                     except Exception:
@@ -633,7 +643,7 @@ class AgentBridge:
                 except Exception as db_err:
                     logger.warning(f"[AgentBridge] Failed to clear DB after error: {db_err}")
             # Release cancel token on error path too (idempotent).
-            if cancel_event is not None and (request_id or session_id) and not web_channel_owns_cancel_token:
+            if cancel_event is not None and (request_id or session_id) and agentbridge_owns_cancel_token:
                 try:
                     get_cancel_registry().unregister(request_id or session_id)
                 except Exception:

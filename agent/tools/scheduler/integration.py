@@ -523,6 +523,7 @@ def _execute_agent_task(task: dict, agent_bridge) -> bool:
         if channel_type == "web":
             request_id = _scheduler_run_request_id(task)
             context["request_id"] = request_id
+            context["cancel_token_owner"] = "scheduler"
         elif channel_type == "feishu":
             context["receive_id_type"] = "chat_id" if is_group else "open_id"
             context["msg"] = None
@@ -839,6 +840,7 @@ def _execute_skill_call(task: dict, agent_bridge) -> bool:
         if channel_type == "web":
             request_id = _scheduler_run_request_id(task)
             context["request_id"] = request_id
+            context["cancel_token_owner"] = "scheduler"
         elif channel_type == "feishu":
             context["receive_id_type"] = "chat_id" if is_group else "open_id"
             context["msg"] = None

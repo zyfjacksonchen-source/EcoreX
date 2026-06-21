@@ -357,3 +357,18 @@
     terminal state, primary-chat isolation, Run Center source contract, and
     existing scheduler fail-closed permission tests; desktop `npm run typecheck`
     passed.
+- Added the scheduler AgentBridge cancel-token owner hardening slice:
+  - `AgentBridge.agent_reply()` now treats pre-existing request tokens marked
+    with `cancel_token_owner=web_channel` or `cancel_token_owner=scheduler` as
+    externally owned, so it reuses the same event but leaves final unregister to
+    the owner. If a caller marks an external owner without pre-registering the
+    token, or agent initialization fails before the stream starts, AgentBridge
+    still owns and cleans up the fallback token to avoid leaks.
+  - Scheduled web `agent_task` and `skill_call` contexts now mark
+    `cancel_token_owner=scheduler`, keeping scheduler attempts cancellable
+    after AgentStream returns and while the scheduler is delivering the reply.
+  - Focused tests cover web-owned token preservation, scheduler-owned token
+    preservation, external-owner fallback cleanup, ordinary AgentBridge-owned
+    cleanup, init-failure cleanup/preservation paths, scheduled skill-call
+    owner context wiring, and scheduler agent-task cancellation during the
+    post-Agent delivery window.

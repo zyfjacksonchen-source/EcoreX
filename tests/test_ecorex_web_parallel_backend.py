@@ -1157,6 +1157,158 @@ class TestWebParallelHandlers(unittest.TestCase):
         finally:
             registry.unregister(request_id)
 
+    def test_scheduler_request_token_survives_agentbridge_for_scheduler_owner(self):
+        from agent.protocol import get_cancel_registry
+        from bridge.agent_bridge import AgentBridge
+        from bridge.context import Context, ContextType
+        from bridge.reply import ReplyType
+
+        class FakeAgent:
+            def __init__(self):
+                self.tools = []
+                self.model = types.SimpleNamespace()
+                self.messages_lock = threading.Lock()
+                self.messages = [{"role": "assistant", "content": "ok"}]
+                self._last_run_new_messages = []
+                self.cancel_event = None
+
+            def run_stream(self, user_message, on_event, clear_history=False, cancel_event=None):
+                self.cancel_event = cancel_event
+                return "ok"
+
+        request_id = "req-scheduler-token-owner"
+        session_id = "scheduler_session-token-owner_task"
+        registry = get_cancel_registry()
+        original_event = registry.register(request_id, session_id=session_id)
+        fake_agent = FakeAgent()
+        bridge = AgentBridge.__new__(AgentBridge)
+        bridge.get_agent = lambda session_id=None: fake_agent
+        bridge._trim_in_memory_to_turns = lambda *args, **kwargs: None
+        bridge._pre_persist_user_message = lambda *args, **kwargs: False
+        bridge._persist_messages = lambda *args, **kwargs: None
+        bridge._schedule_mcp_hot_reload = lambda *args, **kwargs: None
+        context = Context(ContextType.TEXT, "hello")
+        context["session_id"] = session_id
+        context["request_id"] = request_id
+        context["cancel_token_owner"] = "scheduler"
+        context["is_scheduled_task"] = True
+        try:
+            reply = bridge.agent_reply("hello", context=context)
+
+            self.assertEqual(reply.type, ReplyType.TEXT)
+            self.assertIs(fake_agent.cancel_event, original_event)
+            self.assertIs(registry.get_event(request_id), original_event)
+        finally:
+            registry.unregister(request_id)
+
+    def test_external_owner_without_preexisting_token_is_cleaned_by_agentbridge(self):
+        from agent.protocol import get_cancel_registry
+        from bridge.agent_bridge import AgentBridge
+        from bridge.context import Context, ContextType
+
+        class FakeAgent:
+            def __init__(self):
+                self.tools = []
+                self.model = types.SimpleNamespace()
+                self.messages_lock = threading.Lock()
+                self.messages = [{"role": "assistant", "content": "ok"}]
+                self._last_run_new_messages = []
+
+            def run_stream(self, user_message, on_event, clear_history=False, cancel_event=None):
+                return "ok"
+
+        request_id = "req-external-owner-fallback"
+        session_id = "scheduler_session-owner-fallback_task"
+        registry = get_cancel_registry()
+        registry.unregister(request_id)
+        bridge = AgentBridge.__new__(AgentBridge)
+        bridge.get_agent = lambda session_id=None: FakeAgent()
+        bridge._trim_in_memory_to_turns = lambda *args, **kwargs: None
+        bridge._pre_persist_user_message = lambda *args, **kwargs: False
+        bridge._persist_messages = lambda *args, **kwargs: None
+        bridge._schedule_mcp_hot_reload = lambda *args, **kwargs: None
+        context = Context(ContextType.TEXT, "hello")
+        context["session_id"] = session_id
+        context["request_id"] = request_id
+        context["cancel_token_owner"] = "scheduler"
+        try:
+            bridge.agent_reply("hello", context=context)
+
+            self.assertIsNone(registry.get_event(request_id))
+        finally:
+            registry.unregister(request_id)
+
+    def test_agentbridge_owned_token_is_cleaned_when_agent_init_fails(self):
+        from agent.protocol import get_cancel_registry
+        from bridge.agent_bridge import AgentBridge
+        from bridge.context import Context, ContextType
+        from bridge.reply import ReplyType
+
+        request_id = "req-agentbridge-init-failed"
+        session_id = "session-agentbridge-init-failed"
+        registry = get_cancel_registry()
+        registry.unregister(request_id)
+        bridge = AgentBridge.__new__(AgentBridge)
+        bridge.get_agent = lambda session_id=None: None
+        context = Context(ContextType.TEXT, "hello")
+        context["session_id"] = session_id
+        context["request_id"] = request_id
+        try:
+            reply = bridge.agent_reply("hello", context=context)
+
+            self.assertEqual(reply.type, ReplyType.ERROR)
+            self.assertIsNone(registry.get_event(request_id))
+        finally:
+            registry.unregister(request_id)
+
+    def test_external_owner_fallback_token_is_cleaned_when_agent_init_fails(self):
+        from agent.protocol import get_cancel_registry
+        from bridge.agent_bridge import AgentBridge
+        from bridge.context import Context, ContextType
+        from bridge.reply import ReplyType
+
+        request_id = "req-external-owner-init-failed"
+        session_id = "scheduler_session-init-failed_task"
+        registry = get_cancel_registry()
+        registry.unregister(request_id)
+        bridge = AgentBridge.__new__(AgentBridge)
+        bridge.get_agent = lambda session_id=None: None
+        context = Context(ContextType.TEXT, "hello")
+        context["session_id"] = session_id
+        context["request_id"] = request_id
+        context["cancel_token_owner"] = "scheduler"
+        try:
+            reply = bridge.agent_reply("hello", context=context)
+
+            self.assertEqual(reply.type, ReplyType.ERROR)
+            self.assertIsNone(registry.get_event(request_id))
+        finally:
+            registry.unregister(request_id)
+
+    def test_preexisting_external_owner_token_survives_agent_init_failure(self):
+        from agent.protocol import get_cancel_registry
+        from bridge.agent_bridge import AgentBridge
+        from bridge.context import Context, ContextType
+        from bridge.reply import ReplyType
+
+        request_id = "req-preexisting-owner-init-failed"
+        session_id = "scheduler_session-preexisting-init-failed_task"
+        registry = get_cancel_registry()
+        original_event = registry.register(request_id, session_id=session_id)
+        bridge = AgentBridge.__new__(AgentBridge)
+        bridge.get_agent = lambda session_id=None: None
+        context = Context(ContextType.TEXT, "hello")
+        context["session_id"] = session_id
+        context["request_id"] = request_id
+        context["cancel_token_owner"] = "scheduler"
+        try:
+            reply = bridge.agent_reply("hello", context=context)
+
+            self.assertEqual(reply.type, ReplyType.ERROR)
+            self.assertIs(registry.get_event(request_id), original_event)
+        finally:
+            registry.unregister(request_id)
+
     def test_non_web_request_token_is_cleaned_by_agentbridge(self):
         from agent.protocol import get_cancel_registry
         from bridge.agent_bridge import AgentBridge
@@ -5483,6 +5635,118 @@ class TestAgentHostBoundary(unittest.TestCase):
             self.assertEqual(final["error_code"], "SCHEDULER_CANCELLED")
             self.assertIsNone(get_cancel_registry().get_event(fake_bridge.request_id))
             self.assertEqual(ledger.active_snapshot(), [])
+
+    def test_scheduler_agentbridge_token_survives_until_delivery(self):
+        from agent.protocol import get_cancel_registry, get_run_ledger
+        from bridge.agent_bridge import AgentBridge
+
+        fake_croniter = types.ModuleType("croniter")
+        fake_croniter.croniter = lambda *args, **kwargs: None
+        with patch.dict(sys.modules, {"croniter": fake_croniter}):
+            from agent.tools.scheduler import integration as scheduler_integration
+
+        class FakeAgent:
+            def __init__(self):
+                self.tools = []
+                self.model = types.SimpleNamespace()
+                self.messages_lock = threading.Lock()
+                self.messages = [{"role": "assistant", "content": "ok"}]
+                self._last_run_new_messages = []
+                self.cancel_event = None
+
+            def run_stream(self, user_message, on_event, clear_history=False, cancel_event=None):
+                self.cancel_event = cancel_event
+                return "scheduled response"
+
+        class FakeChannel:
+            def __init__(self):
+                self.session_queues = {"web-session-agentbridge-owner": Queue()}
+                self.request_to_session = {}
+                self.sent = []
+
+            def send(self, reply, context):
+                request_id = context.get("request_id")
+                self.event_at_delivery = get_cancel_registry().get_event(request_id)
+                self.cancelled_at_delivery = get_cancel_registry().cancel_request(request_id)
+                self.sent.append((reply, context))
+
+        task = {
+            "id": "task-ledger-agentbridge-owner",
+            "name": "AgentBridge owned by scheduler",
+            "action": {
+                "type": "agent_task",
+                "task_description": "summarize project state",
+                "receiver": "web-session-agentbridge-owner",
+                "channel_type": "web",
+            },
+        }
+
+        with isolated_run_ledger():
+            ledger = get_run_ledger()
+            fake_agent = FakeAgent()
+            fake_channel = FakeChannel()
+            bridge = AgentBridge.__new__(AgentBridge)
+            bridge.get_agent = lambda session_id=None: fake_agent
+            bridge._trim_in_memory_to_turns = lambda *args, **kwargs: None
+            bridge._pre_persist_user_message = lambda *args, **kwargs: False
+            bridge._persist_messages = lambda *args, **kwargs: None
+            bridge._schedule_mcp_hot_reload = lambda *args, **kwargs: None
+            with patch("channel.channel_factory.create_channel", return_value=fake_channel), \
+                    patch.object(scheduler_integration, "_authorize_scheduled_execution", return_value=True):
+                ok = scheduler_integration._execute_scheduled_task(task, bridge)
+
+            request_id = task["_scheduler_run_request_id"]
+            self.assertTrue(ok)
+            self.assertIs(fake_agent.cancel_event, fake_channel.event_at_delivery)
+            self.assertTrue(fake_channel.cancelled_at_delivery)
+            final = ledger.get_run(request_id)
+            self.assertEqual(final["status"], "cancelled")
+            self.assertEqual(final["terminal_reason"], "scheduler_cancelled")
+            self.assertIsNone(get_cancel_registry().get_event(request_id))
+            self.assertEqual(ledger.active_snapshot(), [])
+
+    def test_scheduler_skill_call_marks_scheduler_cancel_token_owner(self):
+        from bridge.reply import Reply, ReplyType
+
+        fake_croniter = types.ModuleType("croniter")
+        fake_croniter.croniter = lambda *args, **kwargs: None
+        with patch.dict(sys.modules, {"croniter": fake_croniter}):
+            from agent.tools.scheduler import integration as scheduler_integration
+
+        class FakeBridge:
+            def agent_reply(self, _query, context=None, **_kwargs):
+                self.context = context
+                return Reply(ReplyType.TEXT, "skill output")
+
+        class FakeChannel:
+            def __init__(self):
+                self.request_to_session = {}
+                self.sent = []
+
+            def send(self, reply, context):
+                self.sent.append((reply, context))
+
+        task = {
+            "id": "task-skill-owner",
+            "name": "Skill owner",
+            "action": {
+                "type": "skill_call",
+                "skill_name": "diagnostics",
+                "skill_params": {"scope": "runtime"},
+                "receiver": "web-session-skill-owner",
+                "channel_type": "web",
+            },
+        }
+
+        fake_bridge = FakeBridge()
+        fake_channel = FakeChannel()
+        with patch("channel.channel_factory.create_channel", return_value=fake_channel):
+            ok = scheduler_integration._execute_skill_call(task, fake_bridge)
+
+        self.assertTrue(ok)
+        self.assertEqual(fake_bridge.context.get("cancel_token_owner"), "scheduler")
+        self.assertEqual(fake_bridge.context.get("request_id"), task["_scheduler_run_request_id"])
+        self.assertEqual(fake_channel.request_to_session[task["_scheduler_run_request_id"]], "web-session-skill-owner")
 
     def test_scheduler_tool_cancel_is_visible_then_terminal_cancelled(self):
         from agent.protocol import get_cancel_registry, get_run_ledger
