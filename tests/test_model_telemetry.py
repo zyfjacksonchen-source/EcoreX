@@ -3316,6 +3316,433 @@ class TestModelTelemetry(unittest.TestCase):
         self.assertEqual(event["error_taxonomy"], "rate_limit")
         self.assertEqual(event["error_message"], "HTTP 429: rate limit")
 
+    def test_openai_create_img_uses_shared_retry_after_then_records_success(self):
+        from unittest.mock import MagicMock, patch
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+        from models.model_telemetry import get_recent_model_calls
+        from models.openai.open_ai_image import OpenAIImage
+        from models.openai.openai_http_client import OpenAIHTTPError
+
+        class FakeImageClient:
+            def __init__(self):
+                self.calls = []
+                self.responses = [
+                    OpenAIHTTPError(
+                        429,
+                        {
+                            "error": {
+                                "message": "image rate limit",
+                                "code": "rate_limit_exceeded",
+                                "type": "rate_limit",
+                            }
+                        },
+                        headers={"Retry-After": "0.25"},
+                    ),
+                    {"data": [{"url": "https://image.test/retry-ok.png"}]},
+                ]
+
+            def images_generate(self, **kwargs):
+                self.calls.append(kwargs)
+                response = self.responses.pop(0)
+                if isinstance(response, Exception):
+                    raise response
+                return response
+
+        fake_conf = MagicMock()
+        config = {
+            "rate_limit_dalle": False,
+            "text_to_image": "gpt-image-2-pro",
+            "model_max_retries": 1,
+            "image_output_format": "png",
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        bot = OpenAIImage.__new__(OpenAIImage)
+        bot._image_client = FakeImageClient()
+        sleeps = []
+
+        with patch("models.openai.open_ai_image.conf", return_value=fake_conf):
+            wrapped = wrap_legacy_create_img(
+                bot,
+                provider_hint="openai",
+                model_hint="gpt-image-2-pro",
+            )
+            result = wrapped.create_img("draw after shared retry", model_retry_sleep=sleeps.append)
+
+        self.assertEqual(result, (True, "https://image.test/retry-ok.png"))
+        self.assertEqual(len(bot._image_client.calls), 2)
+        self.assertEqual(sleeps, [0.25])
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["provider"], "openai")
+        self.assertEqual(event["model"], "gpt-image-2-pro")
+        self.assertEqual(event["api_path"], "/legacy/create_img")
+        self.assertEqual(event["status"], "completed")
+
+    def test_openai_create_img_non_retryable_4xx_records_typed_fail_closed(self):
+        from unittest.mock import MagicMock, patch
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+        from models.model_telemetry import get_recent_model_calls
+        from models.openai.open_ai_image import OpenAIImage
+        from models.openai.openai_http_client import OpenAIHTTPError
+
+        class FakeImageClient:
+            def __init__(self):
+                self.calls = []
+
+            def images_generate(self, **kwargs):
+                self.calls.append(kwargs)
+                raise OpenAIHTTPError(
+                    400,
+                    {
+                        "error": {
+                            "message": "bad image prompt",
+                            "code": "invalid_request_error",
+                            "type": "invalid_request_error",
+                        }
+                    },
+                )
+
+        fake_conf = MagicMock()
+        config = {
+            "rate_limit_dalle": False,
+            "text_to_image": "gpt-image-2-pro",
+            "model_max_retries": 2,
+            "image_output_format": "png",
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        bot = OpenAIImage.__new__(OpenAIImage)
+        bot._image_client = FakeImageClient()
+        sleeps = []
+
+        with patch("models.openai.open_ai_image.conf", return_value=fake_conf):
+            wrapped = wrap_legacy_create_img(
+                bot,
+                provider_hint="openai",
+                model_hint="gpt-image-2-pro",
+            )
+            result = wrapped.create_img("bad prompt", model_retry_sleep=sleeps.append)
+
+        self.assertFalse(result[0])
+        self.assertEqual(len(bot._image_client.calls), 1)
+        self.assertEqual(sleeps, [])
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_status_code"], 400)
+        self.assertEqual(event["error_taxonomy"], "client_error")
+        self.assertEqual(event["error_code"], "invalid_request_error")
+        self.assertEqual(event["error_type"], "invalid_request_error")
+        self.assertEqual(event["error_message"], "bad image prompt")
+
+    def test_openai_create_img_retryable_error_exhausts_shared_policy(self):
+        from unittest.mock import MagicMock, patch
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+        from models.model_telemetry import get_recent_model_calls
+        from models.openai.open_ai_image import OpenAIImage
+        from models.openai.openai_http_client import OpenAIHTTPError
+
+        class FakeImageClient:
+            def __init__(self):
+                self.calls = []
+
+            def images_generate(self, **kwargs):
+                self.calls.append(kwargs)
+                raise OpenAIHTTPError(
+                    503,
+                    {
+                        "error": {
+                            "message": "image service unavailable",
+                            "code": "server_error",
+                            "type": "server_error",
+                        }
+                    },
+                    headers={"Retry-After": "0.1"},
+                )
+
+        fake_conf = MagicMock()
+        config = {
+            "rate_limit_dalle": False,
+            "text_to_image": "gpt-image-2-pro",
+            "model_max_retries": 1,
+            "image_output_format": "png",
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        bot = OpenAIImage.__new__(OpenAIImage)
+        bot._image_client = FakeImageClient()
+        sleeps = []
+
+        with patch("models.openai.open_ai_image.conf", return_value=fake_conf):
+            wrapped = wrap_legacy_create_img(
+                bot,
+                provider_hint="openai",
+                model_hint="gpt-image-2-pro",
+            )
+            result = wrapped.create_img("draw after outage", model_retry_sleep=sleeps.append)
+
+        self.assertFalse(result[0])
+        self.assertEqual(len(bot._image_client.calls), 2)
+        self.assertEqual(sleeps, [0.1])
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_status_code"], 503)
+        self.assertEqual(event["error_taxonomy"], "server_error")
+        self.assertEqual(event["error_code"], "server_error")
+        self.assertEqual(event["error_type"], "server_error")
+        self.assertEqual(event["error_message"], "image service unavailable")
+
+    def test_openai_create_img_default_model_unavailable_falls_back_without_retry(self):
+        from unittest.mock import MagicMock, patch
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+        from models.model_telemetry import get_recent_model_calls
+        from models.openai.open_ai_image import OpenAIImage
+        from models.openai.openai_http_client import OpenAIHTTPError
+
+        class FakeImageClient:
+            def __init__(self):
+                self.calls = []
+                self.responses = [
+                    OpenAIHTTPError(
+                        404,
+                        {
+                            "error": {
+                                "message": "model_not_found",
+                                "code": "model_not_found",
+                                "type": "invalid_request_error",
+                            }
+                        },
+                    ),
+                    {"data": [{"url": "https://image.test/fallback.png"}]},
+                ]
+
+            def images_generate(self, **kwargs):
+                self.calls.append(kwargs)
+                response = self.responses.pop(0)
+                if isinstance(response, Exception):
+                    raise response
+                return response
+
+        fake_conf = MagicMock()
+        config = {
+            "rate_limit_dalle": False,
+            "text_to_image": "gpt-image-2-pro",
+            "model_max_retries": 2,
+            "image_output_format": "png",
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        bot = OpenAIImage.__new__(OpenAIImage)
+        bot._image_client = FakeImageClient()
+        sleeps = []
+
+        with patch("models.openai.open_ai_image.conf", return_value=fake_conf):
+            wrapped = wrap_legacy_create_img(
+                bot,
+                provider_hint="openai",
+                model_hint="gpt-image-2-pro",
+            )
+            result = wrapped.create_img("draw with fallback", model_retry_sleep=sleeps.append)
+
+        self.assertEqual(result, (True, "https://image.test/fallback.png"))
+        self.assertEqual(
+            [call["model"] for call in bot._image_client.calls],
+            ["gpt-image-2-pro", "gpt-image-2"],
+        )
+        self.assertEqual(sleeps, [])
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "completed")
+
+    def test_openai_create_img_lazily_initializes_rate_bucket_for_legacy_bot(self):
+        from unittest.mock import MagicMock, patch
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+        from models.model_telemetry import get_recent_model_calls
+        from models.openai.open_ai_image import OpenAIImage
+
+        class FakeImageClient:
+            def __init__(self):
+                self.calls = []
+
+            def images_generate(self, **kwargs):
+                self.calls.append(kwargs)
+                return {"data": [{"url": "https://image.test/rate-bucket.png"}]}
+
+        class FakeTokenBucket:
+            instances = []
+
+            def __init__(self, tpm):
+                self.tpm = tpm
+                self.get_token_calls = 0
+                FakeTokenBucket.instances.append(self)
+
+            def get_token(self):
+                self.get_token_calls += 1
+                return True
+
+        fake_conf = MagicMock()
+        config = {
+            "rate_limit_dalle": 50,
+            "text_to_image": "gpt-image-2-pro",
+            "model_max_retries": 0,
+            "image_output_format": "png",
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        bot = OpenAIImage.__new__(OpenAIImage)
+        bot._image_client = FakeImageClient()
+        self.assertFalse(hasattr(bot, "tb4dalle"))
+
+        with patch("models.openai.open_ai_image.conf", return_value=fake_conf):
+            with patch("models.openai.open_ai_image.TokenBucket", FakeTokenBucket):
+                wrapped = wrap_legacy_create_img(
+                    bot,
+                    provider_hint="openai",
+                    model_hint="gpt-image-2-pro",
+                )
+                result = wrapped.create_img("draw with legacy rate bucket")
+
+        self.assertEqual(result, (True, "https://image.test/rate-bucket.png"))
+        self.assertEqual([bucket.tpm for bucket in FakeTokenBucket.instances], [50])
+        self.assertEqual([bucket.get_token_calls for bucket in FakeTokenBucket.instances], [1])
+        self.assertTrue(hasattr(bot, "tb4dalle"))
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "completed")
+
+    def test_openai_create_img_local_rate_limit_skips_request_with_typed_error(self):
+        from unittest.mock import MagicMock, patch
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+        from models.model_telemetry import get_recent_model_calls
+        from models.openai.open_ai_image import OpenAIImage
+
+        class FakeImageClient:
+            def __init__(self):
+                self.calls = []
+
+            def images_generate(self, **kwargs):
+                self.calls.append(kwargs)
+                return {"data": [{"url": "https://image.test/should-not-call.png"}]}
+
+        class FakeTokenBucket:
+            def __init__(self, tpm):
+                self.tpm = tpm
+                self.get_token_calls = 0
+
+            def get_token(self):
+                self.get_token_calls += 1
+                return False
+
+        fake_conf = MagicMock()
+        config = {
+            "rate_limit_dalle": 50,
+            "text_to_image": "gpt-image-2-pro",
+            "model_max_retries": 0,
+            "image_output_format": "png",
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        bot = OpenAIImage.__new__(OpenAIImage)
+        bot._image_client = FakeImageClient()
+
+        with patch("models.openai.open_ai_image.conf", return_value=fake_conf):
+            with patch("models.openai.open_ai_image.TokenBucket", FakeTokenBucket):
+                wrapped = wrap_legacy_create_img(
+                    bot,
+                    provider_hint="openai",
+                    model_hint="gpt-image-2-pro",
+                )
+                result = wrapped.create_img("draw too quickly")
+
+        self.assertFalse(result[0])
+        self.assertEqual(bot.tb4dalle.get_token_calls, 1)
+        self.assertEqual(bot._image_client.calls, [])
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_status_code"], 429)
+        self.assertEqual(event["error_taxonomy"], "rate_limit")
+        self.assertEqual(event["error_code"], "local_rate_limit")
+        self.assertEqual(event["error_type"], "rate_limit")
+
+    def test_openai_create_img_error_sidecar_is_thread_local(self):
+        import threading
+        from unittest.mock import MagicMock, patch
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+        from models.model_telemetry import get_recent_model_calls
+        from models.openai.open_ai_image import OpenAIImage
+        from models.openai.openai_http_client import OpenAIHTTPError
+
+        class FakeImageClient:
+            def images_generate(self, **kwargs):
+                prompt = kwargs.get("prompt") or ""
+                if "400" in prompt:
+                    raise OpenAIHTTPError(
+                        400,
+                        {
+                            "error": {
+                                "message": "bad 400",
+                                "code": "bad_400",
+                                "type": "invalid_request_error",
+                            }
+                        },
+                    )
+                raise OpenAIHTTPError(
+                    503,
+                    {
+                        "error": {
+                            "message": "bad 503",
+                            "code": "bad_503",
+                            "type": "server_error",
+                        }
+                    },
+                )
+
+        class ConcurrentOpenAIImage(OpenAIImage):
+            def __init__(self):
+                self._image_client = FakeImageClient()
+                self.barrier = threading.Barrier(2)
+
+            def _set_create_img_error(self, details, decision=None):
+                super()._set_create_img_error(details, decision)
+                self.barrier.wait(timeout=5)
+
+        fake_conf = MagicMock()
+        config = {
+            "rate_limit_dalle": False,
+            "text_to_image": "gpt-image-2-pro",
+            "model_max_retries": 0,
+            "image_output_format": "png",
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        bot = ConcurrentOpenAIImage()
+        errors = []
+        results = []
+
+        with patch("models.openai.open_ai_image.conf", return_value=fake_conf):
+            wrapped = wrap_legacy_create_img(
+                bot,
+                provider_hint="openai",
+                model_hint="gpt-image-2-pro",
+            )
+            self.assertIsNotNone(getattr(bot, "_ecorex_create_img_error_state", None))
+
+            def invoke(prompt):
+                try:
+                    results.append(wrapped.create_img(prompt))
+                except Exception as exc:
+                    errors.append(exc)
+
+            threads = [
+                threading.Thread(target=invoke, args=("draw bad 400",)),
+                threading.Thread(target=invoke, args=("draw bad 503",)),
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=10)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), 2)
+        events = get_recent_model_calls()
+        self.assertEqual(len(events), 2)
+        by_status = {
+            event["error_status_code"]: event["error_message"]
+            for event in events
+        }
+        self.assertEqual(by_status[400], "bad 400")
+        self.assertEqual(by_status[503], "bad 503")
+
     def test_legacy_create_img_gateway_prefers_numeric_http_code(self):
         from models.legacy_reply_gateway import wrap_legacy_create_img
         from models.model_telemetry import get_recent_model_calls

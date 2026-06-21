@@ -846,3 +846,26 @@
     raw vision HTTP surfaces, R18-04-B is promoted to PASS. R18-04-C remains
     PARTIAL because provider-local retry loops and retry policy migration are
     still pending.
+- Migrated OpenAI-compatible image generation retry ownership:
+  - `models/openai/open_ai_image.py` now routes `OpenAIImage.create_img`
+    retry decisions through `models/model_retry.py`, honoring Retry-After or
+    shared backoff for retryable 408/429/5xx/timeout/network failures while
+    failing closed on non-retryable 4xx errors. The existing
+    `gpt-image-2-pro` to `gpt-image-2` unavailable-model fallback remains a
+    model-selection fallback rather than a retry loop.
+  - `models/legacy_reply_gateway.py` now reads provider-supplied thread-local
+    create-image error details before recording `/legacy/create_img`, so
+    OpenAI image failures keep typed status, code, type, and message evidence
+    while preserving the existing tuple return shape used by channels. Legacy
+    bot classes that do not call `OpenAIImage.__init__()` lazily initialize the
+    image client and DALL-E token bucket instead of escaping the tuple-return
+    contract.
+  - Focused tests cover Retry-After retry success, non-retryable 400
+    fail-closed behavior with typed telemetry, retryable 503 exhaustion,
+    injected retry-sleep behavior, model-unavailable fallback without retry,
+    lazy token-bucket initialization, local image rate-limit short-circuiting
+    without an upstream image request, thread-local failure evidence under
+    concurrent requests, and the existing legacy create_img telemetry
+    regressions. R18-04-C remains PARTIAL because LinkAI/Zhipu/Azure/ModelScope
+    image generation, remaining native provider error normalization, and legacy
+    direct-chat retry loops are still pending.

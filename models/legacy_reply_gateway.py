@@ -219,7 +219,64 @@ def _legacy_vision_error_details(result: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _legacy_create_img_error_details(result: Any) -> Optional[Dict[str, Any]]:
+def _provider_create_img_error_details(details: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(details, dict):
+        return None
+    error_value = details.get("error")
+    message = details.get("message") or details.get("content") or error_value
+    status_code = _first_numeric_status(
+        details.get("status_code"),
+        details.get("http_code"),
+        details.get("status"),
+    )
+    error_code = details.get("error_code") or details.get("code") or ""
+    error_type = details.get("error_type") or details.get("type") or ""
+    if isinstance(error_value, dict):
+        message = error_value.get("message") or message
+        error_code = error_value.get("code") or error_code
+        error_type = error_value.get("type") or error_type
+        if status_code in (None, ""):
+            status_code = _first_numeric_status(
+                error_value.get("status_code"),
+                error_value.get("http_code"),
+                error_value.get("status"),
+            )
+    return {
+        "message": str(message or "Legacy create_img failed"),
+        "status_code": status_code,
+        "error_code": str(error_code or ""),
+        "error_type": str(error_type or ""),
+    }
+
+
+def _provider_create_img_error_state(bot: Any):
+    state = getattr(bot, "_ecorex_create_img_error_state", None)
+    if state is None:
+        state = threading.local()
+        try:
+            setattr(bot, "_ecorex_create_img_error_state", state)
+        except Exception:
+            return None
+    return state
+
+
+def _clear_provider_create_img_error(bot: Any) -> None:
+    state = _provider_create_img_error_state(bot)
+    if state is not None:
+        state.details = None
+
+
+def _read_provider_create_img_error(bot: Any) -> Any:
+    state = getattr(bot, "_ecorex_create_img_error_state", None)
+    if state is None:
+        return None
+    return getattr(state, "details", None)
+
+
+def _legacy_create_img_error_details(
+    result: Any,
+    provider_error_details: Any = None,
+) -> Optional[Dict[str, Any]]:
     if result is NotImplemented:
         return {
             "message": "Legacy create_img returned NotImplemented",
@@ -237,6 +294,10 @@ def _legacy_create_img_error_details(result: Any) -> Optional[Dict[str, Any]]:
         }
     if bool(result[0]):
         return None
+
+    provider_details = _provider_create_img_error_details(provider_error_details)
+    if provider_details is not None:
+        return provider_details
 
     payload = result[1] if len(result) > 1 else "Legacy create_img failed"
     message = payload
@@ -466,6 +527,7 @@ def wrap_legacy_create_img(bot: Any, *, provider_hint: str = "", model_hint: str
     if not callable(original) or getattr(original, "_ecorex_legacy_create_img_gateway", False):
         return bot
 
+    _provider_create_img_error_state(bot)
     state = threading.local()
 
     def wrapped_create_img(*args, **kwargs):
@@ -482,6 +544,7 @@ def wrap_legacy_create_img(bot: Any, *, provider_hint: str = "", model_hint: str
         )
 
         state.active = True
+        _clear_provider_create_img_error(bot)
         try:
             result = original(*args, **kwargs)
         except Exception as exc:
@@ -490,8 +553,13 @@ def wrap_legacy_create_img(bot: Any, *, provider_hint: str = "", model_hint: str
         finally:
             state.active = False
 
-        details = _legacy_create_img_error_details(result)
+        provider_error_details = _read_provider_create_img_error(bot)
+        details = _legacy_create_img_error_details(
+            result,
+            provider_error_details=provider_error_details,
+        )
         if details is None:
+            _clear_provider_create_img_error(bot)
             span.finish_completed()
         else:
             span.finish_error(**details)
