@@ -50,3 +50,12 @@
     backend payload sanitization.
   - Focused pytest passed: 9 model-capability/ModelsHandler tests and 3
     qianfan AgentBridge routing tests.
+- Added the second R18-03 cancellation/concurrency slice:
+  - WebChannel now marks request-scoped cancel tokens as owned by
+    `web_channel`.
+  - AgentBridge no longer unregisters Web-owned request tokens immediately after
+    `agent.run_stream()` returns; WebChannel finalization remains the owner that
+    releases the token and records the final run state.
+  - Non-Web AgentBridge tokens still self-clean, preserving IM/scheduler bounded
+    registry behavior.
+  - Focused pytest passed: 6 token-owner/active-request/busy-session tests.

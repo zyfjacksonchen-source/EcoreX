@@ -2580,6 +2580,7 @@ class WebChannel(ChatChannel):
             context["receiver"] = session_id
             context["request_id"] = request_id
             context["session_lock"] = session_lock
+            context["cancel_token_owner"] = "web_channel"
             context["visible_message"] = (visible_message or "Please handle these attachments.").strip()
             if internal_action:
                 context["internal_action"] = True

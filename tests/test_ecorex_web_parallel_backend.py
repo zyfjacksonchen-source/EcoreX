@@ -819,6 +819,122 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertEqual(snapshot[0]["state"], "cancelling")
         self.assertGreaterEqual(snapshot[0]["age_seconds"], 0)
 
+    def test_web_request_token_survives_agentbridge_until_web_finalizer(self):
+        from agent.protocol import get_cancel_registry
+        from bridge.agent_bridge import AgentBridge
+        from bridge.context import Context, ContextType
+        from bridge.reply import ReplyType
+
+        class FakeAgent:
+            def __init__(self):
+                self.tools = []
+                self.model = types.SimpleNamespace()
+                self.messages_lock = threading.Lock()
+                self.messages = [{"role": "assistant", "content": "ok"}]
+                self._last_run_new_messages = []
+                self.cancel_event = None
+
+            def run_stream(self, user_message, on_event, clear_history=False, cancel_event=None):
+                self.cancel_event = cancel_event
+                return "ok"
+
+        request_id = "req-web-token-owner"
+        session_id = "session-web-token-owner"
+        registry = get_cancel_registry()
+        original_event = registry.register(request_id, session_id=session_id)
+        fake_agent = FakeAgent()
+        bridge = AgentBridge.__new__(AgentBridge)
+        bridge.get_agent = lambda session_id=None: fake_agent
+        bridge._pre_persist_user_message = lambda *args, **kwargs: False
+        bridge._persist_messages = lambda *args, **kwargs: None
+        bridge._schedule_mcp_hot_reload = lambda *args, **kwargs: None
+        context = Context(ContextType.TEXT, "hello")
+        context["session_id"] = session_id
+        context["request_id"] = request_id
+        context["cancel_token_owner"] = "web_channel"
+        try:
+            reply = bridge.agent_reply("hello", context=context)
+
+            self.assertEqual(reply.type, ReplyType.TEXT)
+            self.assertIs(fake_agent.cancel_event, original_event)
+            self.assertIs(registry.get_event(request_id), original_event)
+        finally:
+            registry.unregister(request_id)
+
+    def test_web_request_token_survives_agentbridge_error_path(self):
+        from agent.protocol import get_cancel_registry
+        from bridge.agent_bridge import AgentBridge
+        from bridge.context import Context, ContextType
+        from bridge.reply import ReplyType
+
+        class FakeAgent:
+            def __init__(self):
+                self.tools = []
+                self.model = types.SimpleNamespace()
+                self.messages_lock = threading.Lock()
+                self.messages = [{"role": "user", "content": "hello"}]
+                self._last_run_new_messages = []
+
+            def run_stream(self, user_message, on_event, clear_history=False, cancel_event=None):
+                raise RuntimeError("model stream failed")
+
+        request_id = "req-web-token-owner-error"
+        session_id = "session-web-token-owner-error"
+        registry = get_cancel_registry()
+        original_event = registry.register(request_id, session_id=session_id)
+        fake_agent = FakeAgent()
+        bridge = AgentBridge.__new__(AgentBridge)
+        bridge.get_agent = lambda session_id=None: fake_agent
+        bridge._pre_persist_user_message = lambda *args, **kwargs: False
+        bridge._persist_messages = lambda *args, **kwargs: None
+        bridge._schedule_mcp_hot_reload = lambda *args, **kwargs: None
+        context = Context(ContextType.TEXT, "hello")
+        context["session_id"] = session_id
+        context["request_id"] = request_id
+        context["cancel_token_owner"] = "web_channel"
+        try:
+            reply = bridge.agent_reply("hello", context=context)
+
+            self.assertEqual(reply.type, ReplyType.ERROR)
+            self.assertIs(registry.get_event(request_id), original_event)
+        finally:
+            registry.unregister(request_id)
+
+    def test_non_web_request_token_is_cleaned_by_agentbridge(self):
+        from agent.protocol import get_cancel_registry
+        from bridge.agent_bridge import AgentBridge
+        from bridge.context import Context, ContextType
+
+        class FakeAgent:
+            def __init__(self):
+                self.tools = []
+                self.model = types.SimpleNamespace()
+                self.messages_lock = threading.Lock()
+                self.messages = [{"role": "assistant", "content": "ok"}]
+                self._last_run_new_messages = []
+
+            def run_stream(self, user_message, on_event, clear_history=False, cancel_event=None):
+                return "ok"
+
+        request_id = "req-agentbridge-owned-token"
+        session_id = "session-agentbridge-owned-token"
+        registry = get_cancel_registry()
+        fake_agent = FakeAgent()
+        bridge = AgentBridge.__new__(AgentBridge)
+        bridge.get_agent = lambda session_id=None: fake_agent
+        bridge._pre_persist_user_message = lambda *args, **kwargs: False
+        bridge._persist_messages = lambda *args, **kwargs: None
+        bridge._schedule_mcp_hot_reload = lambda *args, **kwargs: None
+        context = Context(ContextType.TEXT, "hello")
+        context["session_id"] = session_id
+        context["request_id"] = request_id
+        try:
+            bridge.agent_reply("hello", context=context)
+
+            self.assertIsNone(registry.get_event(request_id))
+        finally:
+            registry.unregister(request_id)
+
     def test_active_snapshot_keeps_cancelling_request_after_sse_terminal(self):
         from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests
         from channel.web import web_channel
@@ -921,6 +1037,7 @@ class TestWebParallelHandlers(unittest.TestCase):
                     self.assertEqual(channel.request_to_session[new_request_id], session_id)
                     self.assertIn(new_request_id, channel.sse_queues)
                     self.assertTrue(produced_contexts)
+                    self.assertEqual(produced_contexts[0].get("cancel_token_owner"), "web_channel")
                 finally:
                     old_lock.release()
                     registry.unregister(old_request_id)

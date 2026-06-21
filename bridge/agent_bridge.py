@@ -440,11 +440,14 @@ class AgentBridge:
         agent = None
         request_id = None
         cancel_event = None
+        web_channel_owns_cancel_token = False
         try:
             # Extract session_id from context for user isolation
             if context:
                 session_id = context.kwargs.get("session_id") or context.get("session_id")
                 request_id = context.kwargs.get("request_id") or context.get("request_id")
+                token_owner = context.kwargs.get("cancel_token_owner") or context.get("cancel_token_owner")
+                web_channel_owns_cancel_token = token_owner == "web_channel" and bool(request_id)
 
             # Register a cancel token. Prefer per-turn request_id (web),
             # fall back to session_id (IM channels). The Event is polled by
@@ -529,7 +532,7 @@ class AgentBridge:
                 event_handler.log_summary()
 
                 # Release cancel token; keep registry bounded.
-                if token_key:
+                if token_key and not web_channel_owns_cancel_token:
                     try:
                         registry.unregister(token_key)
                     except Exception:
@@ -622,7 +625,7 @@ class AgentBridge:
                 except Exception as db_err:
                     logger.warning(f"[AgentBridge] Failed to clear DB after error: {db_err}")
             # Release cancel token on error path too (idempotent).
-            if cancel_event is not None and (request_id or session_id):
+            if cancel_event is not None and (request_id or session_id) and not web_channel_owns_cancel_token:
                 try:
                     get_cancel_registry().unregister(request_id or session_id)
                 except Exception:
