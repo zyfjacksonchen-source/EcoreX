@@ -38,6 +38,7 @@ MAX_STORED_REASONING_CHARS = 4 * 1024  # 4 KB
 _REASONING_TRUNCATE_MARKER = "\n\n... [reasoning truncated, {omitted} chars omitted] ...\n\n"
 
 TOOL_SCHEMA_BUDGET_ENABLED_DEFAULT = True
+CONTEXT_BUDGET_WARN_RATIO_DEFAULT = 0.85
 TOOL_SCHEMA_CORE_NAMES = {
     "read",
     "ls",
@@ -818,6 +819,260 @@ class AgentStreamExecutor:
             return True
         return len(normalized) <= 12 and any(word in normalized for word in TOOL_SCHEMA_FOLLOWUP_CONFIRMATIONS)
 
+    @staticmethod
+    def _context_budget_config_int(name: str, default: int) -> int:
+        try:
+            from config import conf
+            value = conf().get(name, default)
+        except Exception:
+            return int(default)
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return int(default)
+
+    @staticmethod
+    def _context_budget_config_float(name: str, default: float) -> float:
+        try:
+            from config import conf
+            value = conf().get(name, default)
+        except Exception:
+            return float(default)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(default)
+
+    def _estimate_text_tokens_for_budget(self, text: Any) -> int:
+        value = str(text or "")
+        estimator = getattr(self.agent, "_estimate_text_tokens", None)
+        if callable(estimator):
+            try:
+                return max(0, int(estimator(value)))
+            except Exception:
+                pass
+        if not value:
+            return 0
+        non_ascii = sum(1 for char in value if ord(char) > 127)
+        ascii_count = len(value) - non_ascii
+        return int(non_ascii * 1.5 + ascii_count * 0.25) + 1
+
+    def _estimate_payload_tokens_for_budget(self, value: Any) -> int:
+        if value is None:
+            return 0
+        if isinstance(value, str):
+            return self._estimate_text_tokens_for_budget(value)
+        try:
+            serialized = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        except Exception:
+            serialized = str(value)
+        return self._estimate_text_tokens_for_budget(serialized)
+
+    def _context_budget_limits(self) -> Dict[str, Any]:
+        context_window = 128000
+        if self.agent and hasattr(self.agent, "_get_model_context_window"):
+            try:
+                context_window = max(1, int(self.agent._get_model_context_window()))
+            except Exception:
+                context_window = 128000
+
+        reserve_default = max(1000, int(context_window * 0.1))
+        reserve_getter = getattr(self.agent, "_get_context_reserve_tokens", None)
+        if callable(reserve_getter):
+            try:
+                reserve_default = int(reserve_getter())
+            except Exception:
+                pass
+        response_reserve = self._context_budget_config_int(
+            "agent_context_budget_response_reserve_tokens",
+            reserve_default,
+        )
+        if response_reserve <= 0:
+            response_reserve = reserve_default
+        max_window_reserve = max(0, context_window - 1)
+        max_ratio_reserve = max_window_reserve if context_window <= 2 else max(1, int(context_window * 0.5))
+        max_response_reserve = min(max_window_reserve, max_ratio_reserve)
+        response_reserve = min(max(0, response_reserve), max_response_reserve)
+
+        configured_limit = getattr(self.agent, "max_context_tokens", None) if self.agent else None
+        try:
+            configured_limit = int(configured_limit) if configured_limit else None
+        except (TypeError, ValueError):
+            configured_limit = None
+
+        window_input_limit = max(1, context_window - response_reserve)
+        requested_limit = configured_limit or window_input_limit
+        clamp_to_window = self._tool_schema_config_bool("agent_context_budget_clamp_to_window", True)
+        effective_limit = min(requested_limit, window_input_limit) if clamp_to_window else requested_limit
+        effective_limit = max(1, int(effective_limit))
+
+        return {
+            "model": getattr(self.model, "model", "") or "",
+            "context_window_tokens": context_window,
+            "configured_max_context_tokens": configured_limit,
+            "response_reserve_tokens": response_reserve,
+            "window_input_limit_tokens": window_input_limit,
+            "effective_context_limit_tokens": effective_limit,
+            "clamped_to_window": bool(clamp_to_window and configured_limit and configured_limit > window_input_limit),
+        }
+
+    def _estimate_message_components_for_budget(self, messages: List[Dict[str, Any]]) -> Dict[str, int]:
+        components = {
+            "message_tokens": 0,
+            "text_tokens": 0,
+            "reasoning_tokens": 0,
+            "tool_use_tokens": 0,
+            "tool_result_tokens": 0,
+            "artifact_metadata_tokens": 0,
+            "media_tokens": 0,
+        }
+
+        for message in messages or []:
+            if not isinstance(message, dict):
+                continue
+            components["message_tokens"] += 4
+            content = message.get("content", "")
+            if isinstance(content, str):
+                tokens = self._estimate_text_tokens_for_budget(content)
+                components["text_tokens"] += tokens
+                components["message_tokens"] += tokens
+                continue
+            if not isinstance(content, list):
+                tokens = self._estimate_payload_tokens_for_budget(content)
+                components["text_tokens"] += tokens
+                components["message_tokens"] += tokens
+                continue
+
+            for block in content:
+                if not isinstance(block, dict):
+                    tokens = self._estimate_payload_tokens_for_budget(block)
+                    components["text_tokens"] += tokens
+                    components["message_tokens"] += tokens
+                    continue
+                block_type = block.get("type", "")
+                if block_type == "text":
+                    tokens = self._estimate_text_tokens_for_budget(block.get("text", ""))
+                    components["text_tokens"] += tokens
+                elif block_type == "thinking":
+                    tokens = self._estimate_text_tokens_for_budget(block.get("thinking", ""))
+                    components["reasoning_tokens"] += tokens
+                elif block_type == "tool_use":
+                    tokens = 50 + self._estimate_payload_tokens_for_budget(block.get("input", {}))
+                    components["tool_use_tokens"] += tokens
+                elif block_type == "tool_result":
+                    payload = block.get("content", "")
+                    tokens = 30 + self._estimate_payload_tokens_for_budget(payload)
+                    components["tool_result_tokens"] += tokens
+                    components["artifact_metadata_tokens"] += self._estimate_artifact_metadata_tokens(payload)
+                elif block_type in {"image", "input_image", "image_url"}:
+                    tokens = 1200
+                    components["media_tokens"] += tokens
+                else:
+                    tokens = self._estimate_payload_tokens_for_budget(block)
+                    components["text_tokens"] += tokens
+                components["message_tokens"] += tokens
+
+        return components
+
+    def _estimate_artifact_metadata_tokens(self, payload: Any) -> int:
+        value = payload
+        if isinstance(payload, str):
+            stripped = payload.strip()
+            if not stripped or stripped[0] not in "[{":
+                return 0
+            try:
+                value = json.loads(stripped)
+            except Exception:
+                return 0
+
+        stack = [value]
+        tokens = 0
+        scanned = 0
+        while stack and scanned < 80:
+            item = stack.pop()
+            scanned += 1
+            if isinstance(item, dict):
+                item_type = str(item.get("type") or item.get("kind") or "").lower()
+                looks_like_artifact = (
+                    item_type == "artifact"
+                    or "artifact" in item
+                    or "artifacts" in item
+                    or ("path" in item and any(key in item for key in ("title", "name", "kind", "mime")))
+                )
+                if looks_like_artifact:
+                    metadata = {
+                        key: item.get(key)
+                        for key in ("id", "type", "kind", "title", "name", "path", "url", "mime", "metadata")
+                        if key in item
+                    }
+                    tokens += self._estimate_payload_tokens_for_budget(metadata)
+                stack.extend(item.values())
+            elif isinstance(item, list):
+                stack.extend(item)
+        return tokens
+
+    def _build_context_budget(
+        self,
+        messages: List[Dict[str, Any]],
+        tools_schema: Optional[List[Dict[str, Any]]],
+        schema_budget: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        limits = self._context_budget_limits()
+        system_tokens = self._estimate_text_tokens_for_budget(self.system_prompt)
+        message_components = self._estimate_message_components_for_budget(messages)
+        tool_schema_tokens = self._estimate_payload_tokens_for_budget(tools_schema or [])
+        runtime_artifact_tokens = self._estimate_payload_tokens_for_budget(self.files_to_send or [])
+        artifact_metadata_tokens = message_components.get("artifact_metadata_tokens", 0) + runtime_artifact_tokens
+        estimated_input_tokens = (
+            system_tokens
+            + message_components.get("message_tokens", 0)
+            + tool_schema_tokens
+            + runtime_artifact_tokens
+        )
+        effective_limit = max(1, int(limits["effective_context_limit_tokens"]))
+        warn_ratio = self._context_budget_config_float(
+            "agent_context_budget_warn_ratio",
+            CONTEXT_BUDGET_WARN_RATIO_DEFAULT,
+        )
+        warn_ratio = min(max(0.1, warn_ratio), 0.99)
+        usage_ratio = estimated_input_tokens / float(effective_limit)
+        severity = "over_budget" if estimated_input_tokens > effective_limit else (
+            "near_limit" if usage_ratio >= warn_ratio else "ok"
+        )
+        turns = self._identify_complete_turns()
+        current_turn_tokens = self._estimate_message_components_for_budget(
+            turns[-1]["messages"] if turns else []
+        ).get("message_tokens", 0)
+
+        return {
+            "enabled": True,
+            **limits,
+            "warning_ratio": warn_ratio,
+            "severity": severity,
+            "over_budget": severity == "over_budget",
+            "near_limit": severity in {"near_limit", "over_budget"},
+            "estimated_input_tokens": estimated_input_tokens,
+            "remaining_input_tokens": effective_limit - estimated_input_tokens,
+            "usage_ratio": round(usage_ratio, 4),
+            "system_prompt_tokens": system_tokens,
+            "message_tokens": message_components.get("message_tokens", 0),
+            "text_tokens": message_components.get("text_tokens", 0),
+            "reasoning_tokens": message_components.get("reasoning_tokens", 0),
+            "tool_use_tokens": message_components.get("tool_use_tokens", 0),
+            "tool_result_tokens": message_components.get("tool_result_tokens", 0),
+            "tool_schema_tokens": tool_schema_tokens,
+            "artifact_metadata_tokens": artifact_metadata_tokens,
+            "media_tokens": message_components.get("media_tokens", 0),
+            "message_count": len(messages or []),
+            "turn_count": len(turns),
+            "current_turn_tokens": current_turn_tokens,
+            "current_turn_preserved": bool(turns),
+            "tool_schema_count": len(tools_schema or []),
+            "tool_schema_selected_count": (schema_budget or {}).get("selected_count", 0),
+            "tool_schema_deferred_count": (schema_budget or {}).get("deferred_count", 0),
+            "runtime_artifact_count": len(self.files_to_send or []),
+        }
+
     def _select_tools_for_schema(self, force_text_response: bool = False) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
         if force_text_response or not self.tools:
             return None, {
@@ -1553,6 +1808,17 @@ class AgentStreamExecutor:
                     "input_schema": input_schema,
                 })
 
+        context_budget = self._build_context_budget(messages, tools_schema, schema_budget)
+        if context_budget.get("near_limit"):
+            logger.warning(
+                "[Agent] Context budget %s: estimated=%s limit=%s remaining=%s",
+                context_budget.get("severity"),
+                context_budget.get("estimated_input_tokens"),
+                context_budget.get("effective_context_limit_tokens"),
+                context_budget.get("remaining_input_tokens"),
+            )
+        self._emit_event("context_budget", context_budget)
+
         # Debug: dump the full system prompt and messages sent to the LLM.
         # Gated behind `debug` config to avoid flooding normal logs.
         # try:
@@ -1579,6 +1845,7 @@ class AgentStreamExecutor:
             retry_count=retry_count,
             model_retry_sleep=self._sleep_cancelable,
             tool_schema_budget=schema_budget,
+            context_budget=context_budget,
         )
 
         self._emit_event("message_start", {"role": "assistant"})
@@ -2518,20 +2785,13 @@ class AgentStreamExecutor:
                     )
 
         # Step 3: Token 限制 - 保留完整轮次
-        # Get context window from agent (based on model)
-        context_window = self.agent._get_model_context_window()
-
-        # Use configured max_context_tokens if available
-        if hasattr(self.agent, 'max_context_tokens') and self.agent.max_context_tokens:
-            max_tokens = self.agent.max_context_tokens
-        else:
-            # Reserve 10% for response generation
-            reserve_tokens = int(context_window * 0.1)
-            max_tokens = context_window - reserve_tokens
+        # Use the same effective limit reported by context_budget. This clamps
+        # oversized configured limits to the model window minus response reserve.
+        budget_limits = self._context_budget_limits()
+        max_tokens = budget_limits["effective_context_limit_tokens"]
 
         # Estimate system prompt tokens
         system_tokens = self.agent._estimate_message_tokens({"role": "system", "content": self.system_prompt})
-        available_tokens = max_tokens - system_tokens
 
         # Calculate current tokens
         current_tokens = sum(self._estimate_turn_tokens(turn) for turn in turns)

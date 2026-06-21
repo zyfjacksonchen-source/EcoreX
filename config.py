@@ -257,6 +257,9 @@ available_setting = {
     "agent_max_context_tokens": 258000,  # max context tokens in Agent mode
     "agent_max_context_turns": 20,  # max context memory turns in Agent mode
     "agent_max_steps": 20,  # max decision steps per run in Agent mode
+    "agent_context_budget_warn_ratio": 0.85,  # emit near-limit context-budget evidence above this fraction of the effective input limit
+    "agent_context_budget_clamp_to_window": True,  # clamp configured context budget to the model window minus response reserve
+    "agent_context_budget_response_reserve_tokens": 0,  # 0 means use the model-derived reserve; set a positive number to override
     "enable_thinking": False,  # Enable deep-thinking mode for thinking-capable models
     "reasoning_effort": "high",  # Reasoning depth under thinking mode: "high" or "max"
     "knowledge": True,  # whether to enable the knowledge base feature

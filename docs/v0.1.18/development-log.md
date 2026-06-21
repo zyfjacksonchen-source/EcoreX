@@ -199,3 +199,22 @@
     official OpenAI; default production agent calls still use `/chat/completions`.
   - Focused pytest passed: 8 Responses adapter tests; adjacent model gateway
     regression passed: 28 capability/telemetry/Responses tests.
+- Added the first R18-05-A context budget slice:
+  - AgentStream now computes request-level `context_budget` metadata for each
+    model call, including system prompt, message text, reasoning blocks,
+    tool-use inputs, tool-result payloads, tool-schema cost, artifact metadata,
+    media estimates, runtime artifacts, selected/deferred schema counts, and
+    effective context-limit evidence.
+  - The effective limit clamps oversized `agent_max_context_tokens` values to
+    the model context window minus a response reserve by default, preventing a
+    large global config from overfilling smaller model windows.
+  - Response reserve is capped within the model window so 4K/8K models do not
+    inherit an oversized 10K default reserve and collapse to a 1-token input
+    budget.
+  - AgentStream emits a `context_budget` event before the model call and stores
+    the same metadata on `LLMRequest` so future Run Center/model telemetry work
+    can explain near-limit or over-budget turns.
+  - Context trimming now uses the same effective limit and focused coverage
+    proves old turns are trimmed while the current run remains preserved.
+  - Focused pytest passed: 16 context/tool-schema/forced-text/tool-chain budget
+    tests.

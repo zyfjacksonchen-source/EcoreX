@@ -2522,6 +2522,194 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertEqual(len(budget_events), 1)
         self.assertEqual(budget_events[0]["data"]["selected_tools"], ["bash", "read"])
 
+    def test_context_budget_attaches_request_metadata_and_event(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        class FakeModel:
+            model = "deepseek-v4-flash"
+
+            def __init__(self):
+                self.requests = []
+
+            def call_stream(self, request):
+                self.requests.append(request)
+                yield {"choices": [{"delta": {"content": "budgeted"}, "finish_reason": "stop"}]}
+
+        def tool(name):
+            return types.SimpleNamespace(
+                name=name,
+                description=f"{name} tool",
+                params={"type": "object", "properties": {"path": {"type": "string"}}},
+            )
+
+        events = []
+        model = FakeModel()
+        artifact_payload = {
+            "type": "artifact",
+            "title": "report",
+            "path": "C:/workspace/report.md",
+            "metadata": {"rows": 12},
+        }
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=model,
+            system_prompt="system budget prompt",
+            tools=[tool("read"), tool("bash"), tool("feishu_cli")],
+            on_event=lambda event: events.append(event),
+            messages=[
+                {"role": "user", "content": [{"type": "text", "text": "inspect report"}]},
+                {"role": "assistant", "content": [
+                    {"type": "thinking", "thinking": "reasoning trace"},
+                    {"type": "tool_use", "id": "toolu_1", "name": "read", "input": {"path": "report.md"}},
+                ]},
+                {"role": "user", "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": json.dumps(artifact_payload),
+                }]},
+            ],
+        )
+        executor.files_to_send = [{"path": "C:/workspace/report.md", "kind": "markdown"}]
+
+        content, tool_calls = executor._call_llm_stream(retry_on_empty=False)
+
+        self.assertEqual(content, "budgeted")
+        self.assertEqual(tool_calls, [])
+        budget = model.requests[0].context_budget
+        self.assertTrue(budget["enabled"])
+        self.assertGreater(budget["system_prompt_tokens"], 0)
+        self.assertGreater(budget["message_tokens"], 0)
+        self.assertGreater(budget["reasoning_tokens"], 0)
+        self.assertGreater(budget["tool_result_tokens"], 0)
+        self.assertGreater(budget["artifact_metadata_tokens"], 0)
+        self.assertGreater(budget["tool_schema_tokens"], 0)
+        self.assertEqual(budget["tool_schema_selected_count"], model.requests[0].tool_schema_budget["selected_count"])
+        budget_events = [event for event in events if event["type"] == "context_budget"]
+        self.assertEqual(len(budget_events), 1)
+        self.assertEqual(budget_events[0]["data"], budget)
+
+    def test_context_budget_clamps_configured_limit_to_model_window(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        class FakeAgent:
+            max_context_tokens = 258000
+
+            @staticmethod
+            def _get_model_context_window():
+                return 64000
+
+            @staticmethod
+            def _get_context_reserve_tokens():
+                return 10000
+
+        executor = AgentStreamExecutor(
+            agent=FakeAgent(),
+            model=types.SimpleNamespace(model="deepseek-v4-flash"),
+            system_prompt="",
+            tools=[],
+        )
+
+        with patch("config.conf", return_value={
+            "agent_context_budget_clamp_to_window": True,
+            "agent_context_budget_response_reserve_tokens": 0,
+        }):
+            limits = executor._context_budget_limits()
+
+        self.assertEqual(limits["context_window_tokens"], 64000)
+        self.assertEqual(limits["configured_max_context_tokens"], 258000)
+        self.assertEqual(limits["response_reserve_tokens"], 10000)
+        self.assertEqual(limits["effective_context_limit_tokens"], 54000)
+        self.assertTrue(limits["clamped_to_window"])
+
+    def test_context_budget_caps_large_reserve_for_small_window_models(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        class FakeAgent:
+            max_context_tokens = 258000
+
+            @staticmethod
+            def _get_model_context_window():
+                return 8000
+
+            @staticmethod
+            def _get_context_reserve_tokens():
+                return 10000
+
+        executor = AgentStreamExecutor(
+            agent=FakeAgent(),
+            model=types.SimpleNamespace(model="gpt-4"),
+            system_prompt="",
+            tools=[],
+        )
+
+        with patch("config.conf", return_value={
+            "agent_context_budget_clamp_to_window": True,
+            "agent_context_budget_response_reserve_tokens": 0,
+        }):
+            limits = executor._context_budget_limits()
+
+        self.assertEqual(limits["context_window_tokens"], 8000)
+        self.assertEqual(limits["response_reserve_tokens"], 4000)
+        self.assertEqual(limits["window_input_limit_tokens"], 4000)
+        self.assertEqual(limits["effective_context_limit_tokens"], 4000)
+        self.assertTrue(limits["clamped_to_window"])
+
+    def test_context_trim_uses_effective_budget_and_preserves_current_turn(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        class FakeAgent:
+            memory_manager = None
+            max_context_tokens = 10000
+
+            @staticmethod
+            def _get_model_context_window():
+                return 220
+
+            @staticmethod
+            def _get_context_reserve_tokens():
+                return 20
+
+            @staticmethod
+            def _estimate_message_tokens(message):
+                content = message.get("content", "")
+                if isinstance(content, str):
+                    return len(content)
+                if isinstance(content, list):
+                    total = 0
+                    for block in content:
+                        if isinstance(block, dict):
+                            total += len(str(block.get("text") or block.get("content") or block.get("thinking") or ""))
+                    return max(1, total)
+                return 1
+
+        messages = []
+        for idx in range(6):
+            label = "current" if idx == 5 else f"old-{idx}"
+            messages.extend([
+                {"role": "user", "content": [{"type": "text", "text": f"{label} " + ("x" * 80)}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "answer " + ("y" * 30)}]},
+            ])
+
+        executor = AgentStreamExecutor(
+            agent=FakeAgent(),
+            model=types.SimpleNamespace(model="small-window"),
+            system_prompt="system",
+            tools=[],
+            messages=messages,
+            max_context_turns=20,
+        )
+
+        with patch("config.conf", return_value={
+            "agent_context_budget_clamp_to_window": True,
+            "agent_context_budget_response_reserve_tokens": 20,
+        }):
+            executor._trim_messages()
+
+        serialized = json.dumps(executor.messages, ensure_ascii=False)
+        self.assertIn("current", serialized)
+        self.assertNotIn("old-0", serialized)
+        self.assertLess(len(executor._identify_complete_turns()), 6)
+
     def test_tool_schema_budget_expands_matching_intent_groups(self):
         from agent.protocol.agent_stream import AgentStreamExecutor
 
