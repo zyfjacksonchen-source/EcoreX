@@ -328,11 +328,23 @@
     ignored build/dependency artifacts.
   - If the token scan is skipped, the gate now emits a blocker instead of a
     possible GO report, so credential-leakage evidence remains mandatory.
-  - `--allow-no-go` writes the current report without pretending the release is
-    complete; `docs/v0.1.18/promotion-gate.json` is currently `no-go` with seven
-    blocker groups because the broad v0.1.18 acceptance rows are still PARTIAL.
+  - `--allow-no-go` writes the report without pretending the release is
+    complete; at that point `docs/v0.1.18/promotion-gate.json` was `no-go` with
+    seven blocker groups because the broad v0.1.18 acceptance rows were still
+    PARTIAL.
   - Focused pytest covers GO, PARTIAL/NO-GO, token-pattern failure, and
     token-scan-skipped blocker behavior.
+- Added the second R18-07-A promotion-gate hardening slice:
+  - Promotion gate review checks now cover every gated acceptance family, adding
+    cancellation/concurrency, context-budget, and promotion-gate self-review
+    consensus requirements alongside existing run-ledger, SSE, model-gateway,
+    and Run Center review checks.
+  - Focused unit coverage now proves missing context-budget,
+    cancellation/concurrency, and promotion-gate-hardening review consensus rows
+    are blockers, enforces same-line review markers, and covers all GitHub token
+    pattern families used by the production scan.
+  - R18-07-A is promoted to PASS because the gate itself is now complete and
+    still correctly reports NO-GO while runtime acceptance rows remain PARTIAL.
 - Added the first scheduler execution run-ledger slice:
   - Scheduler due-task execution now flows through `_execute_scheduled_task()`,
     creating one durable `run_type=scheduler` row per execution attempt after

@@ -67,11 +67,34 @@ class TestV018PromotionGate(unittest.TestCase):
             R18-RUN-CENTER Run Center /api/active-requests diagnostics
             Multi-agent cross-review sidecar interruption Consensus: submit
             Multi-agent cross-review SSE replay-gap Consensus: submit
+            Multi-agent cross-review typed busy/retry Consensus: submit
             Multi-agent cross-review model telemetry Consensus: submit
+            Multi-agent cross-review context overflow recovery Consensus: submit
             Multi-agent cross-review desktop Run Center Consensus: submit
+            Multi-agent cross-review promotion-gate hardening Consensus: submit
             """).strip() + "\n",
             encoding="utf-8",
         )
+
+    def assert_missing_review_blocks(self, *, line_to_remove: str, check_name: str) -> None:
+        gate = load_gate_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            self.write_docs(root)
+            evidence_path = root / "docs" / "v0.1.18" / "evidence-ledger.md"
+            evidence_path.write_text(
+                evidence_path.read_text(encoding="utf-8").replace(
+                    line_to_remove + "\n",
+                    "",
+                ),
+                encoding="utf-8",
+            )
+            report = gate.build_report(root, "0.1.18")
+
+        self.assertEqual(report["status"], "no-go")
+        review_check = next(item for item in report["checks"] if item["name"] == check_name)
+        self.assertEqual(review_check["status"], "fail")
+        self.assertEqual(review_check["severity"], "blocker")
 
     def test_gate_reports_go_when_rows_and_evidence_pass(self):
         gate = load_gate_module()
@@ -96,15 +119,17 @@ class TestV018PromotionGate(unittest.TestCase):
 
     def test_gate_detects_github_token_pattern(self):
         gate = load_gate_module()
-        with tempfile.TemporaryDirectory() as tmp:
-            root = pathlib.Path(tmp)
-            self.write_docs(root)
-            (root / "leak.txt").write_text("token=" + "ghp_" + ("A" * 30), encoding="utf-8")
-            report = gate.build_report(root, "0.1.18")
+        for prefix in ("ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_"):
+            with self.subTest(prefix=prefix):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = pathlib.Path(tmp)
+                    self.write_docs(root)
+                    (root / "leak.txt").write_text("token=" + prefix + ("A" * 30), encoding="utf-8")
+                    report = gate.build_report(root, "0.1.18")
 
-        self.assertEqual(report["status"], "no-go")
-        token_check = next(item for item in report["checks"] if item["name"] == "GitHub token pattern scan")
-        self.assertEqual(token_check["status"], "fail")
+                self.assertEqual(report["status"], "no-go")
+                token_check = next(item for item in report["checks"] if item["name"] == "GitHub token pattern scan")
+                self.assertEqual(token_check["status"], "fail")
 
     def test_gate_reports_no_go_when_token_scan_is_skipped(self):
         gate = load_gate_module()
@@ -117,6 +142,47 @@ class TestV018PromotionGate(unittest.TestCase):
         token_check = next(item for item in report["checks"] if item["name"] == "GitHub token pattern scan")
         self.assertEqual(token_check["status"], "fail")
         self.assertEqual(token_check["severity"], "blocker")
+
+    def test_gate_requires_context_budget_review_consensus(self):
+        self.assert_missing_review_blocks(
+            line_to_remove="Multi-agent cross-review context overflow recovery Consensus: submit",
+            check_name="context budget multi-agent review",
+        )
+
+    def test_gate_requires_cancellation_concurrency_review_consensus(self):
+        self.assert_missing_review_blocks(
+            line_to_remove="Multi-agent cross-review typed busy/retry Consensus: submit",
+            check_name="cancellation/concurrency multi-agent review",
+        )
+
+    def test_gate_requires_promotion_gate_hardening_review_consensus(self):
+        self.assert_missing_review_blocks(
+            line_to_remove="Multi-agent cross-review promotion-gate hardening Consensus: submit",
+            check_name="promotion gate multi-agent review",
+        )
+
+    def test_gate_requires_review_markers_on_same_line(self):
+        gate = load_gate_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            self.write_docs(root)
+            evidence_path = root / "docs" / "v0.1.18" / "evidence-ledger.md"
+            evidence_path.write_text(
+                evidence_path.read_text(encoding="utf-8").replace(
+                    "Multi-agent cross-review context overflow recovery Consensus: submit",
+                    "Multi-agent cross-review context overflow recovery\nConsensus: submit",
+                ),
+                encoding="utf-8",
+            )
+            report = gate.build_report(root, "0.1.18")
+
+        self.assertEqual(report["status"], "no-go")
+        review_check = next(
+            item for item in report["checks"]
+            if item["name"] == "context budget multi-agent review"
+        )
+        self.assertEqual(review_check["status"], "fail")
+        self.assertEqual(review_check["severity"], "blocker")
 
 
 if __name__ == "__main__":

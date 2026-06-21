@@ -65,8 +65,11 @@ EVIDENCE_REQUIREMENTS: dict[str, list[str]] = {
 REVIEW_MARKERS: dict[str, list[str]] = {
     "run ledger multi-agent review": ["multi-agent cross-review", "sidecar interruption", "consensus: submit"],
     "sse recovery multi-agent review": ["multi-agent cross-review", "sse replay-gap", "consensus: submit"],
+    "cancellation/concurrency multi-agent review": ["multi-agent cross-review", "typed busy/retry", "consensus: submit"],
     "model gateway multi-agent review": ["multi-agent cross-review", "model telemetry", "consensus: submit"],
+    "context budget multi-agent review": ["multi-agent cross-review", "context overflow recovery", "consensus: submit"],
     "run center multi-agent review": ["multi-agent cross-review", "desktop run center", "consensus: submit"],
+    "promotion gate multi-agent review": ["multi-agent cross-review", "promotion-gate hardening", "consensus: submit"],
 }
 
 TOKEN_RE = re.compile(rb"(?:(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})")
