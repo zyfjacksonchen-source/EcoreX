@@ -901,6 +901,137 @@ class TestWebParallelHandlers(unittest.TestCase):
             finally:
                 registry.unregister(request_id)
 
+    def test_active_request_snapshot_marks_dead_lock_message_run_interrupted(self):
+        from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests
+        from channel.web import web_channel
+        from common.ecorex_workspace import SessionLock
+
+        channel = web_channel.WebChannel()
+        request_id = "req-sidecar-interrupted"
+        session_id = "session-sidecar-interrupted"
+        registry = get_cancel_registry()
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            ledger.create_run(request_id, session_id, phase="tool_running", status="running")
+            registry.register(request_id, session_id=session_id)
+            lock = SessionLock(workspace, session_id)
+            lock.path.parent.mkdir(parents=True, exist_ok=True)
+            lock.path.write_text(
+                json.dumps({
+                    "sessionId": session_id,
+                    "pid": 999999999,
+                    "host": socket.gethostname(),
+                    "createdAt": 1,
+                }),
+                encoding="utf-8",
+            )
+
+            try:
+                with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                    snapshot = channel.active_requests_snapshot()
+                    second_snapshot = channel.active_requests_snapshot()
+            finally:
+                registry.unregister(request_id)
+
+            self.assertEqual(snapshot["status"], "success")
+            self.assertFalse([item for item in snapshot["requests"] if item.get("request_id") == request_id])
+            self.assertFalse([item for item in second_snapshot["requests"] if item.get("request_id") == request_id])
+            self.assertEqual(len(snapshot["staleLocks"]), 1)
+            self.assertTrue(snapshot["staleLocks"][0]["removed"])
+            final = ledger.get_run(request_id)
+            self.assertEqual(final["status"], "interrupted")
+            self.assertEqual(final["phase"], "interrupted")
+            self.assertEqual(final["terminal_reason"], "sidecar_interrupted")
+            self.assertEqual(final["error_code"], "SIDECAR_INTERRUPTED")
+            terminal_at = final["terminal_at"]
+            self.assertIsNotNone(terminal_at)
+            self.assertEqual(ledger.active_snapshot(), [])
+            self.assertEqual(ledger.get_run(request_id)["terminal_at"], terminal_at)
+
+    def test_active_request_snapshot_keeps_subagent_run_active_after_dead_message_lock(self):
+        from agent.protocol import reset_run_ledger_for_tests
+        from channel.web import web_channel
+        from common.ecorex_workspace import SessionLock
+
+        channel = web_channel.WebChannel()
+        request_id = "subagent-sidecar-interrupted"
+        session_id = "session-sidecar-subagent"
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            ledger.create_run(
+                request_id,
+                session_id,
+                run_type="subagent",
+                phase="queued",
+                status="queued",
+                metadata={"task_id": request_id},
+            )
+            lock = SessionLock(workspace, session_id)
+            lock.path.parent.mkdir(parents=True, exist_ok=True)
+            lock.path.write_text(
+                json.dumps({
+                    "sessionId": session_id,
+                    "pid": 999999999,
+                    "host": socket.gethostname(),
+                    "createdAt": 1,
+                }),
+                encoding="utf-8",
+            )
+
+            with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                snapshot = channel.active_requests_snapshot()
+
+            active = [item for item in snapshot["requests"] if item.get("request_id") == request_id]
+            self.assertEqual(len(active), 1)
+            self.assertEqual(active[0]["run_type"], "subagent")
+            self.assertEqual(active[0]["status"], "queued")
+            self.assertEqual(active[0]["phase"], "queued")
+            final = ledger.get_run(request_id)
+            self.assertEqual(final["status"], "queued")
+            self.assertIsNone(final["terminal_at"])
+
+    def test_active_request_snapshot_does_not_interrupt_stale_live_message_lock(self):
+        from agent.protocol import reset_run_ledger_for_tests
+        from channel.web import web_channel
+        from common.ecorex_workspace import LOCK_STALE_SECONDS, SessionLock
+
+        channel = web_channel.WebChannel()
+        request_id = "req-stale-live-owner"
+        session_id = "session-stale-live-owner"
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            ledger.create_run(request_id, session_id, phase="tool_running", status="running")
+            lock = SessionLock(workspace, session_id)
+            lock.path.parent.mkdir(parents=True, exist_ok=True)
+            lock.path.write_text(
+                json.dumps({
+                    "sessionId": session_id,
+                    "pid": os.getpid(),
+                    "host": socket.gethostname(),
+                    "createdAt": int(time.time()) - LOCK_STALE_SECONDS - 10,
+                }),
+                encoding="utf-8",
+            )
+            stale_mtime = int(time.time()) - LOCK_STALE_SECONDS - 10
+            os.utime(lock.path, (stale_mtime, stale_mtime))
+
+            with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                snapshot = channel.active_requests_snapshot()
+
+            active = [item for item in snapshot["requests"] if item.get("request_id") == request_id]
+            self.assertEqual(len(active), 1)
+            self.assertEqual(active[0]["status"], "running")
+            stale = [item for item in snapshot["staleLocks"] if item.get("session_id") == session_id]
+            self.assertEqual(len(stale), 1)
+            self.assertTrue(stale[0]["stale"])
+            self.assertTrue(stale[0]["alive"])
+            self.assertFalse(stale[0]["dead_owner"])
+            self.assertFalse(stale[0]["removed"])
+            self.assertTrue(lock.path.exists())
+            final = ledger.get_run(request_id)
+            self.assertEqual(final["status"], "running")
+            self.assertIsNone(final["terminal_at"])
+
     def test_cancel_registry_snapshot_marks_cancelled_request(self):
         from agent.protocol.cancel import CancelTokenRegistry
 

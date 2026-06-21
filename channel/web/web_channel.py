@@ -1240,13 +1240,13 @@ class WebChannel(ChatChannel):
         """Return backend-authoritative active request state for UI recovery.
 
         The browser may lose local request bookkeeping on refresh or when the
-        same runtime is opened from another surface. The cancel registry is the
-        source of truth for in-flight work; this API exposes it without exposing
-        tool output or message content.
+        same runtime is opened from another surface. The durable run ledger is
+        the primary in-flight source of truth; the cancel registry supplies
+        in-process cancelling and compatibility fallback state.
         """
         try:
             from agent.protocol import get_cancel_registry, get_run_ledger
-            from common.ecorex_workspace import cleanup_stale_session_locks
+            from common.ecorex_workspace import list_session_locks
 
             requests = []
             sessions = {}
@@ -1257,7 +1257,49 @@ class WebChannel(ChatChannel):
                 for row in registry_rows
                 if row.get("request_id")
             }
-            for row in get_run_ledger().active_snapshot():
+            ledger = get_run_ledger()
+            stale_locks = []
+            for item in list_session_locks(_get_workspace_root(), cleanup=False):
+                if not (item.get("dead_owner") or item.get("stale")):
+                    continue
+                if item.get("dead_owner"):
+                    path = str(item.get("path") or "")
+                    if path:
+                        try:
+                            Path(path).unlink()
+                            item["removed"] = True
+                            logger.warning(
+                                f"[WebChannel] Removed dead session lock before active snapshot: "
+                                f"{path} pid={item.get('pid')} session={item.get('session_id')}"
+                            )
+                        except FileNotFoundError:
+                            item["removed"] = True
+                        except Exception as exc:
+                            item["remove_error"] = str(exc)
+                stale_locks.append(item)
+            interrupted_session_ids = {
+                session_id
+                for item in stale_locks
+                for session_id in [str(item.get("session_id") or "")]
+                if item.get("dead_owner")
+                if session_id
+            }
+            interrupted_request_ids = set()
+            if interrupted_session_ids:
+                for row in ledger.active_snapshot():
+                    request_id = row.get("request_id", "")
+                    session_id = row.get("session_id", "")
+                    run_type = str(row.get("run_type") or "message")
+                    if request_id and session_id in interrupted_session_ids and run_type == "message":
+                        ledger.mark_terminal(
+                            request_id,
+                            "interrupted",
+                            reason="sidecar_interrupted",
+                            error_code="SIDECAR_INTERRUPTED",
+                            error_message="Runtime session lock owner disappeared before the run reached a terminal state.",
+                        )
+                        interrupted_request_ids.add(request_id)
+            for row in ledger.active_snapshot():
                 request_id = row.get("request_id", "")
                 session_id = row.get("session_id") or self.request_to_session.get(request_id, "")
                 registry_row = registry_by_request.get(request_id, {})
@@ -1277,7 +1319,14 @@ class WebChannel(ChatChannel):
                     sessions.setdefault(session_id, []).append(request_id)
             for row in registry_rows:
                 request_id = row.get("request_id", "")
-                if not request_id or request_id in seen_request_ids:
+                if not request_id or request_id in seen_request_ids or request_id in interrupted_request_ids:
+                    continue
+                durable_row = ledger.get_run(request_id)
+                if (
+                    durable_row
+                    and durable_row.get("status") == "interrupted"
+                    and durable_row.get("terminal_reason") == "sidecar_interrupted"
+                ):
                     continue
                 session_id = row.get("session_id") or self.request_to_session.get(request_id, "")
                 item = {
@@ -1291,10 +1340,6 @@ class WebChannel(ChatChannel):
                 requests.append(item)
                 if session_id and not item.get("cancelled"):
                     sessions.setdefault(session_id, []).append(request_id)
-            stale_locks = [
-                item for item in cleanup_stale_session_locks(_get_workspace_root())
-                if item.get("removed") or item.get("dead_owner") or item.get("stale")
-            ]
             return {
                 "status": "success",
                 "requests": requests,

@@ -261,3 +261,27 @@
     explain why a live stream stopped.
   - Desktop `npm run typecheck` passed; focused desktop source-contract pytest
     and adjacent backend SSE replay-gap tests passed.
+- Added the first R18-01-B sidecar interruption terminal-ledger slice:
+  - `active_requests_snapshot()` now inspects session-lock diagnostics before
+    reading active durable run rows and removes locks only when the local owner
+    process is confirmed dead.
+  - When diagnostics prove a session lock owner is gone, active
+    `run_type=message` rows for that session are marked terminal `interrupted` with
+    `sidecar_interrupted` and `SIDECAR_INTERRUPTED` before the active snapshot
+    response is built.
+  - The active snapshot is re-read after terminal marking, so desktop recovery
+    and Run Center no longer keep a dead-lock message request visible forever
+    as `running`.
+  - A sidecar-interrupted request is also suppressed from cancel-registry
+    fallback rows, so stale in-process registry state cannot re-add the same
+    durable terminal request as active.
+  - Stale-only locks whose owner is still alive remain diagnostic evidence and
+    do not trigger interruption, preventing long-running message tasks from
+    being mislabelled as sidecar crashes.
+  - The rule is intentionally scoped to message runs in this slice; subagent
+    rows keep their independent lifecycle and remain active for the dedicated
+    subagent/scheduler interruption policy slice.
+  - Focused backend pytest passed for dead-lock cleanup, message-run
+    interruption with registry fallback suppression, stale-live
+    non-interruption, subagent non-interruption, cancelling fallback
+    preservation, and durable active snapshot behavior.
