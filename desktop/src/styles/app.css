@@ -2698,6 +2698,137 @@ html[data-platform="web"] .window-brand {
   padding: 0 12px;
 }
 
+.run-center-panel {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+}
+
+.run-center-head,
+.run-center-stats,
+.run-center-row,
+.run-center-actions {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.run-center-head {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.run-center-head > div,
+.run-center-row-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.run-center-head strong {
+  font-size: 14px;
+}
+
+.run-center-head span,
+.run-center-row-main small {
+  color: var(--color-muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-center-head button,
+.run-center-actions button {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+}
+
+.run-center-stats {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.run-center-stats span,
+.run-center-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-muted);
+  background: var(--color-surface);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.run-center-stats .is-cancelling,
+.run-center-row.is-cancelling .run-center-state {
+  color: #b45309;
+  border-color: rgba(245, 158, 11, 0.38);
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.run-center-stats .is-failed,
+.run-center-row.is-failed .run-center-state {
+  color: var(--color-danger);
+  border-color: color-mix(in srgb, var(--color-danger) 48%, var(--color-border));
+  background: color-mix(in srgb, var(--color-danger) 12%, var(--color-surface));
+}
+
+.run-center-stats .is-stale,
+.run-center-row.is-stale .run-center-state {
+  color: var(--color-muted);
+  background: var(--color-surface-muted);
+}
+
+.run-center-list {
+  display: grid;
+  gap: 8px;
+}
+
+.run-center-row {
+  gap: 10px;
+  justify-content: space-between;
+  padding: 9px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+
+.run-center-row-main {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  flex: 1;
+}
+
+.run-center-row-main small {
+  grid-column: 2;
+}
+
+.run-center-row-main strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.run-center-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .toggle-list-head,
 .toggle-row,
 .pack-toggle {

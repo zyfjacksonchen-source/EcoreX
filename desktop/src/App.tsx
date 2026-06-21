@@ -1,4 +1,6 @@
 import {
+  Activity,
+  AlertTriangle,
   ArrowDownToLine,
   AtSign,
   Bell,
@@ -26,6 +28,7 @@ import {
   Pin,
   PinOff,
   Plus,
+  RefreshCw,
   Search,
   SendHorizontal,
   Settings,
@@ -47,6 +50,7 @@ import type { ClipboardEvent, CSSProperties, DragEvent, MouseEvent, ReactNode } 
 import { MessageContent, type AgentStepDisclosure, type LocalFilePayload, type ToolCallDisclosure } from "./components/MessageContent";
 import {
   cancelChatRequest,
+  cancelSubagentTask,
   checkForUpdates,
   clearRuntimeContext,
   enterpriseChangePassword,
@@ -448,6 +452,83 @@ function isPrimaryChatActiveRequest(request?: RuntimeActiveRequest | null) {
     && !sessionId.startsWith("subagent-")
     && isRuntimeRequestUiActive(request)
   );
+}
+
+function runCenterState(request?: RuntimeActiveRequest | null) {
+  const raw = String(request?.state || request?.status || request?.phase || "").toLowerCase();
+  if (request?.cancelled || raw.includes("cancell")) return "cancelling";
+  if (raw.includes("complete") || raw === "done") return "completed";
+  if (raw.includes("fail") || raw.includes("error") || raw.includes("interrupt")) return "failed";
+  if (raw.includes("queue") || raw.includes("pending")) return "queued";
+  if (raw.includes("final")) return "finalizing";
+  return raw || "running";
+}
+
+function runCenterStateLabel(request?: RuntimeActiveRequest | null) {
+  const state = runCenterState(request);
+  if (state === "cancelling") return "Stopping";
+  if (state === "failed") return "Failed";
+  if (state === "queued") return "Queued";
+  if (state === "finalizing") return "Finalizing";
+  return "Running";
+}
+
+function runCenterStateClass(request?: RuntimeActiveRequest | null) {
+  const state = runCenterState(request);
+  if (state === "cancelling") return "is-cancelling";
+  if (state === "failed") return "is-failed";
+  if (state === "queued") return "is-queued";
+  if (state === "finalizing") return "is-finalizing";
+  return "is-running";
+}
+
+function isRunCenterFailedRequest(request?: RuntimeActiveRequest | null) {
+  return runCenterState(request) === "failed";
+}
+
+function isRunCenterVisibleRequest(request?: RuntimeActiveRequest | null) {
+  if (!request?.request_id) return false;
+  return runCenterState(request) !== "completed";
+}
+
+function isRunCenterSubagentRequest(request?: RuntimeActiveRequest | null) {
+  const requestId = String(request?.request_id || "");
+  const sessionId = String(request?.session_id || "");
+  return (
+    request?.run_type === "subagent"
+    || requestId.startsWith("subagent-")
+    || sessionId.startsWith("subagent-")
+  );
+}
+
+function getRunCenterSubagentTaskId(request?: RuntimeActiveRequest | null) {
+  const metadataTaskId = request?.metadata?.task_id;
+  if (typeof metadataTaskId === "string" && metadataTaskId.trim()) {
+    return metadataTaskId.trim();
+  }
+  for (const value of [request?.request_id, request?.session_id]) {
+    const text = String(value || "");
+    if (text.startsWith("subagent-") && text.length > "subagent-".length) {
+      return text.slice("subagent-".length);
+    }
+  }
+  return "";
+}
+
+function shortRequestId(value?: string) {
+  const text = String(value || "").trim();
+  if (!text) return "unknown";
+  return text.length > 12 ? `${text.slice(0, 8)}...${text.slice(-4)}` : text;
+}
+
+function formatRunAge(seconds?: number | null) {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) return "";
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = Math.round(seconds % 60);
+  if (minutes < 60) return `${minutes}m ${rest}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
 }
 
 function isRetryableConcurrencyResult(result?: ChatSendResult | null) {
@@ -2134,6 +2215,24 @@ export function App() {
     const needle = searchQuery.trim().toLowerCase();
     return needle ? allSessions.filter((row) => `${row.title} ${row.detail}`.toLowerCase().includes(needle)) : allSessions;
   }, [allSessions, searchQuery]);
+  const runCenterRequests = useMemo(() => (
+    (runtimeSnapshot.activeRequests || [])
+      .filter(isRunCenterVisibleRequest)
+  ), [runtimeSnapshot.activeRequests]);
+  const runCenterStaleLocks = useMemo(() => (
+    (runtimeSnapshot.staleLocks || [])
+      .filter((lock) => lock.removed || lock.dead_owner || lock.stale)
+  ), [runtimeSnapshot.staleLocks]);
+  const runCenterStats = useMemo(() => {
+    const cancelling = runCenterRequests.filter((request) => runCenterState(request) === "cancelling").length;
+    const failed = runCenterRequests.filter(isRunCenterFailedRequest).length;
+    return {
+      running: runCenterRequests.length - cancelling - failed,
+      cancelling,
+      failed,
+      stale: runCenterStaleLocks.length
+    };
+  }, [runCenterRequests, runCenterStaleLocks]);
 
   const activeProject = useMemo(
     () => projects.find((project) => project.id === activeProjectId) || null,
@@ -4758,6 +4857,91 @@ export function App() {
     }
   }
 
+  async function refreshRunCenter() {
+    const snapshot = await loadRuntimeSnapshot();
+    setRuntimeSnapshot(snapshot);
+    setToast("Run Center refreshed");
+  }
+
+  async function openRunCenterSession(request: RuntimeActiveRequest) {
+    if (isRunCenterSubagentRequest(request)) {
+      setToast("Subagent runs are visible in Run Center; export diagnostics for details");
+      return;
+    }
+    const sessionId = String(request.session_id || "");
+    if (!sessionId) {
+      setToast("Run Center item has no session id");
+      return;
+    }
+    const existing = allSessions.find((row) => row.id === sessionId);
+    const requestId = request.request_id ? String(request.request_id) : undefined;
+    const state = runCenterState(request);
+    const scopedRow: SessionRow = {
+      ...(existing || {
+        id: sessionId,
+        title: sessionId,
+        detail: String(request.run_type || request.source || ""),
+        activityAt: request.updated_at || request.created_at,
+        createdAt: request.created_at,
+        updatedAt: request.updated_at || request.created_at || "running",
+        status: state === "failed" ? "failed" : state === "cancelling" ? "cancelling" : "waiting"
+      }),
+      id: sessionId,
+      requestId,
+      streamAvailable: request.stream_available !== false,
+      cancelling: state === "cancelling",
+      status: state === "failed" ? "failed" : state === "cancelling" ? "cancelling" : existing?.status || "waiting"
+    };
+    await selectSession(scopedRow);
+  }
+
+  async function stopRunCenterRequest(request: RuntimeActiveRequest) {
+    const requestId = String(request.request_id || "");
+    const sessionId = String(request.session_id || "");
+    if (!requestId && !sessionId) {
+      setToast("Run Center item cannot be stopped");
+      return;
+    }
+    try {
+      if (isRunCenterSubagentRequest(request)) {
+        const taskId = getRunCenterSubagentTaskId(request);
+        if (!taskId) {
+          setToast("Subagent run cannot be stopped without task id");
+          return;
+        }
+        try {
+          await cancelSubagentTask(taskId);
+        } catch (subagentError) {
+          const fallback = await cancelChatRequest({ requestId, sessionId });
+          if (Number(fallback.cancelled || 0) <= 0) {
+            throw subagentError;
+          }
+        }
+        setRuntimeSnapshot(await loadRuntimeSnapshot());
+        setToast("Subagent stop requested");
+        return;
+      }
+      await cancelChatRequest({ requestId, sessionId });
+      setRuntimeSnapshot(await loadRuntimeSnapshot());
+      setToast("Stop requested");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Stop request failed");
+    }
+  }
+
+  async function exportRunCenterDiagnostics(request: RuntimeActiveRequest) {
+    try {
+      const requestId = request.request_id ? String(request.request_id) : undefined;
+      const sessionId = request.session_id ? String(request.session_id) : undefined;
+      const bundle = await exportDiagnosticsBundle({ sessionId, requestId });
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      downloadJsonFile(`ecorex-run-diagnostics-${stamp}.json`, bundle);
+      setToast("Run diagnostics generated");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Run diagnostics failed");
+    }
+  }
+
   async function openArtifactFile(
     file: { file_path: string; file_name: string; file_type?: FileAttachment["file_type"]; open_action?: "preview" | "open" | "reveal" | "copy" | "openWith"; previewDataUrl?: string; preview_url?: string },
     sessionId = activeSessionIdRef.current
@@ -5648,6 +5832,88 @@ export function App() {
                     <div className="settings-section-head">
                       <strong>诊断</strong>
                       <span>{sidecarStatus.message}</span>
+                    </div>
+                    <div className="run-center-panel" aria-label="Run Center">
+                      <div className="run-center-head">
+                        <div>
+                          <strong>Run Center</strong>
+                          <span>{runCenterRequests.length} active / {runCenterStaleLocks.length} stale</span>
+                        </div>
+                        <button type="button" onClick={() => void refreshRunCenter()} title="Refresh Run Center">
+                          <RefreshCw aria-hidden="true" />
+                          Refresh
+                        </button>
+                      </div>
+                      <div className="run-center-stats" aria-label="Run state summary">
+                        <span><Activity aria-hidden="true" />{runCenterStats.running} running</span>
+                        <span className="is-cancelling"><Square aria-hidden="true" />{runCenterStats.cancelling} stopping</span>
+                        <span className="is-failed"><AlertTriangle aria-hidden="true" />{runCenterStats.failed} failed</span>
+                        <span className="is-stale"><HardDrive aria-hidden="true" />{runCenterStats.stale} stale</span>
+                      </div>
+                      <div className="run-center-list">
+                        {runCenterRequests.map((request) => {
+                          const requestId = String(request.request_id || "");
+                          const sessionId = String(request.session_id || "");
+                          const isSubagent = isRunCenterSubagentRequest(request);
+                          const subagentTaskId = isSubagent ? getRunCenterSubagentTaskId(request) : "";
+                          const age = formatRunAge(request.cancelled ? request.cancel_age_seconds ?? request.age_seconds : request.age_seconds);
+                          return (
+                            <article className={`run-center-row ${runCenterStateClass(request)}`} key={requestId || `${sessionId}-${request.source || "request"}`}>
+                              <div className="run-center-row-main">
+                                <span className="run-center-state">{runCenterStateLabel(request)}</span>
+                                <strong>{sessionId || request.run_type || request.source || "runtime run"}</strong>
+                                <small>{shortRequestId(requestId)}{request.phase ? ` · ${request.phase}` : ""}{age ? ` · ${age}` : ""}</small>
+                              </div>
+                              <div className="run-center-actions">
+                                <button type="button" onClick={() => void openRunCenterSession(request)} disabled={isSubagent} title={isSubagent ? "Subagent runs are diagnostics-only here" : "Open or recover session"}>
+                                  <FolderOpen aria-hidden="true" />
+                                  Open
+                                </button>
+                                <button type="button" onClick={() => void exportRunCenterDiagnostics(request)} title="Export diagnostics for this run">
+                                  <ArrowDownToLine aria-hidden="true" />
+                                  Diagnostics
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void stopRunCenterRequest(request)}
+                                  disabled={runCenterState(request) === "failed" || (isSubagent && !subagentTaskId)}
+                                  title={isSubagent ? (subagentTaskId ? "Stop subagent run" : "Subagent task id unavailable") : "Stop run"}
+                                >
+                                  <Square aria-hidden="true" />
+                                  Stop
+                                </button>
+                              </div>
+                            </article>
+                          );
+                        })}
+                        {runCenterStaleLocks.map((lock, index) => (
+                          <article className="run-center-row is-stale" key={`${lock.path || lock.session_id || "lock"}-${index}`}>
+                            <div className="run-center-row-main">
+                              <span className="run-center-state">Stale</span>
+                              <strong>{lock.session_id || "session lock"}</strong>
+                              <small>{lock.removed ? "removed" : lock.dead_owner ? "dead owner" : "stale"}{formatRunAge(lock.age_seconds) ? ` · ${formatRunAge(lock.age_seconds)}` : ""}</small>
+                            </div>
+                            {lock.session_id && (
+                              <div className="run-center-actions">
+                                <button type="button" onClick={() => void selectSession({
+                                  id: String(lock.session_id),
+                                  title: String(lock.session_id),
+                                  detail: "stale lock",
+                                  activityAt: Date.now(),
+                                  updatedAt: Date.now(),
+                                  status: "failed"
+                                })} title="Open session">
+                                  <FolderOpen aria-hidden="true" />
+                                  Open
+                                </button>
+                              </div>
+                            )}
+                          </article>
+                        ))}
+                        {!runCenterRequests.length && !runCenterStaleLocks.length && (
+                          <div className="session-empty">No active or stale runs</div>
+                        )}
+                      </div>
                     </div>
                     <div className="settings-list">
                       <article><div><strong>运行时</strong><span>{runtimeSnapshot.message}</span></div><button onClick={() => loadRuntimeSnapshot().then(setRuntimeSnapshot)}>重新检查</button></article>

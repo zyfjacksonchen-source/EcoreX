@@ -4521,6 +4521,65 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertIn("sidecarDiagnostics: status.diagnostics", source)
         self.assertIn('"X-EcoreX-Runtime-Token": sidecar.getRuntimeToken()', source)
 
+    def test_v018_run_center_surfaces_active_runs_and_recovery_actions(self):
+        root = Path(__file__).resolve().parents[1]
+        app_source = (root / "desktop" / "src" / "App.tsx").read_text(encoding="utf-8")
+        css_source = (root / "desktop" / "src" / "styles" / "app.css").read_text(encoding="utf-8")
+        api_source = (root / "desktop" / "src" / "services" / "ecorexApi.ts").read_text(encoding="utf-8")
+        bridge_source = (root / "desktop" / "electron" / "apiBridge.ts").read_text(encoding="utf-8")
+
+        required_markers = [
+            "const runCenterRequests = useMemo",
+            "runtimeSnapshot.activeRequests",
+            "runtimeSnapshot.staleLocks",
+            "function runCenterState",
+            "function isRunCenterVisibleRequest",
+            ".filter(isRunCenterVisibleRequest)",
+            "function isRunCenterSubagentRequest",
+            "function getRunCenterSubagentTaskId",
+            "async function openRunCenterSession",
+            "if (isRunCenterSubagentRequest(request))",
+            "const scopedRow: SessionRow = {",
+            "...(existing || {",
+            "const requestId = request.request_id ? String(request.request_id) : undefined",
+            "await selectSession(scopedRow)",
+            "resumeRuntimeRequest(row.id, row.requestId, row.streamAvailable !== false)",
+            "async function stopRunCenterRequest",
+            "await cancelSubagentTask(taskId)",
+            "const fallback = await cancelChatRequest({ requestId, sessionId })",
+            "Number(fallback.cancelled || 0) <= 0",
+            "cancelChatRequest({ requestId, sessionId })",
+            "async function exportRunCenterDiagnostics",
+            "exportDiagnosticsBundle({ sessionId, requestId })",
+            'className="run-center-panel"',
+            "Run Center",
+            "runCenterStats.cancelling",
+            "runCenterStats.failed",
+            "runCenterStats.stale",
+            "disabled={isSubagent}",
+            "disabled={runCenterState(request) === \"failed\" || (isSubagent && !subagentTaskId)}",
+        ]
+        for marker in required_markers:
+            self.assertIn(marker, app_source)
+        self.assertNotIn("await selectSession(existing ||", app_source)
+
+        for marker in [
+            ".run-center-panel",
+            ".run-center-stats",
+            ".run-center-row",
+            ".run-center-actions",
+            ".run-center-row.is-cancelling .run-center-state",
+            ".run-center-row.is-failed .run-center-state",
+            ".run-center-row.is-stale .run-center-state",
+        ]:
+            self.assertIn(marker, css_source)
+
+        self.assertIn('"/api/active-requests"', api_source)
+        self.assertIn("export async function cancelSubagentTask", api_source)
+        self.assertIn('`/api/subagents/${encodeURIComponent(taskId)}/cancel`', api_source)
+        self.assertIn('"GET /api/active-requests"', bridge_source)
+        self.assertIn('/^\\/api\\/subagents\\/[^/]+\\/(?:cancel|collect)$/.test(cleanPath)', bridge_source)
+
     def test_legacy_openai_image_payload_supports_gpt_image_base64(self):
         from models.openai.open_ai_image import OpenAIImage
 

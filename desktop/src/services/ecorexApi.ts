@@ -676,6 +676,13 @@ export async function cancelChatRequest(input: { requestId?: string; sessionId?:
   });
 }
 
+export async function cancelSubagentTask(taskId: string) {
+  return apiJson<{ status?: string; cancelled?: number; task?: unknown }>(
+    `/api/subagents/${encodeURIComponent(taskId)}/cancel`,
+    "POST"
+  );
+}
+
 export async function decideToolPermission(input: {
   requestId: string;
   decision: ToolPermissionDecision;

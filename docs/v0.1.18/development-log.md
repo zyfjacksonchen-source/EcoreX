@@ -218,3 +218,30 @@
     proves old turns are trimmed while the current run remains preserved.
   - Focused pytest passed: 16 context/tool-schema/forced-text/tool-chain budget
     tests.
+- Added the first R18-06-A desktop Run Center slice:
+  - Desktop diagnostics settings now surface a Run Center panel backed by the
+    existing `/api/active-requests` snapshot.
+  - The panel summarizes running, stopping, failed, and stale runtime state and
+    lists active request rows, including subagent rows that were previously
+    hidden from the primary chat sidebar.
+  - Per-run actions reuse existing runtime contracts: chat-session rows merge
+    the current Run Center request scope before opening/recovering, normal
+    active runs can stop through `/cancel`, subagent rows stop through
+    `/api/subagents/{task_id}/cancel` when a task id is available, and all run
+    rows can export request-scoped diagnostics bundles.
+  - Subagent stop falls back to request-scoped `/cancel` only when the dedicated
+    task route fails and the fallback reports `cancelled > 0`, covering
+    registry-only degraded rows without reintroducing fake success.
+  - Run Center uses its own visibility predicate instead of the chat sidebar's
+    30-second cancelled-request grace filter, so long-running stopping rows
+    remain visible for recovery and diagnostics.
+  - Subagent rows are visible in Run Center but diagnostics-only for
+    open/recover, preserving the existing boundary that keeps subagents out of
+    primary chat restoration.
+  - Source-contract coverage now locks the Run Center-specific visibility
+    predicate, scoped chat-session recovery row, subagent diagnostics-only
+    Open behavior, subagent-specific cancel path, and guarded request-cancel
+    fallback.
+  - Stale session locks are shown separately so cleanup evidence is visible
+    without being mixed into normal chat sessions.
+  - Desktop `npm run typecheck` passed; focused source-contract pytest passed.
