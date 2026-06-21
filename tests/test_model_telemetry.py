@@ -63,6 +63,17 @@ class TestModelTelemetry(unittest.TestCase):
 
         reset_model_call_telemetry_for_tests()
 
+    @staticmethod
+    def _fake_response(status_code, data=None, headers=None, text=None):
+        from unittest.mock import MagicMock
+
+        response = MagicMock()
+        response.status_code = status_code
+        response.headers = headers or {}
+        response.text = text if text is not None else str(data or {})
+        response.json.return_value = data or {}
+        return response
+
     def test_usage_normalization_extracts_reasoning_and_cached_tokens(self):
         from models.model_telemetry import normalize_usage_tokens
 
@@ -4655,6 +4666,273 @@ class TestModelTelemetry(unittest.TestCase):
         self.assertEqual(event["model"], "cogview-3")
         self.assertEqual(event["api_path"], "/legacy/create_img")
         self.assertEqual(event["status"], "completed")
+
+    def test_modelscope_create_img_retries_task_creation_then_polls_success(self):
+        from unittest.mock import MagicMock, patch
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+        from models.model_telemetry import get_recent_model_calls
+        from models.modelscope.modelscope_bot import ModelScopeBot
+
+        fake_conf = MagicMock()
+        config = {
+            "text_to_image": "modelscope-image",
+            "model_max_retries": 1,
+            "modelscope_image_max_wait_times": 2,
+            "modelscope_image_poll_interval": 0,
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        bot = ModelScopeBot.__new__(ModelScopeBot)
+        bot.api_key = "test-key"
+        bot.base_url = "https://api.modelscope.test/v1"
+        create_rate_limited = self._fake_response(
+            429,
+            {
+                "error": {
+                    "message": "modelscope image rate limit",
+                    "code": "rate_limit_exceeded",
+                    "type": "rate_limit",
+                }
+            },
+            headers={"Retry-After": "0.2"},
+        )
+        create_ok = self._fake_response(200, {"task_id": "task-1"})
+        poll_ok = self._fake_response(
+            200,
+            {
+                "task_status": "SUCCEED",
+                "output_images": ["https://image.test/modelscope-retry.png"],
+            },
+        )
+        sleeps = []
+
+        with patch("models.modelscope.modelscope_bot.conf", return_value=fake_conf):
+            with patch(
+                "models.modelscope.modelscope_bot.requests.post",
+                side_effect=[create_rate_limited, create_ok],
+            ) as post:
+                with patch("models.modelscope.modelscope_bot.requests.get", return_value=poll_ok) as get:
+                    wrapped = wrap_legacy_create_img(
+                        bot,
+                        provider_hint="modelscope",
+                        model_hint="modelscope-image",
+                    )
+                    result = wrapped.create_img("draw after modelscope retry", model_retry_sleep=sleeps.append)
+
+        self.assertEqual(result, (True, "https://image.test/modelscope-retry.png"))
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(get.call_count, 1)
+        self.assertEqual(sleeps, [0.2])
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["provider"], "modelscope")
+        self.assertEqual(event["model"], "modelscope-image")
+        self.assertEqual(event["api_path"], "/legacy/create_img")
+        self.assertEqual(event["status"], "completed")
+
+    def test_modelscope_create_img_non_retryable_create_4xx_records_fail_closed(self):
+        from unittest.mock import MagicMock, patch
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+        from models.model_telemetry import get_recent_model_calls
+        from models.modelscope.modelscope_bot import ModelScopeBot
+
+        fake_conf = MagicMock()
+        config = {
+            "text_to_image": "modelscope-image",
+            "model_max_retries": 2,
+            "modelscope_image_max_wait_times": 2,
+            "modelscope_image_poll_interval": 0,
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        bot = ModelScopeBot.__new__(ModelScopeBot)
+        bot.api_key = "test-key"
+        bot.base_url = "https://api.modelscope.test/v1"
+        create_bad_request = self._fake_response(
+            400,
+            {
+                "error": {
+                    "message": "bad image prompt",
+                    "code": "invalid_prompt",
+                    "type": "invalid_request_error",
+                }
+            },
+        )
+        sleeps = []
+
+        with patch("models.modelscope.modelscope_bot.conf", return_value=fake_conf):
+            with patch("models.modelscope.modelscope_bot.requests.post", return_value=create_bad_request) as post:
+                with patch("models.modelscope.modelscope_bot.requests.get") as get:
+                    wrapped = wrap_legacy_create_img(
+                        bot,
+                        provider_hint="modelscope",
+                        model_hint="modelscope-image",
+                    )
+                    result = wrapped.create_img("bad prompt", model_retry_sleep=sleeps.append)
+
+        self.assertFalse(result[0])
+        self.assertEqual(post.call_count, 1)
+        self.assertEqual(get.call_count, 0)
+        self.assertEqual(sleeps, [])
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_status_code"], 400)
+        self.assertEqual(event["error_taxonomy"], "client_error")
+        self.assertEqual(event["error_code"], "invalid_prompt")
+        self.assertEqual(event["error_type"], "invalid_request_error")
+        self.assertEqual(event["error_message"], "bad image prompt")
+        self.assertFalse(event["retryable"])
+        self.assertEqual(event["retry_attempt"], 0)
+        self.assertEqual(event["max_retries"], 2)
+
+    def test_modelscope_create_img_poll_4xx_fails_closed_with_typed_evidence(self):
+        from unittest.mock import MagicMock, patch
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+        from models.model_telemetry import get_recent_model_calls
+        from models.modelscope.modelscope_bot import ModelScopeBot
+
+        fake_conf = MagicMock()
+        config = {
+            "text_to_image": "modelscope-image",
+            "model_max_retries": 1,
+            "modelscope_image_max_wait_times": 2,
+            "modelscope_image_poll_interval": 0,
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        bot = ModelScopeBot.__new__(ModelScopeBot)
+        bot.api_key = "test-key"
+        bot.base_url = "https://api.modelscope.test/v1"
+        create_ok = self._fake_response(200, {"task_id": "task-bad-poll"})
+        poll_bad_request = self._fake_response(
+            400,
+            {
+                "error": {
+                    "message": "bad poll request",
+                    "code": "invalid_task",
+                    "type": "invalid_request_error",
+                }
+            },
+        )
+
+        with patch("models.modelscope.modelscope_bot.conf", return_value=fake_conf):
+            with patch("models.modelscope.modelscope_bot.requests.post", return_value=create_ok) as post:
+                with patch("models.modelscope.modelscope_bot.requests.get", return_value=poll_bad_request) as get:
+                    wrapped = wrap_legacy_create_img(
+                        bot,
+                        provider_hint="modelscope",
+                        model_hint="modelscope-image",
+                    )
+                    result = wrapped.create_img("draw bad poll")
+
+        self.assertFalse(result[0])
+        self.assertEqual(post.call_count, 1)
+        self.assertEqual(get.call_count, 1)
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_status_code"], 400)
+        self.assertEqual(event["error_taxonomy"], "client_error")
+        self.assertEqual(event["error_code"], "invalid_task")
+        self.assertEqual(event["error_type"], "invalid_request_error")
+        self.assertEqual(event["error_message"], "bad poll request")
+        self.assertFalse(event["retryable"])
+        self.assertEqual(event["retry_attempt"], 0)
+        self.assertEqual(event["max_retries"], 1)
+
+    def test_modelscope_create_img_retryable_poll_error_preserves_exhausted_evidence(self):
+        from unittest.mock import MagicMock, patch
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+        from models.model_telemetry import get_recent_model_calls
+        from models.modelscope.modelscope_bot import ModelScopeBot
+
+        fake_conf = MagicMock()
+        config = {
+            "text_to_image": "modelscope-image",
+            "model_max_retries": 1,
+            "modelscope_image_max_wait_times": 2,
+            "modelscope_image_poll_interval": 0,
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        bot = ModelScopeBot.__new__(ModelScopeBot)
+        bot.api_key = "test-key"
+        bot.base_url = "https://api.modelscope.test/v1"
+        create_ok = self._fake_response(200, {"task_id": "task-poll-outage"})
+        poll_outage = self._fake_response(
+            503,
+            {
+                "error": {
+                    "message": "poll service unavailable",
+                    "code": "server_error",
+                    "type": "server_error",
+                }
+            },
+            headers={"Retry-After": "0.1"},
+        )
+        sleeps = []
+
+        with patch("models.modelscope.modelscope_bot.conf", return_value=fake_conf):
+            with patch("models.modelscope.modelscope_bot.requests.post", return_value=create_ok) as post:
+                with patch("models.modelscope.modelscope_bot.requests.get", return_value=poll_outage) as get:
+                    wrapped = wrap_legacy_create_img(
+                        bot,
+                        provider_hint="modelscope",
+                        model_hint="modelscope-image",
+                    )
+                    result = wrapped.create_img("draw during poll outage", model_retry_sleep=sleeps.append)
+
+        self.assertFalse(result[0])
+        self.assertEqual(post.call_count, 1)
+        self.assertEqual(get.call_count, 2)
+        self.assertEqual(sleeps, [0.1])
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_status_code"], 503)
+        self.assertEqual(event["error_taxonomy"], "server_error")
+        self.assertEqual(event["error_code"], "server_error")
+        self.assertEqual(event["error_type"], "server_error")
+        self.assertEqual(event["error_message"], "poll service unavailable")
+        self.assertTrue(event["retryable"])
+        self.assertEqual(event["retry_attempt"], 1)
+        self.assertEqual(event["max_retries"], 1)
+        self.assertTrue(event["retry_exhausted"])
+        self.assertEqual(event["retry_after_seconds"], 0.1)
+
+    def test_modelscope_create_img_task_timeout_records_typed_timeout(self):
+        from unittest.mock import MagicMock, patch
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+        from models.model_telemetry import get_recent_model_calls
+        from models.modelscope.modelscope_bot import ModelScopeBot
+
+        fake_conf = MagicMock()
+        config = {
+            "text_to_image": "modelscope-image",
+            "model_max_retries": 1,
+            "modelscope_image_max_wait_times": 2,
+            "modelscope_image_poll_interval": 0,
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        bot = ModelScopeBot.__new__(ModelScopeBot)
+        bot.api_key = "test-key"
+        bot.base_url = "https://api.modelscope.test/v1"
+        create_ok = self._fake_response(200, {"task_id": "task-timeout"})
+        poll_running = self._fake_response(200, {"task_status": "RUNNING"})
+
+        with patch("models.modelscope.modelscope_bot.conf", return_value=fake_conf):
+            with patch("models.modelscope.modelscope_bot.requests.post", return_value=create_ok) as post:
+                with patch("models.modelscope.modelscope_bot.requests.get", return_value=poll_running) as get:
+                    wrapped = wrap_legacy_create_img(
+                        bot,
+                        provider_hint="modelscope",
+                        model_hint="modelscope-image",
+                    )
+                    result = wrapped.create_img("draw too slowly")
+
+        self.assertFalse(result[0])
+        self.assertEqual(post.call_count, 1)
+        self.assertEqual(get.call_count, 2)
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_status_code"], 504)
+        self.assertEqual(event["error_taxonomy"], "timeout")
+        self.assertEqual(event["error_code"], "task_timeout")
+        self.assertEqual(event["error_type"], "timeout")
+        self.assertEqual(event["error_message"], "ModelScope image task timed out")
 
     def test_openai_create_img_error_sidecar_is_thread_local(self):
         import threading

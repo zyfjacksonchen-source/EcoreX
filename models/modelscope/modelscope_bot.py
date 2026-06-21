@@ -5,6 +5,16 @@ import time
 import requests
 
 from models.bot import Bot
+from models.model_image_retry import (
+    ModelImageCallError,
+    clear_create_img_error,
+    create_img_with_retry,
+    image_error_details_from_exception,
+    image_error_from_response,
+    set_create_img_error,
+)
+from models.model_provider_errors import http_error_response, provider_error_response
+from models.model_retry import annotate_retry_evidence, build_retry_decision, sleep_for_retry
 from models.session_manager import SessionManager
 from bridge.context import ContextType
 from bridge.reply import Reply, ReplyType
@@ -361,7 +371,7 @@ class ModelScopeBot(Bot):
             logger.exception(e)
             return {"completion_tokens": 0, "content": "我现在有点累了，等会再来吧"}
 
-    def create_img(self, query):
+    def _create_img_legacy_untyped(self, query):
         try:
             logger.info("[ModelScopeImage] image_query={}".format(query))
             
@@ -466,6 +476,215 @@ class ModelScopeBot(Bot):
         except Exception as e:
             logger.error("[ModelScopeImage] error: {}".format(format(e)))
             return False, "画图出现问题，请休息一下再问我吧"
+
+    @staticmethod
+    def _coerce_positive_int(value, default):
+        try:
+            return max(1, int(value))
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _coerce_non_negative_float(value, default):
+        try:
+            return max(0.0, float(value))
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _modelscope_image_error(message, status_code=500, error_code="", error_type=""):
+        return provider_error_response(
+            {
+                "message": message,
+                "code": error_code,
+                "type": error_type,
+            },
+            message=message,
+            status_code=status_code,
+        )
+
+    def create_img(self, query, retry_count=0, api_key=None, model_retry_sleep=None):
+        config = conf()
+        model = config.get("text_to_image")
+        api_key = api_key or self.api_key
+        try:
+            logger.info("[ModelScopeImage] image_query={}".format(query))
+
+            create_headers = {
+                "Authorization": "Bearer " + api_key,
+                "Content-Type": "application/json; charset=utf-8",
+                "X-ModelScope-Async-Mode": "true",
+            }
+            payload = {
+                "model": model,
+                "prompt": query,
+                "n": 1,
+            }
+
+            def invoke_create_task():
+                logger.debug("[ModelScopeImage] model={}".format(payload["model"]))
+                res = requests.post(
+                    "{}/images/generations".format(self.base_url),
+                    headers=create_headers,
+                    data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                    timeout=120,
+                )
+
+                logger.debug("[ModelScopeImage] create task status={}".format(res.status_code))
+                logger.debug("[ModelScopeImage] create task response={}".format(res.text))
+                if res.status_code != 200:
+                    logger.error("[ModelScopeImage] create task failed: {}".format(res.text))
+                    raise image_error_from_response(res)
+
+                task_data = res.json()
+                task_id = task_data.get("task_id")
+                if not task_id:
+                    logger.error("[ModelScopeImage] No task_id in response: {}".format(task_data))
+                    raise ModelImageCallError(self._modelscope_image_error(
+                        "ModelScope image create task response missing task_id",
+                        status_code=502,
+                        error_code="missing_task_id",
+                        error_type="provider_protocol_error",
+                    ))
+                return task_id
+
+            ok, task_result = create_img_with_retry(
+                self,
+                invoke_create_task,
+                provider="modelscope",
+                model=model,
+                retry_count=retry_count,
+                max_model_retries=config.get("model_max_retries"),
+                retry_sleep=model_retry_sleep,
+                failure_message="ModelScope image create task failed, please try again later.",
+            )
+            if not ok:
+                return False, task_result
+
+            task_id = task_result
+            logger.info("[ModelScopeImage] task_id={}".format(task_id))
+
+            max_wait_times = self._coerce_positive_int(
+                config.get("modelscope_image_max_wait_times", 60),
+                60,
+            )
+            wait_interval = self._coerce_non_negative_float(
+                config.get("modelscope_image_poll_interval", 5),
+                5.0,
+            )
+            poll_headers = {
+                "Authorization": "Bearer " + api_key,
+                "X-ModelScope-Task-Type": "image_generation",
+            }
+            last_poll_error = None
+
+            for i in range(max_wait_times):
+                if wait_interval > 0:
+                    time.sleep(wait_interval)
+
+                poll_url = "{}/tasks/{}".format(self.base_url, task_id)
+                logger.debug("[ModelScopeImage] poll {} URL: {}".format(i + 1, poll_url))
+                logger.debug("[ModelScopeImage] poll headers: {}".format(poll_headers))
+
+                task_res = requests.get(
+                    poll_url,
+                    headers=poll_headers,
+                    timeout=30,
+                )
+
+                logger.debug("[ModelScopeImage] poll {} status={}".format(i + 1, task_res.status_code))
+                logger.debug("[ModelScopeImage] poll response={}".format(task_res.text))
+
+                if task_res.status_code != 200:
+                    logger.error("[ModelScopeImage] poll task error: {}".format(task_res.text))
+                    details = http_error_response(task_res)
+                    decision = build_retry_decision(
+                        details,
+                        attempt=i,
+                        max_retries=max_wait_times - 1,
+                    )
+                    last_poll_error = annotate_retry_evidence(details, decision)
+                    if not decision.retryable:
+                        set_create_img_error(self, last_poll_error)
+                        return False, "ModelScope image polling failed: {}".format(
+                            details.get("message") or task_res.status_code
+                        )
+                    if decision.should_retry and decision.retry_after_seconds is not None:
+                        sleep_for_retry(decision.delay_seconds, model_retry_sleep)
+                    continue
+
+                data = task_res.json()
+                task_status = data.get("task_status")
+                logger.debug("[ModelScopeImage] task_status={}".format(task_status))
+                last_poll_error = None
+
+                if task_status == "SUCCEED":
+                    output_images = data.get("output_images", [])
+                    if output_images and len(output_images) > 0:
+                        image_url = output_images[0]
+                        logger.info("[ModelScopeImage] image generated successfully: {}".format(image_url))
+                        clear_create_img_error(self)
+                        return True, image_url
+
+                    logger.error("[ModelScopeImage] No output_images in success response: {}".format(data))
+                    set_create_img_error(self, self._modelscope_image_error(
+                        "ModelScope image task succeeded without output image URL",
+                        status_code=502,
+                        error_code="missing_output_image",
+                        error_type="provider_protocol_error",
+                    ))
+                    return False, "ModelScope image task succeeded without image URL."
+
+                if task_status == "FAILED":
+                    error_payload = data.get("errors") if isinstance(data.get("errors"), dict) else {}
+                    error_msg = error_payload.get("message") or data.get("message") or "ModelScope image task failed"
+                    error_payload = dict(error_payload)
+                    error_payload.setdefault("message", error_msg)
+                    error_payload.setdefault("code", "task_failed")
+                    error_payload.setdefault("type", "task_failed")
+                    logger.error("[ModelScopeImage] task failed: {}".format(data))
+                    set_create_img_error(
+                        self,
+                        provider_error_response(
+                            error_payload,
+                            message=error_msg,
+                            status_code=data.get("status_code") or 500,
+                        ),
+                    )
+                    return False, "ModelScope image task failed: {}".format(error_msg)
+
+                if task_status == "CANCELED":
+                    logger.error("[ModelScopeImage] task canceled: {}".format(data))
+                    set_create_img_error(self, self._modelscope_image_error(
+                        "ModelScope image task canceled",
+                        status_code=499,
+                        error_code="task_canceled",
+                        error_type="cancelled",
+                    ))
+                    return False, "ModelScope image task was canceled."
+
+                logger.debug("[ModelScopeImage] waiting for task to complete...")
+
+            logger.error("[ModelScopeImage] task timeout after {} seconds".format(max_wait_times * wait_interval))
+            if last_poll_error is not None:
+                set_create_img_error(self, last_poll_error)
+                return False, "ModelScope image polling failed before the task completed."
+            timeout_details = self._modelscope_image_error(
+                "ModelScope image task timed out",
+                status_code=504,
+                error_code="task_timeout",
+                error_type="timeout",
+            )
+            set_create_img_error(self, timeout_details)
+            return False, "ModelScope image task timed out, please try again later."
+
+        except Exception as e:
+            logger.error("[ModelScopeImage] error: {}".format(format(e)))
+            set_create_img_error(
+                self,
+                image_error_details_from_exception(e),
+            )
+            return False, "ModelScope image generation failed, please try again later."
 
     # ==================== Agent Mode Support ====================
 

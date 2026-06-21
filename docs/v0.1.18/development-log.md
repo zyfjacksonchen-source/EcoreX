@@ -962,6 +962,28 @@
   - Focused tests cover LinkAI image 503 Retry-After retry exhaustion with
     typed telemetry and Zhipu image 429 Retry-After retry success. Full model
     telemetry plus Responses/capability/model-handler regressions passed.
-    R18-04-C remains PARTIAL pending ModelScope/remaining image edge coverage,
+    R18-04-C remains PARTIAL pending remaining image edge coverage,
     legacy direct-chat retry-loop migration, and provider-specific edges
     outside the AgentBridge native gateway.
+- Hardened ModelScope legacy image generation retry and terminal-state evidence:
+  - `models/modelscope/modelscope_bot.py` now exposes the legacy image method
+    with the same `retry_count` / `model_retry_sleep` contract used by other
+    legacy image providers. Async task creation goes through
+    `models/model_image_retry.py`, so 408/429/5xx/timeouts honor shared
+    Retry-After/backoff and non-retryable create-task 4xx responses fail closed
+    with typed sidecar evidence.
+  - The ModelScope polling phase intentionally does not retry the whole image
+    job after a task id exists, avoiding duplicate upstream generation tasks.
+    Instead, missing output URLs, task `FAILED`, task `CANCELED`, poll
+    timeout, poll non-retryable 4xx, and exhausted retryable poll errors now
+    write typed `/legacy/create_img` sidecar details for diagnostics and
+    model-call telemetry.
+  - Focused tests cover task-creation 429 Retry-After retry followed by poll
+    success, non-retryable create-task 400 fail-closed telemetry without an
+    extra poll, poll 400 fail-closed telemetry without waiting for timeout,
+    exhausted poll 503 evidence preserving Retry-After/retry metadata, and
+    typed 504 timeout evidence for long-running tasks. Full model telemetry
+    plus Responses/capability/promotion-gate regressions passed. R18-04-C
+    remains PARTIAL pending remaining image edge coverage, legacy direct-chat
+    retry-loop migration, and provider-specific edges outside the AgentBridge
+    native gateway.
