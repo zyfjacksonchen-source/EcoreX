@@ -792,3 +792,17 @@
     post-output retry suppression without a second provider call. R18-04-C
     remains PARTIAL pending the remaining special native providers, direct-chat
     local retry-loop migration, and vision/image model-call surfaces.
+- Added the first vision model-call telemetry slice:
+  - `models/legacy_reply_gateway.py` now wraps legacy `call_vision` methods in
+    addition to `reply_text`, recording `/legacy/call_vision` spans with
+    provider/model, latency, usage tokens, error taxonomy, and exception
+    evidence without changing provider behavior.
+  - `models/bot_factory.py` now applies the combined legacy model-surface
+    wrapper to every created bot, so bot-backed vision routes created by the
+    Vision tool inherit telemetry automatically.
+  - Focused tests cover successful vision usage/model recording, error-dict
+    taxonomy, empty-content failures aligned with the Vision tool fallback
+    semantics, HTTP status extraction from error messages, exception telemetry
+    with re-raise, bot_factory wrapping for Qianfan `call_vision`, and adjacent
+    Qianfan vision routing regressions. R18-04-B remains PARTIAL pending
+    image-generation/create_img and remaining raw vision HTTP surface inventory.

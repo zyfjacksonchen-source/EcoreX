@@ -2455,6 +2455,237 @@ class TestModelTelemetry(unittest.TestCase):
         self.assertEqual(event["error_taxonomy"], "rate_limit")
         self.assertEqual(event["error_status_code"], 429)
 
+    def test_legacy_call_vision_gateway_records_usage_and_model(self):
+        from models.legacy_reply_gateway import (
+            LEGACY_CALL_VISION_API_PATH,
+            wrap_legacy_call_vision,
+        )
+        from models.model_telemetry import get_recent_model_calls
+
+        class VisionBot:
+            def __init__(self):
+                self.args = {"model": "default-vision"}
+
+            def call_vision(self, image_url, question, model=None, max_tokens=1000):
+                return {
+                    "model": model or "default-vision",
+                    "content": "ok",
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 4,
+                        "total_tokens": 14,
+                    },
+                }
+
+        bot = wrap_legacy_call_vision(VisionBot(), provider_hint="vision-provider")
+        result = bot.call_vision(
+            "data:image/png;base64,AAAA",
+            "describe",
+            model="vision-v1",
+        )
+
+        self.assertEqual(result["content"], "ok")
+        events = get_recent_model_calls()
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event["provider"], "vision-provider")
+        self.assertEqual(event["model"], "vision-v1")
+        self.assertEqual(event["api_path"], LEGACY_CALL_VISION_API_PATH)
+        self.assertEqual(event["status"], "completed")
+        self.assertEqual(event["input_tokens"], 10)
+        self.assertEqual(event["output_tokens"], 4)
+        self.assertEqual(event["total_tokens"], 14)
+
+    def test_legacy_call_vision_gateway_records_error_dict(self):
+        from models.legacy_reply_gateway import wrap_legacy_call_vision
+        from models.model_telemetry import get_recent_model_calls
+
+        class VisionBot:
+            def call_vision(self, image_url, question, model=None, max_tokens=1000):
+                return {
+                    "error": True,
+                    "message": "bad image",
+                    "status_code": 400,
+                }
+
+        bot = wrap_legacy_call_vision(
+            VisionBot(),
+            provider_hint="qianfan",
+            model_hint="ernie-vision",
+        )
+        result = bot.call_vision("data:image/png;base64,AAAA", "describe")
+
+        self.assertTrue(result["error"])
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["provider"], "qianfan")
+        self.assertEqual(event["model"], "ernie-vision")
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_taxonomy"], "client_error")
+        self.assertEqual(event["error_status_code"], 400)
+        self.assertEqual(event["error_message"], "bad image")
+
+    def test_legacy_call_vision_gateway_treats_empty_content_as_failed(self):
+        from models.legacy_reply_gateway import wrap_legacy_call_vision
+        from models.model_telemetry import get_recent_model_calls
+
+        class VisionBot:
+            def call_vision(self, image_url, question, model=None, max_tokens=1000):
+                return {
+                    "model": model or "vision-v1",
+                    "content": "",
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1},
+                }
+
+        bot = wrap_legacy_call_vision(VisionBot(), provider_hint="vision-provider")
+        result = bot.call_vision("data:image/png;base64,AAAA", "describe", model="vision-v1")
+
+        self.assertEqual(result["content"], "")
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["provider"], "vision-provider")
+        self.assertEqual(event["model"], "vision-v1")
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_message"], "Legacy call_vision returned empty content")
+        self.assertEqual(event["total_tokens"], 1)
+
+    def test_legacy_call_vision_gateway_parses_http_status_from_message(self):
+        from models.legacy_reply_gateway import wrap_legacy_call_vision
+        from models.model_telemetry import get_recent_model_calls
+
+        class VisionBot:
+            def call_vision(self, image_url, question, model=None, max_tokens=1000):
+                return {
+                    "error": True,
+                    "message": "HTTP 429: rate limit",
+                }
+
+        bot = wrap_legacy_call_vision(
+            VisionBot(),
+            provider_hint="deepseek",
+            model_hint="deepseek-vision",
+        )
+        result = bot.call_vision("data:image/png;base64,AAAA", "describe")
+
+        self.assertTrue(result["error"])
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["provider"], "deepseek")
+        self.assertEqual(event["model"], "deepseek-vision")
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_status_code"], 429)
+        self.assertEqual(event["error_taxonomy"], "rate_limit")
+        self.assertEqual(event["error_message"], "HTTP 429: rate limit")
+
+    def test_legacy_call_vision_gateway_records_exception_and_reraises(self):
+        from models.legacy_reply_gateway import wrap_legacy_call_vision
+        from models.model_telemetry import get_recent_model_calls
+
+        class VisionBot:
+            def call_vision(self, image_url, question, model=None, max_tokens=1000):
+                raise TimeoutError("vision timeout")
+
+        bot = wrap_legacy_call_vision(
+            VisionBot(),
+            provider_hint="gemini",
+            model_hint="gemini-vision",
+        )
+
+        with self.assertRaises(TimeoutError):
+            bot.call_vision("data:image/png;base64,AAAA", "describe")
+
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["provider"], "gemini")
+        self.assertEqual(event["model"], "gemini-vision")
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_taxonomy"], "timeout")
+        self.assertEqual(event["error_status_code"], 500)
+
+    def test_bot_factory_wraps_legacy_call_vision(self):
+        from unittest.mock import MagicMock, patch
+        from common import const
+        from models.bot_factory import create_bot
+        from models.model_telemetry import get_recent_model_calls
+
+        fake_conf = MagicMock()
+        config = {
+            "model": "qianfan",
+            "qianfan_api_key": "test-key",
+            "qianfan_api_base": "https://qianfan.test/v2",
+            "conversation_max_tokens": 1000,
+            "expires_in_seconds": 3600,
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        fake_response = MagicMock()
+        fake_response.status_code = 200
+        fake_response.json.return_value = {
+            "model": "ernie-4.5-turbo-vl",
+            "choices": [{"message": {"content": "ok"}}],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
+        }
+
+        with patch("models.qianfan.qianfan_bot.conf", return_value=fake_conf):
+            with patch("models.qianfan.qianfan_bot.SessionManager"):
+                bot = create_bot(const.QIANFAN)
+                self.assertTrue(
+                    getattr(bot.reply_text, "_ecorex_legacy_reply_gateway", False)
+                )
+                self.assertTrue(
+                    getattr(bot.call_vision, "_ecorex_legacy_call_vision_gateway", False)
+                )
+                with patch("models.qianfan.qianfan_bot.requests.post", return_value=fake_response):
+                    result = bot.call_vision(
+                        "data:image/png;base64,AAAA",
+                        "describe",
+                        model="ernie-4.5-turbo-vl",
+                    )
+
+        self.assertEqual(result["content"], "ok")
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["provider"], const.QIANFAN)
+        self.assertEqual(event["model"], "ernie-4.5-turbo-vl")
+        self.assertEqual(event["api_path"], "/legacy/call_vision")
+        self.assertEqual(event["status"], "completed")
+        self.assertEqual(event["total_tokens"], 5)
+
+    def test_bot_factory_wrapped_qianfan_call_vision_error_records_telemetry(self):
+        from unittest.mock import MagicMock, patch
+        from common import const
+        from models.bot_factory import create_bot
+        from models.model_telemetry import get_recent_model_calls
+
+        fake_conf = MagicMock()
+        config = {
+            "model": "qianfan",
+            "qianfan_api_key": "test-key",
+            "qianfan_api_base": "https://qianfan.test/v2",
+            "conversation_max_tokens": 1000,
+            "expires_in_seconds": 3600,
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        fake_response = MagicMock()
+        fake_response.status_code = 400
+        fake_response.json.return_value = {"error": {"message": "bad image"}}
+        fake_response.text = '{"error":{"message":"bad image"}}'
+
+        with patch("models.qianfan.qianfan_bot.conf", return_value=fake_conf):
+            with patch("models.qianfan.qianfan_bot.SessionManager"):
+                bot = create_bot(const.QIANFAN)
+                with patch("models.qianfan.qianfan_bot.requests.post", return_value=fake_response):
+                    result = bot.call_vision(
+                        "data:image/png;base64,AAAA",
+                        "describe",
+                        model="ernie-4.5-turbo-vl",
+                    )
+
+        self.assertTrue(result["error"])
+        self.assertFalse("status_code" in result)
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["provider"], const.QIANFAN)
+        self.assertEqual(event["model"], "ernie-4.5-turbo-vl")
+        self.assertEqual(event["api_path"], "/legacy/call_vision")
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_taxonomy"], "unknown")
+        self.assertEqual(event["error_status_code"], None)
+        self.assertIn("bad image", event["error_message"])
+
     def test_legacy_reply_text_gateway_non_modelscope_zero_token_text_fails(self):
         from models.legacy_reply_gateway import wrap_legacy_reply_text
         from models.model_telemetry import get_recent_model_calls
