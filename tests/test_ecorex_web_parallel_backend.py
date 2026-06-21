@@ -4580,6 +4580,42 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertIn('"GET /api/active-requests"', bridge_source)
         self.assertIn('/^\\/api\\/subagents\\/[^/]+\\/(?:cancel|collect)$/.test(cleanPath)', bridge_source)
 
+    def test_v018_desktop_handles_sse_replay_gap_recovery(self):
+        root = Path(__file__).resolve().parents[1]
+        app_source = (root / "desktop" / "src" / "App.tsx").read_text(encoding="utf-8")
+        api_source = (root / "desktop" / "src" / "services" / "ecorexApi.ts").read_text(encoding="utf-8")
+
+        helper_start = app_source.index("function handleReplayGapStreamItem")
+        helper_end = app_source.index("function finishRunningSteps", helper_start)
+        helper_source = app_source[helper_start:helper_end]
+
+        for marker in [
+            "function isReplayGapStreamItem",
+            'item.type === "replay_gap"',
+            'item.event_type === "stream.replay_gap"',
+            "async function refreshSessionFromHistoryForRequest",
+            "message.requestId === requestId",
+            "return scopedFinal",
+            "function handleReplayGapStreamItem",
+        ]:
+            self.assertIn(marker, app_source)
+        for marker in [
+            'markStreamTerminal(sessionId, requestId, "failed")',
+            "finishSessionRequest(sessionId, requestId)",
+            "void refreshSessionFromHistoryForRequest(sessionId, requestId).then((restored) =>",
+            "Response stream history expired",
+            'label: "stream_replay_gap"',
+            "requestedLastEventId",
+            "retainedFromEventId",
+            "nextEventId",
+        ]:
+            self.assertIn(marker, helper_source)
+        self.assertGreaterEqual(app_source.count("handleReplayGapStreamItem("), 3)
+        self.assertGreaterEqual(app_source.count("if (isReplayGapStreamItem(item))"), 2)
+        self.assertIn("requested_last_event_id?: number;", api_source)
+        self.assertIn("retained_from_event_id?: number;", api_source)
+        self.assertIn("next_event_id?: number;", api_source)
+
     def test_legacy_openai_image_payload_supports_gpt_image_base64(self):
         from models.openai.open_ai_image import OpenAIImage
 

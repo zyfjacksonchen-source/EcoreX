@@ -245,3 +245,19 @@
   - Stale session locks are shown separately so cleanup evidence is visible
     without being mixed into normal chat sessions.
   - Desktop `npm run typecheck` passed; focused source-contract pytest passed.
+- Added the first R18-02-C desktop SSE replay-gap recovery slice:
+  - Desktop stream consumers now detect backend `type=replay_gap` and
+    `event_type=stream.replay_gap` events on both normal sends and resumed
+    EventSource attaches.
+  - Replay-gap handling marks the local stream attach failed, closes the stale
+    EventSource, clears pending request/timer state, and tries to refresh the
+    saved session history for the current request before falling back to an
+    explicit non-pending retry message.
+  - The replay-gap recovery success check is request-scoped, so an older final
+    assistant message in the same session cannot suppress the current turn's
+    retry/recovery fallback.
+  - The fallback records `stream_replay_gap` telemetry with requested,
+    retained-from, and next event cursor ids so Run Center/diagnostics can
+    explain why a live stream stopped.
+  - Desktop `npm run typecheck` passed; focused desktop source-contract pytest
+    and adjacent backend SSE replay-gap tests passed.

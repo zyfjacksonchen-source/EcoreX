@@ -2984,6 +2984,48 @@ export function App() {
     }
   }
 
+  async function refreshSessionFromHistoryForRequest(sessionId: string, requestId: string) {
+    if (!requestId) return false;
+    try {
+      const history = await loadSessionHistoryWithMeta(sessionId);
+      const mapped = normalizePausedMessages(mapRuntimeHistory(history.messages, sessionId, history.contextStartSeq))
+        .map(mergeBufferedPostDoneArtifacts);
+      const scopedFinal = mapped.some((message) => (
+        message.role === "assistant"
+        && message.requestId === requestId
+        && !message.pending
+        && messageHasTerminalPayload(message)
+      ));
+      const localMessages = sessionId === activeSessionIdRef.current
+        ? messagesRef.current
+        : sessionUiState[sessionId]?.messages || [];
+      const merged = mergeHistoryWithLocalMessages(mapped, localMessages);
+      updateSessionMessages(sessionId, () => merged);
+      setSessionUiState((current) => ({
+        ...current,
+        [sessionId]: {
+          ...(current[sessionId] || {
+            title: sessionTitles[sessionId] || activeSessionTitle,
+            projectId: sessionProjects[sessionId] || null,
+            composerText: "",
+            attachments: []
+          }),
+          messages: merged,
+          contextStartSeq: history.contextStartSeq,
+          lastActivityAt: latestMessageMs(merged) || current[sessionId]?.lastActivityAt || Date.now()
+        }
+      }));
+      if (activeSessionIdRef.current === sessionId) {
+        setMessages(merged);
+      } else {
+        markSessionOutputReady(sessionId);
+      }
+      return scopedFinal;
+    } catch {
+      return false;
+    }
+  }
+
   function historyRecoveryKey(sessionId: string, requestId: string) {
     return `${sessionId}::${requestId}`;
   }
@@ -3024,6 +3066,46 @@ export function App() {
         cancelled: false
       }));
       markSessionOutputReady(sessionId);
+    });
+  }
+
+  function handleReplayGapStreamItem(sessionId: string, assistantId: string, requestId: string, item: StreamItem) {
+    const requested = typeof item.requested_last_event_id === "number" ? item.requested_last_event_id : undefined;
+    const retained = typeof item.retained_from_event_id === "number" ? item.retained_from_event_id : undefined;
+    const detail = [requested !== undefined ? `requested=${requested}` : "", retained !== undefined ? `retainedFrom=${retained}` : ""]
+      .filter(Boolean)
+      .join(", ");
+    const message = redactInternalPromptText(
+      item.message
+      || item.content
+      || `Response stream history expired${detail ? ` (${detail})` : ""}. Refreshed saved conversation; retry if the final answer is missing.`
+    );
+    markStreamTerminal(sessionId, requestId, "failed");
+    finishSessionRequest(sessionId, requestId);
+    void refreshSessionFromHistoryForRequest(sessionId, requestId).then((restored) => {
+      if (restored) return;
+      updateAssistantMessageForRequest(sessionId, assistantId, requestId, (entry) => ({
+        ...finishRunningSteps(entry, "error"),
+        content: message,
+        pending: false,
+        paused: false,
+        cancelled: false
+      }));
+      markSessionOutputReady(sessionId);
+    });
+    void reportDesktopEvent({
+      type: "warn",
+      source: "Desktop",
+      category: "runtime",
+      label: "stream_replay_gap",
+      message,
+      sessionId,
+      detail: {
+        requestId,
+        requestedLastEventId: requested ?? null,
+        retainedFromEventId: retained ?? null,
+        nextEventId: item.next_event_id ?? null
+      }
     });
   }
 
@@ -3420,6 +3502,10 @@ export function App() {
     return redactInternalPromptText(streamItemExplicitText(item, ["final_text", "content", "text", "message"]) ?? currentContent);
   }
 
+  function isReplayGapStreamItem(item: StreamItem) {
+    return item.type === "replay_gap" || item.event_type === "stream.replay_gap";
+  }
+
   function shouldAcceptStreamItem(sessionId: string, requestId: string, item: StreamItem) {
     const itemRecord = item as StreamItem & { requestId?: string };
     const itemRequestId = item.request_id || itemRecord.requestId;
@@ -3713,6 +3799,10 @@ export function App() {
         if (item.request_id && item.request_id !== requestId) return;
         if (!shouldAcceptStreamItem(sessionId, requestId, item)) return;
         flushStreamBoundary(sessionId, assistantId, requestId, item);
+        if (isReplayGapStreamItem(item)) {
+          handleReplayGapStreamItem(sessionId, assistantId, requestId, item);
+          return;
+        }
         if (item.type === "cancelled") {
           updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => ({
             ...finishRunningSteps(message, "cancelled"),
@@ -4266,6 +4356,10 @@ export function App() {
             if (!shouldAcceptStreamItem(requestSessionId, requestId, item)) return;
             observeStreamUsage(item);
             flushStreamBoundary(requestSessionId, assistantId, requestId, item);
+            if (isReplayGapStreamItem(item)) {
+              handleReplayGapStreamItem(requestSessionId, assistantId, requestId, item);
+              return;
+            }
             if (item.type === "cancelled") {
               updateAssistantMessageForRequest(requestSessionId, assistantId, requestId, (message) => ({
                 ...finishRunningSteps(message, "cancelled"),
