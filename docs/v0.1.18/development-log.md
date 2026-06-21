@@ -637,3 +637,26 @@
     planning, cleanup lifecycle, non-stream runtime normalization/state
     persistence, failure-state fail-closed handling, stream fallback, existing
     adapter payloads, capability catalog, and model telemetry regressions.
+- Added the explicit model fallback routing slice:
+  - Added `models/model_fallback.py` to parse a default-off `model_fallbacks`
+    chain from config. Entries can be simple model names or objects with
+    `model`/`bot_type`; duplicate primary routes and disabled entries are
+    ignored.
+  - `AgentLLMModel` now builds a primary route plus configured fallback routes
+    for the agent model path. Sync calls try the next route only after the
+    current model returns an exhausted retryable error. Streaming calls try the
+    next route only before any model text, reasoning, or tool-call output has
+    started, so EcoreX never splices partial output from two providers into one
+    answer.
+  - Fallback responses/chunks are annotated with `model_fallback` metadata
+    naming the primary and fallback model/provider, while the existing
+    telemetry span per attempt records the actual provider/model used.
+  - AgentBridge now binds the explicit fallback route `bot_type` onto created
+    bot instances, and `ChatGPTBot` refreshes its OpenAI/custom API key/base
+    from that route binding instead of the global `bot_type`; this covers both
+    `deepseek -> custom` and `custom -> openai` fallback chains.
+  - `config.py` and `config-template.json` document `model_fallbacks` as an
+    explicit opt-in stability setting. Focused pytest passed for config parsing,
+    sync fallback, route-scoped OpenAI-compatible key/base binding, pre-output
+    stream fallback with primary stream closeout, post-output no-fallback, and
+    the existing model telemetry/capability suite.

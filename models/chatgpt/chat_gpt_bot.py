@@ -32,18 +32,8 @@ class ChatGPTBot(Bot, OpenAIImage, OpenAICompatibleBot):
     def __init__(self):
         super().__init__()
         # Resolve api key / base from config (no global SDK state anymore).
-        if conf().get("bot_type") == "custom":
-            self._api_key = conf().get("custom_api_key", "")
-            self._api_base = conf().get("custom_api_base") or None
-        else:
-            self._api_key = conf().get("open_ai_api_key")
-            self._api_base = conf().get("open_ai_api_base") or None
-        self._proxy = conf().get("proxy") or None
-        self._http_client = OpenAIHTTPClient(
-            api_key=self._api_key,
-            api_base=self._api_base,
-            proxy=self._proxy,
-        )
+        self._ecorex_route_bot_type = conf().get("bot_type") or const.OPENAI
+        self._configure_http_client_for_route()
         if conf().get("rate_limit_chatgpt"):
             self.tb4chatgpt = TokenBucket(conf().get("rate_limit_chatgpt", 20))
         conf_model = conf().get("model") or "gpt-3.5-turbo"
@@ -68,9 +58,35 @@ class ChatGPTBot(Bot, OpenAIImage, OpenAICompatibleBot):
             if conf_model in [const.O1, const.O1_MINI]:  # o1系列模型不支持系统提示词，使用文心模型的session
                 self.sessions = SessionManager(BaiduWenxinSession, model=conf().get("model") or const.O1_MINI)
 
+    def configure_model_route(self, bot_type: str):
+        """Bind this bot to an explicit AgentBridge route provider."""
+        self._ecorex_route_bot_type = bot_type or conf().get("bot_type") or const.OPENAI
+        self._configure_http_client_for_route()
+        return self
+
+    def _effective_route_bot_type(self) -> str:
+        return getattr(self, "_ecorex_route_bot_type", None) or conf().get("bot_type") or const.OPENAI
+
+    def _is_custom_route(self) -> bool:
+        return self._effective_route_bot_type() == const.CUSTOM
+
+    def _configure_http_client_for_route(self) -> None:
+        if self._is_custom_route():
+            self._api_key = conf().get("custom_api_key", "")
+            self._api_base = conf().get("custom_api_base") or None
+        else:
+            self._api_key = conf().get("open_ai_api_key")
+            self._api_base = conf().get("open_ai_api_base") or None
+        self._proxy = conf().get("proxy") or None
+        self._http_client = OpenAIHTTPClient(
+            api_key=self._api_key,
+            api_base=self._api_base,
+            proxy=self._proxy,
+        )
+
     def get_api_config(self):
         """Get API configuration for OpenAI-compatible base class"""
-        is_custom = conf().get("bot_type") == "custom"
+        is_custom = self._is_custom_route()
         return {
             'provider': 'custom' if is_custom else 'openai',
             'api_key': conf().get("custom_api_key") if is_custom else conf().get("open_ai_api_key"),
@@ -186,7 +202,7 @@ class ChatGPTBot(Bot, OpenAIImage, OpenAICompatibleBot):
             mime_type = mime_type_map.get(extension, "image/jpeg")
             
             # Get model and API config
-            is_custom = conf().get("bot_type") == "custom"
+            is_custom = self._is_custom_route()
             model = context.get("gpt_model") or conf().get("model", "gpt-4o")
             api_key = context.get("openai_api_key") or (conf().get("custom_api_key") if is_custom else conf().get("open_ai_api_key"))
             api_base = conf().get("custom_api_base") if is_custom else conf().get("open_ai_api_base")

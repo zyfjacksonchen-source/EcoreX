@@ -448,6 +448,52 @@ class TestModelTelemetry(unittest.TestCase):
 
         return NativeModel()
 
+    def _fallback_agent_model(self, bots):
+        from bridge.agent_bridge import AgentLLMModel
+        from models.model_fallback import ModelFallbackRoute
+
+        class FallbackModel(AgentLLMModel):
+            def __init__(self):
+                self._bots = bots
+
+            @property
+            def model(self):
+                return "primary-model"
+
+            @model.setter
+            def model(self, _value):
+                pass
+
+            @property
+            def bot(self):
+                return self._bots["primary-model"]
+
+            def _resolve_bot_type(self, model_name):
+                return "primary-provider" if model_name == "primary-model" else "fallback-provider"
+
+            def _model_call_routes(self):
+                return [
+                    ModelFallbackRoute(
+                        model="primary-model",
+                        bot_type="primary-provider",
+                        provider="primary-provider",
+                        reason="primary",
+                        index=0,
+                    ),
+                    ModelFallbackRoute(
+                        model="fallback-model",
+                        bot_type="fallback-provider",
+                        provider="fallback-provider",
+                        reason="fallback",
+                        index=1,
+                    ),
+                ]
+
+            def _get_bot_for_route(self, route):
+                return self._bots[route.model]
+
+        return FallbackModel()
+
     def test_agent_bridge_native_sync_gateway_retries_and_records_telemetry(self):
         from agent.protocol.models import LLMRequest
         from models.model_telemetry import get_recent_model_calls
@@ -496,6 +542,100 @@ class TestModelTelemetry(unittest.TestCase):
         self.assertEqual(events[0]["api_path"], "/native/call_with_tools")
         self.assertEqual(events[0]["error_taxonomy"], "rate_limit")
         self.assertEqual(events[1]["total_tokens"], 7)
+
+    def test_agent_bridge_sync_falls_back_after_retryable_primary_exhausted(self):
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import get_recent_model_calls
+
+        class PrimaryBot:
+            def __init__(self):
+                self.calls = []
+
+            def call_with_tools(self, **kwargs):
+                self.calls.append(kwargs)
+                return {
+                    "error": {"message": "server unavailable"},
+                    "message": "server unavailable",
+                    "status_code": 503,
+                }
+
+        class FallbackBot:
+            def __init__(self):
+                self.calls = []
+
+            def call_with_tools(self, **kwargs):
+                self.calls.append(kwargs)
+                return {
+                    "choices": [{"message": {"content": "fallback ok"}}],
+                    "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
+                }
+
+        primary = PrimaryBot()
+        fallback = FallbackBot()
+        model = self._fallback_agent_model({
+            "primary-model": primary,
+            "fallback-model": fallback,
+        })
+
+        result = model.call(LLMRequest(
+            messages=[{"role": "user", "content": "hi"}],
+            model_max_retries=0,
+        ))
+
+        self.assertEqual(result["choices"][0]["message"]["content"], "fallback ok")
+        self.assertEqual(result["model_fallback"]["from_model"], "primary-model")
+        self.assertEqual(result["model_fallback"]["to_model"], "fallback-model")
+        self.assertEqual(result["model_fallback"]["used"], True)
+        self.assertEqual(primary.calls[0]["model"], "primary-model")
+        self.assertEqual(fallback.calls[0]["model"], "fallback-model")
+        events = get_recent_model_calls()
+        self.assertEqual([event["status"] for event in events], ["failed", "completed"])
+        self.assertEqual([event["provider"] for event in events], ["primary-provider", "fallback-provider"])
+        self.assertEqual([event["model"] for event in events], ["primary-model", "fallback-model"])
+
+    def test_agent_bridge_create_bot_binds_openai_compatible_route_config(self):
+        from bridge.agent_bridge import AgentLLMModel
+        from config import conf
+
+        keys = [
+            "bot_type",
+            "model",
+            "open_ai_api_key",
+            "open_ai_api_base",
+            "custom_api_key",
+            "custom_api_base",
+        ]
+        previous = {key: conf().get(key) for key in keys}
+        try:
+            conf()["model"] = "gpt-route-test"
+            conf()["open_ai_api_key"] = "openai-key"
+            conf()["open_ai_api_base"] = "https://api.openai.test/v1"
+            conf()["custom_api_key"] = "custom-key"
+            conf()["custom_api_base"] = "https://custom.example/v1"
+
+            conf()["bot_type"] = "deepseek"
+            custom_bot = AgentLLMModel._create_bot("custom")
+            custom_config = custom_bot.get_api_config()
+            self.assertEqual(custom_config["provider"], "custom")
+            self.assertEqual(custom_config["api_key"], "custom-key")
+            self.assertEqual(custom_config["api_base"], "https://custom.example/v1")
+            self.assertEqual(custom_bot._get_http_client().api_key, "custom-key")
+            self.assertEqual(custom_bot._get_http_client().api_base, "https://custom.example/v1")
+
+            conf()["bot_type"] = "custom"
+            openai_bot = AgentLLMModel._create_bot("openai")
+            openai_config = openai_bot.get_api_config()
+            self.assertEqual(openai_config["provider"], "openai")
+            self.assertEqual(openai_config["api_key"], "openai-key")
+            self.assertEqual(openai_config["api_base"], "https://api.openai.test/v1")
+            self.assertEqual(openai_bot._get_http_client().api_key, "openai-key")
+            self.assertEqual(openai_bot._get_http_client().api_base, "https://api.openai.test/v1")
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    conf().pop(key, None)
+                else:
+                    conf()[key] = value
 
     def test_agent_bridge_native_sync_gateway_fails_closed_on_non_retryable_4xx(self):
         from agent.protocol.models import LLMRequest
@@ -651,6 +791,126 @@ class TestModelTelemetry(unittest.TestCase):
         self.assertEqual(events[0]["error_taxonomy"], "server_error")
         self.assertEqual(events[1]["first_token_latency_ms"] is not None, True)
         self.assertEqual(events[1]["total_tokens"], 5)
+
+    def test_agent_bridge_stream_falls_back_before_first_output(self):
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import get_recent_model_calls
+
+        class ClosableErrorStream:
+            def __init__(self):
+                self.closed = 0
+                self._chunks = iter([{
+                    "error": {"message": "server unavailable"},
+                    "message": "server unavailable",
+                    "status_code": 503,
+                }])
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                return next(self._chunks)
+
+            def close(self):
+                self.closed += 1
+
+        class PrimaryBot:
+            def __init__(self):
+                self.calls = []
+                self.stream = ClosableErrorStream()
+
+            def call_with_tools(self, **kwargs):
+                self.calls.append(kwargs)
+                return self.stream
+
+        class FallbackBot:
+            def __init__(self):
+                self.calls = []
+
+            def call_with_tools(self, **kwargs):
+                self.calls.append(kwargs)
+                return iter([
+                    {"choices": [{"delta": {"content": "ok"}}]},
+                    {
+                        "choices": [{"delta": {}, "finish_reason": "stop"}],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                    },
+                ])
+
+        primary = PrimaryBot()
+        fallback = FallbackBot()
+        model = self._fallback_agent_model({
+            "primary-model": primary,
+            "fallback-model": fallback,
+        })
+
+        result = list(model.call_stream(LLMRequest(
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            model_max_retries=0,
+        )))
+
+        self.assertEqual(result[0]["choices"][0]["delta"]["content"], "ok")
+        self.assertEqual(result[0]["model_fallback"]["from_model"], "primary-model")
+        self.assertEqual(result[0]["model_fallback"]["to_model"], "fallback-model")
+        self.assertEqual(result[1]["model_fallback"]["from_model"], "primary-model")
+        self.assertEqual(result[1]["model_fallback"]["to_model"], "fallback-model")
+        self.assertEqual(len(primary.calls), 1)
+        self.assertEqual(len(fallback.calls), 1)
+        self.assertEqual(primary.stream.closed, 1)
+        events = get_recent_model_calls()
+        self.assertEqual([event["status"] for event in events], ["failed", "completed"])
+        self.assertEqual([event["model"] for event in events], ["primary-model", "fallback-model"])
+
+    def test_agent_bridge_stream_does_not_fallback_after_output_started(self):
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import get_recent_model_calls
+
+        class PrimaryBot:
+            def __init__(self):
+                self.calls = []
+
+            def call_with_tools(self, **kwargs):
+                self.calls.append(kwargs)
+                return iter([
+                    {"choices": [{"delta": {"content": "partial"}}]},
+                    {
+                        "error": {"message": "server unavailable"},
+                        "message": "server unavailable",
+                        "status_code": 503,
+                    },
+                ])
+
+        class FallbackBot:
+            def __init__(self):
+                self.calls = []
+
+            def call_with_tools(self, **kwargs):
+                self.calls.append(kwargs)
+                return iter([{"choices": [{"delta": {"content": "should not run"}}]}])
+
+        primary = PrimaryBot()
+        fallback = FallbackBot()
+        model = self._fallback_agent_model({
+            "primary-model": primary,
+            "fallback-model": fallback,
+        })
+
+        result = list(model.call_stream(LLMRequest(
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            model_max_retries=1,
+        )))
+
+        self.assertEqual(result[0]["choices"][0]["delta"]["content"], "partial")
+        self.assertEqual(result[1]["status_code"], 503)
+        self.assertTrue(result[1]["retry_suppressed"])
+        self.assertEqual(len(primary.calls), 1)
+        self.assertEqual(len(fallback.calls), 0)
+        events = get_recent_model_calls()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["status"], "failed")
+        self.assertEqual(events[0]["model"], "primary-model")
 
     def test_agent_bridge_native_stream_exception_after_first_token_is_retry_suppressed(self):
         from agent.protocol.models import LLMRequest

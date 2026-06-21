@@ -89,6 +89,26 @@ class TestModelCapabilities(unittest.TestCase):
         self.assertNotIn("presence_penalty", payload)
         self.assertEqual(payload["stream_options"], {"include_usage": True})
 
+    def test_model_fallback_config_parses_explicit_routes(self):
+        from models.model_fallback import configured_model_fallback_routes
+
+        routes = configured_model_fallback_routes(
+            {
+                "model_fallbacks": [
+                    "gpt-5.4-mini",
+                    {"model": "deepseek-v4-flash", "bot_type": "deepseek"},
+                    {"model": "ignored", "enabled": False},
+                    "primary-model",
+                ],
+            },
+            primary_model="primary-model",
+            primary_bot_type="openai",
+        )
+
+        self.assertEqual([route.model for route in routes], ["gpt-5.4-mini", "deepseek-v4-flash"])
+        self.assertEqual(routes[0].provider, "openai")
+        self.assertEqual(routes[1].provider, "deepseek")
+
 
 if __name__ == "__main__":
     unittest.main()

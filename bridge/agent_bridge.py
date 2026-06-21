@@ -3,7 +3,7 @@ Agent Bridge - Integrates Agent system with existing COW bridge
 """
 
 import os
-from typing import Optional, List
+from typing import Any, Dict, Optional, List
 
 from agent.protocol import Agent, LLMModel, LLMRequest, get_cancel_registry
 from bridge.agent_event_handler import AgentEventHandler
@@ -17,7 +17,14 @@ from common.log import logger
 from common.utils import expand_path
 from config import conf
 from models.legacy_reply_gateway import suppress_legacy_reply_text_telemetry
+from models.model_fallback import (
+    ModelFallbackRoute,
+    annotate_fallback_result,
+    configured_model_fallback_routes,
+    should_try_model_fallback,
+)
 from models.model_gateway import call_native_model_with_gateway
+from models.model_telemetry import chunk_has_model_output, is_model_error_response
 from models.openai_compatible_bot import OpenAICompatibleBot
 
 
@@ -103,6 +110,7 @@ class AgentLLMModel(LLMModel):
         self.bot_type = bot_type
         self._bot = None
         self._bot_model = None
+        self._bot_cache = {}
 
     @property
     def model(self):
@@ -126,15 +134,25 @@ class AgentLLMModel(LLMModel):
     @property
     def bot(self):
         """Lazy load the bot, re-create when model or bot_type changes"""
-        from models.bot_factory import create_bot
         cur_model = self.model
         cur_bot_type = self._resolve_bot_type(cur_model)
         if self._bot is None or self._bot_model != cur_model or getattr(self, '_bot_type', None) != cur_bot_type:
-            self._bot = create_bot(cur_bot_type)
-            self._bot = add_openai_compatible_support(self._bot)
+            self._bot = self._create_bot(cur_bot_type)
             self._bot_model = cur_model
             self._bot_type = cur_bot_type
         return self._bot
+
+    @staticmethod
+    def _create_bot(bot_type: str):
+        from models.bot_factory import create_bot
+
+        bot = add_openai_compatible_support(create_bot(bot_type))
+        if bot_type:
+            setattr(bot, "_ecorex_route_bot_type", bot_type)
+            configure_route = getattr(bot, "configure_model_route", None)
+            if callable(configure_route):
+                configure_route(bot_type)
+        return bot
 
     @staticmethod
     def _uses_shared_openai_gateway(bot) -> bool:
@@ -146,7 +164,85 @@ class AgentLLMModel(LLMModel):
             value = getattr(request, "max_model_retries", None)
         return value
 
-    def _call_bot_with_gateway(self, bot, kwargs, *, stream: bool):
+    def _primary_model_route(self) -> ModelFallbackRoute:
+        bot_type = self._resolve_bot_type(self.model)
+        return ModelFallbackRoute(
+            model=self.model,
+            bot_type=bot_type,
+            provider=bot_type,
+            reason="primary",
+            index=0,
+        )
+
+    def _model_call_routes(self) -> List[ModelFallbackRoute]:
+        primary = self._primary_model_route()
+        fallbacks = configured_model_fallback_routes(
+            conf(),
+            primary_model=primary.model,
+            primary_bot_type=primary.bot_type,
+        )
+        return [primary] + fallbacks
+
+    def _get_bot_for_route(self, route: ModelFallbackRoute):
+        if route.index == 0:
+            return self.bot
+        cache = getattr(self, "_bot_cache", None)
+        if cache is None:
+            cache = {}
+            self._bot_cache = cache
+        bot_type = route.bot_type or route.provider or self._resolve_bot_type(route.model)
+        key = (route.model, bot_type)
+        if key not in cache:
+            cache[key] = self._create_bot(bot_type)
+        return cache[key]
+
+    def _build_call_kwargs(self, request: LLMRequest, *, stream: bool, model_name: str) -> Dict[str, Any]:
+        kwargs: Dict[str, Any] = {
+            'messages': request.messages,
+            'tools': getattr(request, 'tools', None),
+            'stream': stream,
+            'model': model_name,
+            'retry_count': getattr(request, 'retry_count', 0),
+        }
+        if request.max_tokens is not None:
+            kwargs['max_tokens'] = request.max_tokens
+        retry_sleep = getattr(request, 'model_retry_sleep', None)
+        if callable(retry_sleep):
+            kwargs['model_retry_sleep'] = retry_sleep
+        max_model_retries = self._model_max_retries_for_request(request)
+        if max_model_retries is not None:
+            kwargs['model_max_retries'] = max_model_retries
+
+        system_prompt = getattr(request, 'system', None)
+        if system_prompt:
+            kwargs['system'] = system_prompt
+
+        channel_type = getattr(self, 'channel_type', None) or ''
+        if channel_type:
+            kwargs['channel_type'] = channel_type
+        session_id = getattr(self, 'session_id', None)
+        if session_id:
+            kwargs['session_id'] = session_id
+
+        thinking_enabled = bool(conf().get("enable_thinking", False))
+        kwargs['thinking'] = (
+            {"type": "enabled"} if thinking_enabled
+            else {"type": "disabled"}
+        )
+        if thinking_enabled:
+            effort = conf().get("reasoning_effort", "high")
+            if effort in ("high", "max"):
+                kwargs['reasoning_effort'] = effort
+        return kwargs
+
+    def _call_bot_with_gateway(
+        self,
+        bot,
+        kwargs,
+        *,
+        stream: bool,
+        route: Optional[ModelFallbackRoute] = None,
+    ):
         if self._uses_shared_openai_gateway(bot):
             return bot.call_with_tools(**kwargs)
 
@@ -158,11 +254,16 @@ class AgentLLMModel(LLMModel):
             with suppress_legacy_reply_text_telemetry():
                 return bot.call_with_tools(**attempt_kwargs)
 
-        provider = getattr(self, "_bot_type", None) or self._resolve_bot_type(self.model)
+        provider = (
+            (route.provider or route.bot_type)
+            if route is not None
+            else getattr(self, "_bot_type", None) or self._resolve_bot_type(self.model)
+        )
+        model_name = route.model if route is not None else self.model
         return call_native_model_with_gateway(
             invoke,
             provider=provider,
-            model=self.model,
+            model=model_name,
             stream=stream,
             retry_count=base_retry_count,
             max_model_retries=kwargs.get("model_max_retries"),
@@ -183,64 +284,50 @@ class AgentLLMModel(LLMModel):
         Call the model using COW's bot infrastructure
         """
         try:
-            bot = self.bot
-            # For non-streaming calls, we'll use the existing reply method
-            # This is a simplified implementation
-            if hasattr(bot, 'call_with_tools'):
-                # Use tool-enabled call if available
-                kwargs = {
-                    'messages': request.messages,
-                    'tools': getattr(request, 'tools', None),
-                    'stream': False,
-                    'model': self.model,  # Pass model parameter
-                    'retry_count': getattr(request, 'retry_count', 0),
-                }
-                # Only pass max_tokens if it's explicitly set
-                if request.max_tokens is not None:
-                    kwargs['max_tokens'] = request.max_tokens
-                retry_sleep = getattr(request, 'model_retry_sleep', None)
-                if callable(retry_sleep):
-                    kwargs['model_retry_sleep'] = retry_sleep
-                max_model_retries = self._model_max_retries_for_request(request)
-                if max_model_retries is not None:
-                    kwargs['model_max_retries'] = max_model_retries
-
-                # Extract system prompt if present
-                system_prompt = getattr(request, 'system', None)
-                if system_prompt:
-                    kwargs['system'] = system_prompt
-
-                # Pass context metadata to bot
-                channel_type = getattr(self, 'channel_type', None) or ''
-                if channel_type:
-                    kwargs['channel_type'] = channel_type
-                session_id = getattr(self, 'session_id', None)
-                if session_id:
-                    kwargs['session_id'] = session_id
-
-                # Thinking mode is a global toggle independent of the channel.
-                # IM channels (WeChat/WeCom/DingTalk/Feishu) won't render the
-                # reasoning trace, but still benefit from the higher answer
-                # quality the thinking pass produces.
-                from config import conf
-                thinking_enabled = bool(conf().get("enable_thinking", False))
-                kwargs['thinking'] = (
-                    {"type": "enabled"} if thinking_enabled
-                    else {"type": "disabled"}
+            routes = self._model_call_routes()
+            primary_route = routes[0]
+            last_response = None
+            last_route = primary_route
+            for route_index, route in enumerate(routes):
+                bot = self._get_bot_for_route(route)
+                if not hasattr(bot, 'call_with_tools'):
+                    bot_type = type(bot).__name__
+                    raise NotImplementedError(
+                        f"Bot {bot_type} does not support call_with_tools. Please add the method."
+                    )
+                kwargs = self._build_call_kwargs(request, stream=False, model_name=route.model)
+                response = self._call_bot_with_gateway(bot, kwargs, stream=False, route=route)
+                last_response = response
+                last_route = route
+                should_fallback = (
+                    route_index < len(routes) - 1
+                    and should_try_model_fallback(response)
                 )
-                # Reasoning effort is only meaningful when thinking is on.
-                # Bots that don't understand the kwarg drop it silently.
-                if thinking_enabled:
-                    effort = conf().get("reasoning_effort", "high")
-                    if effort in ("high", "max"):
-                        kwargs['reasoning_effort'] = effort
-
-                response = self._call_bot_with_gateway(bot, kwargs, stream=False)
+                if should_fallback:
+                    next_route = routes[route_index + 1]
+                    logger.warning(
+                        f"[AgentLLMModel] model fallback: "
+                        f"{route.provider}/{route.model} -> "
+                        f"{next_route.provider}/{next_route.model}"
+                    )
+                    continue
+                if route_index > 0 and isinstance(response, dict):
+                    response = annotate_fallback_result(
+                        response,
+                        from_route=primary_route,
+                        to_route=route,
+                        exhausted=should_try_model_fallback(response),
+                    )
                 return self._format_response(response)
-            else:
-                # Fallback to regular call
-                # This would need to be implemented based on your specific needs
-                raise NotImplementedError("Regular call not implemented yet")
+
+            if isinstance(last_response, dict) and len(routes) > 1:
+                last_response = annotate_fallback_result(
+                    last_response,
+                    from_route=primary_route,
+                    to_route=last_route,
+                    exhausted=True,
+                )
+            return self._format_response(last_response)
                 
         except Exception as e:
             logger.error(f"AgentLLMModel call error: {e}")
@@ -251,71 +338,90 @@ class AgentLLMModel(LLMModel):
         Call the model with streaming using COW's bot infrastructure
         """
         try:
-            bot = self.bot
-            if hasattr(bot, 'call_with_tools'):
-                # Use tool-enabled streaming call if available
-                # Extract system prompt if present
-                system_prompt = getattr(request, 'system', None)
-
-                # Build kwargs for call_with_tools
-                kwargs = {
-                    'messages': request.messages,
-                    'tools': getattr(request, 'tools', None),
-                    'stream': True,
-                    'model': self.model,  # Pass model parameter
-                    'retry_count': getattr(request, 'retry_count', 0),
-                }
-
-                # Only pass max_tokens if explicitly set, let the bot use its default
-                if request.max_tokens is not None:
-                    kwargs['max_tokens'] = request.max_tokens
-                retry_sleep = getattr(request, 'model_retry_sleep', None)
-                if callable(retry_sleep):
-                    kwargs['model_retry_sleep'] = retry_sleep
-                max_model_retries = self._model_max_retries_for_request(request)
-                if max_model_retries is not None:
-                    kwargs['model_max_retries'] = max_model_retries
-
-                # Add system prompt if present
-                if system_prompt:
-                    kwargs['system'] = system_prompt
-
-                # Pass context metadata to bot
-                channel_type = getattr(self, 'channel_type', None) or ''
-                if channel_type:
-                    kwargs['channel_type'] = channel_type
-                session_id = getattr(self, 'session_id', None)
-                if session_id:
-                    kwargs['session_id'] = session_id
-
-                # Thinking mode is a global toggle independent of the channel.
-                # IM channels (WeChat/WeCom/DingTalk/Feishu) won't render the
-                # reasoning trace, but still benefit from the higher answer
-                # quality the thinking pass produces.
-                from config import conf
-                thinking_enabled = bool(conf().get("enable_thinking", False))
-                kwargs['thinking'] = (
-                    {"type": "enabled"} if thinking_enabled
-                    else {"type": "disabled"}
-                )
-                # Reasoning effort is only meaningful when thinking is on.
-                # Bots that don't understand the kwarg drop it silently.
-                if thinking_enabled:
-                    effort = conf().get("reasoning_effort", "high")
-                    if effort in ("high", "max"):
-                        kwargs['reasoning_effort'] = effort
-
-                stream = self._call_bot_with_gateway(bot, kwargs, stream=True)
-                
-                # Convert stream format to our expected format
+            routes = self._model_call_routes()
+            primary_route = routes[0]
+            for route_index, route in enumerate(routes):
+                bot = self._get_bot_for_route(route)
+                if not hasattr(bot, 'call_with_tools'):
+                    bot_type = type(bot).__name__
+                    raise NotImplementedError(
+                        f"Bot {bot_type} does not support call_with_tools. Please add the method."
+                    )
+                kwargs = self._build_call_kwargs(request, stream=True, model_name=route.model)
+                stream = self._call_bot_with_gateway(bot, kwargs, stream=True, route=route)
+                buffered_chunks = []
+                output_started = False
+                fallback_next = False
                 try:
-                    for chunk in stream:
-                        yield self._format_stream_chunk(chunk)
+                    for raw_chunk in stream:
+                        chunk = self._format_stream_chunk(raw_chunk)
+                        if route_index > 0 and isinstance(chunk, dict):
+                            chunk = annotate_fallback_result(
+                                chunk,
+                                from_route=primary_route,
+                                to_route=route,
+                                exhausted=(
+                                    is_model_error_response(chunk)
+                                    and should_try_model_fallback(chunk)
+                                ),
+                            )
+                        if isinstance(chunk, dict) and is_model_error_response(chunk):
+                            can_fallback = (
+                                not output_started
+                                and route_index < len(routes) - 1
+                                and should_try_model_fallback(chunk)
+                            )
+                            if can_fallback:
+                                fallback_next = True
+                                break
+                            for buffered in buffered_chunks:
+                                yield buffered
+                            yield chunk
+                            return
+
+                        if chunk_has_model_output(chunk):
+                            output_started = True
+                            for buffered in buffered_chunks:
+                                yield buffered
+                            buffered_chunks = []
+                            yield chunk
+                        elif output_started:
+                            yield chunk
+                        else:
+                            buffered_chunks.append(chunk)
+                    else:
+                        for buffered in buffered_chunks:
+                            yield buffered
+                        return
+                except Exception as e:
+                    error_chunk = {
+                        "error": True,
+                        "message": str(e),
+                        "status_code": 500,
+                    }
+                    if (
+                        not output_started
+                        and route_index < len(routes) - 1
+                        and should_try_model_fallback(error_chunk)
+                    ):
+                        fallback_next = True
+                    else:
+                        for buffered in buffered_chunks:
+                            yield buffered
+                        yield error_chunk
+                        return
                 finally:
                     self._close_model_stream(stream)
-            else:
-                bot_type = type(bot).__name__
-                raise NotImplementedError(f"Bot {bot_type} does not support call_with_tools. Please add the method.")
+
+                if fallback_next:
+                    next_route = routes[route_index + 1]
+                    logger.warning(
+                        f"[AgentLLMModel] stream model fallback before output: "
+                        f"{route.provider}/{route.model} -> "
+                        f"{next_route.provider}/{next_route.model}"
+                    )
+                    continue
+                return
                 
         except Exception as e:
             logger.error(f"AgentLLMModel call_stream error: {e}", exc_info=True)
