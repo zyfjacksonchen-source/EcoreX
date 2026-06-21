@@ -244,6 +244,23 @@ def _mark_scheduler_task_failed(
     )
 
 
+def _scheduler_run_was_cancelled(cancel_event) -> bool:
+    try:
+        return bool(cancel_event is not None and cancel_event.is_set())
+    except Exception:
+        return False
+
+
+def _mark_scheduler_run_cancelled(request_id: str) -> None:
+    _mark_scheduler_run_terminal(
+        request_id,
+        "cancelled",
+        reason="scheduler_cancelled",
+        error_code="SCHEDULER_CANCELLED",
+        error_message="Scheduled task execution was cancelled.",
+    )
+
+
 def _execute_scheduled_task(task: dict, agent_bridge) -> bool:
     """Execute one due scheduled task attempt and persist its lifecycle."""
     action = _scheduler_action(task)
@@ -262,11 +279,24 @@ def _execute_scheduled_task(task: dict, agent_bridge) -> bool:
     if isinstance(task, dict):
         task.pop(_SCHEDULER_RUN_REQUEST_ID_KEY, None)
     request_id = _scheduler_run_request_id(task)
+    cancel_event = None
+    try:
+        from agent.protocol import get_cancel_registry
+
+        cancel_event = get_cancel_registry().register(
+            request_id,
+            session_id=_scheduler_session_id(task),
+        )
+    except Exception as e:
+        logger.debug(f"[Scheduler] Cancel token registration skipped for {request_id}: {e}")
     _mark_scheduler_run_created(task, request_id)
 
     try:
         _mark_scheduler_run_phase(request_id, "authorizing", status="running")
         if not _authorize_scheduled_execution(task):
+            if _scheduler_run_was_cancelled(cancel_event):
+                _mark_scheduler_run_cancelled(request_id)
+                return True
             _mark_scheduler_run_terminal(
                 request_id,
                 "failed",
@@ -274,6 +304,10 @@ def _execute_scheduled_task(task: dict, agent_bridge) -> bool:
                 error_code="SCHEDULER_PERMISSION_DENIED",
                 error_message="Background scheduler execution was blocked by the permission boundary.",
             )
+            return True
+
+        if _scheduler_run_was_cancelled(cancel_event):
+            _mark_scheduler_run_cancelled(request_id)
             return True
 
         if action_type == "agent_task":
@@ -299,22 +333,33 @@ def _execute_scheduled_task(task: dict, agent_bridge) -> bool:
             )
             return True
 
+        cancelled = _scheduler_run_was_cancelled(cancel_event)
         if ok:
-            _mark_scheduler_run_terminal(request_id, "completed", reason="scheduler_completed")
+            if cancelled:
+                _mark_scheduler_run_cancelled(request_id)
+            else:
+                _mark_scheduler_run_terminal(request_id, "completed", reason="scheduler_completed")
         else:
-            _mark_scheduler_run_terminal(
-                request_id,
-                "failed",
-                reason="scheduler_execution_failed",
-                error_code="SCHEDULER_EXECUTION_FAILED",
-                error_message="Scheduled task execution or delivery failed; scheduler will retry if the task remains due.",
-            )
+            if cancelled:
+                _mark_scheduler_run_cancelled(request_id)
+                return True
+            else:
+                _mark_scheduler_run_terminal(
+                    request_id,
+                    "failed",
+                    reason="scheduler_execution_failed",
+                    error_code="SCHEDULER_EXECUTION_FAILED",
+                    error_message="Scheduled task execution or delivery failed; scheduler will retry if the task remains due.",
+                )
         return ok
     except Exception as e:
         logger.error(
             f"[Scheduler] Error executing task "
             f"{task.get('id') if isinstance(task, dict) else '<unknown>'}: {e}"
         )
+        if _scheduler_run_was_cancelled(cancel_event):
+            _mark_scheduler_run_cancelled(request_id)
+            return True
         _mark_scheduler_run_terminal(
             request_id,
             "failed",
@@ -323,6 +368,13 @@ def _execute_scheduled_task(task: dict, agent_bridge) -> bool:
             error_message=str(e),
         )
         return False
+    finally:
+        try:
+            from agent.protocol import get_cancel_registry
+
+            get_cancel_registry().unregister(request_id)
+        except Exception:
+            pass
 
 
 def _authorize_scheduled_execution(task: dict) -> bool:
@@ -674,7 +726,27 @@ def _execute_tool_call(task: dict, agent_bridge) -> bool:
             return True
 
         logger.info(f"[Scheduler] Task {task['id']}: Executing tool '{tool_name}' with params {tool_params}")
-        result = tool.execute(tool_params)
+        had_cancel_event = hasattr(tool, "cancel_event")
+        previous_cancel_event = getattr(tool, "cancel_event", None)
+        injected_cancel_event = None
+        try:
+            from agent.protocol import get_cancel_registry
+
+            injected_cancel_event = get_cancel_registry().get_event(_scheduler_run_request_id(task))
+        except Exception:
+            injected_cancel_event = None
+        if injected_cancel_event is not None:
+            tool.cancel_event = injected_cancel_event
+        try:
+            result = tool.execute(tool_params)
+        finally:
+            if injected_cancel_event is not None and not had_cancel_event:
+                try:
+                    delattr(tool, "cancel_event")
+                except Exception:
+                    pass
+            elif injected_cancel_event is not None:
+                tool.cancel_event = previous_cancel_event
         content = result.result if hasattr(result, 'result') else str(result)
         if result_prefix:
             content = f"{result_prefix}\n\n{content}"

@@ -322,11 +322,38 @@
     and scheduled tool permission denial.
   - `active_requests_snapshot()` consumes durable scheduler rows but keeps them
     out of primary chat-session grouping; desktop primary-chat recovery also
-    filters scheduler rows, while Run Center keeps them visible as
-    diagnostics-only until scheduler cancellation/recovery contracts exist.
+    filters scheduler rows, while Run Center kept them visible as
+    diagnostics-only at that point; the cancellation slice below later enables
+    Stop while recovery remains diagnostics-only.
   - Focused backend pytest passed for scheduler active/terminal ledger state,
     fresh attempt ids for reused task dictionaries, scheduler permission-denied
     terminal rows, scheduled tool permission-denied terminal rows,
     scheduler-out-of-primary-session snapshots, Run Center diagnostics-only
     source contract, and the existing scheduler fail-closed permission tests;
     desktop `npm run typecheck` passed.
+- Added the first scheduler cancellation slice:
+  - Scheduler execution attempts now register an in-process cancel token keyed
+    by the scheduler attempt request id before the durable run row becomes
+    visible, and release it when the wrapper exits.
+  - Scheduled `agent_task` / `skill_call` runs reuse that request id through
+    AgentBridge, so Run Center `/cancel` can interrupt model streams, retry
+    sleeps, permission waits, and Agent-managed tool execution through the
+    existing AgentStream cancellation checkpoints.
+  - Direct scheduled `tool_call` runs now inject the same cancel event into the
+    tool object before `execute()`, covering cancel-aware tools such as bash,
+    MCP, browser, and Feishu CLI without changing their public API.
+  - If the scheduler attempt's cancel event is set, the wrapper writes terminal
+    `cancelled` with `scheduler_cancelled` / `SCHEDULER_CANCELLED` instead of
+    misclassifying the partial reply or cancelled tool result as completed.
+    Cancelled failed results and cancelled exceptions are consumed as the
+    stopped attempt, so the scheduler does not immediately retry the same due
+    task after a Run Center Stop.
+  - Run Center keeps scheduler rows diagnostics-only for Open/recover but now
+    enables Stop, using the existing request-scoped `/cancel` contract and a
+    scheduler-specific success toast.
+  - Focused backend pytest passed for cancelled scheduler agent tasks,
+    first-visible scheduler cancel token registration, cancel-visible scheduled
+    tool calls, cancelled false-return and exception paths, scheduler run-ledger
+    terminal state, primary-chat isolation, Run Center source contract, and
+    existing scheduler fail-closed permission tests; desktop `npm run typecheck`
+    passed.

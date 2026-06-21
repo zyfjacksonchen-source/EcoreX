@@ -4721,8 +4721,10 @@ class TestAgentHostBoundary(unittest.TestCase):
             "runCenterStats.stale",
             "const diagnosticsOnly = isSubagent || isScheduler",
             "disabled={diagnosticsOnly}",
-            "disabled={runCenterState(request) === \"failed\" || isScheduler || (isSubagent && !subagentTaskId)}",
+            "disabled={runCenterState(request) === \"failed\" || (isSubagent && !subagentTaskId)}",
             "Scheduler runs are visible in Run Center; export diagnostics for details",
+            "Stop scheduler run",
+            "Scheduler stop requested",
         ]
         for marker in required_markers:
             self.assertIn(marker, app_source)
@@ -5381,6 +5383,266 @@ class TestAgentHostBoundary(unittest.TestCase):
             self.assertEqual(ledger.get_run(first_request_id)["status"], "completed")
             self.assertEqual(ledger.get_run(second_request_id)["status"], "completed")
             self.assertEqual(len(fake_channel.sent), 2)
+            self.assertEqual(ledger.active_snapshot(), [])
+
+    def test_scheduler_cancel_token_is_registered_before_run_is_visible(self):
+        from agent.protocol import get_cancel_registry, get_run_ledger
+
+        fake_croniter = types.ModuleType("croniter")
+        fake_croniter.croniter = lambda *args, **kwargs: None
+        with patch.dict(sys.modules, {"croniter": fake_croniter}):
+            from agent.tools.scheduler import integration as scheduler_integration
+
+        class FakeChannel:
+            session_queues = {"web-session-first-visible-cancel": Queue()}
+
+        task = {
+            "id": "task-ledger-first-visible-cancel",
+            "name": "First visible cancel",
+            "action": {
+                "type": "send_message",
+                "content": "hello",
+                "receiver": "web-session-first-visible-cancel",
+                "channel_type": "web",
+            },
+        }
+
+        original_mark_created = scheduler_integration._mark_scheduler_run_created
+
+        def assert_token_then_mark(action_task, request_id):
+            self.assertIsNotNone(get_cancel_registry().get_event(request_id))
+            self.assertTrue(get_cancel_registry().cancel_request(request_id))
+            original_mark_created(action_task, request_id)
+
+        with isolated_run_ledger():
+            ledger = get_run_ledger()
+            with patch("channel.channel_factory.create_channel", return_value=FakeChannel()), \
+                    patch.object(scheduler_integration, "_mark_scheduler_run_created", side_effect=assert_token_then_mark), \
+                    patch.object(scheduler_integration, "_authorize_scheduled_execution", return_value=True):
+                ok = scheduler_integration._execute_scheduled_task(task, object())
+
+            request_id = task["_scheduler_run_request_id"]
+            self.assertTrue(ok)
+            final = ledger.get_run(request_id)
+            self.assertEqual(final["run_type"], "scheduler")
+            self.assertEqual(final["status"], "cancelled")
+            self.assertEqual(final["terminal_reason"], "scheduler_cancelled")
+            self.assertIsNone(get_cancel_registry().get_event(request_id))
+            self.assertEqual(ledger.active_snapshot(), [])
+
+    def test_scheduler_agent_task_cancel_writes_cancelled_terminal_state(self):
+        from agent.protocol import get_cancel_registry, get_run_ledger
+        from bridge.reply import Reply, ReplyType
+
+        fake_croniter = types.ModuleType("croniter")
+        fake_croniter.croniter = lambda *args, **kwargs: None
+        with patch.dict(sys.modules, {"croniter": fake_croniter}):
+            from agent.tools.scheduler import integration as scheduler_integration
+
+        class FakeChannel:
+            def __init__(self):
+                self.session_queues = {"web-session-cancel": Queue()}
+                self.request_to_session = {}
+                self.sent = []
+
+            def send(self, reply, context):
+                self.sent.append((reply, context))
+
+        class FakeAgentBridge:
+            def agent_reply(self, _content, context=None, **_kwargs):
+                request_id = context.get("request_id", "")
+                self.request_id = request_id
+                self.cancelled = get_cancel_registry().cancel_request(request_id)
+                return Reply(ReplyType.TEXT, "_(Cancelled)_")
+
+        task = {
+            "id": "task-ledger-agent-cancel",
+            "name": "Cancelled summary",
+            "action": {
+                "type": "agent_task",
+                "task_description": "summarize project state",
+                "receiver": "web-session-cancel",
+                "channel_type": "web",
+            },
+        }
+
+        with isolated_run_ledger():
+            ledger = get_run_ledger()
+            fake_channel = FakeChannel()
+            fake_bridge = FakeAgentBridge()
+            with patch("channel.channel_factory.create_channel", return_value=fake_channel), \
+                    patch.object(scheduler_integration, "_authorize_scheduled_execution", return_value=True):
+                ok = scheduler_integration._execute_scheduled_task(task, fake_bridge)
+
+            self.assertTrue(ok)
+            self.assertTrue(fake_bridge.cancelled)
+            final = ledger.get_run(fake_bridge.request_id)
+            self.assertEqual(final["run_type"], "scheduler")
+            self.assertEqual(final["status"], "cancelled")
+            self.assertEqual(final["terminal_reason"], "scheduler_cancelled")
+            self.assertEqual(final["error_code"], "SCHEDULER_CANCELLED")
+            self.assertIsNone(get_cancel_registry().get_event(fake_bridge.request_id))
+            self.assertEqual(ledger.active_snapshot(), [])
+
+    def test_scheduler_tool_cancel_is_visible_then_terminal_cancelled(self):
+        from agent.protocol import get_cancel_registry, get_run_ledger
+        from agent.tools.base_tool import ToolResult
+        from channel.web import web_channel
+
+        fake_croniter = types.ModuleType("croniter")
+        fake_croniter.croniter = lambda *args, **kwargs: None
+        with patch.dict(sys.modules, {"croniter": fake_croniter}):
+            from agent.tools.scheduler import integration as scheduler_integration
+
+        class FakeChannel:
+            def __init__(self):
+                self.session_queues = {"web-session-tool-cancel": Queue()}
+                self.request_to_session = {}
+                self.sent = []
+
+            def send(self, reply, context):
+                self.sent.append((reply, context))
+
+        class FakeTool:
+            name = "fake-long-tool"
+
+            def execute(self, _params):
+                self.saw_cancel_event = hasattr(self, "cancel_event")
+                request_id = task["_scheduler_run_request_id"]
+                self.cancelled = get_cancel_registry().cancel_request(request_id)
+                self.cancel_event_set = self.cancel_event.is_set()
+                with tempfile.TemporaryDirectory() as workspace:
+                    with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                        self.active_snapshot = web_channel.WebChannel().active_requests_snapshot()
+                return ToolResult.fail("cancelled")
+
+        task = {
+            "id": "task-ledger-tool-cancel",
+            "name": "Cancelled tool",
+            "action": {
+                "type": "tool_call",
+                "tool_name": "fake-long-tool",
+                "tool_params": {"seconds": 60},
+                "receiver": "web-session-tool-cancel",
+                "channel_type": "web",
+            },
+        }
+        fake_tool = FakeTool()
+
+        with isolated_run_ledger():
+            ledger = get_run_ledger()
+            fake_channel = FakeChannel()
+            with patch("channel.channel_factory.create_channel", return_value=fake_channel), \
+                    patch.object(scheduler_integration, "_authorize_scheduled_execution", return_value=True), \
+                    patch("agent.tools.tool_manager.ToolManager.create_tool", return_value=fake_tool), \
+                    patch.object(scheduler_integration, "_authorize_scheduled_tool_call", return_value=True):
+                ok = scheduler_integration._execute_scheduled_task(task, object())
+
+            request_id = task["_scheduler_run_request_id"]
+            self.assertTrue(ok)
+            self.assertTrue(fake_tool.saw_cancel_event)
+            self.assertTrue(fake_tool.cancelled)
+            self.assertTrue(fake_tool.cancel_event_set)
+            active = [
+                item for item in fake_tool.active_snapshot["requests"]
+                if item.get("request_id") == request_id
+            ]
+            self.assertEqual(len(active), 1)
+            self.assertEqual(active[0]["run_type"], "scheduler")
+            self.assertTrue(active[0]["cancelled"])
+            self.assertEqual(active[0]["state"], "cancelling")
+            final = ledger.get_run(request_id)
+            self.assertEqual(final["status"], "cancelled")
+            self.assertEqual(final["terminal_reason"], "scheduler_cancelled")
+            self.assertIsNone(get_cancel_registry().get_event(request_id))
+            self.assertFalse(hasattr(fake_tool, "cancel_event"))
+            self.assertEqual(ledger.active_snapshot(), [])
+
+    def test_scheduler_cancelled_failed_action_consumes_attempt_without_retry(self):
+        from agent.protocol import get_cancel_registry, get_run_ledger
+
+        fake_croniter = types.ModuleType("croniter")
+        fake_croniter.croniter = lambda *args, **kwargs: None
+        with patch.dict(sys.modules, {"croniter": fake_croniter}):
+            from agent.tools.scheduler import integration as scheduler_integration
+
+        class FakeChannel:
+            session_queues = {"web-session-cancel-false": Queue()}
+
+        task = {
+            "id": "task-ledger-cancel-false",
+            "name": "Cancelled failed action",
+            "action": {
+                "type": "tool_call",
+                "tool_name": "fake-long-tool",
+                "tool_params": {"seconds": 60},
+                "receiver": "web-session-cancel-false",
+                "channel_type": "web",
+            },
+        }
+
+        def cancel_and_fail(action_task, _agent_bridge):
+            request_id = action_task["_scheduler_run_request_id"]
+            self.assertTrue(get_cancel_registry().cancel_request(request_id))
+            return False
+
+        with isolated_run_ledger():
+            ledger = get_run_ledger()
+            with patch("channel.channel_factory.create_channel", return_value=FakeChannel()), \
+                    patch.object(scheduler_integration, "_authorize_scheduled_execution", return_value=True), \
+                    patch.object(scheduler_integration, "_execute_tool_call", side_effect=cancel_and_fail):
+                ok = scheduler_integration._execute_scheduled_task(task, object())
+
+            request_id = task["_scheduler_run_request_id"]
+            self.assertTrue(ok)
+            final = ledger.get_run(request_id)
+            self.assertEqual(final["status"], "cancelled")
+            self.assertEqual(final["terminal_reason"], "scheduler_cancelled")
+            self.assertEqual(final["error_code"], "SCHEDULER_CANCELLED")
+            self.assertIsNone(get_cancel_registry().get_event(request_id))
+            self.assertEqual(ledger.active_snapshot(), [])
+
+    def test_scheduler_cancelled_exception_writes_cancelled_terminal_state(self):
+        from agent.protocol import get_cancel_registry, get_run_ledger
+
+        fake_croniter = types.ModuleType("croniter")
+        fake_croniter.croniter = lambda *args, **kwargs: None
+        with patch.dict(sys.modules, {"croniter": fake_croniter}):
+            from agent.tools.scheduler import integration as scheduler_integration
+
+        class FakeChannel:
+            session_queues = {"web-session-cancel-exception": Queue()}
+
+        task = {
+            "id": "task-ledger-cancel-exception",
+            "name": "Cancelled exception",
+            "action": {
+                "type": "agent_task",
+                "task_description": "summarize project state",
+                "receiver": "web-session-cancel-exception",
+                "channel_type": "web",
+            },
+        }
+
+        def cancel_and_raise(action_task, _agent_bridge):
+            request_id = action_task["_scheduler_run_request_id"]
+            self.assertTrue(get_cancel_registry().cancel_request(request_id))
+            raise RuntimeError("tool noticed cancellation")
+
+        with isolated_run_ledger():
+            ledger = get_run_ledger()
+            with patch("channel.channel_factory.create_channel", return_value=FakeChannel()), \
+                    patch.object(scheduler_integration, "_authorize_scheduled_execution", return_value=True), \
+                    patch.object(scheduler_integration, "_execute_agent_task", side_effect=cancel_and_raise):
+                ok = scheduler_integration._execute_scheduled_task(task, object())
+
+            request_id = task["_scheduler_run_request_id"]
+            self.assertTrue(ok)
+            final = ledger.get_run(request_id)
+            self.assertEqual(final["status"], "cancelled")
+            self.assertEqual(final["terminal_reason"], "scheduler_cancelled")
+            self.assertEqual(final["error_code"], "SCHEDULER_CANCELLED")
+            self.assertIsNone(get_cancel_registry().get_event(request_id))
             self.assertEqual(ledger.active_snapshot(), [])
 
     def test_scheduler_run_ledger_preserves_tool_permission_denied_terminal_state(self):

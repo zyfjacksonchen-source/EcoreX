@@ -5034,13 +5034,9 @@ export function App() {
         setToast("Subagent stop requested");
         return;
       }
-      if (isRunCenterSchedulerRequest(request)) {
-        setToast("Scheduler runs are diagnostics-only until scheduler cancellation is available");
-        return;
-      }
       await cancelChatRequest({ requestId, sessionId });
       setRuntimeSnapshot(await loadRuntimeSnapshot());
-      setToast("Stop requested");
+      setToast(isRunCenterSchedulerRequest(request) ? "Scheduler stop requested" : "Stop requested");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Stop request failed");
     }
@@ -5996,8 +5992,8 @@ export function App() {
                                 <button
                                   type="button"
                                   onClick={() => void stopRunCenterRequest(request)}
-                                  disabled={runCenterState(request) === "failed" || isScheduler || (isSubagent && !subagentTaskId)}
-                                  title={isScheduler ? "Scheduler cancellation is not available yet" : isSubagent ? (subagentTaskId ? "Stop subagent run" : "Subagent task id unavailable") : "Stop run"}
+                                  disabled={runCenterState(request) === "failed" || (isSubagent && !subagentTaskId)}
+                                  title={isScheduler ? "Stop scheduler run" : isSubagent ? (subagentTaskId ? "Stop subagent run" : "Subagent task id unavailable") : "Stop run"}
                                 >
                                   <Square aria-hidden="true" />
                                   Stop
