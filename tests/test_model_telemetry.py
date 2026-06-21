@@ -736,6 +736,21 @@ class TestModelTelemetry(unittest.TestCase):
 
         raise AssertionError("unsupported provider")
 
+    def _baidu_wenxin_bot_for_tests(self):
+        from models.baidu.baidu_wenxin import BaiduWenxinBot
+
+        cleared = []
+
+        class TestBaiduWenxinBot(BaiduWenxinBot):
+            def __init__(self):
+                self.prompt_enabled = False
+                self.sessions = SimpleNamespace(clear_session=cleared.append)
+
+            def get_access_token(self):
+                return "test-token"
+
+        return TestBaiduWenxinBot(), cleared
+
     def _special_native_http_provider_bot_for_tests(self, provider):
         if provider == "claude":
             from models.claudeapi.claude_api_bot import ClaudeAPIBot
@@ -3880,6 +3895,401 @@ class TestModelTelemetry(unittest.TestCase):
                 self.assertEqual(event["error_taxonomy"], "timeout")
                 self.assertEqual(event["retry_attempt"], 1)
                 self.assertTrue(event["retry_exhausted"])
+
+    def test_baidu_wenxin_legacy_reply_text_uses_retry_after_then_records_success(self):
+        from unittest.mock import MagicMock, patch
+        from models.legacy_reply_gateway import wrap_legacy_reply_text
+        from models.model_telemetry import get_recent_model_calls
+
+        session = SimpleNamespace(
+            session_id="s",
+            model="wenxin-test",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        retry_response = self._FakeHTTPResponse(
+            429,
+            {
+                "error": {
+                    "message": "rate limit",
+                    "code": "rate_limit_exceeded",
+                    "type": "rate_limit",
+                }
+            },
+            headers={"Retry-After": "0.2"},
+        )
+        success_response = self._FakeHTTPResponse(
+            200,
+            {
+                "result": "ok after retry",
+                "usage": {
+                    "total_tokens": 5,
+                    "completion_tokens": 2,
+                },
+            },
+        )
+        bot, cleared = self._baidu_wenxin_bot_for_tests()
+        bot = wrap_legacy_reply_text(bot, provider_hint="baidu", model_hint="wenxin-test")
+        fake_conf = MagicMock()
+        fake_conf.get.side_effect = lambda key, default=None: {
+            "model_max_retries": 1,
+        }.get(key, default)
+        calls = []
+        responses = [retry_response, success_response]
+
+        def fake_request(*args, **kwargs):
+            calls.append((args, kwargs))
+            return responses.pop(0)
+
+        sleeps = []
+        with patch("models.baidu.baidu_wenxin.requests.request", side_effect=fake_request):
+            with patch("models.legacy_direct_chat_retry.conf", return_value=fake_conf):
+                result = bot.reply_text(session, model_retry_sleep=sleeps.append)
+
+        self.assertEqual(result["content"], "ok after retry")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(sleeps, [0.2])
+        self.assertEqual(cleared, [])
+        events = get_recent_model_calls()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["status"], "completed")
+        self.assertEqual(events[0]["provider"], "baidu")
+        self.assertEqual(events[0]["model"], "wenxin-test")
+        self.assertEqual(events[0]["total_tokens"], 5)
+
+    def test_baidu_wenxin_legacy_reply_text_body_error_uses_retry_after_ms(self):
+        from unittest.mock import MagicMock, patch
+        from models.legacy_reply_gateway import wrap_legacy_reply_text
+        from models.model_telemetry import get_recent_model_calls
+
+        session = SimpleNamespace(
+            session_id="s",
+            model="wenxin-test",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        retry_response = self._FakeHTTPResponse(
+            200,
+            {
+                "error_code": "rate_limit_exceeded",
+                "error_msg": "rate limit",
+                "status_code": 429,
+                "retry_after_ms": 200,
+            },
+        )
+        success_response = self._FakeHTTPResponse(
+            200,
+            {
+                "result": "ok after body retry",
+                "usage": {
+                    "total_tokens": 6,
+                    "completion_tokens": 3,
+                },
+            },
+        )
+        bot, cleared = self._baidu_wenxin_bot_for_tests()
+        bot = wrap_legacy_reply_text(bot, provider_hint="baidu", model_hint="wenxin-test")
+        fake_conf = MagicMock()
+        fake_conf.get.side_effect = lambda key, default=None: {
+            "model_max_retries": 1,
+        }.get(key, default)
+        calls = []
+        responses = [retry_response, success_response]
+
+        def fake_request(*args, **kwargs):
+            calls.append((args, kwargs))
+            return responses.pop(0)
+
+        sleeps = []
+        with patch("models.baidu.baidu_wenxin.requests.request", side_effect=fake_request):
+            with patch("models.legacy_direct_chat_retry.conf", return_value=fake_conf):
+                result = bot.reply_text(session, model_retry_sleep=sleeps.append)
+
+        self.assertEqual(result["content"], "ok after body retry")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(sleeps, [0.2])
+        self.assertEqual(cleared, [])
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "completed")
+        self.assertEqual(event["total_tokens"], 6)
+
+    def test_baidu_wenxin_legacy_reply_text_non_retryable_4xx_records_typed_fail_closed(self):
+        from unittest.mock import MagicMock, patch
+        from models.legacy_reply_gateway import wrap_legacy_reply_text
+        from models.model_telemetry import get_recent_model_calls
+
+        session = SimpleNamespace(
+            session_id="s",
+            model="wenxin-test",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        response = self._FakeHTTPResponse(
+            400,
+            {
+                "error_code": "invalid_request",
+                "error_msg": "bad request",
+                "type": "invalid_request_error",
+            },
+        )
+        bot, cleared = self._baidu_wenxin_bot_for_tests()
+        bot = wrap_legacy_reply_text(bot, provider_hint="baidu", model_hint="wenxin-test")
+        fake_conf = MagicMock()
+        fake_conf.get.side_effect = lambda key, default=None: {
+            "model_max_retries": 1,
+        }.get(key, default)
+        calls = []
+
+        def fake_request(*args, **kwargs):
+            calls.append((args, kwargs))
+            return response
+
+        sleeps = []
+        with patch("models.baidu.baidu_wenxin.requests.request", side_effect=fake_request):
+            with patch("models.legacy_direct_chat_retry.conf", return_value=fake_conf):
+                result = bot.reply_text(session, model_retry_sleep=sleeps.append)
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(sleeps, [])
+        self.assertEqual(cleared, [])
+        self.assertEqual(result["completion_tokens"], 0)
+        self.assertEqual(result["status_code"], 400)
+        self.assertEqual(result["error_taxonomy"], "client_error")
+        self.assertEqual(result["error_code"], "invalid_request")
+        self.assertEqual(result["message"], "bad request")
+        self.assertFalse(result["retryable"])
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["provider"], "baidu")
+        self.assertEqual(event["error_status_code"], 400)
+        self.assertEqual(event["error_taxonomy"], "client_error")
+        self.assertEqual(event["error_code"], "invalid_request")
+        self.assertEqual(event["error_message"], "bad request")
+        self.assertFalse(event["retryable"])
+
+    def test_baidu_wenxin_legacy_reply_text_timeout_and_adapter_errors_are_typed(self):
+        from unittest.mock import MagicMock, patch
+        import requests
+        from models.legacy_reply_gateway import wrap_legacy_reply_text
+        from models.model_telemetry import (
+            get_recent_model_calls,
+            reset_model_call_telemetry_for_tests,
+        )
+
+        cases = [
+            (
+                "timeout",
+                requests.exceptions.Timeout("timed out"),
+                2,
+                [2.0],
+                [],
+                408,
+                "timeout",
+                "timeout",
+            ),
+            (
+                "local_adapter",
+                ValueError("adapter server unavailable"),
+                1,
+                [],
+                ["s"],
+                None,
+                "unknown",
+                "legacy_adapter_error",
+            ),
+        ]
+
+        for name, failure, expected_calls, expected_sleeps, expected_cleared, status_code, taxonomy, error_type in cases:
+            with self.subTest(name=name):
+                reset_model_call_telemetry_for_tests()
+                session = SimpleNamespace(
+                    session_id="s",
+                    model="wenxin-test",
+                    messages=[{"role": "user", "content": "hi"}],
+                )
+                bot, cleared = self._baidu_wenxin_bot_for_tests()
+                bot = wrap_legacy_reply_text(bot, provider_hint="baidu", model_hint="wenxin-test")
+                fake_conf = MagicMock()
+                fake_conf.get.side_effect = lambda key, default=None: {
+                    "model_max_retries": 1,
+                }.get(key, default)
+                calls = []
+
+                def fake_request(*args, **kwargs):
+                    calls.append((args, kwargs))
+                    raise failure
+
+                sleeps = []
+                with patch("models.baidu.baidu_wenxin.requests.request", side_effect=fake_request):
+                    with patch("models.legacy_direct_chat_retry.conf", return_value=fake_conf):
+                        result = bot.reply_text(session, model_retry_sleep=sleeps.append)
+
+                self.assertEqual(len(calls), expected_calls)
+                self.assertEqual(sleeps, expected_sleeps)
+                self.assertEqual(cleared, expected_cleared)
+                self.assertEqual(result["status_code"], status_code)
+                self.assertEqual(result["error_taxonomy"], taxonomy)
+                self.assertEqual(result["error_type"], error_type)
+                event = get_recent_model_calls()[0]
+                self.assertEqual(event["status"], "failed")
+                self.assertEqual(event["error_status_code"], status_code)
+                self.assertEqual(event["error_taxonomy"], taxonomy)
+                self.assertEqual(event["error_type"], error_type)
+
+    def test_baidu_wenxin_legacy_reply_text_token_timeout_uses_shared_retry(self):
+        from unittest.mock import MagicMock, patch
+        import requests
+        from models.baidu.baidu_wenxin import BaiduWenxinBot
+        from models.legacy_reply_gateway import wrap_legacy_reply_text
+        from models.model_telemetry import get_recent_model_calls
+
+        class TestBaiduWenxinBot(BaiduWenxinBot):
+            def __init__(self):
+                self.prompt_enabled = False
+                self.sessions = SimpleNamespace(clear_session=lambda _session_id: None)
+
+        session = SimpleNamespace(
+            session_id="s",
+            model="wenxin-test",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        success_response = self._FakeHTTPResponse(
+            200,
+            {
+                "result": "ok after token retry",
+                "usage": {
+                    "total_tokens": 7,
+                    "completion_tokens": 4,
+                },
+            },
+        )
+        bot = wrap_legacy_reply_text(
+            TestBaiduWenxinBot(),
+            provider_hint="baidu",
+            model_hint="wenxin-test",
+        )
+        fake_conf = MagicMock()
+        fake_conf.get.side_effect = lambda key, default=None: {
+            "model_max_retries": 1,
+            "request_timeout": 7,
+        }.get(key, default)
+        token_calls = []
+        chat_calls = []
+
+        class TokenResponse:
+            status_code = 200
+
+            def json(self):
+                return {"access_token": "test-token"}
+
+        def fake_token_post(*args, **kwargs):
+            token_calls.append((args, kwargs))
+            if len(token_calls) == 1:
+                raise requests.exceptions.Timeout("token timed out")
+            return TokenResponse()
+
+        def fake_request(*args, **kwargs):
+            chat_calls.append((args, kwargs))
+            return success_response
+
+        sleeps = []
+        with patch("models.baidu.baidu_wenxin.conf", return_value=fake_conf):
+            with patch("models.legacy_direct_chat_retry.conf", return_value=fake_conf):
+                with patch("models.baidu.baidu_wenxin.requests.post", side_effect=fake_token_post):
+                    with patch("models.baidu.baidu_wenxin.requests.request", side_effect=fake_request):
+                        result = bot.reply_text(session, model_retry_sleep=sleeps.append)
+
+        self.assertEqual(result["content"], "ok after token retry")
+        self.assertEqual(sleeps, [2.0])
+        self.assertEqual(len(token_calls), 2)
+        self.assertEqual([call[1].get("timeout") for call in token_calls], [7, 7])
+        self.assertEqual(len(chat_calls), 1)
+        self.assertEqual(chat_calls[0][1].get("timeout"), 7)
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "completed")
+        self.assertEqual(event["provider"], "baidu")
+        self.assertEqual(event["total_tokens"], 7)
+
+    def test_baidu_wenxin_legacy_reply_text_token_http_error_uses_retry_after(self):
+        from unittest.mock import MagicMock, patch
+        from models.baidu.baidu_wenxin import BaiduWenxinBot
+        from models.legacy_reply_gateway import wrap_legacy_reply_text
+        from models.model_telemetry import get_recent_model_calls
+
+        class TestBaiduWenxinBot(BaiduWenxinBot):
+            def __init__(self):
+                self.prompt_enabled = False
+                self.sessions = SimpleNamespace(clear_session=lambda _session_id: None)
+
+        session = SimpleNamespace(
+            session_id="s",
+            model="wenxin-test",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        token_retry_response = self._FakeHTTPResponse(
+            503,
+            {
+                "error": {
+                    "message": "token service unavailable",
+                    "code": "server_error",
+                    "type": "server_error",
+                }
+            },
+            headers={"Retry-After": "0.1"},
+        )
+        success_response = self._FakeHTTPResponse(
+            200,
+            {
+                "result": "ok after token http retry",
+                "usage": {
+                    "total_tokens": 8,
+                    "completion_tokens": 4,
+                },
+            },
+        )
+        bot = wrap_legacy_reply_text(
+            TestBaiduWenxinBot(),
+            provider_hint="baidu",
+            model_hint="wenxin-test",
+        )
+        fake_conf = MagicMock()
+        fake_conf.get.side_effect = lambda key, default=None: {
+            "model_max_retries": 1,
+            "request_timeout": 7,
+        }.get(key, default)
+        token_calls = []
+        chat_calls = []
+
+        class TokenResponse:
+            status_code = 200
+
+            def json(self):
+                return {"access_token": "test-token"}
+
+        def fake_token_post(*args, **kwargs):
+            token_calls.append((args, kwargs))
+            if len(token_calls) == 1:
+                return token_retry_response
+            return TokenResponse()
+
+        def fake_request(*args, **kwargs):
+            chat_calls.append((args, kwargs))
+            return success_response
+
+        sleeps = []
+        with patch("models.baidu.baidu_wenxin.conf", return_value=fake_conf):
+            with patch("models.legacy_direct_chat_retry.conf", return_value=fake_conf):
+                with patch("models.baidu.baidu_wenxin.requests.post", side_effect=fake_token_post):
+                    with patch("models.baidu.baidu_wenxin.requests.request", side_effect=fake_request):
+                        result = bot.reply_text(session, model_retry_sleep=sleeps.append)
+
+        self.assertEqual(result["content"], "ok after token http retry")
+        self.assertEqual(sleeps, [0.1])
+        self.assertEqual(len(token_calls), 2)
+        self.assertEqual([call[1].get("timeout") for call in token_calls], [7, 7])
+        self.assertEqual(len(chat_calls), 1)
+        self.assertEqual(chat_calls[0][1].get("timeout"), 7)
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "completed")
+        self.assertEqual(event["provider"], "baidu")
+        self.assertEqual(event["total_tokens"], 8)
 
     def test_legacy_special_http_reply_text_uses_retry_after_then_records_success(self):
         from contextlib import ExitStack

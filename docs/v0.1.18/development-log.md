@@ -1064,3 +1064,26 @@
     exceptions that do not retry. R18-04-C remains PARTIAL pending older
     direct-chat edges such as Baidu Wenxin, remaining image edge coverage, and
     provider-specific edges outside the AgentBridge native gateway.
+- Migrated Baidu Wenxin legacy direct-chat retry ownership:
+  - `models/baidu/baidu_wenxin.py` now routes HTTP non-200 responses through
+    `models/legacy_direct_chat_retry.py`, preserving Retry-After/backoff,
+    timeout/network retry, non-retryable 4xx fail-closed evidence, and
+    `/legacy/reply_text` telemetry propagation.
+  - Baidu's 200-status provider error bodies now normalize `error_code`,
+    `error_msg`, status, and retry-after fields before the shared retry
+    decision runs, so body-level 429/5xx evidence can retry without being
+    mistaken for a successful `result` response.
+  - Unknown local adapter exceptions remain non-retryable
+    `legacy_adapter_error` and clear the session, while provider/transport
+    failures no longer clear conversation state during retryable outages.
+  - Baidu access-token acquisition now uses the same configured
+    `request_timeout` and raises response-backed token errors on non-200 token
+    responses, so token endpoint stalls and token HTTP `Retry-After` outages
+    enter the shared retry path before the chat request starts.
+  - Focused tests cover HTTP 429 Retry-After retry success, body-level
+    retry-after-ms retry success, non-retryable 400 fail-closed telemetry,
+    chat timeout retry exhaustion, access-token timeout retry with configured
+    timeout propagation, access-token HTTP `Retry-After` retry, and unknown
+    adapter-error non-retry. R18-04-C remains
+    PARTIAL pending remaining image edge coverage and provider-specific edges
+    outside the AgentBridge native gateway.
