@@ -196,7 +196,20 @@ class AgentLLMModel(LLMModel):
             cache[key] = self._create_bot(bot_type)
         return cache[key]
 
-    def _build_call_kwargs(self, request: LLMRequest, *, stream: bool, model_name: str) -> Dict[str, Any]:
+    def _build_call_kwargs(
+        self,
+        request: LLMRequest,
+        *,
+        stream: bool,
+        model_name: str,
+        provider: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        from models.model_capabilities import get_model_capabilities, normalize_reasoning_effort
+
+        capabilities = get_model_capabilities(
+            model_name,
+            provider=provider or self._resolve_bot_type(model_name),
+        )
         kwargs: Dict[str, Any] = {
             'messages': request.messages,
             'tools': getattr(request, 'tools', None),
@@ -225,14 +238,23 @@ class AgentLLMModel(LLMModel):
             kwargs['session_id'] = session_id
 
         thinking_enabled = bool(conf().get("enable_thinking", False))
-        kwargs['thinking'] = (
-            {"type": "enabled"} if thinking_enabled
-            else {"type": "disabled"}
-        )
-        if thinking_enabled:
-            effort = conf().get("reasoning_effort", "high")
-            if effort in ("high", "max"):
+        if capabilities.supports_thinking_param:
+            kwargs['thinking'] = (
+                {"type": "enabled"} if thinking_enabled
+                else {"type": "disabled"}
+            )
+        if thinking_enabled and capabilities.supports_reasoning_effort:
+            effort = normalize_reasoning_effort(
+                conf().get("reasoning_effort", "high"),
+                capabilities,
+            )
+            if effort:
                 kwargs['reasoning_effort'] = effort
+        verbosity = getattr(request, "verbosity", None)
+        if verbosity in (None, ""):
+            verbosity = conf().get("verbosity", None)
+        if capabilities.supports_verbosity and verbosity not in (None, ""):
+            kwargs["verbosity"] = verbosity
         return kwargs
 
     def _call_bot_with_gateway(
@@ -295,7 +317,12 @@ class AgentLLMModel(LLMModel):
                     raise NotImplementedError(
                         f"Bot {bot_type} does not support call_with_tools. Please add the method."
                     )
-                kwargs = self._build_call_kwargs(request, stream=False, model_name=route.model)
+                kwargs = self._build_call_kwargs(
+                    request,
+                    stream=False,
+                    model_name=route.model,
+                    provider=route.provider or route.bot_type,
+                )
                 response = self._call_bot_with_gateway(bot, kwargs, stream=False, route=route)
                 last_response = response
                 last_route = route
@@ -347,7 +374,12 @@ class AgentLLMModel(LLMModel):
                     raise NotImplementedError(
                         f"Bot {bot_type} does not support call_with_tools. Please add the method."
                     )
-                kwargs = self._build_call_kwargs(request, stream=True, model_name=route.model)
+                kwargs = self._build_call_kwargs(
+                    request,
+                    stream=True,
+                    model_name=route.model,
+                    provider=route.provider or route.bot_type,
+                )
                 stream = self._call_bot_with_gateway(bot, kwargs, stream=True, route=route)
                 buffered_chunks = []
                 output_started = False

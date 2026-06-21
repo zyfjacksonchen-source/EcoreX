@@ -899,3 +899,45 @@
     remains PARTIAL pending non-OpenAI image retry-loop migration, legacy
     direct-chat retry-loop migration, and provider-specific edges outside the
     AgentBridge native gateway.
+- Hardened the shared model capability catalog and model-call control path:
+  - `models/model_capabilities.py` now records explicit support flags for
+    `reasoning_effort`, `verbosity`, provider thinking controls, provider-safe
+    reasoning effort values, and the token-limit parameter name. Official
+    OpenAI fixed-sampling models map `max_tokens` to `max_completion_tokens`,
+    strip unsupported sampling params, support OpenAI reasoning effort and
+    verbosity controls, and keep stream usage enabled only for official OpenAI
+    chat providers. Non-official OpenAI-compatible bases no longer inherit
+    official OpenAI stream-usage or fixed-sampling behavior only because their
+    provider id says `openai`; `capabilities_for_config()` and `/api/models`
+    use the same base-aware downgrade so the UI/catalog no longer overstates
+    official OpenAI-only controls for custom compatible endpoints.
+  - AgentBridge now checks capability flags before adding `thinking`,
+    `reasoning_effort`, or `verbosity` controls, so models such as Gemini do
+    not receive unsupported thinking payloads. DeepSeek V4 keeps its
+    `thinking` and `max` effort semantics, while official OpenAI normalizes
+    overly strong local `reasoning_effort=max` to provider-safe `high`.
+    Unsupported effort values for `high/max` providers now conservatively
+    fall back to `high` instead of escalating to `max`; explicit `max` remains
+    available for providers that support it.
+  - The shared OpenAI-compatible bot path now derives official-vs-compatible
+    capability identity from both provider id and API base, coerces system
+    messages to user messages for o1-style models, forwards reasoning and
+    verbosity into both chat completions and the default-disabled Responses
+    adapter, and reuses sanitized token limits across chat and Responses
+    planning. Subclasses that omit a provider id now explicitly resolve to
+    official OpenAI only when the API base is the official OpenAI host, and to
+    generic OpenAI-compatible behavior otherwise.
+  - The legacy `ChatGPTBot` initialization now uses the same capability
+    catalog instead of a hardcoded model list, and derives the capability
+    provider from the actual route/API base instead of hardcoding official
+    OpenAI. Future official `gpt-5.x` variants inherit unsupported-parameter
+    stripping, while custom OpenAI-compatible direct-chat routes keep ordinary
+    sampling controls.
+  - Focused tests cover ModelScope namespace inference, official OpenAI
+    token/reasoning/verbosity sanitization, non-official OpenAI-compatible
+    bases preserving ordinary sampling and dropping unsupported controls, o1
+    system-message coercion, Responses reasoning/text/max-output mapping,
+    AgentBridge model-control gating, legacy ChatGPT args, and `/api/models`
+    capability exposure, including custom OpenAI-compatible base downgrades.
+    R18-04-A remains PARTIAL pending a machine-readable provider capability
+    matrix and broader native/direct-call coverage.

@@ -12,7 +12,11 @@ import requests
 from typing import Optional
 from common.log import logger
 from agent.protocol.message_utils import drop_orphaned_tool_results_openai
-from models.model_capabilities import get_model_capabilities, sanitize_chat_payload
+from models.model_capabilities import (
+    get_model_capabilities,
+    normalize_reasoning_effort,
+    sanitize_chat_payload,
+)
 from models.model_telemetry import (
     ModelCallSpan,
     chunk_has_model_output,
@@ -104,6 +108,13 @@ class OpenAICompatibleBot:
             
             # Build request parameters
             model_name = kwargs.get("model", api_config.get('model', 'gpt-5.4'))
+            api_key = api_config.get('api_key')
+            api_base = api_config.get('api_base')
+            provider_id = self._capability_provider_id(api_config, api_base)
+            capabilities = get_model_capabilities(model_name, provider=provider_id)
+            if not capabilities.supports_system_messages:
+                messages = self._coerce_system_messages_to_user(messages)
+
             request_params = {
                 "model": model_name,
                 "messages": messages,
@@ -116,19 +127,21 @@ class OpenAICompatibleBot:
             # Add max_tokens if specified
             if kwargs.get("max_tokens"):
                 request_params["max_tokens"] = kwargs["max_tokens"]
+            reasoning_effort = normalize_reasoning_effort(
+                kwargs.get("reasoning_effort"),
+                capabilities,
+            )
+            if reasoning_effort:
+                request_params["reasoning_effort"] = reasoning_effort
+            verbosity = kwargs.get("verbosity")
+            if verbosity not in (None, ""):
+                request_params["verbosity"] = verbosity
             
             # Add tools if provided
             if tools:
                 request_params["tools"] = tools
                 request_params["tool_choice"] = kwargs.get("tool_choice", "auto")
             
-            # Make API call with proper configuration
-            api_key = api_config.get('api_key')
-            api_base = api_config.get('api_base')
-            provider_id = api_config.get('provider')
-            if not provider_id and api_base and "openai.com" not in str(api_base).lower():
-                provider_id = "custom"
-            capabilities = get_model_capabilities(model_name, provider=provider_id)
             request_params, removed_params = sanitize_chat_payload(request_params, capabilities)
             if removed_params:
                 logger.debug(
@@ -154,7 +167,11 @@ class OpenAICompatibleBot:
                     "model": model_name,
                     "temperature": request_params.get("temperature"),
                     "top_p": request_params.get("top_p"),
-                    "max_tokens": request_params.get("max_tokens"),
+                    "max_tokens": (
+                        request_params.get("max_tokens")
+                        or request_params.get("max_completion_tokens")
+                    ),
+                    **self._responses_control_overrides(kwargs, capabilities),
                 },
             )
 
@@ -265,6 +282,53 @@ class OpenAICompatibleBot:
         from config import conf
         proxy = conf().get("proxy") or None
         return OpenAIHTTPClient(proxy=proxy)
+
+    @staticmethod
+    def _capability_provider_id(api_config, api_base):
+        from common import const
+        from models.openai.responses_adapter import DEFAULT_OPENAI_API_BASE, is_official_openai_provider
+
+        provider_id = (api_config or {}).get("provider") or ""
+        if not provider_id:
+            base = api_base or DEFAULT_OPENAI_API_BASE
+            if is_official_openai_provider(const.OPENAI, base):
+                return const.OPENAI
+            return "openai_compatible"
+        official_ids = {const.OPENAI, const.OPEN_AI, const.CHATGPT, "openai"}
+        if provider_id in official_ids:
+            base = api_base or DEFAULT_OPENAI_API_BASE
+            if not is_official_openai_provider(provider_id, base):
+                return "openai_compatible"
+            return const.OPENAI
+        return provider_id
+
+    @staticmethod
+    def _coerce_system_messages_to_user(messages):
+        coerced = []
+        for message in messages or []:
+            if isinstance(message, dict) and message.get("role") == "system":
+                patched = dict(message)
+                patched["role"] = "user"
+                coerced.append(patched)
+            else:
+                coerced.append(message)
+        return coerced
+
+    @staticmethod
+    def _responses_control_overrides(kwargs, capabilities):
+        overrides = {}
+        if "reasoning" not in (kwargs or {}):
+            effort = normalize_reasoning_effort(
+                (kwargs or {}).get("reasoning_effort"),
+                capabilities,
+            )
+            if effort:
+                overrides["reasoning"] = {"effort": effort}
+        if "text" not in (kwargs or {}):
+            verbosity = (kwargs or {}).get("verbosity")
+            if capabilities.supports_verbosity and verbosity not in (None, ""):
+                overrides["text"] = {"verbosity": verbosity}
+        return overrides
 
     def plan_responses_api_call(self, messages, tools=None, stream=False, **kwargs):
         """Build a Responses API request plan when explicitly enabled.

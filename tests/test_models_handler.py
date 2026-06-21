@@ -108,7 +108,29 @@ class TestModelsHandler(unittest.TestCase):
         self.assertEqual(cap["capabilities"]["provider"], "openai")
         self.assertFalse(cap["capabilities"]["supports_temperature"])
         self.assertFalse(cap["capabilities"]["supports_penalties"])
+        self.assertTrue(cap["capabilities"]["supports_reasoning_effort"])
+        self.assertTrue(cap["capabilities"]["supports_verbosity"])
+        self.assertFalse(cap["capabilities"]["supports_thinking_param"])
+        self.assertEqual(cap["capabilities"]["max_tokens_param"], "max_completion_tokens")
         self.assertTrue(cap["capabilities"]["supports_stream_usage"])
+
+    def test_chat_capability_downgrades_custom_openai_base(self):
+        from channel.web.web_channel import ModelsHandler
+
+        cap = ModelsHandler._chat_capability({
+            "model": "gpt-5.5",
+            "bot_type": "chatGPT",
+            "open_ai_api_base": "https://coding-plan.test/v1",
+            "use_linkai": False,
+        })
+
+        self.assertEqual(cap["current_provider"], "openai_compatible")
+        self.assertEqual(cap["capabilities"]["provider"], "openai_compatible")
+        self.assertTrue(cap["capabilities"]["supports_temperature"])
+        self.assertFalse(cap["capabilities"]["supports_stream_usage"])
+        self.assertFalse(cap["capabilities"]["supports_reasoning_effort"])
+        self.assertFalse(cap["capabilities"]["supports_verbosity"])
+        self.assertEqual(cap["capabilities"]["max_tokens_param"], "max_tokens")
 
 
 if __name__ == "__main__":

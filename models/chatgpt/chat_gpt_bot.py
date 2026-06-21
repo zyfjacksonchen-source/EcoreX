@@ -21,6 +21,7 @@ from models.chatgpt.chat_gpt_session import ChatGPTSession
 from models.openai.open_ai_image import OpenAIImage
 from models.session_manager import SessionManager
 from models.model_telemetry import ModelCallSpan
+from models.model_capabilities import get_model_capabilities, sanitize_chat_payload
 from bridge.context import ContextType
 from bridge.reply import Reply, ReplyType
 from common.log import logger
@@ -53,13 +54,12 @@ class ChatGPTBot(Bot, OpenAIImage, OpenAICompatibleBot):
             "request_timeout": conf().get("request_timeout", None),  # 请求超时时间，openai接口默认设置为600，对于难问题一般需要较长时间
             "timeout": conf().get("request_timeout", None),  # 重试超时时间，在这个时间内，将会自动重试
         }
-        # 部分模型暂不支持一些参数，特殊处理
-        if conf_model in [const.O1, const.O1_MINI, const.GPT_5, const.GPT_5_MINI, const.GPT_5_NANO, const.GPT_55]:
-            remove_keys = ["temperature", "top_p", "frequency_penalty", "presence_penalty"]
-            for key in remove_keys:
-                self.args.pop(key, None)  # 如果键不存在，使用 None 来避免抛出错、
-            if conf_model in [const.O1, const.O1_MINI]:  # o1系列模型不支持系统提示词，使用文心模型的session
-                self.sessions = SessionManager(BaiduWenxinSession, model=conf().get("model") or const.O1_MINI)
+        api_config = self.get_api_config()
+        capability_provider = self._capability_provider_id(api_config, api_config.get("api_base"))
+        capabilities = get_model_capabilities(conf_model, provider=capability_provider)
+        self.args, _removed_params = sanitize_chat_payload(self.args, capabilities)
+        if not capabilities.supports_system_messages:
+            self.sessions = SessionManager(BaiduWenxinSession, model=conf().get("model") or const.O1_MINI)
 
     def configure_model_route(self, bot_type: str):
         """Bind this bot to an explicit AgentBridge route provider."""
