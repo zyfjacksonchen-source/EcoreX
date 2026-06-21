@@ -78,9 +78,20 @@ def _resolve_attribution_headers(url: str) -> Dict[str, str]:
 class OpenAIHTTPError(Exception):
     """Raised for non-2xx responses. Carries status code + parsed body."""
 
-    def __init__(self, status_code: int, body: Any, message: str = ""):
+    def __init__(
+        self,
+        status_code: int,
+        body: Any,
+        message: str = "",
+        headers: Optional[Dict[str, str]] = None,
+    ):
         self.status_code = status_code
         self.body = body
+        self.headers = dict(headers or {})
+        self.retry_after = (
+            self.headers.get("Retry-After")
+            or self.headers.get("retry-after")
+        )
         # Try to extract human-readable message from OpenAI-style error envelope
         if not message and isinstance(body, dict):
             err = body.get("error") or {}
@@ -283,7 +294,7 @@ class OpenAIHTTPClient:
             data = {"raw": resp.text}
 
         if resp.status_code >= 400:
-            raise OpenAIHTTPError(resp.status_code, data)
+            raise OpenAIHTTPError(resp.status_code, data, headers=dict(resp.headers or {}))
 
         return data
 
@@ -356,6 +367,7 @@ class OpenAIHTTPClient:
                 # error-shape that `_handle_stream_response` previously emitted.
                 "message": err_msg,
                 "status_code": resp.status_code,
+                "retry_after": resp.headers.get("Retry-After") or resp.headers.get("retry-after"),
             }
             return
 

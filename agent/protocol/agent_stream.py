@@ -1330,7 +1330,9 @@ class AgentStreamExecutor:
             temperature=0,
             stream=True,
             tools=tools_schema,
-            system=self.system_prompt  # Pass system prompt separately for Claude API
+            system=self.system_prompt,  # Pass system prompt separately for Claude API
+            retry_count=retry_count,
+            model_retry_sleep=self._sleep_cancelable,
         )
 
         self._emit_event("message_start", {"role": "assistant"})
@@ -1392,6 +1394,7 @@ class AgentStreamExecutor:
                         error_type = ""
                     
                     status_code = chunk.get("status_code", "N/A")
+                    retry_stopped = bool(chunk.get("retry_exhausted") or chunk.get("retry_suppressed"))
                     
                     # Log error with all available information
                     logger.error(f"🔴 Stream API Error:")
@@ -1415,7 +1418,10 @@ class AgentStreamExecutor:
                         raise Exception(f"[CONTEXT_OVERFLOW] {error_msg} (Status: {status_code})")
                     else:
                         # Raise a user-safe message while keeping raw details in logs above.
-                        raise Exception(_user_visible_llm_error(error_msg, status_code, error_code, error_type))
+                        visible_error = _user_visible_llm_error(error_msg, status_code, error_code, error_type)
+                        if retry_stopped:
+                            raise Exception(f"[MODEL_RETRY_EXHAUSTED] {visible_error}")
+                        raise Exception(visible_error)
 
                 # Parse chunk
                 if isinstance(chunk, dict) and chunk.get("choices"):
@@ -1478,6 +1484,10 @@ class AgentStreamExecutor:
         except Exception as e:
             error_str = str(e)
             error_str_lower = error_str.lower()
+            model_retry_exhausted = '[model_retry_exhausted]' in error_str_lower
+            if model_retry_exhausted:
+                error_str = error_str.replace("[MODEL_RETRY_EXHAUSTED]", "").strip()
+                error_str_lower = error_str.lower()
             
             # Check if error is context overflow (non-retryable, needs session reset)
             # Method 1: Check for special marker (set in stream error handling above)
@@ -1551,7 +1561,7 @@ class AgentStreamExecutor:
             is_rate_limit = '429' in error_str_lower or 'rate limit' in error_str_lower
             
             # Check if error is retryable (timeout, connection, server busy, etc.)
-            is_retryable = any(keyword in error_str_lower for keyword in [
+            is_retryable = (not model_retry_exhausted) and any(keyword in error_str_lower for keyword in [
                 'timeout', 'timed out', 'connection', 'network', 
                 'rate limit', 'overloaded', 'unavailable', 'busy', 'retry',
                 '429', '500', '502', '503', '504', '512'
@@ -1577,6 +1587,8 @@ class AgentStreamExecutor:
                     logger.error(f"❌ LLM API error after {max_retries} retries: {e}", exc_info=True)
                 else:
                     logger.error(f"❌ LLM call error (non-retryable): {e}", exc_info=True)
+                if model_retry_exhausted:
+                    raise Exception(error_str)
                 raise
 
         # Parse tool calls

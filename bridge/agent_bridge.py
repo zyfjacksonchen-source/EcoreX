@@ -134,11 +134,15 @@ class AgentLLMModel(LLMModel):
                     'messages': request.messages,
                     'tools': getattr(request, 'tools', None),
                     'stream': False,
-                    'model': self.model  # Pass model parameter
+                    'model': self.model,  # Pass model parameter
+                    'retry_count': getattr(request, 'retry_count', 0),
                 }
                 # Only pass max_tokens if it's explicitly set
                 if request.max_tokens is not None:
                     kwargs['max_tokens'] = request.max_tokens
+                retry_sleep = getattr(request, 'model_retry_sleep', None)
+                if callable(retry_sleep):
+                    kwargs['model_retry_sleep'] = retry_sleep
 
                 # Extract system prompt if present
                 system_prompt = getattr(request, 'system', None)
@@ -196,12 +200,16 @@ class AgentLLMModel(LLMModel):
                     'messages': request.messages,
                     'tools': getattr(request, 'tools', None),
                     'stream': True,
-                    'model': self.model  # Pass model parameter
+                    'model': self.model,  # Pass model parameter
+                    'retry_count': getattr(request, 'retry_count', 0),
                 }
 
                 # Only pass max_tokens if explicitly set, let the bot use its default
                 if request.max_tokens is not None:
                     kwargs['max_tokens'] = request.max_tokens
+                retry_sleep = getattr(request, 'model_retry_sleep', None)
+                if callable(retry_sleep):
+                    kwargs['model_retry_sleep'] = retry_sleep
 
                 # Add system prompt if present
                 if system_prompt:

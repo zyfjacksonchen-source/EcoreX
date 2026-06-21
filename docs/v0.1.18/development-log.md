@@ -119,3 +119,23 @@
     already received model output and then cancels/closes the generator before
     provider completion.
   - Focused pytest passed: 11 model telemetry/capability tests.
+- Added the first R18-04-C retry/fallback slice:
+  - `models/model_retry.py` defines retryability from the shared model error
+    taxonomy, parses `Retry-After` seconds or HTTP dates, and annotates final
+    error responses with `retryable`, `retry_attempt`, `retry_exhausted`, and
+    `error_taxonomy` evidence.
+  - The OpenAI-compatible sync path retries rate-limit, timeout, network, and
+    server errors using Retry-After when available and deterministic backoff
+    otherwise; non-retryable 4xx errors return immediately with typed evidence.
+  - The streaming path retries only before first model output. Once content,
+    reasoning, or tool-call output has started, retryable errors are marked
+    `retry_suppressed_reason=stream_output_started` so AgentStream does not
+    restart the whole turn and duplicate partial UI output.
+  - AgentStream now passes its outer retry count through `LLMRequest`, and
+    AgentBridge forwards it into bot calls so model-call telemetry records the
+    actual attempt number. AgentBridge also forwards AgentStream's
+    cancel-aware sleep helper so provider-level retry backoff can be interrupted
+    by user cancellation in agent runs.
+  - Focused pytest passed: 20 model telemetry/capability tests; Web
+    agent-stream error regression passed: 5 tests; Qianfan route subset passed:
+    3 tests.

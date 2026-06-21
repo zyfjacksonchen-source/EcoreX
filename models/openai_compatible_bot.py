@@ -15,9 +15,16 @@ from agent.protocol.message_utils import drop_orphaned_tool_results_openai
 from models.model_capabilities import get_model_capabilities, sanitize_chat_payload
 from models.model_telemetry import (
     ModelCallSpan,
+    chunk_has_model_output,
     extract_error_details,
     instrument_model_stream,
     is_model_error_response,
+)
+from models.model_retry import (
+    annotate_retry_evidence,
+    build_retry_decision,
+    coerce_max_retries,
+    sleep_for_retry,
 )
 from models.openai.openai_http_client import OpenAIHTTPClient, OpenAIHTTPError
 
@@ -74,7 +81,6 @@ class OpenAICompatibleBot:
         Returns:
             Formatted response in OpenAI format or generator for streaming
         """
-        telemetry_span = None
         try:
             # Get API configuration from subclass
             api_config = self.get_api_config()
@@ -134,36 +140,47 @@ class OpenAICompatibleBot:
                 retry_count = int(kwargs.get("retry_count") or 0)
             except (TypeError, ValueError):
                 retry_count = 0
-            telemetry_span = ModelCallSpan(
-                provider=capabilities.provider,
-                model=model_name,
-                stream=bool(stream),
-                retry_count=max(0, retry_count),
+            retry_count = max(0, retry_count)
+            max_model_retries = coerce_max_retries(
+                kwargs.get("model_max_retries", kwargs.get("max_model_retries", None))
             )
+            retry_sleep = kwargs.get("model_retry_sleep")
 
             if stream:
                 response_stream = self._handle_stream_response(request_params, api_key, api_base)
                 if isinstance(response_stream, dict):
-                    telemetry_span.observe_response(response_stream)
-                    if is_model_error_response(response_stream):
-                        telemetry_span.finish_error(**extract_error_details(response_stream))
-                    else:
-                        telemetry_span.finish_completed()
-                    return response_stream
-                return instrument_model_stream(response_stream, telemetry_span)
+                    return self._record_single_response_attempt(
+                        response_stream,
+                        capabilities.provider,
+                        model_name,
+                        stream=True,
+                        retry_count=retry_count,
+                    )
+                return self._stream_response_with_retry(
+                    response_stream,
+                    request_params,
+                    api_key,
+                    api_base,
+                    capabilities.provider,
+                    model_name,
+                    retry_count,
+                    max_model_retries,
+                    retry_sleep,
+                )
             else:
-                response = self._handle_sync_response(request_params, api_key, api_base)
-                telemetry_span.observe_response(response)
-                if is_model_error_response(response):
-                    telemetry_span.finish_error(**extract_error_details(response))
-                else:
-                    telemetry_span.finish_completed()
-                return response
+                return self._sync_response_with_retry(
+                    request_params,
+                    api_key,
+                    api_base,
+                    capabilities.provider,
+                    model_name,
+                    retry_count,
+                    max_model_retries,
+                    retry_sleep,
+                )
                 
         except Exception as e:
             error_msg = str(e)
-            if telemetry_span is not None:
-                telemetry_span.finish_error(message=error_msg, status_code=500)
             logger.error(f"[{self.__class__.__name__}] call_with_tools error: {error_msg}")
             if stream:
                 def error_generator():
@@ -190,6 +207,192 @@ class OpenAICompatibleBot:
         proxy = conf().get("proxy") or None
         return OpenAIHTTPClient(proxy=proxy)
 
+    def _new_model_call_span(self, provider, model_name, *, stream, retry_count):
+        return ModelCallSpan(
+            provider=provider,
+            model=model_name,
+            stream=bool(stream),
+            retry_count=max(0, int(retry_count or 0)),
+        )
+
+    def _record_single_response_attempt(self, response, provider, model_name, *, stream, retry_count):
+        span = self._new_model_call_span(
+            provider,
+            model_name,
+            stream=stream,
+            retry_count=retry_count,
+        )
+        span.observe_response(response)
+        if is_model_error_response(response):
+            span.finish_error(**extract_error_details(response))
+        else:
+            span.finish_completed()
+        return response
+
+    def _sync_response_with_retry(
+        self,
+        request_params,
+        api_key,
+        api_base,
+        provider,
+        model_name,
+        base_retry_count,
+        max_model_retries,
+        retry_sleep,
+    ):
+        for attempt in range(max_model_retries + 1):
+            retry_count = base_retry_count + attempt
+            span = self._new_model_call_span(
+                provider,
+                model_name,
+                stream=False,
+                retry_count=retry_count,
+            )
+            response = self._handle_sync_response(request_params, api_key, api_base)
+            span.observe_response(response)
+            if not is_model_error_response(response):
+                span.finish_completed()
+                return response
+
+            details = extract_error_details(response)
+            decision = build_retry_decision(
+                details,
+                attempt=attempt,
+                max_retries=max_model_retries,
+            )
+            span.finish_error(**details)
+            annotated = annotate_retry_evidence(response, decision)
+            if decision.should_retry:
+                logger.warning(
+                    f"[{self.__class__.__name__}] retrying sync model call "
+                    f"after {decision.delay_seconds:.3f}s "
+                    f"(attempt {attempt + 1}/{max_model_retries}, "
+                    f"taxonomy={decision.taxonomy})"
+                )
+                sleep_for_retry(decision.delay_seconds, retry_sleep)
+                continue
+            return annotated
+        return response
+
+    def _stream_response_with_retry(
+        self,
+        first_stream,
+        request_params,
+        api_key,
+        api_base,
+        provider,
+        model_name,
+        base_retry_count,
+        max_model_retries,
+        retry_sleep,
+    ):
+        def retrying_stream():
+            attempt = 0
+            while attempt <= max_model_retries:
+                raw_stream = (
+                    first_stream
+                    if attempt == 0
+                    else self._handle_stream_response(request_params, api_key, api_base)
+                )
+                span = self._new_model_call_span(
+                    provider,
+                    model_name,
+                    stream=True,
+                    retry_count=base_retry_count + attempt,
+                )
+                stream = instrument_model_stream(raw_stream, span)
+                buffered_chunks = []
+                output_started = False
+                retry_next = False
+                retry_decision = None
+                try:
+                    for chunk in stream:
+                        if isinstance(chunk, dict) and is_model_error_response(chunk):
+                            details = extract_error_details(chunk)
+                            retry_decision = build_retry_decision(
+                                details,
+                                attempt=attempt,
+                                max_retries=max_model_retries,
+                            )
+                            annotated = annotate_retry_evidence(chunk, retry_decision)
+                            if not output_started and retry_decision.should_retry:
+                                retry_next = True
+                                self._close_stream(stream)
+                                break
+                            if output_started and retry_decision.should_retry:
+                                annotated = self._mark_stream_retry_suppressed(annotated)
+                            for buffered in buffered_chunks:
+                                yield buffered
+                            yield annotated
+                            return
+
+                        if chunk_has_model_output(chunk):
+                            output_started = True
+                            for buffered in buffered_chunks:
+                                yield buffered
+                            buffered_chunks = []
+                            yield chunk
+                        elif output_started:
+                            yield chunk
+                        else:
+                            buffered_chunks.append(chunk)
+                    else:
+                        for buffered in buffered_chunks:
+                            yield buffered
+                        return
+                except GeneratorExit:
+                    self._close_stream(stream)
+                    raise
+                except Exception as e:
+                    if output_started:
+                        raise
+                    details = {"message": str(e), "status_code": 500}
+                    retry_decision = build_retry_decision(
+                        details,
+                        attempt=attempt,
+                        max_retries=max_model_retries,
+                    )
+                    if retry_decision.should_retry:
+                        retry_next = True
+                    else:
+                        raise
+
+                if retry_next and retry_decision is not None:
+                    logger.warning(
+                        f"[{self.__class__.__name__}] retrying stream model call "
+                        f"after {retry_decision.delay_seconds:.3f}s "
+                        f"(attempt {attempt + 1}/{max_model_retries}, "
+                        f"taxonomy={retry_decision.taxonomy})"
+                    )
+                    sleep_for_retry(retry_decision.delay_seconds, retry_sleep)
+                    attempt += 1
+                    continue
+                return
+
+        return retrying_stream()
+
+    @staticmethod
+    def _mark_stream_retry_suppressed(response):
+        annotated = dict(response or {})
+        annotated["retry_suppressed"] = True
+        annotated["retry_suppressed_reason"] = "stream_output_started"
+        error_value = annotated.get("error")
+        if isinstance(error_value, dict):
+            nested = dict(error_value)
+            nested["retry_suppressed"] = True
+            nested["retry_suppressed_reason"] = "stream_output_started"
+            annotated["error"] = nested
+        return annotated
+
+    @staticmethod
+    def _close_stream(stream):
+        close = getattr(stream, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+
     def _handle_sync_response(self, request_params, api_key, api_base):
         """Handle synchronous chat-completion via HTTP."""
         params = dict(request_params)
@@ -206,14 +409,26 @@ class OpenAICompatibleBot:
                 **params,
             )
         except OpenAIHTTPError as e:
+            error_code = ""
+            error_type = ""
+            if isinstance(e.body, dict):
+                err = e.body.get("error") or {}
+                if isinstance(err, dict):
+                    error_code = err.get("code") or ""
+                    error_type = err.get("type") or ""
             logger.error(
                 f"[{self.__class__.__name__}] sync response error: "
                 f"HTTP {e.status_code}: {e.message}"
             )
             return {
-                "error": True,
+                "error": {
+                    "message": e.message,
+                    "code": error_code,
+                    "type": error_type,
+                },
                 "message": e.message,
                 "status_code": e.status_code or 500,
+                "retry_after": e.retry_after,
             }
         except Exception as e:
             logger.error(f"[{self.__class__.__name__}] sync response error: {e}")

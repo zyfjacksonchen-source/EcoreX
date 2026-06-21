@@ -232,6 +232,11 @@ def extract_error_details(response: Dict[str, Any]) -> Dict[str, Any]:
         "status_code": response.get("status_code"),
         "error_code": str(error_code or ""),
         "error_type": str(error_type or ""),
+        "retry_after": (
+            response.get("retry_after")
+            or response.get("retry_after_seconds")
+            or response.get("retry_after_ms")
+        ),
     }
 
 
@@ -299,6 +304,7 @@ class ModelCallSpan:
         status_code: Any = None,
         error_code: Any = "",
         error_type: Any = "",
+        **_ignored: Any,
     ) -> Dict[str, Any]:
         return self._finish(
             "failed",
