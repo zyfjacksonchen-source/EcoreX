@@ -207,6 +207,66 @@ class OpenAICompatibleBot:
         proxy = conf().get("proxy") or None
         return OpenAIHTTPClient(proxy=proxy)
 
+    def plan_responses_api_call(self, messages, tools=None, stream=False, **kwargs):
+        """Build a Responses API request plan when explicitly enabled.
+
+        This is intentionally a planning hook, not a traffic switch. Production
+        calls stay on /chat/completions until state persistence and stream-event
+        mapping are wired with separate evidence.
+        """
+        from models.openai.responses_adapter import (
+            build_responses_plan,
+            decide_responses_adapter,
+        )
+
+        api_config = self.get_api_config()
+        decision = decide_responses_adapter(api_config, kwargs)
+        if not decision.enabled:
+            return None
+
+        converted_messages = self._convert_messages_to_openai_format(messages)
+        converted_tools = self._convert_tools_to_openai_format(tools) if tools else None
+        model_name = kwargs.get("model", api_config.get("model", "gpt-5.4"))
+        plan_kwargs = dict(kwargs)
+        plan_kwargs.pop("model", None)
+        plan_kwargs.pop("use_responses_api", None)
+        state = self._coerce_responses_state(api_config, plan_kwargs.pop("responses_state", None), plan_kwargs)
+        return build_responses_plan(
+            model=model_name,
+            messages=converted_messages,
+            tools=converted_tools,
+            stream=stream,
+            state=state,
+            **plan_kwargs,
+        )
+
+    @staticmethod
+    def _coerce_responses_state(api_config, raw_state, kwargs):
+        from models.openai.responses_adapter import ResponsesState
+
+        if isinstance(raw_state, ResponsesState):
+            return raw_state
+        allowed_keys = {
+            "previous_response_id",
+            "prompt_cache_key",
+            "prompt_cache_retention",
+            "service_tier",
+            "truncation",
+            "store",
+            "compacted_input",
+        }
+        values = {}
+        if isinstance(raw_state, dict):
+            values.update({key: raw_state[key] for key in allowed_keys if key in raw_state})
+        for key in allowed_keys:
+            if key in kwargs:
+                values[key] = kwargs[key]
+        if "service_tier" not in values and (api_config or {}).get("responses_service_tier"):
+            values["service_tier"] = (api_config or {}).get("responses_service_tier")
+        if "prompt_cache_retention" not in values and (api_config or {}).get("responses_prompt_cache_retention"):
+            values["prompt_cache_retention"] = (api_config or {}).get("responses_prompt_cache_retention")
+        return ResponsesState(**values)
+
     def _new_model_call_span(self, provider, model_name, *, stream, retry_count):
         return ModelCallSpan(
             provider=provider,

@@ -166,6 +166,82 @@ class OpenAIHTTPClient:
             stream=stream,
         )
 
+    def responses_create(
+        self,
+        *,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        timeout: Optional[float] = None,
+        proxy: Optional[str] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        extra_query: Optional[Dict[str, str]] = None,
+        stream: bool = False,
+        **payload,
+    ):
+        """POST /responses for the official OpenAI Responses API."""
+        payload["stream"] = stream
+        return self._request(
+            path="/responses",
+            payload=payload,
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            proxy=proxy,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            stream=stream,
+        )
+
+    def responses_compact(
+        self,
+        *,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        timeout: Optional[float] = None,
+        proxy: Optional[str] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        extra_query: Optional[Dict[str, str]] = None,
+        **payload,
+    ) -> Dict[str, Any]:
+        """POST /responses/compact for long conversation compaction."""
+        payload.pop("stream", None)
+        return self._request(
+            path="/responses/compact",
+            payload=payload,
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            proxy=proxy,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            stream=False,
+        )
+
+    def responses_input_tokens(
+        self,
+        *,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        timeout: Optional[float] = None,
+        proxy: Optional[str] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        extra_query: Optional[Dict[str, str]] = None,
+        **payload,
+    ) -> Dict[str, Any]:
+        """POST /responses/input_tokens for preflight token estimates."""
+        payload.pop("stream", None)
+        return self._request(
+            path="/responses/input_tokens",
+            payload=payload,
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            proxy=proxy,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            stream=False,
+        )
+
     def completions(
         self,
         *,

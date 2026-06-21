@@ -24,6 +24,9 @@ available_setting = {
     "open_ai_api_key": "",  # openai api key
     # openai api base; when use_azure_chatgpt is true, set the matching api base
     "open_ai_api_base": "https://api.openai.com/v1",
+    "openai_responses_api_enabled": False,  # experimental: plan official OpenAI /responses calls; chat completions remains the default runtime path
+    "openai_responses_service_tier": "",  # optional Responses API service_tier: auto/default/flex/priority
+    "openai_responses_prompt_cache_retention": "",  # optional Responses API prompt_cache_retention, e.g. 24h
     "claude_api_base": "https://api.anthropic.com/v1",  # claude api base
     "gemini_api_base": "https://generativelanguage.googleapis.com",  # gemini api base
     "custom_api_key": "",  # custom OpenAI-compatible provider api key (used when bot_type is "custom")

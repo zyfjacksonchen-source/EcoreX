@@ -183,3 +183,19 @@
   - Focused pytest passed: 10 tool-schema/forced-text budget tests; 13 adjacent
     convergence/tool-chain tests; 75 AgentHostBoundary tests excluding two
     existing image-generation fake-byte fixture failures.
+- Added the first R18-04-D Responses adapter slice:
+  - `models/openai/responses_adapter.py` plans official OpenAI Responses API
+    calls from chat-style messages/tools, including `previous_response_id`,
+    compaction payloads, `/responses/input_tokens` payloads, prompt cache
+    key/retention fields, service tier, max-output-token translation, tool-call
+    history conversion, compaction output handoff that omits the compaction
+    response id as `previous_response_id` while appending the fresh turn, and
+    non-stream output normalization back to the existing chat-completions shape.
+  - `OpenAIHTTPClient` now exposes narrow helpers for `/responses`,
+    `/responses/compact`, and `/responses/input_tokens`.
+  - `OpenAICompatibleBot.plan_responses_api_call()` is an explicit planning
+    hook only: it returns a plan when `use_responses_api` or
+    `openai_responses_api_enabled` is true and the provider/base URL resolve to
+    official OpenAI; default production agent calls still use `/chat/completions`.
+  - Focused pytest passed: 8 Responses adapter tests; adjacent model gateway
+    regression passed: 28 capability/telemetry/Responses tests.
