@@ -53,6 +53,7 @@ class OpenAIBot(Bot, OpenAIImage, OpenAICompatibleBot):
     def get_api_config(self):
         """Get API configuration for OpenAI-compatible base class"""
         return {
+            'provider': 'openai',
             'api_key': conf().get("open_ai_api_key"),
             'api_base': conf().get("open_ai_api_base"),
             'model': conf().get("model", "text-davinci-003"),

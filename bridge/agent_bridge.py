@@ -99,30 +99,14 @@ class AgentLLMModel(LLMModel):
 
     def _resolve_bot_type(self, model_name: str) -> str:
         """Resolve bot type from model name, matching Bridge.__init__ logic."""
-        if conf().get("use_linkai", False) and conf().get("linkai_api_key"):
-            return const.LINKAI
-        # Support custom bot type configuration
-        configured_bot_type = conf().get("bot_type")
-        if configured_bot_type:
-            return configured_bot_type
-       
-        if not model_name or not isinstance(model_name, str):
-            return const.OPENAI
-        if model_name in self._MODEL_BOT_TYPE_MAP:
-            return self._MODEL_BOT_TYPE_MAP[model_name]
-        if model_name.lower().startswith("minimax") or model_name in ["abab6.5-chat"]:
-            return const.MiniMax
-        if model_name in [const.QWEN_TURBO, const.QWEN_PLUS, const.QWEN_MAX]:
-            return const.QWEN_DASHSCOPE
-        if model_name in [const.MOONSHOT, "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"]:
-            return const.MOONSHOT
-        if conf().get("bot_type") == "modelscope":
-            return const.MODELSCOPE
-        lowered_model = model_name.lower()
-        for prefix, btype in self._MODEL_PREFIX_MAP:
-            if lowered_model.startswith(prefix):
-                return btype
-        return const.OPENAI
+        from models.model_capabilities import infer_provider_id
+
+        return infer_provider_id(
+            model_name,
+            configured_bot_type=conf().get("bot_type") or "",
+            use_linkai=bool(conf().get("use_linkai", False)),
+            has_linkai_key=bool(conf().get("linkai_api_key")),
+        )
 
     @property
     def bot(self):

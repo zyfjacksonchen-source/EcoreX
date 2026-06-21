@@ -4803,16 +4803,17 @@ class ModelsHandler:
     @classmethod
     def _chat_capability(cls, local_config: dict) -> dict:
         """Main chat model — drives the agent. bot_type maps to a provider id."""
-        bot_type = local_config.get("bot_type") or ""
-        provider_id = "openai" if bot_type == "chatGPT" else bot_type
-        if provider_id not in ConfigHandler.PROVIDER_MODELS and local_config.get("use_linkai"):
-            provider_id = "linkai"
+        from models.model_capabilities import capabilities_for_config
+
+        capability = capabilities_for_config(local_config or {})
+        provider_id = capability.provider
         return {
             "editable": True,
             "current_provider": provider_id,
             "current_model": local_config.get("model", ""),
             "providers": list(ConfigHandler.PROVIDER_MODELS.keys()),
             "use_linkai": bool(local_config.get("use_linkai", False)),
+            "capabilities": capability.to_dict(),
         }
 
     # Auto-fallback order for vision when no explicit model is pinned.

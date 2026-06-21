@@ -32,6 +32,7 @@ class LinkAIBot(Bot, OpenAICompatibleBot):
     def get_api_config(self):
         """Get API configuration for OpenAI-compatible base class"""
         return {
+            'provider': 'linkai',
             'api_key': conf().get("open_ai_api_key"),  # LinkAI uses OpenAI-compatible key
             'api_base': conf().get("open_ai_api_base", "https://api.link-ai.tech/v1"),
             'model': conf().get("model", "gpt-3.5-turbo"),

@@ -39,3 +39,14 @@
   - Desktop `RuntimeActiveRequest` types now include durable run and fallback
     source fields used by the future Run Center.
   - Focused pytest passed: 7 active-request/cancel/busy-session tests.
+- Added the first R18-04 model capability slice:
+  - `models/model_capabilities.py` centralizes provider inference, model
+    capability flags, and OpenAI-compatible chat payload sanitization.
+  - AgentBridge routes agent chat models through the shared provider inference
+    helper.
+  - OpenAI-compatible tool calls strip unsupported sampling parameters for
+    fixed-sampling OpenAI models and request stream usage when supported.
+  - `/api/models` chat capability now exposes the same capability object used by
+    backend payload sanitization.
+  - Focused pytest passed: 9 model-capability/ModelsHandler tests and 3
+    qianfan AgentBridge routing tests.

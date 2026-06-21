@@ -94,6 +94,22 @@ class TestModelsHandler(unittest.TestCase):
         self.assertIn("provider_models", cap)
         self.assertIn("dashscope", cap["provider_models"])
 
+    def test_chat_capability_exposes_model_catalog_capabilities(self):
+        from channel.web.web_channel import ModelsHandler
+
+        cap = ModelsHandler._chat_capability({
+            "model": "gpt-5.5",
+            "bot_type": "chatGPT",
+            "use_linkai": False,
+        })
+
+        self.assertEqual(cap["current_provider"], "openai")
+        self.assertEqual(cap["current_model"], "gpt-5.5")
+        self.assertEqual(cap["capabilities"]["provider"], "openai")
+        self.assertFalse(cap["capabilities"]["supports_temperature"])
+        self.assertFalse(cap["capabilities"]["supports_penalties"])
+        self.assertTrue(cap["capabilities"]["supports_stream_usage"])
+
 
 if __name__ == "__main__":
     unittest.main()

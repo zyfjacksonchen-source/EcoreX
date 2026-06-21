@@ -72,6 +72,7 @@ class ChatGPTBot(Bot, OpenAIImage, OpenAICompatibleBot):
         """Get API configuration for OpenAI-compatible base class"""
         is_custom = conf().get("bot_type") == "custom"
         return {
+            'provider': 'custom' if is_custom else 'openai',
             'api_key': conf().get("custom_api_key") if is_custom else conf().get("open_ai_api_key"),
             'api_base': conf().get("custom_api_base") if is_custom else conf().get("open_ai_api_base"),
             'model': conf().get("model", "gpt-3.5-turbo"),

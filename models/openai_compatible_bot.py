@@ -12,6 +12,7 @@ import requests
 from typing import Optional
 from common.log import logger
 from agent.protocol.message_utils import drop_orphaned_tool_results_openai
+from models.model_capabilities import get_model_capabilities, sanitize_chat_payload
 from models.openai.openai_http_client import OpenAIHTTPClient, OpenAIHTTPError
 
 
@@ -99,11 +100,6 @@ class OpenAICompatibleBot:
                 "presence_penalty": kwargs.get("presence_penalty", api_config.get('default_presence_penalty', 0.0)),
                 "stream": stream
             }
-            # GPT-5 / GPT-5.5 / o1 series only accept default temperature/top_p and reject penalty params
-            if model_name in ("gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5.5", "o1", "o1-mini"):
-                for key in ("temperature", "top_p", "frequency_penalty", "presence_penalty"):
-                    request_params.pop(key, None)
-            
             # Add max_tokens if specified
             if kwargs.get("max_tokens"):
                 request_params["max_tokens"] = kwargs["max_tokens"]
@@ -116,6 +112,16 @@ class OpenAICompatibleBot:
             # Make API call with proper configuration
             api_key = api_config.get('api_key')
             api_base = api_config.get('api_base')
+            provider_id = api_config.get('provider')
+            if not provider_id and api_base and "openai.com" not in str(api_base).lower():
+                provider_id = "custom"
+            capabilities = get_model_capabilities(model_name, provider=provider_id)
+            request_params, removed_params = sanitize_chat_payload(request_params, capabilities)
+            if removed_params:
+                logger.debug(
+                    f"[{self.__class__.__name__}] stripped unsupported model params "
+                    f"for {capabilities.provider}/{model_name}: {removed_params}"
+                )
             
             if stream:
                 return self._handle_stream_response(request_params, api_key, api_base)
