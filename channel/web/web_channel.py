@@ -43,6 +43,8 @@ BACKPRESSURE_SESSION_LIMIT_CODE = "BACKPRESSURE_SESSION_LIMIT"
 BACKPRESSURE_RETRY_AFTER_MS = 2000
 TOOL_OUTPUT_LIMIT_CODE = "TOOL_OUTPUT_LIMIT"
 ARTIFACT_METADATA_LIMIT_CODE = "ARTIFACT_METADATA_LIMIT"
+SSE_RUN_TERMINAL_TYPES = {"done", "error", "cancelled", "interrupted"}
+SSE_STREAM_TERMINAL_TYPES = SSE_RUN_TERMINAL_TYPES | {"replay_gap"}
 DANGEROUS_OPEN_EXTENSIONS = {
     ".app",
     ".bat",
@@ -1225,6 +1227,14 @@ class WebChannel(ChatChannel):
                 error_code=str(event.get("error_code") or "STREAM_ERROR"),
                 error_message=str(event.get("message") or event.get("content") or ""),
             )
+        elif etype == "interrupted":
+            self._mark_run_terminal(
+                request_id,
+                "interrupted",
+                reason=str(event.get("terminal_reason") or "interrupted"),
+                error_code=str(event.get("error_code") or "RUN_INTERRUPTED"),
+                error_message=str(event.get("message") or event.get("content") or ""),
+            )
         elif etype == "tool_permission_request":
             self._mark_run_phase(request_id, "waiting_permission", status="running")
         elif etype == "tool_execution_start":
@@ -1388,29 +1398,31 @@ class WebChannel(ChatChannel):
         event["protocol_version"] = self.SSE_PROTOCOL_VERSION
 
         if legacy_type == "done":
-            event.setdefault("event_type", "run.completed")
-            event.setdefault("state", "completed")
-            event.setdefault("terminal", True)
+            event["event_type"] = "run.completed"
+            event["state"] = "completed"
+            event["terminal"] = True
             event.setdefault("terminal_reason", event.get("terminal_reason") or "completed")
         elif legacy_type == "error":
-            event.setdefault("event_type", "run.failed")
-            event.setdefault("state", "failed")
-            event.setdefault("terminal", True)
+            event["event_type"] = "run.failed"
+            event["state"] = "failed"
+            event["terminal"] = True
             event.setdefault("terminal_reason", event.get("terminal_reason") or "failed")
             event.setdefault("error_code", event.get("error_code") or "STREAM_ERROR")
         elif legacy_type == "cancelled":
-            event.setdefault("event_type", "run.cancelled")
-            event.setdefault("state", "cancelled")
-            event.setdefault("terminal", True)
+            event["event_type"] = "run.cancelled"
+            event["state"] = "cancelled"
+            event["terminal"] = True
             event.setdefault("terminal_reason", event.get("terminal_reason") or "cancelled")
         elif legacy_type == "replay_gap":
-            event.setdefault("event_type", "stream.replay_gap")
-            event.setdefault("state", "recovering")
+            event["event_type"] = "stream.replay_gap"
+            event["state"] = "recovering"
+            event["terminal"] = True
+            event.setdefault("terminal_reason", "replay_gap")
             event.setdefault("recoverable", True)
         elif legacy_type == "interrupted":
-            event.setdefault("event_type", "run.interrupted")
-            event.setdefault("state", "interrupted")
-            event.setdefault("terminal", True)
+            event["event_type"] = "run.interrupted"
+            event["state"] = "interrupted"
+            event["terminal"] = True
             event.setdefault("terminal_reason", event.get("terminal_reason") or "interrupted")
             event.setdefault("error_code", event.get("error_code") or "RUN_INTERRUPTED")
             event.setdefault("recoverable", True)
@@ -3355,7 +3367,7 @@ class WebChannel(ChatChannel):
                         )
                         start_index = 0
                     for offset, event in enumerate(events):
-                        if event.get("type") in ("done", "cancelled", "error", "interrupted") and last_event_number >= event_offset + offset:
+                        if event.get("type") in SSE_STREAM_TERMINAL_TYPES and last_event_number >= event_offset + offset:
                             terminal_consumed = True
                             break
                 except Exception:
@@ -3377,6 +3389,7 @@ class WebChannel(ChatChannel):
                 gap_event_id = max(0, int(replay_gap_event.get("retained_from_event_id") or 0) - 1)
                 payload = json.dumps(replay_gap_event, ensure_ascii=False)
                 yield f"id: {gap_event_id}\ndata: {payload}\n\n".encode("utf-8")
+                return
 
             while time.time() < deadline:
                 item = None
@@ -3404,15 +3417,12 @@ class WebChannel(ChatChannel):
                 if itype == "done":
                     post_done = True
                     post_deadline = time.time() + POST_DONE_TAIL_SECONDS
-                elif itype == "error":
-                    post_done = True
-                    post_deadline = time.time() + 3
                 elif itype == "cancelled":
                     # Close SSE tail quickly after cancel; don't wait for the
                     # full TTS tail since the user already pressed Stop.
                     post_done = True
                     post_deadline = time.time() + 3
-                elif itype == "interrupted":
+                elif itype in ("error", "interrupted", "replay_gap"):
                     post_done = True
                     post_deadline = time.time() + 3
                 elif itype == "voice_attach":

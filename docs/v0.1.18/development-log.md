@@ -399,3 +399,24 @@
     sidecar stream terminal and the request-scoped desktop recovery path;
     replay-gap and sidecar-interruption recovery tests passed together, and
     desktop TypeScript still compiles.
+- Added the SSE terminal contract closure slice:
+  - Backend terminal normalization now forcibly maps terminal legacy types to
+    their versioned contract fields, so callers cannot accidentally turn
+    `done` into `run.failed`, `error` into `run.completed`, or make a terminal
+    event non-terminal by passing stale fields.
+  - `done`, `error`, `cancelled`, `interrupted`, and `replay_gap` now share a
+    central stream-terminal set for reconnect cleanup and stream tail handling.
+    Replay gaps are explicit stream-terminal recovery boundaries with
+    `terminal=true` / `terminal_reason=replay_gap`, while still keeping their
+    `stream.replay_gap` event type separate from run failure.
+  - Generated replay-gap streams now end the current subscriber immediately
+    after the terminal recovery event instead of continuing to emit retained
+    data events after a terminal boundary; backend SSE state is left intact for
+    the still-running request rather than being cleaned as a completed run.
+  - Desktop stream cursor cleanup now includes `replay_gap`, matching the
+    request-scoped replay-gap recovery handler that already stops the local
+    attach and refreshes saved history.
+  - Focused tests prove terminal normalization overrides conflicting legacy
+    fields, replay-gap terminal metadata is present, agent-stream and worker
+    failures emit only machine-readable `run.failed` output without a queued
+    `done`, and the desktop replay-gap source contract includes cursor cleanup.

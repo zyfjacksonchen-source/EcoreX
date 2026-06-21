@@ -1969,6 +1969,7 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertTrue(event["terminal"])
         self.assertEqual(event["error_code"], "MODEL_TIMEOUT")
         self.assertIn("upstream timeout", event["content"])
+        self.assertTrue(channel.sse_queues[request_id].empty())
 
     def test_worker_completion_unregisters_cancel_token_but_keeps_sse_queue(self):
         from agent.protocol import get_cancel_registry
@@ -2026,6 +2027,7 @@ class TestWebParallelHandlers(unittest.TestCase):
                 self.assertEqual(event["error_code"], "WORKER_EXCEPTION")
                 self.assertEqual(event["request_id"], request_id)
                 self.assertIn("boom", event["content"])
+                self.assertTrue(channel.sse_queues[request_id].empty())
                 self.assertIsNone(registry.get_event(request_id))
             finally:
                 registry.unregister(request_id)
@@ -2151,15 +2153,42 @@ class TestWebParallelHandlers(unittest.TestCase):
         with patch.object(web_channel.web, "input", return_value=types.SimpleNamespace(last_event_id="2")):
             resumed = channel.stream_response(request_id)
             gap_chunk = next(resumed)
-            retained_chunk = next(resumed)
+            with self.assertRaises(StopIteration):
+                next(resumed)
 
         self.assertIn(b"id: 9", gap_chunk)
         self.assertIn(b'"type": "replay_gap"', gap_chunk)
         self.assertIn(b'"event_type": "stream.replay_gap"', gap_chunk)
+        self.assertIn(b'"terminal": true', gap_chunk)
+        self.assertIn(b'"terminal_reason": "replay_gap"', gap_chunk)
         self.assertIn(b'"recoverable": true', gap_chunk)
-        self.assertIn(b"id: 10", retained_chunk)
-        self.assertIn(b'"content": "retained"', retained_chunk)
+        self.assertTrue(channel._sse_request_exists(request_id))
         resumed.close()
+
+    def test_sse_terminal_normalization_overrides_conflicting_legacy_fields(self):
+        from channel.web import web_channel
+
+        channel = web_channel.WebChannel()
+        cases = [
+            ("done", "run.completed", "completed"),
+            ("error", "run.failed", "failed"),
+            ("cancelled", "run.cancelled", "cancelled"),
+            ("interrupted", "run.interrupted", "interrupted"),
+            ("replay_gap", "stream.replay_gap", "recovering"),
+        ]
+
+        for event_type, expected_event_type, expected_state in cases:
+            with self.subTest(event_type=event_type):
+                event = channel._normalize_sse_event("req-terminal-contract", {
+                    "type": event_type,
+                    "event_type": "run.failed" if event_type != "error" else "run.completed",
+                    "state": "failed" if expected_state != "failed" else "completed",
+                    "terminal": False,
+                })
+                self.assertEqual(event["event_type"], expected_event_type)
+                self.assertEqual(event["state"], expected_state)
+                self.assertTrue(event["terminal"])
+                self.assertEqual(event["protocol_version"], channel.SSE_PROTOCOL_VERSION)
 
     def test_stream_response_emits_interrupted_terminal_for_lost_sidecar_run(self):
         from agent.protocol import reset_run_ledger_for_tests
@@ -5001,6 +5030,7 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertIn("requested_last_event_id?: number;", api_source)
         self.assertIn("retained_from_event_id?: number;", api_source)
         self.assertIn("next_event_id?: number;", api_source)
+        self.assertIn('item.type === "replay_gap"', api_source)
 
     def test_v018_desktop_handles_sidecar_interrupted_stream_recovery(self):
         root = Path(__file__).resolve().parents[1]
