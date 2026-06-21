@@ -41,6 +41,8 @@ REQUEST_CONFLICT_RETRY_AFTER_MS = 1500
 BACKPRESSURE_GLOBAL_LIMIT_CODE = "BACKPRESSURE_GLOBAL_LIMIT"
 BACKPRESSURE_SESSION_LIMIT_CODE = "BACKPRESSURE_SESSION_LIMIT"
 BACKPRESSURE_RETRY_AFTER_MS = 2000
+TOOL_OUTPUT_LIMIT_CODE = "TOOL_OUTPUT_LIMIT"
+ARTIFACT_METADATA_LIMIT_CODE = "ARTIFACT_METADATA_LIMIT"
 DANGEROUS_OPEN_EXTENSIONS = {
     ".app",
     ".bat",
@@ -984,6 +986,12 @@ class WebChannel(ChatChannel):
     SSE_ORPHAN_TTL_SECONDS = 120
     BACKPRESSURE_GLOBAL_ACTIVE_LIMIT = 32
     BACKPRESSURE_SESSION_ACTIVE_LIMIT = 2
+    TOOL_RESULT_PREVIEW_CHAR_LIMIT = 2000
+    TOOL_OUTPUT_FIELD_CHAR_LIMIT = 2000
+    TOOL_OUTPUT_COLLECTION_ITEM_LIMIT = 64
+    ARTIFACT_METADATA_MAX_ITEMS = 8
+    ARTIFACT_METADATA_STRING_CHAR_LIMIT = 512
+    ARTIFACT_METADATA_PATH_CHAR_LIMIT = 4096
 
     # def __new__(cls):
     #     if cls._instance is None:
@@ -1049,6 +1057,38 @@ class WebChannel(ChatChannel):
             "session_active_limit": self._coerce_positive_int(
                 conf().get("web_max_active_requests_per_session", self.BACKPRESSURE_SESSION_ACTIVE_LIMIT),
                 self.BACKPRESSURE_SESSION_ACTIVE_LIMIT,
+            ),
+        }
+
+    def _tool_output_limits(self) -> Dict[str, int]:
+        return {
+            "result_preview_chars": self._coerce_positive_int(
+                conf().get("web_tool_result_preview_chars", self.TOOL_RESULT_PREVIEW_CHAR_LIMIT),
+                self.TOOL_RESULT_PREVIEW_CHAR_LIMIT,
+            ),
+            "output_field_chars": self._coerce_positive_int(
+                conf().get("web_tool_output_field_chars", self.TOOL_OUTPUT_FIELD_CHAR_LIMIT),
+                self.TOOL_OUTPUT_FIELD_CHAR_LIMIT,
+            ),
+            "collection_items": self._coerce_positive_int(
+                conf().get("web_tool_output_collection_items", self.TOOL_OUTPUT_COLLECTION_ITEM_LIMIT),
+                self.TOOL_OUTPUT_COLLECTION_ITEM_LIMIT,
+            ),
+        }
+
+    def _artifact_metadata_limits(self) -> Dict[str, int]:
+        return {
+            "max_items": self._coerce_positive_int(
+                conf().get("web_artifact_metadata_max_items", self.ARTIFACT_METADATA_MAX_ITEMS),
+                self.ARTIFACT_METADATA_MAX_ITEMS,
+            ),
+            "string_chars": self._coerce_positive_int(
+                conf().get("web_artifact_metadata_string_chars", self.ARTIFACT_METADATA_STRING_CHAR_LIMIT),
+                self.ARTIFACT_METADATA_STRING_CHAR_LIMIT,
+            ),
+            "path_chars": self._coerce_positive_int(
+                conf().get("web_artifact_metadata_path_chars", self.ARTIFACT_METADATA_PATH_CHAR_LIMIT),
+                self.ARTIFACT_METADATA_PATH_CHAR_LIMIT,
             ),
         }
 
@@ -1331,6 +1371,10 @@ class WebChannel(ChatChannel):
         elif legacy_type in ("artifact", "file", "image", "video", "audio", "voice_attach"):
             event.setdefault("event_type", "artifact.updated")
             event.setdefault("state", "finalizing" if legacy_type == "voice_attach" else "running")
+        elif legacy_type == "artifact_limit":
+            event.setdefault("event_type", "artifact.limit")
+            event.setdefault("state", "running")
+            event.setdefault("recoverable", True)
         elif legacy_type == "message_end":
             event.setdefault("event_type", "message.finalizing")
             event.setdefault("state", "finalizing")
@@ -1614,6 +1658,202 @@ class WebChannel(ChatChannel):
             logger.debug(f"[WebChannel] _fetch_agent_usage failed: {e}")
             return None
 
+    @staticmethod
+    def _limit_text_with_marker(value: Any, limit: int, *, from_end: bool = False) -> Tuple[str, Optional[Dict[str, int]]]:
+        text = str(value if value is not None else "")
+        if limit <= 0 or len(text) <= limit:
+            return text, None
+        omitted = len(text) - limit
+        marker = f"[truncated {omitted} chars; limit {limit}]"
+        clipped = text[-limit:] if from_end else text[:limit]
+        limited = f"{marker}\n{clipped}" if from_end else f"{clipped}\n{marker}"
+        return limited, {
+            "original_chars": len(text),
+            "kept_chars": limit,
+            "omitted_chars": omitted,
+        }
+
+    def _bounded_tool_value(
+        self,
+        value: Any,
+        limits: Dict[str, int],
+        truncated_fields: List[Dict[str, Any]],
+        path: str = "",
+        depth: int = 0,
+    ) -> Any:
+        if depth > 6:
+            truncated_fields.append({
+                "field": path or "result",
+                "reason": "max_depth",
+                "kept_depth": 6,
+            })
+            return {"__truncated_depth": True, "__type": type(value).__name__}
+        if isinstance(value, dict):
+            bounded: Dict[str, Any] = {}
+            item_limit = limits.get("collection_items", self.TOOL_OUTPUT_COLLECTION_ITEM_LIMIT)
+            total_items = len(value)
+            for index, (key, child) in enumerate(value.items()):
+                if item_limit > 0 and index >= item_limit:
+                    omitted = max(1, total_items - item_limit)
+                    bounded["__omitted_keys"] = omitted
+                    truncated_fields.append({
+                        "field": path or "result",
+                        "original_items": total_items,
+                        "kept_items": item_limit,
+                        "omitted_items": omitted,
+                    })
+                    break
+                field_path = f"{path}.{key}" if path else str(key)
+                lowered_key = str(key).lower()
+                if lowered_key in ("stdout", "stderr", "output", "stdouttail", "stderrtail", "log", "logs"):
+                    if not isinstance(child, (str, int, float, bool)) and child is not None:
+                        bounded[key] = self._bounded_tool_value(child, limits, truncated_fields, field_path, depth + 1)
+                    else:
+                        limited, meta = self._limit_text_with_marker(
+                            child,
+                            limits.get("output_field_chars", self.TOOL_OUTPUT_FIELD_CHAR_LIMIT),
+                            from_end=True,
+                        )
+                        bounded[key] = limited
+                        if meta:
+                            truncated_fields.append({"field": field_path, **meta})
+                else:
+                    bounded[key] = self._bounded_tool_value(child, limits, truncated_fields, field_path, depth + 1)
+            return bounded
+        if isinstance(value, (list, tuple, set)):
+            item_limit = limits.get("collection_items", self.TOOL_OUTPUT_COLLECTION_ITEM_LIMIT)
+            total_items = len(value)
+            bounded_list = []
+            for index, child in enumerate(value):
+                if item_limit > 0 and index >= item_limit:
+                    omitted = max(1, total_items - item_limit)
+                    bounded_list.append({"__omitted_items": omitted})
+                    truncated_fields.append({
+                        "field": path or "result",
+                        "original_items": total_items,
+                        "kept_items": item_limit,
+                        "omitted_items": omitted,
+                    })
+                    break
+                bounded_list.append(self._bounded_tool_value(child, limits, truncated_fields, f"{path}[{index}]", depth + 1))
+            return bounded_list
+        if isinstance(value, str) and path:
+            limited, meta = self._limit_text_with_marker(
+                value,
+                limits.get("output_field_chars", self.TOOL_OUTPUT_FIELD_CHAR_LIMIT),
+            )
+            if meta:
+                truncated_fields.append({"field": path, **meta})
+            return limited
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        if isinstance(value, (bytes, bytearray)):
+            byte_limit = max(0, limits.get("output_field_chars", self.TOOL_OUTPUT_FIELD_CHAR_LIMIT))
+            raw = bytes(value)
+            preview = raw[:byte_limit].decode("utf-8", errors="replace") if byte_limit else ""
+            if len(raw) > byte_limit:
+                truncated_fields.append({
+                    "field": path or "result",
+                    "original_bytes": len(raw),
+                    "kept_bytes": byte_limit,
+                    "omitted_bytes": len(raw) - byte_limit,
+                })
+            return {
+                "__type": "bytes",
+                "size_bytes": len(raw),
+                "preview": preview,
+                "truncated": len(raw) > byte_limit,
+            }
+        if isinstance(value, os.PathLike):
+            return os.fspath(value)
+        if isinstance(value, (datetime.datetime, datetime.date)):
+            return value.isoformat()
+        truncated_fields.append({
+            "field": path or "result",
+            "reason": "non_json_value",
+            "value_type": type(value).__name__,
+        })
+        return f"<non_json_value:{type(value).__name__}>"
+
+    def _bounded_tool_result_for_sse(self, result: Any) -> Tuple[str, Dict[str, Any]]:
+        limits = self._tool_output_limits()
+        truncated_fields: List[Dict[str, Any]] = []
+        bounded_result = self._bounded_tool_value(result, limits, truncated_fields)
+        if isinstance(bounded_result, (dict, list)):
+            result_str = json.dumps(
+                bounded_result,
+                ensure_ascii=False,
+                default=lambda value: f"<non_json_value:{type(value).__name__}>",
+            )
+        else:
+            result_str = str(bounded_result)
+
+        preview_limit = limits.get("result_preview_chars", self.TOOL_RESULT_PREVIEW_CHAR_LIMIT)
+        result_meta: Dict[str, Any] = {
+            "tool_output_limits": limits,
+            "result_truncated": bool(truncated_fields),
+            "truncated_output_fields": truncated_fields,
+        }
+        if preview_limit > 0 and len(result_str) > preview_limit:
+            original_chars = len(result_str)
+            result_str, preview_meta = self._limit_text_with_marker(result_str, preview_limit)
+            result_meta["result_truncated"] = True
+            result_meta["result_original_chars"] = original_chars
+            result_meta["result_limit_chars"] = preview_limit
+            if preview_meta:
+                result_meta["truncated_output_fields"] = [
+                    *truncated_fields,
+                    {"field": "result", **preview_meta},
+                ]
+        if result_meta["result_truncated"]:
+            result_meta["limit_code"] = TOOL_OUTPUT_LIMIT_CODE
+            result_meta["limit_reason"] = "tool_output_limit"
+            result_meta["error_type"] = "tool_output_limit"
+            result_meta["recoverable"] = True
+        return result_str, result_meta
+
+    @staticmethod
+    def _artifact_text_limit_for_key(key: str, limits: Dict[str, int]) -> int:
+        lowered = str(key or "").lower()
+        if lowered in {"id", "path", "relativepath", "url", "previewurl", "statuspath"}:
+            return limits.get("path_chars", 4096)
+        return limits.get("string_chars", 512)
+
+    def _sanitize_artifact_metadata(self, artifact: Dict[str, Any]) -> Dict[str, Any]:
+        limits = self._artifact_metadata_limits()
+        truncated_fields: List[Dict[str, Any]] = []
+
+        def sanitize(value: Any, key: str = "", path: str = "", depth: int = 0) -> Any:
+            if depth > 4:
+                return str(value)
+            if isinstance(value, dict):
+                return {
+                    child_key: sanitize(child_value, str(child_key), f"{path}.{child_key}" if path else str(child_key), depth + 1)
+                    for child_key, child_value in value.items()
+                    if not str(child_key).startswith("_")
+                }
+            if isinstance(value, list):
+                return [
+                    sanitize(child, key, f"{path}[{index}]", depth + 1)
+                    for index, child in enumerate(value[:16])
+                ]
+            if isinstance(value, str):
+                limit = self._artifact_text_limit_for_key(key, limits)
+                limited, meta = self._limit_text_with_marker(value, limit)
+                if meta:
+                    truncated_fields.append({"field": path or key, **meta})
+                return limited
+            return value
+
+        sanitized = sanitize(artifact)
+        if not isinstance(sanitized, dict):
+            sanitized = {}
+        sanitized["metadataLimits"] = limits
+        if truncated_fields:
+            sanitized["metadataTruncated"] = True
+            sanitized["truncatedFields"] = truncated_fields
+        return sanitized
+
     def _artifact_kind(self, file_type: str, path_value: str = "") -> str:
         kind = str(file_type or "").lower()
         if kind in ("image", "video", "audio", "directory", "file", "url", "diff"):
@@ -1717,17 +1957,48 @@ class WebChannel(ChatChannel):
         })
         self._record_request_artifact(request_id, artifact)
 
-    def _record_request_artifact(self, request_id: str, artifact: Dict[str, Any]) -> None:
+    def _record_request_artifact(self, request_id: str, artifact: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not request_id or not artifact:
-            return
+            return None
+        artifact = self._sanitize_artifact_metadata(artifact)
         items = self.request_artifacts.setdefault(request_id, [])
         key = str(artifact.get("path") or artifact.get("relativePath") or artifact.get("url") or artifact.get("id") or "").lower()
         for index, existing in enumerate(items):
             existing_key = str(existing.get("path") or existing.get("relativePath") or existing.get("url") or existing.get("id") or "").lower()
             if existing.get("id") == artifact.get("id") or (key and existing_key == key):
                 items[index] = {**existing, **artifact}
-                return
+                return items[index]
+        max_items = self._artifact_metadata_limits().get("max_items", self.ARTIFACT_METADATA_MAX_ITEMS)
+        if max_items >= 0 and len(items) >= max_items:
+            return None
         items.append(artifact)
+        return artifact
+
+    def _artifact_limit_event(
+        self,
+        request_id: str,
+        tool_name: str,
+        tool_call_id: str,
+        omitted_count: int = 1,
+    ) -> Dict[str, Any]:
+        limits = self._artifact_metadata_limits()
+        return {
+            "type": "artifact_limit",
+            "status": "warning",
+            "code": ARTIFACT_METADATA_LIMIT_CODE,
+            "error_type": "artifact_metadata_limit",
+            "reason": "artifact_metadata_limit",
+            "recoverable": True,
+            "retryable": False,
+            "request_id": request_id,
+            "tool": tool_name,
+            "tool_call_id": tool_call_id,
+            "limit": limits.get("max_items", self.ARTIFACT_METADATA_MAX_ITEMS),
+            "omitted": max(1, int(omitted_count or 1)),
+            "artifact_limits": limits,
+            "message": "Artifact metadata limit reached; additional artifacts were omitted from the stream.",
+            "timestamp": time.time(),
+        }
 
     def _diff_stats(self, diff_text: str) -> Dict[str, int]:
         added = 0
@@ -1759,10 +2030,14 @@ class WebChannel(ChatChannel):
         )
         if not artifact_tool and result_type not in {"file_to_send", "artifact", "generated_file", "output_file"}:
             return []
+        artifact_limits = self._artifact_metadata_limits()
+        max_items = artifact_limits.get("max_items", self.ARTIFACT_METADATA_MAX_ITEMS)
         raw_items: List[Dict[str, Any]] = []
+        omitted_items = 0
         seen_paths = set()
 
         def add_artifact_candidate(value: Any, meta: Optional[Dict[str, Any]] = None, collection_key: str = "") -> None:
+            nonlocal omitted_items
             path_value = ""
             item_meta = meta if isinstance(meta, dict) else {}
             if isinstance(value, str):
@@ -1780,6 +2055,9 @@ class WebChannel(ChatChannel):
             if normalized_key in seen_paths:
                 return
             seen_paths.add(normalized_key)
+            if max_items >= 0 and len(raw_items) >= max_items:
+                omitted_items += 1
+                return
             inferred_type = str(
                 item_meta.get("file_type")
                 or item_meta.get("fileType")
@@ -1798,15 +2076,23 @@ class WebChannel(ChatChannel):
         for key in ("images", "files", "outputs", "artifacts", "generated_files", "generatedFiles"):
             collection = result.get(key)
             if isinstance(collection, list):
-                for entry in collection:
+                for index, entry in enumerate(collection):
+                    if max_items >= 0 and len(raw_items) >= max_items:
+                        omitted_items += max(1, len(collection) - index)
+                        break
                     add_artifact_candidate(entry, entry if isinstance(entry, dict) else None, key)
             elif isinstance(collection, dict):
                 add_artifact_candidate(collection, collection, key)
 
         if not raw_items:
+            if omitted_items:
+                return [{
+                    "_artifact_limit_only": True,
+                    "_omitted_artifact_count": omitted_items,
+                }]
             return []
         artifacts: List[Dict[str, Any]] = []
-        for raw_item in raw_items[:8]:
+        for raw_item in raw_items:
             raw_path = str(raw_item.get("path") or "").strip()
             file_name = str(raw_item.get("file_name") or result.get("file_name") or result.get("fileName") or os.path.basename(raw_path) or raw_path)
             raw_type = str(raw_item.get("file_type") or result.get("file_type") or result.get("fileType") or "file")
@@ -1851,7 +2137,10 @@ class WebChannel(ChatChannel):
                 artifact["stats"] = stats
             if isinstance(result.get("bytes_written"), int):
                 artifact["stats"] = {**artifact.get("stats", {}), "bytesWritten": int(result.get("bytes_written") or 0)}
+            artifact["metadataLimits"] = artifact_limits
             artifacts.append(artifact)
+        if omitted_items and artifacts:
+            artifacts[-1]["_omitted_artifact_count"] = omitted_items
         return artifacts
 
     def _persist_request_artifacts(self, request_id: str, session_id: str) -> None:
@@ -2240,25 +2529,38 @@ class WebChannel(ChatChannel):
                 exec_time = data.get("execution_time", 0)
                 tool_call_id = data.get("tool_call_id", "")
                 for artifact in self._artifacts_from_tool_result(request_id, tool_name, tool_call_id, status, result):
-                    self._record_request_artifact(request_id, artifact)
-                    self._push_sse_event(request_id, {
-                        "type": "artifact",
-                        "action": "upsert",
-                        "artifact": artifact,
-                        "request_id": request_id,
-                        "timestamp": time.time(),
-                    })
-                # Truncate long results to avoid huge SSE payloads
-                result_str = str(result)
-                if len(result_str) > 2000:
-                    result_str = result_str[:2000] + "…"
+                    omitted_artifact_count = int(artifact.pop("_omitted_artifact_count", 0) or 0)
+                    if artifact.pop("_artifact_limit_only", False):
+                        self._push_sse_event(
+                            request_id,
+                            self._artifact_limit_event(request_id, tool_name, tool_call_id, omitted_artifact_count),
+                        )
+                        continue
+                    recorded_artifact = self._record_request_artifact(request_id, artifact)
+                    if recorded_artifact:
+                        self._push_sse_event(request_id, {
+                            "type": "artifact",
+                            "action": "upsert",
+                            "artifact": recorded_artifact,
+                            "request_id": request_id,
+                            "timestamp": time.time(),
+                        })
+                    else:
+                        omitted_artifact_count = max(1, omitted_artifact_count)
+                    if omitted_artifact_count:
+                        self._push_sse_event(
+                            request_id,
+                            self._artifact_limit_event(request_id, tool_name, tool_call_id, omitted_artifact_count),
+                        )
+                result_str, result_meta = self._bounded_tool_result_for_sse(result)
                 self._push_sse_event(request_id, {
                     "type": "tool_end",
                     "tool": tool_name,
                     "tool_call_id": tool_call_id,
                     "status": status,
                     "result": result_str,
-                    "execution_time": round(exec_time, 2)
+                    "execution_time": round(exec_time, 2),
+                    **result_meta,
                 })
 
             elif event_type == "message_end":
@@ -2335,14 +2637,24 @@ class WebChannel(ChatChannel):
                 artifact = self._artifact_from_file_event(request_id, data)
                 if not artifact:
                     return
-                self._record_request_artifact(request_id, artifact)
-                self._push_sse_event(request_id, {
-                    "type": "artifact",
-                    "action": "upsert",
-                    "artifact": artifact,
-                    "request_id": request_id,
-                    "timestamp": time.time(),
-                })
+                recorded_artifact = self._record_request_artifact(request_id, artifact)
+                if recorded_artifact:
+                    self._push_sse_event(request_id, {
+                        "type": "artifact",
+                        "action": "upsert",
+                        "artifact": recorded_artifact,
+                        "request_id": request_id,
+                        "timestamp": time.time(),
+                    })
+                else:
+                    self._push_sse_event(
+                        request_id,
+                        self._artifact_limit_event(
+                            request_id,
+                            str(data.get("tool_name") or data.get("tool") or "file_to_send"),
+                            str(data.get("tool_call_id") or ""),
+                        ),
+                    )
 
         return on_event
 

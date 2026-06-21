@@ -1936,6 +1936,314 @@ class TestWebParallelHandlers(unittest.TestCase):
             self.assertEqual(event["artifacts"][0]["kind"], "image")
             self.assertEqual(event["artifacts"][0]["path"], str(image_path))
 
+    def test_tool_end_sse_reports_bounded_stdout_stderr(self):
+        from channel.web import web_channel
+
+        channel = web_channel.WebChannel()
+        request_id = "req-tool-output-budget"
+        channel.request_to_session = {request_id: "session-tool-output-budget"}
+        channel._ensure_sse_state(request_id)
+
+        with patch.object(channel, "TOOL_OUTPUT_FIELD_CHAR_LIMIT", 24):
+            with patch.object(channel, "TOOL_RESULT_PREVIEW_CHAR_LIMIT", 500):
+                callback = channel._make_sse_callback(request_id)
+                callback({
+                    "type": "tool_execution_end",
+                    "data": {
+                        "tool_name": "bash",
+                        "tool_call_id": "tool-output-budget",
+                        "status": "success",
+                        "result": {
+                            "stdout": "A" * 80,
+                            "stderr": "B" * 80,
+                            "output": "C" * 80,
+                            "stdoutTail": "D" * 80,
+                            "exit_code": 0,
+                        },
+                        "execution_time": 1.25,
+                    },
+                })
+
+        event = channel.sse_queues[request_id].get(timeout=1)
+        self.assertEqual(event["type"], "tool_end")
+        self.assertEqual(event["limit_code"], "TOOL_OUTPUT_LIMIT")
+        self.assertEqual(event["limit_reason"], "tool_output_limit")
+        self.assertEqual(event["error_type"], "tool_output_limit")
+        self.assertTrue(event["result_truncated"])
+        self.assertTrue(event["recoverable"])
+        self.assertEqual(event["tool_output_limits"]["output_field_chars"], 24)
+        self.assertEqual(
+            {field["field"] for field in event["truncated_output_fields"]},
+            {"stdout", "stderr", "output", "stdoutTail"},
+        )
+        self.assertIn("[truncated 56 chars; limit 24]", event["result"])
+        self.assertNotIn("A" * 80, event["result"])
+        self.assertNotIn("B" * 80, event["result"])
+        self.assertNotIn("C" * 80, event["result"])
+        self.assertNotIn("D" * 80, event["result"])
+
+    def test_tool_end_sse_caps_collection_before_preview(self):
+        from channel.web import web_channel
+
+        channel = web_channel.WebChannel()
+        request_id = "req-tool-collection-budget"
+        channel.request_to_session = {request_id: "session-tool-collection-budget"}
+        channel._ensure_sse_state(request_id)
+
+        with patch.object(channel, "TOOL_OUTPUT_COLLECTION_ITEM_LIMIT", 2):
+            with patch.object(channel, "TOOL_RESULT_PREVIEW_CHAR_LIMIT", 1000):
+                callback = channel._make_sse_callback(request_id)
+                callback({
+                    "type": "tool_execution_end",
+                    "data": {
+                        "tool_name": "remote_tool",
+                        "tool_call_id": "tool-collection-budget",
+                        "status": "success",
+                        "result": {"items": [{"value": index} for index in range(6)]},
+                        "execution_time": 0.1,
+                    },
+                })
+
+        event = channel.sse_queues[request_id].get(timeout=1)
+        self.assertEqual(event["type"], "tool_end")
+        self.assertEqual(event["limit_code"], "TOOL_OUTPUT_LIMIT")
+        self.assertEqual(event["error_type"], "tool_output_limit")
+        self.assertTrue(event["result_truncated"])
+        self.assertEqual(event["tool_output_limits"]["collection_items"], 2)
+        self.assertIn('"__omitted_items": 4', event["result"])
+        self.assertIn("items", {field["field"] for field in event["truncated_output_fields"]})
+
+    def test_tool_output_budget_does_not_materialize_full_dict_before_cap(self):
+        from channel.web import web_channel
+
+        class LazyHugeDict(dict):
+            def __len__(self):
+                return 100
+
+            def items(self):
+                for index in range(4):
+                    if index > 2:
+                        raise AssertionError("budget serializer iterated past the cap sentinel")
+                    yield f"key{index}", f"value{index}"
+
+        channel = web_channel.WebChannel()
+        with patch.object(channel, "TOOL_OUTPUT_COLLECTION_ITEM_LIMIT", 2):
+            result_str, meta = channel._bounded_tool_result_for_sse(LazyHugeDict())
+
+        self.assertEqual(meta["limit_code"], "TOOL_OUTPUT_LIMIT")
+        self.assertIn('"__omitted_keys": 98', result_str)
+        self.assertTrue(any(
+            field.get("field") == "result" and field.get("omitted_items") == 98
+            for field in meta["truncated_output_fields"]
+        ))
+
+    def test_tool_end_sse_serializes_non_json_nested_results(self):
+        from channel.web import web_channel
+
+        channel = web_channel.WebChannel()
+        request_id = "req-tool-non-json-budget"
+        channel.request_to_session = {request_id: "session-tool-non-json-budget"}
+        channel._ensure_sse_state(request_id)
+
+        with patch.object(channel, "TOOL_OUTPUT_FIELD_CHAR_LIMIT", 6):
+            callback = channel._make_sse_callback(request_id)
+            callback({
+                "type": "tool_execution_end",
+                "data": {
+                    "tool_name": "remote_tool",
+                    "tool_call_id": "tool-non-json-budget",
+                    "status": "success",
+                    "result": {
+                        "path": Path("C:/workspace/generated.txt"),
+                        "ids": {"alpha", "beta"},
+                        "stdout": b"abcdefghijklmnopqrstuvwxyz",
+                        "payload": b"abcdefghijklmnopqrstuvwxyz",
+                    },
+                    "execution_time": 0.1,
+                },
+            })
+
+        event = channel.sse_queues[request_id].get(timeout=1)
+        self.assertEqual(event["type"], "tool_end")
+        self.assertEqual(event["limit_code"], "TOOL_OUTPUT_LIMIT")
+        self.assertEqual(event["error_type"], "tool_output_limit")
+        self.assertIn("generated.txt", event["result"])
+        self.assertIn('"__type": "bytes"', event["result"])
+        self.assertIn('"size_bytes": 26', event["result"])
+        self.assertIn("stdout", {field["field"] for field in event["truncated_output_fields"]})
+
+    def test_tool_and_artifact_budgets_use_configured_limits(self):
+        from channel.web import web_channel
+
+        channel = web_channel.WebChannel()
+        config = {
+            "web_tool_result_preview_chars": 60,
+            "web_tool_output_field_chars": 10,
+            "web_tool_output_collection_items": 1,
+            "web_artifact_metadata_max_items": 1,
+            "web_artifact_metadata_string_chars": 8,
+            "web_artifact_metadata_path_chars": 12,
+        }
+
+        with patch.object(web_channel, "conf", return_value=config):
+            with patch.object(channel, "TOOL_RESULT_PREVIEW_CHAR_LIMIT", 999):
+                with patch.object(channel, "TOOL_OUTPUT_FIELD_CHAR_LIMIT", 999):
+                    with patch.object(channel, "TOOL_OUTPUT_COLLECTION_ITEM_LIMIT", 999):
+                        result_str, meta = channel._bounded_tool_result_for_sse({
+                            "stdout": "A" * 40,
+                            "items": [{"value": 1}, {"value": 2}],
+                            "message": "M" * 40,
+                        })
+
+            self.assertEqual(meta["tool_output_limits"]["result_preview_chars"], 60)
+            self.assertEqual(meta["tool_output_limits"]["output_field_chars"], 10)
+            self.assertEqual(meta["tool_output_limits"]["collection_items"], 1)
+            self.assertEqual(meta["result_limit_chars"], 60)
+            self.assertLessEqual(len(result_str.split("\n", 1)[0]), 60)
+            self.assertEqual(meta["limit_code"], "TOOL_OUTPUT_LIMIT")
+            self.assertEqual(meta["error_type"], "tool_output_limit")
+            truncated_fields = meta["truncated_output_fields"]
+            self.assertIn("stdout", {field["field"] for field in truncated_fields})
+            self.assertIn("result", {field["field"] for field in truncated_fields})
+            self.assertTrue(any(
+                field.get("field") == "result" and field.get("original_items") == 3 and field.get("kept_items") == 1
+                for field in truncated_fields
+            ))
+
+            artifact = channel._record_request_artifact("req-configured-artifact-budget", {
+                "id": "artifact-configured-budget",
+                "title": "T" * 40,
+                "path": "C:/workspace/" + ("deep/" * 4) + "artifact.png",
+                "source": {"toolName": "render_image"},
+            })
+
+        self.assertIsNotNone(artifact)
+        self.assertEqual(artifact["metadataLimits"]["max_items"], 1)
+        self.assertEqual(artifact["metadataLimits"]["string_chars"], 8)
+        self.assertEqual(artifact["metadataLimits"]["path_chars"], 12)
+        self.assertTrue(artifact["metadataTruncated"])
+        self.assertIn("[truncated", artifact["title"])
+        self.assertIn("[truncated", artifact["path"])
+        self.assertIn("path", {field["field"] for field in artifact["truncatedFields"]})
+
+    def test_artifact_collection_budget_stops_scanning_after_cap(self):
+        from channel.web import web_channel
+
+        class LazyArtifactList(list):
+            def __len__(self):
+                return 100
+
+            def __iter__(self):
+                for index in range(4):
+                    if index > 2:
+                        raise AssertionError("artifact scanner iterated past the cap sentinel")
+                    yield {"path": f"lazy-output-{index}.png", "fileName": f"lazy-output-{index}.png", "fileType": "image"}
+
+        channel = web_channel.WebChannel()
+        with patch.object(channel, "ARTIFACT_METADATA_MAX_ITEMS", 2):
+            artifacts = channel._artifacts_from_tool_result(
+                "req-artifact-lazy-budget",
+                "render_image",
+                "tool-artifact-lazy-budget",
+                "success",
+                {"type": "artifact", "files": LazyArtifactList()},
+            )
+
+        self.assertEqual(len(artifacts), 2)
+        self.assertEqual(artifacts[-1]["_omitted_artifact_count"], 98)
+
+    def test_artifact_metadata_limit_caps_count_and_marks_warning(self):
+        from channel.web import web_channel
+
+        channel = web_channel.WebChannel()
+        request_id = "req-artifact-budget"
+        channel.request_to_session = {request_id: "session-artifact-budget"}
+        channel._ensure_sse_state(request_id)
+        long_title = "very-long-generated-artifact-title-" + ("x" * 80)
+        files = [
+            {"path": f"output-{index}.png", "fileName": long_title, "fileType": "image"}
+            for index in range(3)
+        ]
+
+        with patch.object(channel, "ARTIFACT_METADATA_MAX_ITEMS", 2):
+            with patch.object(channel, "ARTIFACT_METADATA_STRING_CHAR_LIMIT", 20):
+                with patch.object(channel, "ARTIFACT_METADATA_PATH_CHAR_LIMIT", 80):
+                    callback = channel._make_sse_callback(request_id)
+                    callback({
+                        "type": "tool_execution_end",
+                        "data": {
+                            "tool_name": "render_image",
+                            "tool_call_id": "tool-artifact-budget",
+                            "status": "success",
+                            "result": {
+                                "type": "artifact",
+                                "files": files,
+                            },
+                            "execution_time": 0.5,
+                        },
+                    })
+
+        events = [channel.sse_queues[request_id].get(timeout=1) for _ in range(4)]
+        artifact_events = [event for event in events if event["type"] == "artifact"]
+        limit_events = [event for event in events if event["type"] == "artifact_limit"]
+        tool_end_events = [event for event in events if event["type"] == "tool_end"]
+
+        self.assertEqual(len(artifact_events), 2)
+        self.assertEqual(len(channel.request_artifacts[request_id]), 2)
+        self.assertEqual(len(limit_events), 1)
+        self.assertEqual(limit_events[0]["code"], "ARTIFACT_METADATA_LIMIT")
+        self.assertEqual(limit_events[0]["error_type"], "artifact_metadata_limit")
+        self.assertEqual(limit_events[0]["event_type"], "artifact.limit")
+        self.assertEqual(limit_events[0]["limit"], 2)
+        self.assertEqual(limit_events[0]["omitted"], 1)
+        self.assertEqual(len(tool_end_events), 1)
+        first_artifact = artifact_events[0]["artifact"]
+        self.assertTrue(first_artifact["metadataTruncated"])
+        self.assertEqual(first_artifact["metadataLimits"]["max_items"], 2)
+        self.assertIn("[truncated", first_artifact["title"])
+        self.assertLess(len(first_artifact["title"]), len(long_title))
+
+    def test_artifact_metadata_zero_item_limit_emits_warning(self):
+        from channel.web import web_channel
+
+        channel = web_channel.WebChannel()
+        request_id = "req-artifact-zero-budget"
+        channel.request_to_session = {request_id: "session-artifact-zero-budget"}
+        channel._ensure_sse_state(request_id)
+        files = [
+            {"path": f"zero-output-{index}.png", "fileName": f"zero-output-{index}.png", "fileType": "image"}
+            for index in range(2)
+        ]
+
+        with patch.object(channel, "ARTIFACT_METADATA_MAX_ITEMS", 0):
+            callback = channel._make_sse_callback(request_id)
+            callback({
+                "type": "tool_execution_end",
+                "data": {
+                    "tool_name": "render_image",
+                    "tool_call_id": "tool-artifact-zero-budget",
+                    "status": "success",
+                    "result": {
+                        "type": "artifact",
+                        "files": files,
+                    },
+                    "execution_time": 0.5,
+                },
+            })
+
+        events = [channel.sse_queues[request_id].get(timeout=1) for _ in range(2)]
+        artifact_events = [event for event in events if event["type"] == "artifact"]
+        limit_events = [event for event in events if event["type"] == "artifact_limit"]
+        tool_end_events = [event for event in events if event["type"] == "tool_end"]
+
+        self.assertEqual(artifact_events, [])
+        self.assertNotIn(request_id, channel.request_artifacts)
+        self.assertEqual(len(limit_events), 1)
+        self.assertEqual(limit_events[0]["code"], "ARTIFACT_METADATA_LIMIT")
+        self.assertEqual(limit_events[0]["limit"], 0)
+        self.assertEqual(limit_events[0]["omitted"], 2)
+        self.assertEqual(len(tool_end_events), 1)
+
 
 class TestAgentHostBoundary(unittest.TestCase):
     def test_prompt_exposes_host_boundary_tools_and_convergence_rules(self):

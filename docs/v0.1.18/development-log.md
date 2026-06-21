@@ -156,3 +156,16 @@
   - `/cancel` remains a fast path that bypasses admission pressure so users can
     always stop an overloaded session.
   - Focused pytest passed: 12 backpressure/busy/pre-worker/active snapshot tests.
+- Added the second R18-03-D tool output/artifact budget slice:
+  - Web SSE `tool_end` events now bound stdout/stderr/output/tail fields,
+    generic long strings, large collections, and final result preview before
+    sending them to the browser, while preserving typed
+    `TOOL_OUTPUT_LIMIT` metadata for recoverable truncation.
+  - Artifact metadata now has configurable max item, string length, and path
+    length caps. Stored and streamed artifact metadata includes its limits and
+    per-field truncation evidence.
+  - When artifact metadata exceeds the item cap, WebChannel emits a typed
+    `ARTIFACT_METADATA_LIMIT` warning event instead of silently growing the
+    request artifact list.
+  - Focused pytest passed: 20 backpressure/busy/pre-worker/active snapshot/tool
+    budget tests.
