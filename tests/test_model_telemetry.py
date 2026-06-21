@@ -494,6 +494,53 @@ class TestModelTelemetry(unittest.TestCase):
 
         return FallbackModel()
 
+    def _modelscope_sync_sentinel_bot(self, responses):
+        from models.modelscope.modelscope_bot import ModelScopeBot
+
+        class ModelScopeSyncSentinelBot(ModelScopeBot):
+            def __init__(self, queued_responses):
+                self.args = {"model": "Qwen/Qwen3.5-27B"}
+                self.responses = list(queued_responses)
+                self.calls = []
+                self.reply_calls = []
+
+            def reply_text(self, session, args=None, retry_count=0, allow_local_retry=True, local_retry_sleep=None):
+                self.reply_calls.append({
+                    "retry_count": retry_count,
+                    "allow_local_retry": allow_local_retry,
+                    "args": dict(args or {}),
+                    "messages": list(getattr(session, "messages", []) or []),
+                })
+                return self.responses.pop(0)
+
+            def call_with_tools(self, **kwargs):
+                self.calls.append(kwargs)
+                session = SimpleNamespace(messages=kwargs.get("messages") or [])
+                return self._handle_sync_response(session, kwargs)
+
+        return ModelScopeSyncSentinelBot(responses)
+
+    def _real_modelscope_bot_for_tests(self):
+        from models.modelscope.modelscope_bot import ModelScopeBot
+
+        class FakeSessions:
+            def session_query(self, _query, _session_id):
+                return SimpleNamespace(messages=[])
+
+        class RealModelScopeBot(ModelScopeBot):
+            def __init__(self):
+                self.args = {
+                    "model": "Qwen/Qwen3.5-27B",
+                    "temperature": 0.3,
+                    "top_p": 1.0,
+                }
+                self.api_key = "test-key"
+                self.base_url = "https://modelscope.test/v1"
+                self.sessions = FakeSessions()
+                self._last_context = None
+
+        return RealModelScopeBot()
+
     def test_agent_bridge_native_sync_gateway_retries_and_records_telemetry(self):
         from agent.protocol.models import LLMRequest
         from models.model_telemetry import get_recent_model_calls
@@ -542,6 +589,258 @@ class TestModelTelemetry(unittest.TestCase):
         self.assertEqual(events[0]["api_path"], "/native/call_with_tools")
         self.assertEqual(events[0]["error_taxonomy"], "rate_limit")
         self.assertEqual(events[1]["total_tokens"], 7)
+
+    def test_agent_bridge_modelscope_real_sync_uses_shared_retry_after_without_local_retry(self):
+        from unittest.mock import patch
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import get_recent_model_calls
+
+        class FakeResponse:
+            def __init__(self, status_code, payload, headers=None):
+                self.status_code = status_code
+                self._payload = payload
+                self.headers = headers or {}
+                self.text = str(payload)
+
+            def json(self):
+                return self._payload
+
+        responses = [
+            FakeResponse(
+                429,
+                {"error": {"message": "rate limit", "code": "rate_limit_exceeded"}},
+                headers={"Retry-After": "0.25"},
+            ),
+            FakeResponse(
+                200,
+                {
+                    "choices": [{"message": {"content": "ok"}}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+                },
+            ),
+        ]
+        posts = []
+
+        def fake_post(url, headers=None, json=None, timeout=None, **_kwargs):
+            posts.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
+            return responses.pop(0)
+
+        sleeps = []
+        local_sleeps = []
+        bot = self._real_modelscope_bot_for_tests()
+        model = self._native_agent_model(
+            bot,
+            model_name="Qwen/Qwen3.5-27B",
+            provider="modelscope",
+        )
+
+        with patch("models.modelscope.modelscope_bot.requests.post", side_effect=fake_post), \
+                patch("models.modelscope.modelscope_bot.time.sleep", side_effect=local_sleeps.append):
+            result = model.call(LLMRequest(
+                messages=[{"role": "user", "content": "hi"}],
+                system="follow the system",
+                model_max_retries=1,
+                model_retry_sleep=sleeps.append,
+                retry_count=2,
+            ))
+
+        self.assertEqual(result["choices"][0]["message"]["content"], "ok")
+        self.assertEqual(sleeps, [0.25])
+        self.assertEqual(local_sleeps, [])
+        self.assertEqual(len(posts), 2)
+        self.assertEqual([post["json"]["stream"] for post in posts], [False, False])
+        self.assertEqual(posts[0]["json"]["messages"][0], {
+            "role": "system",
+            "content": "follow the system",
+        })
+        self.assertEqual(posts[0]["json"]["messages"][1], {"role": "user", "content": "hi"})
+        self.assertFalse("system" in posts[0]["json"])
+        self.assertFalse("retry_count" in posts[0]["json"])
+        self.assertFalse("model_max_retries" in posts[0]["json"])
+        self.assertFalse("model_retry_sleep" in posts[0]["json"])
+        events = get_recent_model_calls()
+        self.assertEqual([event["status"] for event in events], ["failed", "completed"])
+        self.assertEqual([event["retry_count"] for event in events], [2, 3])
+        self.assertEqual(events[0]["error_taxonomy"], "rate_limit")
+        self.assertEqual(events[1]["total_tokens"], 3)
+
+    def test_agent_bridge_modelscope_real_sync_non_json_error_preserves_http_status(self):
+        from unittest.mock import patch
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import get_recent_model_calls
+
+        class NonJsonResponse:
+            status_code = 401
+            headers = {}
+            text = "not json auth failure"
+
+            def json(self):
+                raise ValueError("not json")
+
+        posts = []
+
+        def fake_post(url, headers=None, json=None, timeout=None, **_kwargs):
+            posts.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
+            return NonJsonResponse()
+
+        sleeps = []
+        local_sleeps = []
+        bot = self._real_modelscope_bot_for_tests()
+        model = self._native_agent_model(
+            bot,
+            model_name="Qwen/Qwen3.5-27B",
+            provider="modelscope",
+        )
+
+        with patch("models.modelscope.modelscope_bot.requests.post", side_effect=fake_post), \
+                patch("models.modelscope.modelscope_bot.time.sleep", side_effect=local_sleeps.append):
+            result = model.call(LLMRequest(
+                messages=[{"role": "user", "content": "hi"}],
+                model_max_retries=2,
+                model_retry_sleep=sleeps.append,
+            ))
+
+        self.assertEqual(result["status_code"], 401)
+        self.assertEqual(result["error_taxonomy"], "client_error")
+        self.assertFalse(result["retryable"])
+        self.assertEqual(sleeps, [])
+        self.assertEqual(local_sleeps, [])
+        self.assertEqual(len(posts), 1)
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_status_code"], 401)
+        self.assertEqual(event["error_taxonomy"], "client_error")
+
+    def test_agent_bridge_modelscope_sync_sentinel_uses_shared_retry_and_backoff(self):
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import get_recent_model_calls
+
+        bot = self._modelscope_sync_sentinel_bot([
+            {
+                "completion_tokens": 0,
+                "content": "rate limited",
+                "message": "rate limit",
+                "status_code": 429,
+                "error": {"message": "rate limit", "code": "rate_limit_exceeded"},
+                "retry_after": "0.25",
+            },
+            {
+                "completion_tokens": 0,
+                "content": "server unavailable",
+                "message": "server unavailable",
+                "status_code": 503,
+                "error": {"message": "server unavailable"},
+            },
+            {
+                "total_tokens": 7,
+                "completion_tokens": 4,
+                "content": "ok",
+            },
+        ])
+        sleeps = []
+        model = self._native_agent_model(
+            bot,
+            model_name="Qwen/Qwen3.5-27B",
+            provider="modelscope",
+        )
+
+        result = model.call(LLMRequest(
+            messages=[{"role": "user", "content": "hi"}],
+            model_max_retries=2,
+            model_retry_sleep=sleeps.append,
+        ))
+
+        self.assertEqual(result["choices"][0]["message"]["content"], "ok")
+        self.assertEqual([call["retry_count"] for call in bot.calls], [0, 1, 2])
+        self.assertEqual([call["retry_count"] for call in bot.reply_calls], [0, 1, 2])
+        self.assertEqual([call["allow_local_retry"] for call in bot.reply_calls], [False, False, False])
+        self.assertEqual(sleeps, [0.25, 4.0])
+        events = get_recent_model_calls()
+        self.assertEqual([event["status"] for event in events], ["failed", "failed", "completed"])
+        self.assertEqual([event["provider"] for event in events], ["modelscope", "modelscope", "modelscope"])
+        self.assertEqual([event["error_taxonomy"] for event in events[:2]], ["rate_limit", "server_error"])
+        self.assertEqual(events[0]["api_path"], "/native/call_with_tools")
+        self.assertEqual(events[2]["total_tokens"], 7)
+
+    def test_agent_bridge_modelscope_stream_non_200_uses_shared_retry_before_output(self):
+        from unittest.mock import patch
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import get_recent_model_calls
+
+        class FakeResponse:
+            def __init__(self, status_code, payload=None, headers=None, lines=None):
+                self.status_code = status_code
+                self._payload = payload or {}
+                self.headers = headers or {}
+                self.text = str(self._payload)
+                self._lines = list(lines or [])
+
+            def json(self):
+                return self._payload
+
+            def iter_lines(self):
+                return iter(self._lines)
+
+        responses = [
+            FakeResponse(
+                429,
+                {"error": {"message": "rate limit", "code": "rate_limit_exceeded"}},
+                headers={"Retry-After": "0.5"},
+            ),
+            FakeResponse(
+                200,
+                lines=[
+                    b'data: {"choices":[{"delta":{"content":"ok"}}]}',
+                    b'data: [DONE]',
+                ],
+            ),
+        ]
+        posts = []
+
+        def fake_post(url, headers=None, json=None, stream=False, timeout=None, **_kwargs):
+            posts.append({
+                "url": url,
+                "headers": headers,
+                "json": json,
+                "stream": stream,
+                "timeout": timeout,
+            })
+            return responses.pop(0)
+
+        sleeps = []
+        bot = self._real_modelscope_bot_for_tests()
+        model = self._native_agent_model(
+            bot,
+            model_name="Qwen/Qwen3.5-27B",
+            provider="modelscope",
+        )
+
+        with patch("models.modelscope.modelscope_bot.requests.post", side_effect=fake_post):
+            chunks = list(model.call_stream(LLMRequest(
+                messages=[{"role": "user", "content": "hi"}],
+                system="follow the system",
+                stream=True,
+                model_max_retries=1,
+                model_retry_sleep=sleeps.append,
+            )))
+
+        self.assertEqual(chunks[0]["choices"][0]["delta"]["content"], "ok")
+        self.assertEqual(sleeps, [0.5])
+        self.assertEqual(len(posts), 2)
+        self.assertEqual([post["stream"] for post in posts], [True, True])
+        self.assertEqual(posts[0]["json"]["messages"][0], {
+            "role": "system",
+            "content": "follow the system",
+        })
+        self.assertEqual(posts[0]["json"]["messages"][1], {"role": "user", "content": "hi"})
+        self.assertFalse("system" in posts[0]["json"])
+        self.assertFalse("retry_count" in posts[0]["json"])
+        self.assertFalse("model_max_retries" in posts[0]["json"])
+        self.assertFalse("model_retry_sleep" in posts[0]["json"])
+        events = get_recent_model_calls()
+        self.assertEqual([event["status"] for event in events], ["failed", "completed"])
+        self.assertEqual([event["provider"] for event in events], ["modelscope", "modelscope"])
+        self.assertEqual(events[0]["error_taxonomy"], "rate_limit")
 
     def test_agent_bridge_sync_falls_back_after_retryable_primary_exhausted(self):
         from agent.protocol.models import LLMRequest
@@ -592,6 +891,91 @@ class TestModelTelemetry(unittest.TestCase):
         self.assertEqual([event["status"] for event in events], ["failed", "completed"])
         self.assertEqual([event["provider"] for event in events], ["primary-provider", "fallback-provider"])
         self.assertEqual([event["model"] for event in events], ["primary-model", "fallback-model"])
+
+    def test_agent_bridge_modelscope_sync_sentinel_routes_to_fallback_after_exhausted(self):
+        from agent.protocol.models import LLMRequest
+        from bridge.agent_bridge import AgentLLMModel
+        from models.model_fallback import ModelFallbackRoute
+        from models.model_telemetry import get_recent_model_calls
+
+        class ModelScopeFallbackModel(AgentLLMModel):
+            def __init__(self, bots):
+                self._bots = bots
+
+            @property
+            def model(self):
+                return "Qwen/Qwen3.5-27B"
+
+            @model.setter
+            def model(self, _value):
+                pass
+
+            @property
+            def bot(self):
+                return self._bots["Qwen/Qwen3.5-27B"]
+
+            def _resolve_bot_type(self, model_name):
+                return "modelscope" if model_name == "Qwen/Qwen3.5-27B" else "fallback-provider"
+
+            def _model_call_routes(self):
+                return [
+                    ModelFallbackRoute(
+                        model="Qwen/Qwen3.5-27B",
+                        bot_type="modelscope",
+                        provider="modelscope",
+                        reason="primary",
+                        index=0,
+                    ),
+                    ModelFallbackRoute(
+                        model="fallback-model",
+                        bot_type="fallback-provider",
+                        provider="fallback-provider",
+                        reason="fallback",
+                        index=1,
+                    ),
+                ]
+
+            def _get_bot_for_route(self, route):
+                return self._bots[route.model]
+
+        class FallbackBot:
+            def __init__(self):
+                self.calls = []
+
+            def call_with_tools(self, **kwargs):
+                self.calls.append(kwargs)
+                return {
+                    "choices": [{"message": {"content": "fallback ok"}}],
+                    "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
+                }
+
+        primary = self._modelscope_sync_sentinel_bot([{
+            "completion_tokens": 0,
+            "content": "server unavailable",
+            "message": "server unavailable",
+            "status_code": 503,
+            "error": {"message": "server unavailable"},
+        }])
+        fallback = FallbackBot()
+        model = ModelScopeFallbackModel({
+            "Qwen/Qwen3.5-27B": primary,
+            "fallback-model": fallback,
+        })
+
+        result = model.call(LLMRequest(
+            messages=[{"role": "user", "content": "hi"}],
+            model_max_retries=0,
+        ))
+
+        self.assertEqual(result["choices"][0]["message"]["content"], "fallback ok")
+        self.assertEqual(len(primary.calls), 1)
+        self.assertEqual(len(fallback.calls), 1)
+        self.assertEqual(result["model_fallback"]["used"], True)
+        self.assertEqual(result["model_fallback"]["from_provider"], "modelscope")
+        self.assertEqual(result["model_fallback"]["to_model"], "fallback-model")
+        events = get_recent_model_calls()
+        self.assertEqual([event["status"] for event in events], ["failed", "completed"])
+        self.assertEqual([event["provider"] for event in events], ["modelscope", "fallback-provider"])
 
     def test_agent_bridge_create_bot_binds_openai_compatible_route_config(self):
         from bridge.agent_bridge import AgentLLMModel
@@ -670,6 +1054,41 @@ class TestModelTelemetry(unittest.TestCase):
         self.assertEqual(sleeps, [])
         event = get_recent_model_calls()[0]
         self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_taxonomy"], "client_error")
+
+    def test_agent_bridge_modelscope_sync_sentinel_non_retryable_4xx_fails_closed(self):
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import get_recent_model_calls
+
+        bot = self._modelscope_sync_sentinel_bot([{
+            "completion_tokens": 0,
+            "content": "invalid request",
+            "message": "invalid request",
+            "status_code": 400,
+            "error": {"message": "invalid request", "code": "bad_request"},
+        }])
+        sleeps = []
+        model = self._native_agent_model(
+            bot,
+            model_name="Qwen/Qwen3.5-27B",
+            provider="modelscope",
+        )
+
+        result = model.call(LLMRequest(
+            messages=[{"role": "user", "content": "hi"}],
+            model_max_retries=2,
+            model_retry_sleep=sleeps.append,
+        ))
+
+        self.assertEqual(result["status_code"], 400)
+        self.assertEqual(result["error_taxonomy"], "client_error")
+        self.assertFalse(result["retryable"])
+        self.assertEqual(result["retry_attempt"], 0)
+        self.assertEqual(len(bot.calls), 1)
+        self.assertEqual(sleeps, [])
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_status_code"], 400)
         self.assertEqual(event["error_taxonomy"], "client_error")
 
     def test_agent_bridge_native_sync_gateway_accepts_single_response_generator(self):
@@ -1110,6 +1529,136 @@ class TestModelTelemetry(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["api_path"], "/native/call_with_tools")
         self.assertEqual(events[0]["provider"], "modelscope")
+
+    def test_modelscope_legacy_reply_text_keeps_local_retry_and_strips_control_args(self):
+        from unittest.mock import patch
+        from models.modelscope.modelscope_bot import ModelScopeBot
+
+        class FakeResponse:
+            def __init__(self, status_code, payload, headers=None):
+                self.status_code = status_code
+                self._payload = payload
+                self.headers = headers or {}
+                self.text = str(payload)
+
+            def json(self):
+                return self._payload
+
+        bot = ModelScopeBot.__new__(ModelScopeBot)
+        bot.api_key = "test-key"
+        bot.base_url = "https://modelscope.test/v1"
+        session = SimpleNamespace(messages=[{"role": "user", "content": "hi"}])
+        sleeps = []
+        posts = []
+        responses = [
+            FakeResponse(503, {"error": {"message": "server unavailable"}}),
+            FakeResponse(
+                200,
+                {
+                    "choices": [{"message": {"content": "ok"}}],
+                    "usage": {"completion_tokens": 2, "total_tokens": 5},
+                },
+            ),
+        ]
+
+        def fake_post(url, headers=None, json=None, timeout=None, **_kwargs):
+            posts.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
+            return responses.pop(0)
+
+        with patch("models.modelscope.modelscope_bot.requests.post", side_effect=fake_post):
+            result = bot.reply_text(
+                session,
+                args={
+                    "model": "Qwen/Qwen3.5-27B",
+                    "retry_count": 99,
+                    "model_max_retries": 3,
+                    "model_retry_sleep": sleeps.append,
+                    "session_id": "session-1",
+                    "channel_type": "web",
+                    "thinking": {"type": "disabled"},
+                    "reasoning_effort": "high",
+                },
+                allow_local_retry=True,
+                local_retry_sleep=sleeps.append,
+            )
+
+        self.assertEqual(result["content"], "ok")
+        self.assertEqual(result["completion_tokens"], 2)
+        self.assertEqual(sleeps, [3])
+        self.assertEqual(len(posts), 2)
+        sent_body = posts[0]["json"]
+        self.assertEqual(sent_body["model"], "Qwen/Qwen3.5-27B")
+        self.assertFalse("retry_count" in sent_body)
+        self.assertFalse("model_max_retries" in sent_body)
+        self.assertFalse("model_retry_sleep" in sent_body)
+        self.assertFalse("session_id" in sent_body)
+        self.assertFalse("channel_type" in sent_body)
+        self.assertFalse("thinking" in sent_body)
+        self.assertFalse("reasoning_effort" in sent_body)
+
+    def test_modelscope_stream_non_200_yields_typed_error_and_strips_control_args(self):
+        from unittest.mock import patch
+        from models.modelscope.modelscope_bot import ModelScopeBot
+
+        class FakeResponse:
+            status_code = 429
+            headers = {"Retry-After": "0.5"}
+            text = "rate limit"
+
+            def json(self):
+                return {
+                    "error": {
+                        "message": "rate limit",
+                        "code": "rate_limit_exceeded",
+                        "type": "rate_limit",
+                    }
+                }
+
+        bot = ModelScopeBot.__new__(ModelScopeBot)
+        bot.api_key = "test-key"
+        bot.base_url = "https://modelscope.test/v1"
+        session = SimpleNamespace(messages=[{"role": "user", "content": "hi"}])
+        posts = []
+
+        def fake_post(url, headers=None, json=None, stream=False, timeout=None, **_kwargs):
+            posts.append({
+                "url": url,
+                "headers": headers,
+                "json": json,
+                "stream": stream,
+                "timeout": timeout,
+            })
+            return FakeResponse()
+
+        with patch("models.modelscope.modelscope_bot.requests.post", side_effect=fake_post):
+            chunks = list(bot._handle_stream_response(
+                session,
+                {
+                    "model": "Qwen/Qwen3.5-27B",
+                    "retry_count": 1,
+                    "model_max_retries": 2,
+                    "model_retry_sleep": lambda _delay: None,
+                    "session_id": "session-1",
+                    "channel_type": "web",
+                    "thinking": {"type": "disabled"},
+                    "reasoning_effort": "high",
+                },
+            ))
+
+        self.assertEqual(len(chunks), 1)
+        self.assertEqual(chunks[0]["status_code"], 429)
+        self.assertEqual(chunks[0]["message"], "rate limit")
+        self.assertEqual(chunks[0]["retry_after"], "0.5")
+        self.assertEqual(chunks[0]["error"]["code"], "rate_limit_exceeded")
+        sent_body = posts[0]["json"]
+        self.assertTrue(posts[0]["stream"])
+        self.assertFalse("retry_count" in sent_body)
+        self.assertFalse("model_max_retries" in sent_body)
+        self.assertFalse("model_retry_sleep" in sent_body)
+        self.assertFalse("session_id" in sent_body)
+        self.assertFalse("channel_type" in sent_body)
+        self.assertFalse("thinking" in sent_body)
+        self.assertFalse("reasoning_effort" in sent_body)
 
     def test_legacy_reply_text_gateway_records_one_span_for_internal_retry(self):
         from models.legacy_reply_gateway import LEGACY_REPLY_TEXT_API_PATH, wrap_legacy_reply_text

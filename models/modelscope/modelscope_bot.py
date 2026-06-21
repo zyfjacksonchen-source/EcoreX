@@ -107,14 +107,105 @@ class ModelScopeBot(Bot):
         else:
             return Reply(ReplyType.ERROR, "Bot 不支持处理{}类型的消息".format(context.type))
 
-    def reply_text(self, session, args=None, retry_count=0):
+    @staticmethod
+    def _response_retry_after(response):
+        headers = getattr(response, "headers", None) or {}
+        getter = getattr(headers, "get", None)
+        if not callable(getter):
+            return None
+        return getter("Retry-After") or getter("retry-after")
+
+    @staticmethod
+    def _clean_chat_args(args):
+        cleaned = dict(args or {})
+        for key in (
+            "retry_count",
+            "model_max_retries",
+            "max_model_retries",
+            "model_retry_sleep",
+            "session_id",
+            "channel_type",
+            "system",
+            "thinking",
+            "reasoning_effort",
+        ):
+            cleaned.pop(key, None)
+        return cleaned
+
+    @staticmethod
+    def _merge_system_message(messages, system_prompt):
+        merged = list(messages or [])
+        if not system_prompt:
+            return merged
+        system_message = {"role": "system", "content": system_prompt}
+        if merged and isinstance(merged[0], dict) and merged[0].get("role") == "system":
+            merged[0] = system_message
+        else:
+            merged.insert(0, system_message)
+        return merged
+
+    def _modelscope_http_error_result(self, response):
+        status_code = getattr(response, "status_code", None)
+        data = {}
+        try:
+            loaded = response.json()
+            if isinstance(loaded, dict):
+                data = loaded
+        except Exception:
+            data = {}
+
+        error = data.get("error", data.get("errors", {}))
+        message = data.get("message") or data.get("msg") or ""
+        error_code = data.get("code") or ""
+        error_type = data.get("type") or ""
+        if isinstance(error, dict):
+            message = error.get("message") or message
+            error_code = error.get("code") or error_code
+            error_type = error.get("type") or error_type
+        elif error:
+            message = str(error)
+        if not message:
+            message = str(getattr(response, "text", "") or "")
+        if not message:
+            message = "ModelScope request failed with HTTP {}".format(status_code)
+
+        result = {
+            "completion_tokens": 0,
+            "content": message,
+            "message": message,
+            "status_code": status_code,
+            "error": {
+                "message": message,
+                "code": str(error_code or ""),
+                "type": str(error_type or ""),
+            },
+        }
+        retry_after = self._response_retry_after(response)
+        if retry_after not in (None, ""):
+            result["retry_after"] = retry_after
+        return result
+
+    @staticmethod
+    def _modelscope_error_response(result, args=None):
+        response = {
+            "error": result.get("error") or True,
+            "message": result.get("message") or result.get("content") or "",
+            "status_code": result.get("status_code", 500),
+            "model": (args or {}).get("model"),
+        }
+        for key in ("error_code", "error_type", "retry_after", "retry_after_seconds", "retry_after_ms"):
+            if result.get(key) not in (None, ""):
+                response[key] = result.get(key)
+        return response
+
+    def reply_text(self, session, args=None, retry_count=0, allow_local_retry=True, local_retry_sleep=None):
         try:
             headers = {
                 "Content-Type": "application/json",
                 "Authorization": "Bearer " + self.api_key
             }
             
-            body = args.copy() if args else {}
+            body = self._clean_chat_args(args)
             body["messages"] = self._convert_messages_for_modelscope(session.messages)
             body["stream"] = False
             
@@ -127,48 +218,79 @@ class ModelScopeBot(Bot):
             
             if res.status_code == 200:
                 response = res.json()
-                return {
+                message = {}
+                if response.get("choices"):
+                    message = response["choices"][0].get("message") or {}
+                result = {
                     "total_tokens": response.get("usage", {}).get("total_tokens", 0),
                     "completion_tokens": response.get("usage", {}).get("completion_tokens", 0),
-                    "content": response["choices"][0]["message"]["content"] if response.get("choices") else ""
+                    "content": message.get("content", "")
                 }
+                if message.get("tool_calls"):
+                    result["tool_calls"] = message.get("tool_calls")
+                return result
             else:
-                response = res.json()
-                error = response.get("error", response.get("errors", {}))
+                result = self._modelscope_http_error_result(res)
+                error = result.get("error", {})
                 logger.error(
                     "[MODELSCOPE] chat failed, status_code={}, msg={}".format(
                         res.status_code,
-                        error.get('message') if isinstance(error, dict) else error
+                        result.get("message") or (
+                            error.get("message") if isinstance(error, dict) else error
+                        )
                     )
                 )
                 
-                result = {"completion_tokens": 0, "content": "提问太快啦，请休息一下再问我吧"}
                 need_retry = False
 
                 if res.status_code >= 500:
-                    logger.warn("[MODELSCOPE] do retry, times={}".format(retry_count))
-                    need_retry = retry_count < 2
+                    logger.warning("[MODELSCOPE] do retry, times={}".format(retry_count))
+                    result["content"] = "提问太快啦，请休息一下再问我吧"
+                    need_retry = allow_local_retry and retry_count < 2
                 elif res.status_code == 401:
                     result["content"] = "授权失败，请检查 API Key 是否正确"
                 elif res.status_code == 429:
                     result["content"] = "请求过于频繁，请稍后再试"
-                    need_retry = retry_count < 2
+                    need_retry = allow_local_retry and retry_count < 2
                 else:
                     need_retry = False
                 
                 if need_retry:
-                    time.sleep(3)
-                    return self.reply_text(session, args, retry_count + 1)
+                    sleeper = local_retry_sleep or time.sleep
+                    sleeper(3)
+                    return self.reply_text(
+                        session,
+                        args,
+                        retry_count + 1,
+                        allow_local_retry=allow_local_retry,
+                        local_retry_sleep=local_retry_sleep,
+                    )
                 else:
                     return result
                     
         except Exception as e:
             logger.exception(e)
-            need_retry = retry_count < 2
+            need_retry = allow_local_retry and retry_count < 2
+            exception_error = {
+                "status_code": 0,
+                "message": str(e),
+                "error": {
+                    "message": str(e),
+                    "code": "",
+                    "type": type(e).__name__,
+                },
+            }
             result = {"completion_tokens": 0, "content": "我现在有点累了，等会再来吧"}
             if need_retry:
-                return self.reply_text(session, args, retry_count + 1)
+                return self.reply_text(
+                    session,
+                    args,
+                    retry_count + 1,
+                    allow_local_retry=allow_local_retry,
+                    local_retry_sleep=local_retry_sleep,
+                )
             else:
+                result.update(exception_error)
                 return result
 
     def reply_text_stream(self, session, args=None):
@@ -178,7 +300,7 @@ class ModelScopeBot(Bot):
                 "Authorization": "Bearer " + self.api_key
             }
             
-            body = args.copy() if args else {}
+            body = self._clean_chat_args(args)
             body["messages"] = self._convert_messages_for_modelscope(session.messages)
             body["stream"] = True
 
@@ -449,6 +571,7 @@ class ModelScopeBot(Bot):
             # No drawing intent, proceed with normal tool call flow
             session_id = kwargs.get('session_id', 'default_session')
             session = self.sessions.session_query("", session_id)
+            messages = self._merge_system_message(messages, kwargs.get("system"))
             session.messages = messages
             
             args = self.args.copy()
@@ -485,7 +608,18 @@ class ModelScopeBot(Bot):
             return error_generator()
 
     def _handle_sync_response(self, session, args):
-        result = self.reply_text(session, args)
+        try:
+            retry_count = int((args or {}).get("retry_count") or 0)
+        except (TypeError, ValueError):
+            retry_count = 0
+        result = self.reply_text(
+            session,
+            args,
+            retry_count=retry_count,
+            allow_local_retry=False,
+        )
+        if isinstance(result, dict) and result.get("error"):
+            return self._modelscope_error_response(result, args)
         
         content = result.get("content", "")
         tool_calls = result.get("tool_calls")
@@ -529,7 +663,7 @@ class ModelScopeBot(Bot):
                 "Authorization": "Bearer " + self.api_key
             }
             
-            body = args.copy()
+            body = self._clean_chat_args(args)
             body["messages"] = self._convert_messages_for_modelscope(session.messages)
             body["stream"] = True
             
@@ -542,7 +676,8 @@ class ModelScopeBot(Bot):
             )
             
             if response.status_code != 200:
-                yield {"error": True, "message": response.text, "status_code": response.status_code}
+                error_result = self._modelscope_http_error_result(response)
+                yield self._modelscope_error_response(error_result, args)
                 return
             
             current_tool_calls = {}
@@ -560,7 +695,18 @@ class ModelScopeBot(Bot):
                     chunk = json.loads(line[6:])
                     
                     if chunk.get("error"):
-                        yield {"error": True, "message": str(chunk["error"]), "status_code": 500}
+                        error_value = chunk.get("error")
+                        message = str(error_value)
+                        if isinstance(error_value, dict):
+                            message = error_value.get("message") or message
+                        error_chunk = {
+                            "error": error_value or True,
+                            "message": message,
+                            "status_code": chunk.get("status_code", 500),
+                        }
+                        if chunk.get("retry_after") not in (None, ""):
+                            error_chunk["retry_after"] = chunk.get("retry_after")
+                        yield error_chunk
                         return
                     
                     choices = chunk.get("choices")
@@ -731,9 +877,7 @@ class ModelScopeBot(Bot):
         except Exception as e:
             logger.error("[MODELSCOPE] stream tool call error: {}".format(e))
             error_msg = "{}".format(e)
-            def error_generator():
-                yield {"error": True, "message": error_msg, "status_code": 500}
-            return error_generator()
+            yield {"error": True, "message": error_msg, "status_code": 0}
 
     # ==================== Format Conversion ====================
 

@@ -722,3 +722,32 @@
     sync fallback, route-scoped OpenAI-compatible key/base binding, pre-output
     stream fallback with primary stream closeout, post-output no-fallback, and
     the existing model telemetry/capability suite.
+- Added the ModelScope provider-local retry ownership slice:
+  - ModelScope agent sync calls now pass `retry_count` through to `reply_text`
+    for diagnostics while explicitly disabling provider-local recursive retry,
+    so the shared native gateway owns retry attempts, Retry-After/backoff,
+    retry exhaustion, telemetry, and fallback routing.
+  - ModelScope `reply_text` still preserves legacy direct-chat local retry by
+    default, but returns typed `error` / `message` / `status_code` evidence when
+    a retryable or non-retryable provider failure reaches the public result.
+  - `_handle_sync_response()` now returns typed errors directly instead of
+    wrapping failure sentinels as assistant `choices`, closing the false-success
+    path that prevented shared fallback after exhausted retryable failures.
+  - ModelScope chat payload construction strips AgentBridge control fields such
+    as `retry_count`, `model_max_retries`, `model_retry_sleep`, `session_id`,
+    `channel_type`, `thinking`, and `reasoning_effort` before calling the
+    provider, while preserving the Agent system prompt by merging it into the
+    provider message list first.
+  - Sync non-JSON HTTP errors now preserve the provider status code and message
+    through the same typed error parser used by stream non-200 responses, so
+    400/401/429/5xx failures are not misclassified as transport errors.
+  - ModelScope stream non-200 and provider error chunks now preserve typed
+    status and Retry-After evidence, and stream exceptions yield a typed error
+    chunk instead of returning an ignored nested generator.
+  - Focused pytest passed for ModelScope shared retry/backoff, real HTTP
+    Retry-After propagation without provider-local sleep, non-JSON HTTP status
+    preservation, non-retryable 4xx fail-closed behavior, exhausted retryable
+    fallback routing, legacy local retry preservation, system prompt merging,
+    control-arg stripping, stream non-200 typed errors, and the full model
+    telemetry suite. R18-04-C remains PARTIAL pending the remaining
+    non-ModelScope provider-local retry loop migrations.
