@@ -586,3 +586,25 @@
     parent stop cascade, and subagent-owned AgentBridge token preservation.
     R18-03-A is now PASS; R18-03-B remains PARTIAL because the broader
     same-session queue policy is still pending.
+- Added the same-session rapid resend policy hardening slice:
+  - Web `/message` now returns a machine-readable `same_session` decision block
+    on success and retryable conflict responses. The policy is explicit:
+    `interrupt_previous`, `queue=disabled`.
+  - Normal first-writer admission reports `decision=accepted`; rapid resend that
+    cancels the previous request and obtains the session lock reports
+    `decision=replacement_accepted` with replaced request ids and cancellation
+    counts; finalize-window lock acquisition without a live token reports
+    `accepted_after_finalize_wait`; and still-busy sessions report
+    `retryable_conflict`.
+  - Per-session backpressure only ignores existing active request ids after a
+    real replacement succeeded. A free lock plus stale active token/durable row
+    now rejects before allocating a second request id instead of silently
+    becoming a second writer: it returns session backpressure when the session
+    active limit is reached and typed same-session retryable conflict otherwise.
+  - Competing rapid-resend waiters now use per-session replacement tickets; a
+    newer resend supersedes older lock waiters so `queue=disabled` does not
+    degrade into an implicit serialized queue under fast clicks.
+  - Focused pytest passed for replacement success, retryable conflict, the
+    no-interrupt/no-ignore guard under default session limits, superseded
+    replacement waiters, regular successful admission, and global/session
+    backpressure regressions. R18-03-B is now PASS.

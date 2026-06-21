@@ -2174,6 +2174,11 @@ class TestWebParallelHandlers(unittest.TestCase):
                     self.assertEqual(result["status"], "success")
                     self.assertNotEqual(result.get("code"), "session_busy")
                     self.assertEqual(result["request_id"], new_request_id)
+                    self.assertEqual(result["same_session"]["policy"], "interrupt_previous")
+                    self.assertEqual(result["same_session"]["queue"], "disabled")
+                    self.assertEqual(result["same_session"]["decision"], "replacement_accepted")
+                    self.assertEqual(result["same_session"]["replaced_request_ids"], [old_request_id])
+                    self.assertEqual(result["same_session"]["cancelled_requests"], 1)
                     self.assertEqual(cancelled["type"], "cancelled")
                     self.assertEqual(cancelled["request_id"], old_request_id)
                     self.assertEqual(channel.request_to_session[new_request_id], session_id)
@@ -2229,9 +2234,188 @@ class TestWebParallelHandlers(unittest.TestCase):
                     self.assertTrue(result["recoverable"])
                     self.assertGreaterEqual(result["retry_after_ms"], 1000)
                     self.assertEqual(result["active_request_ids"], [old_request_id])
+                    self.assertEqual(result["same_session"]["policy"], "interrupt_previous")
+                    self.assertEqual(result["same_session"]["queue"], "disabled")
+                    self.assertEqual(result["same_session"]["decision"], "retryable_conflict")
+                    self.assertEqual(result["same_session"]["active_request_ids"], [old_request_id])
+                    self.assertGreaterEqual(result["same_session"]["retry_after_ms"], 1000)
                     self.assertIn("retry", result["message"].lower())
                 finally:
                     old_lock.release()
+                    registry.unregister(old_request_id)
+
+    def test_same_session_active_request_is_not_ignored_without_interrupt(self):
+        from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests
+        from channel.web import web_channel
+        from common.ecorex_workspace import SessionLock
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            channel = web_channel.WebChannel()
+            session_id = "session-free-lock-active-token"
+            old_request_id = "req-free-lock-active-token"
+            lock_path = SessionLock(workspace, session_id).path
+            registry = get_cancel_registry()
+            registry.register(old_request_id, session_id=session_id)
+            channel.request_to_session = {old_request_id: session_id}
+            ledger.create_run(old_request_id, session_id, phase="running", status="running")
+            payload = {
+                "session_id": session_id,
+                "message": "must not start second writer",
+                "stream": True,
+                "lang": "en",
+            }
+            try:
+                with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                    with patch.object(channel, "BACKPRESSURE_GLOBAL_ACTIVE_LIMIT", 99):
+                        with patch.object(channel, "_generate_request_id") as generate_request_id:
+                            with patch.object(
+                                web_channel.web,
+                                "data",
+                                return_value=json.dumps(payload).encode("utf-8"),
+                            ):
+                                result = json.loads(channel.post_message())
+
+                self.assertEqual(result["status"], "error")
+                self.assertEqual(result["code"], "REQUEST_CONFLICT_RETRYABLE")
+                self.assertEqual(result["error_type"], "concurrency_conflict")
+                self.assertEqual(result["state"], "retryable_conflict")
+                self.assertEqual(result["reason"], "same_session_active_request")
+                self.assertEqual(result["active_request_ids"], [old_request_id])
+                self.assertEqual(result["same_session"]["policy"], "interrupt_previous")
+                self.assertEqual(result["same_session"]["queue"], "disabled")
+                self.assertEqual(result["same_session"]["decision"], "retryable_conflict")
+                self.assertEqual(result["same_session"]["active_request_ids"], [old_request_id])
+                generate_request_id.assert_not_called()
+                self.assertFalse(lock_path.exists())
+            finally:
+                registry.unregister(old_request_id)
+
+    def test_superseded_same_session_replacement_waiter_does_not_queue(self):
+        from agent.protocol import get_cancel_registry
+        from channel.web import web_channel
+        from common.ecorex_workspace import SessionBusyError, SessionLock
+
+        with isolated_run_ledger():
+            channel = web_channel.WebChannel()
+            session_id = "session-superseded-replacement"
+            old_request_id = "req-superseded-old"
+            registry = get_cancel_registry()
+
+            with tempfile.TemporaryDirectory() as workspace:
+                old_lock = SessionLock(workspace, session_id).acquire()
+                old_event = registry.register(old_request_id, session_id=session_id)
+                channel.request_to_session = {old_request_id: session_id}
+                results = {}
+                errors = {}
+                results_lock = threading.Lock()
+
+                def run_waiter(name, ticket):
+                    try:
+                        result = channel._interrupt_and_wait_for_session_lock(
+                            session_id,
+                            lang="en",
+                            replacement_ticket=ticket,
+                        )
+                        with results_lock:
+                            results[name] = result
+                    except Exception as e:
+                        with results_lock:
+                            errors[name] = e
+
+                try:
+                    with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                        first_ticket = channel._begin_same_session_replacement(session_id)
+                        first = threading.Thread(
+                            target=run_waiter,
+                            args=("first", first_ticket),
+                            daemon=True,
+                        )
+                        first.start()
+                        self.assertTrue(old_event.wait(timeout=2))
+
+                        second_ticket = channel._begin_same_session_replacement(session_id)
+                        second = threading.Thread(
+                            target=run_waiter,
+                            args=("second", second_ticket),
+                            daemon=True,
+                        )
+                        second.start()
+                        time.sleep(0.2)
+                        old_lock.release()
+                        old_lock = None
+
+                        first.join(timeout=3)
+                        second.join(timeout=3)
+
+                    self.assertFalse(first.is_alive())
+                    self.assertFalse(second.is_alive())
+                    self.assertIsInstance(errors.get("first"), SessionBusyError)
+                    self.assertIn("same_session_replacement_superseded", str(errors["first"]))
+                    self.assertNotIn("first", results)
+                    self.assertIn("second", results)
+                    self.assertEqual(results["second"]["same_session"]["decision"], "replacement_accepted")
+                    self.assertEqual(results["second"]["same_session"]["replaced_request_ids"], [old_request_id])
+                    self.assertEqual(results["second"]["same_session"]["cancelled_requests"], 1)
+                    results["second"]["lock"].release()
+                finally:
+                    if old_lock:
+                        old_lock.release()
+                    registry.unregister(old_request_id)
+
+    def test_direct_admission_ticket_supersedes_waiting_replacement(self):
+        from agent.protocol import get_cancel_registry
+        from channel.web import web_channel
+        from common.ecorex_workspace import SessionBusyError, SessionLock
+
+        with isolated_run_ledger():
+            channel = web_channel.WebChannel()
+            session_id = "session-direct-ticket-supersedes"
+            old_request_id = "req-direct-ticket-old"
+            registry = get_cancel_registry()
+
+            with tempfile.TemporaryDirectory() as workspace:
+                old_lock = SessionLock(workspace, session_id).acquire()
+                old_event = registry.register(old_request_id, session_id=session_id)
+                channel.request_to_session = {old_request_id: session_id}
+                results = {}
+                errors = {}
+                results_lock = threading.Lock()
+
+                def run_waiter(ticket):
+                    try:
+                        result = channel._interrupt_and_wait_for_session_lock(
+                            session_id,
+                            lang="en",
+                            replacement_ticket=ticket,
+                        )
+                        with results_lock:
+                            results["waiter"] = result
+                    except Exception as e:
+                        with results_lock:
+                            errors["waiter"] = e
+
+                try:
+                    with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                        waiter_ticket = channel._begin_same_session_replacement(session_id)
+                        waiter = threading.Thread(target=run_waiter, args=(waiter_ticket,), daemon=True)
+                        waiter.start()
+                        self.assertTrue(old_event.wait(timeout=2))
+
+                        direct_ticket = channel._begin_same_session_replacement(session_id)
+                        self.assertGreater(direct_ticket, waiter_ticket)
+
+                        old_lock.release()
+                        old_lock = None
+                        waiter.join(timeout=3)
+
+                    self.assertFalse(waiter.is_alive())
+                    self.assertIsInstance(errors.get("waiter"), SessionBusyError)
+                    self.assertIn("same_session_replacement_superseded", str(errors["waiter"]))
+                    self.assertNotIn("waiter", results)
+                finally:
+                    if old_lock:
+                        old_lock.release()
                     registry.unregister(old_request_id)
 
     def test_post_message_global_backpressure_rejects_before_request_allocation(self):
@@ -2549,6 +2733,14 @@ class TestWebParallelHandlers(unittest.TestCase):
 
                 self.assertEqual(result["status"], "success")
                 self.assertEqual(result["request_id"], request_id)
+                self.assertEqual(result["same_session"]["policy"], "interrupt_previous")
+                self.assertEqual(result["same_session"]["queue"], "disabled")
+                self.assertEqual(result["same_session"]["decision"], "accepted")
+                self.assertEqual(result["same_session"]["active_request_ids"], [])
+                self.assertEqual(result["same_session"]["replaced_request_ids"], [])
+                self.assertEqual(result["same_session"]["cancelled_requests"], 0)
+                self.assertEqual(result["same_session"]["retry_after_ms"], 0)
+                self.assertEqual(channel.same_session_replacement_tickets.get(session_id), 1)
                 self.assertTrue(produced.wait(timeout=2))
 
                 row = ledger.get_run(request_id)

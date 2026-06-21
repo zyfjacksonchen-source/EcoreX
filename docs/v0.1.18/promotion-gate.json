@@ -2,11 +2,11 @@
   "product": "EcoreX",
   "version": "0.1.18",
   "gate": "v0.1.18-production-agent",
-  "generatedAt": "2026-06-21T11:15:08Z",
+  "generatedAt": "2026-06-21T11:49:29Z",
   "status": "no-go",
   "summary": {
     "total": 18,
-    "blockers": 5,
+    "blockers": 4,
     "warnings": 0
   },
   "checks": [
@@ -24,9 +24,9 @@
     },
     {
       "name": "Acceptance rows: cancellation-concurrency",
-      "status": "fail",
-      "severity": "blocker",
-      "evidence": "docs/v0.1.18/acceptance-checklist.md: missing=[] incomplete=['R18-03-B=PARTIAL']"
+      "status": "pass",
+      "severity": "info",
+      "evidence": "4 rows PASS"
     },
     {
       "name": "Acceptance rows: model-calls",

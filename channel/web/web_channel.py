@@ -1018,6 +1018,8 @@ class WebChannel(ChatChannel):
         self.sse_cleanup_timers = {}  # request_id -> guarded orphan cleanup Timer
         self.sse_lock = threading.RLock()
         self.backpressure_lock = threading.RLock()
+        self.same_session_replacement_lock = threading.RLock()
+        self.same_session_replacement_tickets = {}  # session_id -> latest rapid-resend ticket
         self.request_artifacts = {}  # request_id -> list of structured artifact dicts
         self.sse_stream_tokens = {}  # legacy field; no longer used to supersede streams
         self._http_server = None
@@ -1156,7 +1158,7 @@ class WebChannel(ChatChannel):
         limit_key = "global_active_limit" if scope == "global" else "session_active_limit"
         active_key = "global_active" if scope == "global" else "session_active"
         code = BACKPRESSURE_GLOBAL_LIMIT_CODE if scope == "global" else BACKPRESSURE_SESSION_LIMIT_CODE
-        return {
+        payload = {
             "status": "error",
             "code": code,
             "error_type": "backpressure_limit",
@@ -1181,6 +1183,13 @@ class WebChannel(ChatChannel):
                 else "This session already has too many active runs. Please retry shortly."
             ),
         }
+        if scope == "session":
+            payload["same_session"] = self._same_session_decision_payload(
+                "retryable_conflict",
+                active_request_ids=snapshot.get("active_request_ids", []),
+                reason="active_request_limit",
+            )
+        return payload
 
     def _mark_run_phase(self, request_id: str, phase: str, status: Optional[str] = None) -> None:
         if not request_id or not phase:
@@ -1822,8 +1831,34 @@ class WebChannel(ChatChannel):
             logger.warning(f"[WebChannel] subagent orphan state interruption skipped: {e}")
             return {"updated": False, "task": {}, "error": str(e)}
 
-    def _session_conflict_retry_payload(self, session_id: str, *, reason: str = "session_lock_unavailable") -> Dict[str, Any]:
-        active_request_ids = self._active_request_ids_for_session(session_id)
+    def _begin_same_session_replacement(self, session_id: str) -> int:
+        with self.same_session_replacement_lock:
+            ticket = int(self.same_session_replacement_tickets.get(session_id, 0)) + 1
+            self.same_session_replacement_tickets[session_id] = ticket
+            return ticket
+
+    def _same_session_replacement_is_current(self, session_id: str, ticket: Optional[int]) -> bool:
+        if ticket is None:
+            return True
+        with self.same_session_replacement_lock:
+            return self.same_session_replacement_tickets.get(session_id) == ticket
+
+    def _raise_if_same_session_replacement_superseded(self, session_id: str, ticket: Optional[int]) -> None:
+        if self._same_session_replacement_is_current(session_id, ticket):
+            return
+        from common.ecorex_workspace import SessionBusyError
+        raise SessionBusyError(f"same_session_replacement_superseded: {session_id}")
+
+    def _session_conflict_retry_payload(
+        self,
+        session_id: str,
+        *,
+        reason: str = "session_lock_unavailable",
+        active_request_ids: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        if active_request_ids is None:
+            active_request_ids = self._backpressure_snapshot(session_id).get("active_request_ids", [])
+        active_request_ids = list(active_request_ids or [])
         return {
             "status": "error",
             "code": REQUEST_CONFLICT_RETRYABLE_CODE,
@@ -1835,10 +1870,43 @@ class WebChannel(ChatChannel):
             "reason": reason,
             "session_id": session_id,
             "active_request_ids": active_request_ids,
+            "same_session": self._same_session_decision_payload(
+                "retryable_conflict",
+                active_request_ids=active_request_ids,
+                reason=reason,
+            ),
             "message": "The previous run is still stopping. Please retry shortly.",
         }
 
-    def _interrupt_and_wait_for_session_lock(self, session_id: str, lang: str = "zh"):
+    def _same_session_decision_payload(
+        self,
+        decision: str,
+        *,
+        active_request_ids: List[str] | None = None,
+        replaced_request_ids: List[str] | None = None,
+        cancelled_requests: int = 0,
+        cancelled_subagents: int = 0,
+        reason: str = "",
+    ) -> Dict[str, Any]:
+        return {
+            "policy": "interrupt_previous",
+            "queue": "disabled",
+            "decision": decision,
+            "active_request_ids": list(active_request_ids or []),
+            "replaced_request_ids": list(replaced_request_ids or []),
+            "cancelled_requests": int(cancelled_requests or 0),
+            "cancelled_subagents": int(cancelled_subagents or 0),
+            "retry_after_ms": REQUEST_CONFLICT_RETRY_AFTER_MS if decision == "retryable_conflict" else 0,
+            "reason": reason,
+        }
+
+    def _interrupt_and_wait_for_session_lock(
+        self,
+        session_id: str,
+        lang: str = "zh",
+        *,
+        replacement_ticket: Optional[int] = None,
+    ):
         """Cancel the active request for a busy session and wait briefly for its lock."""
         from agent.protocol import get_cancel_registry
         from common.ecorex_workspace import SessionBusyError, SessionLock
@@ -1846,6 +1914,7 @@ class WebChannel(ChatChannel):
         active_request_ids = []
         active_deadline = time.time() + 1.5
         while time.time() < active_deadline:
+            self._raise_if_same_session_replacement_superseded(session_id, replacement_ticket)
             active_request_ids = self._active_request_ids_for_session(session_id)
             if active_request_ids:
                 break
@@ -1858,8 +1927,21 @@ class WebChannel(ChatChannel):
             deadline = time.time() + 4
             last_error = None
             while time.time() < deadline:
+                self._raise_if_same_session_replacement_superseded(session_id, replacement_ticket)
                 try:
-                    return SessionLock(_get_workspace_root(), session_id).acquire()
+                    lock = SessionLock(_get_workspace_root(), session_id).acquire()
+                    try:
+                        self._raise_if_same_session_replacement_superseded(session_id, replacement_ticket)
+                    except Exception:
+                        lock.release()
+                        raise
+                    return {
+                        "lock": lock,
+                        "same_session": self._same_session_decision_payload(
+                            "accepted_after_finalize_wait",
+                            reason="lock_released_without_active_request",
+                        ),
+                    }
                 except SessionBusyError as e:
                     last_error = e
                     time.sleep(0.2)
@@ -1871,8 +1953,22 @@ class WebChannel(ChatChannel):
             deadline = time.time() + 4
             last_error = None
             while time.time() < deadline:
+                self._raise_if_same_session_replacement_superseded(session_id, replacement_ticket)
                 try:
-                    return SessionLock(_get_workspace_root(), session_id).acquire()
+                    lock = SessionLock(_get_workspace_root(), session_id).acquire()
+                    try:
+                        self._raise_if_same_session_replacement_superseded(session_id, replacement_ticket)
+                    except Exception:
+                        lock.release()
+                        raise
+                    return {
+                        "lock": lock,
+                        "same_session": self._same_session_decision_payload(
+                            "accepted_after_finalize_wait",
+                            active_request_ids=active_request_ids,
+                            reason="active_request_had_no_cancel_token",
+                        ),
+                    }
                 except SessionBusyError as e:
                     last_error = e
                     time.sleep(0.2)
@@ -1888,8 +1984,25 @@ class WebChannel(ChatChannel):
         deadline = time.time() + 12
         last_error = None
         while time.time() < deadline:
+            self._raise_if_same_session_replacement_superseded(session_id, replacement_ticket)
             try:
-                return SessionLock(_get_workspace_root(), session_id).acquire()
+                lock = SessionLock(_get_workspace_root(), session_id).acquire()
+                try:
+                    self._raise_if_same_session_replacement_superseded(session_id, replacement_ticket)
+                except Exception:
+                    lock.release()
+                    raise
+                return {
+                    "lock": lock,
+                    "same_session": self._same_session_decision_payload(
+                        "replacement_accepted",
+                        active_request_ids=active_request_ids,
+                        replaced_request_ids=active_request_ids,
+                        cancelled_requests=cancelled,
+                        cancelled_subagents=int(subagent_cancel.get("cancelledTasks") or 0),
+                        reason="previous_run_cancelled",
+                    ),
+                }
             except SessionBusyError as e:
                 last_error = e
                 time.sleep(0.2)
@@ -3242,20 +3355,84 @@ class WebChannel(ChatChannel):
                     "subagents": subagent_cancel,
                 })
 
-            replacement_request_ids = self._active_request_ids_for_session(session_id)
+            same_session_decision = self._same_session_decision_payload("accepted")
+            replacement_request_ids: List[str] = []
+            same_session_ticket = self._begin_same_session_replacement(session_id)
 
             try:
                 from common.ecorex_workspace import SessionBusyError, SessionLock
                 session_lock = SessionLock(_get_workspace_root(), session_id).acquire()
-            except SessionBusyError:
                 try:
-                    session_lock = self._interrupt_and_wait_for_session_lock(session_id, lang=lang)
-                except SessionBusyError:
-                    logger.warning(f"[WebChannel] session conflict remains retryable: session={session_id}")
+                    self._raise_if_same_session_replacement_superseded(session_id, same_session_ticket)
+                except SessionBusyError as e:
+                    session_lock.release()
+                    session_lock = None
+                    logger.warning(f"[WebChannel] direct session admission superseded: session={session_id}")
                     return json.dumps(
-                        self._session_conflict_retry_payload(session_id),
+                        self._session_conflict_retry_payload(
+                            session_id,
+                            reason="same_session_replacement_superseded",
+                        ),
                         ensure_ascii=False,
                     )
+            except SessionBusyError:
+                try:
+                    interrupt_result = self._interrupt_and_wait_for_session_lock(
+                        session_id,
+                        lang=lang,
+                        replacement_ticket=same_session_ticket,
+                    )
+                    if isinstance(interrupt_result, dict):
+                        session_lock = interrupt_result.get("lock")
+                        same_session_decision = interrupt_result.get("same_session") or same_session_decision
+                    else:
+                        session_lock = interrupt_result
+                    if same_session_decision.get("decision") == "replacement_accepted":
+                        replacement_request_ids = list(same_session_decision.get("replaced_request_ids") or [])
+                except SessionBusyError as e:
+                    logger.warning(f"[WebChannel] session conflict remains retryable: session={session_id}")
+                    reason = (
+                        "same_session_replacement_superseded"
+                        if "same_session_replacement_superseded" in str(e)
+                        else "session_lock_unavailable"
+                    )
+                    return json.dumps(
+                        self._session_conflict_retry_payload(session_id, reason=reason),
+                        ensure_ascii=False,
+                    )
+
+            same_session_snapshot = self._backpressure_snapshot(
+                session_id,
+                ignore_request_ids=replacement_request_ids,
+            )
+            residual_same_session_active_ids = list(same_session_snapshot.get("active_request_ids") or [])
+            if residual_same_session_active_ids:
+                logger.warning(
+                    f"[WebChannel] same-session active request remains without replacement admission: "
+                    f"session={session_id}, active={residual_same_session_active_ids}, "
+                    f"decision={same_session_decision.get('decision')}"
+                )
+                if session_lock:
+                    try:
+                        session_lock.release()
+                    except Exception as e:
+                        logger.debug(f"[WebChannel] conflict session lock release skipped: {e}")
+                    session_lock = None
+                session_limit = int(same_session_snapshot.get("session_active_limit") or 0)
+                session_active = int(same_session_snapshot.get("session_active") or 0)
+                if session_limit and session_active >= session_limit:
+                    return json.dumps(
+                        self._backpressure_payload("session", same_session_snapshot),
+                        ensure_ascii=False,
+                    )
+                return json.dumps(
+                    self._session_conflict_retry_payload(
+                        session_id,
+                        reason="same_session_active_request",
+                        active_request_ids=residual_same_session_active_ids,
+                    ),
+                    ensure_ascii=False,
+                )
 
             # Append file references to the prompt (same format as QQ channel)
             if attachments:
@@ -3403,7 +3580,12 @@ class WebChannel(ChatChannel):
 
             threading.Thread(target=self._produce_with_session_lock, args=(context, session_lock), daemon=True).start()
 
-            return json.dumps({"status": "success", "request_id": request_id, "stream": use_sse})
+            return json.dumps({
+                "status": "success",
+                "request_id": request_id,
+                "stream": use_sse,
+                "same_session": same_session_decision,
+            })
 
         except Exception as e:
             if request_id:
