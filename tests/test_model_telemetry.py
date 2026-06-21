@@ -2598,6 +2598,201 @@ class TestModelTelemetry(unittest.TestCase):
         self.assertEqual(event["error_taxonomy"], "timeout")
         self.assertEqual(event["error_status_code"], 500)
 
+    def test_legacy_create_img_gateway_records_success(self):
+        from models.legacy_reply_gateway import (
+            LEGACY_CREATE_IMAGE_API_PATH,
+            wrap_legacy_create_img,
+        )
+        from models.model_telemetry import get_recent_model_calls
+
+        class ImageBot:
+            def create_img(self, query, retry_count=0, api_key=None):
+                return True, "https://image.test/out.png"
+
+        bot = wrap_legacy_create_img(
+            ImageBot(),
+            provider_hint="openai",
+            model_hint="gpt-image-2-pro",
+        )
+        result = bot.create_img("draw a stable gateway")
+
+        self.assertEqual(result, (True, "https://image.test/out.png"))
+        events = get_recent_model_calls()
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event["provider"], "openai")
+        self.assertEqual(event["model"], "gpt-image-2-pro")
+        self.assertEqual(event["api_path"], LEGACY_CREATE_IMAGE_API_PATH)
+        self.assertEqual(event["status"], "completed")
+        self.assertEqual(event["retry_count"], 0)
+        self.assertEqual(event["total_tokens"], 0)
+
+    def test_legacy_create_img_gateway_records_false_result(self):
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+        from models.model_telemetry import get_recent_model_calls
+
+        class ImageBot:
+            def create_img(self, query, retry_count=0, api_key=None):
+                return False, "HTTP 429: rate limit"
+
+        bot = wrap_legacy_create_img(
+            ImageBot(),
+            provider_hint="linkai",
+            model_hint="gpt-image-2-pro",
+        )
+        result = bot.create_img("draw too quickly")
+
+        self.assertEqual(result, (False, "HTTP 429: rate limit"))
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["provider"], "linkai")
+        self.assertEqual(event["model"], "gpt-image-2-pro")
+        self.assertEqual(event["api_path"], "/legacy/create_img")
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_status_code"], 429)
+        self.assertEqual(event["error_taxonomy"], "rate_limit")
+        self.assertEqual(event["error_message"], "HTTP 429: rate limit")
+
+    def test_legacy_create_img_gateway_prefers_numeric_http_code(self):
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+        from models.model_telemetry import get_recent_model_calls
+
+        class ImageBot:
+            def create_img(self, query, retry_count=0, api_key=None):
+                return False, {
+                    "status": "error",
+                    "http_code": 429,
+                    "error": {
+                        "message": "too many image requests",
+                        "status": "error",
+                        "http_code": 500,
+                    },
+                }
+
+        bot = wrap_legacy_create_img(
+            ImageBot(),
+            provider_hint="linkai",
+            model_hint="gpt-image-2-pro",
+        )
+        result = bot.create_img("draw too quickly")
+
+        self.assertFalse(result[0])
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_status_code"], 429)
+        self.assertEqual(event["error_taxonomy"], "rate_limit")
+        self.assertEqual(event["error_message"], "too many image requests")
+
+    def test_legacy_create_img_gateway_uses_zhipu_default_image_model(self):
+        from unittest.mock import MagicMock, patch
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+        from models.model_telemetry import get_recent_model_calls
+
+        class ImageBot:
+            def get_api_config(self):
+                return {"provider": "zhipu", "model": "glm-4"}
+
+            def create_img(self, query, retry_count=0, api_key=None):
+                return True, "https://image.test/zhipu.png"
+
+        fake_conf = MagicMock()
+        fake_conf.get.side_effect = lambda key, default=None: default
+
+        with patch("config.conf", return_value=fake_conf):
+            bot = wrap_legacy_create_img(ImageBot(), provider_hint="zhipu")
+            result = bot.create_img("draw with zhipu")
+
+        self.assertEqual(result, (True, "https://image.test/zhipu.png"))
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["provider"], "zhipu")
+        self.assertEqual(event["model"], "cogview-3")
+        self.assertEqual(event["status"], "completed")
+
+    def test_legacy_create_img_gateway_records_exception_and_reraises(self):
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+        from models.model_telemetry import get_recent_model_calls
+
+        class ImageBot:
+            def create_img(self, query, retry_count=0, api_key=None):
+                raise TimeoutError("image timeout")
+
+        bot = wrap_legacy_create_img(
+            ImageBot(),
+            provider_hint="openai",
+            model_hint="gpt-image-2-pro",
+        )
+
+        with self.assertRaises(TimeoutError):
+            bot.create_img("draw timeout")
+
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["provider"], "openai")
+        self.assertEqual(event["model"], "gpt-image-2-pro")
+        self.assertEqual(event["api_path"], "/legacy/create_img")
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_taxonomy"], "timeout")
+        self.assertEqual(event["error_status_code"], 500)
+
+    def test_legacy_create_img_gateway_records_one_span_for_internal_retry(self):
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+        from models.model_telemetry import get_recent_model_calls
+
+        class RecursiveImageBot:
+            def __init__(self):
+                self.calls = []
+
+            def create_img(self, query, retry_count=0, api_key=None):
+                self.calls.append(retry_count)
+                if retry_count == 0:
+                    return self.create_img(query, retry_count=1, api_key=api_key)
+                return True, "https://image.test/retry.png"
+
+        bot = wrap_legacy_create_img(
+            RecursiveImageBot(),
+            provider_hint="openai",
+            model_hint="gpt-image-2",
+        )
+        result = bot.create_img("draw after retry")
+
+        self.assertEqual(result, (True, "https://image.test/retry.png"))
+        self.assertEqual(bot.calls, [0, 1])
+        events = get_recent_model_calls()
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event["model"], "gpt-image-2")
+        self.assertEqual(event["status"], "completed")
+        self.assertEqual(event["retry_count"], 0)
+
+    def test_legacy_model_surfaces_wraps_create_img(self):
+        from models.legacy_reply_gateway import wrap_legacy_model_surfaces
+        from models.model_telemetry import get_recent_model_calls
+
+        class MultiSurfaceBot:
+            def reply_text(self, session):
+                return {"total_tokens": 1, "completion_tokens": 1, "content": "ok"}
+
+            def call_vision(self, image_url, question, model=None, max_tokens=1000):
+                return {"content": "ok"}
+
+            def create_img(self, query, retry_count=0, api_key=None):
+                return True, "https://image.test/surface.png"
+
+        bot = wrap_legacy_model_surfaces(
+            MultiSurfaceBot(),
+            provider_hint="custom",
+            model_hint="image-model",
+        )
+
+        self.assertTrue(getattr(bot.reply_text, "_ecorex_legacy_reply_gateway", False))
+        self.assertTrue(getattr(bot.call_vision, "_ecorex_legacy_call_vision_gateway", False))
+        self.assertTrue(getattr(bot.create_img, "_ecorex_legacy_create_img_gateway", False))
+        self.assertEqual(bot.create_img("draw"), (True, "https://image.test/surface.png"))
+
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["provider"], "custom")
+        self.assertEqual(event["model"], "image-model")
+        self.assertEqual(event["api_path"], "/legacy/create_img")
+        self.assertEqual(event["status"], "completed")
+
     def test_bot_factory_wraps_legacy_call_vision(self):
         from unittest.mock import MagicMock, patch
         from common import const

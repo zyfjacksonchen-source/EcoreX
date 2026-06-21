@@ -806,3 +806,20 @@
     with re-raise, bot_factory wrapping for Qianfan `call_vision`, and adjacent
     Qianfan vision routing regressions. R18-04-B remains PARTIAL pending
     image-generation/create_img and remaining raw vision HTTP surface inventory.
+- Added the image-generation model-call telemetry slice:
+  - `models/legacy_reply_gateway.py` now wraps legacy `create_img` methods in
+    addition to `reply_text` and `call_vision`, recording `/legacy/create_img`
+    spans with provider/model, latency, retry-count field, tuple failure
+    taxonomy, and exception evidence without changing provider return values or
+    provider-local retry behavior.
+  - `models/bot_factory.py` continues to apply the combined legacy
+    model-surface wrapper to every created bot, so OpenAI-compatible image
+    generation, LinkAI image generation, ZhipuAI image generation, and similar
+    bot-backed `create_img` routes inherit telemetry automatically when created
+    through the factory.
+  - Focused tests cover successful tuple result telemetry, `HTTP 429` tuple
+    failure taxonomy, provider-internal recursive retry de-duplication, and the
+    combined legacy surface wrapper. R18-04-B remains PARTIAL pending remaining
+    raw vision HTTP surface inventory; R18-04-C remains PARTIAL because this
+    slice records image generation calls but does not migrate provider-local
+    `create_img` retry loops to the shared retry policy.

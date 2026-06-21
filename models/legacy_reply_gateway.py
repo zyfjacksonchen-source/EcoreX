@@ -21,8 +21,15 @@ from models.model_telemetry import ModelCallSpan
 
 LEGACY_REPLY_TEXT_API_PATH = "/legacy/reply_text"
 LEGACY_CALL_VISION_API_PATH = "/legacy/call_vision"
+LEGACY_CREATE_IMAGE_API_PATH = "/legacy/create_img"
 _suppression_state = threading.local()
 _ZERO_TOKEN_TEXT_SUCCESS_PROVIDERS = {"modelscope"}
+_DEFAULT_IMAGE_MODELS = {
+    "linkai": "gpt-image-2-pro",
+    "zhipu": "cogview-3",
+    "zhipuai": "cogview-3",
+    "zhipu_ai": "cogview-3",
+}
 
 
 @contextmanager
@@ -137,6 +144,26 @@ def _legacy_error_details(result: Any, *, provider: str = "") -> Optional[Dict[s
     return None
 
 
+def _extract_http_status_from_message(message: Any) -> Optional[str]:
+    if not isinstance(message, str):
+        return None
+    match = re.search(r"\bHTTP\s+(\d{3})\b", message, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    return None
+
+
+def _first_numeric_status(*values: Any) -> Optional[int]:
+    for value in values:
+        if value in (None, ""):
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def _legacy_vision_error_details(result: Any) -> Optional[Dict[str, Any]]:
     if result is NotImplemented:
         return {
@@ -151,11 +178,13 @@ def _legacy_vision_error_details(result: Any) -> Optional[Dict[str, Any]]:
 
     error_value = result.get("error")
     message = result.get("message") or result.get("content") or error_value
-    status_code = result.get("status_code")
-    if status_code in (None, "") and isinstance(message, str):
-        match = re.search(r"\bHTTP\s+(\d{3})\b", message, re.IGNORECASE)
-        if match:
-            status_code = match.group(1)
+    status_code = _first_numeric_status(
+        result.get("status_code"),
+        result.get("http_code"),
+        result.get("status"),
+    )
+    if status_code is None and isinstance(message, str):
+        status_code = _extract_http_status_from_message(message)
     try:
         status_int = int(status_code)
     except (TypeError, ValueError):
@@ -168,11 +197,11 @@ def _legacy_vision_error_details(result: Any) -> Optional[Dict[str, Any]]:
             message = error_value.get("message") or message
             error_code = error_value.get("code") or error_code
             error_type = error_value.get("type") or error_type
-            if status_code in (None, ""):
-                status_code = (
-                    error_value.get("status_code")
-                    or error_value.get("status")
-                    or error_value.get("http_code")
+            if status_code is None:
+                status_code = _first_numeric_status(
+                    error_value.get("status_code"),
+                    error_value.get("http_code"),
+                    error_value.get("status"),
                 )
         return {
             "message": str(message or ""),
@@ -188,6 +217,61 @@ def _legacy_vision_error_details(result: Any) -> Optional[Dict[str, Any]]:
             "error_type": str(result.get("error_type") or result.get("type") or ""),
         }
     return None
+
+
+def _legacy_create_img_error_details(result: Any) -> Optional[Dict[str, Any]]:
+    if result is NotImplemented:
+        return {
+            "message": "Legacy create_img returned NotImplemented",
+            "status_code": 501,
+        }
+    if not isinstance(result, (tuple, list)):
+        return {
+            "message": f"Legacy create_img returned unsupported response: {type(result).__name__}",
+            "status_code": 500,
+        }
+    if not result:
+        return {
+            "message": "Legacy create_img returned empty result",
+            "status_code": 500,
+        }
+    if bool(result[0]):
+        return None
+
+    payload = result[1] if len(result) > 1 else "Legacy create_img failed"
+    message = payload
+    status_code = None
+    error_code = ""
+    error_type = ""
+    if isinstance(payload, dict):
+        error_value = payload.get("error")
+        message = payload.get("message") or payload.get("content") or error_value
+        status_code = _first_numeric_status(
+            payload.get("status_code"),
+            payload.get("http_code"),
+            payload.get("status"),
+        )
+        error_code = payload.get("error_code") or payload.get("code") or ""
+        error_type = payload.get("error_type") or payload.get("type") or ""
+        if isinstance(error_value, dict):
+            message = error_value.get("message") or message
+            error_code = error_value.get("code") or error_code
+            error_type = error_value.get("type") or error_type
+            if status_code in (None, ""):
+                status_code = _first_numeric_status(
+                    error_value.get("status_code"),
+                    error_value.get("http_code"),
+                    error_value.get("status"),
+                )
+    if status_code in (None, ""):
+        status_code = _extract_http_status_from_message(message)
+
+    return {
+        "message": str(message or "Legacy create_img failed"),
+        "status_code": status_code,
+        "error_code": str(error_code or ""),
+        "error_type": str(error_type or ""),
+    }
 
 
 def _resolve_config(bot: Any, *, provider_hint: str = "", model_hint: str = "") -> Dict[str, str]:
@@ -222,6 +306,31 @@ def _resolve_config(bot: Any, *, provider_hint: str = "", model_hint: str = "") 
             model = ""
 
     return {"provider": provider, "model": model}
+
+
+def _resolve_image_config(bot: Any, *, provider_hint: str = "", model_hint: str = "") -> Dict[str, str]:
+    config = _resolve_config(bot, provider_hint=provider_hint, model_hint=model_hint)
+    if model_hint:
+        config["model"] = model_hint
+        return config
+
+    image_model = ""
+    try:
+        from config import conf
+
+        image_model = str(conf().get("text_to_image") or "")
+    except Exception:
+        image_model = ""
+    if not image_model:
+        default_image_model = getattr(bot, "DEFAULT_IMAGE_MODEL", "")
+        if default_image_model:
+            image_model = str(default_image_model)
+    if not image_model:
+        provider_key = str(config.get("provider") or "").lower()
+        image_model = _DEFAULT_IMAGE_MODELS.get(provider_key, "")
+    if image_model:
+        config["model"] = image_model
+    return config
 
 
 def _extract_retry_count(original, args: tuple, kwargs: dict) -> int:
@@ -351,7 +460,51 @@ def wrap_legacy_call_vision(bot: Any, *, provider_hint: str = "", model_hint: st
     return bot
 
 
+def wrap_legacy_create_img(bot: Any, *, provider_hint: str = "", model_hint: str = "") -> Any:
+    """Wrap ``bot.create_img`` with bounded model-call telemetry."""
+    original = getattr(bot, "create_img", None)
+    if not callable(original) or getattr(original, "_ecorex_legacy_create_img_gateway", False):
+        return bot
+
+    state = threading.local()
+
+    def wrapped_create_img(*args, **kwargs):
+        if getattr(state, "active", False):
+            return original(*args, **kwargs)
+
+        config = _resolve_image_config(bot, provider_hint=provider_hint, model_hint=model_hint)
+        span = ModelCallSpan(
+            provider=config["provider"],
+            model=config["model"],
+            stream=False,
+            retry_count=_extract_retry_count(original, args, kwargs),
+            api_path=LEGACY_CREATE_IMAGE_API_PATH,
+        )
+
+        state.active = True
+        try:
+            result = original(*args, **kwargs)
+        except Exception as exc:
+            span.finish_error(message=str(exc), status_code=500)
+            raise
+        finally:
+            state.active = False
+
+        details = _legacy_create_img_error_details(result)
+        if details is None:
+            span.finish_completed()
+        else:
+            span.finish_error(**details)
+        return result
+
+    wrapped_create_img._ecorex_legacy_create_img_gateway = True
+    wrapped_create_img._ecorex_legacy_create_img_original = original
+    bot.create_img = wrapped_create_img
+    return bot
+
+
 def wrap_legacy_model_surfaces(bot: Any, *, provider_hint: str = "", model_hint: str = "") -> Any:
     bot = wrap_legacy_reply_text(bot, provider_hint=provider_hint, model_hint=model_hint)
     bot = wrap_legacy_call_vision(bot, provider_hint=provider_hint, model_hint=model_hint)
+    bot = wrap_legacy_create_img(bot, provider_hint=provider_hint, model_hint=model_hint)
     return bot
