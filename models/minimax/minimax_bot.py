@@ -7,6 +7,7 @@ from typing import Optional
 import requests
 
 from models.bot import Bot
+from models.model_provider_errors import http_error_response, provider_error_response
 from models.minimax.minimax_session import MinimaxSession
 from models.session_manager import SessionManager
 from bridge.context import Context, ContextType
@@ -454,9 +455,12 @@ class MinimaxBot(Bot):
             response = requests.post(url, headers=headers, json=request_body, timeout=60)
 
             if response.status_code != 200:
-                error_msg = response.text
-                logger.error(f"[MINIMAX] API error: status={response.status_code}, msg={error_msg}")
-                yield {"error": True, "message": error_msg, "status_code": response.status_code}
+                error_response = http_error_response(response)
+                logger.error(
+                    f"[MINIMAX] API error: status={response.status_code}, "
+                    f"msg={error_response.get('message')}"
+                )
+                yield error_response
                 return
 
             result = response.json()
@@ -530,9 +534,12 @@ class MinimaxBot(Bot):
             response = requests.post(url, headers=headers, json=request_body, stream=True, timeout=60)
 
             if response.status_code != 200:
-                error_msg = response.text
-                logger.error(f"[MINIMAX] API error: status={response.status_code}, msg={error_msg}")
-                yield {"error": True, "message": error_msg, "status_code": response.status_code}
+                error_response = http_error_response(response)
+                logger.error(
+                    f"[MINIMAX] API error: status={response.status_code}, "
+                    f"msg={error_response.get('message')}"
+                )
+                yield error_response
                 return
 
             current_content = []
@@ -563,18 +570,45 @@ class MinimaxBot(Bot):
 
                 # Check for error response (MiniMax format)
                 if chunk.get("type") == "error" or "error" in chunk:
-                    error_data = chunk.get("error", {})
-                    error_msg = error_data.get("message", "Unknown error")
-                    error_type = error_data.get("type", "")
-                    http_code = error_data.get("http_code", "")
-                    
-                    logger.error(f"[MINIMAX] API error: {error_msg} (type: {error_type}, code: {http_code})")
-                    
-                    yield {
-                        "error": True,
-                        "message": error_msg,
-                        "status_code": int(http_code) if http_code.isdigit() else 500
-                    }
+                    error_data = chunk.get("error") or {}
+                    if isinstance(error_data, dict):
+                        error_data = dict(error_data)
+                        for key in (
+                            "message",
+                            "msg",
+                            "code",
+                            "error_code",
+                            "type",
+                            "error_type",
+                            "http_code",
+                            "status_code",
+                            "retry_after",
+                            "retry_after_seconds",
+                            "retry_after_ms",
+                        ):
+                            if key in chunk and key not in error_data:
+                                error_data[key] = chunk.get(key)
+                    else:
+                        error_data = chunk
+                    error_response = provider_error_response(
+                        error_data,
+                        message="Unknown error",
+                        status_code=(
+                            chunk.get("status_code")
+                            or chunk.get("http_code")
+                            or chunk.get("status")
+                            or 500
+                        ),
+                        retry_after=chunk.get("retry_after"),
+                        retry_after_seconds=chunk.get("retry_after_seconds"),
+                        retry_after_ms=chunk.get("retry_after_ms"),
+                    )
+                    logger.error(
+                        f"[MINIMAX] API error: {error_response.get('message')} "
+                        f"(type: {error_response.get('error', {}).get('type')}, "
+                        f"status={error_response.get('status_code')})"
+                    )
+                    yield error_response
                     return
 
                 if not chunk.get("choices"):

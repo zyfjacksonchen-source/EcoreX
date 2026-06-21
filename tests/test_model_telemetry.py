@@ -559,6 +559,32 @@ class TestModelTelemetry(unittest.TestCase):
             return iter(self._lines)
 
     def _native_http_provider_bot_for_tests(self, provider):
+        if provider == "doubao":
+            from models.doubao.doubao_bot import DoubaoBot
+
+            class TestDoubaoBot(DoubaoBot):
+                def __init__(self):
+                    self.args = {
+                        "model": "doubao-seed-2-0-pro-260215",
+                        "temperature": 0.8,
+                        "top_p": 1.0,
+                    }
+
+                @property
+                def api_key(self):
+                    return "test-key"
+
+                @property
+                def base_url(self):
+                    return "https://doubao.test/api/v3"
+
+            return {
+                "bot": TestDoubaoBot(),
+                "model": "doubao-seed-2-0-pro-260215",
+                "provider": "doubao",
+                "patch": "models.doubao.doubao_bot.requests.post",
+            }
+
         if provider == "deepseek":
             from models.deepseek.deepseek_bot import DeepSeekBot
 
@@ -587,6 +613,32 @@ class TestModelTelemetry(unittest.TestCase):
                 "patch": "models.deepseek.deepseek_bot.requests.post",
             }
 
+        if provider == "minimax":
+            from models.minimax.minimax_bot import MinimaxBot
+
+            class TestMinimaxBot(MinimaxBot):
+                def __init__(self):
+                    self.args = {
+                        "model": "MiniMax-M3",
+                        "temperature": 0.3,
+                        "top_p": 0.95,
+                    }
+
+                @property
+                def api_key(self):
+                    return "test-key"
+
+                @property
+                def api_base(self):
+                    return "https://minimax.test/v1"
+
+            return {
+                "bot": TestMinimaxBot(),
+                "model": "MiniMax-M3",
+                "provider": "minimax",
+                "patch": "models.minimax.minimax_bot.requests.post",
+            }
+
         if provider == "mimo":
             from models.mimo.mimo_bot import MimoBot
 
@@ -611,6 +663,36 @@ class TestModelTelemetry(unittest.TestCase):
                 "model": "mimo-v2.5-pro",
                 "provider": "mimo",
                 "patch": "models.mimo.mimo_bot.requests.post",
+            }
+
+        if provider == "moonshot":
+            from models.moonshot.moonshot_bot import MoonshotBot
+
+            class TestMoonshotBot(MoonshotBot):
+                def __init__(self):
+                    self.args = {
+                        "model": "moonshot-v1-32k",
+                        "temperature": 0.3,
+                        "top_p": 1.0,
+                    }
+
+                @property
+                def api_key(self):
+                    return "test-key"
+
+                @property
+                def base_url(self):
+                    return "https://moonshot.test/v1"
+
+                @property
+                def _is_kimi_coding_plan(self):
+                    return False
+
+            return {
+                "bot": TestMoonshotBot(),
+                "model": "moonshot-v1-32k",
+                "provider": "moonshot",
+                "patch": "models.moonshot.moonshot_bot.requests.post",
             }
 
         raise AssertionError("unsupported provider")
@@ -672,7 +754,7 @@ class TestModelTelemetry(unittest.TestCase):
             reset_model_call_telemetry_for_tests,
         )
 
-        for provider in ("deepseek", "mimo"):
+        for provider in ("deepseek", "mimo", "doubao", "moonshot", "minimax"):
             with self.subTest(provider=provider):
                 reset_model_call_telemetry_for_tests()
                 spec = self._native_http_provider_bot_for_tests(provider)
@@ -745,7 +827,7 @@ class TestModelTelemetry(unittest.TestCase):
             reset_model_call_telemetry_for_tests,
         )
 
-        for provider in ("deepseek", "mimo"):
+        for provider in ("deepseek", "mimo", "doubao", "moonshot", "minimax"):
             with self.subTest(provider=provider):
                 reset_model_call_telemetry_for_tests()
                 spec = self._native_http_provider_bot_for_tests(provider)
@@ -792,7 +874,7 @@ class TestModelTelemetry(unittest.TestCase):
             reset_model_call_telemetry_for_tests,
         )
 
-        for provider in ("deepseek", "mimo"):
+        for provider in ("deepseek", "mimo", "doubao", "moonshot", "minimax"):
             with self.subTest(provider=provider):
                 reset_model_call_telemetry_for_tests()
                 spec = self._native_http_provider_bot_for_tests(provider)
@@ -862,7 +944,7 @@ class TestModelTelemetry(unittest.TestCase):
             reset_model_call_telemetry_for_tests,
         )
 
-        for provider in ("deepseek", "mimo"):
+        for provider in ("deepseek", "mimo", "doubao", "moonshot", "minimax"):
             with self.subTest(provider=provider):
                 reset_model_call_telemetry_for_tests()
                 spec = self._native_http_provider_bot_for_tests(provider)
@@ -921,7 +1003,7 @@ class TestModelTelemetry(unittest.TestCase):
             reset_model_call_telemetry_for_tests,
         )
 
-        for provider in ("deepseek", "mimo"):
+        for provider in ("deepseek", "mimo", "doubao", "moonshot", "minimax"):
             with self.subTest(provider=provider):
                 reset_model_call_telemetry_for_tests()
                 spec = self._native_http_provider_bot_for_tests(provider)
@@ -965,6 +1047,197 @@ class TestModelTelemetry(unittest.TestCase):
                 events = get_recent_model_calls()
                 self.assertEqual([event["status"] for event in events], ["failed", "completed"])
                 self.assertEqual(events[0]["error_taxonomy"], "rate_limit")
+
+    def test_native_http_providers_minimax_stream_http_code_is_retryable(self):
+        from unittest.mock import patch
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import (
+            get_recent_model_calls,
+            reset_model_call_telemetry_for_tests,
+        )
+
+        cases = [
+            (
+                "top_level_http_code",
+                b'data: {"type":"error","message":"rate limit","http_code":"429","retry_after_ms":500}',
+            ),
+            (
+                "nested_http_code",
+                b'data: {"type":"error","error":{"message":"rate limit","type":"rate_limit","http_code":"429","retry_after_ms":500}}',
+            ),
+        ]
+
+        for case_name, error_line in cases:
+            with self.subTest(case=case_name):
+                reset_model_call_telemetry_for_tests()
+                spec = self._native_http_provider_bot_for_tests("minimax")
+                responses = [
+                    self._FakeHTTPResponse(
+                        200,
+                        lines=[
+                            error_line,
+                            b'data: [DONE]',
+                        ],
+                    ),
+                    self._FakeHTTPResponse(
+                        200,
+                        lines=[
+                            b'data: {"choices":[{"delta":{"content":"ok"}}]}',
+                            b'data: [DONE]',
+                        ],
+                    ),
+                ]
+
+                def fake_post(url, headers=None, json=None, stream=False, timeout=None, **_kwargs):
+                    return responses.pop(0)
+
+                sleeps = []
+                model = self._native_agent_model(
+                    spec["bot"],
+                    model_name=spec["model"],
+                    provider=spec["provider"],
+                )
+
+                with patch(spec["patch"], side_effect=fake_post):
+                    chunks = list(model.call_stream(LLMRequest(
+                        messages=[{"role": "user", "content": "hi"}],
+                        stream=True,
+                        model_max_retries=1,
+                        model_retry_sleep=sleeps.append,
+                    )))
+
+                self.assertEqual(chunks[0]["choices"][0]["delta"]["content"], "ok")
+                self.assertEqual(sleeps, [0.5])
+                events = get_recent_model_calls()
+                self.assertEqual([event["status"] for event in events], ["failed", "completed"])
+                self.assertEqual(events[0]["error_status_code"], 429)
+                self.assertEqual(events[0]["error_taxonomy"], "rate_limit")
+
+    def test_native_http_providers_stream_top_level_http_code_is_retryable(self):
+        from unittest.mock import patch
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import (
+            get_recent_model_calls,
+            reset_model_call_telemetry_for_tests,
+        )
+
+        for provider in ("doubao", "moonshot"):
+            with self.subTest(provider=provider):
+                reset_model_call_telemetry_for_tests()
+                spec = self._native_http_provider_bot_for_tests(provider)
+                responses = [
+                    self._FakeHTTPResponse(
+                        200,
+                        lines=[
+                            b'data: {"error":{"message":"rate limit","type":"rate_limit"},"http_code":"429","retry_after_ms":500}',
+                            b'data: [DONE]',
+                        ],
+                    ),
+                    self._FakeHTTPResponse(
+                        200,
+                        lines=[
+                            b'data: {"choices":[{"delta":{"content":"ok"}}]}',
+                            b'data: [DONE]',
+                        ],
+                    ),
+                ]
+
+                def fake_post(url, headers=None, json=None, stream=False, timeout=None, **_kwargs):
+                    return responses.pop(0)
+
+                sleeps = []
+                model = self._native_agent_model(
+                    spec["bot"],
+                    model_name=spec["model"],
+                    provider=spec["provider"],
+                )
+
+                with patch(spec["patch"], side_effect=fake_post):
+                    chunks = list(model.call_stream(LLMRequest(
+                        messages=[{"role": "user", "content": "hi"}],
+                        stream=True,
+                        model_max_retries=1,
+                        model_retry_sleep=sleeps.append,
+                    )))
+
+                self.assertEqual(chunks[0]["choices"][0]["delta"]["content"], "ok")
+                self.assertEqual(sleeps, [0.5])
+                events = get_recent_model_calls()
+                self.assertEqual([event["status"] for event in events], ["failed", "completed"])
+                self.assertEqual(events[0]["error_status_code"], 429)
+                self.assertEqual(events[0]["error_taxonomy"], "rate_limit")
+
+    def test_native_http_providers_stream_text_status_code_does_not_hide_http_code(self):
+        from unittest.mock import patch
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import (
+            get_recent_model_calls,
+            reset_model_call_telemetry_for_tests,
+        )
+
+        for provider in ("doubao", "moonshot"):
+            with self.subTest(provider=provider):
+                reset_model_call_telemetry_for_tests()
+                spec = self._native_http_provider_bot_for_tests(provider)
+                responses = [
+                    self._FakeHTTPResponse(
+                        200,
+                        lines=[
+                            b'data: {"error":{"message":"rate limit","type":"rate_limit"},"status_code":"error","http_code":"429","retry_after_ms":500}',
+                            b'data: [DONE]',
+                        ],
+                    ),
+                    self._FakeHTTPResponse(
+                        200,
+                        lines=[
+                            b'data: {"choices":[{"delta":{"content":"ok"}}]}',
+                            b'data: [DONE]',
+                        ],
+                    ),
+                ]
+
+                def fake_post(url, headers=None, json=None, stream=False, timeout=None, **_kwargs):
+                    return responses.pop(0)
+
+                sleeps = []
+                model = self._native_agent_model(
+                    spec["bot"],
+                    model_name=spec["model"],
+                    provider=spec["provider"],
+                )
+
+                with patch(spec["patch"], side_effect=fake_post):
+                    chunks = list(model.call_stream(LLMRequest(
+                        messages=[{"role": "user", "content": "hi"}],
+                        stream=True,
+                        model_max_retries=1,
+                        model_retry_sleep=sleeps.append,
+                    )))
+
+                self.assertEqual(chunks[0]["choices"][0]["delta"]["content"], "ok")
+                self.assertEqual(sleeps, [0.5])
+                events = get_recent_model_calls()
+                self.assertEqual([event["status"] for event in events], ["failed", "completed"])
+                self.assertEqual(events[0]["error_status_code"], 429)
+                self.assertEqual(events[0]["error_taxonomy"], "rate_limit")
+
+    def test_native_http_provider_error_status_text_does_not_hide_http_code(self):
+        from models.model_provider_errors import provider_error_response
+        from models.model_retry import build_retry_decision
+
+        error = provider_error_response({
+            "message": "rate limit",
+            "status": "error",
+            "http_code": "429",
+            "retry_after_ms": 500,
+        })
+        decision = build_retry_decision(error, attempt=0, max_retries=1)
+
+        self.assertEqual(error["status_code"], 429)
+        self.assertEqual(error["retry_after_ms"], 500)
+        self.assertEqual(decision.taxonomy, "rate_limit")
+        self.assertTrue(decision.should_retry)
+        self.assertEqual(decision.delay_seconds, 0.5)
 
     def test_agent_bridge_modelscope_real_sync_uses_shared_retry_after_without_local_retry(self):
         from unittest.mock import patch

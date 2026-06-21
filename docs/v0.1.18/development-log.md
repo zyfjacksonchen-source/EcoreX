@@ -773,3 +773,22 @@
     taxonomy, and adjacent model capability/Responses/gate regression coverage.
     R18-04-C remains PARTIAL pending the remaining native provider and legacy
     retry-loop migrations.
+- Extended native HTTP error normalization to Doubao, Moonshot, and MiniMax:
+  - Reused `models/model_provider_errors.py` for the three OpenAI-compatible
+    native agent adapters so HTTP non-200 responses and SSE provider error
+    chunks return typed `error` / `message` / `status_code` evidence instead of
+    raw text-only failures.
+  - MiniMax SSE errors now preserve provider `http_code` as retry status
+    evidence, including top-level and nested MiniMax error shapes, while all
+    three adapters preserve separate `retry_after`, `retry_after_seconds`, and
+    `retry_after_ms` fields for the shared retry parser. Error payloads with a
+    textual `status` or `status_code` such as `status=error` no longer hide
+    numeric `http_code` evidence.
+  - Focused native HTTP provider tests now cover DeepSeek, MiMo, Doubao,
+    Moonshot, and MiniMax across sync 429 Retry-After retry, sync non-JSON 400
+    fail-closed behavior, stream HTTP retry before output, pre-output SSE
+    `retry_after_ms` retry, top-level `http_code` retry evidence, textual
+    status/status_code plus numeric `http_code` precedence, and
+    post-output retry suppression without a second provider call. R18-04-C
+    remains PARTIAL pending the remaining special native providers, direct-chat
+    local retry-loop migration, and vision/image model-call surfaces.
