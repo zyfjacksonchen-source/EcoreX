@@ -408,6 +408,8 @@ class AgentStreamExecutor:
                 emit_event=self._emit_event,
                 cancel_event=self.cancel_event,
             )
+        except AgentCancelledError:
+            raise
         except Exception as e:
             logger.warning(f"[Agent] desktop tool permission check skipped: {e}")
             risky = (tool_name or "").strip().lower() in {
@@ -2329,6 +2331,10 @@ class AgentStreamExecutor:
         permission_tool_name, permission_arguments = self._permission_proxy_for_tool(tool, tool_name, arguments)
         permission = self._authorize_tool_execution(permission_tool_name, tool_id, permission_arguments)
         if not permission.get("allowed", True):
+            if permission.get("cancelled"):
+                raise AgentCancelledError(
+                    permission.get("reason") or "agent cancelled while waiting for tool permission"
+                )
             reason = permission.get("reason") or "User denied local tool execution."
             self._force_text_response_once("permission-denied")
             result = {

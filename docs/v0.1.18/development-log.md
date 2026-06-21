@@ -488,3 +488,19 @@
     non-ModelScope zero-token text failure, and native AgentBridge suppression
     of inner legacy reply spans. Qianfan factory/reply-text payload regressions
     still pass after bot_factory wrapping.
+- Added the permission-wait cancellation hardening slice:
+  - `ToolPermissionBroker.authorize()` now marks cancellation during an
+    interactive permission wait with `cancelled=true` while still cleaning the
+    pending request.
+  - `AgentStreamExecutor` now upgrades that structured permission decision to
+    `AgentCancelledError`, so a user stop during a shell/browser/MCP approval
+    prompt follows the normal `agent_cancelled` / `run.cancelled` terminal path
+    instead of becoming a permission-denied tool result and another model turn.
+  - The permission broker path also preserves cancellation exception passthrough
+    if a future broker implementation raises `AgentCancelledError` directly.
+  - Focused backend unittest coverage passed for broker pending cleanup,
+    AgentStream cancellation upgrade, run-stream cancelled terminal/history
+    repair, existing permission denial behavior, capability permission
+    shortcuts, active-request waiting-permission snapshots, worker
+    cancellation/finalization, scheduler cancellation, and bash cancel-aware
+    subprocess behavior.

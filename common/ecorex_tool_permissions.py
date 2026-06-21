@@ -403,7 +403,11 @@ class ToolPermissionBroker:
         decision: Optional[Decision] = None
         while time.time() < deadline:
             if cancel_event is not None and getattr(cancel_event, "is_set", lambda: False)():
-                decision = {"allowed": False, "reason": "User stopped the current task."}
+                decision = {
+                    "allowed": False,
+                    "reason": "User stopped the current task.",
+                    "cancelled": True,
+                }
                 break
             with self._condition:
                 if request_id in self._decisions:

@@ -2753,6 +2753,122 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertIn("Permission blocked", result["result"])
         self.assertTrue(executor._force_text_response_next_turn)
 
+    def test_permission_wait_cancel_raises_agent_cancelled(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+        from agent.protocol.cancel import AgentCancelledError
+
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=types.SimpleNamespace(),
+            system_prompt="",
+            tools=[
+                types.SimpleNamespace(
+                    name="bash",
+                    description="run shell",
+                    params={"type": "object", "properties": {}},
+                )
+            ],
+        )
+
+        with patch.object(
+            executor,
+            "_authorize_tool_execution",
+            return_value={
+                "allowed": False,
+                "reason": "User stopped the current task.",
+                "cancelled": True,
+            },
+        ):
+            with self.assertRaises(AgentCancelledError):
+                executor._execute_tool({
+                    "id": "tool-call-cancelled-permission",
+                    "name": "bash",
+                    "arguments": {"command": "whoami"},
+                })
+
+        self.assertFalse(executor._force_text_response_next_turn)
+
+    def test_run_stream_permission_wait_cancel_injects_tool_result(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        class FakeModel:
+            model = "fake-model"
+
+            def call_stream(self, request):
+                yield {
+                    "choices": [{
+                        "delta": {
+                            "tool_calls": [{
+                                "index": 0,
+                                "id": "tool-call-run-cancelled-permission",
+                                "function": {
+                                    "name": "bash",
+                                    "arguments": json.dumps({"command": "whoami"}),
+                                },
+                            }]
+                        },
+                        "finish_reason": "tool_calls",
+                    }]
+                }
+
+        class FakeAgent:
+            last_usage = {}
+            memory_manager = None
+            max_context_tokens = 10000
+
+            @staticmethod
+            def _estimate_message_tokens(message):
+                return 1
+
+            @staticmethod
+            def _get_model_context_window():
+                return 10000
+
+            @staticmethod
+            def _get_context_reserve_tokens():
+                return 1000
+
+        events = []
+        executor = AgentStreamExecutor(
+            agent=FakeAgent(),
+            model=FakeModel(),
+            system_prompt="",
+            tools=[
+                types.SimpleNamespace(
+                    name="bash",
+                    description="run shell",
+                    params={"type": "object", "properties": {}},
+                )
+            ],
+            on_event=lambda event: events.append(event),
+            messages=[{"role": "user", "content": [{"type": "text", "text": "run whoami"}]}],
+        )
+
+        with patch.object(
+            executor,
+            "_authorize_tool_execution",
+            return_value={
+                "allowed": False,
+                "reason": "User stopped the current task.",
+                "cancelled": True,
+            },
+        ):
+            final_response = executor.run_stream("run whoami")
+
+        self.assertEqual(final_response, "_(Cancelled)_")
+        event_types = [event["type"] for event in events]
+        self.assertIn("agent_cancelled", event_types)
+        self.assertTrue(events[-1]["data"]["cancelled"])
+
+        tool_result_message = executor.messages[-2]
+        self.assertEqual(tool_result_message["role"], "user")
+        self.assertEqual(tool_result_message["content"][0]["type"], "tool_result")
+        self.assertEqual(
+            tool_result_message["content"][0]["tool_use_id"],
+            "tool-call-run-cancelled-permission",
+        )
+        self.assertTrue(tool_result_message["content"][0]["is_error"])
+
     def test_forced_text_turn_sends_no_tool_schema_once(self):
         from agent.protocol.agent_stream import AgentStreamExecutor
 
@@ -4155,6 +4271,48 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertFalse(web_fetch_decision["allowed"])
         self.assertFalse(web_search_decision["allowed"])
         self.assertFalse(vision_decision["allowed"])
+
+    def test_permission_broker_marks_cancelled_wait_and_clears_pending(self):
+        from common.ecorex_tool_permissions import ToolPermissionBroker
+
+        old_desktop = os.environ.get("ECOREX_DESKTOP")
+        old_user_data = os.environ.get("ECOREX_DESKTOP_USER_DATA")
+        with tempfile.TemporaryDirectory() as user_data:
+            os.environ["ECOREX_DESKTOP"] = "1"
+            os.environ["ECOREX_DESKTOP_USER_DATA"] = user_data
+            try:
+                broker = ToolPermissionBroker()
+                broker.set_mode("smart-ask")
+                cancel_event = threading.Event()
+                cancel_event.set()
+                events = []
+
+                decision = broker.authorize(
+                    "bash",
+                    "tool-cancel-permission",
+                    {"command": "echo should-not-run"},
+                    emit_event=lambda event_type, payload: events.append((event_type, payload)),
+                    cancel_event=cancel_event,
+                    timeout_seconds=1,
+                )
+
+                pending = broker.list_pending()["pending"]
+            finally:
+                if old_desktop is None:
+                    os.environ.pop("ECOREX_DESKTOP", None)
+                else:
+                    os.environ["ECOREX_DESKTOP"] = old_desktop
+                if old_user_data is None:
+                    os.environ.pop("ECOREX_DESKTOP_USER_DATA", None)
+                else:
+                    os.environ["ECOREX_DESKTOP_USER_DATA"] = old_user_data
+
+        self.assertFalse(decision["allowed"])
+        self.assertTrue(decision.get("cancelled"))
+        self.assertEqual(decision["reason"], "User stopped the current task.")
+        self.assertEqual(pending, [])
+        self.assertEqual(events[0][0], "tool_permission_request")
+        self.assertEqual(events[0][1]["tool"], "bash")
 
     def test_non_web_channel_dangerous_tools_still_fail_closed(self):
         from common.ecorex_tool_permissions import ToolPermissionBroker
