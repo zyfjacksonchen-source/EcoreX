@@ -9,6 +9,7 @@ from bridge.context import ContextType
 from bridge.reply import Reply, ReplyType
 from common.log import logger
 from config import conf, load_config
+from models.model_provider_errors import provider_error_response
 from .dashscope_session import DashscopeSession
 import os
 import dashscope
@@ -324,9 +325,16 @@ class DashscopeBot(Bot):
                     **parameters
                 )
 
-            if response.status_code == HTTPStatus.OK:
-                # Convert response to dict to avoid DashScope object KeyError issues
-                resp_dict = self._response_to_dict(response)
+            # Convert response to dict before status checks to avoid DashScope
+            # proxy objects raising from direct attribute probes.
+            resp_dict = self._response_to_dict(response)
+            status_code = resp_dict.get("status_code", 500)
+            try:
+                status_code_for_compare = int(status_code)
+            except (TypeError, ValueError):
+                status_code_for_compare = status_code
+
+            if status_code_for_compare == HTTPStatus.OK:
                 choice = resp_dict["output"]["choices"][0]
                 message = choice.get("message", {})
                 content = message.get("content", "")
@@ -359,20 +367,31 @@ class DashscopeBot(Bot):
                     }
                 }
             else:
-                logger.error(f"[DASHSCOPE] API error: {response.code} - {response.message}")
-                return {
-                    "error": True,
-                    "message": response.message,
-                    "status_code": response.status_code
-                }
+                err_msg = resp_dict.get("message", "Unknown error")
+                err_code = resp_dict.get("code", "")
+                logger.error(f"[DASHSCOPE] API error: {err_code} - {err_msg}")
+                return provider_error_response(
+                    resp_dict,
+                    message=err_msg,
+                    status_code=status_code,
+                    retry_after=resp_dict.get("retry_after"),
+                    retry_after_seconds=resp_dict.get("retry_after_seconds"),
+                    retry_after_ms=resp_dict.get("retry_after_ms"),
+                )
 
+        except TimeoutError as e:
+            logger.error(f"[DASHSCOPE] sync response timeout: {e}")
+            return provider_error_response(message=f"DashScope request timed out: {e}", status_code=504)
+        except ConnectionError as e:
+            logger.error(f"[DASHSCOPE] sync response connection error: {e}")
+            return provider_error_response(
+                {"type": "network_error"},
+                message=f"DashScope connection failed: {e}",
+                status_code=503,
+            )
         except Exception as e:
             logger.error(f"[DASHSCOPE] sync response error: {e}")
-            return {
-                "error": True,
-                "message": str(e),
-                "status_code": 500
-            }
+            return provider_error_response(message=str(e), status_code=500)
     
     def _handle_stream_response(self, model_name, messages, parameters):
         """Handle streaming DashScope API response"""
@@ -407,12 +426,15 @@ class DashscopeBot(Bot):
                     err_code = resp_dict.get("code", "")
                     err_msg = resp_dict.get("message", "Unknown error")
                     logger.error(f"[DASHSCOPE] Stream error: {err_code} - {err_msg}")
-                    yield {
-                        "error": True,
-                        "message": err_msg,
-                        "status_code": status_code
-                    }
-                    continue
+                    yield provider_error_response(
+                        resp_dict,
+                        message=err_msg,
+                        status_code=status_code,
+                        retry_after=resp_dict.get("retry_after"),
+                        retry_after_seconds=resp_dict.get("retry_after_seconds"),
+                        retry_after_ms=resp_dict.get("retry_after_ms"),
+                    )
+                    return
 
                 choices = resp_dict.get("output", {}).get("choices", [])
                 if not choices:
@@ -461,13 +483,19 @@ class DashscopeBot(Bot):
 
                 yield openai_chunk
 
+        except TimeoutError as e:
+            logger.error(f"[DASHSCOPE] stream response timeout: {e}", exc_info=True)
+            yield provider_error_response(message=f"DashScope request timed out: {e}", status_code=504)
+        except ConnectionError as e:
+            logger.error(f"[DASHSCOPE] stream response connection error: {e}", exc_info=True)
+            yield provider_error_response(
+                {"type": "network_error"},
+                message=f"DashScope connection failed: {e}",
+                status_code=503,
+            )
         except Exception as e:
             logger.error(f"[DASHSCOPE] stream response error: {e}", exc_info=True)
-            yield {
-                "error": True,
-                "message": str(e),
-                "status_code": 500
-            }
+            yield provider_error_response(message=str(e), status_code=500)
     
     @staticmethod
     def _response_to_dict(response) -> dict:
@@ -508,7 +536,21 @@ class DashscopeBot(Bot):
 
         result = {}
         # Extract known top-level fields safely
-        for attr in ("request_id", "status_code", "code", "message", "output", "usage"):
+        for attr in (
+            "request_id",
+            "status_code",
+            "code",
+            "message",
+            "output",
+            "usage",
+            "http_code",
+            "status",
+            "type",
+            "error_type",
+            "retry_after",
+            "retry_after_seconds",
+            "retry_after_ms",
+        ):
             val = _safe_getattr(response, attr)
             if val is _SENTINEL:
                 try:

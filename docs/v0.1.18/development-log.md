@@ -869,3 +869,33 @@
     regressions. R18-04-C remains PARTIAL because LinkAI/Zhipu/Azure/ModelScope
     image generation, remaining native provider error normalization, and legacy
     direct-chat retry loops are still pending.
+- Extended special native provider error normalization to Claude, Zhipu,
+  Gemini, DashScope, and LinkAI:
+  - Claude, Gemini, and LinkAI raw HTTP agent sync/stream paths now return
+    typed `provider_error_response` / `http_error_response` dictionaries for
+    non-200 responses, provider SSE error events, transport exceptions, and
+    post-output stream errors. This preserves status, code/type, message, and
+    Retry-After evidence for the shared native gateway instead of throwing
+    text-only exceptions or hiding retry evidence inside provider-specific
+    shapes.
+  - Zhipu SDK exceptions now normalize response-backed HTTP failures, nested
+    provider error bodies, top-level `status/http_code/type/error_type`, and
+    `retry_after` / `retry_after_seconds` / `retry_after_ms` values before they
+    reach AgentBridge. DashScope SDK responses now use the same typed error
+    shape for sync and streaming non-OK chunks, including timeout/network
+    classifications and retry-after fields from SDK proxy objects.
+  - Focused tests cover Claude/Gemini/LinkAI sync 429 Retry-After retry,
+    non-JSON 400 fail-closed behavior, stream HTTP retry before output,
+    pre-output SSE provider errors with millisecond Retry-After evidence,
+    post-output retry suppression, timeout and connection retry taxonomy,
+    `stream_output_started` suppression reason, Gemini `data:{...}` SSE
+    prefixes, Zhipu SDK exception retry/fail-closed behavior, and DashScope SDK
+    sync/stream error normalization, including proxy objects that raise from
+    direct attribute probes. Claude and Zhipu stream setup exception fallbacks
+    now snapshot typed error responses before returning generators, avoiding
+    Python 3 cleared-exception-variable `NameError` paths. The full model
+    telemetry suite and
+    model-capability/Responses/promotion-gate regression set passed. R18-04-C
+    remains PARTIAL pending non-OpenAI image retry-loop migration, legacy
+    direct-chat retry-loop migration, and provider-specific edges outside the
+    AgentBridge native gateway.

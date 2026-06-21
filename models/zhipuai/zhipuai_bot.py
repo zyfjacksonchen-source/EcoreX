@@ -12,6 +12,7 @@ from bridge.context import ContextType
 from bridge.reply import Reply, ReplyType
 from common.log import logger
 from config import conf, load_config
+from models.model_provider_errors import http_error_response, provider_error_response, response_retry_after
 from zai import ZhipuAiClient
 
 
@@ -33,6 +34,76 @@ class ZHIPUAIBot(Bot, ZhipuAIImage):
             self.client = ZhipuAiClient(api_key=api_key, base_url=api_base)
         else:
             self.client = ZhipuAiClient(api_key=api_key)
+
+    @staticmethod
+    def _provider_error_from_exception(exc, *, default_status=500):
+        response = getattr(exc, "response", None)
+        if response is not None and getattr(response, "status_code", None) not in (None, ""):
+            return http_error_response(response)
+
+        error_payload = {}
+        for key in (
+            "message",
+            "code",
+            "error_code",
+            "type",
+            "error_type",
+            "status_code",
+            "http_code",
+            "status",
+            "retry_after",
+            "retry_after_seconds",
+            "retry_after_ms",
+        ):
+            value = getattr(exc, key, None)
+            if value not in (None, ""):
+                error_payload[key] = value
+        body = getattr(exc, "body", None) or getattr(exc, "data", None) or getattr(exc, "error", None)
+        if isinstance(body, dict):
+            nested = body.get("error")
+            for key in (
+                "message",
+                "msg",
+                "code",
+                "error_code",
+                "type",
+                "error_type",
+                "status_code",
+                "http_code",
+                "status",
+                "retry_after",
+                "retry_after_seconds",
+                "retry_after_ms",
+            ):
+                if body.get(key) not in (None, "") and key not in error_payload:
+                    error_payload[key] = body.get(key)
+            if isinstance(nested, dict):
+                error_payload.update(nested)
+            else:
+                error_payload.update({k: v for k, v in body.items() if v not in (None, "")})
+        status_code = (
+            error_payload.get("status_code")
+            or error_payload.get("http_code")
+            or error_payload.get("status")
+            or getattr(exc, "status_code", None)
+            or getattr(exc, "http_status", None)
+            or default_status
+        )
+        retry_after = None
+        headers = getattr(exc, "headers", None) or {}
+        getter = getattr(headers, "get", None)
+        if callable(getter):
+            retry_after = getter("Retry-After") or getter("retry-after")
+        if retry_after is None and response is not None:
+            retry_after = response_retry_after(response)
+        return provider_error_response(
+            error_payload or None,
+            message=str(exc),
+            status_code=status_code,
+            retry_after=retry_after,
+            retry_after_seconds=error_payload.get("retry_after_seconds"),
+            retry_after_ms=error_payload.get("retry_after_ms"),
+        )
 
     def reply(self, query, context=None):
         # acquire reply content
@@ -258,20 +329,13 @@ class ZHIPUAIBot(Bot, ZhipuAIImage):
         except Exception as e:
             error_msg = str(e)
             logger.error(f"[ZHIPU_AI] call_with_tools error: {error_msg}")
+            error_response = self._provider_error_from_exception(e)
             if stream:
                 def error_generator():
-                    yield {
-                        "error": True,
-                        "message": error_msg,
-                        "status_code": 500
-                    }
+                    yield error_response
                 return error_generator()
             else:
-                return {
-                    "error": True,
-                    "message": error_msg,
-                    "status_code": 500
-                }
+                return error_response
     
     def _handle_sync_response(self, request_params):
         """Handle synchronous ZhipuAI API response"""
@@ -304,11 +368,7 @@ class ZHIPUAIBot(Bot, ZhipuAIImage):
             
         except Exception as e:
             logger.error(f"[ZHIPU_AI] sync response error: {e}")
-            return {
-                "error": True,
-                "message": str(e),
-                "status_code": 500
-            }
+            return self._provider_error_from_exception(e)
     
     def _handle_stream_response(self, request_params):
         """Handle streaming ZhipuAI API response"""
@@ -375,11 +435,7 @@ class ZHIPUAIBot(Bot, ZhipuAIImage):
                 
         except Exception as e:
             logger.error(f"[ZHIPU_AI] stream response error: {e}")
-            yield {
-                "error": True,
-                "message": str(e),
-                "status_code": 500
-            }
+            yield self._provider_error_from_exception(e)
     
     def _convert_tools_to_zhipu_format(self, tools):
         """

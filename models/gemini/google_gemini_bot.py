@@ -23,6 +23,7 @@ from common.log import logger
 from config import conf
 from models.chatgpt.chat_gpt_session import ChatGPTSession
 from models.baidu.baidu_wenxin_session import BaiduWenxinSession
+from models.model_provider_errors import http_error_response, provider_error_response
 
 
 # OpenAI对话模型API (可用)
@@ -506,14 +507,13 @@ class GoogleGeminiBot(Bot):
             
             # Check HTTP status for stream mode (for non-stream, it's checked in handler)
             if stream and response.status_code != 200:
-                error_text = response.text
-                logger.error(f"[Gemini] API error ({response.status_code}): {error_text}")
+                error_response = http_error_response(response)
+                logger.error(
+                    f"[Gemini] API error ({response.status_code}): "
+                    f"{error_response.get('message')}"
+                )
                 def error_generator():
-                    yield {
-                        "error": True,
-                        "message": f"Gemini API error: {error_text}",
-                        "status_code": response.status_code
-                    }
+                    yield error_response
                 return error_generator()
             
             if stream:
@@ -521,23 +521,52 @@ class GoogleGeminiBot(Bot):
             else:
                 return self._handle_gemini_rest_sync_response(response, model_name)
                 
+        except requests.exceptions.Timeout as e:
+            logger.error(f"[Gemini] call_with_tools timeout: {e}", exc_info=True)
+            if stream:
+                def error_generator():
+                    yield provider_error_response(message=f"Gemini request timed out: {e}", status_code=504)
+                return error_generator()
+            return provider_error_response(message=f"Gemini request timed out: {e}", status_code=504)
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"[Gemini] call_with_tools connection error: {e}", exc_info=True)
+            if stream:
+                def error_generator():
+                    yield provider_error_response(
+                        {"type": "network_error"},
+                        message=f"Gemini connection failed: {e}",
+                        status_code=503,
+                    )
+                return error_generator()
+            return provider_error_response(
+                {"type": "network_error"},
+                message=f"Gemini connection failed: {e}",
+                status_code=503,
+            )
+        except requests.exceptions.RequestException as e:
+            logger.error(f"[Gemini] call_with_tools request error: {e}", exc_info=True)
+            if stream:
+                def error_generator():
+                    yield provider_error_response(
+                        {"type": "network_error"},
+                        message=f"Gemini request failed: {e}",
+                        status_code=503,
+                    )
+                return error_generator()
+            return provider_error_response(
+                {"type": "network_error"},
+                message=f"Gemini request failed: {e}",
+                status_code=503,
+            )
         except Exception as e:
             logger.error(f"[Gemini] call_with_tools error: {e}", exc_info=True)
             error_msg = str(e)  # Capture error message before creating generator
             if stream:
                 def error_generator():
-                    yield {
-                        "error": True,
-                        "message": error_msg,
-                        "status_code": 500
-                    }
+                    yield provider_error_response(message=error_msg, status_code=500)
                 return error_generator()
             else:
-                return {
-                    "error": True,
-                    "message": str(e),
-                    "status_code": 500
-                }
+                return provider_error_response(message=str(e), status_code=500)
     
     def _convert_tools_to_gemini_rest_format(self, tools_list):
         """
@@ -581,13 +610,12 @@ class GoogleGeminiBot(Bot):
         """Handle Gemini REST API sync response and convert to OpenAI format"""
         try:
             if response.status_code != 200:
-                error_text = response.text
-                logger.error(f"[Gemini] API error ({response.status_code}): {error_text}")
-                return {
-                    "error": True,
-                    "message": f"Gemini API error: {error_text}",
-                    "status_code": response.status_code
-                }
+                error_response = http_error_response(response)
+                logger.error(
+                    f"[Gemini] API error ({response.status_code}): "
+                    f"{error_response.get('message')}"
+                )
+                return error_response
             
             data = response.json()
             logger.debug(f"[Gemini] Response data: {json.dumps(data, ensure_ascii=False)[:500]}")
@@ -687,9 +715,10 @@ class GoogleGeminiBot(Bot):
                 
                 line = line.decode('utf-8')
                 
-                # Skip SSE prefixes
-                if line.startswith('data: '):
-                    line = line[6:]
+                # Skip SSE prefixes; providers/proxies may emit either
+                # "data: {...}" or the equally valid "data:{...}" form.
+                if line.startswith('data:'):
+                    line = line[5:].lstrip()
                 
                 if not line or line == '[DONE]':
                     continue
@@ -698,6 +727,43 @@ class GoogleGeminiBot(Bot):
                     chunk_data = json.loads(line)
                     chunk_count += 1
                     raw_chunks.append(chunk_data)
+
+                    if chunk_data.get("error"):
+                        error_data = chunk_data.get("error")
+                        if isinstance(error_data, dict):
+                            error_data = dict(error_data)
+                            for key in (
+                                "message",
+                                "msg",
+                                "code",
+                                "error_code",
+                                "type",
+                                "error_type",
+                                "http_code",
+                                "status_code",
+                                "status",
+                                "retry_after",
+                                "retry_after_seconds",
+                                "retry_after_ms",
+                            ):
+                                if key in chunk_data and key not in error_data:
+                                    error_data[key] = chunk_data.get(key)
+                        error_response = provider_error_response(
+                            error_data,
+                            message="Gemini stream provider error",
+                            status_code=(
+                                chunk_data.get("status_code")
+                                or chunk_data.get("http_code")
+                                or chunk_data.get("status")
+                                or 500
+                            ),
+                            retry_after=chunk_data.get("retry_after"),
+                            retry_after_seconds=chunk_data.get("retry_after_seconds"),
+                            retry_after_ms=chunk_data.get("retry_after_ms"),
+                        )
+                        logger.error(f"[Gemini] stream error: {error_response.get('message')}")
+                        yield error_response
+                        return
                     
                     candidates = chunk_data.get("candidates", [])
                     if not candidates:
@@ -832,14 +898,27 @@ class GoogleGeminiBot(Bot):
                 }]
             }
                     
+        except requests.exceptions.Timeout as e:
+            logger.error(f"[Gemini] stream response timeout: {e}", exc_info=True)
+            yield provider_error_response(message=f"Gemini request timed out: {e}", status_code=504)
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"[Gemini] stream response connection error: {e}", exc_info=True)
+            yield provider_error_response(
+                {"type": "network_error"},
+                message=f"Gemini connection failed: {e}",
+                status_code=503,
+            )
+        except requests.exceptions.RequestException as e:
+            logger.error(f"[Gemini] stream response request error: {e}", exc_info=True)
+            yield provider_error_response(
+                {"type": "network_error"},
+                message=f"Gemini request failed: {e}",
+                status_code=503,
+            )
         except Exception as e:
             logger.error(f"[Gemini] stream response error: {e}", exc_info=True)
             error_msg = str(e)
-            yield {
-                "error": True,
-                "message": error_msg,
-                "status_code": 500
-            }
+            yield provider_error_response(message=error_msg, status_code=500)
     
     def _convert_tools_to_gemini_format(self, openai_tools):
         """Convert OpenAI tool format to Gemini function declarations"""

@@ -697,6 +697,891 @@ class TestModelTelemetry(unittest.TestCase):
 
         raise AssertionError("unsupported provider")
 
+    def _special_native_http_provider_bot_for_tests(self, provider):
+        if provider == "claude":
+            from models.claudeapi.claude_api_bot import ClaudeAPIBot
+
+            class TestClaudeBot(ClaudeAPIBot):
+                def __init__(self):
+                    self.args = {"model": "claude-3-5-sonnet"}
+
+                @property
+                def api_key(self):
+                    return "test-key"
+
+                @property
+                def api_base(self):
+                    return "https://claude.test/v1"
+
+                @property
+                def proxy(self):
+                    return None
+
+            return {
+                "bot": TestClaudeBot(),
+                "model": "claude-3-5-sonnet",
+                "provider": "claude",
+                "patch": "models.claudeapi.claude_api_bot.requests.post",
+                "success_payload": {
+                    "id": "msg-test",
+                    "model": "claude-3-5-sonnet",
+                    "content": [{"type": "text", "text": "ok"}],
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 1, "output_tokens": 2},
+                },
+                "stream_success_lines": [
+                    b'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"ok"}}',
+                    b'data: {"type":"message_stop"}',
+                ],
+                "stream_error_lines": [
+                    b'data: {"type":"error","error":{"message":"rate limit","code":"rate_limit_exceeded","type":"rate_limit"},"status_code":429,"retry_after_ms":500}',
+                ],
+                "stream_post_output_error_lines": [
+                    b'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"partial"}}',
+                    b'data: {"type":"error","error":{"message":"server unavailable","code":"server_error","type":"server_error"},"status_code":503,"retry_after":"0.5"}',
+                ],
+            }
+
+        if provider == "gemini":
+            from models.gemini.google_gemini_bot import GoogleGeminiBot
+
+            class TestGeminiBot(GoogleGeminiBot):
+                def __init__(self):
+                    pass
+
+                @property
+                def api_key(self):
+                    return "test-key"
+
+                @property
+                def api_base(self):
+                    return "https://gemini.test"
+
+                @property
+                def model(self):
+                    return "gemini-3.5-flash"
+
+            return {
+                "bot": TestGeminiBot(),
+                "model": "gemini-3.5-flash",
+                "provider": "gemini",
+                "patch": "models.gemini.google_gemini_bot.requests.post",
+                "success_payload": {
+                    "candidates": [{
+                        "content": {"parts": [{"text": "ok"}]},
+                        "finishReason": "STOP",
+                    }],
+                    "usageMetadata": {
+                        "promptTokenCount": 1,
+                        "candidatesTokenCount": 2,
+                        "totalTokenCount": 3,
+                    },
+                },
+                "stream_success_lines": [
+                    b'data: {"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}',
+                ],
+                "stream_error_lines": [
+                    b'data:{"error":{"message":"rate limit","code":"rate_limit_exceeded","type":"rate_limit"},"status_code":429,"retry_after_ms":500}',
+                ],
+                "stream_post_output_error_lines": [
+                    b'data: {"candidates":[{"content":{"parts":[{"text":"partial"}]}}]}',
+                    b'data: {"error":{"message":"server unavailable","code":"server_error","type":"server_error"},"status_code":503,"retry_after":"0.5"}',
+                ],
+            }
+
+        if provider == "linkai":
+            from models.linkai.link_ai_bot import LinkAIBot
+
+            class TestLinkAIBot(LinkAIBot):
+                def __init__(self):
+                    self.args = {}
+
+            return {
+                "bot": TestLinkAIBot(),
+                "model": "gpt-4o-mini",
+                "provider": "linkai",
+                "patch": "models.linkai.link_ai_bot.requests.post",
+                "conf_patch": "models.linkai.link_ai_bot.conf",
+                "conf": {
+                    "channel_type": "web",
+                    "linkai_api_key": "test-key",
+                    "linkai_api_base": "https://linkai.test",
+                    "model": "gpt-4o-mini",
+                    "temperature": 0.7,
+                    "top_p": 1,
+                    "frequency_penalty": 0,
+                    "presence_penalty": 0,
+                    "request_timeout": 180,
+                },
+                "success_payload": {
+                    "choices": [{
+                        "message": {"content": "ok"},
+                        "finish_reason": "stop",
+                    }],
+                    "usage": {
+                        "prompt_tokens": 1,
+                        "completion_tokens": 2,
+                        "total_tokens": 3,
+                    },
+                },
+                "stream_success_lines": [
+                    b'data: {"choices":[{"delta":{"content":"ok"}}]}',
+                    b'data: [DONE]',
+                ],
+                "stream_error_lines": [
+                    b'data: {"type":"error","error":{"message":"rate limit","code":"rate_limit_exceeded","type":"rate_limit","http_code":"429"},"retry_after_ms":500}',
+                ],
+                "stream_post_output_error_lines": [
+                    b'data: {"choices":[{"delta":{"content":"partial"}}]}',
+                    b'data: {"type":"error","error":{"message":"server unavailable","code":"server_error","type":"server_error","http_code":"503"},"retry_after":"0.5"}',
+                ],
+            }
+
+        raise AssertionError("unsupported special provider")
+
+    def _with_provider_patches(self, spec, post_side_effect):
+        from contextlib import ExitStack
+        from unittest.mock import MagicMock, patch
+
+        stack = ExitStack()
+        stack.enter_context(patch(spec["patch"], side_effect=post_side_effect))
+        conf_patch = spec.get("conf_patch")
+        if conf_patch:
+            fake_conf = MagicMock()
+            values = dict(spec.get("conf") or {})
+            fake_conf.get.side_effect = lambda key, default=None: values.get(key, default)
+            stack.enter_context(patch(conf_patch, return_value=fake_conf))
+        return stack
+
+    def test_special_native_http_providers_sync_retry_after_and_fail_closed(self):
+        import requests
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import (
+            get_recent_model_calls,
+            reset_model_call_telemetry_for_tests,
+        )
+
+        for provider in ("claude", "gemini", "linkai"):
+            with self.subTest(provider=provider, mode="retry_after"):
+                reset_model_call_telemetry_for_tests()
+                spec = self._special_native_http_provider_bot_for_tests(provider)
+                responses = [
+                    self._FakeHTTPResponse(
+                        429,
+                        {
+                            "error": {
+                                "message": "rate limit",
+                                "code": "rate_limit_exceeded",
+                                "type": "rate_limit",
+                            }
+                        },
+                        headers={"Retry-After": "0.25"},
+                    ),
+                    self._FakeHTTPResponse(200, spec["success_payload"]),
+                ]
+                posts = []
+
+                def fake_post(url, headers=None, json=None, timeout=None, **kwargs):
+                    posts.append({"url": url, "headers": headers, "json": json, "timeout": timeout, **kwargs})
+                    return responses.pop(0)
+
+                sleeps = []
+                model = self._native_agent_model(
+                    spec["bot"],
+                    model_name=spec["model"],
+                    provider=spec["provider"],
+                )
+
+                with self._with_provider_patches(spec, fake_post):
+                    result = model.call(LLMRequest(
+                        messages=[{"role": "user", "content": "hi"}],
+                        model_max_retries=1,
+                        model_retry_sleep=sleeps.append,
+                    ))
+
+                self.assertEqual(result["choices"][0]["message"]["content"], "ok")
+                self.assertEqual(sleeps, [0.25])
+                self.assertEqual(len(posts), 2)
+                events = get_recent_model_calls()
+                self.assertEqual([event["status"] for event in events], ["failed", "completed"])
+                self.assertEqual(events[0]["provider"], spec["provider"])
+                self.assertEqual(events[0]["error_taxonomy"], "rate_limit")
+                self.assertEqual(events[0]["error_code"], "rate_limit_exceeded")
+                self.assertEqual(events[0]["error_type"], "rate_limit")
+
+            with self.subTest(provider=provider, mode="fail_closed_4xx"):
+                reset_model_call_telemetry_for_tests()
+                spec = self._special_native_http_provider_bot_for_tests(provider)
+                posts = []
+
+                def fake_post(url, headers=None, json=None, timeout=None, **kwargs):
+                    posts.append({"url": url, "headers": headers, "json": json, "timeout": timeout, **kwargs})
+                    return self._FakeHTTPResponse(
+                        400,
+                        text="bad request text",
+                        json_error=ValueError("not json"),
+                    )
+
+                sleeps = []
+                model = self._native_agent_model(
+                    spec["bot"],
+                    model_name=spec["model"],
+                    provider=spec["provider"],
+                )
+
+                with self._with_provider_patches(spec, fake_post):
+                    result = model.call(LLMRequest(
+                        messages=[{"role": "user", "content": "hi"}],
+                        model_max_retries=2,
+                        model_retry_sleep=sleeps.append,
+                    ))
+
+                self.assertEqual(result["status_code"], 400)
+                self.assertEqual(result["message"], "bad request text")
+                self.assertEqual(result["error_taxonomy"], "client_error")
+                self.assertFalse(result["retryable"])
+                self.assertEqual(sleeps, [])
+                self.assertEqual(len(posts), 1)
+                event = get_recent_model_calls()[0]
+                self.assertEqual(event["status"], "failed")
+                self.assertEqual(event["error_status_code"], 400)
+                self.assertEqual(event["error_taxonomy"], "client_error")
+
+            with self.subTest(provider=provider, mode="timeout_retry"):
+                reset_model_call_telemetry_for_tests()
+                spec = self._special_native_http_provider_bot_for_tests(provider)
+                responses = [
+                    requests.Timeout("read timeout"),
+                    self._FakeHTTPResponse(200, spec["success_payload"]),
+                ]
+                posts = []
+
+                def fake_post(url, headers=None, json=None, timeout=None, **kwargs):
+                    posts.append({"url": url, "headers": headers, "json": json, "timeout": timeout, **kwargs})
+                    response = responses.pop(0)
+                    if isinstance(response, Exception):
+                        raise response
+                    return response
+
+                sleeps = []
+                model = self._native_agent_model(
+                    spec["bot"],
+                    model_name=spec["model"],
+                    provider=spec["provider"],
+                )
+
+                with self._with_provider_patches(spec, fake_post):
+                    result = model.call(LLMRequest(
+                        messages=[{"role": "user", "content": "hi"}],
+                        model_max_retries=1,
+                        model_retry_sleep=sleeps.append,
+                    ))
+
+                self.assertEqual(result["choices"][0]["message"]["content"], "ok")
+                self.assertEqual(sleeps, [2.0])
+                self.assertEqual(len(posts), 2)
+                events = get_recent_model_calls()
+                self.assertEqual([event["status"] for event in events], ["failed", "completed"])
+                self.assertEqual(events[0]["error_taxonomy"], "timeout")
+
+            with self.subTest(provider=provider, mode="connection_retry"):
+                reset_model_call_telemetry_for_tests()
+                spec = self._special_native_http_provider_bot_for_tests(provider)
+                responses = [
+                    requests.ConnectionError("dns failed"),
+                    self._FakeHTTPResponse(200, spec["success_payload"]),
+                ]
+                posts = []
+
+                def fake_post(url, headers=None, json=None, timeout=None, **kwargs):
+                    posts.append({"url": url, "headers": headers, "json": json, "timeout": timeout, **kwargs})
+                    response = responses.pop(0)
+                    if isinstance(response, Exception):
+                        raise response
+                    return response
+
+                sleeps = []
+                model = self._native_agent_model(
+                    spec["bot"],
+                    model_name=spec["model"],
+                    provider=spec["provider"],
+                )
+
+                with self._with_provider_patches(spec, fake_post):
+                    result = model.call(LLMRequest(
+                        messages=[{"role": "user", "content": "hi"}],
+                        model_max_retries=1,
+                        model_retry_sleep=sleeps.append,
+                    ))
+
+                self.assertEqual(result["choices"][0]["message"]["content"], "ok")
+                self.assertEqual(sleeps, [2.0])
+                self.assertEqual(len(posts), 2)
+                events = get_recent_model_calls()
+                self.assertEqual([event["status"] for event in events], ["failed", "completed"])
+                self.assertEqual(events[0]["error_taxonomy"], "network_error")
+
+    def test_special_native_http_providers_stream_retry_and_suppression(self):
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import (
+            get_recent_model_calls,
+            reset_model_call_telemetry_for_tests,
+        )
+
+        for provider in ("claude", "gemini", "linkai"):
+            with self.subTest(provider=provider, mode="http_retry_after"):
+                reset_model_call_telemetry_for_tests()
+                spec = self._special_native_http_provider_bot_for_tests(provider)
+                responses = [
+                    self._FakeHTTPResponse(
+                        429,
+                        {
+                            "error": {
+                                "message": "rate limit",
+                                "code": "rate_limit_exceeded",
+                                "type": "rate_limit",
+                            }
+                        },
+                        headers={"Retry-After": "0.5"},
+                    ),
+                    self._FakeHTTPResponse(200, lines=spec["stream_success_lines"]),
+                ]
+                posts = []
+
+                def fake_post(url, headers=None, json=None, stream=False, timeout=None, **kwargs):
+                    posts.append({
+                        "url": url,
+                        "headers": headers,
+                        "json": json,
+                        "stream": stream,
+                        "timeout": timeout,
+                        **kwargs,
+                    })
+                    return responses.pop(0)
+
+                sleeps = []
+                model = self._native_agent_model(
+                    spec["bot"],
+                    model_name=spec["model"],
+                    provider=spec["provider"],
+                )
+
+                with self._with_provider_patches(spec, fake_post):
+                    chunks = list(model.call_stream(LLMRequest(
+                        messages=[{"role": "user", "content": "hi"}],
+                        stream=True,
+                        model_max_retries=1,
+                        model_retry_sleep=sleeps.append,
+                    )))
+
+                self.assertEqual(chunks[0]["choices"][0]["delta"]["content"], "ok")
+                self.assertEqual(sleeps, [0.5])
+                self.assertEqual(len(posts), 2)
+                events = get_recent_model_calls()
+                self.assertEqual([event["status"] for event in events], ["failed", "completed"])
+                self.assertEqual(events[0]["error_taxonomy"], "rate_limit")
+
+            with self.subTest(provider=provider, mode="sse_retry_after_ms"):
+                reset_model_call_telemetry_for_tests()
+                spec = self._special_native_http_provider_bot_for_tests(provider)
+                responses = [
+                    self._FakeHTTPResponse(200, lines=spec["stream_error_lines"]),
+                    self._FakeHTTPResponse(200, lines=spec["stream_success_lines"]),
+                ]
+                posts = []
+
+                def fake_post(url, headers=None, json=None, stream=False, timeout=None, **kwargs):
+                    posts.append({
+                        "url": url,
+                        "headers": headers,
+                        "json": json,
+                        "stream": stream,
+                        "timeout": timeout,
+                        **kwargs,
+                    })
+                    return responses.pop(0)
+
+                sleeps = []
+                model = self._native_agent_model(
+                    spec["bot"],
+                    model_name=spec["model"],
+                    provider=spec["provider"],
+                )
+
+                with self._with_provider_patches(spec, fake_post):
+                    chunks = list(model.call_stream(LLMRequest(
+                        messages=[{"role": "user", "content": "hi"}],
+                        stream=True,
+                        model_max_retries=1,
+                        model_retry_sleep=sleeps.append,
+                    )))
+
+                self.assertEqual(chunks[0]["choices"][0]["delta"]["content"], "ok")
+                self.assertEqual(sleeps, [0.5])
+                self.assertEqual(len(posts), 2)
+                events = get_recent_model_calls()
+                self.assertEqual([event["status"] for event in events], ["failed", "completed"])
+                self.assertEqual(events[0]["error_taxonomy"], "rate_limit")
+
+            with self.subTest(provider=provider, mode="post_output_suppression"):
+                reset_model_call_telemetry_for_tests()
+                spec = self._special_native_http_provider_bot_for_tests(provider)
+                posts = []
+
+                def fake_post(url, headers=None, json=None, stream=False, timeout=None, **kwargs):
+                    posts.append({
+                        "url": url,
+                        "headers": headers,
+                        "json": json,
+                        "stream": stream,
+                        "timeout": timeout,
+                        **kwargs,
+                    })
+                    return self._FakeHTTPResponse(
+                        200,
+                        lines=spec["stream_post_output_error_lines"],
+                    )
+
+                sleeps = []
+                model = self._native_agent_model(
+                    spec["bot"],
+                    model_name=spec["model"],
+                    provider=spec["provider"],
+                )
+
+                with self._with_provider_patches(spec, fake_post):
+                    chunks = list(model.call_stream(LLMRequest(
+                        messages=[{"role": "user", "content": "hi"}],
+                        stream=True,
+                        model_max_retries=1,
+                        model_retry_sleep=sleeps.append,
+                    )))
+
+                self.assertEqual(chunks[0]["choices"][0]["delta"]["content"], "partial")
+                self.assertEqual(chunks[1]["status_code"], 503)
+                self.assertTrue(chunks[1]["retryable"])
+                self.assertTrue(chunks[1]["retry_suppressed"])
+                self.assertEqual(chunks[1]["retry_suppressed_reason"], "stream_output_started")
+                self.assertEqual(sleeps, [])
+                self.assertEqual(len(posts), 1)
+                event = get_recent_model_calls()[0]
+                self.assertEqual(event["status"], "failed")
+                self.assertEqual(event["error_taxonomy"], "server_error")
+
+    def test_special_native_http_providers_stream_setup_errors_do_not_capture_cleared_exception(self):
+        import requests
+        from unittest.mock import patch
+
+        claude_spec = self._special_native_http_provider_bot_for_tests("claude")
+        with patch.object(
+            claude_spec["bot"],
+            "_handle_stream_response",
+            side_effect=requests.Timeout("setup timeout"),
+        ):
+            chunks = list(claude_spec["bot"].call_with_tools(
+                [{"role": "user", "content": "hi"}],
+                stream=True,
+            ))
+
+        self.assertEqual(chunks[0]["status_code"], 504)
+        self.assertIn("timed out", chunks[0]["message"])
+
+        with patch.dict(sys.modules, {
+            "zai": SimpleNamespace(ZhipuAiClient=lambda *args, **kwargs: None),
+        }):
+            from models.zhipuai.zhipuai_bot import ZHIPUAIBot
+
+        zhipu_bot = ZHIPUAIBot.__new__(ZHIPUAIBot)
+        zhipu_bot.args = {"model": "glm-4", "temperature": 0.7, "top_p": 0.9}
+        with patch.object(
+            zhipu_bot,
+            "_handle_stream_response",
+            side_effect=RuntimeError("setup failed"),
+        ):
+            chunks = list(zhipu_bot.call_with_tools(
+                [{"role": "user", "content": "hi"}],
+                stream=True,
+            ))
+
+        self.assertEqual(chunks[0]["status_code"], 500)
+        self.assertEqual(chunks[0]["message"], "setup failed")
+
+    def test_zhipu_sdk_errors_use_shared_retry_evidence(self):
+        from unittest.mock import patch
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import get_recent_model_calls, reset_model_call_telemetry_for_tests
+        with patch.dict(sys.modules, {
+            "zai": SimpleNamespace(ZhipuAiClient=lambda *args, **kwargs: None),
+        }):
+            from models.zhipuai.zhipuai_bot import ZHIPUAIBot
+
+        class FakeZhipuError(Exception):
+            def __init__(self, message, *, response=None, body=None):
+                super().__init__(message)
+                self.response = response
+                self.body = body
+
+        class FakeCompletions:
+            def __init__(self, responses):
+                self.responses = list(responses)
+                self.calls = []
+
+            def create(self, **kwargs):
+                self.calls.append(kwargs)
+                response = self.responses.pop(0)
+                if isinstance(response, Exception):
+                    raise response
+                return response
+
+        class FakeClient:
+            def __init__(self, completions):
+                self.chat = SimpleNamespace(completions=completions)
+
+        def success_response():
+            return SimpleNamespace(
+                id="zhipu-ok",
+                created=1,
+                model="glm-4",
+                choices=[SimpleNamespace(
+                    message=SimpleNamespace(role="assistant", content="ok", tool_calls=None),
+                    finish_reason="stop",
+                )],
+                usage=SimpleNamespace(
+                    prompt_tokens=1,
+                    completion_tokens=2,
+                    total_tokens=3,
+                ),
+            )
+
+        reset_model_call_telemetry_for_tests()
+        retry_error = FakeZhipuError(
+            "rate limit",
+            response=self._FakeHTTPResponse(
+                429,
+                {
+                    "error": {
+                        "message": "rate limit",
+                        "code": "rate_limit_exceeded",
+                        "type": "rate_limit",
+                    }
+                },
+                headers={"Retry-After": "0.25"},
+            ),
+        )
+        completions = FakeCompletions([retry_error, success_response()])
+        bot = ZHIPUAIBot.__new__(ZHIPUAIBot)
+        bot.args = {"model": "glm-4", "temperature": 0.7, "top_p": 0.9}
+        bot.client = FakeClient(completions)
+        sleeps = []
+        model = self._native_agent_model(bot, model_name="glm-4", provider="zhipu_ai")
+
+        result = model.call(LLMRequest(
+            messages=[{"role": "user", "content": "hi"}],
+            model_max_retries=1,
+            model_retry_sleep=sleeps.append,
+        ))
+
+        self.assertEqual(result["choices"][0]["message"]["content"], "ok")
+        self.assertEqual(sleeps, [0.25])
+        self.assertEqual(len(completions.calls), 2)
+        events = get_recent_model_calls()
+        self.assertEqual([event["status"] for event in events], ["failed", "completed"])
+        self.assertEqual(events[0]["error_taxonomy"], "rate_limit")
+        self.assertEqual(events[0]["error_code"], "rate_limit_exceeded")
+
+        reset_model_call_telemetry_for_tests()
+        fail_closed_error = FakeZhipuError(
+            "bad request",
+            body={
+                "status_code": 400,
+                "error": {
+                    "message": "bad request",
+                    "code": "invalid_request",
+                    "type": "invalid_request_error",
+                },
+            },
+        )
+        completions = FakeCompletions([fail_closed_error])
+        bot.client = FakeClient(completions)
+        sleeps = []
+
+        result = model.call(LLMRequest(
+            messages=[{"role": "user", "content": "hi"}],
+            model_max_retries=2,
+            model_retry_sleep=sleeps.append,
+        ))
+
+        self.assertEqual(result["status_code"], 400)
+        self.assertEqual(result["message"], "bad request")
+        self.assertEqual(result["error_taxonomy"], "client_error")
+        self.assertFalse(result["retryable"])
+        self.assertEqual(sleeps, [])
+        self.assertEqual(len(completions.calls), 1)
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["error_status_code"], 400)
+        self.assertEqual(event["error_code"], "invalid_request")
+
+    def test_dashscope_sdk_errors_use_shared_retry_evidence(self):
+        from unittest.mock import patch
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import get_recent_model_calls, reset_model_call_telemetry_for_tests
+        fake_dashscope = SimpleNamespace(
+            Generation=SimpleNamespace(
+                Models=SimpleNamespace(
+                    qwen_turbo="qwen-turbo",
+                    qwen_plus="qwen-plus",
+                    qwen_max="qwen-max",
+                    bailian_v1="qwen-bailian-v1",
+                ),
+                call=None,
+            ),
+            MultiModalConversation=SimpleNamespace(call=None),
+        )
+        with patch.dict(sys.modules, {"dashscope": fake_dashscope}):
+            from models.dashscope.dashscope_bot import DashscopeBot
+
+        class FakeDashscopeResponse:
+            def __init__(self, *, status_code, code="", message="", output=None, usage=None, retry_after_ms=None):
+                self.status_code = status_code
+                self.code = code
+                self.message = message
+                self.output = output or {}
+                self.usage = usage or {}
+                if retry_after_ms is not None:
+                    self.retry_after_ms = retry_after_ms
+
+        class FakeDashscopeProxyResponse:
+            def __init__(self, data):
+                self._data = data
+
+            def __getattr__(self, name):
+                raise KeyError(name)
+
+            def __getitem__(self, key):
+                return self._data[key]
+
+            def keys(self):
+                return self._data.keys()
+
+        def success_response():
+            return FakeDashscopeResponse(
+                status_code=200,
+                output={
+                    "choices": [{
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }]
+                },
+                usage={"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
+            )
+
+        class TestDashscopeBot(DashscopeBot):
+            def __init__(self):
+                self.model_name = "qwen-plus"
+
+            @property
+            def api_key(self):
+                return "test-key"
+
+        reset_model_call_telemetry_for_tests()
+        responses = [
+            FakeDashscopeResponse(
+                status_code=429,
+                code="rate_limit_exceeded",
+                message="rate limit",
+                retry_after_ms=500,
+            ),
+            success_response(),
+        ]
+        calls = []
+
+        def fake_generation_call(**kwargs):
+            calls.append(kwargs)
+            response = responses.pop(0)
+            if isinstance(response, Exception):
+                raise response
+            return response
+
+        sleeps = []
+        bot = TestDashscopeBot()
+        model = self._native_agent_model(bot, model_name="qwen-plus", provider="dashscope")
+
+        with patch.object(fake_dashscope.Generation, "call", side_effect=fake_generation_call):
+            result = model.call(LLMRequest(
+                messages=[{"role": "user", "content": "hi"}],
+                model_max_retries=1,
+                model_retry_sleep=sleeps.append,
+            ))
+
+        self.assertEqual(result["choices"][0]["message"]["content"], "ok")
+        self.assertEqual(sleeps, [0.5])
+        self.assertEqual(len(calls), 2)
+        events = get_recent_model_calls()
+        self.assertEqual([event["status"] for event in events], ["failed", "completed"])
+        self.assertEqual(events[0]["error_taxonomy"], "rate_limit")
+        self.assertEqual(events[0]["error_code"], "rate_limit_exceeded")
+
+        reset_model_call_telemetry_for_tests()
+        responses = [
+            FakeDashscopeResponse(
+                status_code=400,
+                code="invalid_request",
+                message="bad request",
+            )
+        ]
+        calls = []
+        sleeps = []
+
+        with patch.object(fake_dashscope.Generation, "call", side_effect=fake_generation_call):
+            result = model.call(LLMRequest(
+                messages=[{"role": "user", "content": "hi"}],
+                model_max_retries=2,
+                model_retry_sleep=sleeps.append,
+            ))
+
+        self.assertEqual(result["status_code"], 400)
+        self.assertEqual(result["message"], "bad request")
+        self.assertEqual(result["error_taxonomy"], "client_error")
+        self.assertEqual(sleeps, [])
+        self.assertEqual(len(calls), 1)
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["error_status_code"], 400)
+        self.assertEqual(event["error_code"], "invalid_request")
+
+        reset_model_call_telemetry_for_tests()
+        responses = [
+            FakeDashscopeProxyResponse({
+                "status_code": 429,
+                "code": "rate_limit_exceeded",
+                "message": "rate limit",
+                "retry_after_ms": 500,
+            }),
+            success_response(),
+        ]
+        calls = []
+        sleeps = []
+
+        with patch.object(fake_dashscope.Generation, "call", side_effect=fake_generation_call):
+            result = model.call(LLMRequest(
+                messages=[{"role": "user", "content": "hi"}],
+                model_max_retries=1,
+                model_retry_sleep=sleeps.append,
+            ))
+
+        self.assertEqual(result["choices"][0]["message"]["content"], "ok")
+        self.assertEqual(sleeps, [0.5])
+        self.assertEqual(len(calls), 2)
+        events = get_recent_model_calls()
+        self.assertEqual([event["status"] for event in events], ["failed", "completed"])
+        self.assertEqual(events[0]["error_taxonomy"], "rate_limit")
+
+        for exc, taxonomy in (
+            (TimeoutError("request timeout"), "timeout"),
+            (ConnectionError("connection reset by peer"), "network_error"),
+        ):
+            with self.subTest(provider="dashscope", mode=taxonomy):
+                reset_model_call_telemetry_for_tests()
+                responses = [exc, success_response()]
+                calls = []
+                sleeps = []
+
+                with patch.object(fake_dashscope.Generation, "call", side_effect=fake_generation_call):
+                    result = model.call(LLMRequest(
+                        messages=[{"role": "user", "content": "hi"}],
+                        model_max_retries=1,
+                        model_retry_sleep=sleeps.append,
+                    ))
+
+                self.assertEqual(result["choices"][0]["message"]["content"], "ok")
+                self.assertEqual(sleeps, [2.0])
+                self.assertEqual(len(calls), 2)
+                events = get_recent_model_calls()
+                self.assertEqual([event["status"] for event in events], ["failed", "completed"])
+                self.assertEqual(events[0]["error_taxonomy"], taxonomy)
+
+    def test_dashscope_stream_error_after_output_is_retry_suppressed(self):
+        from unittest.mock import patch
+        from agent.protocol.models import LLMRequest
+        from models.model_telemetry import get_recent_model_calls
+        fake_dashscope = SimpleNamespace(
+            Generation=SimpleNamespace(
+                Models=SimpleNamespace(
+                    qwen_turbo="qwen-turbo",
+                    qwen_plus="qwen-plus",
+                    qwen_max="qwen-max",
+                    bailian_v1="qwen-bailian-v1",
+                ),
+                call=None,
+            ),
+            MultiModalConversation=SimpleNamespace(call=None),
+        )
+        with patch.dict(sys.modules, {"dashscope": fake_dashscope}):
+            from models.dashscope.dashscope_bot import DashscopeBot
+
+        class FakeDashscopeResponse:
+            def __init__(self, *, status_code, code="", message="", output=None, retry_after_ms=None):
+                self.status_code = status_code
+                self.code = code
+                self.message = message
+                self.output = output or {}
+                self.usage = {}
+                if retry_after_ms is not None:
+                    self.retry_after_ms = retry_after_ms
+
+        class TestDashscopeBot(DashscopeBot):
+            def __init__(self):
+                self.model_name = "qwen-plus"
+
+            @property
+            def api_key(self):
+                return "test-key"
+
+        responses = [[
+            FakeDashscopeResponse(
+                status_code=200,
+                output={
+                    "choices": [{
+                        "message": {"role": "assistant", "content": "partial"},
+                        "finish_reason": None,
+                    }]
+                },
+            ),
+            FakeDashscopeResponse(
+                status_code=503,
+                code="server_error",
+                message="server unavailable",
+                retry_after_ms=500,
+            ),
+        ]]
+        calls = []
+
+        def fake_generation_call(**kwargs):
+            calls.append(kwargs)
+            return iter(responses.pop(0))
+
+        sleeps = []
+        bot = TestDashscopeBot()
+        model = self._native_agent_model(bot, model_name="qwen-plus", provider="dashscope")
+
+        with patch.object(fake_dashscope.Generation, "call", side_effect=fake_generation_call):
+            chunks = list(model.call_stream(LLMRequest(
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+                model_max_retries=1,
+                model_retry_sleep=sleeps.append,
+            )))
+
+        self.assertEqual(chunks[0]["choices"][0]["delta"]["content"], "partial")
+        self.assertEqual(chunks[1]["status_code"], 503)
+        self.assertTrue(chunks[1]["retryable"])
+        self.assertTrue(chunks[1]["retry_suppressed"])
+        self.assertEqual(chunks[1]["retry_suppressed_reason"], "stream_output_started")
+        self.assertEqual(sleeps, [])
+        self.assertEqual(len(calls), 1)
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_taxonomy"], "server_error")
+
     def test_agent_bridge_native_sync_gateway_retries_and_records_telemetry(self):
         from agent.protocol.models import LLMRequest
         from models.model_telemetry import get_recent_model_calls

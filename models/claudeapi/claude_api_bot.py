@@ -16,6 +16,7 @@ from bridge.reply import Reply, ReplyType
 from common import const
 from common.log import logger
 from config import conf
+from models.model_provider_errors import http_error_response, provider_error_response
 
 # Optional OpenAI image support
 try:
@@ -345,23 +346,27 @@ class ClaudeAPIBot(Bot, OpenAIImage):
                 return self._handle_sync_response(request_params)
         except Exception as e:
             logger.error(f"Claude API call error: {e}")
+            if isinstance(e, requests.Timeout):
+                error_response = provider_error_response(
+                    message=f"Claude request timed out: {str(e)}",
+                    status_code=504,
+                )
+            elif isinstance(e, requests.RequestException):
+                error_response = provider_error_response(
+                    {"type": "network_error"},
+                    message=f"Connection error: {str(e)}",
+                    status_code=0,
+                )
+            else:
+                error_response = provider_error_response(message=str(e), status_code=500)
             if stream:
                 # Return error generator for stream
                 def error_generator():
-                    yield {
-                        "error": True,
-                        "message": str(e),
-                        "status_code": 500
-                    }
+                    yield error_response
 
                 return error_generator()
             else:
-                # Return error response for sync
-                return {
-                    "error": True,
-                    "message": str(e),
-                    "status_code": 500
-                }
+                return error_response
 
     @staticmethod
     def _sanitize_message(msg: dict) -> dict:
@@ -406,7 +411,12 @@ class ClaudeAPIBot(Bot, OpenAIImage):
         )
 
         if response.status_code != 200:
-            raise Exception(f"API request failed: {response.status_code} - {response.text}")
+            error_response = http_error_response(response)
+            logger.error(
+                f"[Claude] API error: status={response.status_code}, "
+                f"msg={error_response.get('message')}"
+            )
+            return error_response
 
         claude_response = response.json()
 
@@ -488,18 +498,12 @@ class ClaudeAPIBot(Bot, OpenAIImage):
             )
 
             if response.status_code != 200:
-                error_text = response.text
-                try:
-                    error_data = json.loads(error_text)
-                    error_msg = error_data.get("error", {}).get("message", error_text)
-                except Exception:
-                    error_msg = error_text or "Unknown error"
-
-                yield {
-                    "error": True,
-                    "status_code": response.status_code,
-                    "message": error_msg
-                }
+                error_response = http_error_response(response)
+                logger.error(
+                    f"[Claude] API error: status={response.status_code}, "
+                    f"msg={error_response.get('message')}"
+                )
+                yield error_response
                 return
 
             # Process streaming response
@@ -513,6 +517,43 @@ class ClaudeAPIBot(Bot, OpenAIImage):
                         try:
                             event = json.loads(line)
                             event_type = event.get("type")
+
+                            if event_type == "error" or event.get("error"):
+                                error_data = event.get("error", {})
+                                if isinstance(error_data, dict):
+                                    error_data = dict(error_data)
+                                    for key in (
+                                        "message",
+                                        "msg",
+                                        "code",
+                                        "error_code",
+                                        "type",
+                                        "error_type",
+                                        "http_code",
+                                        "status_code",
+                                        "status",
+                                        "retry_after",
+                                        "retry_after_seconds",
+                                        "retry_after_ms",
+                                    ):
+                                        if key in event and key not in error_data:
+                                            error_data[key] = event.get(key)
+                                error_response = provider_error_response(
+                                    error_data,
+                                    message="Claude stream provider error",
+                                    status_code=(
+                                        event.get("status_code")
+                                        or event.get("http_code")
+                                        or event.get("status")
+                                        or 500
+                                    ),
+                                    retry_after=event.get("retry_after"),
+                                    retry_after_seconds=event.get("retry_after_seconds"),
+                                    retry_after_ms=event.get("retry_after_ms"),
+                                )
+                                logger.error(f"[Claude] stream error: {error_response.get('message')}")
+                                yield error_response
+                                return
 
                             if event_type == "content_block_start":
                                 # New content block
@@ -602,17 +643,19 @@ class ClaudeAPIBot(Bot, OpenAIImage):
                         except json.JSONDecodeError:
                             continue
 
+        except requests.Timeout as e:
+            logger.error(f"Claude streaming timeout: {e}")
+            yield provider_error_response(
+                message=f"Claude request timed out: {str(e)}",
+                status_code=504,
+            )
         except requests.RequestException as e:
             logger.error(f"Claude streaming request error: {e}")
-            yield {
-                "error": True,
-                "message": f"Connection error: {str(e)}",
-                "status_code": 0
-            }
+            yield provider_error_response(
+                message=f"Connection error: {str(e)}",
+                status_code=0,
+                error={"type": "network_error"},
+            )
         except Exception as e:
             logger.error(f"Claude streaming error: {e}")
-            yield {
-                "error": True,
-                "message": str(e),
-                "status_code": 500
-            }
+            yield provider_error_response(message=str(e), status_code=500)

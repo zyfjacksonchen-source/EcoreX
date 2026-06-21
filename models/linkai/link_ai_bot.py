@@ -19,6 +19,7 @@ from common import memory, utils
 import base64
 import os
 from models.model_telemetry import ModelCallSpan
+from models.model_provider_errors import http_error_response, provider_error_response
 
 LINKAI_CHAT_API_PATH = "/legacy/linkai_chat"
 
@@ -715,13 +716,26 @@ def _handle_linkai_sync_response(self, base_url, headers, body):
             # LinkAI response is already in OpenAI-compatible format
             return response
         else:
-            error_data = res.json()
-            error_msg = error_data.get("error", {}).get("message", "Unknown error")
-            raise Exception(f"LinkAI API error: {res.status_code} - {error_msg}")
+            error_response = http_error_response(res)
+            logger.error(
+                f"[LinkAI] API error: status={res.status_code}, "
+                f"msg={error_response.get('message')}"
+            )
+            return error_response
             
+    except requests.Timeout as e:
+        logger.error(f"[LinkAI] sync response timeout: {e}")
+        return provider_error_response(message=f"LinkAI request timed out: {e}", status_code=504)
+    except requests.ConnectionError as e:
+        logger.error(f"[LinkAI] sync response connection error: {e}")
+        return provider_error_response(
+            {"type": "network_error"},
+            message=f"LinkAI connection failed: {e}",
+            status_code=503,
+        )
     except Exception as e:
         logger.error(f"[LinkAI] sync response error: {e}")
-        raise
+        return provider_error_response(message=str(e), status_code=500)
 
 def _handle_linkai_stream_response(self, base_url, headers, body):
     """Handle streaming LinkAI API response"""
@@ -735,18 +749,12 @@ def _handle_linkai_stream_response(self, base_url, headers, body):
         )
         
         if res.status_code != 200:
-            error_text = res.text
-            try:
-                error_data = json.loads(error_text)
-                error_msg = error_data.get("error", {}).get("message", error_text)
-            except Exception:
-                error_msg = error_text or "Unknown error"
-            
-            yield {
-                "error": True,
-                "status_code": res.status_code,
-                "message": error_msg
-            }
+            error_response = http_error_response(res)
+            logger.error(
+                f"[LinkAI] API error: status={res.status_code}, "
+                f"msg={error_response.get('message')}"
+            )
+            yield error_response
             return
         
         # Process streaming response (OpenAI-compatible SSE format)
@@ -769,15 +777,39 @@ def _handle_linkai_stream_response(self, base_url, headers, body):
                         isinstance(chunk.get("error"), dict) and "message" in chunk.get("error", {})
                     ):
                         error_data = chunk.get("error", {})
-                        error_msg = error_data.get("message", "Unknown error") if isinstance(error_data, dict) else str(error_data)
-                        http_code = error_data.get("http_code", "") if isinstance(error_data, dict) else ""
-                        status_code = int(http_code) if http_code and str(http_code).isdigit() else 400
-                        logger.error(f"[LinkAI] stream error: {error_msg} (http_code={http_code})")
-                        yield {
-                            "error": True,
-                            "message": error_msg,
-                            "status_code": status_code
-                        }
+                        if isinstance(error_data, dict):
+                            error_data = dict(error_data)
+                            for key in (
+                                "message",
+                                "msg",
+                                "code",
+                                "error_code",
+                                "type",
+                                "error_type",
+                                "http_code",
+                                "status_code",
+                                "status",
+                                "retry_after",
+                                "retry_after_seconds",
+                                "retry_after_ms",
+                            ):
+                                if key in chunk and key not in error_data:
+                                    error_data[key] = chunk.get(key)
+                        error_response = provider_error_response(
+                            error_data,
+                            message="Unknown error",
+                            status_code=(
+                                chunk.get("status_code")
+                                or chunk.get("http_code")
+                                or chunk.get("status")
+                                or 400
+                            ),
+                            retry_after=chunk.get("retry_after"),
+                            retry_after_seconds=chunk.get("retry_after_seconds"),
+                            retry_after_ms=chunk.get("retry_after_ms"),
+                        )
+                        logger.error(f"[LinkAI] stream error: {error_response.get('message')}")
+                        yield error_response
                         return
 
                     # Forward SSE JSON as-is so extensions (e.g. delta._gemini_raw_parts
@@ -785,13 +817,19 @@ def _handle_linkai_stream_response(self, base_url, headers, body):
                     # messages for the next request. Standard OpenAI fields are unchanged.
                     yield chunk
                         
+    except requests.Timeout as e:
+        logger.error(f"[LinkAI] stream response timeout: {e}")
+        yield provider_error_response(message=f"LinkAI request timed out: {e}", status_code=504)
+    except requests.ConnectionError as e:
+        logger.error(f"[LinkAI] stream response connection error: {e}")
+        yield provider_error_response(
+            {"type": "network_error"},
+            message=f"LinkAI connection failed: {e}",
+            status_code=503,
+        )
     except Exception as e:
         logger.error(f"[LinkAI] stream response error: {e}")
-        yield {
-            "error": True,
-            "message": str(e),
-            "status_code": 500
-        }
+        yield provider_error_response(message=str(e), status_code=500)
 
 def _linkai_convert_messages_to_openai_format(self, messages):
     """
