@@ -36,6 +36,8 @@ from config import conf, _ensure_ecorex_runtime_defaults
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
 VIDEO_EXTENSIONS = {".mp4", ".webm", ".avi", ".mov", ".mkv"}
+REQUEST_CONFLICT_RETRYABLE_CODE = "REQUEST_CONFLICT_RETRYABLE"
+REQUEST_CONFLICT_RETRY_AFTER_MS = 1500
 DANGEROUS_OPEN_EXTENSIONS = {
     ".app",
     ".bat",
@@ -1399,6 +1401,22 @@ class WebChannel(ChatChannel):
             logger.warning(f"[WebChannel] subagent cascade cancel skipped for {session_id}: {e}")
             return {"cancelledTasks": 0, "cancelledRequests": 0, "tasks": [], "error": str(e)}
 
+    def _session_conflict_retry_payload(self, session_id: str, *, reason: str = "session_lock_unavailable") -> Dict[str, Any]:
+        active_request_ids = self._active_request_ids_for_session(session_id)
+        return {
+            "status": "error",
+            "code": REQUEST_CONFLICT_RETRYABLE_CODE,
+            "error_type": "concurrency_conflict",
+            "state": "retryable_conflict",
+            "recoverable": True,
+            "retryable": True,
+            "retry_after_ms": REQUEST_CONFLICT_RETRY_AFTER_MS,
+            "reason": reason,
+            "session_id": session_id,
+            "active_request_ids": active_request_ids,
+            "message": "The previous run is still stopping. Please retry shortly.",
+        }
+
     def _interrupt_and_wait_for_session_lock(self, session_id: str, lang: str = "zh"):
         """Cancel the active request for a busy session and wait briefly for its lock."""
         from agent.protocol import get_cancel_registry
@@ -2542,11 +2560,11 @@ class WebChannel(ChatChannel):
                 try:
                     session_lock = self._interrupt_and_wait_for_session_lock(session_id, lang=lang)
                 except SessionBusyError:
-                    return json.dumps({
-                        "status": "error",
-                        "code": "session_busy",
-                        "message": i18n.t("该会话正在执行中，请稍后再试", "This session is already running. Please try again shortly."),
-                    }, ensure_ascii=False)
+                    logger.warning(f"[WebChannel] session conflict remains retryable: session={session_id}")
+                    return json.dumps(
+                        self._session_conflict_retry_payload(session_id),
+                        ensure_ascii=False,
+                    )
 
             # Append file references to the prompt (same format as QQ channel)
             if attachments:

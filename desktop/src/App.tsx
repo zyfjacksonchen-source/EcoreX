@@ -86,6 +86,7 @@ import {
   statLocalPath,
   updatePermissionMode,
   type CapabilityPack,
+  type ChatSendResult,
   type DesktopUpdateStatus,
   type AgentArtifact,
   type EnterpriseQuotaCheckResult,
@@ -436,6 +437,26 @@ function isRuntimeRequestUiActive(request?: RuntimeActiveRequest | null) {
   if (!request.cancelled) return true;
   const ageSeconds = Number(request.cancel_age_seconds ?? request.age_seconds ?? 0);
   return !Number.isFinite(ageSeconds) || ageSeconds < 30;
+}
+
+function isRetryableConcurrencyResult(result?: ChatSendResult | null) {
+  return Boolean(
+    result
+    && result.status === "error"
+    && (
+      result.code === "REQUEST_CONFLICT_RETRYABLE"
+      || result.error_type === "concurrency_conflict"
+      || result.state === "retryable_conflict"
+    )
+    && (result.retryable || result.recoverable)
+  );
+}
+
+function chatSendErrorMessage(result: ChatSendResult) {
+  if (isRetryableConcurrencyResult(result)) {
+    return result.message || "The previous run is still stopping. Please retry shortly.";
+  }
+  return result.message || "发送失败";
 }
 
 function BrandMark() {
@@ -4079,7 +4100,27 @@ export function App() {
         }
         return;
       }
-      if (result.status === "error") throw new Error(result.message || "发送失败");
+      if (result.status === "error") {
+        const message = chatSendErrorMessage(result);
+        if (isRetryableConcurrencyResult(result)) {
+          void reportDesktopEvent({
+            type: "warn",
+            source: "Desktop",
+            category: "runtime",
+            label: "request_conflict_retryable",
+            message,
+            sessionId: requestSessionId,
+            detail: {
+              code: result.code || "",
+              errorType: result.error_type || "",
+              state: result.state || "",
+              retryAfterMs: result.retry_after_ms || 0,
+              activeRequestIds: result.active_request_ids || []
+            }
+          });
+        }
+        throw new Error(message);
+      }
       if (result.inline_reply) {
         const inlineReply = redactInternalPromptText(result.inline_reply || "");
         streamTextChars += inlineReply.length;
@@ -4512,7 +4553,7 @@ export function App() {
       internalAction: true
     });
     if (result.status === "error") {
-      throw new Error(result.message || "发送安装任务失败");
+      throw new Error(chatSendErrorMessage(result));
     }
     if (result.inline_reply) {
       updateAssistantMessage(requestSessionId, assistantId, (message) => ({

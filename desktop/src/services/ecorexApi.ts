@@ -376,6 +376,15 @@ export type EnterpriseSession = Awaited<ReturnType<NonNullable<typeof window.eco
 export type ChatSendResult = {
   status?: string;
   message?: string;
+  code?: string;
+  error_type?: string;
+  state?: string;
+  recoverable?: boolean;
+  retryable?: boolean;
+  retry_after_ms?: number;
+  reason?: string;
+  session_id?: string;
+  active_request_ids?: string[];
   request_id?: string;
   stream?: boolean;
   inline_reply?: string;

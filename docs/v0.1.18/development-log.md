@@ -79,3 +79,13 @@
     visibility semantics.
   - Focused pytest passed: 6 cancel-registry/active-request tests; desktop
     `npm run typecheck` passed.
+- Added the fifth R18-03 concurrency visibility slice:
+  - WebChannel busy-session fallback now returns
+    `code=REQUEST_CONFLICT_RETRYABLE`, `error_type=concurrency_conflict`,
+    `retryable=true`, and `retry_after_ms` instead of exposing raw
+    `session_busy`.
+  - Desktop chat send handling recognizes the typed retryable conflict,
+    displays the stable retry message, and emits structured warning telemetry
+    with retry metadata.
+  - Focused pytest passed: 6 busy-session/active-request tests; desktop
+    `npm run typecheck` passed.

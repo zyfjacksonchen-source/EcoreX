@@ -1080,6 +1080,55 @@ class TestWebParallelHandlers(unittest.TestCase):
                     registry.unregister(old_request_id)
                     registry.unregister(new_request_id)
 
+    def test_busy_session_message_returns_typed_retry_contract_when_lock_stays_busy(self):
+        from agent.protocol import get_cancel_registry
+        from channel.web import web_channel
+        from common.ecorex_workspace import SessionBusyError, SessionLock
+
+        with isolated_run_ledger():
+            channel = web_channel.WebChannel()
+            session_id = "session-busy-retry-contract"
+            old_request_id = "req-busy-retry-old"
+            registry = get_cancel_registry()
+
+            with tempfile.TemporaryDirectory() as workspace:
+                old_lock = SessionLock(workspace, session_id).acquire()
+                registry.register(old_request_id, session_id=session_id)
+                channel.request_to_session = {old_request_id: session_id}
+                payload = {
+                    "session_id": session_id,
+                    "message": "new turn while old lock remains busy",
+                    "stream": True,
+                    "lang": "en",
+                }
+                try:
+                    with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                        with patch.object(
+                            channel,
+                            "_interrupt_and_wait_for_session_lock",
+                            side_effect=SessionBusyError("still stopping"),
+                        ):
+                            with patch.object(
+                                web_channel.web,
+                                "data",
+                                return_value=json.dumps(payload).encode("utf-8"),
+                            ):
+                                result = json.loads(channel.post_message())
+
+                    self.assertEqual(result["status"], "error")
+                    self.assertEqual(result["code"], "REQUEST_CONFLICT_RETRYABLE")
+                    self.assertNotEqual(result["code"], "session_busy")
+                    self.assertEqual(result["error_type"], "concurrency_conflict")
+                    self.assertEqual(result["state"], "retryable_conflict")
+                    self.assertTrue(result["retryable"])
+                    self.assertTrue(result["recoverable"])
+                    self.assertGreaterEqual(result["retry_after_ms"], 1000)
+                    self.assertEqual(result["active_request_ids"], [old_request_id])
+                    self.assertIn("retry", result["message"].lower())
+                finally:
+                    old_lock.release()
+                    registry.unregister(old_request_id)
+
     def test_post_message_compose_exception_cleans_pre_worker_request(self):
         from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests
         from channel.web import web_channel
