@@ -3310,7 +3310,8 @@ class WebChannel(ChatChannel):
                 try:
                     from agent.protocol import get_run_ledger
 
-                    get_run_ledger().create_run(
+                    ledger = get_run_ledger()
+                    persisted = ledger.create_run(
                         request_id,
                         session_id,
                         run_type="message",
@@ -3322,8 +3323,28 @@ class WebChannel(ChatChannel):
                             "attachments": len(attachments) if isinstance(attachments, list) else 0,
                         },
                     )
+                    if not persisted:
+                        raise RuntimeError("run ledger did not persist request")
                 except Exception as e:
-                    logger.debug(f"[WebChannel] run ledger create skipped for {request_id}: {e}")
+                    logger.error(f"[WebChannel] run ledger unavailable for {request_id}: {e}", exc_info=True)
+                    self._abort_pre_worker_request(
+                        request_id,
+                        session_id,
+                        message="Runtime run ledger is unavailable; request was not started.",
+                        reason="run_ledger_unavailable",
+                        error_code="RUN_LEDGER_UNAVAILABLE",
+                        session_lock=session_lock,
+                    )
+                    session_lock = None
+                    return json.dumps({
+                        "status": "error",
+                        "code": "RUN_LEDGER_UNAVAILABLE",
+                        "error_type": "runtime_state_unavailable",
+                        "message": "Runtime run ledger is unavailable; request was not started. Please retry shortly.",
+                        "retryable": True,
+                        "recoverable": True,
+                        "request_id": "",
+                    }, ensure_ascii=False)
 
             if session_id not in self.session_queues:
                 self.session_queues[session_id] = Queue()

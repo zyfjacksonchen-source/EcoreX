@@ -544,3 +544,18 @@
   - Desktop API typing preserves these fields in `RuntimeSnapshot` for future
     Run Center/diagnostics affordances without changing the current active-row
     UI semantics.
+- Added the `/message` durable admission hardening slice:
+  - `RunLedger.create_run()` now returns whether the row was actually persisted,
+    using a same-transaction SQLite existence check before commit. This removes
+    the separate post-create read verification window from `/message`
+    admission.
+  - Web `/message` now fails closed with typed `RUN_LEDGER_UNAVAILABLE` if the
+    durable run row cannot be created or confirmed. The worker is not started,
+    no SSE stream is exposed, the internal request id is not returned to the
+    desktop, and pre-worker cleanup releases the session lock, cancel token,
+    request mapping, and any request state.
+  - Focused tests cover successful `/message` admission row fields and
+    metadata, ledger-create exceptions, and ledger false-return failures. The
+    broader admission/run-ledger regression set passed with 15 tests.
+  - Descartes, Boole, and Lovelace confirmed no P0/P1 after the final
+    same-transaction persistence check and empty-error-request-id contract.

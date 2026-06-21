@@ -2142,6 +2142,178 @@ class TestWebParallelHandlers(unittest.TestCase):
             finally:
                 registry.unregister(request_id)
 
+    def test_post_message_success_persists_required_run_ledger_fields(self):
+        from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests
+        from bridge.context import Context
+        from channel.web import web_channel
+
+        with tempfile.TemporaryDirectory() as workspace:
+            request_id = "req-message-ledger-required-fields"
+            session_id = "session-message-ledger-required-fields"
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            channel = web_channel.WebChannel()
+            produced = threading.Event()
+            payload = {
+                "session_id": session_id,
+                "message": "persist my run row",
+                "stream": False,
+                "internal_action": True,
+                "attachments": [{"file_path": "C:/tmp/a.txt", "file_type": "file"}],
+            }
+
+            def fake_compose_context(ctype, content, **kwargs):
+                context = Context(ctype, content)
+                context.kwargs = kwargs
+                return context
+
+            def fake_produce(context):
+                lock = context.get("session_lock")
+                if lock:
+                    lock.release()
+                produced.set()
+
+            try:
+                with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                    with patch.object(channel, "_generate_request_id", return_value=request_id):
+                        with patch.object(channel, "_compose_context", side_effect=fake_compose_context):
+                            with patch.object(channel, "produce", side_effect=fake_produce):
+                                with patch.object(
+                                    web_channel.web,
+                                    "data",
+                                    return_value=json.dumps(payload).encode("utf-8"),
+                                ):
+                                    result = json.loads(channel.post_message())
+
+                self.assertEqual(result["status"], "success")
+                self.assertEqual(result["request_id"], request_id)
+                self.assertTrue(produced.wait(timeout=2))
+
+                row = ledger.get_run(request_id)
+                self.assertIsNotNone(row)
+                self.assertEqual(row["request_id"], request_id)
+                self.assertEqual(row["session_id"], session_id)
+                self.assertEqual(row["run_type"], "message")
+                self.assertEqual(row["status"], "running")
+                self.assertEqual(row["phase"], "accepted")
+                self.assertIsNotNone(row["created_at"])
+                self.assertIsNotNone(row["started_at"])
+                self.assertIsNotNone(row["updated_at"])
+                self.assertIsNone(row["terminal_at"])
+                self.assertEqual(row["metadata"]["stream"], False)
+                self.assertEqual(row["metadata"]["internal_action"], True)
+                self.assertEqual(row["metadata"]["attachments"], 1)
+            finally:
+                get_cancel_registry().unregister(request_id)
+                reset_run_ledger_for_tests(Path(tempfile.gettempdir()) / "ecorex-run-ledger-test-reset.db")
+
+    def test_post_message_rejects_when_run_ledger_create_fails(self):
+        from agent.protocol import get_cancel_registry
+        from bridge.context import Context
+        from channel.web import web_channel
+        from common.ecorex_workspace import SessionLock
+
+        class FailingLedger:
+            def create_run(self, *args, **kwargs):
+                raise RuntimeError("sqlite is locked")
+
+            def get_run(self, request_id):
+                return None
+
+            def mark_terminal(self, *args, **kwargs):
+                return None
+
+        with tempfile.TemporaryDirectory() as workspace:
+            request_id = "req-message-ledger-create-fails"
+            session_id = "session-message-ledger-create-fails"
+            channel = web_channel.WebChannel()
+            payload = {
+                "session_id": session_id,
+                "message": "do not start without durable run state",
+                "stream": True,
+            }
+
+            def fake_compose_context(ctype, content, **kwargs):
+                context = Context(ctype, content)
+                context.kwargs = kwargs
+                return context
+
+            lock_path = SessionLock(workspace, session_id).path
+            with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                with patch("agent.protocol.get_run_ledger", return_value=FailingLedger()):
+                    with patch.object(channel, "_generate_request_id", return_value=request_id):
+                        with patch.object(channel, "_compose_context", side_effect=fake_compose_context) as compose_context:
+                            with patch.object(channel, "produce") as produce:
+                                with patch.object(
+                                    web_channel.web,
+                                    "data",
+                                    return_value=json.dumps(payload).encode("utf-8"),
+                                ):
+                                    result = json.loads(channel.post_message())
+
+            self.assertEqual(result["status"], "error")
+            self.assertEqual(result["code"], "RUN_LEDGER_UNAVAILABLE")
+            self.assertEqual(result["error_type"], "runtime_state_unavailable")
+            self.assertTrue(result["retryable"])
+            self.assertTrue(result["recoverable"])
+            self.assertEqual(result["request_id"], "")
+            compose_context.assert_not_called()
+            produce.assert_not_called()
+            self.assertIsNone(get_cancel_registry().get_event(request_id))
+            self.assertNotIn(request_id, channel.request_to_session)
+            self.assertFalse(channel._sse_request_exists(request_id))
+            self.assertFalse(lock_path.exists())
+
+    def test_post_message_rejects_when_run_ledger_does_not_persist_row(self):
+        from agent.protocol import get_cancel_registry
+        from bridge.context import Context
+        from channel.web import web_channel
+        from common.ecorex_workspace import SessionLock
+
+        class NonPersistingLedger:
+            def create_run(self, *args, **kwargs):
+                return False
+
+            def mark_terminal(self, *args, **kwargs):
+                return None
+
+        with tempfile.TemporaryDirectory() as workspace:
+            request_id = "req-message-ledger-not-persisted"
+            session_id = "session-message-ledger-not-persisted"
+            channel = web_channel.WebChannel()
+            payload = {
+                "session_id": session_id,
+                "message": "do not start without a persisted row",
+                "stream": True,
+            }
+
+            def fake_compose_context(ctype, content, **kwargs):
+                context = Context(ctype, content)
+                context.kwargs = kwargs
+                return context
+
+            lock_path = SessionLock(workspace, session_id).path
+            with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                with patch("agent.protocol.get_run_ledger", return_value=NonPersistingLedger()):
+                    with patch.object(channel, "_generate_request_id", return_value=request_id):
+                        with patch.object(channel, "_compose_context", side_effect=fake_compose_context) as compose_context:
+                            with patch.object(channel, "produce") as produce:
+                                with patch.object(
+                                    web_channel.web,
+                                    "data",
+                                    return_value=json.dumps(payload).encode("utf-8"),
+                                ):
+                                    result = json.loads(channel.post_message())
+
+            self.assertEqual(result["status"], "error")
+            self.assertEqual(result["code"], "RUN_LEDGER_UNAVAILABLE")
+            self.assertEqual(result["request_id"], "")
+            compose_context.assert_not_called()
+            produce.assert_not_called()
+            self.assertIsNone(get_cancel_registry().get_event(request_id))
+            self.assertNotIn(request_id, channel.request_to_session)
+            self.assertFalse(channel._sse_request_exists(request_id))
+            self.assertFalse(lock_path.exists())
+
     def test_post_message_compose_exception_cleans_pre_worker_request(self):
         from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests
         from channel.web import web_channel

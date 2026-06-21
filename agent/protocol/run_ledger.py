@@ -67,9 +67,9 @@ class RunLedger:
         phase: str = "accepted",
         status: str = "running",
         metadata: Optional[Dict[str, Any]] = None,
-    ) -> None:
+    ) -> bool:
         if not request_id or not session_id:
-            return
+            return False
         now = time.time()
         payload = self._json(metadata or {})
         with self._lock, self._connection() as conn:
@@ -101,7 +101,12 @@ class RunLedger:
                     payload,
                 ),
             )
+            persisted = conn.execute(
+                "SELECT 1 FROM agent_runs WHERE request_id=?",
+                (request_id,),
+            ).fetchone()
             conn.commit()
+            return bool(persisted)
 
     def mark_phase(self, request_id: str, phase: str, *, status: Optional[str] = None) -> None:
         if not request_id or not phase:
