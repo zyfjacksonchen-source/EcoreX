@@ -285,3 +285,23 @@
     interruption with registry fallback suppression, stale-live
     non-interruption, subagent non-interruption, cancelling fallback
     preservation, and durable active snapshot behavior.
+- Added the first R18-07-A promotion-gate slice:
+  - `scripts/check-ecorex-v0.1.18-promotion-gate.py` aggregates the production
+    agent runtime gate into one machine-readable JSON report.
+  - The gate requires all mapped acceptance rows for run ledger, SSE,
+    cancellation/concurrency, model calls, context budgeting, Run Center, and
+    evidence gates to reach `PASS` before it reports GO.
+  - It also verifies evidence-ledger markers for run-ledger terminal semantics,
+    SSE replay/failure semantics, cancellation/backpressure/subagent coverage,
+    model-call telemetry/retry/Responses evidence, context/tool budget evidence,
+    Run Center evidence, and multi-agent review consensus markers.
+  - A built-in GitHub-token pattern scan checks tracked and unignored worktree
+    files using `git ls-files -co --exclude-standard`, avoiding slow scans of
+    ignored build/dependency artifacts.
+  - If the token scan is skipped, the gate now emits a blocker instead of a
+    possible GO report, so credential-leakage evidence remains mandatory.
+  - `--allow-no-go` writes the current report without pretending the release is
+    complete; `docs/v0.1.18/promotion-gate.json` is currently `no-go` with seven
+    blocker groups because the broad v0.1.18 acceptance rows are still PARTIAL.
+  - Focused pytest covers GO, PARTIAL/NO-GO, token-pattern failure, and
+    token-scan-skipped blocker behavior.

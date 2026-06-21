@@ -1,0 +1,122 @@
+{
+  "product": "EcoreX",
+  "version": "0.1.18",
+  "gate": "v0.1.18-production-agent",
+  "generatedAt": "2026-06-21T05:52:10Z",
+  "status": "no-go",
+  "summary": {
+    "total": 18,
+    "blockers": 7,
+    "warnings": 0
+  },
+  "checks": [
+    {
+      "name": "Acceptance rows: run-ledger",
+      "status": "fail",
+      "severity": "blocker",
+      "evidence": "docs/v0.1.18/acceptance-checklist.md: missing=[] incomplete=['R18-01-A=PARTIAL', 'R18-01-B=PARTIAL', 'R18-01-C=PARTIAL']"
+    },
+    {
+      "name": "Acceptance rows: sse-contract",
+      "status": "fail",
+      "severity": "blocker",
+      "evidence": "docs/v0.1.18/acceptance-checklist.md: missing=[] incomplete=['R18-02-A=PARTIAL', 'R18-02-B=PARTIAL', 'R18-02-C=PARTIAL']"
+    },
+    {
+      "name": "Acceptance rows: cancellation-concurrency",
+      "status": "fail",
+      "severity": "blocker",
+      "evidence": "docs/v0.1.18/acceptance-checklist.md: missing=[] incomplete=['R18-03-A=PARTIAL', 'R18-03-B=PARTIAL', 'R18-03-C=PARTIAL']"
+    },
+    {
+      "name": "Acceptance rows: model-calls",
+      "status": "fail",
+      "severity": "blocker",
+      "evidence": "docs/v0.1.18/acceptance-checklist.md: missing=[] incomplete=['R18-04-A=PARTIAL', 'R18-04-B=PARTIAL', 'R18-04-C=PARTIAL', 'R18-04-D=PARTIAL']"
+    },
+    {
+      "name": "Acceptance rows: context-budget",
+      "status": "fail",
+      "severity": "blocker",
+      "evidence": "docs/v0.1.18/acceptance-checklist.md: missing=[] incomplete=['R18-05-A=PARTIAL', 'R18-05-B=PARTIAL']"
+    },
+    {
+      "name": "Acceptance rows: run-center",
+      "status": "fail",
+      "severity": "blocker",
+      "evidence": "docs/v0.1.18/acceptance-checklist.md: missing=[] incomplete=['R18-06-A=PARTIAL']"
+    },
+    {
+      "name": "Acceptance rows: evidence-gates",
+      "status": "fail",
+      "severity": "blocker",
+      "evidence": "docs/v0.1.18/acceptance-checklist.md: missing=[] incomplete=['R18-07-A=PARTIAL']"
+    },
+    {
+      "name": "run-ledger evidence",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "docs/v0.1.18/evidence-ledger.md: markers=['r18-run-ledger', 'terminal-once', 'confirmed dead-owner', 'registry fallback suppression']"
+    },
+    {
+      "name": "sse contract evidence",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "docs/v0.1.18/evidence-ledger.md: markers=['r18-sse-contract', 'run.failed', 'stream.replay_gap', 'request-scoped history recovery']"
+    },
+    {
+      "name": "cancellation and concurrency evidence",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "docs/v0.1.18/evidence-ledger.md: markers=['r18-cancel-concurrency', 'backpressure', 'subagent', 'busy fallback']"
+    },
+    {
+      "name": "model-call evidence",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "docs/v0.1.18/evidence-ledger.md: markers=['r18-model-gateway', 'model-call telemetry', 'retry policy', 'responses api']"
+    },
+    {
+      "name": "context and tool budget evidence",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "docs/v0.1.18/evidence-ledger.md: markers=['r18-context-budget', 'tool_schema_budget', 'context_budget', 'current-turn preservation']"
+    },
+    {
+      "name": "run center evidence",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "docs/v0.1.18/evidence-ledger.md: markers=['r18-run-center', 'run center', '/api/active-requests', 'diagnostics']"
+    },
+    {
+      "name": "run ledger multi-agent review",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "docs/v0.1.18/evidence-ledger.md: review consensus row present"
+    },
+    {
+      "name": "sse recovery multi-agent review",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "docs/v0.1.18/evidence-ledger.md: review consensus row present"
+    },
+    {
+      "name": "model gateway multi-agent review",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "docs/v0.1.18/evidence-ledger.md: review consensus row present"
+    },
+    {
+      "name": "run center multi-agent review",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "docs/v0.1.18/evidence-ledger.md: review consensus row present"
+    },
+    {
+      "name": "GitHub token pattern scan",
+      "status": "pass",
+      "severity": "info",
+      "evidence": "No GitHub token pattern found outside ignored artifacts"
+    }
+  ]
+}
