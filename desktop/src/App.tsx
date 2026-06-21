@@ -443,13 +443,30 @@ function isRuntimeRequestUiActive(request?: RuntimeActiveRequest | null) {
   return !Number.isFinite(ageSeconds) || ageSeconds < 30;
 }
 
-function isPrimaryChatActiveRequest(request?: RuntimeActiveRequest | null) {
+function isSubagentRuntimeRequest(request?: RuntimeActiveRequest | null) {
   const requestId = String(request?.request_id || "");
   const sessionId = String(request?.session_id || "");
   return (
-    request?.run_type !== "subagent"
-    && !requestId.startsWith("subagent-")
-    && !sessionId.startsWith("subagent-")
+    request?.run_type === "subagent"
+    || requestId.startsWith("subagent-")
+    || sessionId.startsWith("subagent-")
+  );
+}
+
+function isSchedulerRuntimeRequest(request?: RuntimeActiveRequest | null) {
+  const requestId = String(request?.request_id || "");
+  const sessionId = String(request?.session_id || "");
+  return (
+    request?.run_type === "scheduler"
+    || requestId.startsWith("scheduler_")
+    || sessionId.startsWith("scheduler_")
+  );
+}
+
+function isPrimaryChatActiveRequest(request?: RuntimeActiveRequest | null) {
+  return (
+    !isSubagentRuntimeRequest(request)
+    && !isSchedulerRuntimeRequest(request)
     && isRuntimeRequestUiActive(request)
   );
 }
@@ -492,13 +509,11 @@ function isRunCenterVisibleRequest(request?: RuntimeActiveRequest | null) {
 }
 
 function isRunCenterSubagentRequest(request?: RuntimeActiveRequest | null) {
-  const requestId = String(request?.request_id || "");
-  const sessionId = String(request?.session_id || "");
-  return (
-    request?.run_type === "subagent"
-    || requestId.startsWith("subagent-")
-    || sessionId.startsWith("subagent-")
-  );
+  return isSubagentRuntimeRequest(request);
+}
+
+function isRunCenterSchedulerRequest(request?: RuntimeActiveRequest | null) {
+  return isSchedulerRuntimeRequest(request);
 }
 
 function getRunCenterSubagentTaskId(request?: RuntimeActiveRequest | null) {
@@ -4962,6 +4977,10 @@ export function App() {
       setToast("Subagent runs are visible in Run Center; export diagnostics for details");
       return;
     }
+    if (isRunCenterSchedulerRequest(request)) {
+      setToast("Scheduler runs are visible in Run Center; export diagnostics for details");
+      return;
+    }
     const sessionId = String(request.session_id || "");
     if (!sessionId) {
       setToast("Run Center item has no session id");
@@ -5013,6 +5032,10 @@ export function App() {
         }
         setRuntimeSnapshot(await loadRuntimeSnapshot());
         setToast("Subagent stop requested");
+        return;
+      }
+      if (isRunCenterSchedulerRequest(request)) {
+        setToast("Scheduler runs are diagnostics-only until scheduler cancellation is available");
         return;
       }
       await cancelChatRequest({ requestId, sessionId });
@@ -5949,8 +5972,11 @@ export function App() {
                           const requestId = String(request.request_id || "");
                           const sessionId = String(request.session_id || "");
                           const isSubagent = isRunCenterSubagentRequest(request);
+                          const isScheduler = isRunCenterSchedulerRequest(request);
+                          const diagnosticsOnly = isSubagent || isScheduler;
                           const subagentTaskId = isSubagent ? getRunCenterSubagentTaskId(request) : "";
                           const age = formatRunAge(request.cancelled ? request.cancel_age_seconds ?? request.age_seconds : request.age_seconds);
+                          const diagnosticsOnlyTitle = isScheduler ? "Scheduler runs are diagnostics-only here" : "Subagent runs are diagnostics-only here";
                           return (
                             <article className={`run-center-row ${runCenterStateClass(request)}`} key={requestId || `${sessionId}-${request.source || "request"}`}>
                               <div className="run-center-row-main">
@@ -5959,7 +5985,7 @@ export function App() {
                                 <small>{shortRequestId(requestId)}{request.phase ? ` · ${request.phase}` : ""}{age ? ` · ${age}` : ""}</small>
                               </div>
                               <div className="run-center-actions">
-                                <button type="button" onClick={() => void openRunCenterSession(request)} disabled={isSubagent} title={isSubagent ? "Subagent runs are diagnostics-only here" : "Open or recover session"}>
+                                <button type="button" onClick={() => void openRunCenterSession(request)} disabled={diagnosticsOnly} title={diagnosticsOnly ? diagnosticsOnlyTitle : "Open or recover session"}>
                                   <FolderOpen aria-hidden="true" />
                                   Open
                                 </button>
@@ -5970,8 +5996,8 @@ export function App() {
                                 <button
                                   type="button"
                                   onClick={() => void stopRunCenterRequest(request)}
-                                  disabled={runCenterState(request) === "failed" || (isSubagent && !subagentTaskId)}
-                                  title={isSubagent ? (subagentTaskId ? "Stop subagent run" : "Subagent task id unavailable") : "Stop run"}
+                                  disabled={runCenterState(request) === "failed" || isScheduler || (isSubagent && !subagentTaskId)}
+                                  title={isScheduler ? "Scheduler cancellation is not available yet" : isSubagent ? (subagentTaskId ? "Stop subagent run" : "Subagent task id unavailable") : "Stop run"}
                                 >
                                   <Square aria-hidden="true" />
                                   Stop

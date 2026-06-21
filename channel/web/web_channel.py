@@ -1258,6 +1258,14 @@ class WebChannel(ChatChannel):
                 if row.get("request_id")
             }
             ledger = get_run_ledger()
+            def is_primary_chat_request(item, request_id: str, session_id: str) -> bool:
+                run_type = str((item or {}).get("run_type") or "message").lower()
+                return (
+                    run_type not in {"subagent", "scheduler"}
+                    and not str(request_id or "").startswith(("subagent-", "scheduler_"))
+                    and not str(session_id or "").startswith(("subagent-", "scheduler_"))
+                )
+
             stale_locks = []
             for item in list_session_locks(_get_workspace_root(), cleanup=False):
                 if not (item.get("dead_owner") or item.get("stale")):
@@ -1315,7 +1323,7 @@ class WebChannel(ChatChannel):
                     item["cancel_age_seconds"] = registry_row.get("cancel_age_seconds")
                 requests.append(item)
                 seen_request_ids.add(request_id)
-                if session_id and not item.get("cancelled"):
+                if session_id and not item.get("cancelled") and is_primary_chat_request(item, request_id, session_id):
                     sessions.setdefault(session_id, []).append(request_id)
             for row in registry_rows:
                 request_id = row.get("request_id", "")
@@ -1337,8 +1345,10 @@ class WebChannel(ChatChannel):
                 }
                 if request_id.startswith("subagent-") or str(session_id).startswith("subagent-"):
                     item["run_type"] = "subagent"
+                elif request_id.startswith("scheduler_") or str(session_id).startswith("scheduler_"):
+                    item["run_type"] = "scheduler"
                 requests.append(item)
-                if session_id and not item.get("cancelled"):
+                if session_id and not item.get("cancelled") and is_primary_chat_request(item, request_id, session_id):
                     sessions.setdefault(session_id, []).append(request_id)
             return {
                 "status": "success",

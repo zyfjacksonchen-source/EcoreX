@@ -4,6 +4,7 @@ Integration module for scheduler with AgentBridge
 
 import os
 import threading
+import uuid
 from typing import Optional
 from config import conf
 from common.log import logger
@@ -16,6 +17,7 @@ _scheduler_service = None
 _task_store = None
 # Module-level lock to guard idempotent initialization across threads
 _init_lock = threading.Lock()
+_SCHEDULER_RUN_REQUEST_ID_KEY = "_scheduler_run_request_id"
 
 
 def init_scheduler(agent_bridge) -> bool:
@@ -61,37 +63,7 @@ def init_scheduler(agent_bridge) -> bool:
             # the scheduler to retry on the next tick (e.g. channel not yet
             # ready right after process start).
             def execute_task_callback(task: dict):
-                try:
-                    action = task.get("action", {})
-                    action_type = action.get("type")
-                    channel_type = action.get("channel_type", "unknown")
-                    receiver = action.get("receiver", "")
-
-                    if not _is_channel_ready(channel_type, receiver):
-                        logger.warning(
-                            f"[Scheduler] Task {task.get('id')}: channel "
-                            f"'{channel_type}' not ready for receiver={receiver} "
-                            f"(no inbound msg cached since restart?); deferring"
-                        )
-                        return False
-
-                    if not _authorize_scheduled_execution(task):
-                        return True
-
-                    if action_type == "agent_task":
-                        return _execute_agent_task(task, agent_bridge)
-                    elif action_type == "send_message":
-                        return _execute_send_message(task, agent_bridge)
-                    elif action_type == "tool_call":
-                        return _execute_tool_call(task, agent_bridge)
-                    elif action_type == "skill_call":
-                        return _execute_skill_call(task, agent_bridge)
-                    else:
-                        logger.warning(f"[Scheduler] Unknown action type: {action_type}")
-                        return True
-                except Exception as e:
-                    logger.error(f"[Scheduler] Error executing task {task.get('id')}: {e}")
-                    return False
+                return _execute_scheduled_task(task, agent_bridge)
 
             # Create scheduler service
             _scheduler_service = SchedulerService(_task_store, execute_task_callback)
@@ -147,6 +119,210 @@ def get_task_store():
 def get_scheduler_service():
     """Get the global scheduler service instance"""
     return _scheduler_service
+
+
+def _scheduler_action(task: dict) -> dict:
+    action = task.get("action", {}) if isinstance(task, dict) else {}
+    return action if isinstance(action, dict) else {}
+
+
+def _scheduler_run_request_id(task: dict) -> str:
+    if not isinstance(task, dict):
+        return f"scheduler_unknown_{uuid.uuid4().hex[:8]}"
+    existing = task.get(_SCHEDULER_RUN_REQUEST_ID_KEY)
+    if existing:
+        return str(existing)
+    task_id = str(task.get("id") or "unknown")
+    request_id = f"scheduler_{task_id}_{uuid.uuid4().hex[:8]}"
+    task[_SCHEDULER_RUN_REQUEST_ID_KEY] = request_id
+    return request_id
+
+
+def _scheduler_session_id(task: dict) -> str:
+    action = _scheduler_action(task)
+    task_id = str(task.get("id") or "unknown") if isinstance(task, dict) else "unknown"
+    receiver = str(action.get("receiver") or action.get("notify_session_id") or "")
+    action_type = str(action.get("type") or "")
+    if action_type in {"agent_task", "skill_call"}:
+        return f"scheduler_{receiver or 'unknown'}_{task_id}"
+    return str(action.get("notify_session_id") or receiver or f"scheduler_{task_id}")
+
+
+def _scheduler_parent_id(task: dict) -> str:
+    action = _scheduler_action(task)
+    return str(action.get("notify_session_id") or action.get("receiver") or "")
+
+
+def _scheduler_run_metadata(task: dict) -> dict:
+    action = _scheduler_action(task)
+    schedule = task.get("schedule", {}) if isinstance(task, dict) else {}
+    if not isinstance(schedule, dict):
+        schedule = {}
+    call_name = (
+        action.get("call_name")
+        or action.get("tool_name")
+        or action.get("skill_name")
+    )
+    metadata = {
+        "task_id": str(task.get("id") or "") if isinstance(task, dict) else "",
+        "task_name": str(task.get("name") or "") if isinstance(task, dict) else "",
+        "action_type": str(action.get("type") or ""),
+        "channel_type": str(action.get("channel_type") or "unknown"),
+        "receiver": str(action.get("receiver") or ""),
+        "schedule_type": str(schedule.get("type") or ""),
+        "call_name": str(call_name or ""),
+    }
+    return {key: value for key, value in metadata.items() if value}
+
+
+def _mark_scheduler_run_created(task: dict, request_id: str) -> None:
+    try:
+        from agent.protocol import get_run_ledger
+
+        ledger = get_run_ledger()
+        ledger.create_run(
+            request_id,
+            _scheduler_session_id(task),
+            run_type="scheduler",
+            parent_id=_scheduler_parent_id(task),
+            phase="queued",
+            status="queued",
+            metadata=_scheduler_run_metadata(task),
+        )
+        ledger.mark_phase(request_id, "running", status="running")
+    except Exception as e:
+        logger.debug(f"[Scheduler] Run ledger create skipped for {request_id}: {e}")
+
+
+def _mark_scheduler_run_phase(request_id: str, phase: str, status: Optional[str] = None) -> None:
+    if not request_id:
+        return
+    try:
+        from agent.protocol import get_run_ledger
+
+        get_run_ledger().mark_phase(request_id, phase, status=status)
+    except Exception as e:
+        logger.debug(f"[Scheduler] Run ledger phase update skipped for {request_id}: {e}")
+
+
+def _mark_scheduler_run_terminal(
+    request_id: str,
+    status: str,
+    *,
+    reason: str = "",
+    error_code: str = "",
+    error_message: str = "",
+) -> None:
+    if not request_id:
+        return
+    try:
+        from agent.protocol import get_run_ledger
+
+        get_run_ledger().mark_terminal(
+            request_id,
+            status,
+            reason=reason,
+            error_code=error_code,
+            error_message=error_message,
+        )
+    except Exception as e:
+        logger.debug(f"[Scheduler] Run ledger terminal update skipped for {request_id}: {e}")
+
+
+def _mark_scheduler_task_failed(
+    task: dict,
+    reason: str,
+    error_code: str,
+    error_message: str = "",
+) -> None:
+    _mark_scheduler_run_terminal(
+        _scheduler_run_request_id(task),
+        "failed",
+        reason=reason,
+        error_code=error_code,
+        error_message=error_message,
+    )
+
+
+def _execute_scheduled_task(task: dict, agent_bridge) -> bool:
+    """Execute one due scheduled task attempt and persist its lifecycle."""
+    action = _scheduler_action(task)
+    action_type = action.get("type")
+    channel_type = action.get("channel_type", "unknown")
+    receiver = action.get("receiver", "")
+
+    if not _is_channel_ready(channel_type, receiver):
+        logger.warning(
+            f"[Scheduler] Task {task.get('id') if isinstance(task, dict) else '<unknown>'}: "
+            f"channel '{channel_type}' not ready for receiver={receiver} "
+            f"(no inbound msg cached since restart?); deferring"
+        )
+        return False
+
+    if isinstance(task, dict):
+        task.pop(_SCHEDULER_RUN_REQUEST_ID_KEY, None)
+    request_id = _scheduler_run_request_id(task)
+    _mark_scheduler_run_created(task, request_id)
+
+    try:
+        _mark_scheduler_run_phase(request_id, "authorizing", status="running")
+        if not _authorize_scheduled_execution(task):
+            _mark_scheduler_run_terminal(
+                request_id,
+                "failed",
+                reason="scheduler_permission_denied",
+                error_code="SCHEDULER_PERMISSION_DENIED",
+                error_message="Background scheduler execution was blocked by the permission boundary.",
+            )
+            return True
+
+        if action_type == "agent_task":
+            _mark_scheduler_run_phase(request_id, "agent_task_running", status="running")
+            ok = _execute_agent_task(task, agent_bridge)
+        elif action_type == "send_message":
+            _mark_scheduler_run_phase(request_id, "send_message_running", status="running")
+            ok = _execute_send_message(task, agent_bridge)
+        elif action_type == "tool_call":
+            _mark_scheduler_run_phase(request_id, "tool_call_running", status="running")
+            ok = _execute_tool_call(task, agent_bridge)
+        elif action_type == "skill_call":
+            _mark_scheduler_run_phase(request_id, "skill_call_running", status="running")
+            ok = _execute_skill_call(task, agent_bridge)
+        else:
+            logger.warning(f"[Scheduler] Unknown action type: {action_type}")
+            _mark_scheduler_run_terminal(
+                request_id,
+                "failed",
+                reason="scheduler_unknown_action",
+                error_code="SCHEDULER_UNKNOWN_ACTION",
+                error_message=f"Unknown scheduled action type: {action_type}",
+            )
+            return True
+
+        if ok:
+            _mark_scheduler_run_terminal(request_id, "completed", reason="scheduler_completed")
+        else:
+            _mark_scheduler_run_terminal(
+                request_id,
+                "failed",
+                reason="scheduler_execution_failed",
+                error_code="SCHEDULER_EXECUTION_FAILED",
+                error_message="Scheduled task execution or delivery failed; scheduler will retry if the task remains due.",
+            )
+        return ok
+    except Exception as e:
+        logger.error(
+            f"[Scheduler] Error executing task "
+            f"{task.get('id') if isinstance(task, dict) else '<unknown>'}: {e}"
+        )
+        _mark_scheduler_run_terminal(
+            request_id,
+            "failed",
+            reason="scheduler_execution_exception",
+            error_code="SCHEDULER_EXECUTION_EXCEPTION",
+            error_message=str(e),
+        )
+        return False
 
 
 def _authorize_scheduled_execution(task: dict) -> bool:
@@ -257,10 +433,22 @@ def _execute_agent_task(task: dict, agent_bridge) -> bool:
         
         if not task_description:
             logger.error(f"[Scheduler] Task {task['id']}: No task_description specified")
+            _mark_scheduler_task_failed(
+                task,
+                "scheduler_malformed_task",
+                "SCHEDULER_MALFORMED_TASK",
+                "agent_task action is missing task_description.",
+            )
             return True  # malformed task, don't loop forever
         
         if not receiver:
             logger.error(f"[Scheduler] Task {task['id']}: No receiver specified")
+            _mark_scheduler_task_failed(
+                task,
+                "scheduler_malformed_task",
+                "SCHEDULER_MALFORMED_TASK",
+                "agent_task action is missing receiver.",
+            )
             return True
         
         # Check for unsupported channels
@@ -281,8 +469,7 @@ def _execute_agent_task(task: dict, agent_bridge) -> bool:
         
         # Channel-specific setup
         if channel_type == "web":
-            import uuid
-            request_id = f"scheduler_{task['id']}_{uuid.uuid4().hex[:8]}"
+            request_id = _scheduler_run_request_id(task)
             context["request_id"] = request_id
         elif channel_type == "feishu":
             context["receive_id_type"] = "chat_id" if is_group else "open_id"
@@ -307,6 +494,12 @@ def _execute_agent_task(task: dict, agent_bridge) -> bool:
 
             if not (reply and reply.content):
                 logger.error(f"[Scheduler] Task {task['id']}: No result from agent execution")
+                _mark_scheduler_task_failed(
+                    task,
+                    "scheduler_empty_result",
+                    "SCHEDULER_EMPTY_RESULT",
+                    "Agent execution completed without reply content.",
+                )
                 return True  # agent ran but produced nothing; don't loop
 
             from channel.channel_factory import create_channel
@@ -354,6 +547,12 @@ def _execute_send_message(task: dict, agent_bridge) -> bool:
         
         if not receiver:
             logger.error(f"[Scheduler] Task {task['id']}: No receiver specified")
+            _mark_scheduler_task_failed(
+                task,
+                "scheduler_malformed_task",
+                "SCHEDULER_MALFORMED_TASK",
+                "send_message action is missing receiver.",
+            )
             return True
         
         # Create context for sending message
@@ -365,8 +564,7 @@ def _execute_send_message(task: dict, agent_bridge) -> bool:
         # Channel-specific context setup
         if channel_type == "web":
             # Web channel needs request_id
-            import uuid
-            request_id = f"scheduler_{task['id']}_{uuid.uuid4().hex[:8]}"
+            request_id = _scheduler_run_request_id(task)
             context["request_id"] = request_id
             logger.debug(f"[Scheduler] Generated request_id for web channel: {request_id}")
         elif channel_type == "feishu":
@@ -437,18 +635,42 @@ def _execute_tool_call(task: dict, agent_bridge) -> bool:
 
         if not tool_name:
             logger.error(f"[Scheduler] Task {task['id']}: No tool_name specified")
+            _mark_scheduler_task_failed(
+                task,
+                "scheduler_malformed_task",
+                "SCHEDULER_MALFORMED_TASK",
+                "tool_call action is missing tool_name.",
+            )
             return True
         if not receiver:
             logger.error(f"[Scheduler] Task {task['id']}: No receiver specified")
+            _mark_scheduler_task_failed(
+                task,
+                "scheduler_malformed_task",
+                "SCHEDULER_MALFORMED_TASK",
+                "tool_call action is missing receiver.",
+            )
             return True
 
         from agent.tools.tool_manager import ToolManager
         tool = ToolManager().create_tool(tool_name)
         if not tool:
             logger.error(f"[Scheduler] Task {task['id']}: Tool '{tool_name}' not found")
+            _mark_scheduler_task_failed(
+                task,
+                "scheduler_tool_not_found",
+                "SCHEDULER_TOOL_NOT_FOUND",
+                f"Tool '{tool_name}' was not found.",
+            )
             return True
 
         if not _authorize_scheduled_tool_call(tool, tool_name, tool_params, task):
+            _mark_scheduler_task_failed(
+                task,
+                "scheduler_tool_permission_denied",
+                "SCHEDULER_TOOL_PERMISSION_DENIED",
+                f"Tool '{tool_name}' was blocked by the permission boundary.",
+            )
             return True
 
         logger.info(f"[Scheduler] Task {task['id']}: Executing tool '{tool_name}' with params {tool_params}")
@@ -464,8 +686,7 @@ def _execute_tool_call(task: dict, agent_bridge) -> bool:
 
         request_id = None
         if channel_type == "web":
-            import uuid
-            request_id = f"scheduler_{task['id']}_{uuid.uuid4().hex[:8]}"
+            request_id = _scheduler_run_request_id(task)
             context["request_id"] = request_id
         elif channel_type == "feishu":
             context["receive_id_type"] = "chat_id" if is_group else "open_id"
@@ -513,9 +734,21 @@ def _execute_skill_call(task: dict, agent_bridge) -> bool:
 
         if not skill_name:
             logger.error(f"[Scheduler] Task {task['id']}: No skill_name specified")
+            _mark_scheduler_task_failed(
+                task,
+                "scheduler_malformed_task",
+                "SCHEDULER_MALFORMED_TASK",
+                "skill_call action is missing skill_name.",
+            )
             return True
         if not receiver:
             logger.error(f"[Scheduler] Task {task['id']}: No receiver specified")
+            _mark_scheduler_task_failed(
+                task,
+                "scheduler_malformed_task",
+                "SCHEDULER_MALFORMED_TASK",
+                "skill_call action is missing receiver.",
+            )
             return True
 
         logger.info(f"[Scheduler] Task {task['id']}: Executing skill '{skill_name}' with params {skill_params}")
@@ -532,8 +765,7 @@ def _execute_skill_call(task: dict, agent_bridge) -> bool:
         context["session_id"] = scheduler_session_id
 
         if channel_type == "web":
-            import uuid
-            request_id = f"scheduler_{task['id']}_{uuid.uuid4().hex[:8]}"
+            request_id = _scheduler_run_request_id(task)
             context["request_id"] = request_id
         elif channel_type == "feishu":
             context["receive_id_type"] = "chat_id" if is_group else "open_id"
@@ -551,6 +783,12 @@ def _execute_skill_call(task: dict, agent_bridge) -> bool:
 
         if not (reply and reply.content):
             logger.error(f"[Scheduler] Task {task['id']}: No result from skill execution")
+            _mark_scheduler_task_failed(
+                task,
+                "scheduler_empty_result",
+                "SCHEDULER_EMPTY_RESULT",
+                "Skill execution completed without reply content.",
+            )
             return True
 
         content = reply.content

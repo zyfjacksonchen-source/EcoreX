@@ -305,3 +305,28 @@
     blocker groups because the broad v0.1.18 acceptance rows are still PARTIAL.
   - Focused pytest covers GO, PARTIAL/NO-GO, token-pattern failure, and
     token-scan-skipped blocker behavior.
+- Added the first scheduler execution run-ledger slice:
+  - Scheduler due-task execution now flows through `_execute_scheduled_task()`,
+    creating one durable `run_type=scheduler` row per execution attempt after
+    the outbound channel readiness check passes.
+  - Scheduler attempt rows use a stable per-attempt request id that is also
+    passed to web-channel contexts, so active snapshots and delivery mappings
+    describe the same backend run.
+  - Each call to `_execute_scheduled_task()` forces a fresh attempt id even if a
+    caller reuses the same task dictionary, so a prior terminal row cannot block
+    a retry or recurring execution attempt.
+  - The ledger records `queued` then `running` before the action dispatch, and
+    terminal-once semantics close attempts as `completed` on delivery success or
+    `failed` on scheduler permission denial, unknown action, execution/delivery
+    failure, malformed consumed tasks, empty agent/skill results, missing tools,
+    and scheduled tool permission denial.
+  - `active_requests_snapshot()` consumes durable scheduler rows but keeps them
+    out of primary chat-session grouping; desktop primary-chat recovery also
+    filters scheduler rows, while Run Center keeps them visible as
+    diagnostics-only until scheduler cancellation/recovery contracts exist.
+  - Focused backend pytest passed for scheduler active/terminal ledger state,
+    fresh attempt ids for reused task dictionaries, scheduler permission-denied
+    terminal rows, scheduled tool permission-denied terminal rows,
+    scheduler-out-of-primary-session snapshots, Run Center diagnostics-only
+    source contract, and the existing scheduler fail-closed permission tests;
+    desktop `npm run typecheck` passed.

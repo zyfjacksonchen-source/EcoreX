@@ -815,6 +815,33 @@ class TestWebParallelHandlers(unittest.TestCase):
             finally:
                 registry.unregister(request_id)
 
+    def test_active_request_snapshot_keeps_scheduler_run_out_of_primary_sessions(self):
+        from agent.protocol import get_run_ledger
+        from channel.web import web_channel
+
+        channel = web_channel.WebChannel()
+        request_id = "scheduler_task-active_1234abcd"
+        session_id = "web-session-with-scheduler"
+        with isolated_run_ledger():
+            ledger = get_run_ledger()
+            ledger.create_run(
+                request_id,
+                session_id,
+                run_type="scheduler",
+                phase="tool_call_running",
+                status="running",
+                metadata={"task_id": "task-active"},
+            )
+            with tempfile.TemporaryDirectory() as workspace:
+                with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                    snapshot = channel.active_requests_snapshot()
+
+            active = [item for item in snapshot["requests"] if item.get("request_id") == request_id]
+            self.assertEqual(len(active), 1)
+            self.assertEqual(active[0]["run_type"], "scheduler")
+            self.assertEqual(active[0]["state"], "running")
+            self.assertNotIn(session_id, snapshot["sessions"])
+
     def test_active_request_snapshot_cleans_dead_session_locks(self):
         from channel.web import web_channel
         from common.ecorex_workspace import SessionLock
@@ -4663,13 +4690,18 @@ class TestAgentHostBoundary(unittest.TestCase):
             "const runCenterRequests = useMemo",
             "runtimeSnapshot.activeRequests",
             "runtimeSnapshot.staleLocks",
+            "function isSubagentRuntimeRequest",
+            "function isSchedulerRuntimeRequest",
+            "!isSchedulerRuntimeRequest(request)",
             "function runCenterState",
             "function isRunCenterVisibleRequest",
             ".filter(isRunCenterVisibleRequest)",
             "function isRunCenterSubagentRequest",
+            "function isRunCenterSchedulerRequest",
             "function getRunCenterSubagentTaskId",
             "async function openRunCenterSession",
             "if (isRunCenterSubagentRequest(request))",
+            "if (isRunCenterSchedulerRequest(request))",
             "const scopedRow: SessionRow = {",
             "...(existing || {",
             "const requestId = request.request_id ? String(request.request_id) : undefined",
@@ -4687,8 +4719,10 @@ class TestAgentHostBoundary(unittest.TestCase):
             "runCenterStats.cancelling",
             "runCenterStats.failed",
             "runCenterStats.stale",
-            "disabled={isSubagent}",
-            "disabled={runCenterState(request) === \"failed\" || (isSubagent && !subagentTaskId)}",
+            "const diagnosticsOnly = isSubagent || isScheduler",
+            "disabled={diagnosticsOnly}",
+            "disabled={runCenterState(request) === \"failed\" || isScheduler || (isSubagent && !subagentTaskId)}",
+            "Scheduler runs are visible in Run Center; export diagnostics for details",
         ]
         for marker in required_markers:
             self.assertIn(marker, app_source)
@@ -5180,6 +5214,215 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertEqual(vision_result.status, "error")
         self.assertIn("read-only", str(vision_result.result))
         self.assertFalse(os.path.exists(os.path.join(workspace, "tmp")))
+
+    def test_scheduler_run_ledger_records_active_and_terminal_agent_task(self):
+        from agent.protocol import get_run_ledger
+        from bridge.reply import Reply, ReplyType
+        from channel.web import web_channel
+
+        fake_croniter = types.ModuleType("croniter")
+        fake_croniter.croniter = lambda *args, **kwargs: None
+        with patch.dict(sys.modules, {"croniter": fake_croniter}):
+            from agent.tools.scheduler import integration as scheduler_integration
+
+        class FakeChannel:
+            def __init__(self):
+                self.session_queues = {"web-session-ledger": Queue()}
+                self.request_to_session = {}
+                self.sent = []
+
+            def send(self, reply, context):
+                self.sent.append((reply, context))
+
+        class FakeAgentBridge:
+            def __init__(self):
+                self.request_id = ""
+                self.session_id = ""
+                self.running_run = None
+                self.active_snapshot = None
+                self.remembered = None
+
+            def agent_reply(self, _content, context=None, **_kwargs):
+                self.request_id = context.get("request_id", "")
+                self.session_id = context.get("session_id", "")
+                self.running_run = ledger.get_run(self.request_id)
+                with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                    self.active_snapshot = web_channel.WebChannel().active_requests_snapshot()
+                return Reply(ReplyType.TEXT, "scheduled result")
+
+            def remember_scheduled_output(self, session_id, content, **kwargs):
+                self.remembered = (session_id, content, kwargs)
+
+        task = {
+            "id": "task-ledger-agent",
+            "name": "Nightly summary",
+            "schedule": {"type": "once"},
+            "action": {
+                "type": "agent_task",
+                "task_description": "summarize project state",
+                "receiver": "web-session-ledger",
+                "channel_type": "web",
+            },
+        }
+
+        with isolated_run_ledger():
+            ledger = get_run_ledger()
+            with tempfile.TemporaryDirectory() as workspace:
+                fake_channel = FakeChannel()
+                fake_bridge = FakeAgentBridge()
+                with patch("channel.channel_factory.create_channel", return_value=fake_channel), \
+                        patch.object(scheduler_integration, "_authorize_scheduled_execution", return_value=True):
+                    ok = scheduler_integration._execute_scheduled_task(task, fake_bridge)
+
+                self.assertTrue(ok)
+                self.assertEqual(len(fake_channel.sent), 1)
+                self.assertEqual(fake_channel.request_to_session[fake_bridge.request_id], "web-session-ledger")
+                self.assertEqual(fake_bridge.session_id, "scheduler_web-session-ledger_task-ledger-agent")
+                self.assertEqual(fake_bridge.running_run["run_type"], "scheduler")
+                self.assertEqual(fake_bridge.running_run["status"], "running")
+                self.assertEqual(fake_bridge.running_run["phase"], "agent_task_running")
+
+                active = [
+                    item for item in fake_bridge.active_snapshot["requests"]
+                    if item.get("request_id") == fake_bridge.request_id
+                ]
+                self.assertEqual(len(active), 1)
+                self.assertEqual(active[0]["run_type"], "scheduler")
+                self.assertEqual(active[0]["state"], "running")
+                self.assertEqual(active[0]["parent_id"], "web-session-ledger")
+
+                final = ledger.get_run(fake_bridge.request_id)
+                self.assertEqual(final["status"], "completed")
+                self.assertEqual(final["phase"], "completed")
+                self.assertEqual(final["terminal_reason"], "scheduler_completed")
+                self.assertEqual(final["metadata"]["task_id"], "task-ledger-agent")
+                self.assertEqual(final["metadata"]["action_type"], "agent_task")
+                self.assertEqual(ledger.active_snapshot(), [])
+                self.assertEqual(fake_bridge.remembered[0], "web-session-ledger")
+
+    def test_scheduler_run_ledger_records_permission_denied_terminal_state(self):
+        from agent.protocol import get_run_ledger
+
+        fake_croniter = types.ModuleType("croniter")
+        fake_croniter.croniter = lambda *args, **kwargs: None
+        with patch.dict(sys.modules, {"croniter": fake_croniter}):
+            from agent.tools.scheduler import integration as scheduler_integration
+
+        class FakeChannel:
+            session_queues = {"web-session-denied": Queue()}
+
+        task = {
+            "id": "task-ledger-denied",
+            "name": "Denied reminder",
+            "action": {
+                "type": "send_message",
+                "content": "hello",
+                "receiver": "web-session-denied",
+                "channel_type": "web",
+            },
+        }
+
+        with isolated_run_ledger():
+            ledger = get_run_ledger()
+            with patch("channel.channel_factory.create_channel", return_value=FakeChannel()), \
+                    patch.object(scheduler_integration, "_authorize_scheduled_execution", return_value=False):
+                ok = scheduler_integration._execute_scheduled_task(task, object())
+
+            self.assertTrue(ok)
+            request_id = task["_scheduler_run_request_id"]
+            final = ledger.get_run(request_id)
+            self.assertEqual(final["run_type"], "scheduler")
+            self.assertEqual(final["status"], "failed")
+            self.assertEqual(final["terminal_reason"], "scheduler_permission_denied")
+            self.assertEqual(final["error_code"], "SCHEDULER_PERMISSION_DENIED")
+            self.assertEqual(ledger.active_snapshot(), [])
+
+    def test_scheduler_run_ledger_uses_new_request_id_for_reused_task_dict(self):
+        from agent.protocol import get_run_ledger
+
+        fake_croniter = types.ModuleType("croniter")
+        fake_croniter.croniter = lambda *args, **kwargs: None
+        with patch.dict(sys.modules, {"croniter": fake_croniter}):
+            from agent.tools.scheduler import integration as scheduler_integration
+
+        class FakeChannel:
+            def __init__(self):
+                self.session_queues = {"web-session-repeat": Queue()}
+                self.request_to_session = {}
+                self.sent = []
+
+            def send(self, reply, context):
+                self.sent.append((reply, context))
+
+        task = {
+            "id": "task-ledger-repeat",
+            "name": "Repeat reminder",
+            "action": {
+                "type": "send_message",
+                "content": "hello",
+                "receiver": "web-session-repeat",
+                "channel_type": "web",
+            },
+        }
+
+        with isolated_run_ledger():
+            ledger = get_run_ledger()
+            fake_channel = FakeChannel()
+            with patch("channel.channel_factory.create_channel", return_value=fake_channel), \
+                    patch.object(scheduler_integration, "_authorize_scheduled_execution", return_value=True):
+                first_ok = scheduler_integration._execute_scheduled_task(task, object())
+                first_request_id = task["_scheduler_run_request_id"]
+                second_ok = scheduler_integration._execute_scheduled_task(task, object())
+                second_request_id = task["_scheduler_run_request_id"]
+
+            self.assertTrue(first_ok)
+            self.assertTrue(second_ok)
+            self.assertNotEqual(first_request_id, second_request_id)
+            self.assertEqual(ledger.get_run(first_request_id)["status"], "completed")
+            self.assertEqual(ledger.get_run(second_request_id)["status"], "completed")
+            self.assertEqual(len(fake_channel.sent), 2)
+            self.assertEqual(ledger.active_snapshot(), [])
+
+    def test_scheduler_run_ledger_preserves_tool_permission_denied_terminal_state(self):
+        from agent.protocol import get_run_ledger
+
+        fake_croniter = types.ModuleType("croniter")
+        fake_croniter.croniter = lambda *args, **kwargs: None
+        with patch.dict(sys.modules, {"croniter": fake_croniter}):
+            from agent.tools.scheduler import integration as scheduler_integration
+
+        class FakeChannel:
+            session_queues = {"web-session-tool-denied": Queue()}
+
+        task = {
+            "id": "task-ledger-tool-denied",
+            "name": "Denied tool",
+            "action": {
+                "type": "tool_call",
+                "tool_name": "bash",
+                "tool_params": {"command": "echo blocked"},
+                "receiver": "web-session-tool-denied",
+                "channel_type": "web",
+            },
+        }
+        fake_tool = types.SimpleNamespace(name="bash")
+
+        with isolated_run_ledger():
+            ledger = get_run_ledger()
+            with patch("channel.channel_factory.create_channel", return_value=FakeChannel()), \
+                    patch.object(scheduler_integration, "_authorize_scheduled_execution", return_value=True), \
+                    patch("agent.tools.tool_manager.ToolManager.create_tool", return_value=fake_tool), \
+                    patch.object(scheduler_integration, "_authorize_scheduled_tool_call", return_value=False):
+                ok = scheduler_integration._execute_scheduled_task(task, object())
+
+            self.assertTrue(ok)
+            request_id = task["_scheduler_run_request_id"]
+            final = ledger.get_run(request_id)
+            self.assertEqual(final["run_type"], "scheduler")
+            self.assertEqual(final["status"], "failed")
+            self.assertEqual(final["terminal_reason"], "scheduler_tool_permission_denied")
+            self.assertEqual(final["error_code"], "SCHEDULER_TOOL_PERMISSION_DENIED")
+            self.assertEqual(ledger.active_snapshot(), [])
 
     def test_scheduler_background_execution_requires_noninteractive_permission(self):
         fake_croniter = types.ModuleType("croniter")
