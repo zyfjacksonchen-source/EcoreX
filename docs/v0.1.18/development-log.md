@@ -504,3 +504,24 @@
     shortcuts, active-request waiting-permission snapshots, worker
     cancellation/finalization, scheduler cancellation, and bash cancel-aware
     subprocess behavior.
+- Added the non-message orphan interruption slice:
+  - WebChannel now records a process boot boundary at module load and uses it
+    during active-request recovery to distinguish current-process background
+    rows from durable rows left active by a previous sidecar process.
+  - Pre-boot `run_type=subagent` and `run_type=scheduler` rows that have no
+    in-process cancel token now terminal exactly once as
+    `subagent_sidecar_interrupted` / `scheduler_sidecar_interrupted` instead
+    of staying indefinitely active in Run Center after a sidecar restart.
+  - Pre-boot orphan subagents also mark their `.ecorex/subagents.json` task row
+    `interrupted`, which keeps the durable subagent state aligned with the run
+    ledger and releases bounded subagent slots after a sidecar restart.
+  - Current-process rows with a cancel token are preserved even when their
+    timestamp is older than the local boot boundary, and rows created after the
+    module boot boundary stay active. This keeps live scheduler/subagent work
+    from being misclassified during normal operation or tests with lazy
+    WebChannel instantiation.
+  - Focused pytest passed for subagent bounded slot reservation, queued
+    run-ledger visibility, subagent completion/cancel, scheduler run-ledger
+    state, scheduler first-visible cancel token registration, pre-boot orphan
+    interruption, current-token preservation, and Run Center subagent/scheduler
+    source contracts.

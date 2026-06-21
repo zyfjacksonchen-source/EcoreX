@@ -2,7 +2,7 @@
   "product": "EcoreX",
   "version": "0.1.18",
   "gate": "v0.1.18-production-agent",
-  "generatedAt": "2026-06-21T09:21:48Z",
+  "generatedAt": "2026-06-21T09:49:28Z",
   "status": "no-go",
   "summary": {
     "total": 18,
@@ -14,7 +14,7 @@
       "name": "Acceptance rows: run-ledger",
       "status": "fail",
       "severity": "blocker",
-      "evidence": "docs/v0.1.18/acceptance-checklist.md: missing=[] incomplete=['R18-01-A=PARTIAL', 'R18-01-B=PARTIAL', 'R18-01-C=PARTIAL']"
+      "evidence": "docs/v0.1.18/acceptance-checklist.md: missing=[] incomplete=['R18-01-A=PARTIAL', 'R18-01-C=PARTIAL']"
     },
     {
       "name": "Acceptance rows: sse-contract",
@@ -26,7 +26,7 @@
       "name": "Acceptance rows: cancellation-concurrency",
       "status": "fail",
       "severity": "blocker",
-      "evidence": "docs/v0.1.18/acceptance-checklist.md: missing=[] incomplete=['R18-03-A=PARTIAL', 'R18-03-B=PARTIAL', 'R18-03-C=PARTIAL']"
+      "evidence": "docs/v0.1.18/acceptance-checklist.md: missing=[] incomplete=['R18-03-A=PARTIAL', 'R18-03-B=PARTIAL']"
     },
     {
       "name": "Acceptance rows: model-calls",

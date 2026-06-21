@@ -45,6 +45,7 @@ TOOL_OUTPUT_LIMIT_CODE = "TOOL_OUTPUT_LIMIT"
 ARTIFACT_METADATA_LIMIT_CODE = "ARTIFACT_METADATA_LIMIT"
 SSE_RUN_TERMINAL_TYPES = {"done", "error", "cancelled", "interrupted"}
 SSE_STREAM_TERMINAL_TYPES = SSE_RUN_TERMINAL_TYPES | {"replay_gap"}
+_RUNTIME_STARTED_AT = time.time()
 DANGEROUS_OPEN_EXTENSIONS = {
     ".app",
     ".bat",
@@ -1002,6 +1003,7 @@ class WebChannel(ChatChannel):
 
     def __init__(self):
         super().__init__()
+        self.runtime_started_at = _RUNTIME_STARTED_AT
         self.msg_id_counter = 0
         self.session_queues = {}  # session_id -> Queue (fallback polling)
         self.request_to_session = {}  # request_id -> session_id
@@ -1317,6 +1319,39 @@ class WebChannel(ChatChannel):
                             error_message="Runtime session lock owner disappeared before the run reached a terminal state.",
                         )
                         interrupted_request_ids.add(request_id)
+            boot_time = float(getattr(self, "runtime_started_at", 0) or 0)
+            if boot_time > 0:
+                for row in ledger.active_snapshot():
+                    request_id = str(row.get("request_id") or "")
+                    if not request_id or request_id in registry_by_request:
+                        continue
+                    run_type = str(row.get("run_type") or "message").lower()
+                    if run_type not in {"subagent", "scheduler"}:
+                        continue
+                    updated_at = float(row.get("updated_at") or row.get("created_at") or boot_time)
+                    if updated_at >= boot_time:
+                        continue
+                    reason = f"{run_type}_sidecar_interrupted"
+                    error_code = f"{run_type.upper()}_SIDECAR_INTERRUPTED"
+                    error_message = (
+                        f"{run_type} run was left active by a previous runtime process "
+                        "and has no in-process cancel token after sidecar restart."
+                    )
+                    if run_type == "subagent":
+                        self._interrupt_orphan_subagent_state(
+                            row,
+                            reason=reason,
+                            error_code=error_code,
+                            error_message=error_message,
+                        )
+                    ledger.mark_terminal(
+                        request_id,
+                        "interrupted",
+                        reason=reason,
+                        error_code=error_code,
+                        error_message=error_message,
+                    )
+                    interrupted_request_ids.add(request_id)
             for row in ledger.active_snapshot():
                 request_id = row.get("request_id", "")
                 session_id = row.get("session_id") or self.request_to_session.get(request_id, "")
@@ -1716,6 +1751,30 @@ class WebChannel(ChatChannel):
         except Exception as e:
             logger.warning(f"[WebChannel] subagent cascade cancel skipped for {session_id}: {e}")
             return {"cancelledTasks": 0, "cancelledRequests": 0, "tasks": [], "error": str(e)}
+
+    def _interrupt_orphan_subagent_state(
+        self,
+        row: Dict[str, Any],
+        *,
+        reason: str,
+        error_code: str,
+        error_message: str,
+    ) -> Dict[str, Any]:
+        try:
+            from agent.tools.subagent.subagent import interrupt_orphan_task
+
+            metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+            return interrupt_orphan_task(
+                _get_workspace_root(),
+                task_id=str(metadata.get("task_id") or ""),
+                child_session_id=str(row.get("request_id") or row.get("session_id") or ""),
+                reason=reason,
+                error_code=error_code,
+                error_message=error_message,
+            )
+        except Exception as e:
+            logger.warning(f"[WebChannel] subagent orphan state interruption skipped: {e}")
+            return {"updated": False, "task": {}, "error": str(e)}
 
     def _session_conflict_retry_payload(self, session_id: str, *, reason: str = "session_lock_unavailable") -> Dict[str, Any]:
         active_request_ids = self._active_request_ids_for_session(session_id)

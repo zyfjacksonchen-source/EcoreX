@@ -17,7 +17,7 @@ from config import conf
 MAX_CONCURRENT_SUBAGENTS = 6
 MAX_SUBAGENT_DEPTH = 1
 DEFAULT_ROLE = "explorer"
-TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
+TERMINAL_STATUSES = {"completed", "failed", "cancelled", "interrupted"}
 ROLES = {
     "default": "General child agent for scoped execution and concise result reporting.",
     "worker": "Implementation-oriented child agent for concrete tasks.",
@@ -206,14 +206,65 @@ def cancel_children_for_parent(workspace: Path | str, parent_session_id: str) ->
     }
 
 
+def interrupt_orphan_task(
+    workspace: Path | str,
+    *,
+    task_id: str = "",
+    child_session_id: str = "",
+    reason: str = "subagent_sidecar_interrupted",
+    error_code: str = "SUBAGENT_SIDECAR_INTERRUPTED",
+    error_message: str = "",
+) -> Dict[str, Any]:
+    """Mark a pre-boot subagent state row terminal so it releases its slot."""
+    task_id = str(task_id or "").strip()
+    child_session_id = str(child_session_id or "").strip()
+    if not task_id and not child_session_id:
+        return {"updated": False, "task": {}}
+    workspace_path = Path(os.path.expanduser(str(workspace))).resolve()
+    now = int(time.time())
+    with _LOCK:
+        state = _read_state(workspace_path)
+        tasks = state.get("tasks") if isinstance(state.get("tasks"), dict) else {}
+        matched_task_id = task_id
+        task = tasks.get(matched_task_id) if matched_task_id else None
+        if not isinstance(task, dict) and child_session_id:
+            for candidate_id, candidate in tasks.items():
+                if not isinstance(candidate, dict):
+                    continue
+                if child_session_id in {
+                    str(candidate.get("childSessionId") or ""),
+                    str(candidate.get("requestId") or ""),
+                }:
+                    matched_task_id = str(candidate_id)
+                    task = candidate
+                    break
+        if not isinstance(task, dict):
+            return {"updated": False, "task": {}}
+        if str(task.get("status") or "") in TERMINAL_STATUSES:
+            return {"updated": False, "task": dict(task)}
+        task.update({
+            "status": "interrupted",
+            "interruptedAt": now,
+            "completedAt": now,
+            "terminalReason": reason,
+            "errorCode": error_code,
+            "error": error_message or "Subagent sidecar interrupted before this run reached a terminal state.",
+        })
+        _write_state(workspace_path, state)
+        return {"updated": True, "task": dict(task), "taskId": matched_task_id}
+
+
 def _run_child(workspace: Path, task: Dict[str, Any]) -> None:
     task_id = task["id"]
     child_session_id = task["childSessionId"]
     try:
         current = _task_snapshot(workspace, task_id)
-        if str(current.get("status") or "") in {"cancelled", "cancelling"}:
+        current_status = str(current.get("status") or "")
+        if current_status in {"cancelled", "cancelling"}:
             _update_task(workspace, task_id, {"status": "cancelled", "completedAt": int(time.time())})
             _mark_subagent_run_terminal(task, "cancelled", reason="cancelled_before_start")
+            return
+        if current_status in TERMINAL_STATUSES:
             return
         _update_task(workspace, task_id, {"status": "running", "startedAt": int(time.time())})
         _mark_subagent_run_phase(task, "running", status="running")
@@ -227,13 +278,16 @@ def _run_child(workspace: Path, task: Dict[str, Any]) -> None:
         })
         result = Bridge().get_agent_bridge().agent_reply(task["prompt"], context=context, clear_history=True)
         current = _task_snapshot(workspace, task_id)
-        if str(current.get("status") or "") in {"cancelled", "cancelling"}:
+        current_status = str(current.get("status") or "")
+        if current_status in {"cancelled", "cancelling"}:
             _update_task(workspace, task_id, {
                 "status": "cancelled",
                 "result": str(result or ""),
                 "completedAt": int(time.time()),
             })
             _mark_subagent_run_terminal(task, "cancelled", reason="cancelled_after_reply")
+        elif current_status in TERMINAL_STATUSES:
+            return
         else:
             _update_task(workspace, task_id, {
                 "status": "completed",
@@ -244,13 +298,16 @@ def _run_child(workspace: Path, task: Dict[str, Any]) -> None:
     except Exception as exc:
         logger.exception(f"[Subagent] child task failed: {task_id}")
         current = _task_snapshot(workspace, task_id)
-        if str(current.get("status") or "") in {"cancelled", "cancelling"} or "cancel" in str(exc).lower():
+        current_status = str(current.get("status") or "")
+        if current_status in {"cancelled", "cancelling"} or "cancel" in str(exc).lower():
             _update_task(workspace, task_id, {
                 "status": "cancelled",
                 "error": str(exc),
                 "completedAt": int(time.time()),
             })
             _mark_subagent_run_terminal(task, "cancelled", reason="subagent_cancelled", error_message=str(exc))
+            return
+        if current_status in TERMINAL_STATUSES:
             return
         _update_task(workspace, task_id, {
             "status": "failed",

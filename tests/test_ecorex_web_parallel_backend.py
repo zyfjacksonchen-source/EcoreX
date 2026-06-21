@@ -1017,6 +1017,175 @@ class TestWebParallelHandlers(unittest.TestCase):
             self.assertEqual(final["status"], "queued")
             self.assertIsNone(final["terminal_at"])
 
+    def test_active_request_snapshot_interrupts_pre_boot_subagent_and_scheduler_runs_without_tokens(self):
+        from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests
+        from channel.web import web_channel
+
+        channel = web_channel.WebChannel()
+        subagent_request_id = "subagent-pre-boot-orphan"
+        subagent_task_id = "pre-boot-subagent"
+        scheduler_request_id = "scheduler_pre_boot_orphan"
+        registry = get_cancel_registry()
+        registry.unregister(subagent_request_id)
+        registry.unregister(scheduler_request_id)
+
+        with tempfile.TemporaryDirectory() as workspace:
+            subagent_state_path = Path(workspace) / ".ecorex" / "subagents.json"
+            subagent_state_path.parent.mkdir(parents=True, exist_ok=True)
+            subagent_state_path.write_text(
+                json.dumps({
+                    "schemaVersion": 1,
+                    "tasks": {
+                        subagent_task_id: {
+                            "id": subagent_task_id,
+                            "status": "running",
+                            "childSessionId": subagent_request_id,
+                            "requestId": subagent_request_id,
+                            "parentSessionId": "parent-pre-boot",
+                        },
+                    },
+                }),
+                encoding="utf-8",
+            )
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            ledger.create_run(
+                subagent_request_id,
+                subagent_request_id,
+                run_type="subagent",
+                phase="running",
+                status="running",
+                metadata={"task_id": subagent_task_id},
+            )
+            ledger.create_run(
+                scheduler_request_id,
+                "scheduler_session_pre_boot",
+                run_type="scheduler",
+                phase="tool_call_running",
+                status="running",
+                metadata={"task_id": "pre-boot-scheduler"},
+            )
+            with patch.object(channel, "runtime_started_at", time.time() + 10):
+                with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                    snapshot = channel.active_requests_snapshot()
+                    subagent_first_final = ledger.get_run(subagent_request_id)
+                    scheduler_first_final = ledger.get_run(scheduler_request_id)
+                    second_snapshot = channel.active_requests_snapshot()
+
+            active_ids = {item.get("request_id") for item in snapshot["requests"]}
+            self.assertNotIn(subagent_request_id, active_ids)
+            self.assertNotIn(scheduler_request_id, active_ids)
+            second_active_ids = {item.get("request_id") for item in second_snapshot["requests"]}
+            self.assertNotIn(subagent_request_id, second_active_ids)
+            self.assertNotIn(scheduler_request_id, second_active_ids)
+
+            self.assertEqual(subagent_first_final["status"], "interrupted")
+            self.assertEqual(subagent_first_final["terminal_reason"], "subagent_sidecar_interrupted")
+            self.assertEqual(subagent_first_final["error_code"], "SUBAGENT_SIDECAR_INTERRUPTED")
+            subagent_terminal_at = subagent_first_final["terminal_at"]
+            self.assertIsNotNone(subagent_terminal_at)
+            subagent_state = json.loads(subagent_state_path.read_text(encoding="utf-8"))
+            subagent_task = subagent_state["tasks"][subagent_task_id]
+            self.assertEqual(subagent_task["status"], "interrupted")
+            self.assertEqual(subagent_task["terminalReason"], "subagent_sidecar_interrupted")
+            self.assertEqual(subagent_task["errorCode"], "SUBAGENT_SIDECAR_INTERRUPTED")
+            self.assertIsNotNone(subagent_task["completedAt"])
+            from agent.tools.subagent.subagent import SubagentTool
+
+            tool = SubagentTool()
+            tool.context = types.SimpleNamespace(_current_session_id="parent-after-restart", workspace_dir=workspace)
+            with patch("agent.tools.subagent.subagent.threading.Thread.start", lambda _thread: None):
+                for index in range(6):
+                    result = tool.execute({"action": "start", "task": f"replacement child {index}"})
+                    self.assertEqual(result.status, "success")
+                blocked = tool.execute({"action": "start", "task": "one too many replacements"})
+            self.assertEqual(blocked.status, "error")
+            self.assertEqual(blocked.result["code"], "SUBAGENT_CONCURRENCY_LIMIT")
+
+            self.assertEqual(scheduler_first_final["status"], "interrupted")
+            self.assertEqual(scheduler_first_final["terminal_reason"], "scheduler_sidecar_interrupted")
+            self.assertEqual(scheduler_first_final["error_code"], "SCHEDULER_SIDECAR_INTERRUPTED")
+            scheduler_terminal_at = scheduler_first_final["terminal_at"]
+            self.assertIsNotNone(scheduler_terminal_at)
+            self.assertEqual(ledger.get_run(subagent_request_id)["terminal_at"], subagent_terminal_at)
+            self.assertEqual(ledger.get_run(scheduler_request_id)["terminal_at"], scheduler_terminal_at)
+
+    def test_active_request_snapshot_keeps_pre_boot_non_message_runs_with_cancel_tokens(self):
+        from agent.protocol import get_cancel_registry, reset_run_ledger_for_tests
+        from channel.web import web_channel
+
+        channel = web_channel.WebChannel()
+        scheduler_request_id = "scheduler-current-token-survives-pre-boot-check"
+        scheduler_session_id = "scheduler_session_current_token"
+        subagent_request_id = "subagent-current-token-survives-pre-boot-check"
+        subagent_task_id = "subagent-current-token"
+        subagent_session_id = "subagent_session_current_token"
+        registry = get_cancel_registry()
+        registry.unregister(scheduler_request_id)
+        registry.unregister(subagent_request_id)
+
+        with tempfile.TemporaryDirectory() as workspace:
+            subagent_state_path = Path(workspace) / ".ecorex" / "subagents.json"
+            subagent_state_path.parent.mkdir(parents=True, exist_ok=True)
+            subagent_state_path.write_text(
+                json.dumps({
+                    "schemaVersion": 1,
+                    "tasks": {
+                        subagent_task_id: {
+                            "id": subagent_task_id,
+                            "status": "queued",
+                            "childSessionId": subagent_request_id,
+                            "requestId": subagent_request_id,
+                            "parentSessionId": "parent-current-token",
+                        },
+                    },
+                }),
+                encoding="utf-8",
+            )
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            ledger.create_run(
+                scheduler_request_id,
+                scheduler_session_id,
+                run_type="scheduler",
+                phase="agent_task_running",
+                status="running",
+            )
+            ledger.create_run(
+                subagent_request_id,
+                subagent_session_id,
+                run_type="subagent",
+                phase="queued",
+                status="queued",
+                metadata={"task_id": subagent_task_id},
+            )
+            registry.register(scheduler_request_id, session_id=scheduler_session_id)
+            registry.register(subagent_request_id, session_id=subagent_session_id)
+            try:
+                with patch.object(channel, "runtime_started_at", time.time() + 10):
+                    with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                        snapshot = channel.active_requests_snapshot()
+            finally:
+                registry.unregister(scheduler_request_id)
+                registry.unregister(subagent_request_id)
+
+            active_by_id = {item.get("request_id"): item for item in snapshot["requests"]}
+            scheduler_active = active_by_id.get(scheduler_request_id)
+            self.assertIsNotNone(scheduler_active)
+            self.assertEqual(scheduler_active["run_type"], "scheduler")
+            self.assertEqual(scheduler_active["status"], "running")
+            scheduler_final = ledger.get_run(scheduler_request_id)
+            self.assertEqual(scheduler_final["status"], "running")
+            self.assertIsNone(scheduler_final["terminal_at"])
+
+            subagent_active = active_by_id.get(subagent_request_id)
+            self.assertIsNotNone(subagent_active)
+            self.assertEqual(subagent_active["run_type"], "subagent")
+            self.assertEqual(subagent_active["status"], "queued")
+            subagent_final = ledger.get_run(subagent_request_id)
+            self.assertEqual(subagent_final["status"], "queued")
+            self.assertIsNone(subagent_final["terminal_at"])
+            subagent_state = json.loads(subagent_state_path.read_text(encoding="utf-8"))
+            self.assertEqual(subagent_state["tasks"][subagent_task_id]["status"], "queued")
+
     def test_active_request_snapshot_does_not_interrupt_stale_live_message_lock(self):
         from agent.protocol import reset_run_ledger_for_tests
         from channel.web import web_channel
