@@ -288,6 +288,8 @@ fi
 
 export PYTHONNOUSERSITE=1
 export PYTHONPATH="$RUNTIME_DIR${PYTHONPATH:+:$PYTHONPATH}"
+export ECOREX_PIP_PREFER_BINARY="${ECOREX_PIP_PREFER_BINARY:-1}"
+export ECOREX_PIP_ONLY_BINARY="${ECOREX_PIP_ONLY_BINARY:-cryptography}"
 
 if [[ "$SKIP_DEPENDENCY_INSTALL" != "1" ]]; then
   if ! "$RUNTIME_PYTHON" -m pip --version >/dev/null 2>&1; then

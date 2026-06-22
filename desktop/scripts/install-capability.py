@@ -172,6 +172,8 @@ def main() -> int:
         env = os.environ.copy()
         env["PYTHONNOUSERSITE"] = "1"
         env.setdefault("PIP_DISABLE_PIP_VERSION_CHECK", "1")
+        prefer_binary = env.get("ECOREX_PIP_PREFER_BINARY", "1").strip() != "0"
+        only_binary = env.get("ECOREX_PIP_ONLY_BINARY", "").strip()
         prepend_path_env(env, "PYTHONPATH", target_dir)
         if playwright_browsers_dir:
             playwright_browsers_dir.mkdir(parents=True, exist_ok=True)
@@ -228,6 +230,10 @@ def main() -> int:
                     "--no-cache-dir",
                     "--no-warn-script-location",
                 ]
+                if prefer_binary:
+                    base_command.append("--prefer-binary")
+                if only_binary:
+                    base_command.extend(["--only-binary", only_binary])
                 command = list(base_command)
                 if args.index_url:
                     command.extend(["--index-url", args.index_url])
