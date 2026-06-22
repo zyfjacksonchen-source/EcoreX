@@ -68,7 +68,7 @@ class TestV018PromotionGate(unittest.TestCase):
             Multi-agent cross-review sidecar interruption Consensus: submit
             Multi-agent cross-review SSE replay-gap Consensus: submit
             Multi-agent cross-review typed busy/retry Consensus: submit
-            Multi-agent cross-review model telemetry Consensus: submit
+            Multi-agent cross-review model gateway final closure Consensus: submit
             Multi-agent cross-review context overflow recovery Consensus: submit
             Multi-agent cross-review Run Center first-class navigation retry/recover policy Consensus: submit
             Multi-agent cross-review promotion-gate hardening Consensus: submit
@@ -208,6 +208,35 @@ class TestV018PromotionGate(unittest.TestCase):
             line_to_remove="Multi-agent cross-review Run Center first-class navigation retry/recover policy Consensus: submit",
             check_name="run center multi-agent review",
         )
+
+    def test_gate_requires_model_gateway_final_closure_review_consensus(self):
+        self.assert_missing_review_blocks(
+            line_to_remove="Multi-agent cross-review model gateway final closure Consensus: submit",
+            check_name="model gateway multi-agent review",
+        )
+
+    def test_gate_rejects_old_model_telemetry_review_for_final_closure(self):
+        gate = load_gate_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            self.write_docs(root)
+            evidence_path = root / "docs" / "v0.1.18" / "evidence-ledger.md"
+            evidence_path.write_text(
+                evidence_path.read_text(encoding="utf-8").replace(
+                    "Multi-agent cross-review model gateway final closure Consensus: submit",
+                    "Multi-agent cross-review model telemetry Consensus: submit",
+                ),
+                encoding="utf-8",
+            )
+            report = gate.build_report(root, "0.1.18")
+
+        self.assertEqual(report["status"], "no-go")
+        review_check = next(
+            item for item in report["checks"]
+            if item["name"] == "model gateway multi-agent review"
+        )
+        self.assertEqual(review_check["status"], "fail")
+        self.assertEqual(review_check["severity"], "blocker")
 
     def test_gate_requires_review_markers_on_same_line(self):
         gate = load_gate_module()

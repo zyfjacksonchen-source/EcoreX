@@ -6446,7 +6446,7 @@ class TestAgentHostBoundary(unittest.TestCase):
                 payloads.append(dict(payload))
                 if payload["model"] == "gpt-image-2-pro":
                     raise RuntimeError("model_not_found: model does not exist")
-                return {"data": [{"b64_json": "aGVsbG8="}]}
+                return {"data": [{"b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="}]}
 
             provider._post_json = fake_post_json
             paths = provider.generate(
@@ -6493,7 +6493,7 @@ class TestAgentHostBoundary(unittest.TestCase):
                     "fields": dict(fields),
                     "files": [(field_name, file_tuple[0], file_tuple[2]) for field_name, file_tuple in files],
                 })
-                return {"data": [{"b64_json": "aGVsbG8="}]}
+                return {"data": [{"b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="}]}
 
             provider._post_multipart = fake_post_multipart
             paths = provider.generate(

@@ -1142,3 +1142,23 @@
     `provider capability matrix` evidence marker. R18-04-A is promoted to PASS;
     R18-04-C remains PARTIAL pending Azure legacy DALL-E image retry ownership
     and image-generation skill provider retry/fail-closed inventory.
+- Closed the R18-04-C retry/fallback gap:
+  - `AzureChatGPTBot.create_img()` now routes DALL-E 2 submit/poll and DALL-E 3
+    generation through shared image retry/fail-closed helpers. Azure image
+    calls preserve Retry-After/backoff, timeout/network classification,
+    non-retryable 4xx sidecar evidence, retry exhaustion metadata, config
+    fallback for legacy OpenAI base/key/deployment settings, and deterministic
+    `model_retry_sleep` injection for tests.
+  - `skills/image-generation/scripts/generate.py` now has a standalone typed
+    provider error and bounded retry layer for OpenAI, LinkAI, Gemini,
+    Seedream, Qwen, and MiniMax HTTP calls. Provider downloads also retry,
+    non-retryable provider errors fail closed without trying unrelated
+    providers, and fallback is limited to retryable exhausted provider
+    failures with JSON `provider_error` evidence.
+  - Focused tests cover Azure DALL-E 2/3 Retry-After retry, fail-closed 4xx,
+    timeout evidence, config fallback, and existing `/legacy/create_img`
+    regressions; skill tests cover all six provider labels, fail-closed main
+    behavior, retry-exhausted fallback, and body-level provider errors for
+    Qwen, Seedream, and MiniMax. R18-04-C is promoted to PASS.
+  - The promotion gate now reports GO with 21 checks, 0 blockers, and 0
+    warnings after final model-gateway multi-agent consensus.

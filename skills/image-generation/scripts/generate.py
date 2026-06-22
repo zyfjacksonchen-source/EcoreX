@@ -29,6 +29,8 @@ import time
 import uuid
 import re
 from abc import ABC, abstractmethod
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from urllib.request import urlopen, Request
 from urllib.parse import urlparse
@@ -40,6 +42,279 @@ try:
     _HAS_REQUESTS = True
 except ImportError:
     _HAS_REQUESTS = False
+
+
+DEFAULT_PROVIDER_MAX_RETRIES = 1
+RETRYABLE_TAXONOMIES = {"rate_limit", "timeout", "network_error", "server_error"}
+
+
+class ImageProviderError(RuntimeError):
+    """Typed provider error used by the standalone skill runtime."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str = "",
+        status_code: int | None = None,
+        code: str = "",
+        error_type: str = "",
+        retry_after: float | None = None,
+        retry_attempt: int = 0,
+        max_retries: int = 0,
+    ):
+        super().__init__(message)
+        self.provider = provider
+        self.message = message
+        self.status_code = status_code
+        self.code = code
+        self.error_type = error_type
+        self.retry_after = retry_after
+        self.retry_attempt = retry_attempt
+        self.max_retries = max_retries
+        self.taxonomy = _classify_provider_error(status_code, message, code, error_type)
+        self.retryable = self.taxonomy in RETRYABLE_TAXONOMIES
+        self.retry_exhausted = self.retryable and retry_attempt >= max_retries
+
+    @property
+    def fallback_allowed(self) -> bool:
+        return self.retryable and self.retry_exhausted
+
+    def with_retry(self, attempt: int, max_retries: int) -> "ImageProviderError":
+        return ImageProviderError(
+            self.message,
+            provider=self.provider,
+            status_code=self.status_code,
+            code=self.code,
+            error_type=self.error_type,
+            retry_after=self.retry_after,
+            retry_attempt=attempt,
+            max_retries=max_retries,
+        )
+
+    def to_dict(self) -> dict:
+        data = {
+            "provider": self.provider,
+            "message": self.message,
+            "status_code": self.status_code,
+            "code": self.code,
+            "type": self.error_type,
+            "taxonomy": self.taxonomy,
+            "retryable": self.retryable,
+            "retry_attempt": self.retry_attempt,
+            "max_retries": self.max_retries,
+            "retry_exhausted": self.retry_exhausted,
+            "fallback_allowed": self.fallback_allowed,
+        }
+        if self.retry_after is not None:
+            data["retry_after_seconds"] = self.retry_after
+        return {key: value for key, value in data.items() if value not in (None, "")}
+
+
+def _coerce_status_code(value, default=None):
+    try:
+        status = int(value)
+    except (TypeError, ValueError):
+        return default
+    if 100 <= status <= 599:
+        return status
+    return default
+
+
+def _parse_retry_after(value) -> float | None:
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return max(0.0, float(text))
+    except (TypeError, ValueError):
+        pass
+    try:
+        target = parsedate_to_datetime(text)
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+    if target.tzinfo is None:
+        target = target.replace(tzinfo=timezone.utc)
+    return max(0.0, (target - datetime.now(timezone.utc)).total_seconds())
+
+
+def _parse_retry_after_ms(value) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return max(0.0, float(value) / 1000.0)
+    except (TypeError, ValueError):
+        return None
+
+
+def _classify_provider_error(status_code, message="", code="", error_type="") -> str:
+    status = _coerce_status_code(status_code)
+    text = " ".join(str(value or "").lower() for value in (message, code, error_type))
+    if any(marker in text for marker in ("rate", "throttl", "quota", "too many")) or status == 429:
+        return "rate_limit"
+    if "timeout" in text or "timed out" in text or status in (408, 504):
+        return "timeout"
+    if any(marker in text for marker in ("connection", "network", "dns", "ssl")):
+        return "network_error"
+    if status is not None and status >= 500:
+        return "server_error"
+    if status in (400, 401, 403, 404):
+        return "client_error"
+    if any(marker in text for marker in ("safety", "refusal", "policy", "content_filter")):
+        return "client_error"
+    return "unknown"
+
+
+def _response_retry_after(resp) -> float | None:
+    headers = getattr(resp, "headers", None) or {}
+    getter = getattr(headers, "get", None)
+    if callable(getter):
+        return _parse_retry_after(getter("Retry-After") or getter("retry-after"))
+    return None
+
+
+def _provider_error_from_response(provider: str, resp) -> ImageProviderError:
+    status_code = _coerce_status_code(getattr(resp, "status_code", None), 500)
+    body = {}
+    try:
+        loaded = resp.json()
+        if isinstance(loaded, dict):
+            body = loaded
+    except Exception:
+        body = {}
+    error = body.get("error") if isinstance(body, dict) else None
+    payload = error if isinstance(error, dict) else {}
+    message = (
+        payload.get("message")
+        or body.get("message")
+        or body.get("msg")
+        or (str(error) if error not in (None, "", False, True) else "")
+        or getattr(resp, "text", "")
+        or "Provider request failed with HTTP {}".format(status_code)
+    )
+    return ImageProviderError(
+        str(message),
+        provider=provider,
+        status_code=status_code,
+        code=str(payload.get("code") or body.get("code") or ""),
+        error_type=str(payload.get("type") or body.get("type") or ""),
+        retry_after=_response_retry_after(resp),
+    )
+
+
+def _provider_error_from_body(provider: str, error, *, default_status=500) -> ImageProviderError:
+    payload = error if isinstance(error, dict) else {}
+    message = (
+        payload.get("message")
+        or payload.get("msg")
+        or payload.get("status_msg")
+        or str(error)
+        or "Provider returned an error"
+    )
+    retry_after_ms = _parse_retry_after_ms(payload.get("retry_after_ms"))
+    return ImageProviderError(
+        str(message),
+        provider=provider,
+        status_code=_coerce_status_code(
+            payload.get("status_code") or payload.get("http_code") or payload.get("status"),
+            default_status,
+        ),
+        code=str(payload.get("code") or payload.get("error_code") or payload.get("status_code") or ""),
+        error_type=str(payload.get("type") or payload.get("error_type") or ""),
+        retry_after=retry_after_ms
+        if retry_after_ms is not None
+        else _parse_retry_after(payload.get("retry_after") or payload.get("retry_after_seconds")),
+    )
+
+
+def _provider_error_from_exception(provider: str, exc: Exception) -> ImageProviderError:
+    if isinstance(exc, ImageProviderError):
+        return exc
+    status_code = None
+    text = "{} {}".format(type(exc).__name__, exc)
+    lowered = text.lower()
+    if "timeout" in lowered or "timed out" in lowered:
+        status_code = 504
+    elif any(marker in lowered for marker in ("connection", "network", "dns", "ssl")):
+        status_code = 503
+    return ImageProviderError(
+        str(exc) or type(exc).__name__,
+        provider=provider,
+        status_code=status_code,
+        error_type=type(exc).__name__,
+    )
+
+
+def _retry_delay(error: ImageProviderError, attempt: int) -> float:
+    if error.retry_after is not None:
+        return error.retry_after
+    base = 30.0 if error.taxonomy == "rate_limit" else 2.0
+    return min(60.0, base * (2 ** max(0, attempt)))
+
+
+def _request_with_retries(provider: str, method: str, url: str, *, max_retries=None, **kwargs):
+    if not _HAS_REQUESTS:
+        raise ImageProviderError(
+            "requests is required for retryable provider calls",
+            provider=provider,
+            status_code=500,
+            error_type="missing_dependency",
+        )
+    retries = DEFAULT_PROVIDER_MAX_RETRIES if max_retries is None else max(0, int(max_retries))
+    attempt = 0
+    while True:
+        try:
+            request_fn = getattr(requests, method.lower(), requests.request)
+            resp = request_fn(url, **kwargs)
+            if resp.status_code < 400:
+                return resp
+            error = _provider_error_from_response(provider, resp)
+        except Exception as exc:
+            error = _provider_error_from_exception(provider, exc)
+        error = error.with_retry(attempt, retries)
+        if error.retryable and attempt < retries:
+            delay = _retry_delay(error, attempt)
+            print(
+                f"[image-generation] {provider} retrying after {delay:.2f}s "
+                f"(attempt {attempt + 1}/{retries}, taxonomy={error.taxonomy})",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
+            attempt += 1
+            continue
+        raise error
+
+
+def _post_json_with_retries(provider: str, url: str, headers: dict, payload: dict, *, timeout=300) -> dict:
+    resp = _request_with_retries(
+        provider,
+        "POST",
+        url,
+        headers=headers,
+        json=payload,
+        timeout=timeout,
+    )
+    return resp.json()
+
+
+def _post_multipart_with_retries(provider: str, url: str, headers: dict, fields: dict, files: list[tuple], *, timeout=300) -> dict:
+    resp = _request_with_retries(
+        provider,
+        "POST",
+        url,
+        headers=headers,
+        data=fields,
+        files=files,
+        timeout=timeout,
+    )
+    return resp.json()
+
+
+def _download_with_retries(source: str, *, timeout=60) -> bytes:
+    resp = _request_with_retries("download", "GET", source, timeout=timeout)
+    return resp.content
 
 
 # ---------------------------------------------------------------------------
@@ -116,9 +391,7 @@ def _load_image(source: str) -> bytes:
         with open(source, "rb") as f:
             return f.read()
     if _HAS_REQUESTS:
-        resp = requests.get(source, timeout=60)
-        resp.raise_for_status()
-        return resp.content
+        return _download_with_retries(source, timeout=60)
     req = Request(source)
     with urlopen(req, timeout=60) as resp:
         return resp.read()
@@ -288,9 +561,7 @@ class OpenAIProvider(ImageProvider):
     def _post_json(self, url: str, payload: dict) -> dict:
         headers = {**self._headers(), "Content-Type": "application/json"}
         if _HAS_REQUESTS:
-            resp = requests.post(url, headers=headers, json=payload, timeout=300)
-            self._raise_for_api_error(resp)
-            return resp.json()
+            return _post_json_with_retries("OpenAI", url, headers, payload, timeout=300)
         data = json.dumps(payload).encode()
         req = Request(url, data=data, headers=headers, method="POST")
         with urlopen(req, timeout=300) as r:
@@ -300,9 +571,7 @@ class OpenAIProvider(ImageProvider):
         """POST multipart/form-data using requests (or fall back to urllib)."""
         headers = self._headers()
         if _HAS_REQUESTS:
-            resp = requests.post(url, headers=headers, data=fields, files=files, timeout=300)
-            self._raise_for_api_error(resp)
-            return resp.json()
+            return _post_multipart_with_retries("OpenAI", url, headers, fields, files, timeout=300)
         boundary = uuid.uuid4().hex
         body = b""
         for key, val in fields.items():
@@ -596,15 +865,7 @@ class LinkAIProvider(ImageProvider):
         }
 
         if _HAS_REQUESTS:
-            resp = requests.post(url, headers=headers, json=payload, timeout=300)
-            if resp.status_code >= 400:
-                try:
-                    body = resp.json()
-                    msg = body.get("error", {}).get("message") or body.get("message") or resp.text
-                except Exception:
-                    msg = resp.text or resp.reason
-                raise RuntimeError(f"API {resp.status_code}: {msg}")
-            result = resp.json()
+            result = _post_json_with_retries("LinkAI", url, headers, payload, timeout=300)
         else:
             data = json.dumps(payload).encode()
             req = Request(url, data=data, headers=headers, method="POST")
@@ -612,7 +873,7 @@ class LinkAIProvider(ImageProvider):
                 result = json.loads(r.read())
 
         if "error" in result:
-            raise RuntimeError(result["error"].get("message", str(result["error"])))
+            raise _provider_error_from_body("LinkAI", result["error"], default_status=400)
 
         paths = []
         for item in result.get("data", []):
@@ -622,6 +883,17 @@ class LinkAIProvider(ImageProvider):
             elif "b64_json" in item:
                 raw = base64.b64decode(item["b64_json"])
                 paths.append(_save_image(raw, output_dir))
+        if not paths:
+            raise _provider_error_from_body(
+                "LinkAI",
+                {
+                    "message": f"LinkAI returned no image: {result}",
+                    "code": "empty_response",
+                    "type": "provider_protocol_error",
+                    "status_code": 502,
+                },
+                default_status=502,
+            )
         return paths
 
 
@@ -708,15 +980,7 @@ class GeminiProvider(ImageProvider):
         }
 
         if _HAS_REQUESTS:
-            resp = requests.post(url, headers=headers, json=payload, timeout=300)
-            if resp.status_code >= 400:
-                try:
-                    body = resp.json()
-                    msg = body.get("error", {}).get("message") or resp.text
-                except Exception:
-                    msg = resp.text or resp.reason
-                raise RuntimeError(f"API {resp.status_code}: {msg}")
-            result = resp.json()
+            result = _post_json_with_retries("Gemini", url, headers, payload, timeout=300)
         else:
             data = json.dumps(payload).encode()
             req = Request(url, data=data, headers=headers, method="POST")
@@ -741,8 +1005,26 @@ class GeminiProvider(ImageProvider):
             for cand in result.get("candidates", []):
                 for part in cand.get("content", {}).get("parts", []):
                     if part.get("text"):
-                        raise RuntimeError(f"Gemini returned no image: {part['text'][:200]}")
-            raise RuntimeError("Gemini returned no image (empty response)")
+                        raise _provider_error_from_body(
+                            "Gemini",
+                            {
+                                "message": f"Gemini returned no image: {part['text'][:200]}",
+                                "code": "no_image",
+                                "type": "provider_refusal",
+                                "status_code": 400,
+                            },
+                            default_status=400,
+                        )
+            raise _provider_error_from_body(
+                "Gemini",
+                {
+                    "message": "Gemini returned no image (empty response)",
+                    "code": "empty_response",
+                    "type": "provider_protocol_error",
+                    "status_code": 502,
+                },
+                default_status=502,
+            )
         return paths
 
 
@@ -905,16 +1187,7 @@ class SeedreamProvider(ImageProvider):
         }
 
         if _HAS_REQUESTS:
-            resp = requests.post(url, headers=headers, json=payload, timeout=300)
-            if resp.status_code >= 400:
-                try:
-                    body = resp.json()
-                    err = body.get("error") or {}
-                    msg = err.get("message") or body.get("message") or resp.text
-                except Exception:
-                    msg = resp.text or resp.reason
-                raise RuntimeError(f"API {resp.status_code}: {msg}")
-            result = resp.json()
+            result = _post_json_with_retries("Seedream", url, headers, payload, timeout=300)
         else:
             data = json.dumps(payload).encode()
             req = Request(url, data=data, headers=headers, method="POST")
@@ -923,7 +1196,7 @@ class SeedreamProvider(ImageProvider):
 
         if result.get("error"):
             err = result["error"]
-            raise RuntimeError(f"Seedream {err.get('code')}: {err.get('message')}")
+            raise _provider_error_from_body("Seedream", err, default_status=400)
 
         paths: list[str] = []
         for item in result.get("data") or []:
@@ -934,7 +1207,16 @@ class SeedreamProvider(ImageProvider):
             elif b64:
                 paths.append(_save_image(base64.b64decode(b64), output_dir))
         if not paths:
-            raise RuntimeError(f"Seedream returned no image: {result}")
+            raise _provider_error_from_body(
+                "Seedream",
+                {
+                    "message": f"Seedream returned no image: {result}",
+                    "code": "empty_response",
+                    "type": "provider_protocol_error",
+                    "status_code": 502,
+                },
+                default_status=502,
+            )
         return paths
 
     @staticmethod
@@ -1043,15 +1325,7 @@ class QwenProvider(ImageProvider):
         }
 
         if _HAS_REQUESTS:
-            resp = requests.post(url, headers=headers, json=payload, timeout=300)
-            if resp.status_code >= 400:
-                try:
-                    body = resp.json()
-                    msg = body.get("message") or body.get("error", {}).get("message") or resp.text
-                except Exception:
-                    msg = resp.text or resp.reason
-                raise RuntimeError(f"API {resp.status_code}: {msg}")
-            result = resp.json()
+            result = _post_json_with_retries("Qwen", url, headers, payload, timeout=300)
         else:
             data = json.dumps(payload).encode()
             req = Request(url, data=data, headers=headers, method="POST")
@@ -1060,7 +1334,16 @@ class QwenProvider(ImageProvider):
 
         # Business-level errors arrive on HTTP 200 with a `code` field.
         if result.get("code"):
-            raise RuntimeError(f"Qwen {result.get('code')}: {result.get('message')}")
+            raise _provider_error_from_body(
+                "Qwen",
+                {
+                    "message": result.get("message"),
+                    "code": result.get("code"),
+                    "type": result.get("type"),
+                    "status_code": result.get("status_code") or 400,
+                },
+                default_status=400,
+            )
 
         paths: list[str] = []
         choices = (result.get("output") or {}).get("choices") or []
@@ -1070,7 +1353,16 @@ class QwenProvider(ImageProvider):
                 if u:
                     paths.append(_save_image(_load_image(u), output_dir))
         if not paths:
-            raise RuntimeError(f"Qwen returned no image: {result}")
+            raise _provider_error_from_body(
+                "Qwen",
+                {
+                    "message": f"Qwen returned no image: {result}",
+                    "code": "empty_response",
+                    "type": "provider_protocol_error",
+                    "status_code": 502,
+                },
+                default_status=502,
+            )
         return paths
 
     @staticmethod
@@ -1165,15 +1457,7 @@ class MinimaxProvider(ImageProvider):
         }
 
         if _HAS_REQUESTS:
-            resp = requests.post(url, headers=headers, json=payload, timeout=300)
-            if resp.status_code >= 400:
-                try:
-                    body = resp.json()
-                    msg = body.get("base_resp", {}).get("status_msg") or body.get("error", {}).get("message") or resp.text
-                except Exception:
-                    msg = resp.text or resp.reason
-                raise RuntimeError(f"API {resp.status_code}: {msg}")
-            result = resp.json()
+            result = _post_json_with_retries("MiniMax", url, headers, payload, timeout=300)
         else:
             data = json.dumps(payload).encode()
             req = Request(url, data=data, headers=headers, method="POST")
@@ -1183,7 +1467,16 @@ class MinimaxProvider(ImageProvider):
         # MiniMax returns business errors inside base_resp even on HTTP 200.
         base_resp = result.get("base_resp") or {}
         if base_resp.get("status_code") not in (None, 0):
-            raise RuntimeError(f"MiniMax {base_resp.get('status_code')}: {base_resp.get('status_msg')}")
+            raise _provider_error_from_body(
+                "MiniMax",
+                {
+                    "message": base_resp.get("status_msg"),
+                    "code": base_resp.get("status_code"),
+                    "type": base_resp.get("status_type"),
+                    "status_code": base_resp.get("http_status") or 400,
+                },
+                default_status=400,
+            )
 
         data_obj = result.get("data") or {}
         b64_list = data_obj.get("image_base64") or []
@@ -1195,7 +1488,16 @@ class MinimaxProvider(ImageProvider):
         for u in urls_list:
             paths.append(_save_image(_load_image(u), output_dir))
         if not paths:
-            raise RuntimeError(f"MiniMax returned no image: {result}")
+            raise _provider_error_from_body(
+                "MiniMax",
+                {
+                    "message": f"MiniMax returned no image: {result}",
+                    "code": "empty_response",
+                    "type": "provider_protocol_error",
+                    "status_code": 502,
+                },
+                default_status=502,
+            )
         return paths
 
 
@@ -1400,6 +1702,22 @@ def main():
             return
         except Exception as e:
             elapsed = time.time() - t0
+            provider_error = _provider_error_from_exception(label, e)
+            print(
+                f"[image-generation] provider {label} failed in {elapsed:.1f}s: "
+                f"{provider_error.message} (taxonomy={provider_error.taxonomy}, "
+                f"retryable={provider_error.retryable})",
+                file=sys.stderr,
+            )
+            errors.append(f"{label}: {provider_error.message}")
+            if not provider_error.fallback_allowed:
+                print(json.dumps({
+                    "error": provider_error.message,
+                    "provider_error": provider_error.to_dict(),
+                    "attempted_providers": errors,
+                }, ensure_ascii=False))
+                sys.exit(1)
+            continue
             print(f"[image-generation] ❌ {label} failed in {elapsed:.1f}s: {e}", file=sys.stderr)
             errors.append(f"{label}: {e}")
 
@@ -1411,7 +1729,8 @@ def main():
                  "Ask the user to verify their API key / base URL "
                  "(OPENAI_API_KEY, GEMINI_API_KEY, ARK_API_KEY, "
                  "DASHSCOPE_API_KEY, MINIMAX_API_KEY, or LINKAI_API_KEY) "
-                 "via env_config."
+                 "via env_config.",
+        "attempted_providers": errors,
     }, ensure_ascii=False))
     sys.exit(1)
 

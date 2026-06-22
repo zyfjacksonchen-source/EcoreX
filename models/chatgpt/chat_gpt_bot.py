@@ -27,6 +27,16 @@ from models.openai.legacy_reply_retry import (
 )
 from models.chatgpt.chat_gpt_session import ChatGPTSession
 from models.openai.open_ai_image import OpenAIImage
+from models.model_image_retry import (
+    ModelImageCallError,
+    clear_create_img_error,
+    create_img_with_retry,
+    image_error_details_from_exception,
+    image_error_from_response,
+    set_create_img_error,
+)
+from models.model_provider_errors import http_error_response, provider_error_response
+from models.model_retry import sleep_for_retry
 from models.session_manager import SessionManager
 from models.model_telemetry import ModelCallSpan
 from models.model_capabilities import get_model_capabilities, sanitize_chat_payload
@@ -427,83 +437,284 @@ class AzureChatGPTBot(ChatGPTBot):
             proxy=self._proxy,
         )
 
-    def create_img(self, query, retry_count=0, api_key=None):
-        text_to_image_model = OpenAIImage._normalize_image_model(conf().get("text_to_image") or OpenAIImage.DEFAULT_IMAGE_MODEL)
+    @staticmethod
+    def _config_value(config, key, fallback_key=None, default=None):
+        value = config.get(key, None)
+        if value in (None, "") and fallback_key:
+            value = config.get(fallback_key, default)
+        return default if value in (None, "") else value
+
+    @staticmethod
+    def _coerce_positive_int(value, default):
+        try:
+            return max(1, int(value))
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _coerce_non_negative_float(value, default):
+        try:
+            return max(0.0, float(value))
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _azure_image_error(message, status_code=502, error_code="", error_type="provider_protocol_error"):
+        return provider_error_response(
+            {
+                "message": message,
+                "code": error_code,
+                "type": error_type,
+            },
+            message=message,
+            status_code=status_code,
+        )
+
+    @staticmethod
+    def _azure_first_image_url(data):
+        if not isinstance(data, dict):
+            return None
+        items = data.get("data")
+        if isinstance(items, list) and items:
+            first = items[0]
+            if isinstance(first, dict):
+                return first.get("url")
+        result = data.get("result")
+        if isinstance(result, dict):
+            return AzureChatGPTBot._azure_first_image_url(result)
+        return None
+
+    def _azure_dalle_endpoint(self, config):
+        endpoint = self._config_value(
+            config,
+            "azure_openai_dalle_api_base",
+            "open_ai_api_base",
+            "",
+        )
+        endpoint = str(endpoint or "").rstrip("/")
+        return "{}/".format(endpoint) if endpoint else ""
+
+    def _azure_dalle_api_key(self, config, api_key=None):
+        key = self._config_value(config, "azure_openai_dalle_api_key", default="")
+        if key in (None, ""):
+            key = api_key
+        if key in (None, ""):
+            key = config.get("open_ai_api_key", "")
+        return key
+
+    def _azure_dalle_failure(self):
+        return _t("鍥剧墖鐢熸垚澶辫触", "Image generation failed")
+
+    def _azure_dalle_request_timeout(self, config, default):
+        return self._coerce_non_negative_float(
+            config.get("azure_dalle_request_timeout", config.get("request_timeout", default)),
+            default,
+        )
+
+    def _azure_dalle_max_retries(self, config):
+        return config.get("model_max_retries", config.get("max_model_retries"))
+
+    def _create_azure_dalle2_image(self, query, retry_count=0, api_key=None, model_retry_sleep=None):
+        config = conf()
+        model = "dall-e-2"
+        api_version = "2023-06-01-preview"
+        endpoint = self._azure_dalle_endpoint(config)
+        url = "{}openai/images/generations:submit?api-version={}".format(endpoint, api_version)
+        headers = {
+            "api-key": self._azure_dalle_api_key(config, api_key),
+            "Content-Type": "application/json",
+        }
+        timeout = self._azure_dalle_request_timeout(config, 120)
+        body = {
+            "prompt": query,
+            "size": config.get("image_create_size", "256x256"),
+            "n": 1,
+        }
+
+        def submit_task():
+            submission = requests.post(url, headers=headers, json=body, timeout=timeout)
+            if submission.status_code < 200 or submission.status_code >= 300:
+                raise image_error_from_response(submission)
+            operation_location = (
+                submission.headers.get("operation-location")
+                or submission.headers.get("Operation-Location")
+            )
+            if not operation_location:
+                raise ModelImageCallError(self._azure_image_error(
+                    "Azure DALL-E submit response missing operation-location",
+                    error_code="missing_operation_location",
+                ))
+            return operation_location
+
+        ok, operation_location = create_img_with_retry(
+            self,
+            submit_task,
+            provider="azure_openai",
+            model=model,
+            retry_count=retry_count,
+            max_model_retries=self._azure_dalle_max_retries(config),
+            retry_sleep=model_retry_sleep,
+            failure_message=self._azure_dalle_failure(),
+        )
+        if not ok:
+            return False, operation_location
+
+        max_wait_times = self._coerce_positive_int(
+            config.get("azure_dalle_poll_max_wait_times", 60),
+            60,
+        )
+        poll_interval = self._coerce_non_negative_float(
+            config.get("azure_dalle_poll_interval", 2),
+            2.0,
+        )
+        for attempt in range(max_wait_times):
+            if poll_interval > 0:
+                sleep_for_retry(poll_interval, model_retry_sleep)
+            try:
+                response = requests.get(operation_location, headers=headers, timeout=timeout)
+                if response.status_code < 200 or response.status_code >= 300:
+                    details = http_error_response(response)
+                    decision = build_retry_decision(
+                        details,
+                        attempt=attempt,
+                        max_retries=max_wait_times - 1,
+                    )
+                    set_create_img_error(self, details, decision)
+                    if decision.should_retry:
+                        sleep_for_retry(decision.delay_seconds, model_retry_sleep)
+                        continue
+                    return False, self._azure_dalle_failure()
+                data = response.json()
+            except Exception as exc:
+                details = image_error_details_from_exception(exc)
+                decision = build_retry_decision(
+                    details,
+                    attempt=attempt,
+                    max_retries=max_wait_times - 1,
+                )
+                set_create_img_error(self, details, decision)
+                if decision.should_retry:
+                    sleep_for_retry(decision.delay_seconds, model_retry_sleep)
+                    continue
+                return False, self._azure_dalle_failure()
+
+            status = str(data.get("status") or "").lower()
+            if status == "succeeded":
+                image_url = self._azure_first_image_url(data)
+                if image_url:
+                    clear_create_img_error(self)
+                    return True, image_url
+                set_create_img_error(self, self._azure_image_error(
+                    "Azure DALL-E task succeeded without image URL",
+                    error_code="missing_image_url",
+                ))
+                return False, self._azure_dalle_failure()
+            if status in ("failed", "cancelled", "canceled"):
+                error_payload = data.get("error") if isinstance(data.get("error"), dict) else {}
+                error_message = (
+                    error_payload.get("message")
+                    or data.get("message")
+                    or "Azure DALL-E image task failed"
+                )
+                error_payload = dict(error_payload)
+                error_payload.setdefault("message", error_message)
+                error_payload.setdefault("code", "task_failed")
+                error_payload.setdefault("type", "task_failed")
+                set_create_img_error(
+                    self,
+                    provider_error_response(
+                        error_payload,
+                        message=error_message,
+                        status_code=data.get("status_code") or 500,
+                    ),
+                )
+                return False, self._azure_dalle_failure()
+
+        set_create_img_error(self, self._azure_image_error(
+            "Azure DALL-E image task timed out",
+            status_code=504,
+            error_code="task_timeout",
+            error_type="timeout",
+        ))
+        return False, self._azure_dalle_failure()
+
+    def _create_azure_dalle3_image(self, query, retry_count=0, api_key=None, model_retry_sleep=None):
+        config = conf()
+        model = "dall-e-3"
+        api_version = config.get("azure_api_version", "2024-02-15-preview")
+        endpoint = self._azure_dalle_endpoint(config)
+        deployment = self._config_value(
+            config,
+            "azure_openai_dalle_deployment_id",
+            "text_to_image",
+            model,
+        )
+        url = "{}openai/deployments/{}/images/generations?api-version={}".format(
+            endpoint,
+            deployment,
+            api_version,
+        )
+        headers = {
+            "api-key": self._azure_dalle_api_key(config, api_key),
+            "Content-Type": "application/json",
+        }
+        timeout = self._azure_dalle_request_timeout(config, 120)
+        body = {
+            "prompt": query,
+            "size": config.get("image_create_size", "1024x1024"),
+            "quality": config.get("dalle3_image_quality", "standard"),
+        }
+
+        def invoke_generation():
+            response = requests.post(url, headers=headers, json=body, timeout=timeout)
+            if response.status_code < 200 or response.status_code >= 300:
+                raise image_error_from_response(response)
+            image_url = self._azure_first_image_url(response.json())
+            if not image_url:
+                raise ModelImageCallError(self._azure_image_error(
+                    "Azure DALL-E response missing image URL",
+                    error_code="missing_image_url",
+                ))
+            return image_url
+
+        return create_img_with_retry(
+            self,
+            invoke_generation,
+            provider="azure_openai",
+            model=model,
+            retry_count=retry_count,
+            max_model_retries=self._azure_dalle_max_retries(config),
+            retry_sleep=model_retry_sleep,
+            failure_message=self._azure_dalle_failure(),
+        )
+
+    def create_img(self, query, retry_count=0, api_key=None, model_retry_sleep=None):
+        config = conf()
+        text_to_image_model = OpenAIImage._normalize_image_model(config.get("text_to_image") or OpenAIImage.DEFAULT_IMAGE_MODEL)
         if OpenAIImage._is_gpt_image_model(text_to_image_model):
             return OpenAIImage.create_img(
                 self,
                 query,
                 retry_count,
-                api_key=conf().get("open_ai_api_key") or api_key,
-                api_base=conf().get("open_ai_api_base"),
+                api_key=config.get("open_ai_api_key") or api_key,
+                api_base=config.get("open_ai_api_base"),
+                model_retry_sleep=model_retry_sleep,
             )
         if text_to_image_model == "dall-e-2":
-            api_version = "2023-06-01-preview"
-            endpoint = conf().get("azure_openai_dalle_api_base","open_ai_api_base")
-            # 检查endpoint是否以/结尾
-            if not endpoint.endswith("/"):
-                endpoint = endpoint + "/"
-            url = "{}openai/images/generations:submit?api-version={}".format(endpoint, api_version)
-            api_key = conf().get("azure_openai_dalle_api_key","open_ai_api_key")
-            headers = {"api-key": api_key, "Content-Type": "application/json"}
-            try:
-                body = {"prompt": query, "size": conf().get("image_create_size", "256x256"),"n": 1}
-                submission = requests.post(url, headers=headers, json=body)
-                operation_location = submission.headers['operation-location']
-                status = ""
-                while (status != "succeeded"):
-                    if retry_count > 3:
-                        return False, _t("图片生成失败", "Image generation failed")
-                    response = requests.get(operation_location, headers=headers)
-                    status = response.json()['status']
-                    retry_count += 1
-                image_url = response.json()['result']['data'][0]['url']
-                return True, image_url
-            except Exception as e:
-                logger.error("create image error: {}".format(e))
-                return False, _t("图片生成失败", "Image generation failed")
-        elif text_to_image_model == "dall-e-3":
-            api_version = conf().get("azure_api_version", "2024-02-15-preview")
-            endpoint = conf().get("azure_openai_dalle_api_base","open_ai_api_base")
-            # 检查endpoint是否以/结尾
-            if not endpoint.endswith("/"):
-                endpoint = endpoint + "/"
-            url = "{}openai/deployments/{}/images/generations?api-version={}".format(endpoint, conf().get("azure_openai_dalle_deployment_id","text_to_image"),api_version)
-            api_key = conf().get("azure_openai_dalle_api_key","open_ai_api_key")
-            headers = {"api-key": api_key, "Content-Type": "application/json"}
-            try:
-                body = {"prompt": query, "size": conf().get("image_create_size", "1024x1024"), "quality": conf().get("dalle3_image_quality", "standard")}
-                response = requests.post(url, headers=headers, json=body)
-                response.raise_for_status()  # 检查请求是否成功
-                data = response.json()
-
-                # 检查响应中是否包含图像 URL
-                if 'data' in data and len(data['data']) > 0 and 'url' in data['data'][0]:
-                    image_url = data['data'][0]['url']
-                    return True, image_url
-                else:
-                    error_message = "响应中没有图像 URL"
-                    logger.error(error_message)
-                    return False, _t("图片生成失败", "Image generation failed")
-
-            except requests.exceptions.RequestException as e:
-                # 捕获所有请求相关的异常
-                try:
-                    error_detail = response.json().get('error', {}).get('message', str(e))
-                except ValueError:
-                    error_detail = str(e)
-                error_message = f"{error_detail}"
-                logger.error(error_message)
-                return False, error_message
-
-            except Exception as e:
-                # 捕获所有其他异常
-                error_message = f"生成图像时发生错误: {e}"
-                logger.error(error_message)
-                return False, _t("图片生成失败", "Image generation failed")
-        else:
-            return False, _t("图片生成失败，未配置text_to_image参数", "Image generation failed: text_to_image is not configured")
-
+            return self._create_azure_dalle2_image(
+                query,
+                retry_count=retry_count,
+                api_key=api_key,
+                model_retry_sleep=model_retry_sleep,
+            )
+        if text_to_image_model == "dall-e-3":
+            return self._create_azure_dalle3_image(
+                query,
+                retry_count=retry_count,
+                api_key=api_key,
+                model_retry_sleep=model_retry_sleep,
+            )
+        return False, "Image generation failed: text_to_image is not configured"
 
 class _AzureChatHTTPClient(OpenAIHTTPClient):
     """Subclass that injects Azure's ``api-version`` query param and ``api-key``

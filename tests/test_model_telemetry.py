@@ -5940,6 +5940,539 @@ class TestModelTelemetry(unittest.TestCase):
         self.assertEqual(event["error_taxonomy"], "rate_limit")
         self.assertEqual(event["error_message"], "HTTP 429: rate limit")
 
+    def test_azure_dalle3_retries_retry_after_then_records_success(self):
+        from unittest.mock import MagicMock, patch
+        from models.chatgpt.chat_gpt_bot import AzureChatGPTBot
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+        from models.model_telemetry import get_recent_model_calls
+
+        fake_conf = MagicMock()
+        config = {
+            "text_to_image": "dall-e-3",
+            "azure_openai_dalle_api_base": "https://azure-image.test",
+            "azure_openai_dalle_api_key": "azure-key",
+            "azure_openai_dalle_deployment_id": "dalle-deploy",
+            "azure_api_version": "2024-02-15-preview",
+            "image_create_size": "1024x1024",
+            "dalle3_image_quality": "standard",
+            "model_max_retries": 1,
+            "request_timeout": 30,
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        rate_limited = self._fake_response(
+            429,
+            {
+                "error": {
+                    "message": "azure image rate limit",
+                    "code": "rate_limit_exceeded",
+                    "type": "rate_limit",
+                }
+            },
+            headers={"Retry-After": "0.25"},
+        )
+        success = self._fake_response(
+            200,
+            {"data": [{"url": "https://image.test/azure-dalle3.png"}]},
+        )
+        sleeps = []
+
+        with patch("models.chatgpt.chat_gpt_bot.conf", return_value=fake_conf):
+            with patch(
+                "models.chatgpt.chat_gpt_bot.requests.post",
+                side_effect=[rate_limited, success],
+            ) as post:
+                wrapped = wrap_legacy_create_img(
+                    AzureChatGPTBot.__new__(AzureChatGPTBot),
+                    provider_hint="chatGPTOnAzure",
+                    model_hint="dall-e-3",
+                )
+                result = wrapped.create_img("draw azure retry", model_retry_sleep=sleeps.append)
+
+        self.assertEqual(result, (True, "https://image.test/azure-dalle3.png"))
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(sleeps, [0.25])
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["provider"], "chatGPTOnAzure")
+        self.assertEqual(event["model"], "dall-e-3")
+        self.assertEqual(event["api_path"], "/legacy/create_img")
+        self.assertEqual(event["status"], "completed")
+
+    def test_azure_dalle3_non_retryable_4xx_fails_closed(self):
+        from unittest.mock import MagicMock, patch
+        from models.chatgpt.chat_gpt_bot import AzureChatGPTBot
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+        from models.model_telemetry import get_recent_model_calls
+
+        fake_conf = MagicMock()
+        config = {
+            "text_to_image": "dall-e-3",
+            "azure_openai_dalle_api_base": "https://azure-image.test",
+            "azure_openai_dalle_api_key": "azure-key",
+            "azure_openai_dalle_deployment_id": "dalle-deploy",
+            "model_max_retries": 2,
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        bad_request = self._fake_response(
+            400,
+            {
+                "error": {
+                    "message": "bad azure image prompt",
+                    "code": "invalid_prompt",
+                    "type": "invalid_request_error",
+                }
+            },
+        )
+        sleeps = []
+
+        with patch("models.chatgpt.chat_gpt_bot.conf", return_value=fake_conf):
+            with patch("models.chatgpt.chat_gpt_bot.requests.post", return_value=bad_request) as post:
+                wrapped = wrap_legacy_create_img(
+                    AzureChatGPTBot.__new__(AzureChatGPTBot),
+                    provider_hint="chatGPTOnAzure",
+                    model_hint="dall-e-3",
+                )
+                result = wrapped.create_img("bad prompt", model_retry_sleep=sleeps.append)
+
+        self.assertFalse(result[0])
+        self.assertEqual(post.call_count, 1)
+        self.assertEqual(sleeps, [])
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_status_code"], 400)
+        self.assertEqual(event["error_taxonomy"], "client_error")
+        self.assertEqual(event["error_code"], "invalid_prompt")
+        self.assertEqual(event["error_type"], "invalid_request_error")
+        self.assertEqual(event["error_message"], "bad azure image prompt")
+        self.assertFalse(event["retryable"])
+        self.assertEqual(event["retry_attempt"], 0)
+        self.assertEqual(event["max_retries"], 2)
+
+    def test_azure_dalle3_retryable_error_exhausts_with_retry_after(self):
+        from unittest.mock import MagicMock, patch
+        from models.chatgpt.chat_gpt_bot import AzureChatGPTBot
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+        from models.model_telemetry import get_recent_model_calls
+
+        fake_conf = MagicMock()
+        config = {
+            "text_to_image": "dall-e-3",
+            "azure_openai_dalle_api_base": "https://azure-image.test",
+            "azure_openai_dalle_api_key": "azure-key",
+            "azure_openai_dalle_deployment_id": "dalle-deploy",
+            "model_max_retries": 1,
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        outage = self._fake_response(
+            503,
+            {
+                "error": {
+                    "message": "azure image unavailable",
+                    "code": "server_error",
+                    "type": "server_error",
+                }
+            },
+            headers={"Retry-After": "0.5"},
+        )
+        sleeps = []
+
+        with patch("models.chatgpt.chat_gpt_bot.conf", return_value=fake_conf):
+            with patch(
+                "models.chatgpt.chat_gpt_bot.requests.post",
+                side_effect=[outage, outage],
+            ) as post:
+                wrapped = wrap_legacy_create_img(
+                    AzureChatGPTBot.__new__(AzureChatGPTBot),
+                    provider_hint="chatGPTOnAzure",
+                    model_hint="dall-e-3",
+                )
+                result = wrapped.create_img("draw outage", model_retry_sleep=sleeps.append)
+
+        self.assertFalse(result[0])
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(sleeps, [0.5])
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_status_code"], 503)
+        self.assertEqual(event["error_taxonomy"], "server_error")
+        self.assertEqual(event["error_code"], "server_error")
+        self.assertEqual(event["error_type"], "server_error")
+        self.assertTrue(event["retryable"])
+        self.assertEqual(event["retry_attempt"], 1)
+        self.assertEqual(event["max_retries"], 1)
+        self.assertTrue(event["retry_exhausted"])
+        self.assertEqual(event["retry_after_seconds"], 0.5)
+
+    def test_azure_dalle3_timeout_exception_records_typed_failure(self):
+        from unittest.mock import MagicMock, patch
+        from requests.exceptions import Timeout
+        from models.chatgpt.chat_gpt_bot import AzureChatGPTBot
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+        from models.model_telemetry import get_recent_model_calls
+
+        fake_conf = MagicMock()
+        config = {
+            "text_to_image": "dall-e-3",
+            "azure_openai_dalle_api_base": "https://azure-image.test",
+            "azure_openai_dalle_api_key": "azure-key",
+            "azure_openai_dalle_deployment_id": "dalle-deploy",
+            "model_max_retries": 1,
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        sleeps = []
+
+        with patch("models.chatgpt.chat_gpt_bot.conf", return_value=fake_conf):
+            with patch(
+                "models.chatgpt.chat_gpt_bot.requests.post",
+                side_effect=[Timeout("timed out"), Timeout("timed out")],
+            ) as post:
+                wrapped = wrap_legacy_create_img(
+                    AzureChatGPTBot.__new__(AzureChatGPTBot),
+                    provider_hint="chatGPTOnAzure",
+                    model_hint="dall-e-3",
+                )
+                result = wrapped.create_img("draw timeout", model_retry_sleep=sleeps.append)
+
+        self.assertFalse(result[0])
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(sleeps, [2.0])
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_status_code"], 504)
+        self.assertEqual(event["error_taxonomy"], "timeout")
+        self.assertTrue(event["retryable"])
+        self.assertEqual(event["retry_attempt"], 1)
+        self.assertEqual(event["max_retries"], 1)
+        self.assertTrue(event["retry_exhausted"])
+
+    def test_azure_dalle3_uses_legacy_openai_config_fallbacks(self):
+        from unittest.mock import MagicMock, patch
+        from models.chatgpt.chat_gpt_bot import AzureChatGPTBot
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+
+        fake_conf = MagicMock()
+        config = {
+            "text_to_image": "dall-e-3",
+            "azure_openai_dalle_api_base": "",
+            "azure_openai_dalle_api_key": "",
+            "azure_openai_dalle_deployment_id": "",
+            "open_ai_api_base": "https://legacy-openai-base.test",
+            "open_ai_api_key": "legacy-openai-key",
+            "azure_api_version": "2024-02-15-preview",
+            "model_max_retries": 0,
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        success = self._fake_response(
+            200,
+            {"data": [{"url": "https://image.test/fallback.png"}]},
+        )
+
+        with patch("models.chatgpt.chat_gpt_bot.conf", return_value=fake_conf):
+            with patch("models.chatgpt.chat_gpt_bot.requests.post", return_value=success) as post:
+                wrapped = wrap_legacy_create_img(
+                    AzureChatGPTBot.__new__(AzureChatGPTBot),
+                    provider_hint="chatGPTOnAzure",
+                    model_hint="dall-e-3",
+                )
+                result = wrapped.create_img("draw fallback config")
+
+        self.assertEqual(result, (True, "https://image.test/fallback.png"))
+        url = post.call_args.args[0]
+        self.assertIn("https://legacy-openai-base.test/openai/deployments/dall-e-3/images/generations", url)
+        self.assertNotIn("open_ai_api_base", url)
+        self.assertEqual(post.call_args.kwargs["headers"]["api-key"], "legacy-openai-key")
+
+    def test_azure_dalle2_retries_submit_then_polls_success(self):
+        from unittest.mock import MagicMock, patch
+        from models.chatgpt.chat_gpt_bot import AzureChatGPTBot
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+        from models.model_telemetry import get_recent_model_calls
+
+        fake_conf = MagicMock()
+        config = {
+            "text_to_image": "dall-e-2",
+            "azure_openai_dalle_api_base": "https://azure-image.test",
+            "azure_openai_dalle_api_key": "azure-key",
+            "image_create_size": "256x256",
+            "model_max_retries": 1,
+            "azure_dalle_poll_max_wait_times": 2,
+            "azure_dalle_poll_interval": 0,
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        submit_rate_limited = self._fake_response(
+            429,
+            {
+                "error": {
+                    "message": "azure submit rate limit",
+                    "code": "rate_limit_exceeded",
+                    "type": "rate_limit",
+                }
+            },
+            headers={"Retry-After": "0.1"},
+        )
+        submit_ok = self._fake_response(
+            202,
+            {},
+            headers={"operation-location": "https://azure-image.test/operations/task-1"},
+        )
+        poll_ok = self._fake_response(
+            200,
+            {
+                "status": "succeeded",
+                "result": {
+                    "data": [{"url": "https://image.test/azure-dalle2.png"}],
+                },
+            },
+        )
+        sleeps = []
+
+        with patch("models.chatgpt.chat_gpt_bot.conf", return_value=fake_conf):
+            with patch(
+                "models.chatgpt.chat_gpt_bot.requests.post",
+                side_effect=[submit_rate_limited, submit_ok],
+            ) as post:
+                with patch("models.chatgpt.chat_gpt_bot.requests.get", return_value=poll_ok) as get:
+                    wrapped = wrap_legacy_create_img(
+                        AzureChatGPTBot.__new__(AzureChatGPTBot),
+                        provider_hint="chatGPTOnAzure",
+                        model_hint="dall-e-2",
+                    )
+                    result = wrapped.create_img("draw azure dalle2", model_retry_sleep=sleeps.append)
+
+        self.assertEqual(result, (True, "https://image.test/azure-dalle2.png"))
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(get.call_count, 1)
+        self.assertEqual(sleeps, [0.1])
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["provider"], "chatGPTOnAzure")
+        self.assertEqual(event["model"], "dall-e-2")
+        self.assertEqual(event["status"], "completed")
+
+    def test_azure_dalle2_poll_retry_after_then_succeeds(self):
+        from unittest.mock import MagicMock, patch
+        from models.chatgpt.chat_gpt_bot import AzureChatGPTBot
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+        from models.model_telemetry import get_recent_model_calls
+
+        fake_conf = MagicMock()
+        config = {
+            "text_to_image": "dall-e-2",
+            "azure_openai_dalle_api_base": "https://azure-image.test",
+            "azure_openai_dalle_api_key": "azure-key",
+            "model_max_retries": 1,
+            "azure_dalle_poll_max_wait_times": 2,
+            "azure_dalle_poll_interval": 0,
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        submit_ok = self._fake_response(
+            202,
+            {},
+            headers={"operation-location": "https://azure-image.test/operations/task-poll"},
+        )
+        poll_outage = self._fake_response(
+            503,
+            {
+                "error": {
+                    "message": "azure poll unavailable",
+                    "code": "server_error",
+                    "type": "server_error",
+                }
+            },
+            headers={"Retry-After": "0.2"},
+        )
+        poll_ok = self._fake_response(
+            200,
+            {
+                "status": "succeeded",
+                "result": {"data": [{"url": "https://image.test/poll-retry.png"}]},
+            },
+        )
+        sleeps = []
+
+        with patch("models.chatgpt.chat_gpt_bot.conf", return_value=fake_conf):
+            with patch("models.chatgpt.chat_gpt_bot.requests.post", return_value=submit_ok):
+                with patch(
+                    "models.chatgpt.chat_gpt_bot.requests.get",
+                    side_effect=[poll_outage, poll_ok],
+                ) as get:
+                    wrapped = wrap_legacy_create_img(
+                        AzureChatGPTBot.__new__(AzureChatGPTBot),
+                        provider_hint="chatGPTOnAzure",
+                        model_hint="dall-e-2",
+                    )
+                    result = wrapped.create_img("draw poll retry", model_retry_sleep=sleeps.append)
+
+        self.assertEqual(result, (True, "https://image.test/poll-retry.png"))
+        self.assertEqual(get.call_count, 2)
+        self.assertEqual(sleeps, [0.2])
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "completed")
+
+    def test_azure_dalle2_default_poll_interval_avoids_tight_running_loop(self):
+        from unittest.mock import MagicMock, patch
+        from models.chatgpt.chat_gpt_bot import AzureChatGPTBot
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+
+        fake_conf = MagicMock()
+        config = {
+            "text_to_image": "dall-e-2",
+            "azure_openai_dalle_api_base": "https://azure-image.test",
+            "azure_openai_dalle_api_key": "azure-key",
+            "model_max_retries": 0,
+            "azure_dalle_poll_max_wait_times": 2,
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        submit_ok = self._fake_response(
+            202,
+            {},
+            headers={"operation-location": "https://azure-image.test/operations/task-running"},
+        )
+        poll_running = self._fake_response(200, {"status": "running"})
+        poll_ok = self._fake_response(
+            200,
+            {
+                "status": "succeeded",
+                "result": {"data": [{"url": "https://image.test/running-success.png"}]},
+            },
+        )
+        sleeps = []
+
+        with patch("models.chatgpt.chat_gpt_bot.conf", return_value=fake_conf):
+            with patch("models.chatgpt.chat_gpt_bot.requests.post", return_value=submit_ok):
+                with patch(
+                    "models.chatgpt.chat_gpt_bot.requests.get",
+                    side_effect=[poll_running, poll_ok],
+                ):
+                    wrapped = wrap_legacy_create_img(
+                        AzureChatGPTBot.__new__(AzureChatGPTBot),
+                        provider_hint="chatGPTOnAzure",
+                        model_hint="dall-e-2",
+                    )
+                    result = wrapped.create_img("draw running", model_retry_sleep=sleeps.append)
+
+        self.assertEqual(result, (True, "https://image.test/running-success.png"))
+        self.assertEqual(sleeps, [2.0, 2.0])
+
+    def test_azure_dalle2_missing_operation_location_records_typed_failure(self):
+        from unittest.mock import MagicMock, patch
+        from models.chatgpt.chat_gpt_bot import AzureChatGPTBot
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+        from models.model_telemetry import get_recent_model_calls
+
+        fake_conf = MagicMock()
+        config = {
+            "text_to_image": "dall-e-2",
+            "azure_openai_dalle_api_base": "https://azure-image.test",
+            "azure_openai_dalle_api_key": "azure-key",
+            "model_max_retries": 0,
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        submit_without_location = self._fake_response(202, {})
+
+        with patch("models.chatgpt.chat_gpt_bot.conf", return_value=fake_conf):
+            with patch("models.chatgpt.chat_gpt_bot.requests.post", return_value=submit_without_location):
+                wrapped = wrap_legacy_create_img(
+                    AzureChatGPTBot.__new__(AzureChatGPTBot),
+                    provider_hint="chatGPTOnAzure",
+                    model_hint="dall-e-2",
+                )
+                result = wrapped.create_img("draw missing operation")
+
+        self.assertFalse(result[0])
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_status_code"], 502)
+        self.assertEqual(event["error_code"], "missing_operation_location")
+        self.assertEqual(event["error_type"], "provider_protocol_error")
+        self.assertTrue(event["retry_exhausted"])
+
+    def test_azure_dalle2_missing_image_url_records_typed_failure(self):
+        from unittest.mock import MagicMock, patch
+        from models.chatgpt.chat_gpt_bot import AzureChatGPTBot
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+        from models.model_telemetry import get_recent_model_calls
+
+        fake_conf = MagicMock()
+        config = {
+            "text_to_image": "dall-e-2",
+            "azure_openai_dalle_api_base": "https://azure-image.test",
+            "azure_openai_dalle_api_key": "azure-key",
+            "model_max_retries": 0,
+            "azure_dalle_poll_max_wait_times": 1,
+            "azure_dalle_poll_interval": 0,
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        submit_ok = self._fake_response(
+            202,
+            {},
+            headers={"operation-location": "https://azure-image.test/operations/task-empty"},
+        )
+        poll_empty = self._fake_response(200, {"status": "succeeded", "result": {"data": []}})
+
+        with patch("models.chatgpt.chat_gpt_bot.conf", return_value=fake_conf):
+            with patch("models.chatgpt.chat_gpt_bot.requests.post", return_value=submit_ok):
+                with patch("models.chatgpt.chat_gpt_bot.requests.get", return_value=poll_empty):
+                    wrapped = wrap_legacy_create_img(
+                        AzureChatGPTBot.__new__(AzureChatGPTBot),
+                        provider_hint="chatGPTOnAzure",
+                        model_hint="dall-e-2",
+                    )
+                    result = wrapped.create_img("draw missing image")
+
+        self.assertFalse(result[0])
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["status"], "failed")
+        self.assertEqual(event["error_status_code"], 502)
+        self.assertEqual(event["error_code"], "missing_image_url")
+        self.assertEqual(event["error_type"], "provider_protocol_error")
+
+    def test_azure_dalle3_uses_legacy_max_model_retries_key(self):
+        from unittest.mock import MagicMock, patch
+        from models.chatgpt.chat_gpt_bot import AzureChatGPTBot
+        from models.legacy_reply_gateway import wrap_legacy_create_img
+        from models.model_telemetry import get_recent_model_calls
+
+        fake_conf = MagicMock()
+        config = {
+            "text_to_image": "dall-e-3",
+            "azure_openai_dalle_api_base": "https://azure-image.test",
+            "azure_openai_dalle_api_key": "azure-key",
+            "azure_openai_dalle_deployment_id": "dalle-deploy",
+            "max_model_retries": 1,
+        }
+        fake_conf.get.side_effect = lambda key, default=None: config.get(key, default)
+        outage = self._fake_response(
+            503,
+            {
+                "error": {
+                    "message": "legacy max retry outage",
+                    "code": "server_error",
+                    "type": "server_error",
+                }
+            },
+            headers={"Retry-After": "0.3"},
+        )
+        sleeps = []
+
+        with patch("models.chatgpt.chat_gpt_bot.conf", return_value=fake_conf):
+            with patch(
+                "models.chatgpt.chat_gpt_bot.requests.post",
+                side_effect=[outage, outage],
+            ) as post:
+                wrapped = wrap_legacy_create_img(
+                    AzureChatGPTBot.__new__(AzureChatGPTBot),
+                    provider_hint="chatGPTOnAzure",
+                    model_hint="dall-e-3",
+                )
+                result = wrapped.create_img("draw old retry key", model_retry_sleep=sleeps.append)
+
+        self.assertFalse(result[0])
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(sleeps, [0.3])
+        event = get_recent_model_calls()[0]
+        self.assertEqual(event["max_retries"], 1)
+        self.assertEqual(event["retry_attempt"], 1)
+        self.assertTrue(event["retry_exhausted"])
+
     def test_openai_create_img_uses_shared_retry_after_then_records_success(self):
         from unittest.mock import MagicMock, patch
         from models.legacy_reply_gateway import wrap_legacy_create_img

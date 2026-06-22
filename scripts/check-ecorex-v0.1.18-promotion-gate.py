@@ -69,7 +69,7 @@ REVIEW_MARKERS: dict[str, list[str]] = {
     "run ledger multi-agent review": ["multi-agent cross-review", "sidecar interruption", "consensus: submit"],
     "sse recovery multi-agent review": ["multi-agent cross-review", "sse replay-gap", "consensus: submit"],
     "cancellation/concurrency multi-agent review": ["multi-agent cross-review", "typed busy/retry", "consensus: submit"],
-    "model gateway multi-agent review": ["multi-agent cross-review", "model telemetry", "consensus: submit"],
+    "model gateway multi-agent review": ["multi-agent cross-review", "model gateway final closure", "consensus: submit"],
     "context budget multi-agent review": ["multi-agent cross-review", "context overflow recovery", "consensus: submit"],
     "run center multi-agent review": ["multi-agent cross-review", "run center first-class navigation", "retry/recover policy", "consensus: submit"],
     "promotion gate multi-agent review": ["multi-agent cross-review", "promotion-gate hardening", "consensus: submit"],
