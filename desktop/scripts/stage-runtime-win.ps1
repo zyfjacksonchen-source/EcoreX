@@ -113,6 +113,7 @@ if (-not $RuntimeCacheDir) {
 $repoRootResolved = Resolve-Path -LiteralPath $RepoRoot
 $runtimeResolved = Resolve-UnderDirectory -Path $RuntimeDir -Base $desktopRoot
 $pythonEmbedArch = if ($WinArch -eq "ia32") { "win32" } else { "amd64" }
+$skippedCoreRequirements = @()
 
 if (-not $PSBoundParameters.ContainsKey("PreinstallPacks")) {
     if ($null -ne $env:ECOREX_PREINSTALL_PACKS) {
@@ -178,7 +179,26 @@ if (Test-Path -LiteralPath (Join-Path $desktopDist "index.html")) {
 Copy-OptionalLarkCli -TargetRuntime $runtimeResolved
 
 $runtimePackRoot = Join-Path $desktopRoot "runtime-packs"
-Copy-Item -LiteralPath (Join-Path $runtimePackRoot "core-requirements.txt") -Destination (Join-Path $runtimeResolved "core-requirements.txt") -Force
+$coreRequirementsPath = Join-Path $runtimeResolved "core-requirements.txt"
+Copy-Item -LiteralPath (Join-Path $runtimePackRoot "core-requirements.txt") -Destination $coreRequirementsPath -Force
+if ($WinArch -eq "ia32") {
+    $unsupportedCorePackages = @("playwright")
+    $filteredRequirements = @()
+    foreach ($line in Get-Content -LiteralPath $coreRequirementsPath -Encoding UTF8) {
+        $trimmed = $line.Trim()
+        $packageName = (($trimmed -split "[<>=; \t]") | Select-Object -First 1).ToLowerInvariant()
+        if ($packageName -and $unsupportedCorePackages -contains $packageName) {
+            $skippedCoreRequirements += $trimmed
+            continue
+        }
+        $filteredRequirements += $line
+    }
+    if ($skippedCoreRequirements.Count -gt 0) {
+        Write-Host "Skipping Win32-incompatible core requirement(s): $($skippedCoreRequirements -join ', ')"
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($coreRequirementsPath, (($filteredRequirements -join "`n") + "`n"), $utf8NoBom)
+    }
+}
 Copy-Item -LiteralPath (Join-Path $runtimePackRoot "capabilities.json") -Destination (Join-Path $runtimeResolved "capabilities.json") -Force
 
 $runtimeScripts = Join-Path $runtimeResolved "scripts"
@@ -312,6 +332,8 @@ $manifest = [ordered]@{
     pythonDistribution = $pythonDistribution
     dependencyInstall = -not $SkipDependencyInstall
     preinstalledPacks = $PreinstallPacks
+    skippedCoreRequirements = $skippedCoreRequirements
+    runtimeLimitations = if ($WinArch -eq "ia32" -and $skippedCoreRequirements.Count -gt 0) { @("playwright-unavailable-win32") } else { @() }
 }
 $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $runtimeResolved "runtime-manifest.json") -Encoding UTF8
 
