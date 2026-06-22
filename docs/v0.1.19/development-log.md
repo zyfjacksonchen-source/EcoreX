@@ -171,3 +171,33 @@ Review fixes:
 - Added a backend SSE behavior regression test for retry metadata and reran the
   renderer visual smoke to back the reconnect acceptance entries with more than
   source-marker checks.
+
+## Release Continuation: Current-Branch Web Artifacts
+
+On 2026-06-23, after the user opened the GitHub billing and upgrade pages, the
+release path was rechecked from current state.
+
+- GitHub macOS workflow run `27971223382` was dispatched against
+  `codex/ecorex-v0.1.19` at
+  `ee5b59449d270e2a9c64c0445eb4b739d7602fb0`. Both macOS jobs still failed
+  before any runner step started; the run JSON showed empty `steps` arrays and
+  failed-log retrieval returned `log not found`.
+- Windows signing preflight still failed: SimplySign Desktop was running, but
+  `SCardSvr` and `CertPropSvc` remained stopped and the SimplySign CSP key
+  containers were not visible to the current process.
+- A production packaging risk was found before rebuilding Web artifacts:
+  `desktop/runtime/ecorex-runtime` had not fully inherited the latest
+  `agent_stream.py` retry evidence changes. `npm run build` and
+  `desktop/scripts/stage-runtime-win.ps1 -WinArch x64` were run to regenerate
+  the renderer/electron build and restage the desktop runtime from the
+  repository root.
+- Current-branch Web artifacts were built into
+  `release-artifacts/current-ee5b5944` and validated structurally. The Linux
+  service package passed `check-ecorex-web-release.sh` with installed/HTTP
+  checks disabled, and archive marker validation confirmed that the Linux
+  service tarball plus all WebUI zip variants include the latest network
+  recovery markers and the current renderer chunk.
+- These Web artifacts were intentionally not uploaded to GitHub Release or the
+  public site yet. Updating only Web assets would create a mixed release where
+  GitHub tag `v0.1.19` still points to `b52999b0...` and signed Win/Mac desktop
+  assets are not rebuilt from the same current branch head.

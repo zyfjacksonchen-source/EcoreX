@@ -53,6 +53,38 @@ Date: 2026-06-22
   provider remained unavailable. Rebuilding signed Windows installers requires
   unlocking Certum SimplySign/proCertum SmartSign and starting the Smart Card
   services in an elevated session.
+- 2026-06-23 retry after the user opened GitHub billing/plan pages: `npm run
+  sign:win:preflight` still failed. `SimplySignDesktop` was running, but
+  `SCardSvr` and `CertPropSvc` remained stopped and no SimplySign CSP key
+  containers were visible.
+
+## Current Branch Web Rebuild
+
+- Current branch head: `ee5b59449d270e2a9c64c0445eb4b739d7602fb0`.
+- `npm run build` passed from `desktop/`, producing renderer chunk
+  `assets/index-CcWYypJL.js` and compiling Electron TypeScript.
+- `desktop/scripts/stage-runtime-win.ps1 -WinArch x64` passed and restaged
+  `desktop/runtime/ecorex-runtime` from the repository root. This synchronized
+  the network recovery changes into the runtime used by local WebUI and
+  desktop packaging.
+- Current-branch Web artifacts were generated under
+  `release-artifacts/current-ee5b5944` for validation only. They were not
+  uploaded to the public release because signed Windows installers and macOS
+  DMGs have not yet been rebuilt from this same branch head.
+- `EcoreX_0.1.19-web-linux-service.tar.gz`: size `3369259`, SHA256
+  `3D83730384D769119E271031FE3FEA4CF761E9C375C69D6737B6D457EA79AEB5`.
+- `EcoreX_0.1.19-webui-windows-x64.zip`: size `80952789`, SHA256
+  `30721342262C9ED71A0A8FE501F4B171FB6A20AC85586C79FD05A060555C6938`.
+- `EcoreX_0.1.19-webui-macos-universal.zip`: size `158064446`, SHA256
+  `DF4F7614DD3CB099598DB0C1B40E9C3842F2552556843BCBB252DF0E56F5322D`.
+- `EcoreX_0.1.19-webui-win-mac.zip`: size `239249838`, SHA256
+  `71625F3554D0B2CA0B375867C8A7F4AD514723C7F1AF50BF49014564B7F4C4DD`.
+- Package validation passed for the Linux service tarball with installed and
+  HTTP checks disabled.
+- Archive marker validation passed for all four current-branch Web artifacts:
+  package runtimes contain `retry_mode`, `manual_retry_prepare`,
+  `_last_model_retry_evidence`, and `retry_suppressed`, and all packaged
+  renderer `index.html` files reference `assets/index-CcWYypJL.js`.
 
 ## Published Artifacts
 
@@ -86,6 +118,13 @@ Date: 2026-06-22
 - Second check result: failed before any job step started for both `macOS DMG
   (arm64)` and `macOS DMG (x64)`. GitHub run JSON again shows empty `steps`
   arrays; failed log retrieval returned `log not found`.
+- 2026-06-23 retry after the user opened GitHub billing/plan pages: workflow
+  run `27971223382` on branch `codex/ecorex-v0.1.19`, commit
+  `ee5b59449d270e2a9c64c0445eb4b739d7602fb0`.
+- Retry result: failed before any job step started for both `macOS DMG
+  (arm64)` and `macOS DMG (x64)`. GitHub run JSON again shows empty `steps`
+  arrays; failed log retrieval returned `log not found`. The macOS runner
+  billing/spending gate has therefore not recovered yet.
 - Production note: Windows/Web hotfix assets were rebuilt and deployed. macOS desktop DMGs remain the existing v0.1.19 assets until GitHub macOS runner billing/spending is restored and the DMG workflow can be rerun.
 
 ## Notes
