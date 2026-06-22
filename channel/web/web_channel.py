@@ -1917,8 +1917,9 @@ class WebChannel(ChatChannel):
         error_code: str = "STREAM_ERROR",
         terminal_reason: str = "failed",
         usage: Optional[Dict[str, Any]] = None,
+        extra: Optional[Dict[str, Any]] = None,
     ) -> bool:
-        return self._push_terminal_event_once(request_id, {
+        payload = {
             "type": "error",
             "content": message or "Worker failed before producing a response.",
             "message": message or "Worker failed before producing a response.",
@@ -1927,7 +1928,14 @@ class WebChannel(ChatChannel):
             "error_code": error_code,
             "terminal_reason": terminal_reason or "failed",
             "usage": usage,
-        })
+        }
+        if isinstance(extra, dict):
+            for key, value in extra.items():
+                if value is not None and key not in payload:
+                    if key == "retry_mode" and value == "auto_retry":
+                        value = "manual_retry_prepare" if extra.get("retryable") else "unavailable"
+                    payload[key] = value
+        return self._push_terminal_event_once(request_id, payload)
 
     def _push_cancelled_event_once(self, request_id: str, item: Dict[str, Any]) -> bool:
         """Emit one cancellation terminal event per request."""
@@ -2179,6 +2187,7 @@ class WebChannel(ChatChannel):
                 "session_id": actual_session_id,
                 "retryable": False,
                 "recoverable": recoverable,
+                "retry_mode": "unavailable",
                 "exactReplay": exact_replay,
                 "exact_replay": exact_replay,
                 "prompt": visible_message,
@@ -2196,6 +2205,7 @@ class WebChannel(ChatChannel):
                 "session_id": actual_session_id,
                 "retryable": False,
                 "recoverable": recoverable,
+                "retry_mode": "unavailable",
                 "exactReplay": False,
                 "exact_replay": False,
                 "prompt": "",
@@ -2212,6 +2222,7 @@ class WebChannel(ChatChannel):
             "session_id": actual_session_id,
             "retryable": True,
             "recoverable": recoverable,
+            "retry_mode": "manual_retry_prepare",
             "exactReplay": exact_replay,
             "exact_replay": exact_replay,
             "prompt": visible_message,
@@ -3279,10 +3290,38 @@ class WebChannel(ChatChannel):
                 # Remember it so the agent_end handler below knows not to
                 # rewrite the message into a generic empty-response notice.
                 streamed_error.append(err_msg)
+                retry_meta_keys = (
+                    "error_type",
+                    "error_taxonomy",
+                    "retryable",
+                    "recoverable",
+                    "retry_exhausted",
+                    "retry_suppressed",
+                    "retry_suppressed_reason",
+                    "retry_attempt",
+                    "max_retries",
+                    "status_code",
+                    "retry_mode",
+                )
+                retry_meta = {
+                    key: data.get(key)
+                    for key in retry_meta_keys
+                    if data.get(key) is not None
+                }
+                terminal_reason = str(
+                    data.get("terminal_reason")
+                    or (
+                        "model_retry_suppressed_stream_output_started"
+                        if data.get("retry_suppressed")
+                        else "failed"
+                    )
+                )
                 self._push_error_event_once(
                     request_id,
                     err_msg,
                     error_code=str(data.get("error_code") or "AGENT_STREAM_ERROR"),
+                    terminal_reason=terminal_reason,
+                    extra=retry_meta,
                     usage=data.get("usage") or self._fetch_agent_usage(self.request_to_session.get(request_id, "")),
                 )
                 self._push_done_event_once(request_id, {

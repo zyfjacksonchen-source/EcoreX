@@ -199,6 +199,10 @@ type ChatItem = {
     message: string;
     retryable?: boolean;
     recoverable?: boolean;
+    reason?: string;
+    retryAfterMs?: number;
+    retryMode?: string;
+    stopAllowed?: boolean;
   };
 };
 type ApprovalState =
@@ -3895,6 +3899,86 @@ export function App() {
     }
   }
 
+  function streamErrorRetryable(item: StreamItem, fallback = true) {
+    if (typeof item.retryable === "boolean") return item.retryable;
+    const evidence = [
+      item.error_taxonomy,
+      item.error_type,
+      item.error_code,
+      item.terminal_reason,
+      item.message,
+      item.content
+    ].filter(Boolean).join(" ").toLowerCase();
+    if (!evidence) return fallback;
+    if (/(auth|permission|policy|denied|forbidden|invalid|bad_request|context_overflow)/i.test(evidence)) return false;
+    return /(network|timeout|rate_limit|server_error|unavailable|502|503|504|retry|MODEL_RETRY)/i.test(evidence) || fallback;
+  }
+
+  function streamFailureRecovery(
+    requestId: string,
+    item: StreamItem,
+    fallbackMessage: string,
+    kind: NonNullable<ChatItem["recovery"]>["kind"] = "failed"
+  ): NonNullable<ChatItem["recovery"]> {
+    const reason = item.retry_suppressed_reason || item.terminal_reason || item.error_taxonomy || item.error_type || item.error_code || "";
+    const suppressedAfterOutput = Boolean(item.retry_suppressed && item.retry_suppressed_reason === "stream_output_started");
+    const message = suppressedAfterOutput
+      ? "Network interrupted after output started. Automatic replay is paused to avoid duplicate work; recover history or prepare a retry draft."
+      : fallbackMessage || "Response interrupted. Recover saved history or prepare a retry draft.";
+    return {
+      kind,
+      requestId,
+      message,
+      recoverable: item.recoverable !== false,
+      retryable: streamErrorRetryable(item, true),
+      reason,
+      retryAfterMs: typeof item.retry_after_ms === "number" ? item.retry_after_ms : undefined,
+      retryMode: item.retry_mode === "auto_retry"
+        ? "manual_retry_prepare"
+        : item.retry_mode || (streamErrorRetryable(item, true) ? "manual_retry_prepare" : "unavailable")
+    };
+  }
+
+  function markStreamConnectionInterrupted(sessionId: string, assistantId: string, requestId: string) {
+    updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => (
+      message.pending ? {
+        ...replaceCurrentPhase(message, "Response stalled; reconnecting"),
+        recovery: {
+          kind: "stalled",
+          requestId,
+          message: "Connection interrupted. Reconnecting to the same run; recover saved history if it does not resume.",
+          recoverable: true,
+          retryable: false,
+          reason: "eventsource_error",
+          retryMode: "stream_reconnect"
+        }
+      } : message
+    ));
+  }
+
+  function markStreamReconnectExhausted(sessionId: string, assistantId: string, requestId: string, options: { activeStillRunning?: boolean } = {}) {
+    const activeStillRunning = Boolean(options.activeStillRunning);
+    updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => ({
+      ...finishRunningSteps(message),
+      requestId,
+      pending: false,
+      paused: false,
+      cancelled: false,
+      recovery: {
+        kind: "failed",
+        requestId,
+        message: activeStillRunning
+          ? "Response channel could not be restored, but the original run still appears active. Recover saved history or stop it before retrying."
+          : "Response channel could not be restored. Recover saved history or prepare a retry draft.",
+        recoverable: true,
+        retryable: !activeStillRunning,
+        reason: activeStillRunning ? "active_stream_unavailable" : "stream_reconnect_exhausted",
+        retryMode: activeStillRunning ? "stop_before_retry" : "manual_retry_prepare",
+        stopAllowed: activeStillRunning
+      }
+    }));
+  }
+
   function scheduleStreamStallTimer(sessionId: string, assistantId: string, requestId: string, delayMs: number) {
     clearStreamStallTimer(sessionId, requestId);
     const key = streamRequestKey(sessionId, requestId);
@@ -4189,6 +4273,12 @@ export function App() {
             ? await refreshSessionFromHistory(sessionId)
             : false;
           if (restored) return;
+          if (active.stream_available === false) {
+            markStreamReconnectExhausted(sessionId, assistantId, requestId, { activeStillRunning: true });
+            markSessionOutputReady(sessionId);
+            finishSessionRequest(sessionId, requestId);
+            return;
+          }
           updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => ({
             ...message,
             requestId,
@@ -4196,12 +4286,8 @@ export function App() {
             paused: false,
             cancelled: false
           }));
-          streamRetryCounts.current[sessionId] = active.stream_available === false ? 5 : 0;
-          if (active.stream_available !== false) {
-            window.setTimeout(() => attachMessageStream(sessionId, assistantId, requestId), 3000);
-          } else {
-            window.setTimeout(() => scheduleStreamReconnect(sessionId, assistantId, requestId), 5000);
-          }
+          streamRetryCounts.current[sessionId] = 0;
+          window.setTimeout(() => attachMessageStream(sessionId, assistantId, requestId), 3000);
           return;
         }
         const restored = await refreshSessionFromHistory(sessionId);
@@ -4209,13 +4295,7 @@ export function App() {
           clearSessionRequestState(sessionId, requestId);
           return;
         }
-        updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => ({
-          ...finishRunningSteps(message),
-          requestId,
-          pending: false,
-          paused: false,
-          cancelled: false
-        }));
+        markStreamReconnectExhausted(sessionId, assistantId, requestId);
         markSessionOutputReady(sessionId);
         finishSessionRequest(sessionId, requestId);
       })();
@@ -4324,7 +4404,8 @@ export function App() {
               ...finishRunningSteps(entry, "error"),
               content: message,
               pending: false,
-              paused: false
+              paused: false,
+              recovery: streamFailureRecovery(requestId, item, message)
             }));
             markSessionOutputReady(sessionId);
           }
@@ -4437,6 +4518,7 @@ export function App() {
           }
           if (!isCurrentSessionRequest(sessionId, requestId)) return;
           setStreamRequestPhase(sessionId, requestId, "stalled");
+          markStreamConnectionInterrupted(sessionId, assistantId, requestId);
           closeSessionStream(sessionId, requestId);
           scheduleHistoryRecovery(sessionId, requestId, [800, 2400, 5000]);
           scheduleStreamReconnect(sessionId, assistantId, requestId);
@@ -4947,13 +5029,7 @@ export function App() {
                   content: message,
                   pending: false,
                   paused: false,
-                  recovery: {
-                    kind: "failed",
-                    requestId,
-                    message,
-                    recoverable: true,
-                    retryable: true
-                  }
+                  recovery: streamFailureRecovery(requestId, item, message)
                 }));
                 markSessionOutputReady(requestSessionId);
               }
@@ -5066,6 +5142,7 @@ export function App() {
             }
             if (!isCurrentSessionRequest(requestSessionId, requestId)) return;
             setStreamRequestPhase(requestSessionId, requestId, "stalled");
+            markStreamConnectionInterrupted(requestSessionId, assistantId, requestId);
             closeSessionStream(requestSessionId, requestId);
             scheduleHistoryRecovery(requestSessionId, requestId, [800, 2400, 5000]);
             scheduleStreamReconnect(requestSessionId, assistantId, requestId);
@@ -6085,6 +6162,7 @@ export function App() {
       return <div className="message-recovery-actions"><span>Sending while stopping the previous response</span></div>;
     }
     if (!recovery) return null;
+    const showStop = Boolean(requestId && (message.pending || recovery.stopAllowed));
     return (
       <div className="message-recovery-actions">
         <span>{recovery.message}</span>
@@ -6098,7 +6176,7 @@ export function App() {
             <BookOpen aria-hidden="true" />Recover
           </button>
         )}
-        {requestId && message.pending && (
+        {showStop && (
           <button type="button" onClick={() => void cancelChatRequest({ requestId, sessionId }).then(() => stopActiveRequest()).catch(() => undefined)}>
             <Square aria-hidden="true" />Stop
           </button>

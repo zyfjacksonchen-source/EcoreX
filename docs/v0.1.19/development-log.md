@@ -117,3 +117,57 @@ Implemented v0.1.19 skill-level hardening from this discussion:
 - The current workspace overlays under `C:\Users\user\EcoreX\skills\...` were
   synchronized from the updated bundled skills so runtime use does not keep a
   stale fallback copy.
+
+## Network Disconnect Root-Cause Follow-Up
+
+On 2026-06-23 the user reported that a visible network interruption stayed in a
+manual recovery state and did not automatically continue. Three read-only
+subagents reviewed backend retry behavior, frontend recovery UI, and runtime
+gateway/configuration:
+
+- Backend finding: stream retry taxonomy correctly marks network interruptions
+  as retryable, but when assistant output or tool-call arguments have already
+  started, retry is deliberately suppressed with
+  `retry_suppressed_reason=stream_output_started` to avoid duplicate output,
+  duplicate tool execution, and duplicate file writes.
+- Frontend finding: `EventSource.onerror` and reconnect exhaustion only tried
+  stream reattach/history recovery. They did not consistently set the inline
+  recovery state, so users could see a stalled message without a clear
+  Codex-like `Recover` / `Retry draft` path.
+- Environment finding: the local desktop runtime was using a cached enterprise
+  model policy that selected a non-official OpenAI-compatible gateway. The
+  host is intentionally redacted from release docs. Redacted local logs suggest
+  mixed provider capability coverage, so the code fix avoids blaming one host
+  and instead hardens the generic stream recovery path.
+
+Implemented follow-up:
+
+- `AgentStreamExecutor` now passes configured `model_max_retries` /
+  `max_model_retries` into `LLMRequest`, so pre-output retry behavior is
+  actually governed by config.
+- Stream error chunks now record retry evidence on the agent error event:
+  taxonomy, retryable, retry exhausted/suppressed, suppression reason, retry
+  attempt, max retries, status code, terminal reason, and retry mode.
+- `WebChannel` now preserves this evidence on SSE `type:error` events and
+  records terminal reason such as
+  `model_retry_suppressed_stream_output_started` in the durable run ledger.
+- Renderer recovery UI now sets a stalled recovery card on every
+  `EventSource.onerror`. Reconnect exhaustion produces a failed recovery state
+  with `Recover`, `Retry draft`, and `Diagnostics`; if the backend still reports
+  the original run active but the stream is unavailable, the UI exits pending
+  and exposes `Recover`, `Stop`, and `Diagnostics` instead of looping forever.
+- The implementation intentionally still does not blindly start a new run after
+  output has begun; it follows the Codex-like safety rule that replay after an
+  uncertain partial stream requires explicit user confirmation via retry draft.
+
+Review fixes:
+
+- Terminal SSE error payloads no longer advertise `retry_mode=auto_retry`;
+  backend evidence and renderer recovery both normalize terminal retry mode to
+  manual retry preparation or unavailable.
+- Release docs were scrubbed of exact enterprise gateway host and production
+  Admin DB backup path values. Future docs should keep provider/gateway hosts
+  redacted unless the user explicitly asks for a private diagnostic note.
+- Added a backend SSE behavior regression test for retry metadata and reran the
+  renderer visual smoke to back the reconnect acceptance entries with more than
+  source-marker checks.

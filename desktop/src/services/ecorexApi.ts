@@ -429,6 +429,7 @@ export type RetryPrepareResult = {
   exactReplay?: boolean;
   exact_replay?: boolean;
   retry_after_ms?: number;
+  retry_mode?: string;
   prompt?: string;
   visible_message?: string;
   attachments?: FileAttachment[];
@@ -454,7 +455,18 @@ export type StreamItem = {
   terminal?: boolean;
   terminal_reason?: string;
   error_code?: string;
+  error_type?: string;
+  error_taxonomy?: string;
+  retryable?: boolean;
   recoverable?: boolean;
+  retry_after_ms?: number;
+  retry_mode?: string;
+  retry_exhausted?: boolean;
+  retry_suppressed?: boolean;
+  retry_suppressed_reason?: string;
+  retry_attempt?: number;
+  max_retries?: number;
+  status_code?: number | string;
   requested_last_event_id?: number;
   retained_from_event_id?: number;
   next_event_id?: number;

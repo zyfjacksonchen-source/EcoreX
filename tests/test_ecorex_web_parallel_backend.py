@@ -3618,6 +3618,45 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertEqual(event["state"], "cancelled")
         self.assertTrue(event["terminal"])
 
+    def test_sse_error_retry_metadata_is_terminal_and_manual(self):
+        from channel.web import web_channel
+
+        channel = web_channel.WebChannel()
+        request_id = "req-test-error-retry-meta"
+        channel.request_to_session = {request_id: "session-test-error-retry-meta"}
+        channel._ensure_sse_state(request_id)
+
+        pushed = channel._push_error_event_once(
+            request_id,
+            "network interrupted",
+            error_code="MODEL_RETRY_SUPPRESSED",
+            terminal_reason="model_retry_suppressed_stream_output_started",
+            extra={
+                "retryable": True,
+                "recoverable": True,
+                "retry_suppressed": True,
+                "retry_suppressed_reason": "stream_output_started",
+                "retry_attempt": 0,
+                "max_retries": 1,
+                "retry_mode": "auto_retry",
+            },
+        )
+
+        self.assertTrue(pushed)
+        self.assertEqual(len(channel.sse_events[request_id]), 1)
+        event = channel.sse_queues[request_id].get(timeout=1)
+        self.assertEqual(event["type"], "error")
+        self.assertEqual(event["event_type"], "run.failed")
+        self.assertEqual(event["state"], "failed")
+        self.assertTrue(event["terminal"])
+        self.assertEqual(event["terminal_reason"], "model_retry_suppressed_stream_output_started")
+        self.assertEqual(event["error_code"], "MODEL_RETRY_SUPPRESSED")
+        self.assertTrue(event["retryable"])
+        self.assertTrue(event["recoverable"])
+        self.assertTrue(event["retry_suppressed"])
+        self.assertEqual(event["retry_suppressed_reason"], "stream_output_started")
+        self.assertEqual(event["retry_mode"], "manual_retry_prepare")
+
     def test_local_image_reply_emits_done_with_artifact(self):
         from bridge.context import Context, ContextType
         from bridge.reply import Reply, ReplyType
@@ -7407,6 +7446,7 @@ class TestAgentHostBoundary(unittest.TestCase):
             "interrupts_request_id",
             "retry_of_request_id",
             "prepareRequestRetry",
+            "retry_mode",
         ]:
             self.assertIn(marker, api_source)
         for marker in [
@@ -7421,6 +7461,8 @@ class TestAgentHostBoundary(unittest.TestCase):
             "accepted_after_recovery",
             "dead_owner_lock_recovered",
             "_is_within_directory(upload_dir, full_path)",
+            "retry_suppressed_reason",
+            "model_retry_suppressed_stream_output_started",
         ]:
             self.assertIn(marker, web_source)
         self.assertNotIn("full_path.startswith(os.path.abspath(upload_dir))", web_source)
@@ -7428,6 +7470,20 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertIn("retained_from_event_id?: number;", api_source)
         self.assertIn("next_event_id?: number;", api_source)
         self.assertIn('item.type === "replay_gap"', api_source)
+        for marker in [
+            "markStreamConnectionInterrupted",
+            "markStreamReconnectExhausted",
+            "streamFailureRecovery",
+            "stream_reconnect_exhausted",
+            "active_stream_unavailable",
+            "stop_before_retry",
+            "activeStillRunning: true",
+            "stopAllowed",
+            "Network interrupted after output started",
+        ]:
+            self.assertIn(marker, app_source)
+        self.assertIn('"retry_mode": "manual_retry_prepare" if retryable else "unavailable"', (root / "agent" / "protocol" / "agent_stream.py").read_text(encoding="utf-8"))
+        self.assertNotIn('"retry_mode": "manual_retry_prepare" if retry_stopped else "auto_retry"', (root / "agent" / "protocol" / "agent_stream.py").read_text(encoding="utf-8"))
 
     def test_v018_desktop_handles_sidecar_interrupted_stream_recovery(self):
         root = Path(__file__).resolve().parents[1]

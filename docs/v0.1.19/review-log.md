@@ -11,5 +11,8 @@ agent did not count as a reviewer.
 | Pascal | XHS image routing | PASS | Initial P1 found cached existing images could relabel old placeholder/Python output as final. Fixed by requiring matching OpenAI `gpt-image-2-pro` provenance, prompt hash, output path, and SHA256 before cache reuse; re-review PASS. |
 | Ptolemy | Generic image-generation routing | PASS | Initial P1 found provider hints could route `gpt-image-2-pro` to Gemini/DashScope/Qwen. Fixed by restricting GPT Image model requests to OpenAI/LinkAI compatible providers and fail-closed behavior; re-review PASS. |
 | Wegener | Evidence/docs/release guards | PASS | Confirmed pytest coverage and release validator markers for XHS/generic image routing. P2 noted default release artifact validator targets v0.1.18 public artifacts; documented as not applicable until v0.1.19 installers are produced. |
+| Bacon | 2026-06-23 network recovery UI | PASS | Initial P1 found active-but-stream-unavailable reconnect exhaustion could loop pending forever. Fixed by exiting pending with Recover/Stop/Diagnostics and no retry draft until the active run is stopped; re-review PASS with no P0/P1/P2. |
+| Arendt | 2026-06-23 backend retry/ledger | PASS | Initial P2 found terminal SSE errors could advertise `retry_mode=auto_retry`. Fixed by normalizing terminal retry mode to manual retry preparation or unavailable in both agent evidence and WebChannel SSE output; re-review PASS. |
+| Lagrange | 2026-06-23 cross-platform/security/docs | PASS | Initial P1 found exact enterprise gateway host in release docs and then in the evidence grep pattern. Fixed by redacting current and historical docs plus omitting raw sensitive search patterns; re-review PASS. |
 
 Consensus: PASS. No P0/P1 findings remain.

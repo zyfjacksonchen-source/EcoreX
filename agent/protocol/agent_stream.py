@@ -327,6 +327,7 @@ class AgentStreamExecutor:
         self._force_text_response_next_turn = False
         self._force_text_response_reason = ""
         self._internal_hint_texts = []
+        self._last_model_retry_evidence: Dict[str, Any] = {}
         
         # Track files to send (populated by read tool)
         self.files_to_send = []  # List of file metadata dicts
@@ -842,6 +843,19 @@ class AgentStreamExecutor:
             return int(value)
         except (TypeError, ValueError):
             return int(default)
+
+    @staticmethod
+    def _model_retry_config_int(default: int) -> int:
+        try:
+            from config import conf
+            cfg = conf()
+            value = cfg.get("model_max_retries", cfg.get("max_model_retries", default))
+        except Exception:
+            return max(0, int(default))
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return max(0, int(default))
 
     @staticmethod
     def _context_budget_config_float(name: str, default: float) -> float:
@@ -1769,7 +1783,11 @@ class AgentStreamExecutor:
 
         except Exception as e:
             logger.error(f"❌ Agent execution error: {e}")
-            self._emit_event("error", {"error": str(e)})
+            error_payload = {"error": str(e)}
+            retry_evidence = getattr(self, "_last_model_retry_evidence", {}) or {}
+            if isinstance(retry_evidence, dict):
+                error_payload.update(retry_evidence)
+            self._emit_event("error", error_payload)
             raise
 
         finally:
@@ -1803,6 +1821,7 @@ class AgentStreamExecutor:
         Returns:
             (response_text, tool_calls)
         """
+        self._last_model_retry_evidence = {}
         # Validate and fix message history (e.g. orphaned tool_result blocks).
         # Context trimming is done once in run_stream() before the loop starts,
         # NOT here — trimming mid-execution would strip the current run's
@@ -1897,6 +1916,7 @@ class AgentStreamExecutor:
         #     pass
 
         # Create request
+        configured_model_max_retries = self._model_retry_config_int(max_retries)
         request = LLMRequest(
             messages=messages,
             temperature=0,
@@ -1904,6 +1924,8 @@ class AgentStreamExecutor:
             tools=tools_schema,
             system=self.system_prompt,  # Pass system prompt separately for Claude API
             retry_count=retry_count,
+            max_model_retries=configured_model_max_retries,
+            model_max_retries=configured_model_max_retries,
             model_retry_sleep=self._sleep_cancelable,
             tool_schema_budget=schema_budget,
             context_budget=context_budget,
@@ -1975,7 +1997,40 @@ class AgentStreamExecutor:
                     
                     status_code = chunk.get("status_code", "N/A")
                     retry_stopped = bool(chunk.get("retry_exhausted") or chunk.get("retry_suppressed"))
-                    
+                    nested_error = error_data if isinstance(error_data, dict) else {}
+                    retry_suppressed = bool(chunk.get("retry_suppressed") or nested_error.get("retry_suppressed"))
+                    retry_suppressed_reason = (
+                        chunk.get("retry_suppressed_reason")
+                        or nested_error.get("retry_suppressed_reason")
+                        or ""
+                    )
+                    retry_exhausted = bool(chunk.get("retry_exhausted") or nested_error.get("retry_exhausted"))
+                    retryable = bool(chunk.get("retryable") or nested_error.get("retryable"))
+                    retry_attempt = chunk.get("retry_attempt", nested_error.get("retry_attempt"))
+                    max_model_retry_attempts = chunk.get("max_retries", nested_error.get("max_retries"))
+                    terminal_reason = (
+                        "model_retry_suppressed_stream_output_started"
+                        if retry_suppressed
+                        else "model_retry_exhausted"
+                        if retry_exhausted
+                        else "model_stream_error"
+                    )
+                    self._last_model_retry_evidence = {
+                        "error_code": "MODEL_RETRY_SUPPRESSED" if retry_suppressed else ("MODEL_RETRY_EXHAUSTED" if retry_exhausted else "MODEL_STREAM_ERROR"),
+                        "error_type": error_type or error_taxonomy or ("network_error" if retryable else ""),
+                        "error_taxonomy": error_taxonomy,
+                        "terminal_reason": terminal_reason,
+                        "retryable": retryable,
+                        "recoverable": True,
+                        "retry_exhausted": retry_exhausted,
+                        "retry_suppressed": retry_suppressed,
+                        "retry_suppressed_reason": retry_suppressed_reason,
+                        "retry_attempt": retry_attempt,
+                        "max_retries": max_model_retry_attempts,
+                        "status_code": status_code,
+                        "retry_mode": "manual_retry_prepare" if retryable else "unavailable",
+                    }
+
                     # Log error with all available information
                     logger.error(f"🔴 Stream API Error:")
                     logger.error(f"   Message: {error_msg}")
