@@ -53,6 +53,8 @@ Date: 2026-06-22
 - Attempted hotfix DMG workflow: `27962802969` on commit `29025b972501ebd829599cec43ad3b87bb028919`.
 - Result: failed before any job step started.
 - GitHub annotation: the macOS jobs were not started because recent account payments failed or the spending limit needs to be increased.
+- Follow-up attempt: `27965693068` on hotfix evidence commit `4cc799ae42797b0c7cf1b1af1d92d5fe1d0b561e`.
+- Follow-up result: failed before any job step started with the same GitHub billing/spending-limit annotation.
 - Production note: Windows/Web hotfix assets were rebuilt and deployed. macOS desktop DMGs remain the existing v0.1.19 assets until GitHub macOS runner billing/spending is restored and the DMG workflow can be rerun.
 
 ## Notes
