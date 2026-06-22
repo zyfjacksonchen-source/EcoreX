@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.1.18",
+    [string]$Version = "0.1.19",
     [string]$InstallerPath = "",
     [string]$InstallerIa32Path = "",
     [string]$SmokePath = "",
@@ -85,8 +85,8 @@ function Write-Plan {
             "cd `"$desktopDir`"",
             $preflight,
             "npm run package:win:signed",
-            "npm run smoke:win:installed -- -InstallerPath `"$InstallerPath`" -OutputPath `"..\docs\v$Version\win-installed-smoke.json`"",
-            "npm run smoke:win:installed -- -InstallerPath `"$InstallerIa32Path`" -OutputPath `"..\docs\v$Version\win-ia32-installed-smoke.json`" -ExpectedWinArch ia32",
+            "npm run smoke:win:installed -- -InstallerPath `"$InstallerPath`" -OutputPath `"..\docs\v$Version\win-installed-smoke.json`" -ExpectedVersion $Version",
+            "npm run smoke:win:installed -- -InstallerPath `"$InstallerIa32Path`" -OutputPath `"..\docs\v$Version\win-ia32-installed-smoke.json`" -ExpectedVersion $Version -ExpectedWinArch ia32",
             "cd `"$RepoRoot`"",
             "powershell -ExecutionPolicy Bypass -File scripts\update-ecorex-desktop-release-manifest.ps1 -Version $Version -WindowsInstallerPath `"$InstallerPath`" -WindowsInstalledSmokePath `"$SmokePath`" -WindowsIa32InstallerPath `"$InstallerIa32Path`" -WindowsIa32InstalledSmokePath `"$SmokeIa32Path`""
         )
@@ -170,6 +170,8 @@ Invoke-Step -WorkingDirectory $desktopDir -FilePath "npm" -ArgumentList @(
     $resolvedInstaller,
     "-OutputPath",
     $resolvedSmokePath,
+    "-ExpectedVersion",
+    $Version,
     "-ExpectedWinArch",
     "x64"
 )
@@ -182,6 +184,8 @@ Invoke-Step -WorkingDirectory $desktopDir -FilePath "npm" -ArgumentList @(
     $resolvedInstallerIa32,
     "-OutputPath",
     $resolvedSmokeIa32Path,
+    "-ExpectedVersion",
+    $Version,
     "-ExpectedWinArch",
     "ia32"
 )

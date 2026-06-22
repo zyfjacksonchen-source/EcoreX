@@ -1,6 +1,7 @@
 param(
     [string]$AppDir = "release/win-unpacked",
     [string]$OutputPath = "",
+    [string]$ExpectedVersion = "",
     [int]$Port = 19132,
     [int]$TimeoutSeconds = 90,
     [switch]$KeepRunning
@@ -133,6 +134,16 @@ $appDirResolved = Resolve-FullPath -Path $AppDir
 if (-not (Test-Path -LiteralPath $appDirResolved)) {
     throw "AppDir not found: $appDirResolved"
 }
+if (-not $ExpectedVersion) {
+    $packageJsonPath = Join-Path $PSScriptRoot "..\package.json"
+    if (Test-Path -LiteralPath $packageJsonPath) {
+        $packageJson = Get-Content -Raw -Encoding UTF8 -LiteralPath $packageJsonPath | ConvertFrom-Json
+        $ExpectedVersion = [string]$packageJson.version
+    }
+    if (-not $ExpectedVersion) {
+        throw "ExpectedVersion was not provided and could not be inferred from package.json."
+    }
+}
 
 $appExe = Join-Path $appDirResolved "EcoreX.exe"
 $runtimePython = Join-Path $appDirResolved "resources\ecorex-runtime\python\python.exe"
@@ -174,7 +185,7 @@ try {
     $result.appStarted = $true
 
     $version = Wait-JsonEndpoint -Url "http://127.0.0.1:$Port/api/version" -TimeoutSeconds $TimeoutSeconds
-    if ($version.version -ne "0.1.18") {
+    if ($version.version -ne $ExpectedVersion) {
         throw "Unexpected runtime version: $($version.version)"
     }
     $result.sidecarReady = $true

@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.1.18",
+    [string]$Version = "0.1.19",
     [string]$ManifestPath = "deploy/ecorex-site/manifest.json",
     [string]$WindowsInstallerPath = "",
     [string]$WindowsInstalledSmokePath = "",

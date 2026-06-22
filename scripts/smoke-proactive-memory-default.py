@@ -283,7 +283,7 @@ def check_runtime_artifacts(root: pathlib.Path, runtime_dir: pathlib.Path | None
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=".")
-    parser.add_argument("--version", default="0.1.18")
+    parser.add_argument("--version", default="0.1.19")
     parser.add_argument("--output", default="")
     parser.add_argument("--runtime-dir", default="")
     parser.add_argument("--unpacked-dir", default="")

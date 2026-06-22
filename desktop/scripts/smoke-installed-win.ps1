@@ -2,7 +2,7 @@ param(
     [string]$InstallerPath = "",
     [string]$InstallDir = "",
     [string]$OutputPath = "",
-    [string]$ExpectedVersion = "0.1.18",
+    [string]$ExpectedVersion = "",
     [string]$ExpectedWinArch = "",
     [int]$Port = 19131,
     [switch]$KeepInstall
@@ -134,6 +134,21 @@ function Write-JsonResult {
 
 $installerResolved = Resolve-Path -LiteralPath $InstallerPath -ErrorAction Stop
 $installerItem = Get-Item -LiteralPath $installerResolved
+if (-not $ExpectedVersion) {
+    if ($installerItem.Name -match '^EcoreX_(?<version>\d+\.\d+\.\d+)_') {
+        $ExpectedVersion = $Matches.version
+    }
+    else {
+        $packageJsonPath = Join-Path $PSScriptRoot "..\package.json"
+        if (Test-Path -LiteralPath $packageJsonPath) {
+            $packageJson = Get-Content -Raw -Encoding UTF8 -LiteralPath $packageJsonPath | ConvertFrom-Json
+            $ExpectedVersion = [string]$packageJson.version
+        }
+    }
+    if (-not $ExpectedVersion) {
+        throw "ExpectedVersion was not provided and could not be inferred from installer name or package.json."
+    }
+}
 $installerSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $installerResolved).Hash.ToUpperInvariant()
 $installerSignature = Get-AuthenticodeSignature -LiteralPath $installerResolved
 if ($installerSignature.Status -ne "Valid") {

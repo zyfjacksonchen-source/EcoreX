@@ -1,7 +1,7 @@
 param(
-    [string]$Version = "0.1.18",
+    [string]$Version = "0.1.19",
     [string]$Repo = "zhangyifanjackson-dotcom/EcoreX",
-    [string]$Ref = "codex/ecorex-v0.1.18",
+    [string]$Ref = "codex/ecorex-v0.1.19",
     [string]$Workflow = "ecorex-desktop-release.yml",
     [ValidateSet("all", "arm64", "x64")]
     [string]$MacArch = "all",
