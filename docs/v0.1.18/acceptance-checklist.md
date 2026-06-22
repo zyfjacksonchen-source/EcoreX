@@ -28,7 +28,7 @@ Status values: TODO, PARTIAL, PASS, BLOCKED.
 The v0.1.18 production-agent runtime gate is GO. Public release publication is
 tracked separately. Windows Authenticode signing and installed smoke now pass:
 `EcoreX_0.1.18_x64-setup.exe` is manifest-ready with SHA256
-`AE5E6E702BD431EE2D5FBF5EED2B6DF80A8DE651F8376B56E7BE8E15F9B3281E`.
+`54AAEA28F3E6F8C5051995C0333069B3BD5FDC7BB87123D0C5C42A2D9B91BF71`.
 macOS desktop DMGs are intentionally unsigned for this release lane and are
 manifest-ready as `ready-unsigned` with install-smoke evidence: arm64 SHA256
 `2D131EAD984A62F8B5F36135FE1D40B0D5E4EC95736E8A1D3304E58175A7A26E`, x64 SHA256
@@ -36,6 +36,9 @@ manifest-ready as `ready-unsigned` with install-smoke evidence: arm64 SHA256
 Windows, WebUI macOS, and Web Linux service artifacts have been rebuilt with
 v0.1.18 hashes and validated in
 `release-artifacts/EcoreX_0.1.18-public-release.zip` (SHA256
-`9DC1880DF3AAE35015AF1E7289CB6AC63F1AB87AB57D4762F694D84C03A0D950`). Remaining
-publication work is final download-page deployment verification and GitHub
-main/product-branch verification.
+`9DC1880DF3AAE35015AF1E7289CB6AC63F1AB87AB57D4762F694D84C03A0D950`). The
+public download page is deployed and verified at
+`https://www.ecoreai.cn/ecorex-agent/`: the public manifest reports `0.1.18`,
+all six publishable downloads return HTTP 200, admin auth returns 401, and the
+client config gate returns 403. Remaining publication handoff is final GitHub
+PR/tag alignment.

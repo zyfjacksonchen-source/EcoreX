@@ -3174,6 +3174,32 @@ export function App() {
     });
   }
 
+  function reportStreamErrorTelemetry(sessionId: string, requestId: string, message: string, staleRequest: boolean) {
+    if (staleRequest) {
+      void reportDesktopEvent({
+        type: "warn",
+        source: "Desktop",
+        category: "runtime",
+        label: "stale_stream_request",
+        message,
+        sessionId,
+        detail: {
+          requestId,
+          recovery: "history",
+          suppressedErrorLog: true
+        }
+      });
+      return;
+    }
+    void reportDesktopEvent({
+      type: "error",
+      source: "Desktop",
+      message,
+      sessionId,
+      detail: { requestId }
+    });
+  }
+
   function finishRunningSteps(message: ChatItem, reason: AgentFinishReason = "done"): ChatItem {
     return { ...message, steps: finishAgentSteps(message.steps, reason), toolCalls: message.toolCalls?.map((tool) => ({ ...tool, running: false })) };
   }
@@ -3929,7 +3955,7 @@ export function App() {
             }));
             markSessionOutputReady(sessionId);
           }
-          void reportDesktopEvent({ type: "error", source: "Desktop", message, sessionId });
+          reportStreamErrorTelemetry(sessionId, requestId, message, staleRequest);
           return;
         }
         if (item.type === "reasoning" || item.type === "thinking") {
@@ -4497,7 +4523,7 @@ export function App() {
                 markSessionOutputReady(requestSessionId);
               }
               reportChatUsage(item.usage, usageTotal(item.usage) ? "provider" : "estimated");
-              void reportDesktopEvent({ type: "error", source: "Desktop", message, sessionId: requestSessionId });
+              reportStreamErrorTelemetry(requestSessionId, requestId, message, staleRequest);
               return;
             }
             if (item.type === "reasoning" || item.type === "thinking") {

@@ -2,7 +2,7 @@
     "product":  "EcoreX",
     "version":  "0.1.18",
     "updatedAt":  "2026-06-22",
-    "notes":  "EcoreX v0.1.18 production-agent release candidate. Runtime promotion gate is GO; publication still requires final signed Windows installer, macOS DMG evidence, Web/WebUI artifact hashes, and full public verification.",
+    "notes":  "EcoreX v0.1.18 production-agent release. Runtime promotion gate is GO; signed Windows, unsigned macOS DMG, WebUI, and Web Linux artifacts are published with checksum and smoke evidence. The public download page has been deployed and verified.",
     "update":  {
                    "windows":  {
                                    "mode":  "auto-download",
@@ -47,8 +47,8 @@
                           "variant":  "Desktop x64 installer",
                           "fileName":  "EcoreX_0.1.18_x64-setup.exe",
                           "href":  "downloads/EcoreX_0.1.18_x64-setup.exe",
-                          "size":  157440216,
-                          "sha256":  "AE5E6E702BD431EE2D5FBF5EED2B6DF80A8DE651F8376B56E7BE8E15F9B3281E",
+                          "size":  157440568,
+                          "sha256":  "54AAEA28F3E6F8C5051995C0333069B3BD5FDC7BB87123D0C5C42A2D9B91BF71",
                           "status":  "ready",
                           "source":  "Signed v0.1.18 Windows installer verified by installed smoke evidence.",
                           "updatedAt":  "2026-06-22",

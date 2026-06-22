@@ -1190,11 +1190,11 @@
     `cryptography` wheel, avoiding transient Rust/OpenSSL source builds on
     GitHub macOS x64 runners.
 - Built, signed, and validated current release artifacts:
-  - `desktop/release/EcoreX_0.1.18_x64-setup.exe`, size `157,440,216`,
-    SHA256 `AE5E6E702BD431EE2D5FBF5EED2B6DF80A8DE651F8376B56E7BE8E15F9B3281E`;
+  - `desktop/release/EcoreX_0.1.18_x64-setup.exe`, size `157,440,568`,
+    SHA256 `54AAEA28F3E6F8C5051995C0333069B3BD5FDC7BB87123D0C5C42A2D9B91BF71`;
     Authenticode status is `Valid`. `desktop/release/latest.yml` and
     `.blockmap` were regenerated after setup signing with SHA512
-    `9uRo8pR/GLU0rJOs6hO/pwXR9R6qaK0QS18alQ6PBm9ikRl5urmhUpe1cSdDtk9aihv71f7105+Bb4CQFMcADw==`.
+    `6PwxX8msrz4/tEo24LTB1fK4FrMDeq7TGO2bYA2iqYHa75QMzXeC5xD91EsjUxcKsW9JlR/r0zqZtH2UN0J7zA==`.
   - `release-artifacts/EcoreX_0.1.18-webui-windows-x64.zip`, size
     `80,940,550`, SHA256
     `4E0765C9D687338D12A63FD7E9EE4A9464E13BAD97DF644C6629550DE53D79F7`.
@@ -1215,6 +1215,15 @@
   - `release-artifacts/EcoreX_0.1.18-public-release.zip`, size
     `834,704,384`, SHA256
     `9DC1880DF3AAE35015AF1E7289CB6AC63F1AB87AB57D4762F694D84C03A0D950`.
+- Deployed the public release package to the download host:
+  - `ssh ubuntu-140-143-183-53 "sudo VERSION=0.1.18 EXPECTED_SHA256=... bash /tmp/install-ecorex-public-release.sh /tmp/EcoreX_0.1.18-public-release.zip"`
+    installed release directory
+    `/srv/ecorex-agent-download/releases/20260622030414-v0.1.18` and updated
+    `/srv/ecorex-agent-download/current`.
+  - `ssh ubuntu-140-143-183-53 "sudo VERSION=0.1.18 bash /tmp/check-ecorex-server-release.sh"`
+    passed local and public checks: public manifest is `0.1.18`, Windows/WebUI
+    macOS/WebUI Windows/macOS DMG/Web Linux downloads return HTTP 200, admin
+    route returns 401, and client model-config gate returns 403.
 - Windows signing is closed for this release. The provider preflight can still
   report Smart Card / CertProp stopped and no visible SimplySign CSP key
   containers from this non-elevated shell, but actual signing succeeds with the
