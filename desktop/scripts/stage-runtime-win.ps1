@@ -192,10 +192,11 @@ if ($env:ECOREX_DISABLE_ENTERPRISE_POLICY -ne "1") {
     $adminBase = $adminBase.TrimEnd("/")
     $clientEventKey = $env:ECOREX_CLIENT_EVENT_KEY
     if (-not $clientEventKey) {
-        $clientEventKey = "ecorex-desktop-v0.1.17"
+        $clientEventKey = "ecorex-desktop-v0.1.18"
     }
     $compatClientEventKeys = @(
         $clientEventKey,
+        "ecorex-desktop-v0.1.18",
         "ecorex-desktop-v0.1.17",
         "ecorex-desktop-v0.1.16",
         "ecorex-desktop-v0.1.15",

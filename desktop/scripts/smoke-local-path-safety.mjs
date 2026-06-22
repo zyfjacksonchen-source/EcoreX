@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const desktopRoot = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(desktopRoot, "..");
-const outputPath = path.resolve(process.argv[2] || path.join(repoRoot, "docs", "v0.1.17", "local-path-safety-smoke.json"));
+const outputPath = path.resolve(process.argv[2] || path.join(repoRoot, "docs", "v0.1.18", "local-path-safety-smoke.json"));
 
 const { PermissionManager } = await import(pathToFileURL(path.join(desktopRoot, "dist-electron", "permissions.js")).href);
 const { openLocalPath, statLocalPath } = await import(pathToFileURL(path.join(desktopRoot, "dist-electron", "localPathBroker.js")).href);
@@ -116,7 +116,7 @@ assert(distFresh, "dist-electron/localPathBroker.js must be newer than localPath
 const symlinkStatus = symlinkAvailable ? "pass" : "fail";
 const payload = {
   status: symlinkAvailable ? "pass" : "fail",
-  version: "0.1.17",
+  version: "0.1.18",
   generatedAt: new Date().toISOString(),
   changeIds: ["STAB-003"],
   distFresh,

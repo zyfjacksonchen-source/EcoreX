@@ -76,8 +76,9 @@ def _web_app_bridge_script() -> str:
 (function () {
   if (window.ecorexDesktop) return;
 
-  var DEFAULT_WEB_CLIENT_KEY = "ecorex-web-v0.1.17-web.1";
+  var DEFAULT_WEB_CLIENT_KEY = "ecorex-web-v0.1.18-web.1";
   var DEFAULT_WEB_COMPAT_CLIENT_KEYS = [
+    "ecorex-web-v0.1.18-web.1",
     "ecorex-web-v0.1.17-web.1",
     "ecorex-web-v0.1.16-web.1",
     "ecorex-web-v0.1.15-web.1",
@@ -506,7 +507,7 @@ def _web_app_bridge_script() -> str:
   var updateStatus = {
     state: "idle",
     platform: desktopPlatform,
-    currentVersion: "0.1.17-web.1",
+    currentVersion: "0.1.18-web.1",
     message: "尚未检查更新"
   };
 
@@ -516,7 +517,7 @@ def _web_app_bridge_script() -> str:
       updateStatus = {
         state: payload.hasUpdate ? "available" : "not-available",
         platform: desktopPlatform,
-        currentVersion: payload.currentVersion || "0.1.17-web.1",
+        currentVersion: payload.currentVersion || "0.1.18-web.1",
         version: payload.latestVersion || payload.version,
         downloadUrl: payload.downloadUrl,
         message: payload.message || (payload.hasUpdate ? "发现新版本，请前往下载页安装" : "当前已经是最新版本"),
@@ -527,7 +528,7 @@ def _web_app_bridge_script() -> str:
       updateStatus = {
         state: "error",
         platform: desktopPlatform,
-        currentVersion: "0.1.17-web.1",
+        currentVersion: "0.1.18-web.1",
         message: error && error.message ? error.message : String(error),
         checkedAt: new Date().toISOString()
       };
@@ -637,7 +638,7 @@ def _web_app_bridge_script() -> str:
           email: input.email,
           password: input.password,
           deviceId: currentDeviceId,
-          appVersion: "0.1.17-web.1"
+          appVersion: "0.1.18-web.1"
         }, false);
       } catch (error) {
         adminError = error;
@@ -5112,7 +5113,7 @@ class ClientProxyHandler:
         return target
 
     def _forward_headers(self) -> dict:
-        headers = {"User-Agent": "EcoreX-WebUI/0.1.17"}
+        headers = {"User-Agent": "EcoreX-WebUI/0.1.18"}
         for key, value in web.ctx.env.items():
             if key == "CONTENT_TYPE":
                 name = "Content-Type"

@@ -236,7 +236,7 @@ def run_server_check(repo: pathlib.Path, release_root: pathlib.Path, admin_root:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=".")
-    parser.add_argument("--version", default="0.1.17")
+    parser.add_argument("--version", default="0.1.18")
     parser.add_argument("--output", default="")
     args = parser.parse_args(argv)
 

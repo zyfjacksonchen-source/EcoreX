@@ -134,7 +134,7 @@ jobs:
         with:
           name: ecorex-macos-${{ matrix.arch }}
           path: |
-            desktop/release/EcoreX_0.1.17_${{ matrix.arch }}.dmg
+            desktop/release/EcoreX_*_${{ matrix.arch }}.dmg
             desktop/release/EcoreX_${{ matrix.arch }}.sha256
             desktop/release/ecorex-macos-${{ matrix.arch }}-install-smoke.json
           if-no-files-found: error

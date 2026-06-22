@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.1.17",
+    [string]$Version = "0.1.18",
     [string]$RuntimeRoot = "desktop/runtime/ecorex-runtime",
     [string]$OutputDir = "release-artifacts",
     [switch]$KeepStaging

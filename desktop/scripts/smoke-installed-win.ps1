@@ -2,7 +2,7 @@ param(
     [string]$InstallerPath = "",
     [string]$InstallDir = "",
     [string]$OutputPath = "",
-    [string]$ExpectedVersion = "0.1.17",
+    [string]$ExpectedVersion = "0.1.18",
     [int]$Port = 19131,
     [switch]$KeepInstall
 )

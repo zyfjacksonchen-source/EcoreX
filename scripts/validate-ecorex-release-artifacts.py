@@ -531,7 +531,7 @@ def validate_public_zip(
         site_js = archive.read("site/site.js").decode("utf-8", errors="replace")
         require_contains(
             site_js,
-            "options.find((item) => item.id === preferredId) || options.find(ready) || options[0]",
+            "options.find((item) => item.id === preferredId) || options.find((item) => ready(item, manifestVersion)) || options[0]",
             "public site device recommendation",
         )
         require_not_contains(
@@ -735,7 +735,7 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
     require_contains(broker, "\"filesystem-access\"", f"{label} permission broker")
 
     release_notes = read_text_by_suffix("common/ecorex_release_notes.py")
-    require_contains(release_notes, "\"version\": \"0.1.17\"", f"{label} release notes")
+    require_contains(release_notes, "\"version\": \"0.1.18\"", f"{label} release notes")
     require_contains(release_notes, "\"updatePolicy\"", f"{label} release notes")
     require_contains(release_notes, "\"webui\"", f"{label} release notes")
 

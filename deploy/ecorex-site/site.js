@@ -151,23 +151,24 @@ function shortSha(sha256) {
   return `${sha256.slice(0, 12)}...`;
 }
 
-function installSmokeReady(artifact) {
+function installSmokeReady(artifact, manifestVersion) {
   const smoke = artifact?.installSmoke || artifact?.install_smoke;
   return Boolean(smoke
     && smoke.status === "pass"
-    && smoke.version === manifest.version
+    && smoke.version === manifestVersion
     && String(smoke.sha256 || "").toUpperCase() === String(artifact.sha256 || "").toUpperCase()
     && (smoke.runId || smoke.run_id || smoke.evidenceUrl || smoke.evidence_url || smoke.evidence));
 }
 
-function ready(artifact) {
+function ready(artifact, manifestVersion = "") {
+  if (!artifact?.size || !artifact?.sha256) return false;
   if (artifact?.id === "windows-x64" && artifact.signature !== "Valid") return false;
   if (String(artifact?.id || "").startsWith("macos-") && artifact.signature === "unsigned" && artifact.status === "ready") return false;
   if (artifact?.status === "ready") return true;
   return artifact?.status === "ready-unsigned"
     && String(artifact.id || "").startsWith("macos-")
     && artifact.signature === "unsigned"
-    && installSmokeReady(artifact);
+    && installSmokeReady(artifact, manifestVersion);
 }
 
 function isExternalHref(href) {
@@ -195,11 +196,11 @@ function artifactMeta(artifact) {
   `;
 }
 
-function buttonForArtifact(artifact, label = "下载") {
+function buttonForArtifact(artifact, label = "下载", manifestVersion = "") {
   if (!artifact) {
     return `<span class="download-link is-disabled">待发布</span>`;
   }
-  if (ready(artifact)) {
+  if (ready(artifact, manifestVersion)) {
     const downloadAttr = isExternalHref(artifact.href) ? "" : " download";
     return `<a class="download-link" href="${artifactHref(artifact)}"${downloadAttr} title="${artifact.source || ""}">${label}</a>`;
   }
@@ -207,13 +208,13 @@ function buttonForArtifact(artifact, label = "下载") {
   return `<span class="download-link is-disabled" title="${artifact.source || ""}">${pendingText}</span>`;
 }
 
-function architectureSelector(cardId, artifacts, preferredId = "") {
+function architectureSelector(cardId, artifacts, preferredId = "", manifestVersion = "") {
   const options = artifacts.filter(Boolean);
   if (options.length <= 1) {
-    return `${artifactMeta(options[0])}${buttonForArtifact(options[0])}`;
+    return `${artifactMeta(options[0])}${buttonForArtifact(options[0], "下载", manifestVersion)}`;
   }
 
-  const initial = options.find((item) => item.id === preferredId) || options.find(ready) || options[0];
+  const initial = options.find((item) => item.id === preferredId) || options.find((item) => ready(item, manifestVersion)) || options[0];
   const selectId = `${cardId}-select`;
   const encoded = encodeURIComponent(JSON.stringify(options));
   return `
@@ -228,7 +229,7 @@ function architectureSelector(cardId, artifacts, preferredId = "") {
       </select>
     </label>
     <div data-arch-meta>${artifactMeta(initial)}</div>
-    <div data-arch-action>${buttonForArtifact(initial)}</div>
+    <div data-arch-action>${buttonForArtifact(initial, "下载", manifestVersion)}</div>
   `;
 }
 
@@ -246,14 +247,14 @@ function collectCards(artifacts) {
   };
 }
 
-function wireSelectors(grid) {
+function wireSelectors(grid, manifestVersion = "") {
   grid.querySelectorAll("select[data-arch-options]").forEach((select) => {
     const options = JSON.parse(decodeURIComponent(select.dataset.archOptions || "[]"));
     select.addEventListener("change", () => {
       const card = select.closest(".download-card");
       const selected = options.find((item) => item.id === select.value) || options[0];
       card.querySelector("[data-arch-meta]").innerHTML = artifactMeta(selected);
-      card.querySelector("[data-arch-action]").innerHTML = buttonForArtifact(selected);
+      card.querySelector("[data-arch-action]").innerHTML = buttonForArtifact(selected, "下载", manifestVersion);
     });
   });
 }
@@ -281,11 +282,11 @@ function renderDownloads(manifest) {
       <small class="card-version">v${manifest.version}</small>
       <p>${copy.body}</p>
       ${cardNote(copy)}
-      ${architectureSelector(cardId, grouped[cardId] || [], preferredArtifactId(cardId, recommended, device))}
+      ${architectureSelector(cardId, grouped[cardId] || [], preferredArtifactId(cardId, recommended, device), manifest.version)}
     `;
     grid.appendChild(card);
   });
-  wireSelectors(grid);
+  wireSelectors(grid, manifest.version);
 }
 
 fetch("./manifest.json", { cache: "no-store" })

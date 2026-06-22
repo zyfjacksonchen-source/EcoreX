@@ -174,7 +174,7 @@ try {
     $result.appStarted = $true
 
     $version = Wait-JsonEndpoint -Url "http://127.0.0.1:$Port/api/version" -TimeoutSeconds $TimeoutSeconds
-    if ($version.version -ne "0.1.17") {
+    if ($version.version -ne "0.1.18") {
         throw "Unexpected runtime version: $($version.version)"
     }
     $result.sidecarReady = $true

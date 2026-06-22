@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.1.17",
+    [string]$Version = "0.1.18",
     [string]$InstallerPath = "",
     [string]$SmokePath = "",
     [switch]$PreflightOnly,
@@ -68,7 +68,7 @@ function Write-Plan {
     $desktopDir = Join-Path $RepoRoot "desktop"
     $preflight = "npm run sign:win:preflight"
     if ($LaunchSimplySign) {
-        $preflight = "powershell -ExecutionPolicy Bypass -File scripts\sign-win.ps1 -PreflightOnly -LaunchSimplySign"
+        $preflight = "powershell -ExecutionPolicy Bypass -File scripts\sign-win.ps1 -SignToolDir `"C:/脚本签名工具`" -PreflightOnly -LaunchSimplySign"
     }
     [ordered]@{
         dryRun = $true
@@ -105,7 +105,7 @@ if ($DryRun) {
     return
 }
 
-$preflightArgs = @("-ExecutionPolicy", "Bypass", "-File", "scripts\sign-win.ps1", "-PreflightOnly")
+$preflightArgs = @("-ExecutionPolicy", "Bypass", "-File", "scripts\sign-win.ps1", "-SignToolDir", "C:/脚本签名工具", "-PreflightOnly")
 if ($LaunchSimplySign) {
     $preflightArgs += "-LaunchSimplySign"
 }
@@ -142,7 +142,7 @@ Invoke-Step -WorkingDirectory $desktopDir -FilePath "npm" -ArgumentList @(
     "-InstallerPath",
     $resolvedInstaller,
     "-OutputPath",
-    "..\docs\v$Version\win-installed-smoke.json"
+    $resolvedSmokePath
 )
 
 if ($ImportManifest) {

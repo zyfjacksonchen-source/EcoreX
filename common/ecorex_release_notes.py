@@ -7,32 +7,36 @@ from typing import Any, Dict
 
 
 CURRENT_RELEASE_NOTES: Dict[str, Any] = {
-    "version": "0.1.17",
-    "title": "EcoreX 0.1.17 更新说明",
-    "summary": "这次更新聚焦 Codex-like 桌面体验：更安静的消息流、更明确的产物披露、更可靠的本地文件打开和更稳的流式生命周期。",
+    "version": "0.1.18",
+    "title": "EcoreX 0.1.18 更新说明",
+    "summary": (
+        "本次更新把桌面端和 WebUI 的 Agent 运行链路推进到生产级稳定性："
+        "会话持久化、运行状态识别、SSE 恢复、取消并发、Run Center、"
+        "模型调用治理和图像生成重试都完成了闭环。"
+    ),
     "highlights": [
-        "AI 回复去掉卡片阴影，改为更接近 Codex 桌面端的正文排版与低噪声过程披露。",
-        "流式 Markdown 按完整行稳定渲染，支持表格，减少先吐出原始 Markdown 再整体排版的突兀感。",
-        "产物卡片支持预览、本地打开、在文件夹中显示、选择应用打开和复制路径。",
-        "WebUI 可以登记本机项目文件夹，并按当前项目优先解析相对产物路径。",
-        "长回复期间降低前端持久化、Markdown 解析和 SSE 重连重复输出的压力。",
+        "新增 Run Center 一级控制面，集中呈现运行中、可取消、可恢复和失败的任务状态。",
+        "强化请求级运行账本和终态记录，减少刷新、重连或后台任务结束后的状态丢失。",
+        "SSE 流式输出增加终态、重放缺口和 request-scoped 历史恢复能力。",
+        "模型调用增加 provider capability matrix、模型调用遥测和显式失败/重试策略。",
+        "图像生成与 legacy 模型路径统一 Retry-After、限流、超时和不可重试错误处理。",
     ],
     "fixes": [
-        "修复第三次查看本机任务日志后可能无响应的问题，日志查看默认返回有界快照，只有显式 EventSource 才进入长尾流。",
-        "修复 WebUI 本地文件链接和项目文件夹打开在 Windows/macOS 上不稳定的问题。",
-        "修复 WebUI 打开可执行脚本文件的安全边界，默认拒绝直接启动危险扩展名，保留在文件夹中显示。",
-        "修复 SSE 断线重连可能重复 delta 的问题，并为无人订阅的完成请求增加 TTL 清理。",
-        "修复打包顺序导致 WebUI 静态资源可能落后一版的问题，macOS/Windows runtime staging 都在 build 后同步静态资源。",
+        "修复部分模型或图像 provider 在 4xx/协议错误后继续错误 fallback 的问题。",
+        "修复 Azure DALL-E 轮询过紧、配置 fallback 不完整和 legacy max retry 兼容问题。",
+        "修复高并发取消、忙碌 fallback 和子 agent 场景下运行状态不一致的问题。",
+        "修复上下文预算和工具 schema 预算在长会话中缺少显式保护的问题。",
+        "修复发布包中 release notes、client key 和 WebUI version 容易滞后一版的问题。",
     ],
     "howTo": [
-        "需要打开产物时，在产物卡片的打开方式菜单里选择本地打开、在文件夹中显示或选择应用打开。",
-        "WebUI 添加项目时输入本机绝对路径，EcoreX 会登记为当前项目工作区并创建项目记忆目录。",
-        "如果任务中断或刷新页面，EcoreX 会尽量按 request id 和 SSE cursor 恢复流式输出，避免重复内容。",
+        "需要查看或处理运行中的任务时，进入 Run Center 查看状态、取消、恢复或重试。",
+        "模型不可用、限流或超时时，界面会保留更明确的失败原因，便于切换 provider 或重试。",
+        "刷新页面或恢复会话后，EcoreX 会尽量按 request id 和 SSE cursor 恢复流式输出。",
     ],
     "updatePolicy": {
-        "windows": "Windows 自动检测并下载更新，不强制安装；安装前会保存 UI 状态并阻止运行中任务升级。",
+        "windows": "Windows 自动检测并下载更新，不强制安装；安装前会保留 UI 状态并阻止运行中任务升级。",
         "macos": "macOS 只提示新版本并跳转下载页，不自动替换本地 App 或用户数据目录。",
-        "webui": "WebUI 只提示新版本并跳转下载页；发布包会校验静态资源、桥接接口和本地文件打开能力是否完整。",
+        "webui": "WebUI 只提示新版本并跳转下载页；发布包会校验静态资源、桥接接口和本地文件能力。",
     },
 }
 

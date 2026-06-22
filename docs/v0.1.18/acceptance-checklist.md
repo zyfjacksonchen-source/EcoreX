@@ -23,8 +23,11 @@ Status values: TODO, PARTIAL, PASS, BLOCKED.
 | R18-06-A | Desktop Run Center | UI exposes active/stale/failed/cancelling runs with cancel/retry/recover/diagnostics affordances. | PASS | Desktop now exposes Run Center as a first-class sidebar surface with a count badge and independent modal, while retaining the diagnostics-embedded panel. `/api/active-requests` attaches a backend Run Center action policy to active and recent terminal rows, including `actions.open/recover/retry/stop/diagnostics`, `retry_mode`, and `retry_disabled_reason`; failed ordinary chat-session rows support explicit manual retry preparation from the latest saved conversation state, non-retryable rows fail closed, and subagent/scheduler rows remain stop/diagnostics-only until their replay contracts exist. Run Center merges active and recent terminal rows, shows active/stale/failed/cancelling counts, opens/recover chat-session rows with request scope, validates stop results instead of reporting no-op success, stops subagents through `/api/subagents/{task_id}/cancel`, stops scheduler attempts through request-scoped `/cancel`, and exports request-scoped diagnostics |
 | R18-07-A | Evidence Gates | v0.1.18 promotion gate includes run ledger, SSE contract, cancellation, concurrency, and model-call smoke evidence. | PASS | `scripts/check-ecorex-v0.1.18-promotion-gate.py` emits machine-readable GO/NO-GO JSON, checks every acceptance group, verifies run-ledger/SSE/cancellation-concurrency/model-call/context/Run Center evidence markers including provider capability matrix evidence, requires same-row multi-agent review consensus for run-ledger, SSE recovery, cancellation/concurrency, model gateway, context budget, Run Center, and the promotion gate itself, scans local tracked/unignored files for GitHub token patterns, and treats skipped token scans as blockers. Current `docs/v0.1.18/promotion-gate.json` is GO with 21 checks, 0 blockers, and 0 warnings |
 
-## Deferred From v0.1.17
+## Release Publication Status
 
-The following remain v0.1.17 release-production blockers unless explicitly moved
-into this release scope: Windows Authenticode installed smoke, macOS DMG
-artifacts, GitHub workflow authentication, and privileged symlink execution.
+The v0.1.18 production-agent runtime gate is GO. Public release publication is
+tracked separately and remains blocked until Windows Authenticode installed
+smoke, macOS DMG install smoke, GitHub branch/workflow dispatch, and final
+download-page deployment verification are complete. WebUI Windows, WebUI macOS,
+and Web Linux service artifacts have been rebuilt with v0.1.18 hashes and
+validated in `release-artifacts/EcoreX_0.1.18-public-release.zip`.

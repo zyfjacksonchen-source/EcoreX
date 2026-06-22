@@ -1,5 +1,5 @@
 param(
-    [string]$OutputPath = "..\docs\v0.1.17\local-path-safety-smoke.json"
+    [string]$OutputPath = "..\docs\v0.1.18\local-path-safety-smoke.json"
 )
 
 $ErrorActionPreference = "Stop"

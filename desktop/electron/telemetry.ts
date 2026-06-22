@@ -3,7 +3,13 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { enterpriseRequestHeaders, normalizeEnterpriseDeviceId, resolveEnterprisePolicy, type EnterprisePolicy } from "./enterprisePolicy.js";
+import {
+  enterpriseClientEventKeys,
+  enterpriseRequestHeaders,
+  normalizeEnterpriseDeviceId,
+  resolveEnterprisePolicy,
+  type EnterprisePolicy
+} from "./enterprisePolicy.js";
 
 export type TelemetryEvent = {
   type: "usage" | "error" | "warn" | "info";
@@ -42,6 +48,10 @@ function compactText(value: unknown, limit = 500) {
   return String(value).slice(0, limit);
 }
 
+function isInvalidClientKeyResponse(status: number, text: string) {
+  return (status === 401 || status === 403) && /invalid client key/i.test(text);
+}
+
 export class TelemetryReporter {
   private policy: EnterprisePolicy | null = null;
   private lastError = "";
@@ -67,6 +77,8 @@ export class TelemetryReporter {
       return { skipped: true, reason: "telemetry-not-configured" };
     }
 
+    const session = this.loadSession();
+    const deviceId = session?.deviceId || this.resolveDeviceId(policy);
     const body = {
       type: event.type,
       source: compactText(event.source || "Desktop", 80),
@@ -74,8 +86,8 @@ export class TelemetryReporter {
       category: compactText(event.category || event.type, 80),
       label: compactText(event.label || event.category || event.type, 120),
       amount: Number.isFinite(event.amount) ? event.amount : 1,
-      userEmail: this.loadSession()?.user?.email || policy.userEmail,
-      deviceId: this.loadSession()?.deviceId || this.resolveDeviceId(policy),
+      userEmail: session?.user?.email || policy.userEmail,
+      deviceId,
       orgId: policy.orgId,
       sessionId: compactText(event.sessionId, 180),
       tool: compactText(event.tool, 120),
@@ -83,25 +95,35 @@ export class TelemetryReporter {
     };
 
     try {
-      const session = this.loadSession();
-      const response = await fetch(policy.adminEventsUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...enterpriseRequestHeaders({
-            clientEventKey: policy.clientEventKey,
-            userToken: session?.token,
-            deviceId: session?.deviceId || this.resolveDeviceId(policy),
-            authorizationToken: session?.token
-          })
-        },
-        body: JSON.stringify(body)
-      });
-      if (!response.ok) {
-        throw new Error(`telemetry HTTP ${response.status}`);
+      const clientKeys = enterpriseClientEventKeys(policy);
+      let lastInvalidKeyError = "";
+      for (const clientEventKey of clientKeys) {
+        const response = await fetch(policy.adminEventsUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...enterpriseRequestHeaders({
+              clientEventKey,
+              userToken: session?.token,
+              deviceId,
+              authorizationToken: session?.token
+            })
+          },
+          body: JSON.stringify(body)
+        });
+        if (response.ok) {
+          this.lastError = "";
+          return { skipped: false, ok: true };
+        }
+        const text = await response.text().catch(() => "");
+        const message = `telemetry HTTP ${response.status}${text ? `: ${text.slice(0, 200)}` : ""}`;
+        if (isInvalidClientKeyResponse(response.status, text)) {
+          lastInvalidKeyError = message;
+          continue;
+        }
+        throw new Error(message);
       }
-      this.lastError = "";
-      return { skipped: false, ok: true };
+      throw new Error(lastInvalidKeyError || "telemetry client key rejected");
     } catch (error) {
       this.lastError = error instanceof Error ? error.message : String(error);
       await this.writeFailedEvent(body, this.lastError);

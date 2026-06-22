@@ -1162,3 +1162,46 @@
     Qwen, Seedream, and MiniMax. R18-04-C is promoted to PASS.
   - The promotion gate now reports GO with 21 checks, 0 blockers, and 0
     warnings after final model-gateway multi-agent consensus.
+
+## Release Packaging Handoff
+
+- Advanced the release boundary to v0.1.18 across Desktop, runtime, WebUI,
+  Admin API, download site defaults, smoke defaults, release scripts, and
+  installer-only README templates. Compatibility client-event keys for older
+  desktop/WebUI clients remain intentionally present.
+- Closed release-slice review blockers found by the parallel agents:
+  - Desktop telemetry now retries compatible enterprise client-event keys on
+    `invalid client key`, matching the WebUI/Admin compatibility contract.
+  - macOS DMG workflow upload paths no longer hardcode `0.1.17`; WebUI macOS
+    smoke defaults now target `0.1.18` / `v0.1.18`.
+  - Windows signed packaging now regenerates `latest.yml` and `.blockmap` after
+    setup signing via `desktop/scripts/regenerate-win-update-feed.mjs`, so the
+    update feed can match the final signed installer bytes.
+  - The download page now passes the manifest version into `ready-unsigned`
+    install-smoke checks and refuses ready links when size/hash are absent.
+- Built and validated current unsigned/local artifacts:
+  - `desktop/release/EcoreX_0.1.18_x64-setup.exe` plus regenerated
+    `latest.yml` and `.blockmap`; Authenticode status remains `NotSigned`.
+  - `release-artifacts/EcoreX_0.1.18-webui-windows-x64.zip`, size
+    `80,940,550`, SHA256
+    `4E0765C9D687338D12A63FD7E9EE4A9464E13BAD97DF644C6629550DE53D79F7`.
+  - `release-artifacts/EcoreX_0.1.18-webui-macos-universal.zip`, size
+    `158,050,345`, SHA256
+    `27F7240291B55DCA0264D321BA212C8977A72C5A901AA244E64EC607C1867F12`.
+  - `release-artifacts/EcoreX_0.1.18-web-linux-service.tar.gz`, size
+    `3,349,211`, SHA256
+    `2184ADF0047F3D4FAF52826FAF360F55215A4E982BE82BFC2DE69996BA630B70`.
+  - `release-artifacts/EcoreX_0.1.18-public-release.zip`, size
+    `244,280,051`, SHA256
+    `56F3409BE67F9B5E6BCDBEE8CB5C2E42EB5EEBBF34B205D66D9887C92BFBF6C8`.
+- Windows signing is blocked by the local signing-provider environment, not by
+  the release script path. The explicit command
+  `powershell -ExecutionPolicy Bypass -File scripts\sign-win.ps1 -SignToolDir "C:/脚本签名工具" -PreflightOnly`
+  sees the certificate but reports `Smart Card service: Stopped`,
+  `Certificate Propagation service: Stopped`, and no visible SimplySign CSP key
+  containers. Starting those services from this shell fails with insufficient
+  service access. Re-run signing after SimplySign/proCertum is unlocked and the
+  smart-card services are running from an elevated shell.
+- macOS DMG dispatch is ready in scripts, but it depends on pushing
+  `codex/ecorex-v0.1.18` to GitHub before
+  `scripts/dispatch-ecorex-macos-dmg-workflow.ps1` can run against that ref.
