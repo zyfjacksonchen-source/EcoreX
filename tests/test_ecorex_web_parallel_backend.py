@@ -155,6 +155,31 @@ class TestEcoreXWorkspaceState(unittest.TestCase):
         self.assertEqual(page["messages"][0]["role"], "user")
         self.assertEqual(page["messages"][0]["extras"]["attachments"][0]["file_name"], "cover.png")
 
+    def test_manual_session_rename_locks_title_against_generated_updates(self):
+        from agent.memory.conversation_store import ConversationStore
+
+        with tempfile.TemporaryDirectory() as workspace:
+            store = ConversationStore(Path(workspace) / "conversation.sqlite3")
+            store.append_messages("session-title-lock", [{"role": "user", "content": "first prompt"}], channel_type="web")
+
+            self.assertTrue(store.rename_session("session-title-lock", "Manual title", lock_title=True))
+            self.assertFalse(
+                store.rename_session(
+                    "session-title-lock",
+                    "Generated title",
+                    respect_title_lock=True,
+                )
+            )
+
+            sessions = store.list_sessions(channel_type="web")["sessions"]
+            title_state = store.get_session_title_state("session-title-lock")
+
+        self.assertEqual(title_state["title"], "Manual title")
+        self.assertTrue(title_state["title_locked"])
+        self.assertEqual(sessions[0]["title"], "Manual title")
+        self.assertTrue(sessions[0]["title_locked"])
+        self.assertTrue(sessions[0]["titleLocked"])
+
     def test_history_page_returns_context_boundary_after_clear(self):
         from agent.memory.conversation_store import ConversationStore
 
@@ -6958,6 +6983,101 @@ class TestAgentHostBoundary(unittest.TestCase):
             self.assertIn(marker, helper_source)
         self.assertGreaterEqual(app_source.count("handleReplayGapStreamItem("), 3)
         self.assertGreaterEqual(app_source.count("if (isReplayGapStreamItem(item))"), 2)
+
+    def test_v019_retry_prepare_returns_safe_manual_draft(self):
+        with isolated_run_ledger():
+            from agent.protocol import get_run_ledger
+            from channel.web.web_channel import WebChannel
+
+            ledger = get_run_ledger()
+            ledger.create_run(
+                "req-v019-retry",
+                "session-v019-retry",
+                phase="running",
+                status="running",
+                metadata={
+                    "visible_message": "please rebuild the report",
+                    "client_attempt_id": "attempt-v019",
+                    "interrupts_request_id": "req-old",
+                    "retry_of_request_id": "",
+                    "attachment_items": [
+                        {
+                            "file_path": "C:/tmp/input.png",
+                            "file_name": "input.png",
+                            "file_type": "image",
+                        }
+                    ],
+                },
+            )
+            ledger.mark_terminal(
+                "req-v019-retry",
+                "failed",
+                reason="model_error",
+                error_code="MODEL_ERROR",
+                error_message="transient failure",
+            )
+
+            result = WebChannel().prepare_request_retry("req-v019-retry", session_id="session-v019-retry")
+
+            self.assertEqual(result["status"], "success")
+            self.assertTrue(result["retryable"])
+            self.assertTrue(result["recoverable"])
+            self.assertTrue(result["exactReplay"])
+            self.assertEqual(result["prompt"], "please rebuild the report")
+            self.assertEqual(result["attachments"][0]["file_name"], "input.png")
+
+    def test_v019_frontend_sources_have_recovery_and_hidden_run_center_markers(self):
+        root = Path(__file__).resolve().parents[1]
+        app_source = (root / "desktop" / "src" / "App.tsx").read_text(encoding="utf-8")
+        message_source = (root / "desktop" / "src" / "components" / "MessageContent.tsx").read_text(encoding="utf-8")
+        css_source = (root / "desktop" / "src" / "styles" / "app.css").read_text(encoding="utf-8")
+        api_source = (root / "desktop" / "src" / "services" / "ecorexApi.ts").read_text(encoding="utf-8")
+        web_source = (root / "channel" / "web" / "web_channel.py").read_text(encoding="utf-8")
+
+        for marker in [
+            "RUN_CENTER_DEV_GATE_STORAGE_KEY",
+            "runCenterDevVisible &&",
+            "SIDEBAR_COLLAPSE_STORAGE_KEY",
+            "latestSendAttemptRef",
+            "restoreUnacceptedDraft",
+            "prepareRetryDraft",
+            "message-recovery-actions",
+            "showChatFileMenu",
+            "normalizeAttachmentDedupeKey",
+        ]:
+            self.assertIn(marker, app_source)
+        for marker in [
+            "createPortal",
+            "artifact-action-menu-portal",
+            "ARTIFACT_PENDING_MAX_RETRIES = 6",
+            "artifactActionAllowed(status: ArtifactAvailability)",
+            "return status === \"ready\"",
+            "onLocalFileContextMenu",
+        ]:
+            self.assertIn(marker, message_source)
+        for marker in [
+            ".artifact-action-menu-portal",
+            ".message-recovery-actions",
+            ".sidebar-collapse-button",
+            ".project-collapse-button",
+        ]:
+            self.assertIn(marker, css_source)
+        for marker in [
+            "export type RetryPrepareResult",
+            "client_attempt_id",
+            "interrupts_request_id",
+            "retry_of_request_id",
+            "prepareRequestRetry",
+        ]:
+            self.assertIn(marker, api_source)
+        for marker in [
+            "def prepare_request_retry",
+            "RequestRetryPrepareHandler",
+            "retry-prepare",
+            "visible_message",
+            "attachment_items",
+        ]:
+            self.assertIn(marker, web_source)
         self.assertIn("requested_last_event_id?: number;", api_source)
         self.assertIn("retained_from_event_id?: number;", api_source)
         self.assertIn("next_event_id?: number;", api_source)

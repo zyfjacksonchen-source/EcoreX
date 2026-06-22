@@ -6,6 +6,8 @@ export type RuntimeSession = {
   last_active?: string | number;
   updatedAt?: string | number;
   msg_count?: number;
+  title_locked?: boolean;
+  titleLocked?: boolean;
 };
 
 export type RuntimeActiveRequest = {
@@ -407,7 +409,7 @@ export type ChatSendResult = {
   same_session?: {
     policy?: string;
     queue?: string;
-    decision?: string;
+    decision?: "accepted" | "replacement_accepted" | "accepted_after_finalize_wait" | "retryable_conflict" | string;
     active_request_ids?: string[];
     replaced_request_ids?: string[];
     cancelled_requests?: number;
@@ -745,7 +747,7 @@ export async function sendChatMessage(input: {
 export async function prepareRequestRetry(input: { requestId: string; sessionId?: string }) {
   const requestId = String(input.requestId || "").trim();
   if (!requestId) {
-    return { status: "error", message: "requestId is required" } as RetryPrepareResult;
+    return { status: "error", message: "missing request_id", retryable: false, recoverable: false } as RetryPrepareResult;
   }
   return apiJson<RetryPrepareResult>(
     `/api/requests/${encodeURIComponent(requestId)}/retry-prepare`,

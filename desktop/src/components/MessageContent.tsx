@@ -79,7 +79,6 @@ const STREAM_LIVE_HEAD_CHARS = 7000;
 const STREAM_LIVE_TAIL_CHARS = 4200;
 const STREAM_LIVE_ARIA_CHARS = 12000;
 const ARTIFACT_PENDING_MAX_RETRIES = 6;
-
 type LocalFileContextHandler = (event: MouseEvent, file: LocalFilePayload) => void;
 const ARTIFACT_PREVIEW_LIMIT = 6;
 const ARTIFACT_RELATIVE_ROOTS = "deliverables|output|outputs|artifacts|images|assets";
@@ -336,7 +335,7 @@ function artifactAvailabilityLabel(status: ArtifactAvailability) {
 }
 
 function artifactActionAllowed(status: ArtifactAvailability) {
-  return status === "ready";
+  return status === "ready" || status === "error";
 }
 
 function artifactMenuStyle(anchor: { x: number; y: number; width: number; height: number }): CSSProperties {

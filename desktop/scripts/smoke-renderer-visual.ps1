@@ -408,8 +408,10 @@ with sync_playwright() as p:
             raise SystemExit("Terminal boundary revived waiting/stalled UI after completion")
     elif action == "artifact-preview":
         page.wait_for_selector(".app-shell", state="visible", timeout=30000)
-        if page.locator(".session-list button").count() > 0:
-            page.locator(".session-list button").first.click(timeout=10000)
+        if page.locator(".project-session-list .session-row .session-main").count() > 0:
+            page.locator(".project-session-list .session-row .session-main").first.click(timeout=10000)
+        elif page.locator(".session-list .session-row .session-main").count() > 0:
+            page.locator(".session-list .session-row .session-main").first.click(timeout=10000)
         page.wait_for_selector(".artifact-shelf", state="visible", timeout=10000)
         thumb = page.locator(".artifact-row-icon img").first
         thumb.wait_for(state="visible", timeout=10000)
@@ -657,7 +659,7 @@ try {
           id: "visual-cover",
           kind: "image",
           title: "visual-cover.png",
-          path: "C:\\EcoreX\\images\\visual-cover.png",
+          path: "/uploads/visual-cover.png",
           thumbnailUrl: previewDataUrl,
           previewUrl: previewDataUrl,
           sizeBytes: 4096,
@@ -765,7 +767,7 @@ try {
           id: "postdone-cover",
           kind: "image",
           title: "postdone-cover.png",
-          path: "C:\\EcoreX\\images\\postdone-cover.png",
+          path: "/uploads/postdone-cover.png",
           thumbnailUrl: previewDataUrl,
           previewUrl: previewDataUrl,
           sizeBytes: 4096

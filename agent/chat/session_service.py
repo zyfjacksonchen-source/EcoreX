@@ -147,7 +147,7 @@ class SessionService:
         session_id = self._normalize_sid(session_id)
 
         store = self._get_store()
-        found = store.rename_session(session_id, title)
+        found = store.rename_session(session_id, title, lock_title=True)
         if not found:
             raise ValueError("session not found")
 
@@ -179,7 +179,12 @@ class SessionService:
         title = generate_session_title(user_message, assistant_reply)
 
         store = self._get_store()
-        updated = store.rename_session(session_id, title)
+        title_state = store.get_session_title_state(session_id)
+        if title_state and title_state.get("title_locked"):
+            current_title = str(title_state.get("title") or "")
+            logger.info(f"[SessionService] Title locked: sid={session_id}, title='{current_title}'")
+            return current_title
+        updated = store.rename_session(session_id, title, respect_title_lock=True)
         logger.info(f"[SessionService] Title set: sid={session_id}, "
                      f"title='{title}', db_updated={updated}")
         return title

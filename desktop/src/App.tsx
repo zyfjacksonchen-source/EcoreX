@@ -2353,6 +2353,21 @@ export function App() {
       .forEach((request) => settleTerminalSnapshotRequest(request));
   }, [runtimeSnapshot.status, runtimeSnapshot.recentTerminalRequests, sessionUiState]);
 
+  useEffect(() => {
+    if (runtimeSnapshot.status !== "ready") return;
+    const lockedFromRuntime: StringBoolMap = {};
+    (runtimeSnapshot.sessions || []).forEach((session, index) => {
+      const id = session.session_id || session.id || `runtime-${index}`;
+      if (!id) return;
+      if (session.title_locked || session.titleLocked) lockedFromRuntime[id] = true;
+    });
+    if (Object.keys(lockedFromRuntime).length === 0) return;
+    setLockedSessionTitles((current) => {
+      const changed = Object.keys(lockedFromRuntime).some((sessionId) => !current[sessionId]);
+      return changed ? { ...current, ...lockedFromRuntime } : current;
+    });
+  }, [runtimeSnapshot.status, runtimeSnapshot.sessions]);
+
   const allSessions = useMemo(() => (
     mapSessions(runtimeSnapshot, activeSessionId, activeSessionTitle, sessionProjects, sessionTitles, pinnedSessions, projects, sessionUiState, locallyCompletedRequestIds)
   ), [runtimeSnapshot, activeSessionId, activeSessionTitle, sessionProjects, sessionTitles, pinnedSessions, projects, sessionUiState, locallyCompletedRequestIds]);
@@ -2981,13 +2996,20 @@ export function App() {
     setProjectMenu({ projectId: project.id, x: event.clientX, y: event.clientY });
   }
 
-  function showChatFileMenu(event: MouseEvent, file: FileAttachment) {
+  function showChatFileMenu(event: MouseEvent, file: FileAttachment | LocalFilePayload) {
     event.preventDefault();
     event.stopPropagation();
-    const durable = isDurableLocalAttachment(file);
+    const normalizedFile: FileAttachment = {
+      file_path: normalizeLocalSource(file.file_path),
+      file_name: file.file_name || normalizeLocalSource(file.file_path).split(/[\\/]/).filter(Boolean).pop() || "file",
+      file_type: file.file_type || (isImageAttachment(file as FileAttachment) ? "image" : "file"),
+      previewDataUrl: file.previewDataUrl,
+      preview_url: file.preview_url
+    };
+    const durable = isDurableLocalAttachment(normalizedFile);
     setProjectMenu(null);
     setChatFileMenu({
-      file,
+      file: normalizedFile,
       x: event.clientX,
       y: event.clientY,
       canAdd: durable,
@@ -3333,7 +3355,14 @@ export function App() {
         content: message,
         pending: false,
         paused: false,
-        cancelled: false
+        cancelled: false,
+        recovery: {
+          kind: "replay_gap",
+          requestId,
+          message,
+          recoverable: true,
+          retryable: true
+        }
       }));
       markSessionOutputReady(sessionId);
     });
@@ -3368,7 +3397,14 @@ export function App() {
         content: message,
         pending: false,
         paused: false,
-        cancelled: false
+        cancelled: false,
+        recovery: {
+          kind: "interrupted",
+          requestId,
+          message,
+          recoverable: true,
+          retryable: true
+        }
       }));
       markSessionOutputReady(sessionId);
     });
@@ -3427,7 +3463,14 @@ export function App() {
         content: message,
         pending: false,
         paused: false,
-        cancelled: phase === "cancelled"
+        cancelled: phase === "cancelled",
+        recovery: phase === "cancelled" ? undefined : {
+          kind: "interrupted",
+          requestId,
+          message,
+          recoverable: true,
+          retryable: true
+        }
       }));
       markSessionOutputReady(sessionId);
     });
@@ -3813,7 +3856,16 @@ export function App() {
       if (isTerminalStreamPhase(state?.phase) || completedRequestIds.current[requestId]) return;
       setStreamRequestPhase(sessionId, requestId, "stalled");
       updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => (
-        message.pending ? replaceCurrentPhase(message, "Response stalled; reconnecting") : message
+        message.pending ? {
+          ...replaceCurrentPhase(message, "Response stalled; reconnecting"),
+          recovery: {
+            kind: "stalled",
+            requestId,
+            message: "Response stalled; reconnecting. You can reconnect or recover from saved history.",
+            recoverable: true,
+            retryable: false
+          }
+        } : message
       ));
       scheduleStreamReconnect(sessionId, assistantId, requestId);
     }, delayMs);
@@ -4414,14 +4466,6 @@ export function App() {
     if (!text && !attachments.length) return;
     const previousRequestId = activeSessionRequestId;
     const previousSessionId = activeSessionId;
-    if (activeSessionRequestId) {
-      closeSessionStream(activeSessionId, activeSessionRequestId);
-      markSessionRequestsPaused(activeSessionId);
-      clearSessionRequestState(activeSessionId, activeSessionRequestId);
-      setApproval(null);
-    } else if (messagesRef.current.some((message) => message.pending)) {
-      markSessionRequestsPaused(activeSessionId);
-    }
 
     if (isCompactCommand(text) && !attachments.length) {
       await runCompactCommand(text);
@@ -4481,29 +4525,61 @@ export function App() {
     };
     const assistantId = `a-${Date.now()}`;
     const requestSessionId = activeSessionId;
+    const clientAttemptId = `attempt-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    latestSendAttemptRef.current[requestSessionId] = clientAttemptId;
     const { generation: sendGeneration, controller: preflightController } = beginSessionPreflight(requestSessionId);
+    const restoreUnacceptedDraft = (message: string) => {
+      if (latestSendAttemptRef.current[requestSessionId] !== clientAttemptId) return;
+      clearAssistantPhaseTimers(assistantId);
+      clearSessionPreflight(requestSessionId, preflightController);
+      updateSessionMessages(requestSessionId, (current) => current.filter((item) => item.id !== userMessage.id && item.id !== assistantId));
+      setComposerText(text);
+      setAttachments(attachments);
+      setApproval({
+        type: "info",
+        title: "消息未发送",
+        message,
+        actions: [
+          {
+            label: "重试发送",
+            primary: true,
+            onClick: () => {
+              setApproval(null);
+              void sendNow(skipCapabilityCheck);
+            }
+          },
+          {
+            label: "保留草稿",
+            onClick: () => setApproval(null)
+          }
+        ]
+      });
+      markSessionOutputReady(requestSessionId);
+    };
     updateSessionMessages(requestSessionId, (current) => [
       ...current,
-      userMessage,
+      {
+        ...userMessage,
+        sendAttempt: {
+          id: clientAttemptId,
+          state: previousRequestId ? "stopping-previous" : "sending",
+          interruptsRequestId: previousRequestId || undefined
+        }
+      },
       {
         id: assistantId,
         role: "assistant",
         content: "",
         pending: true,
         createdAt: new Date().toISOString(),
+        sendAttempt: {
+          id: clientAttemptId,
+          state: previousRequestId ? "stopping-previous" : "sending",
+          interruptsRequestId: previousRequestId || undefined
+        },
         steps: [{ type: "phase", content: "正在发送" }]
       }
     ]);
-    if (previousRequestId) {
-      void cancelChatRequest({ requestId: previousRequestId, sessionId: previousSessionId }).catch((error) => {
-        void reportDesktopEvent({
-          type: "warn",
-          source: "Desktop",
-          message: error instanceof Error ? error.message : String(error || "cancel failed"),
-          sessionId: previousSessionId
-        });
-      });
-    }
     queuePreflightPhase(requestSessionId, assistantId, sendGeneration, 800, "已收到，正在准备响应");
     queuePreflightPhase(requestSessionId, assistantId, sendGeneration, 1800, "正在检查额度");
     queuePreflightPhase(requestSessionId, assistantId, sendGeneration, 3600, "正在建立响应通道");
@@ -4523,14 +4599,7 @@ export function App() {
     setApproval(null);
 
     if (neededPack?.policyMode === "disabled") {
-      updateAssistantMessage(requestSessionId, assistantId, (message) => ({
-        ...finishRunningSteps(message, "error"),
-        content: `${neededPack.name} is disabled by policy. Please ask an administrator to enable or preinstall it.`,
-        pending: false
-      }));
-      clearAssistantPhaseTimers(assistantId);
-      clearSessionPreflight(requestSessionId, preflightController);
-      markSessionOutputReady(requestSessionId);
+      restoreUnacceptedDraft(`${neededPack.name} is disabled by policy. Please ask an administrator to enable or preinstall it.`);
       return;
     }
 
@@ -4568,14 +4637,7 @@ export function App() {
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Failed to prepare capability setup task";
-        updateAssistantMessage(requestSessionId, assistantId, (assistant) => ({
-          ...finishRunningSteps(assistant, "error"),
-          content: message,
-          pending: false
-        }));
-        clearAssistantPhaseTimers(assistantId);
-        clearSessionPreflight(requestSessionId, preflightController);
-        markSessionOutputReady(requestSessionId);
+        restoreUnacceptedDraft(message);
         return;
       }
     }
@@ -4594,6 +4656,8 @@ export function App() {
     if (quota.quota && quota.quota.allowed === false) {
       const quotaMessage = quota.quota.reason || "当前账号暂时不能继续发送。";
       const authFailure = isEnterpriseAuthFailure(quota.quota) && !isQuotaLimitFailure(quota.quota);
+      restoreUnacceptedDraft(authFailure ? `${quotaMessage} Please sign in again before sending.` : quotaMessage);
+      return;
       setApproval({
         type: authFailure ? "error" : "quota",
         title: authFailure ? "登录状态异常" : "额度已达到上限",
@@ -4665,8 +4729,18 @@ export function App() {
         sessionId: requestSessionId,
         message: displayText,
         hiddenContext,
-        attachments: outboundAttachments
+        attachments: outboundAttachments,
+        clientAttemptId,
+        interruptsRequestId: previousRequestId || undefined
       });
+      if (latestSendAttemptRef.current[requestSessionId] !== clientAttemptId) {
+        clearAssistantPhaseTimers(assistantId);
+        if (result.request_id) {
+          void cancelChatRequest({ requestId: result.request_id, sessionId: requestSessionId }).catch(() => undefined);
+        }
+        updateSessionMessages(requestSessionId, (current) => current.filter((item) => item.id !== userMessage.id && item.id !== assistantId));
+        return;
+      }
       if (!isSessionPreflightCurrent(requestSessionId, sendGeneration, preflightController)) {
         clearAssistantPhaseTimers(assistantId);
         if (result.request_id) {
@@ -4693,7 +4767,27 @@ export function App() {
             }
           });
         }
-        throw new Error(message);
+        restoreUnacceptedDraft(message);
+        return;
+      }
+      updateSessionMessages(requestSessionId, (current) => current.map((item) => (
+        item.id === userMessage.id || item.id === assistantId
+          ? { ...item, sendAttempt: item.sendAttempt ? { ...item.sendAttempt, state: "accepted" } : undefined }
+          : item
+      )));
+      if (previousRequestId && result.same_session?.decision === "replacement_accepted") {
+        closeSessionStream(previousSessionId, previousRequestId);
+        clearSessionRequestState(previousSessionId, previousRequestId);
+        updateSessionMessages(previousSessionId, (current) => current.map((item) => (
+          item.role === "assistant" && item.requestId === previousRequestId && item.pending
+            ? {
+                ...finishRunningSteps(item, "cancelled"),
+                content: item.content || "Stopped because a newer message was accepted.",
+                pending: false,
+                cancelled: true
+              }
+            : item
+        )));
       }
       if (result.inline_reply) {
         const inlineReply = redactInternalPromptText(result.inline_reply || "");
@@ -4765,6 +4859,7 @@ export function App() {
                   content: doneItemContent(item, message.content),
                   pending: false,
                   requestId,
+                  recovery: undefined,
                   userSeq: typeof item.user_seq === "number" ? item.user_seq : message.userSeq,
                   botSeq: typeof item.bot_seq === "number" ? item.bot_seq : message.botSeq
                 };
@@ -4793,7 +4888,14 @@ export function App() {
                   ...finishRunningSteps(entry, "error"),
                   content: message,
                   pending: false,
-                  paused: false
+                  paused: false,
+                  recovery: {
+                    kind: "failed",
+                    requestId,
+                    message,
+                    recoverable: true,
+                    retryable: true
+                  }
                 }));
                 markSessionOutputReady(requestSessionId);
               }
@@ -4941,10 +5043,7 @@ export function App() {
         clearAssistantPhaseTimers(assistantId);
         return;
       }
-      clearAssistantPhaseTimers(assistantId);
-      clearSessionPreflight(requestSessionId, preflightController);
-      updateSessionMessages(requestSessionId, (current) => current.map((item) => item.id === assistantId ? { ...finishRunningSteps(item), content: message, pending: false } : item));
-      markSessionOutputReady(requestSessionId);
+      restoreUnacceptedDraft(message);
       finishSessionRequest(requestSessionId);
       void reportDesktopEvent({ type: "error", source: "Desktop", message, sessionId: requestSessionId });
     }
@@ -5340,6 +5439,7 @@ export function App() {
   }
 
   function openRunCenterSurface() {
+    if (!runCenterDevVisible) return;
     setRunCenterOpen(true);
     void refreshRunCenter(false).catch(() => undefined);
   }
@@ -5462,16 +5562,34 @@ export function App() {
     }
     await openRunCenterSession(request);
     const requestId = String(request.request_id || "");
-    const prompt = [
-      "Retry the failed Run Center request.",
-      requestId ? `Request id: ${requestId}.` : "",
-      "Continue from the latest saved conversation state and produce the missing final answer."
-    ].filter(Boolean).join(" ");
-    setComposerText(prompt);
-    setAttachments([]);
+    const prepared = await prepareRetryDraft(requestId, String(request.session_id || ""));
+    if (prepared) setToast("Run Center retry prepared; review and send.");
     setRunCenterOpen(false);
-    focusComposerSoon();
-    setToast("Run Center retry prepared; review and send.");
+  }
+
+  async function prepareRetryDraft(requestId: string, sessionId = activeSessionIdRef.current) {
+    if (!requestId) {
+      setToast("Retry requires a request id");
+      return false;
+    }
+    try {
+      const result = await prepareRequestRetry({ requestId, sessionId });
+      if (result.recoverable) {
+        void refreshSessionFromHistory(sessionId);
+      }
+      if (result.status === "error" || !result.retryable || !result.prompt) {
+        setToast(result.message || "This request cannot be safely retried yet");
+        return false;
+      }
+      setComposerText(result.prompt);
+      setAttachments((result.attachments || []).filter(isDurableLocalAttachment));
+      focusComposerSoon();
+      setToast(result.exactReplay || result.exact_replay ? "Retry draft prepared; review and send." : "Retry draft prepared from latest history; review before sending.");
+      return true;
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Retry prepare failed");
+      return false;
+    }
   }
 
   async function stopRunCenterRequest(request: RuntimeActiveRequest) {
@@ -5746,6 +5864,17 @@ export function App() {
   const hasPendingAssistantMessage = messages.some(isUiLiveAssistantMessage);
   const visibleMessages = messages.filter((message) => !isSilentPausedAssistantMessage(message));
   const composerHasPayload = Boolean(composerText.trim() || attachments.length);
+  const sessionRowNeedsReveal = (row: SessionRow) => {
+    const cachedMessages = sessionUiState[row.id]?.messages || [];
+    const isRunning = row.status === "waiting" || row.status === "cancelling" || Boolean(row.requestId) || Boolean(sessionRequestIds[row.id]) || cachedMessages.some(isUiLiveAssistantMessage);
+    return row.id === activeSessionId || isRunning || Boolean(unreadSessionIds[row.id]) || Boolean(searchQuery.trim());
+  };
+  const projectsForceRevealed = projectSessionGroups.some(({ project, sessions }) => (
+    project.id === activeProjectId || sessions.some(sessionRowNeedsReveal)
+  ));
+  const projectsSectionCollapsed = sidebarCollapse.projectsSection && !projectsForceRevealed && !searchQuery.trim();
+  const generalForceRevealed = generalSessions.some(sessionRowNeedsReveal);
+  const generalSessionsCollapsed = sidebarCollapse.generalSessions && !generalForceRevealed && !searchQuery.trim();
   const currentComposerPermissionMode: PermissionMode = permissionState?.mode || "smart-ask";
   const releaseNotes = runtimeSnapshot.releaseNotes;
   const updateVisible = ["available", "downloading", "downloaded", "blocked", "error"].includes(updateStatus.state);
@@ -5885,6 +6014,47 @@ export function App() {
     );
   };
 
+  function renderRecoveryActions(message: ChatItem, sessionId: string) {
+    const recovery = message.recovery;
+    const requestId = recovery?.requestId || message.requestId || "";
+    if (!recovery && !message.sendAttempt) return null;
+    if (message.sendAttempt && message.sendAttempt.state !== "accepted") {
+      return <div className="message-recovery-actions"><span>Sending while stopping the previous response</span></div>;
+    }
+    if (!recovery) return null;
+    return (
+      <div className="message-recovery-actions">
+        <span>{recovery.message}</span>
+        {requestId && message.pending && (
+          <button type="button" onClick={() => attachMessageStream(sessionId, message.id, requestId)}>
+            <RefreshCw aria-hidden="true" />Reconnect
+          </button>
+        )}
+        {recovery.recoverable && (
+          <button type="button" onClick={() => void refreshSessionFromHistory(sessionId)}>
+            <BookOpen aria-hidden="true" />Recover
+          </button>
+        )}
+        {requestId && message.pending && (
+          <button type="button" onClick={() => void cancelChatRequest({ requestId, sessionId }).then(() => stopActiveRequest()).catch(() => undefined)}>
+            <Square aria-hidden="true" />Stop
+          </button>
+        )}
+        {requestId && recovery.retryable && (
+          <button type="button" onClick={() => void prepareRetryDraft(requestId, sessionId)}>
+            <RefreshCw aria-hidden="true" />Retry draft
+          </button>
+        )}
+        <button type="button" onClick={() => void exportDiagnosticsBundle({ sessionId, requestId: requestId || undefined }).then((bundle) => {
+          const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+          downloadJsonFile(`ecorex-recovery-diagnostics-${stamp}.json`, bundle);
+        }).catch((error) => setToast(error instanceof Error ? error.message : "Diagnostics export failed"))}>
+          <FileText aria-hidden="true" />Diagnostics
+        </button>
+      </div>
+    );
+  }
+
   if (!authChecked) {
     return <main className="auth-shell"><WindowBrand version={appVersion} /><section className="auth-panel"><p>正在检查登录状态</p></section></main>;
   }
@@ -5911,20 +6081,26 @@ export function App() {
 
         <section className="project-panel" aria-label="项目">
           <div className="sidebar-section-title">
-            <span>项目</span>
+            <button className="sidebar-collapse-button" type="button" onClick={() => setSidebarCollapse((current) => ({ ...current, projectsSection: !current.projectsSection }))} aria-expanded={!projectsSectionCollapsed} title={projectsSectionCollapsed ? "展开项目" : "折叠项目"}>
+              {projectsSectionCollapsed ? <ChevronRight aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
+              <span>项目</span>
+            </button>
             <button className="icon-button" type="button" onClick={() => void addProject()} title="添加项目文件夹">
               <FolderPlus aria-hidden="true" />
             </button>
           </div>
-          {projectSessionGroups.length === 0 ? (
+          {projectsSectionCollapsed ? null : projectSessionGroups.length === 0 ? (
             <button className="project-empty" type="button" onClick={() => void addProject()} title="选择一个本地文件夹作为项目">
               <FolderOpen aria-hidden="true" />
               <span>添加项目文件夹</span>
             </button>
           ) : (
             <div className="project-list">
-              {projectSessionGroups.slice(0, 8).map(({ project, sessions }) => (
-                <article className={`project-group ${project.id === activeProjectId ? "is-active" : ""}`} key={project.id}>
+              {projectSessionGroups.slice(0, 8).map(({ project, sessions }) => {
+                const forceRevealGroup = project.id === activeProjectId || sessions.some(sessionRowNeedsReveal);
+                const groupCollapsed = Boolean(sidebarCollapse.projectGroups[project.id]) && !forceRevealGroup && !searchQuery.trim();
+                return (
+                <article className={`project-group ${project.id === activeProjectId ? "is-active" : ""}${groupCollapsed ? " is-collapsed" : ""}`} key={project.id}>
                   <div
                     className="project-row"
                     onContextMenu={(event) => showProjectMenu(event, project)}
@@ -5937,6 +6113,9 @@ export function App() {
                       <FolderOpen aria-hidden="true" />
                       <span>{project.name}</span>
                     </button>
+                    <button className="project-collapse-button" type="button" title={groupCollapsed ? "展开项目会话" : "折叠项目会话"} aria-expanded={!groupCollapsed} onClick={() => setSidebarCollapse((current) => ({ ...current, projectGroups: { ...current.projectGroups, [project.id]: !current.projectGroups[project.id] } }))}>
+                      {groupCollapsed ? <ChevronRight aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
+                    </button>
                     <button className="project-new-session-button" type="button" title={`为 ${project.name} 创建新会话`} aria-label={`为 ${project.name} 创建新会话`} onClick={() => startNewSession(project)}>
                       <Plus aria-hidden="true" />
                     </button>
@@ -5944,7 +6123,7 @@ export function App() {
                       <MoreHorizontal aria-hidden="true" />
                     </button>
                   </div>
-                  <div className="project-session-list" aria-label={`${project.name} 的会话`}>
+                  {!groupCollapsed && <div className="project-session-list" aria-label={`${project.name} 的会话`}>
                     {sessions.length ? (
                       sessions.map(renderSessionRow)
                     ) : (
@@ -5952,24 +6131,33 @@ export function App() {
                         新建项目会话
                       </button>
                     )}
-                  </div>
+                  </div>}
                 </article>
-              ))}
+                );
+              })}
             </div>
           )}
         </section>
 
-        <div className="session-list" aria-label="会话列表">
-          <div className="sidebar-section-title"><span>通用会话</span><small>{generalSessions.length}</small></div>
-          {generalSessions.length ? generalSessions.map(renderSessionRow) : <div className="session-empty">暂无通用会话</div>}
+        <div className={`session-list${generalSessionsCollapsed ? " is-collapsed" : ""}`} aria-label="会话列表">
+          <div className="sidebar-section-title">
+            <button className="sidebar-collapse-button" type="button" onClick={() => setSidebarCollapse((current) => ({ ...current, generalSessions: !current.generalSessions }))} aria-expanded={!generalSessionsCollapsed} title={generalSessionsCollapsed ? "展开通用会话" : "折叠通用会话"}>
+              {generalSessionsCollapsed ? <ChevronRight aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
+              <span>通用会话</span>
+            </button>
+            <small>{generalSessions.length}</small>
+          </div>
+          {generalSessionsCollapsed ? null : generalSessions.length ? generalSessions.map(renderSessionRow) : <div className="session-empty">暂无通用会话</div>}
         </div>
 
         <div className="sidebar-footer">
-          <button className={`run-center-nav-button${runCenterOpen ? " is-active" : ""}`} onClick={() => openRunCenterSurface()} title="Open Run Center" aria-label="Open Run Center">
-            <Activity aria-hidden="true" />
-            <span>Run Center</span>
-            <em>{runCenterNavCount > 99 ? "99+" : runCenterNavCount}</em>
-          </button>
+          {runCenterDevVisible && (
+            <button className={`run-center-nav-button${runCenterOpen ? " is-active" : ""}`} onClick={() => openRunCenterSurface()} title="Open Run Center" aria-label="Open Run Center">
+              <Activity aria-hidden="true" />
+              <span>Run Center</span>
+              <em>{runCenterNavCount > 99 ? "99+" : runCenterNavCount}</em>
+            </button>
+          )}
           <button onClick={() => { setSettingsSection("account"); setSettingsOpen(true); }} title="设置、能力包、权限和诊断"><Settings aria-hidden="true" />设置</button>
           <button onClick={() => { setSettingsSection("account"); setSettingsOpen(true); }} title={`${session.user.name} / ${session.user.email}`}><UserRound aria-hidden="true" />{session.user.name}</button>
         </div>
@@ -5990,6 +6178,17 @@ export function App() {
           </div>
         );
       })()}
+
+      {chatFileMenu && (
+        <div className="context-menu chat-file-context-menu" style={{ left: chatFileMenu.x, top: chatFileMenu.y }} onMouseLeave={() => setChatFileMenu(null)}>
+          <button type="button" disabled={!chatFileMenu.canAdd} title={chatFileMenu.disabledReason || "添加到当前聊天"} onClick={() => addFileToCurrentChat(chatFileMenu.file)}>
+            <Paperclip aria-hidden="true" />添加到当前聊天
+          </button>
+          <button type="button" onClick={() => { void openArtifactFile(chatFileMenu.file, activeSessionId); setChatFileMenu(null); }}>
+            <FolderOpen aria-hidden="true" />本地打开
+          </button>
+        </div>
+      )}
 
       <section className="chat-pane">
         <header className="chat-header">
@@ -6086,16 +6285,18 @@ export function App() {
                     localFilePreviewUrl={messageLocalFilePreviewUrl}
                     localFileJson={messageLocalJson}
                     localFileStat={messageLocalFileStat}
+                    onLocalFileContextMenu={showChatFileMenu}
                   />
                   {message.attachments?.length ? (
                     <div className="message-files">
                       {message.attachments.map((file) => (
-                        <button key={file.file_path} onClick={() => void openArtifactFile(file, messageSessionId)} title="点击在本地打开">
+                        <button key={file.file_path} onClick={() => void openArtifactFile(file, messageSessionId)} onContextMenu={(event) => showChatFileMenu(event, file)} title="点击在本地打开">
                           {attachmentPreviewUrl(file) ? <img src={attachmentPreviewUrl(file)} alt={file.file_name} loading="lazy" /> : fileIcon(file)}<span>{file.file_name}</span>
                         </button>
                       ))}
                     </div>
                   ) : null}
+                  {renderRecoveryActions(message, messageSessionId)}
                 </div>
               </article>
               );
@@ -6511,7 +6712,7 @@ export function App() {
                       <strong>诊断</strong>
                       <span>{sidecarStatus.message}</span>
                     </div>
-                    {renderRunCenterPanel("settings")}
+                    {runCenterDevVisible ? renderRunCenterPanel("settings") : null}
                     <div className="settings-list">
                       <article><div><strong>运行时</strong><span>{runtimeSnapshot.message}</span></div><button onClick={() => loadRuntimeSnapshot().then(setRuntimeSnapshot)}>重新检查</button></article>
                       <article><div><strong>模型策略</strong><span>{runtimeSnapshot.modelsCount} 个企业模型映射</span></div><button onClick={() => loadRuntimeSnapshot().then(setRuntimeSnapshot)}>刷新</button></article>
@@ -6526,7 +6727,7 @@ export function App() {
         </div>
       )}
 
-      {runCenterOpen && (
+      {runCenterDevVisible && runCenterOpen && (
         <div className="modal-backdrop run-center-backdrop" onClick={() => setRunCenterOpen(false)}>
           <section className="run-center-sheet" role="dialog" aria-modal="true" aria-labelledby="run-center-title" onClick={(event) => event.stopPropagation()}>
             <header>

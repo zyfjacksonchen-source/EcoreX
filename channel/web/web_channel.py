@@ -2105,6 +2105,7 @@ class WebChannel(ChatChannel):
                 latest = get_conversation_store().get_visible_user_message(actual_session_id)
                 visible_message = str(latest.get("text") or "").strip()
                 source_user_seq = latest.get("seq")
+                exact_replay = bool(visible_message)
             except Exception as e:
                 logger.warning(f"[WebChannel] retry prepare history fallback failed: {e}")
 
@@ -7860,7 +7861,7 @@ class SessionDetailHandler:
 
             from agent.memory import get_conversation_store
             store = get_conversation_store()
-            found = store.rename_session(session_id, title)
+            found = store.rename_session(session_id, title, lock_title=True)
             if not found:
                 return json.dumps({"status": "error", "message": "session not found"})
             return json.dumps({"status": "success"})
@@ -7887,10 +7888,21 @@ class SessionTitleHandler:
 
             from agent.memory import get_conversation_store
             store = get_conversation_store()
-            updated = store.rename_session(session_id, title)
+            title_state = store.get_session_title_state(session_id)
+            if title_state and title_state.get("title_locked"):
+                current_title = str(title_state.get("title") or "")
+                logger.info(f"[WebChannel] Session title locked: sid={session_id}, title='{current_title}'")
+                return json.dumps({
+                    "status": "success",
+                    "title": current_title,
+                    "updated": False,
+                    "title_locked": True,
+                    "titleLocked": True,
+                }, ensure_ascii=False)
+            updated = store.rename_session(session_id, title, respect_title_lock=True)
             logger.info(f"[WebChannel] Session title set: sid={session_id}, title='{title}', db_updated={updated}")
 
-            return json.dumps({"status": "success", "title": title}, ensure_ascii=False)
+            return json.dumps({"status": "success", "title": title, "updated": updated}, ensure_ascii=False)
         except Exception as e:
             logger.error(f"[WebChannel] Title generation error: {e}")
             return json.dumps({"status": "error", "message": str(e)})

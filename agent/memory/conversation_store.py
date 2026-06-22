@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     session_id        TEXT    PRIMARY KEY,
     channel_type      TEXT    NOT NULL DEFAULT '',
     title             TEXT    NOT NULL DEFAULT '',
+    title_locked      INTEGER NOT NULL DEFAULT 0,
     context_start_seq INTEGER NOT NULL DEFAULT 0,
     created_at        INTEGER NOT NULL,
     last_active       INTEGER NOT NULL,
@@ -63,6 +64,10 @@ ALTER TABLE sessions ADD COLUMN channel_type TEXT NOT NULL DEFAULT '';
 
 _MIGRATION_ADD_TITLE = """
 ALTER TABLE sessions ADD COLUMN title TEXT NOT NULL DEFAULT '';
+"""
+
+_MIGRATION_ADD_TITLE_LOCKED = """
+ALTER TABLE sessions ADD COLUMN title_locked INTEGER NOT NULL DEFAULT 0;
 """
 
 _MIGRATION_ADD_CONTEXT_START_SEQ = """
@@ -532,10 +537,10 @@ class ConversationStore:
 
                     # Auto-generate title from the first visible user message
                     cur_title = conn.execute(
-                        "SELECT title FROM sessions WHERE session_id = ?",
+                        "SELECT title, title_locked FROM sessions WHERE session_id = ?",
                         (session_id,),
                     ).fetchone()
-                    if cur_title and not cur_title[0]:
+                    if cur_title and not cur_title[0] and not cur_title[1]:
                         for msg in messages:
                             if msg.get("role") == "user":
                                 content = msg.get("content", "")
@@ -1223,7 +1228,7 @@ class ConversationStore:
                     ).fetchone()[0]
                     rows = conn.execute(
                         """
-                        SELECT session_id, title, created_at, last_active, msg_count
+                        SELECT session_id, title, created_at, last_active, msg_count, title_locked
                         FROM sessions
                         WHERE channel_type = ?
                         ORDER BY last_active DESC
@@ -1237,7 +1242,7 @@ class ConversationStore:
                     ).fetchone()[0]
                     rows = conn.execute(
                         """
-                        SELECT session_id, title, created_at, last_active, msg_count
+                        SELECT session_id, title, created_at, last_active, msg_count, title_locked
                         FROM sessions
                         ORDER BY last_active DESC
                         LIMIT ? OFFSET ?
@@ -1254,6 +1259,8 @@ class ConversationStore:
                 "created_at": r[2],
                 "last_active": r[3],
                 "msg_count": r[4],
+                "title_locked": bool(r[5]),
+                "titleLocked": bool(r[5]),
             }
             for r in rows
         ]
@@ -1265,17 +1272,50 @@ class ConversationStore:
             "has_more": (page - 1) * page_size + page_size < total,
         }
 
-    def rename_session(self, session_id: str, title: str) -> bool:
+    def rename_session(
+        self,
+        session_id: str,
+        title: str,
+        *,
+        lock_title: bool = False,
+        respect_title_lock: bool = False,
+    ) -> bool:
         """Update the title of a session. Returns True if the session existed."""
         with self._lock:
             conn = self._connect()
             try:
                 with conn:
-                    cur = conn.execute(
-                        "UPDATE sessions SET title = ? WHERE session_id = ?",
-                        (title, session_id),
-                    )
+                    if lock_title:
+                        cur = conn.execute(
+                            "UPDATE sessions SET title = ?, title_locked = 1 WHERE session_id = ?",
+                            (title, session_id),
+                        )
+                    elif respect_title_lock:
+                        cur = conn.execute(
+                            "UPDATE sessions SET title = ? WHERE session_id = ? AND title_locked = 0",
+                            (title, session_id),
+                        )
+                    else:
+                        cur = conn.execute(
+                            "UPDATE sessions SET title = ? WHERE session_id = ?",
+                            (title, session_id),
+                        )
                     return cur.rowcount > 0
+            finally:
+                conn.close()
+
+    def get_session_title_state(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Return the persisted title and lock state for a session."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT title, title_locked FROM sessions WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
+                if not row:
+                    return None
+                return {"title": row[0], "title_locked": bool(row[1]), "titleLocked": bool(row[1])}
             finally:
                 conn.close()
 
@@ -1340,6 +1380,13 @@ class ConversationStore:
                 logger.info("[ConversationStore] Migrated: added title column")
             except Exception as e:
                 logger.warning(f"[ConversationStore] Migration (title) failed: {e}")
+        if "title_locked" not in cols:
+            try:
+                conn.execute(_MIGRATION_ADD_TITLE_LOCKED)
+                conn.commit()
+                logger.info("[ConversationStore] Migrated: added title_locked column")
+            except Exception as e:
+                logger.warning(f"[ConversationStore] Migration (title_locked) failed: {e}")
         if "context_start_seq" not in cols:
             try:
                 conn.execute(_MIGRATION_ADD_CONTEXT_START_SEQ)

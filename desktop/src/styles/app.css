@@ -499,6 +499,36 @@ html[data-platform="web"] .window-brand {
   font-weight: 600;
 }
 
+.sidebar-collapse-button,
+.project-collapse-button {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: inherit;
+  background: transparent;
+  font: inherit;
+}
+
+.sidebar-collapse-button:hover,
+.sidebar-collapse-button:focus-visible,
+.project-collapse-button:hover,
+.project-collapse-button:focus-visible {
+  border-color: var(--color-border);
+  background: var(--color-surface-muted);
+  outline: 0;
+}
+
+.sidebar-collapse-button svg,
+.project-collapse-button svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
 .project-panel {
   grid-row: 2;
   display: grid;
@@ -803,6 +833,11 @@ html[data-platform="web"] .window-brand {
 .context-menu button:hover {
   border-color: var(--color-border);
   background: var(--color-surface-muted);
+}
+
+.context-menu button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .context-menu svg {
@@ -1443,6 +1478,11 @@ html[data-platform="web"] .window-brand {
   outline: 0;
 }
 
+.artifact-icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
 .artifact-icon-button svg {
   width: 14px;
   height: 14px;
@@ -1468,6 +1508,13 @@ html[data-platform="web"] .window-brand {
   box-shadow: var(--shadow-popover);
 }
 
+.artifact-action-menu-portal {
+  position: fixed;
+  right: auto;
+  z-index: 80;
+  max-width: calc(100vw - 16px);
+}
+
 .artifact-action-menu button {
   min-height: 28px;
   padding: 0 8px;
@@ -1483,6 +1530,15 @@ html[data-platform="web"] .window-brand {
 .artifact-action-menu button:focus-visible {
   background: var(--color-surface-muted);
   outline: 0;
+}
+
+.artifact-action-menu button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.artifact-action-menu button:disabled:hover {
+  background: transparent;
 }
 
 .agent-steps {
@@ -1952,6 +2008,48 @@ html[data-platform="web"] .window-brand {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.message-recovery-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--color-warning, #d9902f) 42%, var(--color-border));
+  border-radius: var(--radius-md);
+  color: var(--color-muted);
+  background: color-mix(in srgb, var(--color-warning, #d9902f) 8%, var(--color-surface));
+  font-size: 12px;
+}
+
+.message-recovery-actions > span {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.message-recovery-actions button {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  background: var(--color-surface);
+}
+
+.message-recovery-actions button:hover,
+.message-recovery-actions button:focus-visible {
+  border-color: var(--color-brand);
+  outline: 0;
+}
+
+.message-recovery-actions svg {
+  width: 14px;
+  height: 14px;
 }
 
 .composer-zone {
