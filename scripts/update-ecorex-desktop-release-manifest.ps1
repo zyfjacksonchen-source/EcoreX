@@ -118,6 +118,7 @@ function Assert-WindowsSmoke {
     Assert-RequiredTrue -Payload $Smoke -Keys @(
         "installed",
         "appStarted",
+        "rendererReady",
         "sidecarReady",
         "authReady",
         "authRequired",
@@ -139,6 +140,12 @@ function Assert-WindowsSmoke {
     }
     if ([int]$Smoke.runtimePythonBits -ne $expectedPythonBits) {
         throw "$Label runtimePythonBits '$($Smoke.runtimePythonBits)' does not match '$expectedPythonBits'."
+    }
+    if ([int]$Smoke.rendererRootHtmlLength -le 0) {
+        throw "$Label rendererRootHtmlLength must be positive; got '$($Smoke.rendererRootHtmlLength)'."
+    }
+    if ([int]$Smoke.rendererBodyTextLength -le 0) {
+        throw "$Label rendererBodyTextLength must be positive; got '$($Smoke.rendererBodyTextLength)'."
     }
     $negative = $Smoke.authNegativeStatuses
     if (-not $negative) {

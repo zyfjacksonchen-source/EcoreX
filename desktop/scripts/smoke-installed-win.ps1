@@ -5,6 +5,7 @@ param(
     [string]$ExpectedVersion = "",
     [string]$ExpectedWinArch = "",
     [int]$Port = 19131,
+    [int]$RendererDebugPort = 19231,
     [switch]$KeepInstall
 )
 
@@ -58,6 +59,121 @@ function Wait-JsonEndpoint {
         Start-Sleep -Milliseconds 800
     }
     throw "Endpoint did not become ready: $Url. Last error: $lastError"
+}
+
+function Wait-RendererDom {
+    param(
+        [Parameter(Mandatory = $true)][int]$DebugPort,
+        [int]$TimeoutSeconds = 60
+    )
+
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+        throw "Node.js is required on PATH for installed renderer smoke checks."
+    }
+
+    $script = @'
+const port = Number(process.argv[2]);
+const timeoutSeconds = Number(process.argv[3]);
+const deadline = Date.now() + timeoutSeconds * 1000;
+const endpoint = `http://127.0.0.1:${port}/json`;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function evaluate(wsUrl) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(wsUrl);
+    const id = 1;
+    const timer = setTimeout(() => {
+      try {
+        ws.close();
+      } catch {}
+      reject(new Error("CDP evaluate timed out"));
+    }, 8000);
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({
+        id,
+        method: "Runtime.evaluate",
+        params: {
+          returnByValue: true,
+          expression: `(() => {
+            const root = document.getElementById("root");
+            const bodyText = document.body ? document.body.innerText || "" : "";
+            return {
+              url: location.href,
+              title: document.title,
+              rootHtmlLength: root && root.innerHTML ? root.innerHTML.length : 0,
+              bodyTextLength: bodyText.length,
+              bodyTextSample: bodyText.slice(0, 240)
+            };
+          })()`
+        }
+      }));
+    };
+    ws.onerror = () => {
+      clearTimeout(timer);
+      reject(new Error("CDP websocket failed"));
+    };
+    ws.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+      if (message.id !== id) return;
+      clearTimeout(timer);
+      try {
+        ws.close();
+      } catch {}
+      if (message.error) {
+        reject(new Error(message.error.message || "CDP evaluate failed"));
+        return;
+      }
+      resolve(message.result && message.result.result && message.result.result.value);
+    };
+  });
+}
+
+let last = null;
+let lastError = "";
+while (Date.now() < deadline) {
+  try {
+    const response = await fetch(endpoint);
+    const targets = await response.json();
+    const target = targets.find((item) => item.type === "page" && item.webSocketDebuggerUrl);
+    if (!target) {
+      throw new Error("No page target found");
+    }
+    last = await evaluate(target.webSocketDebuggerUrl);
+    if (last && last.rootHtmlLength > 0 && last.bodyTextLength > 0) {
+      console.log(JSON.stringify({ ok: true, ...last }));
+      process.exit(0);
+    }
+  } catch (error) {
+    lastError = error && error.message ? error.message : String(error);
+  }
+  await sleep(800);
+}
+
+console.log(JSON.stringify({ ok: false, lastError, last }));
+process.exit(2);
+'@
+
+    $tempScript = Join-Path ([System.IO.Path]::GetTempPath()) ("ecorex-renderer-smoke-" + [System.Guid]::NewGuid().ToString("N") + ".mjs")
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($tempScript, $script, $encoding)
+    try {
+        $output = & node $tempScript $DebugPort $TimeoutSeconds
+        $exitCode = $LASTEXITCODE
+        $joined = ($output -join [Environment]::NewLine).Trim()
+        if (-not $joined) {
+            throw "Renderer smoke produced no output."
+        }
+        $result = $joined | ConvertFrom-Json
+        $result | Add-Member -NotePropertyName nodeExitCode -NotePropertyValue $exitCode -Force
+        if (-not $result.ok) {
+            throw "Renderer did not become nonblank on port ${DebugPort}: $joined"
+        }
+        return $result
+    }
+    finally {
+        Remove-Item -LiteralPath $tempScript -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Get-HttpStatus {
@@ -178,12 +294,14 @@ $result = [ordered]@{
     installerSha256 = $installerSha256
     installDir = $installResolved
     webPort = $Port
+    rendererDebugPort = $RendererDebugPort
     expectedVersion = $ExpectedVersion
     installerSignatureStatus = [string]$installerSignature.Status
     expectedWinArch = $ExpectedWinArch
     expectedPythonBits = $expectedPythonBits
     installed = $false
     appStarted = $false
+    rendererReady = $false
     sidecarReady = $false
     authReady = $false
     authRequired = $false
@@ -244,8 +362,17 @@ try {
     $env:WEB_PORT = [string]$Port
     Remove-Item Env:ECOREX_SKIP_SIDECAR -ErrorAction SilentlyContinue
     try {
-        $app = Start-Process -FilePath $appExe -PassThru -WindowStyle Hidden
+        $appArgs = @("--remote-debugging-port=$RendererDebugPort")
+        $app = Start-Process -FilePath $appExe -ArgumentList $appArgs -PassThru -WindowStyle Hidden
         $result.appStarted = $true
+
+        $renderer = Wait-RendererDom -DebugPort $RendererDebugPort -TimeoutSeconds 75
+        $result.rendererReady = $true
+        $result.rendererUrl = [string]$renderer.url
+        $result.rendererTitle = [string]$renderer.title
+        $result.rendererRootHtmlLength = [int]$renderer.rootHtmlLength
+        $result.rendererBodyTextLength = [int]$renderer.bodyTextLength
+        $result.rendererBodyTextSample = [string]$renderer.bodyTextSample
 
         $version = Wait-JsonEndpoint -Url "http://127.0.0.1:$Port/api/version" -TimeoutSeconds 75
         if ($version.version -ne $ExpectedVersion) {
