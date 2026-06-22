@@ -15,7 +15,7 @@ metadata:
 
 # Image Generation
 
-Generate and edit images using AI models. The script automatically picks a backend based on which API keys are configured. **Do not create final images by coding HTML/canvas/SVG/Pillow layouts; use the image model API script for real image generation.**
+Generate and edit images using AI models. The default route uses `gpt-image-2-pro` final image generation, preferring OpenAI and using LinkAI only as a GPT Image compatible route when OpenAI is not configured. **Do not create final images by coding HTML/canvas/SVG/Pillow layouts; use the image model API script for real image generation.**
 
 Supported models (passed via `model` only when the user asks for a specific one):
 
@@ -81,7 +81,7 @@ Prints JSON to stdout:
 
 ```json
 {
-  "model": "doubao-seedream-5-0-260128",
+  "model": "gpt-image-2-pro",
   "images": [
     {"url": "/path/to/output.png"}
   ]
@@ -104,7 +104,7 @@ The script needs **at least one** of these API keys (set via `env_config` or `co
 
 `OPENAI_API_KEY` / `GEMINI_API_KEY` / `ARK_API_KEY` / `DASHSCOPE_API_KEY` / `MINIMAX_API_KEY` / `LINKAI_API_KEY`
 
-Each also has an optional `*_API_BASE` for custom endpoints. The script automatically picks the first configured backend and falls back to the next if it fails — no need to specify a model.
+Each also has an optional `*_API_BASE` for custom endpoints. By default, the script sends final image generation to `gpt-image-2-pro`. OpenAI is preferred; LinkAI may be used only as a GPT Image compatible route when OpenAI is not configured. Do not rely on automatic downgrade to another model family for default image generation.
 
 ### Error Handling
 
@@ -112,8 +112,8 @@ If the script returns an error after trying all configured backends, **do NOT re
 
 ### Notes
 
-- OpenAI auto mode tries `gpt-image-2-pro` first and falls back to `gpt-image-2` only when the API reports model/access unavailability.
-- LinkAI fallback uses the same `gpt-image-2-pro` default; legacy `image-2-pro` input is normalized as a compatibility alias and must not be recommended as the default.
+- OpenAI default mode uses `gpt-image-2-pro` only. If the API reports model/access unavailability, surface the error and ask for configuration access; do not automatically fall back to `gpt-image-2`.
+- LinkAI uses the same `gpt-image-2-pro` default when OpenAI is unavailable or when the user explicitly chooses LinkAI; legacy `image-2-pro` input is normalized as a compatibility alias and must not be recommended as the default.
 - For GPT Image models, use the official Images API parameters (`model`, `prompt`, `n`, `size`, `quality`, `output_format`, `background`, `moderation`). Do not send `response_format`.
 - OpenAI requests without `image_url` use `/images/generations`; requests with `image_url` use `/images/edits` with multipart `image` / `image[]`.
 

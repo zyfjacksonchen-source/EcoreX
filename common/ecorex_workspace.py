@@ -120,6 +120,7 @@ def _session_lock_info(path: Path, now: int, stale_seconds: int = LOCK_STALE_SEC
     alive = _process_is_alive(owner.get("pid"))
     dead_owner = owner_host == current_host and alive is False
     stale = age >= stale_seconds
+    removable_stale = stale and not (owner_host == current_host and alive is True)
     return {
         "path": str(path),
         "session_id": owner.get("sessionId") or "",
@@ -130,13 +131,13 @@ def _session_lock_info(path: Path, now: int, stale_seconds: int = LOCK_STALE_SEC
         "alive": alive,
         "dead_owner": dead_owner,
         "stale": stale,
-        "removable": bool(dead_owner or stale),
+        "removable": bool(dead_owner or removable_stale),
         "removed": False,
     }
 
 
 def list_session_locks(workspace: str, cleanup: bool = False, stale_seconds: int = LOCK_STALE_SECONDS) -> list[Dict[str, Any]]:
-    """Return session lock diagnostics and optionally remove dead/stale locks."""
+    """Return session lock diagnostics and optionally remove safely removable locks."""
     now = int(time.time())
     result: list[Dict[str, Any]] = []
     try:
@@ -291,6 +292,8 @@ class SessionLock(AbstractContextManager):
                     f"{self.path} pid={owner.get('pid')}"
                 )
                 return True
+            if owner_host == current_host and alive is True:
+                return False
             if age < self.stale_seconds:
                 return False
             self._unlink_lock()

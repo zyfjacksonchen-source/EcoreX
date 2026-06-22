@@ -7,8 +7,8 @@ from typing import Any, Dict
 
 
 CURRENT_RELEASE_NOTES: Dict[str, Any] = {
-    "version": "0.1.18",
-    "title": "EcoreX 0.1.18 更新说明",
+    "version": "0.1.19",
+    "title": "EcoreX 0.1.19 更新说明",
     "summary": (
         "本次更新把桌面端和 WebUI 的 Agent 运行链路推进到生产级稳定性："
         "会话持久化、运行状态识别、SSE 恢复、取消并发、Run Center、"

@@ -2,7 +2,7 @@ param(
     [string]$DistDir = "dist",
     [string]$OutputDir = "..\tmp\ecorex-desktop-visual",
     [string]$EdgePath = "",
-    [string]$EvidencePath = "..\docs\v0.1.18\acceptance-smoke.json"
+    [string]$EvidencePath = "..\docs\v0.1.19\acceptance-smoke.json"
 )
 
 $ErrorActionPreference = "Stop"
@@ -91,11 +91,28 @@ function Invoke-PlaywrightScreenshot {
     elseif ($ExpectedDom -match "skill-mention-popover") {
         $selector = ".skill-mention-popover"
     }
+    elseif ($ExpectedDom -match "artifact-action-menu-portal") {
+        $selector = ".artifact-action-menu-portal"
+    }
+    elseif ($ExpectedDom -match "chat-file-context-menu|attachment-tray") {
+        $selector = ".chat-file-context-menu"
+    }
     elseif ($ExpectedDom -match "artifact-shelf|image-preview-popover") {
         $selector = ".artifact-shelf"
     }
     elseif ($ExpectedDom -match "long-answer-disclosure|markdown-content") {
         $selector = ".message.assistant"
+    }
+    if ($Action -eq "stream-100k") {
+        # The stream-100k action already performs content, stop-button, and
+        # DOM-size assertions. A second wait on the huge assistant node can
+        # time out in Playwright even after it reports a visible match.
+        $selector = ".app-shell"
+    }
+    elseif ($Action -eq "chat-file-context") {
+        # The action intentionally closes the context menu after choosing
+        # "add to current chat"; the durable post-action assertion is the tray.
+        $selector = ".attachment-tray"
     }
 
     $code = @'
@@ -426,6 +443,101 @@ with sync_playwright() as p:
             browser.close()
             raise SystemExit("Artifact preview image did not load")
         action_metrics = {"thumbNaturalWidth": natural_width, "previewNaturalWidth": preview_width}
+    elif action == "artifact-menu-mobile":
+        page.wait_for_selector(".app-shell", state="visible", timeout=30000)
+        if page.locator(".project-session-list .session-row .session-main").count() > 0:
+            page.locator(".project-session-list .session-row .session-main").first.click(timeout=10000)
+        elif page.locator(".session-list .session-row .session-main").count() > 0:
+            page.locator(".session-list .session-row .session-main").first.click(timeout=10000)
+        page.wait_for_selector(".artifact-shelf", state="visible", timeout=10000)
+        row = page.locator(".artifact-row").first
+        row.scroll_into_view_if_needed(timeout=10000)
+        row.hover(timeout=10000)
+        menu_button = page.locator(".artifact-menu-wrap .artifact-icon-button").first
+        menu_button.focus(timeout=10000)
+        menu_button.click(timeout=10000)
+        try:
+            page.wait_for_selector(".artifact-action-menu-portal", state="visible", timeout=10000)
+        except Exception:
+            stats = page.evaluate("""() => ({
+                shelves: document.querySelectorAll('.artifact-shelf').length,
+                rows: [...document.querySelectorAll('.artifact-row')].map((row, index) => ({
+                    index,
+                    text: row.innerText,
+                    box: (() => {
+                        const rect = row.getBoundingClientRect();
+                        return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+                    })()
+                })),
+                menuButtons: [...document.querySelectorAll('.artifact-menu-wrap .artifact-icon-button')].map((button, index) => {
+                    const rect = button.getBoundingClientRect();
+                    return {
+                        index,
+                        aria: button.getAttribute('aria-label'),
+                        visible: Boolean(button.offsetWidth || button.offsetHeight || button.getClientRects().length),
+                        disabled: button.disabled,
+                        box: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+                        rowActionsOpacity: getComputedStyle(button.closest('.artifact-row-actions') || button).opacity
+                    };
+                }),
+                portals: document.querySelectorAll('.artifact-action-menu-portal').length
+            })""")
+            browser.close()
+            raise SystemExit(f"Artifact action menu did not open: {stats}")
+        box = page.locator(".artifact-action-menu-portal").bounding_box()
+        if not box:
+            browser.close()
+            raise SystemExit("Artifact action menu has no bounding box")
+        if box["x"] < 0 or box["y"] < 0 or box["x"] + box["width"] > width or box["y"] + box["height"] > height:
+            browser.close()
+            raise SystemExit(f"Artifact action menu overflows viewport: box={box}, viewport={width}x{height}")
+        action_metrics = {
+            "menuX": box["x"],
+            "menuY": box["y"],
+            "menuWidth": box["width"],
+            "menuHeight": box["height"],
+            "viewportWidth": width,
+            "viewportHeight": height
+        }
+    elif action == "chat-file-context":
+        page.wait_for_selector(".app-shell", state="visible", timeout=30000)
+        if page.locator(".session-list .session-row .session-main").count() > 0:
+            page.locator(".session-list .session-row .session-main").first.click(timeout=10000)
+        try:
+            page.wait_for_selector(".message-files button", state="visible", timeout=10000)
+        except Exception:
+            stats = page.evaluate("""() => ({
+                sessions: [...document.querySelectorAll('.session-row .session-main')].map((item, index) => ({ index, text: item.innerText })),
+                messages: [...document.querySelectorAll('.message')].map((item, index) => ({
+                    index,
+                    className: item.className,
+                    text: item.innerText.slice(0, 400),
+                    files: item.querySelectorAll('.message-files button').length
+                })),
+                bodyText: (document.body.innerText || '').slice(0, 1200),
+                currentSession: localStorage.getItem('ecorex-current-session')
+            })""")
+            browser.close()
+            raise SystemExit(f"Chat file attachment was not visible: {stats}")
+        page.locator(".message-files button").first.click(button="right", timeout=10000)
+        page.wait_for_selector(".chat-file-context-menu", state="visible", timeout=10000)
+        box = page.locator(".chat-file-context-menu").bounding_box()
+        if not box:
+            browser.close()
+            raise SystemExit("Chat file context menu has no bounding box")
+        if box["x"] < 0 or box["y"] < 0 or box["x"] + box["width"] > width or box["y"] + box["height"] > height:
+            browser.close()
+            raise SystemExit(f"Chat file context menu overflows viewport: box={box}, viewport={width}x{height}")
+        page.wait_for_function("!document.querySelector('.chat-file-context-menu button')?.disabled", timeout=10000)
+        page.locator(".chat-file-context-menu button").first.click(timeout=10000)
+        page.wait_for_selector(".attachment-tray", state="visible", timeout=10000)
+        action_metrics = page.evaluate("""() => ({
+            attachmentTrayItems: document.querySelectorAll('.attachment-tray article').length,
+            contextMenus: document.querySelectorAll('.chat-file-context-menu').length
+        })""")
+        if action_metrics["attachmentTrayItems"] < 1:
+            browser.close()
+            raise SystemExit("Right-click add-to-chat did not create a composer attachment")
     elif action == "send-stability":
         page.wait_for_selector(".app-shell", state="visible", timeout=30000)
         page.locator(".composer textarea").fill("Run a quick smoke response")
@@ -443,12 +555,17 @@ with sync_playwright() as p:
         if first_box and second_box and abs(first_box["x"] - second_box["x"]) + abs(first_box["y"] - second_box["y"]) > 1:
             browser.close()
             raise SystemExit("Session summary position shifted after task completion")
-    try:
-        page.wait_for_selector(selector, state="visible", timeout=30000)
-    except Exception:
-        print("\n".join(errors), flush=True)
-        print(page.content()[:3000], flush=True)
-        raise
+    if action == "stream-100k":
+        if page.locator(".app-shell").count() < 1:
+            browser.close()
+            raise SystemExit("App shell disappeared after 100k stream")
+    else:
+        try:
+            page.wait_for_selector(selector, state="visible", timeout=30000)
+        except Exception:
+            print("\n".join(errors), flush=True)
+            print(page.content()[:3000], flush=True)
+            raise
     html = page.content()
     if expected and not any(token in html for token in expected.split("|")):
         browser.close()
@@ -470,17 +587,23 @@ with sync_playwright() as p:
         if overflows:
             browser.close()
             raise SystemExit(f"Settings sheet overflows viewport: box={box}, viewport={width}x{height}")
-    Path(output).parent.mkdir(parents=True, exist_ok=True)
-    page.screenshot(path=output, full_page=False)
     if metrics_output:
         Path(metrics_output).parent.mkdir(parents=True, exist_ok=True)
         Path(metrics_output).write_text(json.dumps(action_metrics, ensure_ascii=False, indent=2), encoding="utf-8")
+    if action == "stream-100k":
+        browser.close()
+        sys.exit(0)
+    Path(output).parent.mkdir(parents=True, exist_ok=True)
+    page.screenshot(path=output, full_page=False)
     browser.close()
 '@
 
     $scriptPath = Join-Path (Split-Path -Parent $Output) "visual-smoke-runner.py"
     $argsPath = [System.IO.Path]::ChangeExtension([System.IO.Path]::GetTempFileName(), ".json")
     $metricsPath = [System.IO.Path]::ChangeExtension($Output, ".metrics.json")
+    if (Test-Path -LiteralPath $metricsPath) {
+        Remove-Item -LiteralPath $metricsPath -Force
+    }
     try {
         Set-Content -Encoding UTF8 -LiteralPath $scriptPath -Value $code
         [ordered]@{
@@ -515,6 +638,26 @@ with sync_playwright() as p:
         }
     }
 
+    if ($Action -eq "stream-100k") {
+        if (-not (Test-Path -LiteralPath $metricsPath)) {
+            if ($pythonOutput) {
+                Write-Host $pythonOutput
+            }
+            throw "100k stream metrics were not created: $metricsPath"
+        }
+        $metricsLength = (Get-Item -LiteralPath $metricsPath).Length
+        if ($metricsLength -lt 100) {
+            throw "100k stream metrics are unexpectedly small ($metricsLength bytes): $metricsPath"
+        }
+        return [ordered]@{
+            file = $metricsPath
+            bytes = $metricsLength
+            action = $Action
+            evidenceType = "metrics"
+            metrics = Get-Content -Raw -Encoding UTF8 -LiteralPath $metricsPath | ConvertFrom-Json
+        }
+    }
+
     if (-not (Test-Path -LiteralPath $Output)) {
         if ($pythonOutput) {
             Write-Host $pythonOutput
@@ -531,6 +674,7 @@ with sync_playwright() as p:
         file = $Output
         bytes = $length
         action = $Action
+        evidenceType = "screenshot"
         metrics = if (Test-Path -LiteralPath $metricsPath) { Get-Content -Raw -Encoding UTF8 -LiteralPath $metricsPath | ConvertFrom-Json } else { $null }
     }
 }
@@ -611,7 +755,7 @@ try {
   let streamCounter = 0;
   const streamRecords = {};
   const defaultHistory = [
-    { role: "user", content: "Prepare today's ad delivery report and preview the attachment.", seq: 1, user_seq: 1, created_at: Date.now() / 1000 - 180 },
+    { role: "user", content: "Prepare today's ad delivery report and preview the attachment.", seq: 1, user_seq: 1, created_at: Date.now() / 1000 - 180, extras: { attachments: [{ file_path: "C:\\EcoreX\\inputs\\creative-review.pdf", file_name: "creative-review.pdf", file_type: "file" }] } },
     { role: "assistant", content: "I will read the attachment, summarize metric changes, and ask for confirmation before sending.", seq: 2, user_seq: 1, created_at: Date.now() / 1000 - 120 }
   ];
   const secondaryHistory = [
@@ -634,7 +778,7 @@ try {
         "| Artifacts | Renderer | Pass |",
         "",
         "```json",
-        "{\"version\":\"0.1.18\",\"gate\":\"visual-smoke\"}",
+        "{\"version\":\"0.1.19\",\"gate\":\"visual-smoke\"}",
         "```",
         "",
         "1. Keep the first paint rendered as HTML.",
@@ -737,7 +881,7 @@ try {
       "| Switchback | Pass |",
       "",
       "```json",
-      "{\"stream\":\"ok\",\"version\":\"0.1.18\"}",
+      "{\"stream\":\"ok\",\"version\":\"0.1.19\"}",
       "```",
       "",
       (modeName === "switch" || modeName === "switchrace") ? "Switchback verified after returning to the original session." : "Streaming markdown rendered without raw marker flash.",
@@ -815,7 +959,7 @@ try {
     openPath: async () => "",
     apiJson: async (request) => {
       const path = request.path || "";
-      if (path === "/api/version") return { version: "0.1.18" };
+      if (path === "/api/version") return { version: "0.1.19" };
       if (path.startsWith("/api/sessions/") && path.endsWith("/generate_title")) return { status: "success", title: "Ad delivery report" };
       if (path.startsWith("/api/sessions")) return {
         sessions: [
@@ -877,6 +1021,8 @@ try {
     $captures += Invoke-PlaywrightScreenshot $python "${url}?mode=postdone&theme=light" (Join-Path $outputPath "desktop-postdone-tail-light.png") "1440,900" "artifact-shelf|markdown-content" "postdone-tail"
     $captures += Invoke-PlaywrightScreenshot $python "${url}?mode=terminalrace&theme=light" (Join-Path $outputPath "desktop-terminal-boundary-light.png") "1440,900" "markdown-content" "terminal-boundary"
     $captures += Invoke-PlaywrightScreenshot $python "${url}?mode=artifact&theme=light" (Join-Path $outputPath "desktop-artifact-preview-light.png") "1440,900" "artifact-shelf|image-preview-popover" "artifact-preview"
+    $captures += Invoke-PlaywrightScreenshot $python "${url}?mode=artifact&theme=light" (Join-Path $outputPath "mobile-artifact-menu-light.png") "390,760" "artifact-action-menu-portal" "artifact-menu-mobile"
+    $captures += Invoke-PlaywrightScreenshot $python "${url}?mode=main&theme=light" (Join-Path $outputPath "desktop-chat-file-context-light.png") "720,760" "chat-file-context-menu|attachment-tray" "chat-file-context"
     $captures += Invoke-PlaywrightScreenshot $python "${url}?mode=main&theme=light" (Join-Path $outputPath "desktop-send-stability-light.png") "1440,900" "app-shell|session-sidebar" "send-stability"
     $captures += Invoke-PlaywrightScreenshot $python "${url}?mode=main&theme=dark" (Join-Path $outputPath "desktop-main-dark.png") "1440,900" "app-shell|session-sidebar"
     $captures += Invoke-PlaywrightScreenshot $python "${url}?mode=main&theme=dark" (Join-Path $outputPath "desktop-settings-dark.png") "1440,900" "settings-sheet" "open-settings"
@@ -891,7 +1037,7 @@ try {
 
     $result = [ordered]@{
         status = "pass"
-        version = "0.1.18"
+        version = "0.1.19"
         changeIds = @("STAB-004", "UX-004", "PERF-001")
         scenarios = [ordered]@{
             noResponseDeadLoop = [ordered]@{
@@ -909,7 +1055,7 @@ try {
             longMarkdown = [ordered]@{
                 status = if ($captureActions["stream-100k"] -and $captureActions["long-markdown"]) { "pass" } else { "missing" }
                 chars = 100000
-                evidence = "stream-100k gates delivered chars, raw markdown marker leaks, terminal convergence, and stop-button state"
+                evidence = "stream-100k records metrics-only stress evidence for delivered chars, raw markdown marker leaks, terminal convergence, and stop-button state"
             }
         }
         edge = $edge

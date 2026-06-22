@@ -271,11 +271,17 @@ function nativePathFromFileUrl(value?: string) {
   if (!/^file:\/\//i.test(source)) return "";
   try {
     const parsed = new URL(source);
-    if (parsed.hostname) {
-      return `\\\\${parsed.hostname}${decodeURIComponent(parsed.pathname).replace(/\//g, "\\")}`;
+    const platform = window.ecorexDesktop?.platform || "";
+    const hostname = parsed.hostname;
+    if (hostname && hostname.toLowerCase() !== "localhost") {
+      const decodedPath = decodeURIComponent(parsed.pathname || "");
+      return platform === "win32" ? `\\\\${hostname}${decodedPath.replace(/\//g, "\\")}` : `//${hostname}${decodedPath}`;
     }
     const decoded = decodeURIComponent(parsed.pathname || "");
-    return decoded.replace(/^\/([a-zA-Z]:[\\/])/, "$1").replace(/\//g, "\\");
+    if (platform === "win32") {
+      return decoded.replace(/^\/([a-zA-Z]:[\\/])/, "$1").replace(/\//g, "\\");
+    }
+    return decoded;
   } catch {
     return source.replace(/^file:\/\/+/i, "").replace(/^\/([a-zA-Z]:[\\/])/, "$1");
   }
@@ -310,6 +316,19 @@ function joinLocalPath(base: string, child: string) {
   if (!root || !rel) return child;
   const slash = root.includes("\\") && !root.includes("/") ? "\\" : "/";
   return root.replace(/[\\/]+$/g, "") + slash + rel;
+}
+
+function fixedMenuStyle(x: number, y: number, width = 220, height = 140): CSSProperties {
+  const margin = 8;
+  const viewportWidth = typeof window === "undefined" ? 1024 : window.innerWidth;
+  const viewportHeight = typeof window === "undefined" ? 768 : window.innerHeight;
+  return {
+    left: Math.max(margin, Math.min(x, viewportWidth - width - margin)),
+    top: Math.max(margin, Math.min(y, viewportHeight - height - margin)),
+    maxWidth: `calc(100vw - ${margin * 2}px)`,
+    maxHeight: `calc(100vh - ${margin * 2}px)`,
+    overflowY: "auto"
+  };
 }
 
 function isImageAttachment(file: FileAttachment) {
@@ -2436,7 +2455,7 @@ export function App() {
   const statArtifactPath = async (filePath: string, sessionId = activeSessionIdRef.current): Promise<LocalPathStat> => {
     const raw = normalizeLocalSource(filePath);
     if (!raw || isRuntimePreviewPath(raw) || /^https?:\/\//i.test(raw)) {
-      return { path: raw, exists: Boolean(raw), status: raw ? "remote" : "error" };
+      return { path: raw, exists: false, isFile: false, isDirectory: false, status: raw ? "remote" : "error" };
     }
     const resolvedPath = resolveArtifactPathForSession(sessionId, raw);
     return statLocalPath(resolvedPath);
@@ -2996,6 +3015,25 @@ export function App() {
     setProjectMenu({ projectId: project.id, x: event.clientX, y: event.clientY });
   }
 
+  async function verifyAddableChatFile(file: FileAttachment, sessionId = activeSessionIdRef.current) {
+    const normalizedPath = normalizeLocalSource(file.file_path);
+    if (!normalizedPath || !isDurableLocalAttachment({ ...file, file_path: normalizedPath })) {
+      return { ok: false, reason: "Only verified local files can be added to the current chat" };
+    }
+    const resolvedPath = resolveArtifactPathForSession(sessionId, normalizedPath);
+    try {
+      const stat = await statLocalPath(resolvedPath);
+      const status = String(stat.status || "").toLowerCase();
+      if (status === "denied") return { ok: false, reason: "File access is blocked by permissions" };
+      if (status === "error") return { ok: false, reason: "Could not verify local file" };
+      const expectedKindOk = file.file_type === "directory" ? stat.isDirectory !== false : stat.isFile !== false;
+      if (!stat.exists || !expectedKindOk) return { ok: false, reason: "Local file was not found" };
+      return { ok: true, reason: "", resolvedPath };
+    } catch {
+      return { ok: false, reason: "Could not verify local file" };
+    }
+  }
+
   function showChatFileMenu(event: MouseEvent, file: FileAttachment | LocalFilePayload) {
     event.preventDefault();
     event.stopPropagation();
@@ -3008,25 +3046,35 @@ export function App() {
     };
     const durable = isDurableLocalAttachment(normalizedFile);
     setProjectMenu(null);
+    const menuKey = normalizeAttachmentDedupeKey(normalizedFile);
     setChatFileMenu({
       file: normalizedFile,
       x: event.clientX,
       y: event.clientY,
-      canAdd: durable,
-      disabledReason: durable ? "" : "Only verified local files can be added to the current chat"
+      canAdd: false,
+      disabledReason: durable ? "Verifying local file..." : "Only verified local files can be added to the current chat"
     });
+    if (durable) {
+      void verifyAddableChatFile(normalizedFile).then((result) => {
+        setChatFileMenu((current) => {
+          if (!current || normalizeAttachmentDedupeKey(current.file) !== menuKey) return current;
+          return { ...current, canAdd: result.ok, disabledReason: result.ok ? "" : result.reason };
+        });
+      });
+    }
   }
 
-  function addFileToCurrentChat(file: FileAttachment) {
-    if (!isDurableLocalAttachment(file)) {
-      setToast("Only verified local files can be added to the current chat");
+  async function addFileToCurrentChat(file: FileAttachment) {
+    const verification = await verifyAddableChatFile(file);
+    if (!verification.ok) {
+      setToast(verification.reason || "Only verified local files can be added to the current chat");
       setChatFileMenu(null);
       return;
     }
     const normalizedPath = normalizeLocalSource(file.file_path);
     const normalizedFile: FileAttachment = {
       ...file,
-      file_path: normalizedPath,
+      file_path: verification.resolvedPath || normalizedPath,
       file_name: file.file_name || normalizedPath.split(/[\\/]/).filter(Boolean).pop() || "file",
       file_type: file.file_type || (isImageAttachment(file) ? "image" : "file")
     };
@@ -4342,7 +4390,12 @@ export function App() {
               ? clearTransientSendSteps(appendArtifact(finishRunningSteps(message), item, false))
               : appendArtifact(message, item)
           ));
-          if (postDoneTail) markSessionOutputReady(sessionId);
+          if (postDoneTail) {
+            markSessionOutputReady(sessionId);
+            window.setTimeout(() => {
+              void refreshSessionFromHistory(sessionId);
+            }, 0);
+          }
           return;
         }
         if (item.type === "image" || item.type === "video" || item.type === "audio" || item.type === "file" || item.type === "voice_attach") {
@@ -4775,14 +4828,19 @@ export function App() {
           ? { ...item, sendAttempt: item.sendAttempt ? { ...item.sendAttempt, state: "accepted" } : undefined }
           : item
       )));
-      if (previousRequestId && result.same_session?.decision === "replacement_accepted") {
-        closeSessionStream(previousSessionId, previousRequestId);
-        clearSessionRequestState(previousSessionId, previousRequestId);
+      const replacedRequestIds = result.same_session?.decision === "replacement_accepted" || result.same_session?.decision === "accepted_after_recovery"
+        ? Array.from(new Set([previousRequestId, ...(result.same_session?.replaced_request_ids || [])].filter(Boolean)))
+        : [];
+      if (replacedRequestIds.length) {
+        replacedRequestIds.forEach((replacedRequestId) => {
+          closeSessionStream(previousSessionId, replacedRequestId);
+          clearSessionRequestState(previousSessionId, replacedRequestId);
+        });
         updateSessionMessages(previousSessionId, (current) => current.map((item) => (
-          item.role === "assistant" && item.requestId === previousRequestId && item.pending
+          item.role === "assistant" && item.requestId && replacedRequestIds.includes(item.requestId) && item.pending
             ? {
                 ...finishRunningSteps(item, "cancelled"),
-                content: item.content || "Stopped because a newer message was accepted.",
+                content: item.content || "Stopped because a newer message was accepted or recovered.",
                 pending: false,
                 cancelled: true
               }
@@ -4961,7 +5019,12 @@ export function App() {
                   ? clearTransientSendSteps(appendArtifact(finishRunningSteps(message), item, false))
                   : appendArtifact(message, item)
               ));
-              if (postDoneTail) markSessionOutputReady(requestSessionId);
+              if (postDoneTail) {
+                markSessionOutputReady(requestSessionId);
+                window.setTimeout(() => {
+                  void refreshSessionFromHistory(requestSessionId);
+                }, 0);
+              }
               return;
             }
             if (item.type === "image" || item.type === "video" || item.type === "audio" || item.type === "file" || item.type === "voice_attach") {
@@ -6168,7 +6231,7 @@ export function App() {
         if (!project) return null;
         const isPinned = Boolean(pinnedProjects[project.id] || project.pinned);
         return (
-          <div className="context-menu" style={{ left: projectMenu.x, top: projectMenu.y }} onMouseLeave={() => setProjectMenu(null)}>
+          <div className="context-menu" style={fixedMenuStyle(projectMenu.x, projectMenu.y, 230, 152)} onMouseLeave={() => setProjectMenu(null)}>
             <button type="button" onClick={() => openProjectInExplorer(project)}><FolderInput aria-hidden="true" />在资源管理器打开</button>
             <button type="button" onClick={() => { togglePinProject(project); setProjectMenu(null); }}>
               {isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}{isPinned ? "取消置顶项目" : "置顶项目"}
@@ -6180,8 +6243,8 @@ export function App() {
       })()}
 
       {chatFileMenu && (
-        <div className="context-menu chat-file-context-menu" style={{ left: chatFileMenu.x, top: chatFileMenu.y }} onMouseLeave={() => setChatFileMenu(null)}>
-          <button type="button" disabled={!chatFileMenu.canAdd} title={chatFileMenu.disabledReason || "添加到当前聊天"} onClick={() => addFileToCurrentChat(chatFileMenu.file)}>
+        <div className="context-menu chat-file-context-menu" style={fixedMenuStyle(chatFileMenu.x, chatFileMenu.y, 230, 84)} onMouseLeave={() => setChatFileMenu(null)}>
+          <button type="button" disabled={!chatFileMenu.canAdd} title={chatFileMenu.disabledReason || "添加到当前聊天"} onClick={() => void addFileToCurrentChat(chatFileMenu.file)}>
             <Paperclip aria-hidden="true" />添加到当前聊天
           </button>
           <button type="button" onClick={() => { void openArtifactFile(chatFileMenu.file, activeSessionId); setChatFileMenu(null); }}>

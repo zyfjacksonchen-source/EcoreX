@@ -21,7 +21,7 @@ MANAGED_BUILTIN_REFRESH_MARKERS: Dict[str, List[str]] = {
     # silently overrides the fixed built-in version.
     "image-generation": [
         'DEFAULT_MODEL = "gpt-image-2-pro"',
-        "OpenAI model {model} unavailable",
+        "OpenAI default mode uses `gpt-image-2-pro` only",
         "LinkAI default model follows EcoreX's OpenAI image default",
         '"output_format"',
         "/images/edits",

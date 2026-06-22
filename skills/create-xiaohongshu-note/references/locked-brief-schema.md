@@ -116,8 +116,11 @@ Required JSON fields:
   "asset_paths": [],
   "image_generation_status": {
     "status": "pending",
+    "provider": "openai",
     "model": "gpt-image-2-pro",
-    "fallback_model": "image-2",
+    "image_kind": "final",
+    "draft": false,
+    "fallback_used": false,
     "prompt_hash": ""
   }
 }

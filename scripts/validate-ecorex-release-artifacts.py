@@ -763,7 +763,10 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
     require_contains(broker, "\"filesystem-access\"", f"{label} permission broker")
 
     release_notes = read_text_by_suffix("common/ecorex_release_notes.py")
-    require_contains(release_notes, "\"version\": \"0.1.18\"", f"{label} release notes")
+    require(
+        re.search(r'"version"\s*:\s*"\d+\.\d+\.\d+"', release_notes) is not None,
+        f"{label} release notes missing semantic version",
+    )
     require_contains(release_notes, "\"updatePolicy\"", f"{label} release notes")
     require_contains(release_notes, "\"webui\"", f"{label} release notes")
 
@@ -847,7 +850,9 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
     require_contains(image_generation, "DEFAULT_MODEL = \"gpt-image-2-pro\"", f"{label} image-generation skill")
     require_contains(image_generation, "LinkAI default model follows EcoreX's OpenAI image default", f"{label} image-generation skill")
     require_contains(image_generation, "\"output_format\"", f"{label} image-generation skill")
-    require_contains(image_generation, "OpenAI model {model} unavailable", f"{label} image-generation skill")
+    require_contains(image_generation, "or OpenAIProvider.DEFAULT_MODEL", f"{label} image-generation skill")
+    require_not_contains(image_generation, 'FALLBACK_MODEL = "gpt-image-2"', f"{label} image-generation skill")
+    require_not_contains(image_generation, "falling back to {self.FALLBACK_MODEL}", f"{label} image-generation skill")
     require_contains(image_generation, "/images/generations", f"{label} image-generation skill")
     require_contains(image_generation, "/images/edits", f"{label} image-generation skill")
     require_contains(image_generation, "image_url=image_url", f"{label} image-generation skill")
@@ -865,6 +870,11 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
     xhs_image = read_text_by_suffix("skills/create-xiaohongshu-note/scripts/generate_cover_image.py")
     require_contains(xhs_image, "\"output_format\"", f"{label} xhs image generation")
     require_contains(xhs_image, "/images/generations", f"{label} xhs image generation")
+    require_contains(xhs_image, "def generate_final_image", f"{label} xhs image generation")
+    require_contains(xhs_image, '"image_kind": "final"', f"{label} xhs image generation")
+    require_contains(xhs_image, '"draft": False', f"{label} xhs image generation")
+    require_not_contains(xhs_image, 'parser.add_argument("--fallback-model"', f"{label} xhs image generation")
+    require_not_contains(xhs_image, "def generate_with_fallback", f"{label} xhs image generation")
     require_not_contains(xhs_image, "from openai import OpenAI", f"{label} xhs image generation")
 
     web_channel = read_text_by_suffix("channel/web/web_channel.py")

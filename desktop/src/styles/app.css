@@ -181,6 +181,7 @@ button:disabled {
   border-radius: var(--radius-xl);
   background: var(--color-surface);
   box-shadow: var(--shadow-popover);
+  overflow: auto;
 }
 
 .auth-panel h1,
@@ -565,7 +566,7 @@ html[data-platform="web"] .window-brand {
 
 .project-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   padding: 0;
 }
 

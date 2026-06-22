@@ -167,8 +167,8 @@ class TestImageGenerationSkillRetry(unittest.TestCase):
         self.assertFalse(payload["provider_error"]["fallback_allowed"])
         self.assertEqual(len(payload["attempted_providers"]), 1)
 
-    def test_main_falls_back_after_retryable_exhaustion(self):
-        module = load_image_generation_module("ecorex_image_generation_retry_fallback_test")
+    def test_main_default_gpt_image_pro_fails_closed_after_retryable_exhaustion(self):
+        module = load_image_generation_module("ecorex_image_generation_retry_fail_closed_test")
         outage = FakeResponse(
             503,
             {
@@ -179,8 +179,7 @@ class TestImageGenerationSkillRetry(unittest.TestCase):
                 }
             },
         )
-        linkai_success = FakeResponse(200, {"data": [{"b64_json": "aGVsbG8="}]})
-        responses = [outage, outage, linkai_success]
+        responses = [outage, outage]
         sleeps = []
         stdout = io.StringIO()
         env = {
@@ -199,12 +198,52 @@ class TestImageGenerationSkillRetry(unittest.TestCase):
                     with patch.object(module.requests, "post", side_effect=fake_post) as post:
                         with patch.object(module, "_save_image", return_value="fallback.png"):
                             with contextlib.redirect_stdout(stdout):
-                                module.main()
+                                with self.assertRaises(SystemExit) as raised:
+                                    module.main()
 
-        self.assertEqual(post.call_count, 3)
+        self.assertEqual(raised.exception.code, 1)
+        self.assertEqual(post.call_count, 2)
         self.assertEqual(sleeps, [2.0])
         payload = json.loads(stdout.getvalue())
-        self.assertEqual(payload["images"], [{"url": "fallback.png"}])
+        self.assertEqual(payload["provider_error"]["provider"], "OpenAI")
+        self.assertEqual(payload["provider_error"]["status_code"], 503)
+        self.assertEqual(payload["provider_error"]["fallback_allowed"], True)
+        self.assertEqual(len(payload["attempted_providers"]), 1)
+
+    def test_build_providers_defaults_to_gpt_image_pro_and_linkai_only_when_openai_missing(self):
+        module = load_image_generation_module("ecorex_image_generation_default_provider_test")
+
+        with patch.dict(os.environ, {
+            "OPENAI_API_KEY": "sk-test",
+            "LINKAI_API_KEY": "lk-test",
+            "GEMINI_API_KEY": "gemini-test",
+        }, clear=True):
+            providers = module._build_providers("gpt-image-2-pro")
+            self.assertEqual([label for label, _ in providers], ["OpenAI"])
+            self.assertEqual(providers[0][1].model, "gpt-image-2-pro")
+
+        with patch.dict(os.environ, {
+            "LINKAI_API_KEY": "lk-test",
+            "GEMINI_API_KEY": "gemini-test",
+        }, clear=True):
+            providers = module._build_providers("gpt-image-2-pro")
+            self.assertEqual([label for label, _ in providers], ["LinkAI"])
+            self.assertEqual(providers[0][1].model, "gpt-image-2-pro")
+
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "gemini-test"}, clear=True):
+            self.assertEqual(module._build_providers("gpt-image-2-pro"), [])
+
+        with patch.dict(os.environ, {
+            "OPENAI_API_KEY": "sk-test",
+            "GEMINI_API_KEY": "gemini-test",
+            "DASHSCOPE_API_KEY": "dashscope-test",
+        }, clear=True):
+            providers = module._build_providers("gpt-image-2-pro", provider_id="gemini")
+            self.assertEqual([label for label, _ in providers], ["OpenAI"])
+            self.assertEqual(providers[0][1].model, "gpt-image-2-pro")
+
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "gemini-test"}, clear=True):
+            self.assertEqual(module._build_providers("gpt-image-2-pro", provider_id="gemini"), [])
 
     def test_qwen_body_error_is_typed_fail_closed(self):
         module = load_image_generation_module("ecorex_image_generation_qwen_body_test")

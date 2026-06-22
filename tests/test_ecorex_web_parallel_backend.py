@@ -1,4 +1,5 @@
 # encoding:utf-8
+import hashlib
 import json
 import os
 import socket
@@ -108,6 +109,29 @@ class TestEcoreXWorkspaceState(unittest.TestCase):
 
             acquired = SessionLock(workspace, "session-dead").acquire()
             acquired.release()
+
+    def test_session_lock_preserves_live_stale_owner_pid(self):
+        from common.ecorex_workspace import LOCK_STALE_SECONDS, SessionBusyError, SessionLock
+
+        with tempfile.TemporaryDirectory() as workspace:
+            lock = SessionLock(workspace, "session-live-stale")
+            lock.path.parent.mkdir(parents=True, exist_ok=True)
+            lock.path.write_text(
+                json.dumps({
+                    "sessionId": "session-live-stale",
+                    "pid": os.getpid(),
+                    "host": socket.gethostname(),
+                    "createdAt": int(time.time()) - LOCK_STALE_SECONDS - 10,
+                }),
+                encoding="utf-8",
+            )
+            stale_mtime = time.time() - LOCK_STALE_SECONDS - 10
+            os.utime(lock.path, (stale_mtime, stale_mtime))
+
+            with self.assertRaises(SessionBusyError):
+                SessionLock(workspace, "session-live-stale").acquire()
+
+            self.assertTrue(lock.path.exists())
 
     def test_cleanup_stale_session_locks_reports_dead_owner(self):
         from common.ecorex_workspace import SessionLock, cleanup_stale_session_locks
@@ -6616,7 +6640,7 @@ class TestAgentHostBoundary(unittest.TestCase):
             self.assertNotIn("..", path.parts)
             self.assertEqual(path.name, "MEMORY.md")
 
-    def test_openai_image_provider_uses_gpt_image_2_payload_and_pro_fallback(self):
+    def test_openai_image_provider_uses_gpt_image_2_pro_without_model_fallback(self):
         import importlib.util
 
         script_path = Path(__file__).resolve().parents[1] / "skills" / "image-generation" / "scripts" / "generate.py"
@@ -6637,25 +6661,22 @@ class TestAgentHostBoundary(unittest.TestCase):
                 return {"data": [{"b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="}]}
 
             provider._post_json = fake_post_json
-            paths = provider.generate(
-                "orange x",
-                quality="low",
-                size="1024x1024",
-                output_format="png",
-                output_dir=output_dir,
-            )
+            with self.assertRaises(RuntimeError):
+                provider.generate(
+                    "orange x",
+                    quality="low",
+                    size="1024x1024",
+                    output_format="png",
+                    output_dir=output_dir,
+                )
 
-        self.assertEqual(provider.model, "gpt-image-2")
-        self.assertEqual(urls, [
-            "https://api.openai.com/v1/images/generations",
-            "https://api.openai.com/v1/images/generations",
-        ])
-        self.assertEqual([payload["model"] for payload in payloads], ["gpt-image-2-pro", "gpt-image-2"])
+        self.assertEqual(provider.model, "gpt-image-2-pro")
+        self.assertEqual(urls, ["https://api.openai.com/v1/images/generations"])
+        self.assertEqual([payload["model"] for payload in payloads], ["gpt-image-2-pro"])
         self.assertEqual(payloads[0]["n"], 1)
         self.assertEqual(payloads[0]["quality"], "low")
         self.assertEqual(payloads[0]["output_format"], "png")
         self.assertNotIn("response_format", payloads[0])
-        self.assertEqual(len(paths), 1)
         self.assertEqual(
             module.LinkAIProvider("lk-test", "https://api.link-ai.tech", "").model,
             "gpt-image-2-pro",
@@ -6731,6 +6752,129 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertEqual(linkai_only["fallback_provider"], "linkai")
         self.assertEqual(linkai_only["fallback_model"], "gpt-image-2-pro")
 
+    def test_v019_xhs_skill_generates_final_images_with_pro_only_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        script = root / "skills" / "create-xiaohongshu-note" / "scripts" / "generate_cover_image.py"
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "cover.png"
+            status_path = Path(tmp) / "cover.status.json"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--prompt",
+                    "final cover smoke",
+                    "--output",
+                    str(output),
+                    "--status-path",
+                    str(status_path),
+                    "--dry-run",
+                ],
+                cwd=str(root),
+                text=True,
+                capture_output=True,
+                timeout=20,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads(result.stdout)
+            status_payload = json.loads(status_path.read_text(encoding="utf-8"))
+            for item in [payload, status_payload]:
+                self.assertEqual(item["provider"], "openai")
+                self.assertEqual(item["model"], "gpt-image-2-pro")
+                self.assertEqual(item["image_kind"], "final")
+                self.assertFalse(item["draft"])
+                self.assertFalse(item["fallback_used"])
+                self.assertNotIn("fallback_model", item)
+            self.assertFalse(output.exists())
+
+            stale_output = Path(tmp) / "stale-cache.png"
+            stale_status = Path(tmp) / "stale-cache.status.json"
+            stale_bytes = (
+                b"\x89PNG\r\n\x1a\n"
+                b"\x00\x00\x00\rIHDR"
+                + (1).to_bytes(4, "big")
+                + (1).to_bytes(4, "big")
+                + b"\x08\x06\x00\x00\x00"
+                + b"placeholder-python-draft"
+            )
+            stale_output.write_bytes(stale_bytes)
+            stale_status.write_text(
+                json.dumps({
+                    "ok": True,
+                    "status": "completed",
+                    "provider": "openai",
+                    "model": "gpt-image-2-pro",
+                    "image_kind": "final",
+                    "draft": False,
+                    "fallback_used": False,
+                    "prompt_hash": hashlib.sha256(b"final cover smoke\n1080x1440").hexdigest()[:16],
+                    "sha256": hashlib.sha256(stale_bytes).hexdigest(),
+                }),
+                encoding="utf-8",
+            )
+            stale_cache = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--prompt",
+                    "final cover smoke",
+                    "--output",
+                    str(stale_output),
+                    "--status-path",
+                    str(stale_status),
+                    "--dry-run",
+                ],
+                cwd=str(root),
+                text=True,
+                capture_output=True,
+                timeout=20,
+            )
+            self.assertEqual(stale_cache.returncode, 0, stale_cache.stderr)
+            stale_payload = json.loads(stale_cache.stdout)
+            self.assertEqual(stale_payload["status"], "dry_run")
+            self.assertFalse(stale_output.exists())
+
+            wrong_model = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--prompt",
+                    "wrong model smoke",
+                    "--output",
+                    str(Path(tmp) / "wrong.png"),
+                    "--model",
+                    "gpt-image-2",
+                    "--dry-run",
+                ],
+                cwd=str(root),
+                text=True,
+                capture_output=True,
+                timeout=20,
+            )
+            self.assertEqual(wrong_model.returncode, 2)
+            self.assertIn("gpt-image-2-pro", wrong_model.stdout)
+
+            fallback_arg = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--prompt",
+                    "fallback arg smoke",
+                    "--output",
+                    str(Path(tmp) / "fallback.png"),
+                    "--fallback-model",
+                    "gpt-image-2",
+                    "--dry-run",
+                ],
+                cwd=str(root),
+                text=True,
+                capture_output=True,
+                timeout=20,
+            )
+            self.assertNotEqual(fallback_arg.returncode, 0)
+            self.assertIn("--fallback-model", fallback_arg.stderr)
+
     def test_v014_defaults_keep_agent_install_and_image_2_pro(self):
         root = Path(__file__).resolve().parents[1]
         direct_install_sources = [
@@ -6763,7 +6907,9 @@ class TestAgentHostBoundary(unittest.TestCase):
         stage_runtime_win = (root / "desktop" / "scripts" / "stage-runtime-win.ps1").read_text(encoding="utf-8")
         web_channel_py = (root / "channel" / "web" / "web_channel.py").read_text(encoding="utf-8")
         self.assertIn('DEFAULT_MODEL = "gpt-image-2-pro"', generate_py)
-        self.assertIn('FALLBACK_MODEL = "gpt-image-2"', generate_py)
+        self.assertNotIn('FALLBACK_MODEL = "gpt-image-2"', generate_py)
+        self.assertIn("OpenAI default mode uses `gpt-image-2-pro` only", skill_md)
+        self.assertIn("or OpenAIProvider.DEFAULT_MODEL", generate_py)
         self.assertIn("LinkAI default model follows EcoreX's OpenAI image default", generate_py)
         self.assertNotIn('("linkai",    "image-2-pro")', web_channel_py)
         self.assertIn('("linkai",    "gpt-image-2-pro")', web_channel_py)
@@ -6771,6 +6917,12 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertIn('Do not create final images by coding HTML/canvas/SVG/Pillow layouts', skill_md)
         self.assertIn("legacy `image-2-pro` input is normalized", skill_md)
         self.assertIn('parser.add_argument("--model", default="gpt-image-2-pro")', xhs_py)
+        self.assertIn("def generate_final_image", xhs_py)
+        self.assertIn('raise ValueError("create-xiaohongshu-note final images must use --model gpt-image-2-pro")', xhs_py)
+        self.assertIn('"image_kind": "final"', xhs_py)
+        self.assertIn('"draft": False', xhs_py)
+        self.assertNotIn('parser.add_argument("--fallback-model"', xhs_py)
+        self.assertNotIn("def generate_with_fallback", xhs_py)
         self.assertIn('DEFAULT_MODEL = "gpt-image-2-pro"', manager_py)
         self.assertIn('default="gpt-image-2-pro"', manager_py)
         self.assertIn('"ecorex-desktop-v0.1.14"', enterprise_policy_ts)
@@ -7026,6 +7178,186 @@ class TestAgentHostBoundary(unittest.TestCase):
             self.assertEqual(result["prompt"], "please rebuild the report")
             self.assertEqual(result["attachments"][0]["file_name"], "input.png")
 
+    def test_v019_retry_prepare_history_fallback_is_not_exact_replay(self):
+        with isolated_run_ledger():
+            from agent.protocol import get_run_ledger
+            from channel.web.web_channel import WebChannel
+
+            test_case = self
+
+            class FakeConversationStore:
+                def get_visible_user_message(self, session_id):
+                    test_case.assertEqual(session_id, "session-v019-history-fallback")
+                    return {"text": "latest visible request", "seq": 7}
+
+            ledger = get_run_ledger()
+            ledger.create_run(
+                "req-v019-history-fallback",
+                "session-v019-history-fallback",
+                phase="running",
+                status="running",
+                metadata={},
+            )
+            ledger.mark_terminal(
+                "req-v019-history-fallback",
+                "failed",
+                reason="network_error",
+                error_code="NETWORK_ERROR",
+                error_message="transient failure",
+            )
+
+            with patch("agent.memory.get_conversation_store", return_value=FakeConversationStore()):
+                result = WebChannel().prepare_request_retry(
+                    "req-v019-history-fallback",
+                    session_id="session-v019-history-fallback",
+                )
+
+            self.assertEqual(result["status"], "success")
+            self.assertTrue(result["retryable"])
+            self.assertFalse(result["exactReplay"])
+            self.assertEqual(result["prompt"], "latest visible request")
+            self.assertEqual(result["source_user_seq"], 7)
+
+    def test_v019_dead_owner_session_lock_recovery_marks_active_run_interrupted(self):
+        with isolated_run_ledger(), tempfile.TemporaryDirectory() as workspace:
+            import channel.web.web_channel as web_channel
+            from agent.protocol import get_run_ledger
+            from common.ecorex_workspace import LOCK_STALE_SECONDS, SessionLock
+            from channel.web.web_channel import WebChannel
+
+            session_id = "session-v019-dead-lock"
+            request_id = "req-v019-dead-lock"
+            ledger = get_run_ledger()
+            ledger.create_run(request_id, session_id, phase="running", status="running", metadata={})
+
+            lock = SessionLock(workspace, session_id)
+            lock.path.parent.mkdir(parents=True, exist_ok=True)
+            lock.path.write_text(
+                json.dumps({
+                    "sessionId": session_id,
+                    "pid": 99999999,
+                    "host": socket.gethostname(),
+                    "createdAt": int(time.time()) - LOCK_STALE_SECONDS - 10,
+                }),
+                encoding="utf-8",
+            )
+            stale_time = time.time() - LOCK_STALE_SECONDS - 10
+            os.utime(lock.path, (stale_time, stale_time))
+
+            with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                interrupted = WebChannel()._recover_interrupted_runs_for_removed_session_locks(session_id)
+
+            row = ledger.get_run(request_id)
+            self.assertEqual(interrupted, [request_id])
+            self.assertFalse(lock.path.exists())
+            self.assertEqual(row["status"], "interrupted")
+            self.assertEqual(row["error_code"], "SIDECAR_INTERRUPTED")
+
+    def test_v019_post_message_reports_accepted_after_dead_owner_recovery(self):
+        with isolated_run_ledger(), tempfile.TemporaryDirectory() as workspace:
+            import channel.web.web_channel as web_channel
+            from agent.protocol import get_run_ledger
+            from bridge.context import Context
+            from channel.web.web_channel import WebChannel
+            from common.ecorex_workspace import LOCK_STALE_SECONDS, SessionLock
+
+            session_id = "session-v019-dead-lock-admission"
+            old_request_id = "req-v019-dead-lock-admission-old"
+            new_request_id = "req-v019-dead-lock-admission-new"
+            ledger = get_run_ledger()
+            ledger.create_run(old_request_id, session_id, phase="running", status="running", metadata={})
+
+            lock = SessionLock(workspace, session_id)
+            lock.path.parent.mkdir(parents=True, exist_ok=True)
+            lock.path.write_text(
+                json.dumps({
+                    "sessionId": session_id,
+                    "pid": 99999999,
+                    "host": socket.gethostname(),
+                    "createdAt": int(time.time()) - LOCK_STALE_SECONDS - 10,
+                }),
+                encoding="utf-8",
+            )
+            stale_time = time.time() - LOCK_STALE_SECONDS - 10
+            os.utime(lock.path, (stale_time, stale_time))
+
+            channel = WebChannel()
+            produced = threading.Event()
+            payload = {
+                "session_id": session_id,
+                "message": "continue after runtime restart",
+                "stream": False,
+            }
+
+            def fake_compose_context(ctype, content, **kwargs):
+                context = Context(ctype, content)
+                context.kwargs = kwargs
+                return context
+
+            def fake_produce(context):
+                session_lock = context.get("session_lock")
+                if session_lock:
+                    session_lock.release()
+                produced.set()
+
+            with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                with patch.object(channel, "_generate_request_id", return_value=new_request_id):
+                    with patch.object(channel, "_compose_context", side_effect=fake_compose_context):
+                        with patch.object(channel, "produce", side_effect=fake_produce):
+                            with patch.object(
+                                web_channel.web,
+                                "data",
+                                return_value=json.dumps(payload).encode("utf-8"),
+                            ):
+                                result = json.loads(channel.post_message())
+
+            self.assertEqual(result["status"], "success")
+            self.assertEqual(result["request_id"], new_request_id)
+            self.assertEqual(result["same_session"]["decision"], "accepted_after_recovery")
+            self.assertEqual(result["same_session"]["reason"], "dead_owner_lock_recovered")
+            self.assertEqual(result["same_session"]["active_request_ids"], [old_request_id])
+            self.assertEqual(result["same_session"]["replaced_request_ids"], [old_request_id])
+            self.assertTrue(produced.wait(timeout=2))
+            self.assertFalse(lock.path.exists())
+
+            old_row = ledger.get_run(old_request_id)
+            self.assertEqual(old_row["status"], "interrupted")
+            self.assertEqual(old_row["error_code"], "SIDECAR_INTERRUPTED")
+
+    def test_v019_live_stale_session_lock_recovery_does_not_interrupt_active_run(self):
+        with isolated_run_ledger(), tempfile.TemporaryDirectory() as workspace:
+            import channel.web.web_channel as web_channel
+            from agent.protocol import get_run_ledger
+            from channel.web.web_channel import WebChannel
+            from common.ecorex_workspace import LOCK_STALE_SECONDS, SessionLock
+
+            session_id = "session-v019-live-stale-lock"
+            request_id = "req-v019-live-stale-lock"
+            ledger = get_run_ledger()
+            ledger.create_run(request_id, session_id, phase="running", status="running", metadata={})
+
+            lock = SessionLock(workspace, session_id)
+            lock.path.parent.mkdir(parents=True, exist_ok=True)
+            lock.path.write_text(
+                json.dumps({
+                    "sessionId": session_id,
+                    "pid": os.getpid(),
+                    "host": socket.gethostname(),
+                    "createdAt": int(time.time()) - LOCK_STALE_SECONDS - 10,
+                }),
+                encoding="utf-8",
+            )
+            stale_time = time.time() - LOCK_STALE_SECONDS - 10
+            os.utime(lock.path, (stale_time, stale_time))
+
+            with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                interrupted = WebChannel()._recover_interrupted_runs_for_removed_session_locks(session_id)
+
+            row = ledger.get_run(request_id)
+            self.assertEqual(interrupted, [])
+            self.assertTrue(lock.path.exists())
+            self.assertEqual(row["status"], "running")
+
     def test_v019_frontend_sources_have_recovery_and_hidden_run_center_markers(self):
         root = Path(__file__).resolve().parents[1]
         app_source = (root / "desktop" / "src" / "App.tsx").read_text(encoding="utf-8")
@@ -7043,6 +7375,9 @@ class TestAgentHostBoundary(unittest.TestCase):
             "prepareRetryDraft",
             "message-recovery-actions",
             "showChatFileMenu",
+            "verifyAddableChatFile",
+            "fixedMenuStyle",
+            "statLocalPath(resolvedPath)",
             "normalizeAttachmentDedupeKey",
         ]:
             self.assertIn(marker, app_source)
@@ -7051,10 +7386,14 @@ class TestAgentHostBoundary(unittest.TestCase):
             "artifact-action-menu-portal",
             "ARTIFACT_PENDING_MAX_RETRIES = 6",
             "artifactActionAllowed(status: ArtifactAvailability)",
-            "return status === \"ready\"",
+            "return status === \"ready\";",
+            "artifactPreviewAllowed(status: ArtifactAvailability)",
+            "status === \"remote\"",
+            "\"preview\"",
             "onLocalFileContextMenu",
         ]:
             self.assertIn(marker, message_source)
+        self.assertNotIn("return status === \"ready\" || status === \"error\"", message_source)
         for marker in [
             ".artifact-action-menu-portal",
             ".message-recovery-actions",
@@ -7076,8 +7415,15 @@ class TestAgentHostBoundary(unittest.TestCase):
             "retry-prepare",
             "visible_message",
             "attachment_items",
+            "_recover_interrupted_runs_for_removed_session_locks",
+            "list_session_locks(_get_workspace_root(), cleanup=False)",
+            "item.get(\"dead_owner\")",
+            "accepted_after_recovery",
+            "dead_owner_lock_recovered",
+            "_is_within_directory(upload_dir, full_path)",
         ]:
             self.assertIn(marker, web_source)
+        self.assertNotIn("full_path.startswith(os.path.abspath(upload_dir))", web_source)
         self.assertIn("requested_last_event_id?: number;", api_source)
         self.assertIn("retained_from_event_id?: number;", api_source)
         self.assertIn("next_event_id?: number;", api_source)
@@ -7148,7 +7494,7 @@ class TestAgentHostBoundary(unittest.TestCase):
             (custom_skill / "scripts").mkdir(parents=True)
             (builtin_skill / "SKILL.md").write_text(
                 "---\nname: image-generation\ndescription: Generate images\n---\n"
-                "OpenAI model {model} unavailable\n\"output_format\"\n"
+                "OpenAI default mode uses `gpt-image-2-pro` only\n\"output_format\"\n"
                 "/images/edits\nrequests with `image_url` use\n"
                 "LinkAI default model follows EcoreX's OpenAI image default\n",
                 encoding="utf-8",
@@ -7184,7 +7530,7 @@ class TestAgentHostBoundary(unittest.TestCase):
             (custom_skill / "scripts").mkdir(parents=True)
             (builtin_skill / "SKILL.md").write_text(
                 "---\nname: image-generation\ndescription: Generate images\n---\n"
-                "OpenAI model {model} unavailable\n\"output_format\"\n"
+                "OpenAI default mode uses `gpt-image-2-pro` only\n\"output_format\"\n"
                 "/images/edits\nrequests with `image_url` use\n"
                 "LinkAI default model follows EcoreX's OpenAI image default\n",
                 encoding="utf-8",

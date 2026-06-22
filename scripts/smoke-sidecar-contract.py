@@ -30,7 +30,7 @@ def contains_all(source: str, markers: list[str]) -> tuple[bool, str]:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=".")
-    parser.add_argument("--version", default="0.1.18")
+    parser.add_argument("--version", default="0.1.19")
     parser.add_argument("--output", default="")
     args = parser.parse_args(argv)
 

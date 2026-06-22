@@ -76,8 +76,9 @@ def _web_app_bridge_script() -> str:
 (function () {
   if (window.ecorexDesktop) return;
 
-  var DEFAULT_WEB_CLIENT_KEY = "ecorex-web-v0.1.18-web.1";
+  var DEFAULT_WEB_CLIENT_KEY = "ecorex-web-v0.1.19-web.1";
   var DEFAULT_WEB_COMPAT_CLIENT_KEYS = [
+    "ecorex-web-v0.1.19-web.1",
     "ecorex-web-v0.1.18-web.1",
     "ecorex-web-v0.1.17-web.1",
     "ecorex-web-v0.1.16-web.1",
@@ -507,7 +508,7 @@ def _web_app_bridge_script() -> str:
   var updateStatus = {
     state: "idle",
     platform: desktopPlatform,
-    currentVersion: "0.1.18-web.1",
+    currentVersion: "0.1.19-web.1",
     message: "尚未检查更新"
   };
 
@@ -517,7 +518,7 @@ def _web_app_bridge_script() -> str:
       updateStatus = {
         state: payload.hasUpdate ? "available" : "not-available",
         platform: desktopPlatform,
-        currentVersion: payload.currentVersion || "0.1.18-web.1",
+        currentVersion: payload.currentVersion || "0.1.19-web.1",
         version: payload.latestVersion || payload.version,
         downloadUrl: payload.downloadUrl,
         message: payload.message || (payload.hasUpdate ? "发现新版本，请前往下载页安装" : "当前已经是最新版本"),
@@ -528,7 +529,7 @@ def _web_app_bridge_script() -> str:
       updateStatus = {
         state: "error",
         platform: desktopPlatform,
-        currentVersion: "0.1.18-web.1",
+        currentVersion: "0.1.19-web.1",
         message: error && error.message ? error.message : String(error),
         checkedAt: new Date().toISOString()
       };
@@ -638,7 +639,7 @@ def _web_app_bridge_script() -> str:
           email: input.email,
           password: input.password,
           deviceId: currentDeviceId,
-          appVersion: "0.1.18-web.1"
+          appVersion: "0.1.19-web.1"
         }, false);
       } catch (error) {
         adminError = error;
@@ -1048,6 +1049,68 @@ class WebChannel(ChatChannel):
         except Exception as e:
             logger.debug(f"[WebChannel] active request lookup failed for session {session_id}: {e}")
             return []
+
+    def _recover_interrupted_runs_for_removed_session_locks(self, session_id: str = "") -> List[str]:
+        """Close ledger rows whose session lock owner process is confirmed dead."""
+        session_id = str(session_id or "").strip()
+        try:
+            from common.ecorex_workspace import list_session_locks
+
+            removed_session_ids = set()
+            for item in list_session_locks(_get_workspace_root(), cleanup=False):
+                item_session_id = str(item.get("session_id") or "").strip()
+                if session_id and item_session_id != session_id:
+                    continue
+                if not item_session_id or not item.get("dead_owner"):
+                    continue
+                path_text = str(item.get("path") or "")
+                try:
+                    if path_text:
+                        Path(path_text).unlink()
+                    item["removed"] = True
+                except FileNotFoundError:
+                    item["removed"] = True
+                except Exception as e:
+                    logger.debug(f"[WebChannel] dead session lock removal skipped for {item_session_id}: {e}")
+                    continue
+                if item.get("removed"):
+                    removed_session_ids.add(item_session_id)
+        except Exception as e:
+            logger.debug(f"[WebChannel] dead session lock recovery skipped for {session_id}: {e}")
+            return []
+
+        if not removed_session_ids:
+            return []
+
+        interrupted_request_ids: List[str] = []
+        try:
+            from agent.protocol import get_run_ledger
+
+            ledger = get_run_ledger()
+            for row in ledger.active_snapshot():
+                row_session_id = str(row.get("session_id") or "").strip()
+                request_id = str(row.get("request_id") or "").strip()
+                run_type = str(row.get("run_type") or "message").strip().lower()
+                if row_session_id not in removed_session_ids or not request_id or run_type != "message":
+                    continue
+                ledger.mark_terminal(
+                    request_id,
+                    "interrupted",
+                    reason="sidecar_interrupted",
+                    error_code="SIDECAR_INTERRUPTED",
+                    error_message="Runtime session lock owner disappeared before the run reached a terminal state.",
+                )
+                interrupted_request_ids.append(request_id)
+        except Exception as e:
+            logger.warning(f"[WebChannel] failed to mark dead-owner lock runs interrupted: {e}", exc_info=True)
+            return interrupted_request_ids
+
+        if interrupted_request_ids:
+            logger.warning(
+                f"[WebChannel] recovered dead-owner session lock active runs: "
+                f"sessions={sorted(removed_session_ids)}, requests={interrupted_request_ids}"
+            )
+        return interrupted_request_ids
 
     @staticmethod
     def _coerce_positive_int(value, fallback: int) -> int:
@@ -2105,7 +2168,6 @@ class WebChannel(ChatChannel):
                 latest = get_conversation_store().get_visible_user_message(actual_session_id)
                 visible_message = str(latest.get("text") or "").strip()
                 source_user_seq = latest.get("seq")
-                exact_replay = bool(visible_message)
             except Exception as e:
                 logger.warning(f"[WebChannel] retry prepare history fallback failed: {e}")
 
@@ -3620,6 +3682,15 @@ class WebChannel(ChatChannel):
             same_session_decision = self._same_session_decision_payload("accepted")
             replacement_request_ids: List[str] = []
             same_session_ticket = self._begin_same_session_replacement(session_id)
+            recovered_interrupted_request_ids = self._recover_interrupted_runs_for_removed_session_locks(session_id)
+            if recovered_interrupted_request_ids:
+                replacement_request_ids.extend(recovered_interrupted_request_ids)
+                same_session_decision = self._same_session_decision_payload(
+                    "accepted_after_recovery",
+                    active_request_ids=recovered_interrupted_request_ids,
+                    replaced_request_ids=recovered_interrupted_request_ids,
+                    reason="dead_owner_lock_recovered",
+                )
 
             try:
                 from common.ecorex_workspace import SessionBusyError, SessionLock
@@ -4599,9 +4670,9 @@ class UploadsHandler:
     def GET(self, file_name):
         _require_auth()
         try:
-            upload_dir = _get_upload_dir()
-            full_path = os.path.normpath(os.path.join(upload_dir, file_name))
-            if not os.path.abspath(full_path).startswith(os.path.abspath(upload_dir)):
+            upload_dir = os.path.realpath(_get_upload_dir())
+            full_path = os.path.realpath(os.path.join(upload_dir, file_name))
+            if not _is_within_directory(upload_dir, full_path):
                 raise web.notfound()
             if not os.path.isfile(full_path):
                 raise web.notfound()
@@ -5335,7 +5406,7 @@ class ClientProxyHandler:
         return target
 
     def _forward_headers(self) -> dict:
-        headers = {"User-Agent": "EcoreX-WebUI/0.1.18"}
+        headers = {"User-Agent": "EcoreX-WebUI/0.1.19"}
         for key, value in web.ctx.env.items():
             if key == "CONTENT_TYPE":
                 name = "Content-Type"

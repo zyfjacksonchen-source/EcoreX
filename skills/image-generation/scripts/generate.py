@@ -526,7 +526,6 @@ class OpenAIProvider(ImageProvider):
     """Provider for OpenAI Image API (generations + edits)."""
 
     DEFAULT_MODEL = "gpt-image-2-pro"
-    FALLBACK_MODEL = "gpt-image-2"
     MODEL_ALIASES = {
         "image-2-pro": "gpt-image-2-pro",
         "image-2": "gpt-image-2",
@@ -604,24 +603,11 @@ class OpenAIProvider(ImageProvider):
     ) -> list[str]:
         # OpenAI Images API expects pixel size like 1024x1024.
         resolved = resolve_size(size, aspect_ratio) if (size or aspect_ratio) else None
+        model = self._normalize_model(self.model or self.DEFAULT_MODEL)
         if image_url:
-            return self._with_model_fallback(
-                lambda model: self._edit(
-                    prompt,
-                    image_url=image_url,
-                    model=model,
-                    quality=quality,
-                    size=resolved,
-                    output_format=output_format,
-                    output_compression=output_compression,
-                    background=background,
-                    moderation=moderation,
-                    output_dir=output_dir,
-                )
-            )
-        return self._with_model_fallback(
-            lambda model: self._create(
+            result = self._edit(
                 prompt,
+                image_url=image_url,
                 model=model,
                 quality=quality,
                 size=resolved,
@@ -631,50 +617,21 @@ class OpenAIProvider(ImageProvider):
                 moderation=moderation,
                 output_dir=output_dir,
             )
+            self.model = model
+            return result
+        result = self._create(
+            prompt,
+            model=model,
+            quality=quality,
+            size=resolved,
+            output_format=output_format,
+            output_compression=output_compression,
+            background=background,
+            moderation=moderation,
+            output_dir=output_dir,
         )
-
-    @staticmethod
-    def _is_model_unavailable_error(exc: Exception) -> bool:
-        text = str(exc).lower()
-        return any(
-            marker in text
-            for marker in (
-                "model_not_found",
-                "model not found",
-                "does not exist",
-                "do not have access",
-                "don't have access",
-                "not have access",
-                "unsupported model",
-                "invalid model",
-            )
-        )
-
-    def _model_candidates(self) -> list[str]:
-        candidates = [self._normalize_model(self.model or self.DEFAULT_MODEL)]
-        if candidates[0] == self.DEFAULT_MODEL and self.FALLBACK_MODEL not in candidates:
-            candidates.append(self.FALLBACK_MODEL)
-        return candidates
-
-    def _with_model_fallback(self, run):
-        last_error: Exception | None = None
-        for model in self._model_candidates():
-            try:
-                result = run(model)
-                self.model = model
-                return result
-            except Exception as exc:
-                last_error = exc
-                if model == self.FALLBACK_MODEL or not self._is_model_unavailable_error(exc):
-                    raise
-                print(
-                    f"[image-generation] OpenAI model {model} unavailable, "
-                    f"falling back to {self.FALLBACK_MODEL}: {exc}",
-                    file=sys.stderr,
-                )
-        if last_error:
-            raise last_error
-        raise RuntimeError("OpenAI image generation produced no result")
+        self.model = model
+        return result
 
     @staticmethod
     def _clean_output_format(value: str | None) -> str | None:
@@ -1540,6 +1497,10 @@ def _preferred_provider(model: str) -> str | None:
     return None
 
 
+def _is_gpt_image_model(model: str) -> bool:
+    return (model or "").lower().startswith(("gpt-image", "image-2"))
+
+
 def _build_providers(model: str, provider_id: str = "") -> list[tuple[str, ImageProvider]]:
     """Build an ordered list of (label, provider) to try.
 
@@ -1549,10 +1510,9 @@ def _build_providers(model: str, provider_id: str = "") -> list[tuple[str, Image
       2. If `model` natively belongs to one of the providers AND that provider
          is configured, it is promoted to the front so it gets the first
          attempt with the right model id.
-      3. If the preferred provider is NOT configured (no API key), the model
-         id would 100% fail on every other backend, so we drop the explicit
-         model and fall back to automatic routing — every provider then uses
-         its own DEFAULT_MODEL.
+      3. Default `gpt-image-2-pro` requests are fail-closed to GPT Image
+         compatible providers: OpenAI first, then LinkAI if OpenAI is not
+         configured. They do not silently drift to Gemini/Seedream/Qwen.
     """
     keys = {
         "OpenAI": os.environ.get("OPENAI_API_KEY", ""),
@@ -1574,12 +1534,36 @@ def _build_providers(model: str, provider_id: str = "") -> list[tuple[str, Image
     # Provider preference resolution priority:
     #   1. Explicit `provider_id` (UI-persisted, supports custom model names).
     #   2. Model-name prefix inference.
+    #
+    # GPT Image models are special: stale UI/env provider hints must not route
+    # `gpt-image-2-pro` into unrelated provider families.
     pref = _PROVIDER_ID_TO_LABEL.get(provider_id) if provider_id else None
     if not pref:
         pref = _preferred_provider(model)
 
-    # If a specific model is requested and its native provider has no key,
-    # other backends won't recognise the id → reset to auto routing.
+    gpt_image_requested = _is_gpt_image_model(model)
+
+    # If a GPT Image model is requested and OpenAI is missing, LinkAI is the
+    # only compatible default fallback. Other backends use different model
+    # families and would violate the "gpt-image-2-pro by default" contract.
+    if gpt_image_requested:
+        if pref not in {"OpenAI", "LinkAI"}:
+            pref = "OpenAI"
+        if pref == "OpenAI" and not keys.get("OpenAI"):
+            if keys.get("LinkAI"):
+                pref = "LinkAI"
+            else:
+                return []
+        if pref == "LinkAI" and not keys.get("LinkAI"):
+            if provider_id:
+                return []
+            if keys.get("OpenAI"):
+                pref = "OpenAI"
+            else:
+                return []
+
+    # If a specific non-GPT model is requested and its native provider has no
+    # key, other backends won't recognise the id → reset to auto routing.
     if pref and not keys.get(pref):
         model = ""
         pref = None
@@ -1638,7 +1622,7 @@ def main():
     #      config["skills"]["image-generation"]["model"] at startup)
     #   3. None → fall back to automatic provider routing (try every
     #      provider with a configured API key in global priority order)
-    model = args.get("model") or os.environ.get("SKILL_IMAGE_GENERATION_MODEL") or ""
+    model = args.get("model") or os.environ.get("SKILL_IMAGE_GENERATION_MODEL") or OpenAIProvider.DEFAULT_MODEL
     # Provider hint persisted by the Models UI; lets users pin a vendor for
     # custom model names that prefix-inference can't recognize.
     provider_id = args.get("provider") or os.environ.get("SKILL_IMAGE_GENERATION_PROVIDER") or ""
@@ -1667,7 +1651,7 @@ def main():
         sys.exit(1)
 
     errors = []
-    for label, provider in providers:
+    for index, (label, provider) in enumerate(providers):
         try:
             attempt_model = getattr(provider, "model", model) or "auto"
             print(f"[image-generation] Trying {label} (model={attempt_model})...", file=sys.stderr)
@@ -1710,7 +1694,7 @@ def main():
                 file=sys.stderr,
             )
             errors.append(f"{label}: {provider_error.message}")
-            if not provider_error.fallback_allowed:
+            if not provider_error.fallback_allowed or index == len(providers) - 1:
                 print(json.dumps({
                     "error": provider_error.message,
                     "provider_error": provider_error.to_dict(),

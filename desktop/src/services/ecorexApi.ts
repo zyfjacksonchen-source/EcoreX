@@ -409,7 +409,7 @@ export type ChatSendResult = {
   same_session?: {
     policy?: string;
     queue?: string;
-    decision?: "accepted" | "replacement_accepted" | "accepted_after_finalize_wait" | "retryable_conflict" | string;
+    decision?: "accepted" | "replacement_accepted" | "accepted_after_recovery" | "accepted_after_finalize_wait" | "retryable_conflict" | string;
     active_request_ids?: string[];
     replaced_request_ids?: string[];
     cancelled_requests?: number;

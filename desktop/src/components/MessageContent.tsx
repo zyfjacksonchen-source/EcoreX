@@ -260,7 +260,7 @@ type DisplayArtifact = AgentArtifact & {
   legacyPath?: string;
 };
 
-type ArtifactAvailability = "pending" | "ready" | "missing" | "denied" | "error";
+type ArtifactAvailability = "pending" | "ready" | "preview" | "missing" | "denied" | "error";
 type ArtifactStatusJsonState = "pending" | "ready" | "failed" | "unknown";
 
 const ARTIFACT_STATUS_READY = new Set(["complete", "completed", "done", "ready", "success", "saved", "cached"]);
@@ -321,6 +321,7 @@ function artifactExistsForKind(stat: LocalPathStat, kind: AgentArtifact["kind"])
 
 function artifactAvailabilityFromStat(stat: LocalPathStat, kind: AgentArtifact["kind"]): ArtifactAvailability {
   const status = String(stat.status || "").toLowerCase();
+  if (status === "remote") return kind === "image" ? "preview" : "error";
   if (status === "denied") return "denied";
   if (status === "error") return "error";
   return artifactExistsForKind(stat, kind) ? "ready" : "missing";
@@ -328,6 +329,7 @@ function artifactAvailabilityFromStat(stat: LocalPathStat, kind: AgentArtifact["
 
 function artifactAvailabilityLabel(status: ArtifactAvailability) {
   if (status === "pending") return "checking local file";
+  if (status === "preview") return "preview only";
   if (status === "denied") return "blocked by file permissions";
   if (status === "error") return "could not verify local file";
   if (status === "missing") return "local file not found";
@@ -335,7 +337,11 @@ function artifactAvailabilityLabel(status: ArtifactAvailability) {
 }
 
 function artifactActionAllowed(status: ArtifactAvailability) {
-  return status === "ready" || status === "error";
+  return status === "ready";
+}
+
+function artifactPreviewAllowed(status: ArtifactAvailability) {
+  return status === "ready" || status === "preview";
 }
 
 function artifactMenuStyle(anchor: { x: number; y: number; width: number; height: number }): CSSProperties {
@@ -717,7 +723,7 @@ function ArtifactShelf({
       localFileStat(source)
         .then((stat) => {
           const nextStatus = artifactAvailabilityFromStat(stat, artifact.kind);
-          if (nextStatus === "ready") {
+          if (nextStatus === "ready" || nextStatus === "preview") {
             statRetryCounts.current[key] = 0;
           }
           setAvailability((current) => ({
@@ -754,7 +760,7 @@ function ArtifactShelf({
         delete statusRetryTimers.current[timerKey];
         setAvailability((current) => {
           const value = current[availabilityKey];
-          if (value === "ready" || value === "error" || value === "denied") return current;
+          if (value === "ready" || value === "preview" || value === "error" || value === "denied") return current;
           const next = { ...current };
           delete next[availabilityKey];
           return next;
@@ -768,7 +774,7 @@ function ArtifactShelf({
       const key = artifactSourceKey(artifact);
       const timerKey = `${key}:status:${artifact.statusPath}`;
       const currentStatus = availability[key];
-      if (currentStatus === "ready" || currentStatus === "error" || currentStatus === "denied") return;
+      if (currentStatus === "ready" || currentStatus === "preview" || currentStatus === "error" || currentStatus === "denied") return;
       if (statusRetryTimers.current[timerKey]) return;
       setAvailability((current) => current[key] ? current : { ...current, [key]: "pending" });
       localFileJson(artifact.statusPath)
@@ -784,7 +790,7 @@ function ArtifactShelf({
             if (localFileStat && source) {
               const stat = await localFileStat(source);
               const nextStatus = artifactAvailabilityFromStat(stat, artifact.kind);
-              if (nextStatus === "ready" || nextStatus === "denied" || nextStatus === "error") {
+              if (nextStatus === "ready" || nextStatus === "preview" || nextStatus === "denied" || nextStatus === "error") {
                 statusRetryCounts.current[timerKey] = 0;
                 setAvailability((current) => ({ ...current, [key]: nextStatus }));
                 return;
@@ -815,7 +821,7 @@ function ArtifactShelf({
     const key = artifactSourceKey(artifact);
     const statStatus = availability[key] || "pending";
     const attempts = statRetryCounts.current[key] || 0;
-    if (statStatus === "ready") return true;
+    if (statStatus === "ready" || statStatus === "preview") return true;
     if (statStatus === "pending") return true;
     if (statStatus === "missing" && String(artifact.status || "").toLowerCase() === "pending" && attempts < ARTIFACT_PENDING_MAX_RETRIES) return true;
     return !source;
@@ -838,7 +844,7 @@ function ArtifactShelf({
       setOpenMenu(null);
       return;
     }
-    if (!artifactActionAllowed(sourceStatus)) {
+    if (!artifactActionAllowed(sourceStatus) && !(action === "preview" && sourceStatus === "preview")) {
       setOpenMenu(null);
       return;
     }
@@ -908,7 +914,7 @@ function ArtifactShelf({
               : statStatus;
           const availabilityText = artifactAvailabilityLabel(availabilityStatus);
           const blocked = !artifactActionAllowed(availabilityStatus);
-          const displayPreviewUrl = artifactActionAllowed(availabilityStatus) ? previewUrl : "";
+          const displayPreviewUrl = artifactPreviewAllowed(availabilityStatus) ? previewUrl : "";
           const isPreviewableImage = artifact.kind === "image" && Boolean(displayPreviewUrl);
           const menuOpen = openMenu?.id === artifact.id;
           const menuStyle = openMenu && menuOpen ? artifactMenuStyle(openMenu) : undefined;

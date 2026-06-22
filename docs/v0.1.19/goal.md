@@ -28,3 +28,20 @@ sidebar groups.
 - Windows, macOS, and Web/Electron fallback behavior must remain compatible.
 - Acceptance requires independent parallel multi-agent review; the writing agent
   does not count as reviewer.
+
+## Added Discussion Item
+
+- Image generation must not silently fall back to Python/PIL/matplotlib/browser
+  screenshots when the user asks for AI image creation. Parallel read-only
+  investigation concluded that a production fix should hard-route
+  `ai_image_generation` intent to a typed OpenAI image generation path targeting
+  `gpt-image-2-pro`, keep Python only for explicit code visualization or
+  post-processing, and fail closed with clear diagnostics when model/provider
+  configuration is unavailable.
+- The bundled and currently installed `create-xiaohongshu-note` skill must
+  generate final cover/carousel images directly with `gpt-image-2-pro`, not
+  draft/placeholder/Python images and not an automatic `gpt-image-2` fallback.
+- The bundled and currently installed general `image-generation` skill must
+  default to `gpt-image-2-pro` and fail closed on OpenAI model/access
+  unavailability instead of silently falling back to `gpt-image-2` or another
+  provider family.

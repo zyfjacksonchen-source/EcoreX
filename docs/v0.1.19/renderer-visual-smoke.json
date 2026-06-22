@@ -1,0 +1,232 @@
+{
+    "status":  "pass",
+    "version":  "0.1.19",
+    "changeIds":  [
+                      "STAB-004",
+                      "UX-004",
+                      "PERF-001"
+                  ],
+    "scenarios":  {
+                      "noResponseDeadLoop":  {
+                                                 "status":  "pass",
+                                                 "evidence":  "terminal-boundary proves post-terminal onerror does not revive waiting UI; postdone-tail proves tail merge remains visible"
+                                             },
+                      "stalledStream":  {
+                                            "status":  "pass",
+                                            "evidence":  "switch-race validates reconnect/replay after an interrupted non-first-turn stream without blanking content"
+                                        },
+                      "terminalNoFlicker":  {
+                                                "status":  "pass",
+                                                "evidence":  "terminal-boundary gates delta/tool/done/onerror ordering, send-button stop state, backend waiting text, and settled mutation budget"
+                                            },
+                      "longMarkdown":  {
+                                           "status":  "pass",
+                                           "chars":  100000,
+                                           "evidence":  "stream-100k records metrics-only stress evidence for delivered chars, raw markdown marker leaks, terminal convergence, and stop-button state"
+                                       }
+                  },
+    "edge":  "",
+    "playwrightPython":  "C:\\Users\\user\\AppData\\Local\\Programs\\Python\\Python311\\python.exe",
+    "outputDir":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual",
+    "captures":  [
+                     {
+                         "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-auth-light.png",
+                         "bytes":  22075,
+                         "action":  "",
+                         "evidenceType":  "screenshot",
+                         "metrics":  {
+
+                                     }
+                     },
+                     {
+                         "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-main-light.png",
+                         "bytes":  49106,
+                         "action":  "",
+                         "evidenceType":  "screenshot",
+                         "metrics":  {
+
+                                     }
+                     },
+                     {
+                         "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-settings-light.png",
+                         "bytes":  80170,
+                         "action":  "open-settings",
+                         "evidenceType":  "screenshot",
+                         "metrics":  {
+
+                                     }
+                     },
+                     {
+                         "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-abilities-light.png",
+                         "bytes":  109056,
+                         "action":  "open-abilities",
+                         "evidenceType":  "screenshot",
+                         "metrics":  {
+
+                                     }
+                     },
+                     {
+                         "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-skill-menu-light.png",
+                         "bytes":  70289,
+                         "action":  "skill-menu",
+                         "evidenceType":  "screenshot",
+                         "metrics":  {
+
+                                     }
+                     },
+                     {
+                         "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-skill-lark-hidden-light.png",
+                         "bytes":  54713,
+                         "action":  "lark-hidden",
+                         "evidenceType":  "screenshot",
+                         "metrics":  {
+
+                                     }
+                     },
+                     {
+                         "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-long-markdown-light.png",
+                         "bytes":  114371,
+                         "action":  "long-markdown",
+                         "evidenceType":  "screenshot",
+                         "metrics":  {
+                                         "collapsed":  true,
+                                         "beforeNodes":  33,
+                                         "afterNodes":  33,
+                                         "markdownBlocks":  1,
+                                         "expandMs":  84.40000000596046,
+                                         "expanded":  true,
+                                         "textChars":  4078
+                                     }
+                     },
+                     {
+                         "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-stream-long-markdown-light.png",
+                         "bytes":  52250,
+                         "action":  "stream-long",
+                         "evidenceType":  "screenshot",
+                         "metrics":  {
+
+                                     }
+                     },
+                     {
+                         "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-switch-stream-light.png",
+                         "bytes":  57305,
+                         "action":  "switch-stream",
+                         "evidenceType":  "screenshot",
+                         "metrics":  {
+
+                                     }
+                     },
+                     {
+                         "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-switch-race-light.png",
+                         "bytes":  57669,
+                         "action":  "switch-race",
+                         "evidenceType":  "screenshot",
+                         "metrics":  {
+
+                                     }
+                     },
+                     {
+                         "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-stream-100k-light.metrics.json",
+                         "bytes":  174,
+                         "action":  "stream-100k",
+                         "evidenceType":  "metrics",
+                         "metrics":  {
+                                         "deliveredChars":  145699,
+                                         "markerLeaks":  0,
+                                         "latestTextChars":  451,
+                                         "latestDomNodes":  27,
+                                         "markdownBlocks":  1,
+                                         "longDisclosure":  1,
+                                         "stopButtons":  0
+                                     }
+                     },
+                     {
+                         "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-postdone-tail-light.png",
+                         "bytes":  57707,
+                         "action":  "postdone-tail",
+                         "evidenceType":  "screenshot",
+                         "metrics":  {
+
+                                     }
+                     },
+                     {
+                         "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-terminal-boundary-light.png",
+                         "bytes":  45240,
+                         "action":  "terminal-boundary",
+                         "evidenceType":  "screenshot",
+                         "metrics":  {
+
+                                     }
+                     },
+                     {
+                         "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-artifact-preview-light.png",
+                         "bytes":  51768,
+                         "action":  "artifact-preview",
+                         "evidenceType":  "screenshot",
+                         "metrics":  {
+                                         "thumbNaturalWidth":  640,
+                                         "previewNaturalWidth":  640
+                                     }
+                     },
+                     {
+                         "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\mobile-artifact-menu-light.png",
+                         "bytes":  39646,
+                         "action":  "artifact-menu-mobile",
+                         "evidenceType":  "screenshot",
+                         "metrics":  {
+                                         "menuX":  158,
+                                         "menuY":  391.625,
+                                         "menuWidth":  224,
+                                         "menuHeight":  128,
+                                         "viewportWidth":  390,
+                                         "viewportHeight":  760
+                                     }
+                     },
+                     {
+                         "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-chat-file-context-light.png",
+                         "bytes":  52539,
+                         "action":  "chat-file-context",
+                         "evidenceType":  "screenshot",
+                         "metrics":  {
+                                         "attachmentTrayItems":  1,
+                                         "contextMenus":  0
+                                     }
+                     },
+                     {
+                         "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-send-stability-light.png",
+                         "bytes":  46094,
+                         "action":  "send-stability",
+                         "evidenceType":  "screenshot",
+                         "metrics":  {
+
+                                     }
+                     },
+                     {
+                         "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-main-dark.png",
+                         "bytes":  50294,
+                         "action":  "",
+                         "evidenceType":  "screenshot",
+                         "metrics":  {
+
+                                     }
+                     },
+                     {
+                         "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-settings-dark.png",
+                         "bytes":  75777,
+                         "action":  "open-settings",
+                         "evidenceType":  "screenshot",
+                         "metrics":  {
+
+                                     }
+                     },
+                     {
+                         "file":  "C:\\CowAgent\\tmp\\ecorex-desktop-visual\\desktop-abilities-dark.png",
+                         "bytes":  104786,
+                         "action":  "open-abilities",
+                         "evidenceType":  "screenshot",
+                         "metrics":  {
+
+                                     }
+                     }
+                 ]
+}

@@ -53,14 +53,14 @@ Use these scripts when deterministic checks or delivery artifacts are needed:
 - `scripts/validate_note_pack.py <note_pack.json>`
 - `scripts/select_feishu_references.py --input <record_json> --brief <brief_or_keywords.txt> --output <selected_refs.json> --limit 12` after Feishu Base reads to compact records and decide whether pagination should stop.
 - `scripts/research_xhs_references.py --input <brief_or_context.json> --output <refs.json>` when Feishu references are unavailable or live Xiaohongshu search is explicitly needed.
-- `scripts/generate_cover_image.py --prompt-file <prompt.txt> --output <cover_or_inner_page.png> --async`
+- `scripts/generate_cover_image.py --prompt-file <prompt.txt> --output <cover_or_inner_page.png> --model gpt-image-2-pro --async`
 - `scripts/render_wps_docx.py --brief <brief.json> --note-pack <note_pack.json> --output <note.docx>`
 - `scripts/sync_lark_base_review.py --brief <brief.json> --note-pack <note_pack.json> --manifest <manifest.json> --customer <客户名> --public-read` after the user explicitly confirms Feishu customer-review delivery and internet-visible read permission.
 
 ## Runtime Defaults
 
-- Preferred image model: `gpt-image-2-pro`.
-- Fallback image model: `image-2`.
+- Image generation model: `gpt-image-2-pro` only.
+- Image generation is final-image only: do not create local draft images, placeholder previews, Python/PIL/matplotlib mockups, or automatic fallback images. If `gpt-image-2-pro` is unavailable or fails, mark the visual deliverable `blocked` and do not call the note package final.
 - Cover size: `1080x1440`.
 - Carousel inner-page size: `1080x1440`, same design language as the cover.
 - Title limit: every title candidate and selected title must be <=20 characters.
