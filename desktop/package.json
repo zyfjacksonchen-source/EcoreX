@@ -23,7 +23,7 @@
     "package:win:signed": "npm run package:win:all:signed",
     "package:win:x64:signed": "npm run build && npm run stage:runtime:win:x64 && electron-builder --win --dir --x64 --publish never && npm run sign:win:unpacked:skip-provider && npm run sign:win:nsis-helper:skip-provider && electron-builder --win nsis --x64 --prepackaged release/win-unpacked --publish never && npm run sign:win:setup:skip-provider && npm run update-feed:win -- --arch x64",
     "package:win:ia32:signed": "npm run build && npm run stage:runtime:win:ia32 && electron-builder --win --dir --ia32 --publish never && npm run sign:win:unpacked:ia32:skip-provider && npm run sign:win:nsis-helper:skip-provider && electron-builder --win nsis --ia32 --prepackaged release/win-ia32-unpacked --publish never && npm run sign:win:setup:skip-provider && npm run update-feed:win -- --arch ia32",
-    "package:win:all:signed": "npm run package:win:x64:signed && npm run package:win:ia32:signed",
+    "package:win:all:signed": "npm run package:win:x64:signed && npm run package:win:ia32:signed && npm run update-feed:win -- --arch x64 && npm run update-feed:win -- --arch ia32",
     "package:mac": "npm run package:mac:all",
     "package:mac:all": "npm run package:mac:arm64 && npm run package:mac:x64",
     "package:mac:arm64": "npm run build && npm run stage:runtime:mac -- --python-arch arm64 && electron-builder --mac dmg --arm64 --publish never",
