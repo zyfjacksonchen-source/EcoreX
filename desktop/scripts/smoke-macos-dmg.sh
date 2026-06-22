@@ -109,8 +109,18 @@ wait_json() {
   return 1
 }
 
-VERSION_JSON="$(wait_json "http://127.0.0.1:${PORT}/api/version" 90)"
-AUTH_JSON="$(wait_json "http://127.0.0.1:${PORT}/auth/check" 20)"
+if ! VERSION_JSON="$(wait_json "http://127.0.0.1:${PORT}/api/version" 90)"; then
+  echo "EcoreX did not become ready at http://127.0.0.1:${PORT}/api/version" >&2
+  echo "---- EcoreX app log tail ----" >&2
+  tail -200 "$LOG_PATH" >&2 || true
+  exit 1
+fi
+if ! AUTH_JSON="$(wait_json "http://127.0.0.1:${PORT}/auth/check" 20)"; then
+  echo "EcoreX auth/check did not become ready at http://127.0.0.1:${PORT}/auth/check" >&2
+  echo "---- EcoreX app log tail ----" >&2
+  tail -200 "$LOG_PATH" >&2 || true
+  exit 1
+fi
 
 http_status() {
   local method="$1"
