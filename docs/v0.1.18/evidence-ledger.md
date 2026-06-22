@@ -350,12 +350,14 @@ Base commit: f8ff1db4 chore: stabilize EcoreX v0.1.17 gates
 | Multi-agent cross-review for v0.1.18 release-boundary packaging slice | PASS | Hypatia found Desktop telemetry lacked compatible client-event-key fallback; fixed by routing telemetry through `enterpriseClientEventKeys()` on `invalid client key` and adding source-contract coverage. Cicero found hardcoded macOS workflow `0.1.17` upload paths, WebUI macOS smoke defaults, a Windows signing/update-feed ordering risk, and a custom Windows smoke path risk; fixed by dynamic DMG upload paths, v0.1.18 smoke defaults, post-sign update-feed regeneration, and smoke path propagation. Locke found the manifest had no ready artifacts yet and `ready-unsigned` download-page logic referenced an out-of-scope manifest variable; fixed by rebuilding WebUI/Linux artifacts, writing real size/hash entries, and passing manifest version into readiness checks. Remaining blockers are external signing/macOS/GitHub-publication conditions, not release-boundary code blockers. Consensus: submit |
 | `npm run package:win` in `desktop` | PASS | Rebuilt unsigned Windows desktop package after telemetry fallback fixes: `desktop/release/EcoreX_0.1.18_x64-setup.exe`, `desktop/release/win-unpacked`, `latest.yml`, and blockmap generated for v0.1.18 |
 | `npm run update-feed:win` in `desktop` | PASS | `desktop/scripts/regenerate-win-update-feed.mjs` regenerated `desktop/release/latest.yml` and `EcoreX_0.1.18_x64-setup.exe.blockmap` from the current installer bytes; output size `157,412,196`, SHA512 `Fz6aXusffMYA/VkQUEpyBjKWLn2c1BGFFjOxyKmmNoAw0jszfKMrc6MYc0EOxxDYI0D+9M6BMpTqmVCL3Z90kQ==` |
-| `Get-AuthenticodeSignature desktop\release\EcoreX_0.1.18_x64-setup.exe` | BLOCKED | Current Windows installer is intentionally not promoted: signature status is `NotSigned` until `C:/脚本签名工具` can access the SimplySign/proCertum provider |
-| `powershell -ExecutionPolicy Bypass -File scripts\sign-win.ps1 -SignToolDir "C:/脚本签名工具" -PreflightOnly` | BLOCKED | Certificate is present, but signing provider preflight reports Smart Card service stopped, Certificate Propagation service stopped, and no visible SimplySign CSP key containers. `Start-Service SCardSvr` and `Start-Service CertPropSvc` fail from this shell due insufficient service access |
+| `npm run package:win:signed` in `desktop` | PASS | Rebuilt the formal Windows installer with the hardened signing chain: sign unpacked core files with `-SkipProviderPreflight`, sign electron-builder NSIS `elevate.exe` helper cache via `-NsisHelperOnly`, build NSIS from signed unpacked app, sign setup, and regenerate `latest.yml`/blockmap from the final signed bytes. Final setup size `157,440,216`, SHA256 `AE5E6E702BD431EE2D5FBF5EED2B6DF80A8DE651F8376B56E7BE8E15F9B3281E`, latest.yml SHA512 `9uRo8pR/GLU0rJOs6hO/pwXR9R6qaK0QS18alQ6PBm9ikRl5urmhUpe1cSdDtk9aihv71f7105+Bb4CQFMcADw==` |
+| `Get-AuthenticodeSignature desktop\release\EcoreX_0.1.18_x64-setup.exe` | PASS | Authenticode status is `Valid`; signer certificate thumbprint `0F678477DFC0A2BDAAB88307126EF657FAF8674F` |
+| `Get-AuthenticodeSignature desktop\release\win-unpacked\EcoreX.exe, resources\elevate.exe, resources\ecorex-runtime\python\python.exe, resources\ecorex-runtime\python\pythonw.exe` | PASS | All required unpacked executable signatures are `Valid`, including the NSIS `resources/elevate.exe` helper after signing the electron-builder cache source before NSIS generation |
+| `npm run smoke:win:installed -- -InstallerPath "C:\CowAgent\desktop\release\EcoreX_0.1.18_x64-setup.exe" -OutputPath "..\docs\v0.1.18\win-installed-smoke.json"` | PASS | Installed-app smoke passed: installer/app/runtime Python signatures `Valid`, runtime version `0.1.18`, sidecar/auth/auth-required/auth-negative checks passed, all negative auth probes returned 401, and cleanup succeeded |
 | `powershell -ExecutionPolicy Bypass -File scripts\prepare-ecorex-webui-local-release.ps1 -Version 0.1.18` | PASS | Built WebUI local packages: Windows zip size `80,940,550` SHA256 `4E0765C9D687338D12A63FD7E9EE4A9464E13BAD97DF644C6629550DE53D79F7`; macOS universal zip size `158,050,345` SHA256 `27F7240291B55DCA0264D321BA212C8977A72C5A901AA244E64EC607C1867F12`; dual Win/Mac zip size `239,223,497` SHA256 `F7F4273DE570DC25D7CEC6511A4E8BED52741D024E19AD1871E129ABC4B6758A` |
 | `powershell -ExecutionPolicy Bypass -File scripts\prepare-ecorex-web-release.ps1 -Version 0.1.18` | PASS | Built Web Linux service tarball size `3,349,211` SHA256 `2184ADF0047F3D4FAF52826FAF360F55215A4E982BE82BFC2DE69996BA630B70` |
-| `powershell -ExecutionPolicy Bypass -File scripts\prepare-ecorex-public-release.ps1 -Version 0.1.18` | PASS | Generated validated Web-ready public release zip `release-artifacts/EcoreX_0.1.18-public-release.zip`, size `244,280,051`, SHA256 `56F3409BE67F9B5E6BCDBEE8CB5C2E42EB5EEBBF34B205D66D9887C92BFBF6C8`; validator passed WebUI Windows, WebUI macOS, Web Linux, and public zip checks while correctly skipping pending Windows/macOS desktop installers |
-| `python scripts\validate-ecorex-release-artifacts.py --version 0.1.18 --public-zip release-artifacts\EcoreX_0.1.18-public-release.zip --desktop-dir desktop\release\win-unpacked` | PASS | Release validator passed ready Web artifacts, public zip checksums/download contents, and desktop unpacked host-boundary checks; Windows installer and macOS DMGs remain skipped because manifest status is pending |
+| `powershell -ExecutionPolicy Bypass -File scripts\prepare-ecorex-public-release.ps1 -Version 0.1.18` | PASS | Generated validated public release zip `release-artifacts/EcoreX_0.1.18-public-release.zip`, size `401,773,708`, SHA256 `B1C0F696B1D7BB64CB3FCB57EF34FFC71CEB89A8187EDAD8072D9C1BF3A32AD9`; validator passed signed Windows installer, WebUI Windows, WebUI macOS, Web Linux, and public zip checks while correctly skipping pending macOS desktop DMGs |
+| `python scripts\validate-ecorex-release-artifacts.py --version 0.1.18 --public-zip release-artifacts\EcoreX_0.1.18-public-release.zip --desktop-dir desktop\release\win-unpacked` | PASS | Release validator passed signed Windows installer, ready Web artifacts, public zip checksums/download contents, and desktop unpacked host-boundary checks; macOS DMGs remain skipped because manifest status is pending |
 | `python scripts\check-ecorex-v0.1.18-promotion-gate.py --output docs\v0.1.18\promotion-gate.json` | GO | Machine-readable production-agent gate remains GO after release-boundary packaging fixes: 21 checks, 0 blockers, 0 warnings |
 
 ## Change Evidence
@@ -373,12 +375,13 @@ Base commit: f8ff1db4 chore: stabilize EcoreX v0.1.17 gates
 
 ## Open Blockers
 
-- v0.1.18 public Windows installer promotion is blocked until the local
-  SimplySign/proCertum provider is unlocked and Smart Card / Certificate
-  Propagation services are running so `C:/脚本签名工具` can produce a valid
-  Authenticode signature and installed-smoke evidence.
+- v0.1.18 Windows installer promotion is no longer blocked: the signed setup
+  is Authenticode `Valid`, installed-app smoke passed, and the public manifest
+  marks `windows-x64` ready with size/hash/signature evidence.
 - v0.1.18 macOS DMG promotion is blocked until the `codex/ecorex-v0.1.18`
   branch is pushed and the GitHub macOS DMG workflow produces arm64/x64 DMGs
   plus install-smoke JSON for manifest import.
-- Final public download-page deployment and GitHub main/product-branch
-  verification remain blocked on those signed Windows and macOS DMG artifacts.
+- Full all-platform public download-page deployment and GitHub main/product-
+  branch verification remain blocked on the macOS DMG workflow output; the
+  Windows/Web/Linux public bundle is ready for server install or partial
+  publication.

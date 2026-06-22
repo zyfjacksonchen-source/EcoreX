@@ -1176,12 +1176,18 @@
     smoke defaults now target `0.1.18` / `v0.1.18`.
   - Windows signed packaging now regenerates `latest.yml` and `.blockmap` after
     setup signing via `desktop/scripts/regenerate-win-update-feed.mjs`, so the
-    update feed can match the final signed installer bytes.
+    update feed can match the final signed installer bytes. The signed path was
+    hardened again after discovering that `electron-builder --prepackaged ...
+    nsis` rewrites `resources/elevate.exe`; `sign-win.ps1 -NsisHelperOnly` now
+    signs the electron-builder NSIS `elevate.exe` cache before NSIS generation.
   - The download page now passes the manifest version into `ready-unsigned`
     install-smoke checks and refuses ready links when size/hash are absent.
-- Built and validated current unsigned/local artifacts:
-  - `desktop/release/EcoreX_0.1.18_x64-setup.exe` plus regenerated
-    `latest.yml` and `.blockmap`; Authenticode status remains `NotSigned`.
+- Built, signed, and validated current release artifacts:
+  - `desktop/release/EcoreX_0.1.18_x64-setup.exe`, size `157,440,216`,
+    SHA256 `AE5E6E702BD431EE2D5FBF5EED2B6DF80A8DE651F8376B56E7BE8E15F9B3281E`;
+    Authenticode status is `Valid`. `desktop/release/latest.yml` and
+    `.blockmap` were regenerated after setup signing with SHA512
+    `9uRo8pR/GLU0rJOs6hO/pwXR9R6qaK0QS18alQ6PBm9ikRl5urmhUpe1cSdDtk9aihv71f7105+Bb4CQFMcADw==`.
   - `release-artifacts/EcoreX_0.1.18-webui-windows-x64.zip`, size
     `80,940,550`, SHA256
     `4E0765C9D687338D12A63FD7E9EE4A9464E13BAD97DF644C6629550DE53D79F7`.
@@ -1192,16 +1198,17 @@
     `3,349,211`, SHA256
     `2184ADF0047F3D4FAF52826FAF360F55215A4E982BE82BFC2DE69996BA630B70`.
   - `release-artifacts/EcoreX_0.1.18-public-release.zip`, size
-    `244,280,051`, SHA256
-    `56F3409BE67F9B5E6BCDBEE8CB5C2E42EB5EEBBF34B205D66D9887C92BFBF6C8`.
-- Windows signing is blocked by the local signing-provider environment, not by
-  the release script path. The explicit command
-  `powershell -ExecutionPolicy Bypass -File scripts\sign-win.ps1 -SignToolDir "C:/脚本签名工具" -PreflightOnly`
-  sees the certificate but reports `Smart Card service: Stopped`,
-  `Certificate Propagation service: Stopped`, and no visible SimplySign CSP key
-  containers. Starting those services from this shell fails with insufficient
-  service access. Re-run signing after SimplySign/proCertum is unlocked and the
-  smart-card services are running from an elevated shell.
+    `401,773,708`, SHA256
+    `B1C0F696B1D7BB64CB3FCB57EF34FFC71CEB89A8187EDAD8072D9C1BF3A32AD9`.
+- Windows signing is closed for this release. The provider preflight can still
+  report Smart Card / CertProp stopped and no visible SimplySign CSP key
+  containers from this non-elevated shell, but actual signing succeeds with the
+  configured `C:/脚本签名工具` toolchain when `-SkipProviderPreflight` is used.
+  `npm run package:win:signed` now reproduces the signed installer end to end,
+  including unpacked executable signatures, NSIS helper source signing, setup
+  signing, and post-sign update-feed regeneration. Installed-app smoke wrote
+  `docs/v0.1.18/win-installed-smoke.json` with sidecar/auth/auth-negative
+  checks passing and all required signatures `Valid`.
 - macOS DMG dispatch is ready in scripts, but it depends on pushing
   `codex/ecorex-v0.1.18` to GitHub before
   `scripts/dispatch-ecorex-macos-dmg-workflow.ps1` can run against that ref.

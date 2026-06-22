@@ -1,10 +1,11 @@
 param(
     [string]$ArtifactsDir = "$PSScriptRoot\..\release",
     [string]$SignToolDir = "",
-    [string]$SimplySignShortcut = "C:\Users\user\Desktop\SimplySign Desktop.lnk",
+    [string]$SimplySignShortcut = "",
     [string]$Thumbprint = "0f678477dfc0a2bdaab88307126ef657faf8674f",
     [switch]$CoreAppOnly,
     [switch]$SetupOnly,
+    [switch]$NsisHelperOnly,
     [switch]$LaunchSimplySign,
     [switch]$PreflightOnly,
     [switch]$SkipProviderPreflight
@@ -17,7 +18,6 @@ if (-not $SignToolDir) {
     $SignToolDir = Join-Path "C:\" $signToolFolderName
 }
 
-$resolvedArtifacts = Resolve-Path -LiteralPath $ArtifactsDir -ErrorAction Stop
 $signTool = Join-Path $SignToolDir "signtool.exe"
 
 if (-not (Test-Path -LiteralPath $signTool)) {
@@ -116,6 +116,12 @@ $combined
 }
 
 if ($LaunchSimplySign) {
+    if (-not $SimplySignShortcut) {
+        if (-not $env:USERPROFILE) {
+            throw "USERPROFILE is not set; pass -SimplySignShortcut explicitly."
+        }
+        $SimplySignShortcut = Join-Path $env:USERPROFILE "Desktop\SimplySign Desktop.lnk"
+    }
     if (-not (Test-Path -LiteralPath $SimplySignShortcut)) {
         throw "SimplySign shortcut not found at $SimplySignShortcut"
     }
@@ -123,8 +129,26 @@ if ($LaunchSimplySign) {
     Start-Sleep -Seconds 3
 }
 
+function Get-NsisHelperTargets {
+    $roots = @()
+    if ($env:LOCALAPPDATA) {
+        $roots += Join-Path $env:LOCALAPPDATA "electron-builder\Cache"
+    }
+    $roots = @($roots | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -Unique)
+    $helpers = @()
+    foreach ($root in $roots) {
+        $helpers += Get-ChildItem -LiteralPath $root -Recurse -Filter "elevate.exe" -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '(?i)[\\/](nsis|nsis-[^\\/]+)[\\/]' }
+    }
+    return @($helpers | Sort-Object FullName -Unique)
+}
+
 $targets = @()
-if ($CoreAppOnly) {
+if ($NsisHelperOnly) {
+    $targets = Get-NsisHelperTargets
+}
+elseif ($CoreAppOnly) {
+    $resolvedArtifacts = Resolve-Path -LiteralPath $ArtifactsDir -ErrorAction Stop
     $coreRelative = @(
         "EcoreX.exe",
         "resources\elevate.exe",
@@ -139,11 +163,15 @@ if ($CoreAppOnly) {
     }
 }
 else {
+    $resolvedArtifacts = Resolve-Path -LiteralPath $ArtifactsDir -ErrorAction Stop
     $targets = Get-ChildItem -LiteralPath $resolvedArtifacts -Recurse -File |
         Where-Object { $_.Extension -in ".exe", ".msi" }
 }
 
 if ($SetupOnly) {
+    if ($NsisHelperOnly) {
+        throw "-SetupOnly cannot be combined with -NsisHelperOnly."
+    }
     $artifactRoot = [System.IO.Path]::GetFullPath([string]$resolvedArtifacts)
     $targets = $targets | Where-Object {
         [System.IO.Path]::GetFullPath($_.DirectoryName) -eq $artifactRoot -and $_.Name -like "*setup*.exe"
@@ -151,6 +179,9 @@ if ($SetupOnly) {
 }
 
 if (-not $targets) {
+    if ($NsisHelperOnly) {
+        throw "No NSIS elevate.exe helper artifacts found in the electron-builder cache."
+    }
     throw "No .exe or .msi artifacts found under $resolvedArtifacts"
 }
 

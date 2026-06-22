@@ -68,7 +68,7 @@ function Write-Plan {
     $desktopDir = Join-Path $RepoRoot "desktop"
     $preflight = "npm run sign:win:preflight"
     if ($LaunchSimplySign) {
-        $preflight = "powershell -ExecutionPolicy Bypass -File scripts\sign-win.ps1 -SignToolDir `"C:/脚本签名工具`" -PreflightOnly -LaunchSimplySign"
+        $preflight = "powershell -ExecutionPolicy Bypass -File scripts\sign-win.ps1 -PreflightOnly -LaunchSimplySign"
     }
     [ordered]@{
         dryRun = $true
@@ -105,11 +105,19 @@ if ($DryRun) {
     return
 }
 
-$preflightArgs = @("-ExecutionPolicy", "Bypass", "-File", "scripts\sign-win.ps1", "-SignToolDir", "C:/脚本签名工具", "-PreflightOnly")
+$preflightArgs = @("-ExecutionPolicy", "Bypass", "-File", "scripts\sign-win.ps1", "-PreflightOnly")
 if ($LaunchSimplySign) {
     $preflightArgs += "-LaunchSimplySign"
 }
-Invoke-Step -WorkingDirectory $desktopDir -FilePath "powershell" -ArgumentList $preflightArgs
+try {
+    Invoke-Step -WorkingDirectory $desktopDir -FilePath "powershell" -ArgumentList $preflightArgs
+}
+catch {
+    if ($PreflightOnly) {
+        throw
+    }
+    Write-Warning "Windows signing provider preflight failed; continuing to the actual signing steps because signtool may still be able to access the certificate. $($_.Exception.Message)"
+}
 
 if ($PreflightOnly) {
     [ordered]@{

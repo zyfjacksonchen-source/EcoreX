@@ -47,12 +47,12 @@
                           "variant":  "Desktop x64 installer",
                           "fileName":  "EcoreX_0.1.18_x64-setup.exe",
                           "href":  "downloads/EcoreX_0.1.18_x64-setup.exe",
-                          "size":  0,
-                          "sha256":  "",
-                          "status":  "pending-signature",
-                          "source":  "Pending final v0.1.18 signed installer, latest.yml, blockmap, and Authenticode verification.",
-                          "updatedAt":  "",
-                          "signature":  "pending"
+                          "size":  157440216,
+                          "sha256":  "AE5E6E702BD431EE2D5FBF5EED2B6DF80A8DE651F8376B56E7BE8E15F9B3281E",
+                          "status":  "ready",
+                          "source":  "Signed v0.1.18 Windows installer verified by installed smoke evidence.",
+                          "updatedAt":  "2026-06-22",
+                          "signature":  "Valid"
                       },
                       {
                           "id":  "webui-windows-x64",

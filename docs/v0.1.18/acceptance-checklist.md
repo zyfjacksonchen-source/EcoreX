@@ -26,8 +26,11 @@ Status values: TODO, PARTIAL, PASS, BLOCKED.
 ## Release Publication Status
 
 The v0.1.18 production-agent runtime gate is GO. Public release publication is
-tracked separately and remains blocked until Windows Authenticode installed
-smoke, macOS DMG install smoke, GitHub branch/workflow dispatch, and final
-download-page deployment verification are complete. WebUI Windows, WebUI macOS,
-and Web Linux service artifacts have been rebuilt with v0.1.18 hashes and
-validated in `release-artifacts/EcoreX_0.1.18-public-release.zip`.
+tracked separately. Windows Authenticode signing and installed smoke now pass:
+`EcoreX_0.1.18_x64-setup.exe` is manifest-ready with SHA256
+`AE5E6E702BD431EE2D5FBF5EED2B6DF80A8DE651F8376B56E7BE8E15F9B3281E`.
+WebUI Windows, WebUI macOS, and Web Linux service artifacts have been rebuilt
+with v0.1.18 hashes and validated in
+`release-artifacts/EcoreX_0.1.18-public-release.zip`. Remaining publication
+blockers are macOS desktop DMG workflow output, GitHub branch/workflow push,
+and final download-page deployment verification.
