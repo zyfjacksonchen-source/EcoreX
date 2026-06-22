@@ -814,6 +814,21 @@ function ArtifactShelf({
     Object.values(statusRetryTimers.current).forEach((timer) => window.clearTimeout(timer));
     statusRetryTimers.current = {};
   }, []);
+  useEffect(() => {
+    if (!openMenu) return undefined;
+    const close = () => setOpenMenu(null);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [openMenu]);
   const items = rawItems.filter((artifact) => {
     const source = artifactPath(artifact);
     if (String(artifact.status || "").toLowerCase() === "failed") return false;
@@ -865,22 +880,6 @@ function ArtifactShelf({
     });
     setOpenMenu(null);
   };
-
-  useEffect(() => {
-    if (!openMenu) return undefined;
-    const close = () => setOpenMenu(null);
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") close();
-    };
-    window.addEventListener("scroll", close, true);
-    window.addEventListener("resize", close);
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("scroll", close, true);
-      window.removeEventListener("resize", close);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [openMenu]);
 
   return (
     <section className="artifact-shelf" aria-label={title}>
