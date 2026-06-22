@@ -66,6 +66,7 @@ function detectVisitorDevice() {
   let arch = "";
   if (/arm64|aarch64|apple silicon/.test(source)) arch = "arm64";
   if (/x86_64|x64|wow64|win64|amd64|intel/.test(source)) arch = "x64";
+  if (isWindows && !arch && /win32|x86|i686|i386/.test(source)) arch = "ia32";
   return {
     platform: isMac ? "darwin" : isWindows ? "win32" : "web",
     arch
@@ -74,7 +75,10 @@ function detectVisitorDevice() {
 
 function recommendedForDevice(manifest, device) {
   const map = manifest.recommendedDownloads || {};
-  if (device.platform === "win32") return map.win32 || {};
+  if (device.platform === "win32") {
+    const windows = map.win32 || {};
+    return device.arch === "ia32" && windows.ia32 ? { ...windows, primary: windows.ia32 } : windows;
+  }
   if (device.platform === "darwin") return map.darwin || {};
   if (/mac/i.test(navigator.userAgent || "")) {
     return { webui: map.web?.macos };
@@ -101,6 +105,10 @@ function cardIdForArtifactId(id) {
 }
 
 function preferredArtifactId(cardId, recommended, device) {
+  if (cardId === "windows-x64") {
+    if (device.arch === "ia32") return recommended.ia32 || "windows-ia32";
+    return recommended.primary || "windows-x64";
+  }
   if (cardId === "macos-dmg") {
     if (device.arch === "x64") return recommended.intel || "macos-x64-dmg";
     return recommended.primary || "macos-arm64-dmg";
@@ -162,7 +170,7 @@ function installSmokeReady(artifact, manifestVersion) {
 
 function ready(artifact, manifestVersion = "") {
   if (!artifact?.size || !artifact?.sha256) return false;
-  if (artifact?.id === "windows-x64" && artifact.signature !== "Valid") return false;
+  if (String(artifact?.id || "").startsWith("windows-") && artifact.signature !== "Valid") return false;
   if (String(artifact?.id || "").startsWith("macos-") && artifact.signature === "unsigned" && artifact.status === "ready") return false;
   if (artifact?.status === "ready") return true;
   return artifact?.status === "ready-unsigned"
@@ -240,7 +248,7 @@ function cardNote(copy) {
 function collectCards(artifacts) {
   const byId = Object.fromEntries(artifacts.map((artifact) => [artifact.id, artifact]));
   return {
-    "windows-x64": [byId["windows-x64"]],
+    "windows-x64": [byId["windows-x64"], byId["windows-ia32"]],
     "macos-dmg": [byId["macos-arm64-dmg"], byId["macos-x64-dmg"]],
     "webui-windows-x64": [byId["webui-windows-x64"]],
     "webui-macos-universal": [byId["webui-macos-universal"]],
@@ -261,6 +269,8 @@ function wireSelectors(grid, manifestVersion = "") {
 
 function renderDownloads(manifest) {
   document.querySelector("[data-version]").textContent = manifest.version;
+  const brandVersion = document.querySelector("[data-site-version]");
+  if (brandVersion) brandVersion.textContent = manifest.version ? `v${manifest.version}` : "";
   document.querySelector("[data-updated]").textContent = manifest.updatedAt;
 
   const grid = document.querySelector("[data-downloads]");

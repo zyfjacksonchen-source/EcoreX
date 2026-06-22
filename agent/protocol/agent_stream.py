@@ -457,11 +457,7 @@ class AgentStreamExecutor:
                 ability = args.get("pack_id") or args.get("ability") or ""
                 normalized_ability = str(ability or "").strip().lower().replace("_", "-")
                 if normalized_ability in {"feishu", "lark", "feishu-lark", "lark-feishu"}:
-                    return "agent_capability", {
-                        "action": "install_pack",
-                        "pack_id": "feishu-lark",
-                        "discoveryOnly": True,
-                    }
+                    ability = "feishu-cli"
                 elif normalized_ability in {"feishu-cli", "lark-cli"}:
                     ability = "feishu-cli"
                 return "optional_abilities", {
@@ -1311,8 +1307,14 @@ class AgentStreamExecutor:
 
     @staticmethod
     def _looks_like_feishu_cli_command(command: str) -> bool:
-        text = str(command or "").strip().lower().replace("\\", "/")
+        text = str(command or "").strip().lower().replace("\\", "/").replace("%2f", "/").replace("%40", "@")
         if "lark-cli" in text or "@larksuite/cli" in text:
+            return True
+        if (
+            "github.com/larksuite/cli" in text
+            or "github.com:larksuite/cli" in text
+            or "registry.npmmirror.com/@larksuite/cli" in text
+        ):
             return True
         if "scripts/run.js" in text and (
             "cli-main/" in text

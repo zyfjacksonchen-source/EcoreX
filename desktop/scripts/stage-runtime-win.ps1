@@ -3,6 +3,7 @@ param(
     [string]$RuntimeDir = "",
     [string]$PythonHome = "",
     [string]$PythonEmbedVersion = "3.11.9",
+    [ValidateSet("x64", "ia32")][string]$WinArch = "x64",
     [string]$RuntimeCacheDir = "",
     [string[]]$PreinstallPacks = @(),
     [switch]$UseLocalPython,
@@ -82,7 +83,7 @@ function Enable-EmbeddedPythonSite {
 function Copy-OptionalLarkCli {
     param([Parameter(Mandatory = $true)][string]$TargetRuntime)
 
-    Write-Host "Skipping bundled lark-cli for Windows runtime; Feishu/Lark connector remains discovery-only and routes installs through the built-in find skill/find-skill gate."
+    Write-Host "Skipping bundled lark-cli for Windows runtime; Feishu/Lark connector installs on demand through the structured find-skill gated tool."
 }
 
 function Invoke-ReleaseRuntimeSanitizer {
@@ -111,13 +112,14 @@ if (-not $RuntimeCacheDir) {
 
 $repoRootResolved = Resolve-Path -LiteralPath $RepoRoot
 $runtimeResolved = Resolve-UnderDirectory -Path $RuntimeDir -Base $desktopRoot
+$pythonEmbedArch = if ($WinArch -eq "ia32") { "win32" } else { "amd64" }
 
 if (-not $PSBoundParameters.ContainsKey("PreinstallPacks")) {
     if ($null -ne $env:ECOREX_PREINSTALL_PACKS) {
         $PreinstallPacks = @($env:ECOREX_PREINSTALL_PACKS -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     }
     else {
-        $PreinstallPacks = @("office-pdf")
+        $PreinstallPacks = if ($WinArch -eq "ia32") { @() } else { @("office-pdf") }
     }
 }
 
@@ -252,13 +254,13 @@ if ($PythonHome -or $UseLocalPython) {
 }
 else {
     New-Item -ItemType Directory -Force -Path $pythonRuntime | Out-Null
-    $pythonZip = Join-Path $RuntimeCacheDir "python-$PythonEmbedVersion-embed-amd64.zip"
-    $pythonUrl = "https://www.python.org/ftp/python/$PythonEmbedVersion/python-$PythonEmbedVersion-embed-amd64.zip"
+    $pythonZip = Join-Path $RuntimeCacheDir "python-$PythonEmbedVersion-embed-$pythonEmbedArch.zip"
+    $pythonUrl = "https://www.python.org/ftp/python/$PythonEmbedVersion/python-$PythonEmbedVersion-embed-$pythonEmbedArch.zip"
     Save-Download -Uri $pythonUrl -Destination $pythonZip
     Expand-Archive -LiteralPath $pythonZip -DestinationPath $pythonRuntime -Force
     Enable-EmbeddedPythonSite -PythonDir $pythonRuntime
     $pythonHomeResolved = $pythonRuntime
-    $pythonDistribution = "python-embed-$PythonEmbedVersion"
+    $pythonDistribution = "python-embed-$PythonEmbedVersion-$pythonEmbedArch"
 }
 
 $runtimePython = Join-Path $pythonRuntime "python.exe"
@@ -306,6 +308,7 @@ $manifest = [ordered]@{
     product = "EcoreX"
     runtime = "compatible-agent-runtime"
     stagedAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+    winArch = $WinArch
     pythonDistribution = $pythonDistribution
     dependencyInstall = -not $SkipDependencyInstall
     preinstalledPacks = $PreinstallPacks

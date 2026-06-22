@@ -1,7 +1,9 @@
 param(
     [string]$Version = "0.1.18",
     [string]$InstallerPath = "",
+    [string]$InstallerIa32Path = "",
     [string]$SmokePath = "",
+    [string]$SmokeIa32Path = "",
     [switch]$PreflightOnly,
     [switch]$PackageOnly,
     [switch]$SmokeOnly,
@@ -42,6 +44,7 @@ function Resolve-InstallerPath {
     param(
         [Parameter(Mandatory = $true)][string]$RepoRoot,
         [Parameter(Mandatory = $true)][string]$Version,
+        [ValidateSet("x64", "ia32")][string]$Arch = "x64",
         [string]$Path = ""
     )
     if ($Path) {
@@ -50,7 +53,7 @@ function Resolve-InstallerPath {
         }
         return (Resolve-Path -LiteralPath $Path).Path
     }
-    $default = Join-Path $RepoRoot "desktop\release\EcoreX_${Version}_x64-setup.exe"
+    $default = Join-Path $RepoRoot "desktop\release\EcoreX_${Version}_${Arch}-setup.exe"
     if (-not (Test-Path -LiteralPath $default)) {
         throw "Signed installer was not found at $default"
     }
@@ -62,7 +65,9 @@ function Write-Plan {
         [Parameter(Mandatory = $true)][string]$RepoRoot,
         [Parameter(Mandatory = $true)][string]$Version,
         [Parameter(Mandatory = $true)][string]$InstallerPath,
+        [Parameter(Mandatory = $true)][string]$InstallerIa32Path,
         [Parameter(Mandatory = $true)][string]$SmokePath,
+        [Parameter(Mandatory = $true)][string]$SmokeIa32Path,
         [Parameter(Mandatory = $true)][bool]$LaunchSimplySign
     )
     $desktopDir = Join-Path $RepoRoot "desktop"
@@ -81,8 +86,9 @@ function Write-Plan {
             $preflight,
             "npm run package:win:signed",
             "npm run smoke:win:installed -- -InstallerPath `"$InstallerPath`" -OutputPath `"..\docs\v$Version\win-installed-smoke.json`"",
+            "npm run smoke:win:installed -- -InstallerPath `"$InstallerIa32Path`" -OutputPath `"..\docs\v$Version\win-ia32-installed-smoke.json`" -ExpectedWinArch ia32",
             "cd `"$RepoRoot`"",
-            "powershell -ExecutionPolicy Bypass -File scripts\update-ecorex-desktop-release-manifest.ps1 -Version $Version -WindowsInstallerPath `"$InstallerPath`" -WindowsInstalledSmokePath `"$SmokePath`""
+            "powershell -ExecutionPolicy Bypass -File scripts\update-ecorex-desktop-release-manifest.ps1 -Version $Version -WindowsInstallerPath `"$InstallerPath`" -WindowsInstalledSmokePath `"$SmokePath`" -WindowsIa32InstallerPath `"$InstallerIa32Path`" -WindowsIa32InstalledSmokePath `"$SmokeIa32Path`""
         )
     } | ConvertTo-Json -Depth 5
 }
@@ -94,14 +100,24 @@ $resolvedSmokePath = if ($SmokePath) {
 } else {
     Join-Path $repoRoot "docs\v$Version\win-installed-smoke.json"
 }
+$resolvedSmokeIa32Path = if ($SmokeIa32Path) {
+    [System.IO.Path]::GetFullPath($SmokeIa32Path)
+} else {
+    Join-Path $repoRoot "docs\v$Version\win-ia32-installed-smoke.json"
+}
 $expectedInstaller = if ($InstallerPath) {
     [System.IO.Path]::GetFullPath($InstallerPath)
 } else {
     Join-Path $repoRoot "desktop\release\EcoreX_${Version}_x64-setup.exe"
 }
+$expectedInstallerIa32 = if ($InstallerIa32Path) {
+    [System.IO.Path]::GetFullPath($InstallerIa32Path)
+} else {
+    Join-Path $repoRoot "desktop\release\EcoreX_${Version}_ia32-setup.exe"
+}
 
 if ($DryRun) {
-    Write-Plan -RepoRoot $repoRoot -Version $Version -InstallerPath $expectedInstaller -SmokePath $resolvedSmokePath -LaunchSimplySign ([bool]$LaunchSimplySign)
+    Write-Plan -RepoRoot $repoRoot -Version $Version -InstallerPath $expectedInstaller -InstallerIa32Path $expectedInstallerIa32 -SmokePath $resolvedSmokePath -SmokeIa32Path $resolvedSmokeIa32Path -LaunchSimplySign ([bool]$LaunchSimplySign)
     return
 }
 
@@ -132,13 +148,16 @@ if (-not $SmokeOnly) {
     Invoke-Step -WorkingDirectory $desktopDir -FilePath "npm" -ArgumentList @("run", "package:win:signed")
 }
 
-$resolvedInstaller = Resolve-InstallerPath -RepoRoot $repoRoot -Version $Version -Path $InstallerPath
+$resolvedInstaller = Resolve-InstallerPath -RepoRoot $repoRoot -Version $Version -Arch "x64" -Path $InstallerPath
+$resolvedInstallerIa32 = Resolve-InstallerPath -RepoRoot $repoRoot -Version $Version -Arch "ia32" -Path $InstallerIa32Path
 if ($PackageOnly) {
     [ordered]@{
         ok = $true
         step = "package"
         installer = $resolvedInstaller
+        installerIa32 = $resolvedInstallerIa32
         signatureStatus = [string](Get-AuthenticodeSignature -LiteralPath $resolvedInstaller).Status
+        signatureIa32Status = [string](Get-AuthenticodeSignature -LiteralPath $resolvedInstallerIa32).Status
     } | ConvertTo-Json -Depth 4
     return
 }
@@ -150,7 +169,21 @@ Invoke-Step -WorkingDirectory $desktopDir -FilePath "npm" -ArgumentList @(
     "-InstallerPath",
     $resolvedInstaller,
     "-OutputPath",
-    $resolvedSmokePath
+    $resolvedSmokePath,
+    "-ExpectedWinArch",
+    "x64"
+)
+
+Invoke-Step -WorkingDirectory $desktopDir -FilePath "npm" -ArgumentList @(
+    "run",
+    "smoke:win:installed",
+    "--",
+    "-InstallerPath",
+    $resolvedInstallerIa32,
+    "-OutputPath",
+    $resolvedSmokeIa32Path,
+    "-ExpectedWinArch",
+    "ia32"
 )
 
 if ($ImportManifest) {
@@ -164,7 +197,11 @@ if ($ImportManifest) {
         "-WindowsInstallerPath",
         $resolvedInstaller,
         "-WindowsInstalledSmokePath",
-        $resolvedSmokePath
+        $resolvedSmokePath,
+        "-WindowsIa32InstallerPath",
+        $resolvedInstallerIa32,
+        "-WindowsIa32InstalledSmokePath",
+        $resolvedSmokeIa32Path
     )
 }
 
@@ -172,6 +209,8 @@ if ($ImportManifest) {
     ok = $true
     version = $Version
     installer = $resolvedInstaller
+    installerIa32 = $resolvedInstallerIa32
     smoke = $resolvedSmokePath
+    smokeIa32 = $resolvedSmokeIa32Path
     importedManifest = [bool]$ImportManifest
 } | ConvertTo-Json -Depth 4

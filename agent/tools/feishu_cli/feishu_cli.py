@@ -69,6 +69,13 @@ def _prepend_path(env: Dict[str, str], path: Optional[Path]) -> None:
 def _candidate_bin_dirs() -> List[Path]:
     home = Path.home()
     dirs: List[Path] = []
+    install_root_override = os.environ.get("ECOREX_LARK_CLI_INSTALL_ROOT")
+    if install_root_override:
+        install_root = Path(install_root_override).expanduser()
+        dirs.extend([
+            install_root / "bin",
+            install_root / "node_modules" / ".bin",
+        ])
     if os.name == "nt":
         for base in (os.environ.get("APPDATA"), os.environ.get("LOCALAPPDATA")):
             if base:
@@ -120,7 +127,13 @@ def _find_local_lark_runner(env: Dict[str, str]) -> Optional[List[str]]:
     node = _which("node", env)
     if not node:
         return None
+    install_root_override = os.environ.get("ECOREX_LARK_CLI_INSTALL_ROOT")
+    override_root = Path(install_root_override).expanduser() if install_root_override else None
     candidates = [
+        *(([
+            override_root / "scripts" / "run.js",
+            override_root / "node_modules" / "@larksuite" / "cli" / "scripts" / "run.js",
+        ]) if override_root else []),
         Path("C:/EcoreX Artifact Desk/cli-main/scripts/run.js"),
         Path(__file__).resolve().parents[3] / "tools" / "lark-cli" / "scripts" / "run.js",
         Path(__file__).resolve().parents[3] / "tools" / "lark-cli" / "node_modules" / "@larksuite" / "cli" / "scripts" / "run.js",
@@ -277,9 +290,16 @@ def _has_find_skill_gate(args: Dict[str, Any]) -> bool:
     if result is None:
         return False
     if not isinstance(result, dict):
-        return True
-    status = str(result.get("status") or result.get("state") or "").strip().lower()
-    if status in {"error", "failed", "failure", "blocked"}:
+        return False
+    status = str(result.get("status") or result.get("state") or result.get("result") or "").strip().lower()
+    positive = (
+        status in {"success", "ok", "found", "pass", "passed", "ready", "available"}
+        or result.get("success") is True
+        or result.get("ok") is True
+        or result.get("found") is True
+        or result.get("available") is True
+    )
+    if not positive:
         return False
     try:
         text = json.dumps(result, ensure_ascii=False, sort_keys=True).lower()
@@ -438,6 +458,9 @@ class FeishuCli(BaseTool):
         return self._missing_payload(env)
 
     def _install_root(self) -> Path:
+        override = self.config.get("install_root") or os.environ.get("ECOREX_LARK_CLI_INSTALL_ROOT")
+        if override:
+            return Path(str(override)).expanduser()
         return Path(__file__).resolve().parents[3] / "tools" / "lark-cli"
 
     def _diagnose(self, env: Dict[str, str]) -> Dict[str, Any]:

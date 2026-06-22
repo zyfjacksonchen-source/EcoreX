@@ -110,6 +110,9 @@ def _which(name: str) -> Optional[str]:
 
 
 def _state_dir() -> Path:
+    override = os.environ.get("ECOREX_CAPABILITY_STATE_DIR")
+    if override:
+        return Path(override).expanduser()
     return RUNTIME_ROOT / "capability-state"
 
 
@@ -119,7 +122,15 @@ def _safe_pack_dir_name(pack_id: str) -> str:
 
 
 def _capability_package_root() -> Path:
+    override = os.environ.get("ECOREX_CAPABILITY_TARGET_DIR")
+    if override:
+        return Path(override).expanduser()
     return RUNTIME_ROOT / "capability-packages"
+
+
+def _playwright_browsers_dir() -> Optional[Path]:
+    override = os.environ.get("ECOREX_PLAYWRIGHT_BROWSERS_DIR") or os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    return Path(override).expanduser() if override else None
 
 
 def _capability_target_dir(pack_id: str) -> Path:
@@ -322,21 +333,20 @@ def _ability_defs() -> Dict[str, Dict[str, Any]]:
             "notes": "Keeps browser automation available without starting Chrome/CDP at boot.",
         },
         "feishu-cli": {
-            "label": "Feishu/Lark connector discovery",
+            "label": "Feishu/Lark CLI connector",
             "kind": "optional-runtime",
             "defaultPolicy": "discoverable-disabled",
             "startupImpact": "medium",
             "configPath": ["tools", "feishu_cli", "auto_install"],
             "packId": "feishu-lark",
-            "discoveryOnly": True,
             "sourceUrl": FEISHU_LARK_SOURCE_URL,
             "mirrorUrls": FEISHU_LARK_MIRROR_URLS,
             "installHint": (
-                "Agent should use the built-in find skill first (gated as find-skill) to discover Feishu/Lark connector sources, "
-                "then install official @larksuite/cli on demand. If npmjs.org times out, retry with "
+                "Agent should use the built-in find skill first (gated as find-skill), then install official "
+                "@larksuite/cli on demand. If npmjs.org times out, retry with "
                 f"the domestic npm mirror {FEISHU_LARK_NPM_MIRROR}."
             ),
-            "notes": "The connector is only discovered here; the current agent uses the find skill/find-skill gate before any on-demand CLI install.",
+            "notes": "Installs official @larksuite/cli on demand through the structured feishu_cli tool after the find-skill gate.",
         },
         "scheduler": {
             "label": "Scheduler background service",
@@ -446,6 +456,14 @@ class OptionalAbilities(BaseTool):
                 "type": "integer",
                 "description": "Install timeout seconds. Default 600, max 3600.",
             },
+            "discovery_source": {
+                "type": "string",
+                "description": "Discovery gate for Feishu/Lark CLI install. Must be find-skill.",
+            },
+            "find_skill_result": {
+                "type": "object",
+                "description": "Structured result returned by the built-in find skill/find-skill gate.",
+            },
         },
         "required": ["action"],
     }
@@ -463,7 +481,12 @@ class OptionalAbilities(BaseTool):
                 return self._enable(ability)
             if action == "disable":
                 return self._disable(ability)
-            return self._install(ability, timeout=self._timeout(args.get("timeout")))
+            return self._install(
+                ability,
+                timeout=self._timeout(args.get("timeout")),
+                discovery_source=args.get("discovery_source"),
+                find_skill_result=args.get("find_skill_result") or args.get("findSkillResult"),
+            )
         return ToolResult.fail({"status": "error", "message": "action must be one of: list, status, enable, disable, install"})
 
     def _list(self, ability: Optional[str] = None) -> Dict[str, Any]:
@@ -601,28 +624,68 @@ class OptionalAbilities(BaseTool):
             ),
         })
 
-    def _install(self, ability: str, timeout: int) -> ToolResult:
+    def _install(self, ability: str, timeout: int, discovery_source: Any = None, find_skill_result: Any = None) -> ToolResult:
         defs = _ability_defs()
         meta = defs.get(ability)
         if not meta:
             if ability == "feishu-lark":
-                return self._feishu_lark_discovery_only(ability)
+                return self._install_feishu_cli(timeout, discovery_source=discovery_source, find_skill_result=find_skill_result)
             if ability in _capability_pack_ids():
                 return self._install_capability_pack(ability, timeout)
             return ToolResult.fail({"status": "error", "message": f"unknown ability: {ability}", "known": sorted(defs)})
 
         if ability == "feishu-cli":
-            return self._feishu_lark_discovery_only(ability)
+            return self._install_feishu_cli(timeout, discovery_source=discovery_source, find_skill_result=find_skill_result)
 
         pack_id = meta.get("packId")
         if not pack_id:
             return ToolResult.fail({"status": "error", "message": f"{ability} has no installer"})
         if str(pack_id) == "feishu-lark":
-            return self._feishu_lark_discovery_only(ability)
+            return self._install_feishu_cli(timeout, discovery_source=discovery_source, find_skill_result=find_skill_result)
         return self._install_capability_pack(str(pack_id), timeout)
 
-    def _install_feishu_cli(self, timeout: int) -> ToolResult:
-        return self._feishu_lark_discovery_only("feishu-cli")
+    def _install_feishu_cli(self, timeout: int, discovery_source: Any = None, find_skill_result: Any = None) -> ToolResult:
+        from agent.tools.feishu_cli.feishu_cli import FeishuCli
+
+        install_args: Dict[str, Any] = {
+            "action": "install",
+            "timeout": timeout,
+        }
+        if discovery_source is not None:
+            install_args["discovery_source"] = discovery_source
+        if find_skill_result is not None:
+            install_args["find_skill_result"] = find_skill_result
+        result = FeishuCli().execute({
+            **install_args,
+        })
+        payload = result.result if isinstance(result.result, dict) else {"result": result.result}
+        status = "installed" if result.status == "success" and payload.get("available") else "failed"
+        state_dir = _state_dir()
+        state_dir.mkdir(parents=True, exist_ok=True)
+        state = {
+            "packId": "feishu-lark",
+            "state": status,
+            "installed": status == "installed",
+            "updatedAt": _now(),
+            "message": payload.get("message") or ("Feishu/Lark CLI is ready." if status == "installed" else "Feishu/Lark CLI installation failed."),
+            "sourceUrl": FEISHU_LARK_SOURCE_URL,
+            "mirrorUrls": FEISHU_LARK_MIRROR_URLS,
+            "installHint": "Official @larksuite/cli is installed on demand after the built-in find-skill gate.",
+            "command": payload.get("command"),
+            "installRoot": payload.get("installRoot"),
+        }
+        try:
+            (state_dir / "feishu-lark.json").write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        except Exception as exc:
+            logger.warning(f"[OptionalAbilities] failed writing Feishu/Lark state: {exc}")
+
+        merged = {
+            **payload,
+            "status": "success" if status == "installed" else "error",
+            "packId": "feishu-lark",
+            "capabilityState": state,
+        }
+        return ToolResult.success(merged) if status == "installed" else ToolResult.fail(merged)
 
     def _install_capability_pack(self, pack_id: str, timeout: int) -> ToolResult:
         manifest = _capability_manifest_path()
@@ -655,6 +718,9 @@ class OptionalAbilities(BaseTool):
             "--fallback-index-url",
             os.environ.get("ECOREX_PIP_FALLBACK_INDEX_URL", "https://pypi.tuna.tsinghua.edu.cn/simple"),
         ]
+        browsers_dir = _playwright_browsers_dir()
+        if browsers_dir:
+            command.extend(["--playwright-browsers-dir", str(browsers_dir)])
         try:
             result = subprocess.run(
                 command,
@@ -662,7 +728,12 @@ class OptionalAbilities(BaseTool):
                 text=True,
                 capture_output=True,
                 timeout=timeout,
-                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                env={
+                    **os.environ,
+                    "PYTHONIOENCODING": "utf-8",
+                    "ECOREX_CAPABILITY_STATE_DIR": str(_state_dir()),
+                    "ECOREX_CAPABILITY_TARGET_DIR": str(_capability_package_root()),
+                },
             )
         except subprocess.TimeoutExpired:
             return ToolResult.fail({"status": "error", "message": f"install timed out after {timeout}s", "packId": pack_id})

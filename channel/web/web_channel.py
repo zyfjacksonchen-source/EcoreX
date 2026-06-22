@@ -4936,7 +4936,27 @@ class AgentInstallRequestHandler:
         if not pack_id:
             return json.dumps({"status": "error", "message": "packId is required"}, ensure_ascii=False)
         normalized_pack_id = pack_id.strip().lower().replace("_", "-")
-        if normalized_pack_id in {"feishu", "lark", "feishu-lark", "lark-feishu"}:
+        if normalized_pack_id in {"feishu", "lark", "feishu-lark", "lark-feishu", "feishu-cli", "lark-cli"}:
+            prompt = (
+                f"Install the EcoreX Feishu/Lark CLI connector `{pack_id}` ({pack_name}) inside this response. "
+                "The connector installs the official `@larksuite/cli` package on demand. "
+                "First use the built-in find skill/find-skill gate to confirm the official source, then use the structured "
+                "`agent_capability` tool with "
+                f"`{{\"action\":\"install_pack\",\"pack_id\":\"{pack_id}\",\"discovery_source\":\"find-skill\"}}` "
+                "or pass the structured `find_skill_result`; direct `feishu_cli` install must also include "
+                "`discovery_source=\"find-skill\"` or `find_skill_result`. "
+                "Do not use raw bash/curl/npm/git clone for this setup unless the structured tool returns a concrete unrecoverable setup issue. "
+                "If npmjs.org times out, the structured installer must retry the domestic npm mirror https://registry.npmmirror.com. "
+                "Do not stop at discoveryOnly guidance; this runtime supports on-demand installation after the find-skill gate. "
+                "After installation, call `agent_capability` with `action=\"diagnose\"`, then continue the original user task."
+            )
+            extra_fields = {
+                "discoveryOnly": False,
+                "sourceUrl": "https://github.com/larksuite/cli",
+                "mirrorUrls": ["https://registry.npmmirror.com/@larksuite/cli"],
+                "installHint": "Installs official @larksuite/cli on demand through feishu_cli after the find-skill gate.",
+            }
+        elif normalized_pack_id in {"feishu", "lark", "feishu-lark", "lark-feishu"}:
             source_url = "https://github.com/larksuite/cli"
             mirror_url = "https://registry.npmmirror.com/@larksuite/cli"
             npm_mirror = "https://registry.npmmirror.com"

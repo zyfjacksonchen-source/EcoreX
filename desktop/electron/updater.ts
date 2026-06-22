@@ -124,9 +124,17 @@ function compareVersions(left: string, right: string) {
 }
 
 function platformArtifactId(platform: NodeJS.Platform) {
-  if (platform === "win32") return "windows-x64";
+  if (platform === "win32") return process.arch === "ia32" ? "windows-ia32" : "windows-x64";
   if (platform === "darwin") return process.arch === "x64" ? "macos-x64-dmg" : "macos-arm64-dmg";
   return "";
+}
+
+function appendUrlPath(base: string, suffix: string) {
+  try {
+    return new URL(suffix, base.endsWith("/") ? base : `${base}/`).href;
+  } catch {
+    return base;
+  }
 }
 
 function absoluteDownloadUrl(href: string | undefined, downloadPageUrl: string) {
@@ -355,7 +363,12 @@ export class EcorexUpdateManager {
   }
 
   private updateFeedUrl() {
-    return normalizeUrl(this.resolveEndpointPolicy().updateFeedUrl, { directory: true }) || UPDATE_FEED_URL;
+    const configured = normalizeUrl(this.resolveEndpointPolicy().updateFeedUrl, { directory: true });
+    const feedUrl = configured || UPDATE_FEED_URL;
+    if (process.platform === "win32" && process.arch === "ia32" && !/[\\/]ia32[\\/]?$|\/ia32\/?$/i.test(feedUrl)) {
+      return appendUrlPath(feedUrl, "ia32/");
+    }
+    return feedUrl;
   }
 
   private manifestUrl() {

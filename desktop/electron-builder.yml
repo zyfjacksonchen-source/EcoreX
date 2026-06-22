@@ -38,6 +38,7 @@ win:
     - target: nsis
       arch:
         - x64
+        - ia32
   artifactName: EcoreX_${version}_${arch}-setup.${ext}
   signExecutable: false
   forceCodeSigning: false

@@ -3,6 +3,7 @@ param(
     [string]$InstallDir = "",
     [string]$OutputPath = "",
     [string]$ExpectedVersion = "0.1.18",
+    [string]$ExpectedWinArch = "",
     [int]$Port = 19131,
     [switch]$KeepInstall
 )
@@ -138,6 +139,10 @@ $installerSignature = Get-AuthenticodeSignature -LiteralPath $installerResolved
 if ($installerSignature.Status -ne "Valid") {
     throw "Installer signature is not valid: $($installerSignature.StatusMessage)"
 }
+if (-not $ExpectedWinArch) {
+    $ExpectedWinArch = if ($installerItem.Name -match "_ia32-setup\.exe$") { "ia32" } else { "x64" }
+}
+$expectedPythonBits = if ($ExpectedWinArch -eq "ia32") { 32 } else { 64 }
 
 if (-not $InstallDir) {
     $InstallDir = Join-Path ([System.IO.Path]::GetTempPath()) ("EcoreX-smoke-" + [System.Guid]::NewGuid().ToString("N"))
@@ -160,6 +165,8 @@ $result = [ordered]@{
     webPort = $Port
     expectedVersion = $ExpectedVersion
     installerSignatureStatus = [string]$installerSignature.Status
+    expectedWinArch = $ExpectedWinArch
+    expectedPythonBits = $expectedPythonBits
     installed = $false
     appStarted = $false
     sidecarReady = $false
@@ -181,11 +188,25 @@ try {
     $runtimePython = Join-Path $installResolved "resources\ecorex-runtime\python\python.exe"
     $runtimeApp = Join-Path $installResolved "resources\ecorex-runtime\app.py"
     $capabilityManifest = Join-Path $installResolved "resources\ecorex-runtime\capabilities.json"
+    $runtimeManifestPath = Join-Path $installResolved "resources\ecorex-runtime\runtime-manifest.json"
 
-    foreach ($path in @($appExe, $runtimePython, $runtimeApp, $capabilityManifest)) {
+    foreach ($path in @($appExe, $runtimePython, $runtimeApp, $capabilityManifest, $runtimeManifestPath)) {
         if (-not (Test-Path -LiteralPath $path)) {
             throw "Expected installed file not found: $path"
         }
+    }
+    $runtimeManifest = Get-Content -Raw -Encoding UTF8 -LiteralPath $runtimeManifestPath | ConvertFrom-Json
+    $result.runtimeWinArch = [string]$runtimeManifest.winArch
+    if ($result.runtimeWinArch -ne $ExpectedWinArch) {
+        throw "Installed runtime winArch '$($result.runtimeWinArch)' does not match expected '$ExpectedWinArch'."
+    }
+    $pythonBitsText = (& $runtimePython -c "import struct; print(struct.calcsize('P') * 8)")
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to query runtime Python bitness."
+    }
+    $result.runtimePythonBits = [int]([string]$pythonBitsText).Trim()
+    if ($result.runtimePythonBits -ne $expectedPythonBits) {
+        throw "Installed runtime Python bitness '$($result.runtimePythonBits)' does not match expected '$expectedPythonBits'."
     }
 
     foreach ($signedPath in @($appExe, $runtimePython)) {

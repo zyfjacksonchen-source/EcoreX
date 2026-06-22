@@ -297,6 +297,14 @@ export class SidecarManager {
       return;
     }
     const webPort = this.getWebPort();
+    const capabilityEnv = process.platform === "darwin"
+      ? {
+          ECOREX_CAPABILITY_STATE_DIR: path.join(this.appGetPath("userData"), "capabilities", "state"),
+          ECOREX_CAPABILITY_TARGET_DIR: path.join(this.appGetPath("userData"), "capabilities", "python-site"),
+          ECOREX_PLAYWRIGHT_BROWSERS_DIR: path.join(this.appGetPath("userData"), "capabilities", "playwright-browsers"),
+          ECOREX_LARK_CLI_INSTALL_ROOT: path.join(this.appGetPath("userData"), "capabilities", "lark-cli")
+        }
+      : {};
     this.ensureDesktopRuntimeDefaults();
     let resolveStartup: (ready: boolean) => void = () => undefined;
     const startupPromise = new Promise<boolean>((resolve) => {
@@ -325,6 +333,7 @@ export class SidecarManager {
           ECOREX_DESKTOP_BOOT_ID: this.bootId,
           ECOREX_DESKTOP_RUNTIME_TOKEN: this.runtimeToken,
           ECOREX_DESKTOP_USER_DATA: this.appGetPath("userData"),
+          ...capabilityEnv,
           PATH: [this.resolveExternalCliPath(), process.env.PATH].filter(Boolean).join(path.delimiter),
           PYTHONPATH: [this.repoRoot, this.resolveCapabilityPythonPath(), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
           PLAYWRIGHT_BROWSERS_PATH:

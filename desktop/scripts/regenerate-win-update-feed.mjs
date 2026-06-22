@@ -23,20 +23,32 @@ const version = argValue("--version") || process.env.ECOREX_VERSION || desktopVe
 if (!version) {
   throw new Error("Unable to resolve EcoreX version");
 }
+const arch = (argValue("--arch") || process.env.ECOREX_WIN_ARCH || "x64").trim();
+if (!["x64", "ia32"].includes(arch)) {
+  throw new Error(`Unsupported Windows update arch: ${arch}`);
+}
 
 const setup = path.resolve(
   argValue("--setup") ||
     process.env.ECOREX_SETUP ||
-    path.join(desktopRoot, "release", `EcoreX_${version}_x64-setup.exe`)
+    path.join(desktopRoot, "release", `EcoreX_${version}_${arch}-setup.exe`)
 );
 if (!fs.existsSync(setup)) {
   throw new Error(`Setup installer not found: ${setup}`);
 }
 
-const outDir = path.resolve(argValue("--out-dir") || process.env.ECOREX_RELEASE_DIR || path.dirname(setup));
+const outDir = path.resolve(
+  argValue("--out-dir") ||
+    process.env.ECOREX_RELEASE_DIR ||
+    (arch === "ia32" ? path.join(path.dirname(setup), "ia32") : path.dirname(setup))
+);
 fs.mkdirSync(outDir, { recursive: true });
 
 const fileName = path.basename(setup);
+const feedSetup = path.join(outDir, fileName);
+if (path.resolve(setup) !== path.resolve(feedSetup)) {
+  fs.copyFileSync(setup, feedSetup);
+}
 const blockmap = path.join(outDir, `${fileName}.blockmap`);
 const result = await buildBlockMap(setup, "gzip", blockmap);
 const latest = [
@@ -58,6 +70,7 @@ console.log(
     {
       ok: true,
       version,
+      arch,
       setup,
       blockmap,
       latestYml,

@@ -103,6 +103,13 @@ a {
   border-radius: 10px;
 }
 
+.brand small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 760;
+  line-height: 1;
+}
+
 .nav-links {
   gap: 8px;
 }

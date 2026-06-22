@@ -6,7 +6,11 @@
     "update":  {
                    "windows":  {
                                    "mode":  "auto-download",
-                                   "artifactId":  "windows-x64"
+                                   "artifactId":  "windows-x64",
+                                   "artifactIds":  [
+                                                       "windows-x64",
+                                                       "windows-ia32"
+                                                   ]
                                },
                    "macos":  {
                                  "mode":  "prompt-download",
@@ -27,6 +31,7 @@
     "recommendedDownloads":  {
                                  "win32":  {
                                                "primary":  "windows-x64",
+                                               "ia32":  "windows-ia32",
                                                "webui":  "webui-windows-x64"
                                            },
                                  "darwin":  {
@@ -53,6 +58,20 @@
                           "source":  "Signed v0.1.18 Windows installer verified by installed smoke evidence.",
                           "updatedAt":  "2026-06-22",
                           "signature":  "Valid"
+                      },
+                      {
+                          "id":  "windows-ia32",
+                          "version":  "0.1.18",
+                          "platform":  "Windows",
+                          "variant":  "Desktop ia32 installer",
+                          "fileName":  "EcoreX_0.1.18_ia32-setup.exe",
+                          "href":  "downloads/EcoreX_0.1.18_ia32-setup.exe",
+                          "size":  0,
+                          "sha256":  "pending",
+                          "status":  "pending-signature",
+                          "source":  "Windows ia32 installer will be published after signing and installed-smoke verification.",
+                          "updatedAt":  "2026-06-22",
+                          "signature":  "pending"
                       },
                       {
                           "id":  "webui-windows-x64",

@@ -3,6 +3,7 @@ param(
     [string]$SiteRoot = "deploy/ecorex-site",
     [string]$AdminApiRoot = "deploy/ecorex-admin-api",
     [string]$InstallerPath = "",
+    [string]$InstallerIa32Path = "",
     [string]$MacArm64DmgPath = "",
     [string]$MacX64DmgPath = "",
     [string]$WebTarballPath = "",
@@ -112,6 +113,9 @@ if (-not $Version) {
 if (-not $InstallerPath) {
     $InstallerPath = Join-Path "desktop/release" "EcoreX_${Version}_x64-setup.exe"
 }
+if (-not $InstallerIa32Path) {
+    $InstallerIa32Path = Join-Path "desktop/release" "EcoreX_${Version}_ia32-setup.exe"
+}
 $siteRootResolved = Resolve-RequiredPath $SiteRoot
 $adminApiRootResolved = Resolve-RequiredPath $AdminApiRoot
 
@@ -126,6 +130,7 @@ New-Item -ItemType Directory -Force -Path $outputResolved | Out-Null
 
 $artifactSources = @{}
 $artifactSources["windows-x64"] = $InstallerPath
+$artifactSources["windows-ia32"] = $InstallerIa32Path
 $artifactSources["webui-win-mac"] = Join-Path "release-artifacts" "EcoreX_${Version}-webui-win-mac.zip"
 $artifactSources["webui-windows-x64"] = Join-Path "release-artifacts" "EcoreX_${Version}-webui-windows-x64.zip"
 $artifactSources["webui-macos-universal"] = Join-Path "release-artifacts" "EcoreX_${Version}-webui-macos-universal.zip"
@@ -212,7 +217,9 @@ function Assert-AuthNegativeStatuses {
 
 function Assert-WindowsInstalledSmoke {
     param([Parameter(Mandatory = $true)][object]$Artifact)
-    $smokePath = Join-Path $repoRoot "docs\v$Version\win-installed-smoke.json"
+    $artifactId = [string]$Artifact.id
+    $smokeFile = if ($artifactId -eq "windows-ia32") { "win-ia32-installed-smoke.json" } else { "win-installed-smoke.json" }
+    $smokePath = Join-Path $repoRoot "docs\v$Version\$smokeFile"
     if (-not (Test-Path -LiteralPath $smokePath)) {
         throw "Windows artifact '$($Artifact.fileName)' requires installed smoke evidence: $smokePath."
     }
@@ -228,26 +235,34 @@ function Assert-WindowsInstalledSmoke {
     )
     $missing = @($requiredTrue | Where-Object { -not [bool]$smoke.$_ })
     if ($missing.Count -gt 0) {
-        throw "Windows installed smoke missing passed flags: $($missing -join ', ')."
+        throw "$artifactId installed smoke missing passed flags: $($missing -join ', ')."
     }
     if ([string]$smoke.runtimeVersion -ne $Version) {
-        throw "Windows installed smoke runtimeVersion '$($smoke.runtimeVersion)' must be $Version."
+        throw "$artifactId installed smoke runtimeVersion '$($smoke.runtimeVersion)' must be $Version."
+    }
+    $expectedWinArch = if ($artifactId -eq "windows-ia32") { "ia32" } else { "x64" }
+    $expectedPythonBits = if ($artifactId -eq "windows-ia32") { 32 } else { 64 }
+    if ([string]$smoke.runtimeWinArch -ne $expectedWinArch) {
+        throw "$artifactId installed smoke runtimeWinArch '$($smoke.runtimeWinArch)' must be $expectedWinArch."
+    }
+    if ([int]$smoke.runtimePythonBits -ne $expectedPythonBits) {
+        throw "$artifactId installed smoke runtimePythonBits '$($smoke.runtimePythonBits)' must be $expectedPythonBits."
     }
     if ([string]$smoke.installerFileName -ne [string]$Artifact.fileName) {
-        throw "Windows installed smoke fileName '$($smoke.installerFileName)' does not match manifest '$($Artifact.fileName)'."
+        throw "$artifactId installed smoke fileName '$($smoke.installerFileName)' does not match manifest '$($Artifact.fileName)'."
     }
     if (([string]$smoke.installerSha256).ToUpperInvariant() -ne ([string]$Artifact.sha256).ToUpperInvariant()) {
-        throw "Windows installed smoke sha256 '$($smoke.installerSha256)' does not match manifest '$($Artifact.sha256)'."
+        throw "$artifactId installed smoke sha256 '$($smoke.installerSha256)' does not match manifest '$($Artifact.sha256)'."
     }
     if ([int64]$smoke.installerSize -ne [int64]$Artifact.size) {
-        throw "Windows installed smoke installerSize '$($smoke.installerSize)' does not match manifest '$($Artifact.size)'."
+        throw "$artifactId installed smoke installerSize '$($smoke.installerSize)' does not match manifest '$($Artifact.size)'."
     }
     foreach ($name in @("installerSignatureStatus", "appSignatureStatus", "runtimePythonSignatureStatus")) {
         if ([string]$smoke.$name -ne "Valid") {
-            throw "Windows installed smoke requires $name=Valid."
+            throw "$artifactId installed smoke requires $name=Valid."
         }
     }
-    Assert-AuthNegativeStatuses -Smoke $smoke -EvidenceName "Windows installed smoke"
+    Assert-AuthNegativeStatuses -Smoke $smoke -EvidenceName "$artifactId installed smoke"
 }
 
 function Assert-MacUnsignedInstallSmoke($Artifact) {
@@ -320,13 +335,13 @@ foreach ($artifact in $manifest.artifacts) {
     if (-not (Test-PublishableArtifact $artifact)) {
         continue
     }
-    if ([string]$artifact.id -eq "windows-x64" -and ([string]$artifact.signature).ToLowerInvariant().Contains("unsigned")) {
+    if ([string]$artifact.id -like "windows-*" -and ([string]$artifact.signature).ToLowerInvariant().Contains("unsigned")) {
         throw "Windows artifact cannot be published while manifest signature is '$($artifact.signature)'."
     }
-    if ([string]$artifact.id -eq "windows-x64" -and [string]$artifact.signature -ne "Valid") {
+    if ([string]$artifact.id -like "windows-*" -and [string]$artifact.signature -ne "Valid") {
         throw "Windows artifact '$($artifact.fileName)' requires manifest signature=Valid before publication."
     }
-    if ([string]$artifact.id -eq "windows-x64") {
+    if ([string]$artifact.id -like "windows-*") {
         Assert-WindowsInstalledSmoke $artifact
     }
     if ([string]$artifact.status -eq "ready-unsigned") {
@@ -370,7 +385,7 @@ foreach ($artifact in $manifest.artifacts) {
     if ($sourceItem.Extension -in ".exe", ".msi") {
         $signatureStatus = (Get-AuthenticodeSignature -LiteralPath $sourceResolved).Status.ToString()
     }
-    if ($artifact.id -eq "windows-x64" -and $signatureStatus -ne "Valid") {
+    if ($artifact.id -like "windows-*" -and $signatureStatus -ne "Valid") {
         throw "Windows artifact '$($artifact.fileName)' is not Authenticode signed: $signatureStatus."
     }
 
@@ -403,6 +418,19 @@ foreach ($ready in $readyArtifacts) {
                 Copy-Item -LiteralPath $feedSource -Destination $feedTarget -Force
             }
         }
+    }
+    elseif ($ready.Artifact.id -eq "windows-ia32") {
+        $sourceDir = Split-Path -Parent $ready.Path
+        $feedDir = Join-Path $sourceDir "ia32"
+        $feedOut = Resolve-UnderDirectory -Path (Join-Path $outputResolved "ia32") -Base $outputResolved
+        New-Item -ItemType Directory -Force -Path $feedOut | Out-Null
+        foreach ($feedSource in @((Join-Path $feedDir "latest.yml"), (Join-Path $feedDir "$($ready.Artifact.fileName).blockmap"))) {
+            if (Test-Path -LiteralPath $feedSource) {
+                $feedTarget = Resolve-UnderDirectory -Path (Join-Path $feedOut (Split-Path -Leaf $feedSource)) -Base $outputResolved
+                Copy-Item -LiteralPath $feedSource -Destination $feedTarget -Force
+            }
+        }
+        Copy-Item -LiteralPath $ready.Path -Destination (Join-Path $feedOut $ready.Artifact.fileName) -Force
     }
 }
 
@@ -461,6 +489,39 @@ foreach ($ready in $readyArtifacts) {
                 Size = (Get-Item -LiteralPath $feedTarget).Length
                 Sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $feedTarget).Hash.ToUpperInvariant()
             }
+        }
+    }
+    elseif ($ready.Artifact.id -eq "windows-ia32") {
+        $sourceDir = Split-Path -Parent $ready.Path
+        $feedDir = Join-Path $sourceDir "ia32"
+        $latestSource = Join-Path $feedDir "latest.yml"
+        $blockmapSource = Join-Path $feedDir "$($ready.Artifact.fileName).blockmap"
+        if (-not (Test-Path -LiteralPath $latestSource)) {
+            throw "Windows ia32 update feed file missing: $latestSource"
+        }
+        if (-not (Test-Path -LiteralPath $blockmapSource)) {
+            throw "Windows ia32 update blockmap missing: $blockmapSource"
+        }
+        $ia32Out = Join-Path $downloadOut "ia32"
+        New-Item -ItemType Directory -Force -Path $ia32Out | Out-Null
+        Copy-Item -LiteralPath $ready.Path -Destination (Join-Path $ia32Out $ready.Artifact.fileName) -Force
+        foreach ($feedSource in @($latestSource, $blockmapSource)) {
+            $feedName = Split-Path -Leaf $feedSource
+            $feedTarget = Join-Path $ia32Out $feedName
+            Copy-Item -LiteralPath $feedSource -Destination $feedTarget -Force
+            $updateFeedFiles += [pscustomobject]@{
+                FileName = "ia32/$feedName"
+                RelativePath = "site/downloads/ia32/$feedName"
+                Size = (Get-Item -LiteralPath $feedTarget).Length
+                Sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $feedTarget).Hash.ToUpperInvariant()
+            }
+        }
+        $ia32InstallerTarget = Join-Path $ia32Out $ready.Artifact.fileName
+        $updateFeedFiles += [pscustomobject]@{
+            FileName = "ia32/$($ready.Artifact.fileName)"
+            RelativePath = "site/downloads/ia32/$($ready.Artifact.fileName)"
+            Size = (Get-Item -LiteralPath $ia32InstallerTarget).Length
+            Sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $ia32InstallerTarget).Hash.ToUpperInvariant()
         }
     }
 }

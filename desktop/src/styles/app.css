@@ -20,6 +20,11 @@ html[data-platform="win32"] {
   --window-brand-left: 12px;
 }
 
+html[data-platform="web"] {
+  --titlebar-height: 36px;
+  --window-brand-left: 12px;
+}
+
 html,
 body,
 #root {
@@ -298,13 +303,21 @@ button:disabled {
 }
 
 html[data-platform="web"] .window-brand {
-  display: none;
+  position: absolute;
 }
 
 .window-brand img {
   width: 18px;
   height: 18px;
   object-fit: contain;
+}
+
+.window-brand small {
+  color: var(--color-muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
+  opacity: 0.82;
 }
 
 .session-sidebar {

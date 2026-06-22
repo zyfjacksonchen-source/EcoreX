@@ -365,7 +365,9 @@ def validate_auth_negative_statuses(smoke: dict, evidence_name: str) -> None:
 
 def validate_windows_installed_smoke(manifest: dict, artifact: dict) -> None:
     version = str(manifest.get("version") or "")
-    smoke_path = pathlib.Path("docs") / f"v{version}" / "win-installed-smoke.json"
+    artifact_id = str(artifact.get("id") or "windows-x64")
+    smoke_file = "win-ia32-installed-smoke.json" if artifact_id == "windows-ia32" else "win-installed-smoke.json"
+    smoke_path = pathlib.Path("docs") / f"v{version}" / smoke_file
     smoke = read_json_no_bom(smoke_path)
     required_true = [
         "installed",
@@ -377,14 +379,18 @@ def validate_windows_installed_smoke(manifest: dict, artifact: dict) -> None:
         "cleaned",
     ]
     missing = [key for key in required_true if not smoke.get(key)]
-    require(not missing, f"windows-x64 installed smoke missing passed flags: {', '.join(missing)}")
-    require(str(smoke.get("runtimeVersion") or "") == version, f"windows-x64 installed smoke runtimeVersion must be {version}")
-    require(str(smoke.get("installerFileName") or "") == str(artifact.get("fileName") or ""), "windows-x64 installed smoke fileName must match manifest")
-    require(str(smoke.get("installerSha256") or "").upper() == str(artifact.get("sha256") or "").upper(), "windows-x64 installed smoke sha256 must match manifest")
-    require(int(smoke.get("installerSize") or 0) == int(artifact.get("size") or 0), "windows-x64 installed smoke size must match manifest")
+    require(not missing, f"{artifact_id} installed smoke missing passed flags: {', '.join(missing)}")
+    require(str(smoke.get("runtimeVersion") or "") == version, f"{artifact_id} installed smoke runtimeVersion must be {version}")
+    expected_win_arch = "ia32" if artifact_id == "windows-ia32" else "x64"
+    expected_python_bits = 32 if artifact_id == "windows-ia32" else 64
+    require(str(smoke.get("runtimeWinArch") or "") == expected_win_arch, f"{artifact_id} installed smoke runtimeWinArch must be {expected_win_arch}")
+    require(int(smoke.get("runtimePythonBits") or 0) == expected_python_bits, f"{artifact_id} installed smoke runtimePythonBits must be {expected_python_bits}")
+    require(str(smoke.get("installerFileName") or "") == str(artifact.get("fileName") or ""), f"{artifact_id} installed smoke fileName must match manifest")
+    require(str(smoke.get("installerSha256") or "").upper() == str(artifact.get("sha256") or "").upper(), f"{artifact_id} installed smoke sha256 must match manifest")
+    require(int(smoke.get("installerSize") or 0) == int(artifact.get("size") or 0), f"{artifact_id} installed smoke size must match manifest")
     for key in ("installerSignatureStatus", "appSignatureStatus", "runtimePythonSignatureStatus"):
-        require(str(smoke.get(key) or "") == "Valid", f"windows-x64 installed smoke requires {key}=Valid")
-    validate_auth_negative_statuses(smoke, "windows-x64 installed smoke")
+        require(str(smoke.get(key) or "") == "Valid", f"{artifact_id} installed smoke requires {key}=Valid")
+    validate_auth_negative_statuses(smoke, f"{artifact_id} installed smoke")
 
 
 def validate_external_artifact_metadata(artifact_id: str, artifact: dict) -> None:
@@ -405,9 +411,9 @@ def validate_manifest_artifacts(manifest: dict, artifact_dir: pathlib.Path) -> l
         if not is_publishable_artifact(artifact):
             print(f"SKIP artifact {artifact_id} status={status}")
             continue
-        if artifact_id == "windows-x64":
+        if artifact_id.startswith("windows-"):
             signature = str(artifact.get("signature") or "").lower()
-            require(signature == "valid", "windows-x64 publishable artifact requires signature=Valid")
+            require(signature == "valid", f"{artifact_id} publishable artifact requires signature=Valid")
             validate_windows_installed_smoke(manifest, artifact)
         if status == MACOS_UNSIGNED_STATUS:
             require(is_macos_artifact(artifact_id), f"{status} is only allowed for macOS artifacts")
@@ -578,6 +584,10 @@ def validate_public_zip(
         if windows_ready:
             installer_name = str(windows_ready.get("fileName") or "")
             expected_download_files.update({"latest.yml", f"{installer_name}.blockmap"})
+        windows_ia32_ready = next((item for item in ready if str(item.get("id") or "") == "windows-ia32" and not is_external_artifact(item)), None)
+        if windows_ia32_ready:
+            installer_name = str(windows_ia32_ready.get("fileName") or "")
+            expected_download_files.update({f"ia32/{installer_name}", "ia32/latest.yml", f"ia32/{installer_name}.blockmap"})
         require(download_files == expected_download_files, "public zip download file set mismatch")
 
         for artifact_id, artifact in ready_by_id.items():
@@ -623,6 +633,24 @@ def validate_public_zip(
             require(f"path: {installer_name}" in latest_text, "latest.yml installer path mismatch")
             require(f"size: {installer_size}" in latest_text, "latest.yml installer size mismatch")
             require(len(archive.read(blockmap_rel)) > 0, "Windows installer blockmap is empty")
+        if windows_ia32_ready:
+            installer_name = str(windows_ia32_ready.get("fileName") or "")
+            installer_size = int(windows_ia32_ready.get("size") or 0)
+            latest_rel = "site/downloads/ia32/latest.yml"
+            installer_rel = f"site/downloads/ia32/{installer_name}"
+            blockmap_rel = f"site/downloads/ia32/{installer_name}.blockmap"
+            require(latest_rel in names, "public zip missing Windows ia32 latest.yml")
+            require(installer_rel in names, "public zip missing Windows ia32 updater installer")
+            require(blockmap_rel in names, "public zip missing Windows ia32 installer blockmap")
+            latest_text = archive.read(latest_rel).decode("utf-8")
+            require(f"version: {manifest.get('version')}" in latest_text, "ia32 latest.yml version mismatch")
+            require(f"url: {installer_name}" in latest_text, "ia32 latest.yml installer url mismatch")
+            require(f"path: {installer_name}" in latest_text, "ia32 latest.yml installer path mismatch")
+            require(f"size: {installer_size}" in latest_text, "ia32 latest.yml installer size mismatch")
+            installer_payload = archive.read(installer_rel)
+            require(len(installer_payload) == installer_size, "Windows ia32 updater installer size mismatch")
+            require(sha256_bytes(installer_payload) == str(windows_ia32_ready.get("sha256") or "").upper(), "Windows ia32 updater installer sha256 mismatch")
+            require(len(archive.read(blockmap_rel)) > 0, "Windows ia32 installer blockmap is empty")
     print(f"PASS public zip {public_zip.name}")
 
 

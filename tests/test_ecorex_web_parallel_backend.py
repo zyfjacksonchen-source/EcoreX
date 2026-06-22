@@ -678,22 +678,22 @@ class TestAgentCapabilityPermissions(unittest.TestCase):
             {"action": "install_pack", "pack_id": "feishu-lark"},
         )
 
-        self.assertEqual(proxy_name, "agent_capability")
-        self.assertEqual(proxy_args["action"], "install_pack")
-        self.assertEqual(proxy_args["pack_id"], "feishu-lark")
-        self.assertTrue(proxy_args["discoveryOnly"])
+        self.assertEqual(proxy_name, "optional_abilities")
+        self.assertEqual(proxy_args["action"], "install")
+        self.assertEqual(proxy_args["ability"], "feishu-cli")
+        self.assertNotIn("discoveryOnly", proxy_args)
 
-    def test_agent_capability_feishu_pack_is_discovery_only(self):
+    def test_agent_capability_feishu_pack_requires_find_skill_gate(self):
         from agent.tools.agent_capability.agent_capability import AgentCapabilityTool
         from agent.tools.optional_abilities.optional_abilities import OptionalAbilities
 
         calls = []
 
-        def fake_install(self, pack_id, timeout):
-            calls.append((pack_id, timeout))
-            raise AssertionError("feishu-lark must not enter capability-pack installer")
+        def fake_feishu_cli(self, timeout, discovery_source=None, find_skill_result=None):
+            calls.append(("feishu-cli", timeout, discovery_source, find_skill_result))
+            raise AssertionError("feishu-lark install must not run without a find-skill gate")
 
-        with patch.object(OptionalAbilities, "_install_capability_pack", fake_install):
+        with patch.object(OptionalAbilities, "_install_feishu_cli", fake_feishu_cli):
             result = AgentCapabilityTool().execute({
                 "action": "install_pack",
                 "pack_id": "feishu-lark",
@@ -705,26 +705,116 @@ class TestAgentCapabilityPermissions(unittest.TestCase):
         self.assertTrue(result.result["discoveryOnly"])
         self.assertIn("find-skill", result.result["message"])
 
-    def test_agent_capability_install_pack_accepts_feishu_cli_alias(self):
+    def test_agent_capability_feishu_pack_rejects_unstructured_find_skill_result(self):
         from agent.tools.agent_capability.agent_capability import AgentCapabilityTool
         from agent.tools.optional_abilities.optional_abilities import OptionalAbilities
 
         calls = []
 
-        def fake_feishu_cli(self, timeout):
-            calls.append(("feishu-cli", timeout))
-            raise AssertionError("feishu-cli alias must stay discovery-only")
+        def fake_feishu_cli(self, timeout, discovery_source=None, find_skill_result=None):
+            calls.append(("feishu-cli", timeout, discovery_source, find_skill_result))
+            raise AssertionError("unstructured find_skill_result must not reach installer")
+
+        with patch.object(OptionalAbilities, "_install_feishu_cli", fake_feishu_cli):
+            for gate in ("find-skill", {"status": "success", "package": "not-related"}):
+                with self.subTest(gate=gate):
+                    result = AgentCapabilityTool().execute({
+                        "action": "install_pack",
+                        "pack_id": "feishu-lark",
+                        "timeout": 45,
+                        "find_skill_result": gate,
+                    })
+                    self.assertEqual(result.status, "error")
+                    self.assertTrue(result.result["discoveryOnly"])
+
+        self.assertEqual(calls, [])
+
+    def test_agent_capability_feishu_pack_accepts_structured_find_skill_result(self):
+        from agent.tools.agent_capability.agent_capability import AgentCapabilityTool
+        from agent.tools.optional_abilities.optional_abilities import OptionalAbilities
+        from agent.tools.base_tool import ToolResult
+
+        gate = {
+            "status": "success",
+            "source": "find-skill",
+            "package": "@larksuite/cli",
+            "url": "https://github.com/larksuite/cli",
+        }
+        calls = []
+
+        def fake_feishu_cli(self, timeout, discovery_source=None, find_skill_result=None):
+            calls.append(("feishu-cli", timeout, discovery_source, find_skill_result))
+            return ToolResult.success({
+                "status": "success",
+                "available": True,
+                "capabilityState": {"installed": True},
+            })
+
+        with patch.object(OptionalAbilities, "_install_feishu_cli", fake_feishu_cli):
+            result = AgentCapabilityTool().execute({
+                "action": "install_pack",
+                "pack_id": "feishu-lark",
+                "timeout": 45,
+                "find_skill_result": gate,
+            })
+
+        self.assertEqual(result.status, "success")
+        self.assertEqual(calls, [("feishu-cli", 45, None, gate)])
+
+    def test_agent_capability_feishu_pack_installs_structured_cli_after_find_skill_gate(self):
+        from agent.tools.agent_capability.agent_capability import AgentCapabilityTool
+        from agent.tools.optional_abilities.optional_abilities import OptionalAbilities
+        from agent.tools.base_tool import ToolResult
+
+        calls = []
+
+        def fake_feishu_cli(self, timeout, discovery_source=None, find_skill_result=None):
+            calls.append(("feishu-cli", timeout, discovery_source, find_skill_result))
+            return ToolResult.success({
+                "status": "success",
+                "available": True,
+                "capabilityState": {"installed": True},
+            })
+
+        with patch.object(OptionalAbilities, "_install_feishu_cli", fake_feishu_cli):
+            result = AgentCapabilityTool().execute({
+                "action": "install_pack",
+                "pack_id": "feishu-lark",
+                "timeout": 45,
+                "discovery_source": "find-skill",
+            })
+
+        self.assertEqual(result.status, "success")
+        self.assertEqual(calls, [("feishu-cli", 45, "find-skill", None)])
+        self.assertEqual(result.result["installPlan"], ["feishu-cli"])
+        self.assertTrue(result.result["steps"][0]["installed"])
+
+    def test_agent_capability_install_pack_accepts_feishu_cli_alias(self):
+        from agent.tools.agent_capability.agent_capability import AgentCapabilityTool
+        from agent.tools.optional_abilities.optional_abilities import OptionalAbilities
+        from agent.tools.base_tool import ToolResult
+
+        calls = []
+
+        def fake_feishu_cli(self, timeout, discovery_source=None, find_skill_result=None):
+            calls.append(("feishu-cli", timeout, discovery_source, find_skill_result))
+            return ToolResult.success({
+                "status": "success",
+                "available": True,
+                "capabilityState": {"installed": True},
+            })
 
         with patch.object(OptionalAbilities, "_install_feishu_cli", fake_feishu_cli):
             result = AgentCapabilityTool().execute({
                 "action": "install_pack",
                 "pack_id": "lark-cli",
                 "timeout": 30,
+                "discovery_source": "find-skill",
             })
 
-        self.assertEqual(result.status, "error")
-        self.assertEqual(calls, [])
-        self.assertTrue(result.result["discoveryOnly"])
+        self.assertEqual(result.status, "success")
+        self.assertEqual(calls, [("feishu-cli", 30, "find-skill", None)])
+        self.assertEqual(result.result["installPlan"], ["feishu-cli"])
 
     def test_optional_abilities_update_preserves_live_provider_config(self):
         import config as config_module
@@ -901,8 +991,10 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertIn("agent_capability", prompt)
         self.assertIn("feishu_cli", prompt)
         self.assertIn("@larksuite/cli", prompt)
-        self.assertIn("不要要求用户输入", prompt)
-        self.assertIn("不要反复诊断", prompt)
+        self.assertIn("find-skill", prompt)
+        self.assertIn("registry.npmmirror.com", prompt)
+        self.assertIn("Do not use raw bash/curl/npm/git clone", prompt)
+        self.assertFalse(result["discoveryOnly"])
 
     def test_default_app_shell_is_independent_of_desktop_dist(self):
         from channel.web.web_channel import _default_web_app_html
@@ -5172,6 +5264,20 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertIn("Do not call Feishu/Lark CLI through raw bash", package_reason)
         self.assertIn("feishu_cli", package_reason)
 
+        git_reason = executor._external_capability_reroute(
+            "bash",
+            {"command": "git clone https://github.com/larksuite/cli /tmp/feishu"},
+        )
+        self.assertIn("Do not call Feishu/Lark CLI through raw bash", git_reason)
+        self.assertIn("feishu_cli", git_reason)
+
+        git_ssh_reason = executor._external_capability_reroute(
+            "bash",
+            {"command": "git clone git@github.com:larksuite/cli.git /tmp/feishu"},
+        )
+        self.assertIn("Do not call Feishu/Lark CLI through raw bash", git_ssh_reason)
+        self.assertIn("feishu_cli", git_ssh_reason)
+
     def test_chrome_devtools_mcp_startup_is_allowed_noninteractive(self):
         from common.ecorex_tool_permissions import ToolPermissionBroker
 
@@ -5407,6 +5513,25 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertIn("find-skill", result.result["message"])
         safe_run.assert_not_called()
 
+    def test_feishu_cli_install_rejects_unstructured_find_skill_result(self):
+        from agent.tools.feishu_cli.feishu_cli import FeishuCli
+
+        tool = FeishuCli({"package": "@larksuite/cli@1.0.56"})
+        with patch("agent.tools.feishu_cli.feishu_cli._resolve_lark_command", return_value=None), \
+                patch("agent.tools.feishu_cli.feishu_cli._which", return_value="npm"), \
+                patch.object(FeishuCli, "_safe_run") as safe_run:
+            for gate in ("find-skill", {"status": "success", "package": "not-related"}):
+                with self.subTest(gate=gate):
+                    result = tool.execute({
+                        "action": "install",
+                        "timeout": 1,
+                        "find_skill_result": gate,
+                    })
+                    self.assertEqual(result.status, "error")
+                    self.assertTrue(result.result["discoveryOnly"])
+
+        safe_run.assert_not_called()
+
     def test_feishu_cli_install_allows_find_skill_gate(self):
         from agent.tools.feishu_cli.feishu_cli import FeishuCli
 
@@ -5424,6 +5549,44 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertTrue(result.result["installedNow"])
         self.assertEqual(result.result["registry"], "https://registry.npmjs.org")
         safe_run.assert_called_once()
+
+    def test_feishu_cli_install_allows_structured_find_skill_result(self):
+        from agent.tools.feishu_cli.feishu_cli import FeishuCli
+
+        tool = FeishuCli({"package": "@larksuite/cli@1.0.56"})
+        with patch("agent.tools.feishu_cli.feishu_cli._resolve_lark_command", side_effect=[None, ["lark"]]), \
+                patch("agent.tools.feishu_cli.feishu_cli._which", return_value="npm"), \
+                patch.object(FeishuCli, "_safe_run", return_value={"status": "success", "exitCode": 0, "output": "ok"}) as safe_run:
+            result = tool.execute({
+                "action": "install",
+                "timeout": 1,
+                "find_skill_result": {
+                    "status": "success",
+                    "source": "find-skill",
+                    "package": "@larksuite/cli",
+                    "url": "https://github.com/larksuite/cli",
+                },
+            })
+
+        self.assertEqual(result.status, "success")
+        self.assertTrue(result.result["installedNow"])
+        safe_run.assert_called_once()
+
+    def test_feishu_cli_install_root_uses_env_override(self):
+        from agent.tools.feishu_cli.feishu_cli import FeishuCli
+
+        with tempfile.TemporaryDirectory() as workspace:
+            install_root = os.path.join(workspace, "user-data", "capabilities", "lark-cli")
+            previous = os.environ.get("ECOREX_LARK_CLI_INSTALL_ROOT")
+            os.environ["ECOREX_LARK_CLI_INSTALL_ROOT"] = install_root
+            try:
+                tool = FeishuCli({"package": "@larksuite/cli@1.0.56"})
+                self.assertEqual(str(tool._install_root()), install_root)
+            finally:
+                if previous is None:
+                    os.environ.pop("ECOREX_LARK_CLI_INSTALL_ROOT", None)
+                else:
+                    os.environ["ECOREX_LARK_CLI_INSTALL_ROOT"] = previous
 
     def test_tool_manager_create_tool_applies_feishu_cli_config(self):
         from agent.tools.tool_manager import ToolManager

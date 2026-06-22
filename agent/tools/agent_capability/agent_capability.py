@@ -114,6 +114,8 @@ _FEISHU_LARK_SKILL_HINTS = (
     "lark-cli",
 )
 
+_FIND_SKILL_POSITIVE_STATUSES = {"success", "ok", "found", "pass", "passed", "ready", "available"}
+
 
 def _contains_feishu_lark_hint(value: Any) -> bool:
     try:
@@ -124,11 +126,28 @@ def _contains_feishu_lark_hint(value: Any) -> bool:
     return any(hint.lower() in lowered for hint in _FEISHU_LARK_SKILL_HINTS)
 
 
+def _is_positive_find_skill_result(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    status = str(value.get("status") or value.get("state") or value.get("result") or "").strip().lower()
+    positive = (
+        status in _FIND_SKILL_POSITIVE_STATUSES
+        or value.get("success") is True
+        or value.get("ok") is True
+        or value.get("found") is True
+        or value.get("available") is True
+    )
+    return positive and _contains_feishu_lark_hint(value)
+
+
 def _has_find_skill_discovery(params: Dict[str, Any]) -> bool:
     for key in ("discovery_source", "source", "via", "gate", "resolved_by"):
         if "find" in str(params.get(key) or "").strip().lower():
             return True
-    return params.get("find_skill_result") is not None or params.get("findSkillResult") is not None
+    return (
+        _is_positive_find_skill_result(params.get("find_skill_result"))
+        or _is_positive_find_skill_result(params.get("findSkillResult"))
+    )
 
 
 class AgentCapabilityTool(BaseTool):
@@ -170,7 +189,7 @@ class AgentCapabilityTool(BaseTool):
                 pack_id = _normalize_pack_id(str(params.get("pack_id") or params.get("ability") or ""))
                 if not pack_id:
                     return ToolResult.fail({"status": "error", "message": "pack_id is required"})
-                return self._install_pack(pack_id, params.get("timeout"))
+                return self._install_pack(pack_id, params)
             if action == "install_skill":
                 return self._install_skill(workspace, params)
             if action == "enable_skill":
@@ -186,34 +205,38 @@ class AgentCapabilityTool(BaseTool):
             return ToolResult.fail({"status": "error", "action": action, "message": str(exc)})
         return ToolResult.fail({"status": "error", "message": "unknown action"})
 
-    def _install_pack(self, pack_id: str, timeout: Any) -> ToolResult:
-        if pack_id in {"feishu-lark", "feishu-cli"}:
+    def _install_pack(self, pack_id: str, params: Dict[str, Any]) -> ToolResult:
+        timeout = params.get("timeout")
+        install_plan = ["feishu-cli"] if pack_id in {"feishu-lark", "feishu-cli"} else [pack_id]
+        if pack_id in {"feishu-lark", "feishu-cli"} and not _has_find_skill_discovery(params):
             return ToolResult.fail({
                 "status": "error",
                 "packId": pack_id,
                 "discoveryOnly": True,
                 "sourceUrl": FEISHU_LARK_SOURCE_URL,
                 "mirrorUrls": FEISHU_LARK_MIRROR_URLS,
-                "installHint": (
-                    "feishu-lark is discovery-only. Do not use install_pack. "
-                    "Use the built-in find skill first (gated as find-skill) to discover and choose the Feishu/Lark connector install source. "
-                    "For real Feishu/Lark CLI work, install official @larksuite/cli on demand. "
-                    f"If npmjs.org times out, retry with the domestic npm mirror: npm install --registry={FEISHU_LARK_NPM_MIRROR} @larksuite/cli@1.0.56."
-                ),
                 "message": (
-                    "feishu-lark is discovery-only. Use the built-in find skill/find-skill gate first, then fall back to "
-                    "official npm or a domestic npm mirror as needed."
+                    "Feishu/Lark CLI install requires the built-in find skill/find-skill gate first. "
+                    "Retry install_pack with discovery_source='find-skill' or a structured find_skill_result."
                 ),
-                "nextAction": {"action": "diagnose"},
+                "nextAction": {
+                    "skill": "find",
+                    "ability": "find-skill",
+                    "query": "official Feishu Lark CLI @larksuite/cli install source",
+                },
             })
-        install_plan = ["feishu-lark", "feishu-cli"] if pack_id == "feishu-lark" else [pack_id]
         steps = []
         for ability in install_plan:
-            payload = _payload_for_result(OptionalAbilities().execute({
+            install_args: Dict[str, Any] = {
                 "action": "install",
                 "ability": ability,
                 "timeout": timeout,
-            }))
+            }
+            if ability == "feishu-cli":
+                for key in ("discovery_source", "source", "via", "gate", "resolved_by", "find_skill_result", "findSkillResult"):
+                    if key in params:
+                        install_args[key] = params[key]
+            payload = _payload_for_result(OptionalAbilities().execute(install_args))
             steps.append(_compact_install_step(ability, payload))
             if payload.get("status") != "success":
                 return ToolResult.fail({

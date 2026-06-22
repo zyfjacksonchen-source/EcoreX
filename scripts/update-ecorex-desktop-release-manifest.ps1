@@ -3,6 +3,8 @@ param(
     [string]$ManifestPath = "deploy/ecorex-site/manifest.json",
     [string]$WindowsInstallerPath = "",
     [string]$WindowsInstalledSmokePath = "",
+    [string]$WindowsIa32InstallerPath = "",
+    [string]$WindowsIa32InstalledSmokePath = "",
     [string]$MacArm64DmgPath = "",
     [string]$MacArm64InstallSmokePath = "",
     [string]$MacX64DmgPath = "",
@@ -109,7 +111,9 @@ function Get-SmokeFirstNonEmpty {
 function Assert-WindowsSmoke {
     param(
         [Parameter(Mandatory = $true)]$Smoke,
-        [Parameter(Mandatory = $true)][string]$Version
+        [Parameter(Mandatory = $true)][string]$Version,
+        [Parameter(Mandatory = $true)][string]$ArtifactId,
+        [string]$Label = "Windows installed smoke"
     )
     Assert-RequiredTrue -Payload $Smoke -Keys @(
         "installed",
@@ -119,27 +123,35 @@ function Assert-WindowsSmoke {
         "authRequired",
         "authNegativeReady",
         "cleaned"
-    ) -Label "Windows installed smoke"
+    ) -Label $Label
     foreach ($name in @("installerSignatureStatus", "appSignatureStatus", "runtimePythonSignatureStatus")) {
         if ([string]$Smoke.$name -ne "Valid") {
-            throw "Windows installed smoke requires $name=Valid; got '$($Smoke.$name)'."
+            throw "$Label requires $name=Valid; got '$($Smoke.$name)'."
         }
     }
     if ([string]$Smoke.runtimeVersion -ne $Version) {
-        throw "Windows installed smoke runtimeVersion '$($Smoke.runtimeVersion)' does not match '$Version'."
+        throw "$Label runtimeVersion '$($Smoke.runtimeVersion)' does not match '$Version'."
+    }
+    $expectedWinArch = if ($ArtifactId -eq "windows-ia32") { "ia32" } else { "x64" }
+    $expectedPythonBits = if ($ArtifactId -eq "windows-ia32") { 32 } else { 64 }
+    if ([string]$Smoke.runtimeWinArch -ne $expectedWinArch) {
+        throw "$Label runtimeWinArch '$($Smoke.runtimeWinArch)' does not match '$expectedWinArch'."
+    }
+    if ([int]$Smoke.runtimePythonBits -ne $expectedPythonBits) {
+        throw "$Label runtimePythonBits '$($Smoke.runtimePythonBits)' does not match '$expectedPythonBits'."
     }
     $negative = $Smoke.authNegativeStatuses
     if (-not $negative) {
-        throw "Windows installed smoke is missing authNegativeStatuses."
+        throw "$Label is missing authNegativeStatuses."
     }
     $negativeNames = @($negative.PSObject.Properties.Name)
     $missingNegative = @($RequiredAuthNegativeStatusKeys | Where-Object { $_ -notin $negativeNames })
     if ($missingNegative.Count -gt 0) {
-        throw "Windows installed smoke is missing authNegativeStatuses keys: $($missingNegative -join ', ')."
+        throw "$Label is missing authNegativeStatuses keys: $($missingNegative -join ', ')."
     }
     foreach ($property in $negative.PSObject.Properties) {
         if ([int]$property.Value -ne 401) {
-            throw "Windows installed smoke negative auth '$($property.Name)' returned $($property.Value), expected 401."
+            throw "$Label negative auth '$($property.Name)' returned $($property.Value), expected 401."
         }
     }
 }
@@ -248,16 +260,21 @@ function Update-CommonMetadata {
 function Update-WindowsArtifact {
     param(
         [Parameter(Mandatory = $true)]$Manifest,
+        [Parameter(Mandatory = $true)][string]$ArtifactId,
         [Parameter(Mandatory = $true)][string]$InstallerPath,
         [Parameter(Mandatory = $true)][string]$SmokePath
     )
     $metadata = Get-FileMetadata $InstallerPath
+    $expectedFileName = if ($ArtifactId -eq "windows-ia32") { "EcoreX_${Version}_ia32-setup.exe" } else { "EcoreX_${Version}_x64-setup.exe" }
+    if ($metadata.FileName -ne $expectedFileName) {
+        throw "Windows artifact '$ArtifactId' file '$($metadata.FileName)' does not match expected '$expectedFileName'."
+    }
     $signature = Get-AuthenticodeSignature -LiteralPath $metadata.Path
     if ($signature.Status -ne "Valid") {
         throw "Windows installer is not Authenticode Valid: $($signature.Status) $($signature.StatusMessage)"
     }
     $smoke = Read-JsonFile $SmokePath
-    Assert-WindowsSmoke -Smoke $smoke -Version $Version
+    Assert-WindowsSmoke -Smoke $smoke -Version $Version -ArtifactId $ArtifactId -Label "$ArtifactId installed smoke"
     if ([string]$smoke.installer -and ([System.IO.Path]::GetFileName([string]$smoke.installer) -ne $metadata.FileName)) {
         throw "Windows installed smoke tested '$($smoke.installer)', not '$($metadata.FileName)'."
     }
@@ -273,8 +290,8 @@ function Update-WindowsArtifact {
     if ([int64]$smoke.installerSize -ne $metadata.Size) {
         throw "Windows installed smoke installerSize '$($smoke.installerSize)' does not match '$($metadata.Size)'."
     }
-    $artifact = Get-Artifact -Manifest $Manifest -Id "windows-x64"
-    Update-CommonMetadata -Artifact $artifact -Metadata $metadata -Status "ready" -Signature "Valid" -Source "Signed v$Version Windows installer verified by installed smoke evidence."
+    $artifact = Get-Artifact -Manifest $Manifest -Id $ArtifactId
+    Update-CommonMetadata -Artifact $artifact -Metadata $metadata -Status "ready" -Signature "Valid" -Source "Signed v$Version $ArtifactId installer verified by installed smoke evidence."
 }
 
 function Update-MacArtifact {
@@ -337,7 +354,14 @@ if ($WindowsInstallerPath -or $WindowsInstalledSmokePath) {
     if (-not $WindowsInstallerPath -or -not $WindowsInstalledSmokePath) {
         throw "Pass both -WindowsInstallerPath and -WindowsInstalledSmokePath."
     }
-    Update-WindowsArtifact -Manifest $manifest -InstallerPath $WindowsInstallerPath -SmokePath $WindowsInstalledSmokePath
+    Update-WindowsArtifact -Manifest $manifest -ArtifactId "windows-x64" -InstallerPath $WindowsInstallerPath -SmokePath $WindowsInstalledSmokePath
+}
+
+if ($WindowsIa32InstallerPath -or $WindowsIa32InstalledSmokePath) {
+    if (-not $WindowsIa32InstallerPath -or -not $WindowsIa32InstalledSmokePath) {
+        throw "Pass both -WindowsIa32InstallerPath and -WindowsIa32InstalledSmokePath."
+    }
+    Update-WindowsArtifact -Manifest $manifest -ArtifactId "windows-ia32" -InstallerPath $WindowsIa32InstallerPath -SmokePath $WindowsIa32InstalledSmokePath
 }
 
 if ($MacArm64DmgPath -or $MacArm64InstallSmokePath) {

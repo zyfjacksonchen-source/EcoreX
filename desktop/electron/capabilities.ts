@@ -132,7 +132,7 @@ export class CapabilityManager {
         const missingModules = check?.missingModules || status.missingModules || [];
         const state: CapabilityState = installed ? "installed" : status.state || "not-installed";
         const policyPack = policyPacks.get(pack.id);
-        const discoveryOnly = pack.discoveryOnly === true;
+        const discoveryOnly = pack.discoveryOnly === true && pack.id !== "feishu-lark";
         const packPolicyMode = discoveryOnly ? "ask" : (policyPack?.mode as CapabilityPolicyMode | undefined) || policy.mode || "ask";
         const message =
           discoveryOnly && !installed
@@ -144,6 +144,7 @@ export class CapabilityManager {
               : status.message || `${pack.name} is not installed. EcoreX will ask the current agent session to install it when needed.`;
         return {
           ...pack,
+          discoveryOnly,
           state,
           message,
           installed,

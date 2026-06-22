@@ -2,6 +2,7 @@ param(
     [string]$PublicBaseUrl = "https://www.ecoreai.cn/ecorex-agent",
     [string]$ExpectedVersion = "0.1.18",
     [string]$LocalWindowsInstaller = "",
+    [string]$LocalWindowsIa32Installer = "",
     [string]$LocalMacArm64Dmg = "",
     [string]$LocalMacX64Dmg = "",
     [string]$ClientEventKey = "",
@@ -277,7 +278,7 @@ foreach ($artifact in $manifest.artifacts) {
     $artifacts[$artifact.id] = $artifact
 }
 
-foreach ($requiredId in @("windows-x64", "macos-arm64-dmg", "macos-x64-dmg")) {
+foreach ($requiredId in @("windows-x64", "windows-ia32", "macos-arm64-dmg", "macos-x64-dmg")) {
     if ($SkipMacArtifacts -and $requiredId.StartsWith("macos-")) {
         if ($artifacts.ContainsKey($requiredId)) {
             $artifact = $artifacts[$requiredId]
@@ -308,7 +309,7 @@ foreach ($artifact in $manifest.artifacts) {
         $checks.Add((New-Check "Public download: $($artifact.fileName)" "skipped" "Artifact status is $($artifact.status); not required in this verification pass." "warn"))
         continue
     }
-    if ($artifact.id -eq "windows-x64" -and [string]$artifact.signature -ne "Valid") {
+    if ($artifact.id -like "windows-*" -and [string]$artifact.signature -ne "Valid") {
         $checks.Add((New-Check "Windows manifest signature" "fail" "Publishable Windows artifact requires signature=Valid, got '$($artifact.signature)'." "blocker"))
         continue
     }
@@ -391,24 +392,34 @@ if ($ClientEventKey) {
     $checks.Add((New-Check "Client authenticated policy checks" "skipped" "Pass -ClientEventKey to verify authenticated model and capability policy endpoints." "warn"))
 }
 
-$windowsArtifact = if ($artifacts.ContainsKey("windows-x64")) { $artifacts["windows-x64"] } else { $null }
-$windowsPublishable = $windowsArtifact -and (Test-PublishableArtifact $windowsArtifact)
-if ($windowsPublishable -and $LocalWindowsInstaller) {
-    $checks.Add((Assert-Hash $LocalWindowsInstaller $windowsArtifact.sha256))
-    if (Test-Path -LiteralPath $LocalWindowsInstaller) {
-        $signature = Get-AuthenticodeSignature -LiteralPath $LocalWindowsInstaller
-        if ($signature.Status -eq "Valid") {
-            $checks.Add((New-Check "Windows Authenticode signature" "pass" "Signature verified."))
-        } else {
-            $checks.Add((New-Check "Windows Authenticode signature" "fail" "$($signature.Status): $($signature.StatusMessage)" "blocker"))
+function Add-WindowsLocalInstallerChecks {
+    param(
+        [string]$ArtifactId,
+        [string]$LocalPath,
+        [string]$ParameterName
+    )
+    $artifact = if ($artifacts.ContainsKey($ArtifactId)) { $artifacts[$ArtifactId] } else { $null }
+    $publishable = $artifact -and (Test-PublishableArtifact $artifact)
+    if ($publishable -and $LocalPath) {
+        $checks.Add((Assert-Hash $LocalPath $artifact.sha256))
+        if (Test-Path -LiteralPath $LocalPath) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $LocalPath
+            if ($signature.Status -eq "Valid") {
+                $checks.Add((New-Check "$ArtifactId Authenticode signature" "pass" "Signature verified."))
+            } else {
+                $checks.Add((New-Check "$ArtifactId Authenticode signature" "fail" "$($signature.Status): $($signature.StatusMessage)" "blocker"))
+            }
         }
+    } elseif ($publishable) {
+        $checks.Add((New-Check "$ArtifactId local installer signature" "fail" "Publishable Windows artifact requires -$ParameterName for Authenticode verification." "blocker"))
+    } else {
+        $status = if ($artifact) { [string]$artifact.status } else { "missing" }
+        $checks.Add((New-Check "$ArtifactId local installer signature" "skipped" "Windows artifact is not publishable in this manifest (status=$status)." "warn"))
     }
-} elseif ($windowsPublishable) {
-    $checks.Add((New-Check "Windows local installer signature" "fail" "Publishable Windows artifact requires -LocalWindowsInstaller for Authenticode verification." "blocker"))
-} else {
-    $status = if ($windowsArtifact) { [string]$windowsArtifact.status } else { "missing" }
-    $checks.Add((New-Check "Windows local installer signature" "skipped" "Windows artifact is not publishable in this manifest (status=$status)." "warn"))
 }
+
+Add-WindowsLocalInstallerChecks -ArtifactId "windows-x64" -LocalPath $LocalWindowsInstaller -ParameterName "LocalWindowsInstaller"
+Add-WindowsLocalInstallerChecks -ArtifactId "windows-ia32" -LocalPath $LocalWindowsIa32Installer -ParameterName "LocalWindowsIa32Installer"
 
 if ($SkipMacArtifacts) {
     $checks.Add((New-Check "macOS local DMG hash" "skipped" "macOS signing/notarization/Gatekeeper validation is deferred to a Mac." "warn"))

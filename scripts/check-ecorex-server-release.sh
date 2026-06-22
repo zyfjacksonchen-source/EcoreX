@@ -200,6 +200,7 @@ else:
     fail(f"manifest product={payload.get('product')} version={payload.get('version')} expected={expected}")
 
 ready_count = 0
+ready_windows = {}
 for artifact in payload.get("artifacts") or []:
     artifact_id = artifact.get("id") or artifact.get("fileName") or "unknown"
     status = artifact.get("status") or ""
@@ -207,7 +208,7 @@ for artifact in payload.get("artifacts") or []:
     if not is_publishable(artifact):
         print(f"SKIP artifact {artifact_id} status={status}")
         continue
-    if artifact_id == "windows-x64" and str(artifact.get("signature") or "").lower() != "valid":
+    if artifact_id.startswith("windows-") and str(artifact.get("signature") or "").lower() != "valid":
         fail(f"{artifact_id} requires signature=Valid")
     if status == "ready-unsigned":
         validate_macos_unsigned_install_smoke(artifact)
@@ -240,9 +241,41 @@ for artifact in payload.get("artifacts") or []:
         fail(f"artifact {artifact_id} sha256={actual_sha} expected={expected_sha}")
         continue
     print(f"PASS artifact {artifact_id} {file_name}")
+    if str(artifact_id).startswith("windows-"):
+        ready_windows[str(artifact_id)] = artifact
 
 if ready_count == 0:
     fail("manifest has no ready artifacts")
+
+def validate_windows_feed(artifact_id, rel_dir):
+    artifact = ready_windows.get(artifact_id)
+    if not artifact:
+        return
+    file_name = artifact.get("fileName") or ""
+    expected_size = int(artifact.get("size") or 0)
+    feed_dir = downloads / rel_dir if rel_dir else downloads
+    latest = feed_dir / "latest.yml"
+    installer = feed_dir / file_name
+    blockmap = feed_dir / f"{file_name}.blockmap"
+    for path, label in ((latest, "latest.yml"), (blockmap, "blockmap")):
+        if not path.is_file():
+            fail(f"{artifact_id} update feed missing {label}: {path}")
+        elif path.stat().st_size <= 0:
+            fail(f"{artifact_id} update feed empty {label}: {path}")
+    if rel_dir and not installer.is_file():
+        fail(f"{artifact_id} update feed missing installer copy: {installer}")
+    if latest.is_file():
+        text = latest.read_text(encoding="utf-8", errors="replace")
+        if f"version: {expected}" not in text:
+            fail(f"{artifact_id} latest.yml version mismatch")
+        if f"url: {file_name}" not in text or f"path: {file_name}" not in text:
+            fail(f"{artifact_id} latest.yml installer name mismatch")
+        if f"size: {expected_size}" not in text:
+            fail(f"{artifact_id} latest.yml installer size mismatch")
+    print(f"PASS {artifact_id} update feed")
+
+validate_windows_feed("windows-x64", "")
+validate_windows_feed("windows-ia32", "ia32")
 
 raise SystemExit(1 if failures else 0)
 PY
@@ -288,6 +321,7 @@ import json
 import pathlib
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 manifest = pathlib.Path(sys.argv[1])
@@ -326,6 +360,13 @@ def status_for(url):
         return exc.code
     except Exception as exc:
         return f"error:{exc}"
+
+def text_for(url):
+    try:
+        with urllib.request.urlopen(url, timeout=20) as response:
+            return response.read().decode("utf-8", errors="replace")
+    except Exception as exc:
+        return f"__error__:{exc}"
 
 def is_publishable(artifact):
     global failures
@@ -422,15 +463,18 @@ if payload.get("product") == "EcoreX" and str(payload.get("version") or "") == e
 else:
     print(f"FAIL public manifest product={payload.get('product')} version={payload.get('version')} expected={expected_version}")
     failures += 1
+ready_windows = {}
 for artifact in payload.get("artifacts") or []:
     status = artifact.get("status") or ""
     artifact_id = artifact.get("id") or artifact.get("fileName") or "unknown"
     if not is_publishable(artifact):
         print(f"SKIP public artifact {artifact_id} status={status}")
         continue
-    if artifact_id == "windows-x64" and str(artifact.get("signature") or "").lower() != "valid":
+    if artifact_id.startswith("windows-") and str(artifact.get("signature") or "").lower() != "valid":
         print(f"FAIL {artifact_id} requires signature=Valid")
         failures += 1
+    if str(artifact_id).startswith("windows-"):
+        ready_windows[str(artifact_id)] = artifact
     if status == "ready-unsigned":
         failures += validate_macos_unsigned_install_smoke(artifact)
     href = artifact.get("href") or f"downloads/{artifact.get('fileName', '')}"
@@ -444,6 +488,46 @@ for artifact in payload.get("artifacts") or []:
     else:
         print(f"FAIL http artifact {artifact_id} {url} -> {status_code}")
         failures += 1
+
+def validate_public_windows_feed(artifact_id, rel_dir):
+    global failures
+    artifact = ready_windows.get(artifact_id)
+    if not artifact:
+        return
+    file_name = str(artifact.get("fileName") or "")
+    expected_size = int(artifact.get("size") or 0)
+    feed_path = "downloads/" + (rel_dir.strip("/") + "/" if rel_dir else "")
+    feed_base = f"{base_url}/{feed_path.rstrip('/')}"
+    latest_url = f"{feed_base}/latest.yml"
+    blockmap_url = f"{feed_base}/{urllib.parse.quote(file_name + '.blockmap')}"
+    checks = [(latest_url, "latest.yml"), (blockmap_url, "blockmap")]
+    if rel_dir:
+        installer_url = f"{feed_base}/{urllib.parse.quote(file_name)}"
+        checks.append((installer_url, "installer copy"))
+    for url, label in checks:
+        status_code = status_for(url)
+        if status_code in (200, 206):
+            print(f"PASS http {artifact_id} update feed {label} {url} -> {status_code}")
+        else:
+            print(f"FAIL http {artifact_id} update feed {label} {url} -> {status_code}")
+            failures += 1
+    latest_text = text_for(latest_url)
+    if latest_text.startswith("__error__:"):
+        print(f"FAIL http {artifact_id} latest.yml download {latest_text}")
+        failures += 1
+        return
+    if f"version: {expected_version}" not in latest_text:
+        print(f"FAIL http {artifact_id} latest.yml version mismatch")
+        failures += 1
+    if f"url: {file_name}" not in latest_text or f"path: {file_name}" not in latest_text:
+        print(f"FAIL http {artifact_id} latest.yml installer name mismatch")
+        failures += 1
+    if f"size: {expected_size}" not in latest_text:
+        print(f"FAIL http {artifact_id} latest.yml installer size mismatch")
+        failures += 1
+
+validate_public_windows_feed("windows-x64", "")
+validate_public_windows_feed("windows-ia32", "ia32")
 
 raise SystemExit(1 if failures else 0)
 PY

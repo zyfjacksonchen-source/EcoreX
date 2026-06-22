@@ -73,7 +73,6 @@ import {
   loadRuntimeSnapshot,
   loadSessionHistoryWithMeta,
   openLocalPath,
-  openRuntimePath,
   openDownloadPage,
   openMessageStream,
   readLocalJson,
@@ -331,6 +330,7 @@ function friendlyUpdateErrorMessage(error: unknown) {
 const PROJECTS_STORAGE_KEY = "ecorex-projects";
 const SESSION_PROJECTS_STORAGE_KEY = "ecorex-session-projects";
 const SESSION_TITLES_STORAGE_KEY = "ecorex-session-titles";
+const LOCKED_SESSION_TITLES_STORAGE_KEY = "ecorex-locked-session-titles";
 const PINNED_SESSIONS_STORAGE_KEY = "ecorex-pinned-sessions";
 const PINNED_PROJECTS_STORAGE_KEY = "ecorex-pinned-projects";
 const SESSION_UI_STORAGE_KEY = "ecorex-session-ui-state";
@@ -473,6 +473,34 @@ function isPrimaryChatActiveRequest(request?: RuntimeActiveRequest | null) {
   );
 }
 
+function isAbnormalTerminalRequest(request?: RuntimeActiveRequest | null) {
+  if (!request?.request_id) return false;
+  const raw = String(request.state || request.status || request.phase || "").toLowerCase();
+  const terminalReason = String(request.terminal_reason || "").trim().toLowerCase();
+  const completed = /(complete|success|done|finish)/.test(raw) || /(complete|success|done|finish)/.test(terminalReason);
+  if (completed && !request.cancelled) return false;
+  if (request.cancelled || request.error_message || request.error_code) return true;
+  if (terminalReason && !/(complete|success|done|finish)/.test(terminalReason)) return true;
+  return (
+    raw.includes("cancel")
+    || raw.includes("fail")
+    || raw.includes("error")
+    || raw.includes("interrupt")
+    || raw.includes("stale")
+    || raw.includes("dead")
+    || raw.includes("lock")
+  );
+}
+
+function isPrimaryChatTerminalRequest(request?: RuntimeActiveRequest | null) {
+  return Boolean(
+    request?.request_id
+    && !isSubagentRuntimeRequest(request)
+    && !isSchedulerRuntimeRequest(request)
+    && isAbnormalTerminalRequest(request)
+  );
+}
+
 function runCenterState(request?: RuntimeActiveRequest | null) {
   const raw = String(request?.state || request?.status || request?.phase || "").toLowerCase();
   if (raw === "cancelled" && request?.terminal_at != null) return "cancelled";
@@ -580,11 +608,19 @@ function BrandMark() {
   );
 }
 
-function WindowBrand() {
+function versionLabel(version?: string) {
+  const value = String(version || "").trim();
+  if (!value) return "";
+  return value.startsWith("v") ? value : `v${value}`;
+}
+
+function WindowBrand(props: { version?: string } = {}) {
+  const label = versionLabel(props.version);
   return (
     <div className="window-brand" aria-hidden="true">
       <img src={brandIconUrl} alt="" />
       <span>EcoreX</span>
+      {label && <small>{label}</small>}
     </div>
   );
 }
@@ -1735,7 +1771,7 @@ function memoryFileTime(file: MemoryFile) {
   return file.updated_at || file.updatedAt || "";
 }
 
-function AuthGate(props: { onLogin: (session: EnterpriseSession) => void }) {
+function AuthGate(props: { onLogin: (session: EnterpriseSession) => void; version?: string }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -1756,7 +1792,7 @@ function AuthGate(props: { onLogin: (session: EnterpriseSession) => void }) {
 
   return (
     <main className="auth-shell">
-      <WindowBrand />
+      <WindowBrand version={props.version} />
       <section className="auth-panel">
         <BrandMark />
         <h1>EcoreX</h1>
@@ -1810,6 +1846,7 @@ export function App() {
   const [projects, setProjects] = useState<ProjectFolder[]>(() => readStorage<ProjectFolder[]>(PROJECTS_STORAGE_KEY, []));
   const [sessionProjects, setSessionProjects] = useState<SessionProjectMap>(() => bootSessionProjects);
   const [sessionTitles, setSessionTitles] = useState<StringMap>(() => readStorage<StringMap>(SESSION_TITLES_STORAGE_KEY, {}));
+  const [lockedSessionTitles, setLockedSessionTitles] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(LOCKED_SESSION_TITLES_STORAGE_KEY, {}));
   const [pinnedSessions, setPinnedSessions] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(PINNED_SESSIONS_STORAGE_KEY, {}));
   const [pinnedProjects, setPinnedProjects] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(PINNED_PROJECTS_STORAGE_KEY, {}));
   const [unreadSessionIds, setUnreadSessionIds] = useState<StringBoolMap>({});
@@ -1846,6 +1883,8 @@ export function App() {
   const completedRequestIds = useRef<StringBoolMap>({});
   const completedRequestCleanupTimers = useRef<Record<string, number>>({});
   const locallyCompletedRequestIdsRef = useRef<StringBoolMap>({});
+  const lockedSessionTitlesRef = useRef<StringBoolMap>(lockedSessionTitles);
+  const handledSnapshotTerminalRequestsRef = useRef<StringBoolMap>({});
   const postDoneStreamCloseTimers = useRef<Record<string, number>>({});
   const postDoneTailArtifactsRef = useRef<Record<string, AgentArtifact[]>>({});
   const streamRetryCounts = useRef<Record<string, number>>({});
@@ -1906,6 +1945,11 @@ export function App() {
   useEffect(() => {
     writeStorage(SESSION_TITLES_STORAGE_KEY, sessionTitles);
   }, [sessionTitles]);
+
+  useEffect(() => {
+    writeStorage(LOCKED_SESSION_TITLES_STORAGE_KEY, lockedSessionTitles);
+    lockedSessionTitlesRef.current = lockedSessionTitles;
+  }, [lockedSessionTitles]);
 
   useEffect(() => {
     writeStorage(PINNED_SESSIONS_STORAGE_KEY, pinnedSessions);
@@ -2229,6 +2273,13 @@ export function App() {
     });
   }, [runtimeSnapshot, sessionUiState, locallyCompletedRequestIds]);
 
+  useEffect(() => {
+    if (runtimeSnapshot.status !== "ready") return;
+    (runtimeSnapshot.recentTerminalRequests || [])
+      .filter(isPrimaryChatTerminalRequest)
+      .forEach((request) => settleTerminalSnapshotRequest(request));
+  }, [runtimeSnapshot.status, runtimeSnapshot.recentTerminalRequests, sessionUiState]);
+
   const allSessions = useMemo(() => (
     mapSessions(runtimeSnapshot, activeSessionId, activeSessionTitle, sessionProjects, sessionTitles, pinnedSessions, projects, sessionUiState, locallyCompletedRequestIds)
   ), [runtimeSnapshot, activeSessionId, activeSessionTitle, sessionProjects, sessionTitles, pinnedSessions, projects, sessionUiState, locallyCompletedRequestIds]);
@@ -2330,6 +2381,7 @@ export function App() {
     startNewSession(project);
   };
   const currentModelName = displayModelName(runtimeSnapshot.currentModel);
+  const appVersion = runtimeSnapshot.version || runtimeSnapshot.releaseNotes?.version || updateStatus.currentVersion;
   const skillDisplayRows = useMemo(() => buildSkillDisplayRows(runtimeSnapshot), [runtimeSnapshot]);
   const mentionableSkillRows = useMemo(() => skillDisplayRows.filter((skill) => skill.mentionable), [skillDisplayRows]);
   const backgroundSkillRows = useMemo(() => skillDisplayRows.filter((skill) => !skill.mentionable), [skillDisplayRows]);
@@ -2717,9 +2769,19 @@ export function App() {
 
   async function renameSession(row: SessionRow) {
     const nextTitle = window.prompt("重命名会话", row.title)?.trim();
-    if (!nextTitle || nextTitle === row.title) return;
+    if (!nextTitle) return;
+    if (nextTitle === row.title) {
+      lockedSessionTitlesRef.current = { ...lockedSessionTitlesRef.current, [row.id]: true };
+      setLockedSessionTitles((current) => ({ ...current, [row.id]: true }));
+      setPinnedSessions((current) => ({ ...current, [row.id]: true }));
+      setToast("会话标题已锁定");
+      return;
+    }
     try {
       setSessionTitles((current) => ({ ...current, [row.id]: nextTitle }));
+      lockedSessionTitlesRef.current = { ...lockedSessionTitlesRef.current, [row.id]: true };
+      setLockedSessionTitles((current) => ({ ...current, [row.id]: true }));
+      setPinnedSessions((current) => ({ ...current, [row.id]: true }));
       const result = await renameRuntimeSession({ sessionId: row.id, title: nextTitle });
       if (result.status === "error") {
         throw new Error(result.message || "重命名失败");
@@ -2745,6 +2807,17 @@ export function App() {
         throw new Error(result.message || "删除失败");
       }
       setSessionProjects((current) => {
+        const next = { ...current };
+        delete next[row.id];
+        return next;
+      });
+      setLockedSessionTitles((current) => {
+        const next = { ...current };
+        delete next[row.id];
+        lockedSessionTitlesRef.current = next;
+        return next;
+      });
+      setPinnedSessions((current) => {
         const next = { ...current };
         delete next[row.id];
         return next;
@@ -3170,6 +3243,66 @@ export function App() {
         requestId,
         terminalReason: item.terminal_reason || null,
         errorCode: item.error_code || null
+      }
+    });
+  }
+
+  function settleTerminalSnapshotRequest(request: RuntimeActiveRequest) {
+    const sessionId = String(request.session_id || "").trim();
+    const requestId = String(request.request_id || "").trim();
+    if (!sessionId || !requestId) return;
+    if (!isAbnormalTerminalRequest(request)) return;
+    const handledKey = `${sessionId}::${requestId}`;
+    if (handledSnapshotTerminalRequestsRef.current[handledKey]) return;
+
+    const sourceMessages = activeSessionIdRef.current === sessionId
+      ? messagesRef.current
+      : sessionUiState[sessionId]?.messages || [];
+    const assistant = sourceMessages.find((message) => (
+      message.role === "assistant"
+      && message.requestId === requestId
+      && message.pending
+    ));
+    if (!assistant && sessionRequestIdsRef.current[sessionId] !== requestId) return;
+
+    handledSnapshotTerminalRequestsRef.current = {
+      ...handledSnapshotTerminalRequestsRef.current,
+      [handledKey]: true
+    };
+    const state = runCenterState(request);
+    const phase = state === "cancelled" || state === "cancelling" ? "cancelled" : "interrupted";
+    const message = redactInternalPromptText(
+      request.error_message
+      || request.terminal_reason
+      || "Runtime session lock owner disappeared before the run reached a terminal state."
+    );
+    markStreamTerminal(sessionId, requestId, phase);
+    finishSessionRequest(sessionId, requestId);
+    if (!assistant) return;
+
+    void refreshSessionFromHistoryForRequest(sessionId, requestId).then((restored) => {
+      if (restored) return;
+      updateAssistantMessageForRequest(sessionId, assistant.id, requestId, (entry) => ({
+        ...finishRunningSteps(entry, phase === "cancelled" ? "cancelled" : "error"),
+        content: message,
+        pending: false,
+        paused: false,
+        cancelled: phase === "cancelled"
+      }));
+      markSessionOutputReady(sessionId);
+    });
+    void reportDesktopEvent({
+      type: "warn",
+      source: "Desktop",
+      category: "runtime",
+      label: "snapshot_terminal_request",
+      message,
+      sessionId,
+      detail: {
+        requestId,
+        state: request.state || request.status || request.phase || null,
+        terminalReason: request.terminal_reason || null,
+        errorCode: request.error_code || null
       }
     });
   }
@@ -4235,11 +4368,13 @@ export function App() {
     queuePreflightPhase(requestSessionId, assistantId, sendGeneration, 1800, "正在检查额度");
     queuePreflightPhase(requestSessionId, assistantId, sendGeneration, 3600, "正在建立响应通道");
     queuePreflightPhase(requestSessionId, assistantId, sendGeneration, 6500, "正在组织上下文");
-    setActiveSessionTitle((current) => {
-      const nextTitle = current === "新对话" ? shortTitle(text) : current;
-      setSessionTitles((titles) => ({ ...titles, [requestSessionId]: nextTitle }));
-      return nextTitle;
-    });
+    if (!lockedSessionTitlesRef.current[requestSessionId]) {
+      setActiveSessionTitle((current) => {
+        const nextTitle = current === "新对话" ? shortTitle(text) : current;
+        setSessionTitles((titles) => ({ ...titles, [requestSessionId]: nextTitle }));
+        return nextTitle;
+      });
+    }
     if (activeProject) {
       setSessionProjects((current) => ({ ...current, [requestSessionId]: activeProject.id }));
     }
@@ -4639,25 +4774,27 @@ export function App() {
         clearAssistantPhaseTimers(assistantId);
         clearSessionPreflight(requestSessionId, preflightController);
       }
-      generateSessionTitle({ sessionId: requestSessionId, userMessage: text || activeProject?.name || "项目会话" }).then((title) => {
-        if (!title) return;
-        setSessionTitles((current) => ({ ...current, [requestSessionId]: title }));
-        setSessionUiState((current) => ({
-          ...current,
-          [requestSessionId]: {
-            ...(current[requestSessionId] || {
-              messages: [],
-              composerText: "",
-              attachments: []
-            }),
-            projectId: sessionProjects[requestSessionId] || null,
-            title
+      if (!lockedSessionTitlesRef.current[requestSessionId]) {
+        generateSessionTitle({ sessionId: requestSessionId, userMessage: text || activeProject?.name || "项目会话" }).then((title) => {
+          if (!title || lockedSessionTitlesRef.current[requestSessionId]) return;
+          setSessionTitles((current) => ({ ...current, [requestSessionId]: title }));
+          setSessionUiState((current) => ({
+            ...current,
+            [requestSessionId]: {
+              ...(current[requestSessionId] || {
+                messages: [],
+                composerText: "",
+                attachments: []
+              }),
+              projectId: sessionProjects[requestSessionId] || null,
+              title
+            }
+          }));
+          if (activeSessionIdRef.current === requestSessionId) {
+            setActiveSessionTitle(title);
           }
-        }));
-        if (activeSessionIdRef.current === requestSessionId) {
-          setActiveSessionTitle(title);
-        }
-      }).catch(() => undefined);
+        }).catch(() => undefined);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "发送失败";
       if (!isSessionPreflightCurrent(requestSessionId, sendGeneration, preflightController)) {
@@ -4847,9 +4984,11 @@ export function App() {
       || sessionUiState[requestSessionId]?.title
       || (activeSessionIdRef.current === requestSessionId ? activeSessionTitle : "新对话");
     const nextTitle = currentTitle === "新对话" ? (pack.discoveryOnly ? `find skill ${pack.name}` : `安装 ${pack.name}`) : currentTitle;
-    setSessionTitles((titles) => ({ ...titles, [requestSessionId]: nextTitle }));
-    if (activeSessionIdRef.current === requestSessionId) {
-      setActiveSessionTitle(nextTitle);
+    if (!lockedSessionTitlesRef.current[requestSessionId]) {
+      setSessionTitles((titles) => ({ ...titles, [requestSessionId]: nextTitle }));
+      if (activeSessionIdRef.current === requestSessionId) {
+        setActiveSessionTitle(nextTitle);
+      }
     }
     const result = await sendChatMessage({
       sessionId: requestSessionId,
@@ -5288,7 +5427,7 @@ export function App() {
     const openAction: OpenPathAction = action === "reveal" ? "reveal" : action === "openWith" ? "openWith" : "open";
     for (const candidate of candidates) {
       try {
-        result = await openRuntimePath(candidate, openAction);
+        result = await openLocalPath(candidate, openAction);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error || "");
         result = message;
@@ -5323,7 +5462,7 @@ export function App() {
     let result = "";
     for (const candidate of candidates) {
       try {
-        result = await openRuntimePath(candidate);
+        result = await openLocalPath(candidate);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error || "");
         result = message;
@@ -5607,7 +5746,7 @@ export function App() {
   };
 
   if (!authChecked) {
-    return <main className="auth-shell"><WindowBrand /><section className="auth-panel"><p>正在检查登录状态</p></section></main>;
+    return <main className="auth-shell"><WindowBrand version={appVersion} /><section className="auth-panel"><p>正在检查登录状态</p></section></main>;
   }
 
   if (!session) {
@@ -5615,12 +5754,12 @@ export function App() {
       if (!next) return;
       setSession(next);
       setQuotaSnapshot((next.quota || null) as UsageQuota | null);
-    }} />;
+    }} version={appVersion} />;
   }
 
   return (
     <main className="app-shell">
-      <WindowBrand />
+      <WindowBrand version={appVersion} />
       <aside className="session-sidebar">
         <div className="sidebar-actions">
           <button onClick={() => startNewSession(null)} title="创建不绑定项目的通用会话" data-tooltip="创建不绑定项目的通用会话" data-tooltip-position="bottom-left"><Plus aria-hidden="true" />新对话</button>

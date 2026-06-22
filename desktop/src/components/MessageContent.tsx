@@ -332,6 +332,10 @@ function artifactAvailabilityLabel(status: ArtifactAvailability) {
   return "";
 }
 
+function artifactActionAllowed(status: ArtifactAvailability) {
+  return status === "ready" || status === "error";
+}
+
 function artifactStatusJsonState(result: LocalJsonResult): ArtifactStatusJsonState {
   const transportStatus = String(result.status || "").toLowerCase();
   if (transportStatus === "denied") return "failed";
@@ -791,7 +795,7 @@ function ArtifactShelf({
       setOpenMenuId("");
       return;
     }
-    if (sourceStatus !== "ready") {
+    if (!artifactActionAllowed(sourceStatus)) {
       setOpenMenuId("");
       return;
     }
@@ -840,12 +844,12 @@ function ArtifactShelf({
             && (statRetryCounts.current[artifactKey] || 0) >= ARTIFACT_PENDING_MAX_RETRIES;
           const availabilityStatus = artifactStatus === "failed"
             ? "error"
-            : artifactStatus === "pending" && statStatus !== "ready" && !pendingRetryExhausted
+            : artifactStatus === "pending" && (statStatus === "pending" || statStatus === "missing") && !pendingRetryExhausted
               ? "pending"
               : statStatus;
           const availabilityText = artifactAvailabilityLabel(availabilityStatus);
-          const blocked = availabilityStatus !== "ready";
-          const displayPreviewUrl = blocked ? "" : previewUrl;
+          const blocked = !artifactActionAllowed(availabilityStatus);
+          const displayPreviewUrl = artifactActionAllowed(availabilityStatus) ? previewUrl : "";
           const isPreviewableImage = artifact.kind === "image" && Boolean(displayPreviewUrl);
           const menuOpen = openMenuId === artifact.id;
           return (
