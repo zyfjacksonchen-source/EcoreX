@@ -55,6 +55,15 @@ Date: 2026-06-22
 - GitHub annotation: the macOS jobs were not started because recent account payments failed or the spending limit needs to be increased.
 - Follow-up attempt: `27965693068` on hotfix evidence commit `4cc799ae42797b0c7cf1b1af1d92d5fe1d0b561e`.
 - Follow-up result: failed before any job step started with the same GitHub billing/spending-limit annotation.
+- 2026-06-23 retry after the network-recovery follow-up commit: workflow run
+  `27970105624` on branch `codex/ecorex-v0.1.19`, commit
+  `e6d1f2f4366336a9e12e20f399fc93a8870f500a`.
+- Retry result: failed before any job step started for both `macOS DMG (arm64)`
+  and `macOS DMG (x64)`. GitHub run JSON shows empty `steps` arrays; failed
+  log retrieval returned `log not found` because the jobs were rejected before
+  runner execution.
+- GitHub annotation remained: recent account payments failed or the spending
+  limit needs to be increased in Billing & plans.
 - Production note: Windows/Web hotfix assets were rebuilt and deployed. macOS desktop DMGs remain the existing v0.1.19 assets until GitHub macOS runner billing/spending is restored and the DMG workflow can be rerun.
 
 ## Notes
