@@ -38,6 +38,22 @@ Date: 2026-06-22
 - `EcoreX_0.1.19_ia32-setup.exe`: Authenticode `Valid`, size `103631384`, SHA256 `6BB2579510B1280EE957396C24D8380E94E390CB15F908210EA4FF5A1BC29239`.
 - ia32 installed smoke: `installed=true`, `rendererReady=true`, `sidecarReady=true`, `authReady=true`, `authNegativeReady=true`, `cleaned=true`, `rendererRootHtmlLength=309`, `rendererBodyTextLength=16`.
 
+## Windows Rebuild Status
+
+- 2026-06-23 check for rebuilding signed Windows installers from the latest
+  `codex/ecorex-v0.1.19` branch: `npm run sign:win:preflight` failed before
+  packaging.
+- Signing certificate is present in `Cert:\CurrentUser\My`, but the signing
+  provider is not usable: Smart Card service `SCardSvr` and Certificate
+  Propagation service `CertPropSvc` are stopped, and `certutil -user -key -csp
+  "SimplySign CSP"` shows no visible key containers.
+- Attempting to start `SCardSvr` and `CertPropSvc` from this non-elevated
+  process failed with `Cannot open ... service on computer '.'`.
+- `sign-win.ps1 -PreflightOnly -LaunchSimplySign` was also attempted; the
+  provider remained unavailable. Rebuilding signed Windows installers requires
+  unlocking Certum SimplySign/proCertum SmartSign and starting the Smart Card
+  services in an elevated session.
+
 ## Published Artifacts
 
 - `EcoreX_0.1.19_x64-setup.exe`: size `157452928`, SHA256 `E40DA22FBB6B29D7B8E78D08B5C884A65F8B339514CD20F3D3C325E814F6C3D6`, GitHub asset digest `sha256:e40da22fbb6b29d7b8e78d08b5c884a65f8b339514cd20f3d3c325e814f6c3d6`.
@@ -64,6 +80,12 @@ Date: 2026-06-22
   runner execution.
 - GitHub annotation remained: recent account payments failed or the spending
   limit needs to be increased in Billing & plans.
+- 2026-06-23 second billing check after evidence commit: workflow run
+  `27970406460` on branch `codex/ecorex-v0.1.19`, commit
+  `82b25a3b385642a88cc0c4f49e9f979838c1a0ef`.
+- Second check result: failed before any job step started for both `macOS DMG
+  (arm64)` and `macOS DMG (x64)`. GitHub run JSON again shows empty `steps`
+  arrays; failed log retrieval returned `log not found`.
 - Production note: Windows/Web hotfix assets were rebuilt and deployed. macOS desktop DMGs remain the existing v0.1.19 assets until GitHub macOS runner billing/spending is restored and the DMG workflow can be rerun.
 
 ## Notes
