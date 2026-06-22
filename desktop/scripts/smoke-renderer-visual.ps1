@@ -172,8 +172,10 @@ with sync_playwright() as p:
             raise SystemExit("Hidden Lark CLI skill did not show the background hint row")
     elif action == "long-markdown":
         page.wait_for_selector(".app-shell", state="visible", timeout=30000)
-        if page.locator(".session-list button").count() > 0:
-            page.locator(".session-list button").first.click(timeout=10000)
+        if page.locator(".project-session-list .session-row .session-main").count() > 0:
+            page.locator(".project-session-list .session-row .session-main").first.click(timeout=10000)
+        elif page.locator(".session-list .session-row .session-main").count() > 0:
+            page.locator(".session-list .session-row .session-main").first.click(timeout=10000)
         page.wait_for_selector(".long-answer-disclosure", state="visible", timeout=10000)
         before = page.evaluate("""() => {
             const latest = Array.from(document.querySelectorAll('.message.assistant')).pop();
@@ -433,9 +435,9 @@ with sync_playwright() as p:
         if page.locator("text=正在连接后台任务").count() > 0:
             browser.close()
             raise SystemExit("Backend connection status is still shown after task completion")
-        first_box = page.locator(".session-list button").first.bounding_box()
+        first_box = page.locator(".session-list .session-row .session-main").first.bounding_box()
         page.wait_for_timeout(600)
-        second_box = page.locator(".session-list button").first.bounding_box()
+        second_box = page.locator(".session-list .session-row .session-main").first.bounding_box()
         if first_box and second_box and abs(first_box["x"] - second_box["x"]) + abs(first_box["y"] - second_box["y"]) > 1:
             browser.close()
             raise SystemExit("Session summary position shifted after task completion")

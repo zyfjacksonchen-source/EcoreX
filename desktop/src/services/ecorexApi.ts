@@ -404,6 +404,34 @@ export type ChatSendResult = {
   stream?: boolean;
   inline_reply?: string;
   usage?: TokenUsage;
+  same_session?: {
+    policy?: string;
+    queue?: string;
+    decision?: string;
+    active_request_ids?: string[];
+    replaced_request_ids?: string[];
+    cancelled_requests?: number;
+    cancelled_subagents?: number;
+    retry_after_ms?: number;
+    reason?: string;
+  };
+};
+
+export type RetryPrepareResult = {
+  status?: string;
+  message?: string;
+  request_id?: string;
+  session_id?: string;
+  retryable?: boolean;
+  recoverable?: boolean;
+  exactReplay?: boolean;
+  exact_replay?: boolean;
+  retry_after_ms?: number;
+  prompt?: string;
+  visible_message?: string;
+  attachments?: FileAttachment[];
+  source_user_seq?: number | null;
+  reason?: string;
 };
 
 export type ToolPermissionDecision = "allow_once" | "always_allow" | "deny";
@@ -670,6 +698,9 @@ export async function sendChatMessage(input: {
   attachments?: FileAttachment[];
   lang?: string;
   internalAction?: boolean;
+  clientAttemptId?: string;
+  interruptsRequestId?: string;
+  retryOfRequestId?: string;
 }): Promise<ChatSendResult> {
   if (!window.ecorexDesktop?.apiJson) {
     return {
@@ -701,11 +732,26 @@ export async function sendChatMessage(input: {
       stream: true,
       timestamp: new Date().toISOString(),
       attachments: input.attachments || [],
-      lang: input.lang || "zh"
+      lang: input.lang || "zh",
+      client_attempt_id: input.clientAttemptId || "",
+      interrupts_request_id: input.interruptsRequestId || "",
+      retry_of_request_id: input.retryOfRequestId || ""
     }
   });
 
   return (result || {}) as ChatSendResult;
+}
+
+export async function prepareRequestRetry(input: { requestId: string; sessionId?: string }) {
+  const requestId = String(input.requestId || "").trim();
+  if (!requestId) {
+    return { status: "error", message: "requestId is required" } as RetryPrepareResult;
+  }
+  return apiJson<RetryPrepareResult>(
+    `/api/requests/${encodeURIComponent(requestId)}/retry-prepare`,
+    "POST",
+    { session_id: input.sessionId || "" }
+  );
 }
 
 export async function cancelChatRequest(input: { requestId?: string; sessionId?: string }) {

@@ -646,6 +646,70 @@ class ConversationStore:
                 conn.close()
         return result
 
+    def get_visible_user_message(self, session_id: str, seq: Optional[int] = None) -> Dict[str, Any]:
+        """Return a visible user message for retry/recovery UI.
+
+        When ``seq`` is omitted, the latest visible user message is returned.
+        Tool-result-only user rows are skipped so retry drafts never replay an
+        internal tool protocol message.
+        """
+        result: Dict[str, Any] = {
+            "seq": None,
+            "text": "",
+            "content": None,
+            "created_at": None,
+            "extras": {},
+        }
+        if not session_id:
+            return result
+        with self._lock:
+            conn = self._connect()
+            try:
+                if seq is not None:
+                    rows = conn.execute(
+                        """
+                        SELECT seq, content, created_at, extras
+                        FROM messages
+                        WHERE session_id = ? AND role = 'user' AND seq = ?
+                        LIMIT 1
+                        """,
+                        (session_id, int(seq)),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        """
+                        SELECT seq, content, created_at, extras
+                        FROM messages
+                        WHERE session_id = ? AND role = 'user'
+                        ORDER BY seq DESC LIMIT 50
+                        """,
+                        (session_id,),
+                    ).fetchall()
+            finally:
+                conn.close()
+
+        for row_seq, raw_content, created_at, raw_extras in rows:
+            try:
+                content = json.loads(raw_content)
+            except Exception:
+                content = raw_content
+            if not _is_visible_user_message(content):
+                continue
+            try:
+                extras = json.loads(raw_extras) if raw_extras else {}
+                if not isinstance(extras, dict):
+                    extras = {}
+            except Exception:
+                extras = {}
+            return {
+                "seq": int(row_seq),
+                "text": _extract_display_text(content),
+                "content": content,
+                "created_at": created_at,
+                "extras": extras,
+            }
+        return result
+
     def clear_session(self, session_id: str) -> None:
         """Delete all messages and the session record for a given session_id."""
         with self._lock:

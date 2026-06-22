@@ -1989,6 +1989,175 @@ class WebChannel(ChatChannel):
             "reason": reason,
         }
 
+    @staticmethod
+    def _retry_attachment_snapshot(attachments: Any) -> List[Dict[str, Any]]:
+        if not isinstance(attachments, list):
+            return []
+        snapshot: List[Dict[str, Any]] = []
+        for item in attachments[:20]:
+            if not isinstance(item, dict):
+                continue
+            file_path = str(item.get("file_path") or item.get("path") or "").strip()
+            file_name = str(item.get("file_name") or item.get("name") or os.path.basename(file_path)).strip()
+            file_type = str(item.get("file_type") or item.get("type") or "file").strip() or "file"
+            if not file_path:
+                continue
+            snapshot.append({
+                "file_path": file_path,
+                "file_name": file_name,
+                "file_type": file_type,
+                "preview_url": str(item.get("preview_url") or "").strip(),
+            })
+        return snapshot
+
+    @staticmethod
+    def _retry_non_retryable_reason(row: Dict[str, Any]) -> str:
+        run_type = str((row or {}).get("run_type") or "message").lower()
+        request_id = str((row or {}).get("request_id") or "")
+        session_id = str((row or {}).get("session_id") or "")
+        if run_type == "subagent" or request_id.startswith("subagent-") or session_id.startswith("subagent-"):
+            return "subagent_replay_unavailable"
+        if run_type == "scheduler" or request_id.startswith("scheduler_") or session_id.startswith("scheduler_"):
+            return "scheduler_replay_unavailable"
+        status = str((row or {}).get("status") or (row or {}).get("state") or "").lower()
+        if status in {"queued", "running", "cancelling", "finalizing", "recovering"}:
+            return "request_still_active"
+        if status == "completed":
+            return "already_completed"
+        code_text = "{} {}".format(
+            (row or {}).get("error_code") or "",
+            (row or {}).get("terminal_reason") or "",
+        ).lower()
+        if any(marker in code_text for marker in (
+            "auth",
+            "permission",
+            "policy",
+            "denied",
+            "forbidden",
+            "invalid",
+            "bad_request",
+            "badrequest",
+            "not_retryable",
+            "non_retryable",
+        )):
+            return "non_retryable_terminal"
+        return ""
+
+    def prepare_request_retry(self, request_id: str, *, session_id: str = "") -> Dict[str, Any]:
+        """Build a safe manual retry draft for a prior request.
+
+        This endpoint never starts execution. It mirrors Codex-style recovery:
+        recover history first when possible, and only offer an explicit retry
+        draft when replaying the visible user turn is safe.
+        """
+        request_id = str(request_id or "").strip()
+        expected_session_id = str(session_id or "").strip()
+        if not request_id:
+            return {"status": "error", "message": "missing request_id", "retryable": False, "recoverable": False}
+        try:
+            from agent.protocol import get_run_ledger
+
+            row = get_run_ledger().get_run(request_id)
+        except Exception as e:
+            logger.error(f"[WebChannel] retry prepare ledger lookup failed: {e}", exc_info=True)
+            return {
+                "status": "error",
+                "message": "Runtime run ledger is unavailable; please recover history first.",
+                "request_id": request_id,
+                "retryable": False,
+                "recoverable": True,
+                "reason": "run_ledger_unavailable",
+            }
+        if not row:
+            return {
+                "status": "error",
+                "message": "Request was not found. Recover the session history before retrying.",
+                "request_id": request_id,
+                "retryable": False,
+                "recoverable": True,
+                "reason": "request_not_found",
+            }
+
+        actual_session_id = str(row.get("session_id") or "")
+        if expected_session_id and expected_session_id != actual_session_id:
+            return {
+                "status": "error",
+                "message": "Request belongs to a different session; retry was not prepared.",
+                "request_id": request_id,
+                "session_id": actual_session_id,
+                "retryable": False,
+                "recoverable": True,
+                "reason": "session_mismatch",
+            }
+
+        reason = self._retry_non_retryable_reason(row)
+        recoverable = bool(actual_session_id) and reason not in {"subagent_replay_unavailable", "scheduler_replay_unavailable"}
+        metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        visible_message = str(metadata.get("visible_message") or "").strip()
+        source_user_seq = metadata.get("source_user_seq")
+        exact_replay = bool(visible_message)
+        attachments = metadata.get("attachment_items") if isinstance(metadata.get("attachment_items"), list) else []
+
+        if not visible_message and actual_session_id:
+            try:
+                from agent.memory import get_conversation_store
+
+                latest = get_conversation_store().get_visible_user_message(actual_session_id)
+                visible_message = str(latest.get("text") or "").strip()
+                source_user_seq = latest.get("seq")
+            except Exception as e:
+                logger.warning(f"[WebChannel] retry prepare history fallback failed: {e}")
+
+        if reason:
+            return {
+                "status": "success",
+                "message": "Recover the existing response state before retrying." if reason == "request_still_active" else "This request cannot be safely retried.",
+                "request_id": request_id,
+                "session_id": actual_session_id,
+                "retryable": False,
+                "recoverable": recoverable,
+                "exactReplay": exact_replay,
+                "exact_replay": exact_replay,
+                "prompt": visible_message,
+                "visible_message": visible_message,
+                "attachments": attachments,
+                "source_user_seq": source_user_seq,
+                "reason": reason,
+            }
+
+        if not visible_message:
+            return {
+                "status": "success",
+                "message": "No visible user message was available to retry.",
+                "request_id": request_id,
+                "session_id": actual_session_id,
+                "retryable": False,
+                "recoverable": recoverable,
+                "exactReplay": False,
+                "exact_replay": False,
+                "prompt": "",
+                "visible_message": "",
+                "attachments": attachments,
+                "source_user_seq": source_user_seq,
+                "reason": "missing_visible_message",
+            }
+
+        return {
+            "status": "success",
+            "message": "Retry draft prepared. Review and send to run it again.",
+            "request_id": request_id,
+            "session_id": actual_session_id,
+            "retryable": True,
+            "recoverable": recoverable,
+            "exactReplay": exact_replay,
+            "exact_replay": exact_replay,
+            "prompt": visible_message,
+            "visible_message": visible_message,
+            "attachments": attachments,
+            "source_user_seq": source_user_seq,
+            "reason": "manual_retry_prepare",
+        }
+
     def _interrupt_and_wait_for_session_lock(
         self,
         session_id: str,
@@ -3415,6 +3584,9 @@ class WebChannel(ChatChannel):
             internal_action = bool(json_data.get('internal_action', False))
             use_sse = json_data.get('stream', True)
             attachments = json_data.get('attachments', [])
+            client_attempt_id = str(json_data.get('client_attempt_id') or '').strip()
+            interrupts_request_id = str(json_data.get('interrupts_request_id') or '').strip()
+            retry_of_request_id = str(json_data.get('retry_of_request_id') or '').strip()
             lang = (json_data.get('lang') or 'zh').lower()
             # Tag the message as originating from voice input so the post-reply
             # TTS hook can honour the `voice_if_voice` policy (mirrors the
@@ -3577,6 +3749,10 @@ class WebChannel(ChatChannel):
                     from agent.protocol import get_run_ledger
 
                     ledger = get_run_ledger()
+                    retry_visible_message, _retry_visible_trunc = self._limit_text_with_marker(
+                        visible_message or visible_prompt or "",
+                        64 * 1024,
+                    )
                     persisted = ledger.create_run(
                         request_id,
                         session_id,
@@ -3587,6 +3763,11 @@ class WebChannel(ChatChannel):
                             "stream": bool(use_sse),
                             "internal_action": bool(internal_action),
                             "attachments": len(attachments) if isinstance(attachments, list) else 0,
+                            "attachment_items": self._retry_attachment_snapshot(attachments),
+                            "visible_message": retry_visible_message,
+                            "client_attempt_id": client_attempt_id,
+                            "interrupts_request_id": interrupts_request_id,
+                            "retry_of_request_id": retry_of_request_id,
                         },
                     )
                     if not persisted:
@@ -4056,6 +4237,7 @@ class WebChannel(ChatChannel):
             '/stream', 'StreamHandler',
             '/cancel', 'CancelHandler',
             '/api/active-requests', 'ActiveRequestsHandler',
+            '/api/requests/([^/]+)/retry-prepare', 'RequestRetryPrepareHandler',
             '/api/tool-permissions', 'ToolPermissionHandler',
             '/api/update-check', 'UpdateCheckHandler',
             '/api/file-stat', 'FileStatHandler',
@@ -4629,6 +4811,25 @@ class ActiveRequestsHandler:
         _require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         return json.dumps(WebChannel().active_requests_snapshot(), ensure_ascii=False)
+
+
+class RequestRetryPrepareHandler:
+    def POST(self, request_id):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            raw = web.data() or b"{}"
+            if len(raw) > 64 * 1024:
+                return json.dumps({"status": "error", "message": "payload too large"}, ensure_ascii=False)
+            payload = json.loads(raw) if raw else {}
+            session_id = str(payload.get("session_id") or "").strip()
+            return json.dumps(
+                WebChannel().prepare_request_retry(str(request_id or ""), session_id=session_id),
+                ensure_ascii=False,
+            )
+        except Exception as e:
+            logger.error(f"[WebChannel] retry prepare error: {e}", exc_info=True)
+            return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
 
 
 class ToolPermissionHandler:

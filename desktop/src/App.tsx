@@ -9,6 +9,7 @@ import {
   Brain,
   CheckCircle2,
   ChevronDown,
+  ChevronRight,
   Copy,
   Database,
   FileText,
@@ -75,6 +76,7 @@ import {
   openLocalPath,
   openDownloadPage,
   openMessageStream,
+  prepareRequestRetry,
   readLocalJson,
   reportDesktopEvent,
   requestAgentInstallRequest,
@@ -186,6 +188,18 @@ type ChatItem = {
   userSeq?: number;
   botSeq?: number;
   contextExcluded?: boolean;
+  sendAttempt?: {
+    id: string;
+    state: "stopping-previous" | "sending" | "accepted" | "restore-available";
+    interruptsRequestId?: string;
+  };
+  recovery?: {
+    kind: "stalled" | "failed" | "interrupted" | "replay_gap" | "retryable_conflict";
+    requestId?: string;
+    message: string;
+    retryable?: boolean;
+    recoverable?: boolean;
+  };
 };
 type ApprovalState =
   | {
@@ -225,6 +239,18 @@ type ProjectContextMenu = {
   x: number;
   y: number;
 } | null;
+type ChatFileContextMenu = {
+  file: FileAttachment;
+  x: number;
+  y: number;
+  canAdd: boolean;
+  disabledReason?: string;
+} | null;
+type SidebarCollapseState = {
+  projectsSection: boolean;
+  generalSessions: boolean;
+  projectGroups: StringBoolMap;
+};
 type InstallNotice = {
   packId: string;
   packName: string;
@@ -290,6 +316,19 @@ function isImageAttachment(file: FileAttachment) {
   return file.file_type === "image" || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(file.file_name || file.file_path || "");
 }
 
+function normalizeAttachmentDedupeKey(file: FileAttachment) {
+  const raw = normalizeLocalSource(file.file_path || file.preview_url || file.file_name || "");
+  const compact = raw.replace(/[\\/]+$/g, "").replace(/\\/g, "/");
+  if (/^[a-zA-Z]:\//.test(compact) || compact.startsWith("//")) return compact.toLowerCase();
+  return compact;
+}
+
+function isDurableLocalAttachment(file: FileAttachment) {
+  const path = normalizeLocalSource(file.file_path || "");
+  if (!path || /^data:/i.test(path) || /^https?:\/\//i.test(path) || isRuntimePreviewPath(path)) return false;
+  return true;
+}
+
 const initialRuntime: RuntimeSnapshot = {
   status: "offline",
   message: "正在连接本地运行时",
@@ -338,6 +377,8 @@ const LAST_ACTIVE_SESSION_STORAGE_KEY = "ecorex-last-active-session-id";
 const CAPABILITY_ENABLED_STORAGE_KEY = "ecorex-capability-enabled";
 const SKILL_DEFAULTS_STORAGE_KEY = "ecorex-skill-defaults-v1";
 const RELEASE_NOTES_SEEN_STORAGE_KEY = "ecorex-release-notes-seen-version";
+const SIDEBAR_COLLAPSE_STORAGE_KEY = "ecorex-sidebar-collapse-state-v1";
+const RUN_CENTER_DEV_GATE_STORAGE_KEY = "ecorex-dev-run-center";
 const CONTEXT_THRESHOLD_TOKENS = 258_000;
 const EFFECTIVE_MODEL_FALLBACK = "gpt-5.5";
 const EFFECTIVE_MODEL_ALIAS_PREFIXES = ["deepseek-"];
@@ -373,6 +414,15 @@ function readStorage<T>(key: string, fallback: T): T {
 
 function writeStorage<T>(key: string, value: T) {
   window.localStorage.setItem(key, JSON.stringify(value));
+}
+
+function initialSidebarCollapseState(): SidebarCollapseState {
+  const saved = readStorage<Partial<SidebarCollapseState>>(SIDEBAR_COLLAPSE_STORAGE_KEY, {});
+  return {
+    projectsSection: Boolean(saved.projectsSection),
+    generalSessions: Boolean(saved.generalSessions),
+    projectGroups: saved.projectGroups && typeof saved.projectGroups === "object" ? saved.projectGroups : {}
+  };
 }
 
 function pruneSessionUiState(state: Record<string, SessionUiState>) {
@@ -1857,6 +1907,8 @@ export function App() {
   const [activeProjectId, setActiveProjectId] = useState<string | null>(bootSession?.id ? bootSessionProjects[bootSession.id] || null : null);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("account");
   const [projectMenu, setProjectMenu] = useState<ProjectContextMenu>(null);
+  const [chatFileMenu, setChatFileMenu] = useState<ChatFileContextMenu>(null);
+  const [sidebarCollapse, setSidebarCollapse] = useState<SidebarCollapseState>(() => initialSidebarCollapseState());
   const [installingPackIds, setInstallingPackIds] = useState<StringBoolMap>({});
   const [installNotice, setInstallNotice] = useState<InstallNotice>(null);
   const [memoryFiles, setMemoryFiles] = useState<MemoryFile[]>([]);
@@ -1873,6 +1925,7 @@ export function App() {
   const streamCleanupRequestIds = useRef<StringMap>({});
   const streamDeltaBuffers = useRef<Record<string, { sessionId: string; assistantId: string; requestId: string; text: string; timer: number | null }>>({});
   const sessionRequestIdsRef = useRef<StringMap>({});
+  const latestSendAttemptRef = useRef<Record<string, string>>({});
   const installWatchers = useRef<Record<string, number>>({});
   const queuedInstallRef = useRef<Array<{ pack: CapabilityPack; onInstalled?: () => void; sessionId: string }>>([]);
   const activeSessionIdRef = useRef(activeSessionId);
@@ -1962,6 +2015,10 @@ export function App() {
   useEffect(() => {
     writeStorage(CAPABILITY_ENABLED_STORAGE_KEY, enabledCapabilityPacks);
   }, [enabledCapabilityPacks]);
+
+  useEffect(() => {
+    writeStorage(SIDEBAR_COLLAPSE_STORAGE_KEY, sidebarCollapse);
+  }, [sidebarCollapse]);
 
   useEffect(() => {
     const projectSyncedState = Object.fromEntries(
@@ -2219,6 +2276,22 @@ export function App() {
   }, [session]);
 
   useEffect(() => {
+    if (!chatFileMenu) return undefined;
+    const close = () => setChatFileMenu(null);
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [chatFileMenu]);
+
+  useEffect(() => {
     if (runtimeSnapshot.status !== "ready") return;
     if (runtimeSnapshot.activeRequestsStatus === "unavailable") return;
     const activeRequestIds = new Set(
@@ -2315,6 +2388,14 @@ export function App() {
     };
   }, [runCenterRequests, runCenterStaleLocks]);
   const runCenterNavCount = runCenterRequests.length + runCenterStaleLocks.length;
+  const runCenterDevVisible = useMemo(() => {
+    try {
+      const params = new URLSearchParams(window.location.search || "");
+      return window.localStorage.getItem(RUN_CENTER_DEV_GATE_STORAGE_KEY) === "1" || params.get("runCenter") === "1";
+    } catch {
+      return false;
+    }
+  }, []);
 
   const activeProject = useMemo(
     () => projects.find((project) => project.id === activeProjectId) || null,
@@ -2900,10 +2981,58 @@ export function App() {
     setProjectMenu({ projectId: project.id, x: event.clientX, y: event.clientY });
   }
 
+  function showChatFileMenu(event: MouseEvent, file: FileAttachment) {
+    event.preventDefault();
+    event.stopPropagation();
+    const durable = isDurableLocalAttachment(file);
+    setProjectMenu(null);
+    setChatFileMenu({
+      file,
+      x: event.clientX,
+      y: event.clientY,
+      canAdd: durable,
+      disabledReason: durable ? "" : "Only verified local files can be added to the current chat"
+    });
+  }
+
+  function addFileToCurrentChat(file: FileAttachment) {
+    if (!isDurableLocalAttachment(file)) {
+      setToast("Only verified local files can be added to the current chat");
+      setChatFileMenu(null);
+      return;
+    }
+    const normalizedPath = normalizeLocalSource(file.file_path);
+    const normalizedFile: FileAttachment = {
+      ...file,
+      file_path: normalizedPath,
+      file_name: file.file_name || normalizedPath.split(/[\\/]/).filter(Boolean).pop() || "file",
+      file_type: file.file_type || (isImageAttachment(file) ? "image" : "file")
+    };
+    const key = normalizeAttachmentDedupeKey(normalizedFile);
+    setAttachments((current) => {
+      if (current.some((item) => normalizeAttachmentDedupeKey(item) === key)) return current;
+      return [...current, normalizedFile];
+    });
+    setChatFileMenu(null);
+    focusComposerSoon();
+    setToast("已添加到当前聊天");
+  }
+
   async function chooseFiles() {
     try {
       const files = await chooseLocalFiles(sidecarStatus.webPort);
-      setAttachments((current) => [...current, ...files]);
+      setAttachments((current) => {
+        const seen = new Set(current.map(normalizeAttachmentDedupeKey));
+        const next = [...current];
+        files.forEach((file) => {
+          const key = normalizeAttachmentDedupeKey(file);
+          if (!seen.has(key)) {
+            seen.add(key);
+            next.push(file);
+          }
+        });
+        return next;
+      });
       composerRef.current?.focus({ preventScroll: true });
     } catch (error) {
       setToast(error instanceof Error ? error.message : "选择文件失败");
@@ -2922,7 +3051,18 @@ export function App() {
         setToast(source === "drop" ? "未能添加拖拽的文件" : "未能添加粘贴的文件");
         return;
       }
-      setAttachments((current) => [...current, ...nextFiles]);
+      setAttachments((current) => {
+        const seen = new Set(current.map(normalizeAttachmentDedupeKey));
+        const next = [...current];
+        nextFiles.forEach((file) => {
+          const key = normalizeAttachmentDedupeKey(file);
+          if (!seen.has(key)) {
+            seen.add(key);
+            next.push(file);
+          }
+        });
+        return next;
+      });
       const failedCount = results.filter((result) => result.status === "rejected").length;
       setToast(failedCount ? `已添加 ${nextFiles.length} 个文件，${failedCount} 个失败` : source === "drop" ? `已添加 ${nextFiles.length} 个文件` : "已添加粘贴的文件");
       composerRef.current?.focus({ preventScroll: true });

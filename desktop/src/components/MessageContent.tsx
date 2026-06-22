@@ -1,4 +1,5 @@
-import { memo, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   ExternalLink,
   Eye,
@@ -77,7 +78,9 @@ const STREAM_LIVE_FULL_RENDER_CHARS = 32000;
 const STREAM_LIVE_HEAD_CHARS = 7000;
 const STREAM_LIVE_TAIL_CHARS = 4200;
 const STREAM_LIVE_ARIA_CHARS = 12000;
-const ARTIFACT_PENDING_MAX_RETRIES = 180;
+const ARTIFACT_PENDING_MAX_RETRIES = 6;
+
+type LocalFileContextHandler = (event: MouseEvent, file: LocalFilePayload) => void;
 const ARTIFACT_PREVIEW_LIMIT = 6;
 const ARTIFACT_RELATIVE_ROOTS = "deliverables|output|outputs|artifacts|images|assets";
 const ARTIFACT_ABSOLUTE_POSIX_ROOTS = "Users|Volumes|home|tmp|var|mnt|opt|srv|workspace";
@@ -333,7 +336,29 @@ function artifactAvailabilityLabel(status: ArtifactAvailability) {
 }
 
 function artifactActionAllowed(status: ArtifactAvailability) {
-  return status === "ready" || status === "error";
+  return status === "ready";
+}
+
+function artifactMenuStyle(anchor: { x: number; y: number; width: number; height: number }): CSSProperties {
+  const menuWidth = 224;
+  const menuHeight = 172;
+  const margin = 8;
+  const viewportWidth = typeof window === "undefined" ? 1024 : window.innerWidth;
+  const viewportHeight = typeof window === "undefined" ? 768 : window.innerHeight;
+  const preferredLeft = anchor.x + anchor.width - menuWidth;
+  const preferredTop = anchor.y + anchor.height + 4;
+  const left = Math.max(margin, Math.min(preferredLeft, viewportWidth - menuWidth - margin));
+  const top = Math.max(margin, Math.min(preferredTop, viewportHeight - menuHeight - margin));
+  return { left, top, width: menuWidth };
+}
+
+function localFilePayloadFromArtifact(artifact: DisplayArtifact, source: string, previewUrl?: string): LocalFilePayload {
+  return {
+    file_path: source,
+    file_name: displayArtifactTitle(artifact),
+    file_type: artifactFileTypeFromKind(artifact.kind),
+    preview_url: previewUrl
+  };
 }
 
 function artifactStatusJsonState(result: LocalJsonResult): ArtifactStatusJsonState {
@@ -500,11 +525,13 @@ function extractImageArtifacts(content: string) {
 function ImageArtifactGrid({
   artifacts,
   localFilePreviewUrl,
-  onOpenLocalFile
+  onOpenLocalFile,
+  onLocalFileContextMenu
 }: {
   artifacts: ImageArtifact[];
   localFilePreviewUrl?: (filePath: string) => string;
   onOpenLocalFile?: (file: LocalFilePayload) => void;
+  onLocalFileContextMenu?: LocalFileContextHandler;
 }) {
   if (!artifacts.length || !localFilePreviewUrl) return null;
   return (
@@ -515,6 +542,7 @@ function ImageArtifactGrid({
           type="button"
           className="image-artifact-card"
           onClick={() => onOpenLocalFile?.({ file_path: artifact.path, file_name: artifact.name, file_type: "image" })}
+          onContextMenu={(event) => onLocalFileContextMenu?.(event, { file_path: artifact.path, file_name: artifact.name, file_type: "image" })}
           title={artifact.path}
         >
           <img src={localFilePreviewUrl(artifact.path)} alt={artifact.name} loading="lazy" />
@@ -605,11 +633,13 @@ function artifactIcon(type: ArtifactFileType) {
 function ArtifactGrid({
   artifacts,
   localFilePreviewUrl,
-  onOpenLocalFile
+  onOpenLocalFile,
+  onLocalFileContextMenu
 }: {
   artifacts: ArtifactItem[];
   localFilePreviewUrl?: (filePath: string) => string;
   onOpenLocalFile?: (file: LocalFilePayload) => void;
+  onLocalFileContextMenu?: LocalFileContextHandler;
 }) {
   const [expanded, setExpanded] = useState(false);
   if (!artifacts.length) return null;
@@ -628,6 +658,7 @@ function ArtifactGrid({
             type="button"
             className={`artifact-card image-artifact-card${artifact.fileType === "image" ? " is-image" : ""}`}
             onClick={() => onOpenLocalFile?.({ file_path: artifact.path, file_name: artifact.name, file_type: artifact.fileType })}
+            onContextMenu={(event) => onLocalFileContextMenu?.(event, { file_path: artifact.path, file_name: artifact.name, file_type: artifact.fileType })}
             title={artifact.path}
           >
             {artifact.fileType === "image" && localFilePreviewUrl ? (
@@ -657,7 +688,8 @@ function ArtifactShelf({
   localFilePreviewUrl,
   localFileJson,
   localFileStat,
-  onOpenLocalFile
+  onOpenLocalFile,
+  onLocalFileContextMenu
 }: {
   artifacts?: AgentArtifact[];
   legacyArtifacts?: ArtifactItem[];
@@ -665,9 +697,10 @@ function ArtifactShelf({
   localFileJson?: (filePath: string) => Promise<LocalJsonResult>;
   localFileStat?: (filePath: string) => Promise<LocalPathStat>;
   onOpenLocalFile?: (file: LocalFilePayload) => void;
+  onLocalFileContextMenu?: LocalFileContextHandler;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const [openMenuId, setOpenMenuId] = useState("");
+  const [openMenu, setOpenMenu] = useState<{ id: string; x: number; y: number; width: number; height: number } | null>(null);
   const [availability, setAvailability] = useState<Record<string, ArtifactAvailability>>({});
   const statRetryCounts = useRef<Record<string, number>>({});
   const statRetryTimers = useRef<Record<string, number>>({});
@@ -776,7 +809,18 @@ function ArtifactShelf({
     Object.values(statusRetryTimers.current).forEach((timer) => window.clearTimeout(timer));
     statusRetryTimers.current = {};
   }, []);
-  const items = rawItems;
+  const items = rawItems.filter((artifact) => {
+    const source = artifactPath(artifact);
+    if (String(artifact.status || "").toLowerCase() === "failed") return false;
+    if (!localFileStat || !shouldVerifyArtifact(artifact)) return true;
+    const key = artifactSourceKey(artifact);
+    const statStatus = availability[key] || "pending";
+    const attempts = statRetryCounts.current[key] || 0;
+    if (statStatus === "ready") return true;
+    if (statStatus === "pending") return true;
+    if (statStatus === "missing" && String(artifact.status || "").toLowerCase() === "pending" && attempts < ARTIFACT_PENDING_MAX_RETRIES) return true;
+    return !source;
+  });
   if (!items.length) return null;
 
   const visibleArtifacts = expanded ? items : items.slice(0, 3);
@@ -792,16 +836,16 @@ function ArtifactShelf({
       : "ready";
     if (action === "copy") {
       await navigator.clipboard?.writeText(source).catch(() => undefined);
-      setOpenMenuId("");
+      setOpenMenu(null);
       return;
     }
     if (!artifactActionAllowed(sourceStatus)) {
-      setOpenMenuId("");
+      setOpenMenu(null);
       return;
     }
     if (artifact.kind === "url" && artifact.url && action !== "reveal" && action !== "openWith") {
       window.open(artifact.url, "_blank", "noopener,noreferrer");
-      setOpenMenuId("");
+      setOpenMenu(null);
       return;
     }
     onOpenLocalFile?.({
@@ -814,8 +858,24 @@ function ArtifactShelf({
         : undefined,
       preview_url: action === "preview" ? artifact.previewUrl || artifact.thumbnailUrl : undefined
     });
-    setOpenMenuId("");
+    setOpenMenu(null);
   };
+
+  useEffect(() => {
+    if (!openMenu) return undefined;
+    const close = () => setOpenMenu(null);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [openMenu]);
 
   return (
     <section className="artifact-shelf" aria-label={title}>
@@ -851,9 +911,19 @@ function ArtifactShelf({
           const blocked = !artifactActionAllowed(availabilityStatus);
           const displayPreviewUrl = artifactActionAllowed(availabilityStatus) ? previewUrl : "";
           const isPreviewableImage = artifact.kind === "image" && Boolean(displayPreviewUrl);
-          const menuOpen = openMenuId === artifact.id;
+          const menuOpen = openMenu?.id === artifact.id;
+          const menuStyle = openMenu && menuOpen ? artifactMenuStyle(openMenu) : undefined;
+          const payload = source ? localFilePayloadFromArtifact(artifact, source, displayPreviewUrl || previewUrl) : null;
           return (
-            <div className={`artifact-row is-${artifact.kind}${blocked ? ` is-${availabilityStatus}` : ""}`} key={artifact.id} title={displayPath || subtitle || name}>
+            <div
+              className={`artifact-row is-${artifact.kind}${blocked ? ` is-${availabilityStatus}` : ""}`}
+              key={artifact.id}
+              title={displayPath || subtitle || name}
+              onContextMenu={(event) => {
+                if (!payload || !onLocalFileContextMenu) return;
+                onLocalFileContextMenu(event, payload);
+              }}
+            >
               <span className="artifact-row-icon" aria-hidden="true">
                 {displayPreviewUrl ? <img src={displayPreviewUrl} alt="" loading="lazy" /> : artifactIcon(fileType)}
               </span>
@@ -874,7 +944,7 @@ function ArtifactShelf({
                     <Eye aria-hidden="true" />
                   </button>
                 )}
-                <button type="button" className="artifact-icon-button" title="本地打开" aria-label={`本地打开 ${name}`} onClick={() => void runAction(artifact, "open")}>
+                <button type="button" className="artifact-icon-button" title="本地打开" aria-label={`本地打开 ${name}`} disabled={blocked} onClick={() => void runAction(artifact, "open")}>
                   <MonitorUp aria-hidden="true" />
                 </button>
                 <span className="artifact-menu-wrap">
@@ -884,17 +954,27 @@ function ArtifactShelf({
                     title="打开方式"
                     aria-label={`${name} 的打开方式`}
                     aria-expanded={menuOpen}
-                    onClick={() => setOpenMenuId((current) => current === artifact.id ? "" : artifact.id)}
+                    onClick={(event) => {
+                      const rect = event.currentTarget.getBoundingClientRect();
+                      setOpenMenu((current) => current?.id === artifact.id ? null : {
+                        id: artifact.id,
+                        x: rect.left,
+                        y: rect.top,
+                        width: rect.width,
+                        height: rect.height
+                      });
+                    }}
                   >
                     <MoreHorizontal aria-hidden="true" />
                   </button>
-                  {menuOpen && (
-                    <span className="artifact-action-menu" role="menu">
-                      <button type="button" role="menuitem" onClick={() => void runAction(artifact, "open")}>本地打开</button>
-                      <button type="button" role="menuitem" onClick={() => void runAction(artifact, "reveal")}>在文件夹中显示</button>
-                      <button type="button" role="menuitem" onClick={() => void runAction(artifact, "openWith")}>选择应用打开</button>
+                  {menuOpen && menuStyle && createPortal(
+                    <span className="artifact-action-menu artifact-action-menu-portal" role="menu" style={menuStyle} onMouseDown={(event) => event.stopPropagation()}>
+                      <button type="button" role="menuitem" disabled={blocked} onClick={() => void runAction(artifact, "open")}>本地打开</button>
+                      <button type="button" role="menuitem" disabled={blocked} onClick={() => void runAction(artifact, "reveal")}>在文件夹中显示</button>
+                      <button type="button" role="menuitem" disabled={blocked} onClick={() => void runAction(artifact, "openWith")}>选择应用打开</button>
                       <button type="button" role="menuitem" onClick={() => void runAction(artifact, "copy")}>复制路径</button>
-                    </span>
+                    </span>,
+                    document.body
                   )}
                 </span>
               </span>
@@ -1356,11 +1436,13 @@ function extractArtifactsFromSteps(steps: AgentStepDisclosure[], toolCalls: Tool
 function MarkdownBlock({
   content,
   localFilePreviewUrl,
-  onOpenLocalFile
+  onOpenLocalFile,
+  onLocalFileContextMenu
 }: {
   content: string;
   localFilePreviewUrl?: (filePath: string) => string;
   onOpenLocalFile?: (file: LocalFilePayload) => void;
+  onLocalFileContextMenu?: LocalFileContextHandler;
 }) {
   const html = useMemo(
     () => renderMarkdown(redactInternalPromptText(content), localFilePreviewUrl),
@@ -1379,10 +1461,23 @@ function MarkdownBlock({
       file_type: mediaTypeFromUrl(filePath) || "file"
     });
   };
+  const handleContextMenu = (event: MouseEvent<HTMLDivElement>) => {
+    if (!onLocalFileContextMenu) return;
+    const target = event.target instanceof Element ? event.target : null;
+    const anchor = target?.closest<HTMLAnchorElement>("a[data-ecorex-file-path]");
+    const filePath = anchor?.dataset.ecorexFilePath || "";
+    if (!anchor || !filePath) return;
+    onLocalFileContextMenu(event, {
+      file_path: filePath,
+      file_name: anchor.dataset.ecorexFileName || basenameFromPath(filePath),
+      file_type: mediaTypeFromUrl(filePath) || "file"
+    });
+  };
   return (
     <div
       className="markdown-content"
       onClick={handleClick}
+      onContextMenu={handleContextMenu}
       dangerouslySetInnerHTML={{ __html: html }}
     />
   );
@@ -1561,11 +1656,13 @@ function streamingWindowMarkdown(content: string) {
 function StreamingStableMarkdown({
   content,
   localFilePreviewUrl,
-  onOpenLocalFile
+  onOpenLocalFile,
+  onLocalFileContextMenu
 }: {
   content: string;
   localFilePreviewUrl?: (filePath: string) => string;
   onOpenLocalFile?: (file: LocalFilePayload) => void;
+  onLocalFileContextMenu?: LocalFileContextHandler;
 }) {
   const chunks = useMemo(() => splitStableMarkdownChunksV2(content), [content]);
   return (
@@ -1576,6 +1673,7 @@ function StreamingStableMarkdown({
           content={chunk}
           localFilePreviewUrl={localFilePreviewUrl}
           onOpenLocalFile={onOpenLocalFile}
+          onLocalFileContextMenu={onLocalFileContextMenu}
         />
       ))}
     </>
@@ -1585,11 +1683,13 @@ function StreamingStableMarkdown({
 function StreamingMarkdownBlock({
   content,
   localFilePreviewUrl,
-  onOpenLocalFile
+  onOpenLocalFile,
+  onLocalFileContextMenu
 }: {
   content: string;
   localFilePreviewUrl?: (filePath: string) => string;
   onOpenLocalFile?: (file: LocalFilePayload) => void;
+  onLocalFileContextMenu?: LocalFileContextHandler;
 }) {
   const liveContent = useMemo(() => streamingWindowMarkdown(content), [content]);
   const { stable, tail, tailKind, cleanedTail } = useMemo(() => {
@@ -1598,12 +1698,12 @@ function StreamingMarkdownBlock({
   }, [liveContent]);
   return (
     <div className="streaming-markdown">
-      {stable && <StreamingStableMarkdown content={stable} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />}
+      {stable && <StreamingStableMarkdown content={stable} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} onLocalFileContextMenu={onLocalFileContextMenu} />}
       {tailKind === "code" ? (
         <pre className="streaming-code"><code>{tail}</code></pre>
       ) : cleanedTail ? (
         <div className="streaming-tail">
-          <MarkdownBlock content={cleanedTail} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />
+          <MarkdownBlock content={cleanedTail} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} onLocalFileContextMenu={onLocalFileContextMenu} />
         </div>
       ) : null}
     </div>
@@ -1654,9 +1754,10 @@ function ToolStep({ step }: { step: ToolCallDisclosure }) {
   );
 }
 
-function MediaStep({ step, onOpenLocalFile, localFilePreviewUrl }: {
+function MediaStep({ step, onOpenLocalFile, onLocalFileContextMenu, localFilePreviewUrl }: {
   step: Extract<AgentStepDisclosure, { type: "media" }>;
   onOpenLocalFile?: (file: LocalFilePayload) => void;
+  onLocalFileContextMenu?: LocalFileContextHandler;
   localFilePreviewUrl?: (filePath: string) => string;
 }) {
   const previewSource = step.previewUrl || step.url || step.filePath || "";
@@ -1672,11 +1773,13 @@ function MediaStep({ step, onOpenLocalFile, localFilePreviewUrl }: {
   if (step.fileType === "image" && previewUrl) {
     const image = <img className="agent-media-image" src={previewUrl} alt={fileName} loading="lazy" />;
     if (!onOpenLocalFile || !localPath) return image;
+    const payload: LocalFilePayload = { file_path: localPath, file_name: fileName, file_type: "image" };
     return (
       <button
         type="button"
         className="agent-media-button"
-        onClick={() => onOpenLocalFile({ file_path: localPath, file_name: fileName, file_type: "image" })}
+        onClick={() => onOpenLocalFile(payload)}
+        onContextMenu={(event) => onLocalFileContextMenu?.(event, payload)}
         title="点击在本地打开"
       >
         {image}
@@ -1684,11 +1787,13 @@ function MediaStep({ step, onOpenLocalFile, localFilePreviewUrl }: {
     );
   }
   if (localPath && onOpenLocalFile) {
+    const payload: LocalFilePayload = { file_path: localPath, file_name: fileName, file_type: step.fileType || "file" };
     return (
       <button
         type="button"
         className="agent-file-link"
-        onClick={() => onOpenLocalFile({ file_path: localPath, file_name: fileName, file_type: step.fileType || "file" })}
+        onClick={() => onOpenLocalFile(payload)}
+        onContextMenu={(event) => onLocalFileContextMenu?.(event, payload)}
         title="点击在本地打开"
       >
         {fileName}
@@ -1717,21 +1822,22 @@ function renderStep(
   step: AgentStepDisclosure,
   index: number,
   onOpenLocalFile?: (file: LocalFilePayload) => void,
-  localFilePreviewUrl?: (filePath: string) => string
+  localFilePreviewUrl?: (filePath: string) => string,
+  onLocalFileContextMenu?: LocalFileContextHandler
 ): ReactNode {
   if (step.type === "thinking") return <ThinkingStep key={index} content={step.content} running={step.running} />;
   if (step.type === "tool") return <ToolStep key={index} step={step} />;
   if (step.type === "content") {
     return (
       <div className="agent-step agent-content-step" key={index}>
-        <MarkdownBlock content={step.content || ""} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />
+        <MarkdownBlock content={step.content || ""} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} onLocalFileContextMenu={onLocalFileContextMenu} />
       </div>
     );
   }
   if (step.type === "phase") {
     return <div className="agent-step agent-phase-step" key={index}>{redactInternalPromptText(step.content || "")}</div>;
   }
-  return <MediaStep key={index} step={step} onOpenLocalFile={onOpenLocalFile} localFilePreviewUrl={localFilePreviewUrl} />;
+  return <MediaStep key={index} step={step} onOpenLocalFile={onOpenLocalFile} onLocalFileContextMenu={onLocalFileContextMenu} localFilePreviewUrl={localFilePreviewUrl} />;
 }
 
 function stepIsRunning(step: AgentStepDisclosure) {
@@ -1765,12 +1871,14 @@ function ProcessDisclosure({
   steps,
   legacySteps,
   onOpenLocalFile,
+  onLocalFileContextMenu,
   localFilePreviewUrl
 }: {
   pending?: boolean;
   steps: AgentStepDisclosure[];
   legacySteps: ReactNode[];
   onOpenLocalFile?: (file: LocalFilePayload) => void;
+  onLocalFileContextMenu?: LocalFileContextHandler;
   localFilePreviewUrl?: (filePath: string) => string;
 }) {
   if (!steps.length && !legacySteps.length) return null;
@@ -1788,7 +1896,7 @@ function ProcessDisclosure({
         {currentStep && <span className="agent-process-current">{stepSummary(currentStep)}</span>}
       </summary>
       <div className="agent-steps">
-        {steps.map((step, index) => renderStep(step, index, onOpenLocalFile, localFilePreviewUrl))}
+        {steps.map((step, index) => renderStep(step, index, onOpenLocalFile, localFilePreviewUrl, onLocalFileContextMenu))}
         {legacySteps}
       </div>
     </details>
@@ -1804,7 +1912,7 @@ function splitSteps(steps: AgentStepDisclosure[], content: string) {
   return { mainContent, visibleSteps };
 }
 
-function MainAnswer({ content, pending, collapsible, artifacts = [], extraArtifacts = [], localFilePreviewUrl, localFileJson, localFileStat, onOpenLocalFile }: {
+function MainAnswer({ content, pending, collapsible, artifacts = [], extraArtifacts = [], localFilePreviewUrl, localFileJson, localFileStat, onOpenLocalFile, onLocalFileContextMenu }: {
   content: string;
   pending?: boolean;
   collapsible?: boolean;
@@ -1814,21 +1922,22 @@ function MainAnswer({ content, pending, collapsible, artifacts = [], extraArtifa
   localFileJson?: (filePath: string) => Promise<LocalJsonResult>;
   localFileStat?: (filePath: string) => Promise<LocalPathStat>;
   onOpenLocalFile?: (file: LocalFilePayload) => void;
+  onLocalFileContextMenu?: LocalFileContextHandler;
 }) {
   const [expanded, setExpanded] = useState(false);
   const legacyArtifacts = useMemo(
     () => pending ? mergeArtifacts(extraArtifacts) : mergeArtifacts(extractArtifacts(content, { allowBareFiles: false }), extraArtifacts),
     [content, pending, extraArtifacts]
   );
-  const artifactShelf = <ArtifactShelf artifacts={artifacts} legacyArtifacts={legacyArtifacts} localFilePreviewUrl={localFilePreviewUrl} localFileJson={localFileJson} localFileStat={localFileStat} onOpenLocalFile={onOpenLocalFile} />;
+  const artifactShelf = <ArtifactShelf artifacts={artifacts} legacyArtifacts={legacyArtifacts} localFilePreviewUrl={localFilePreviewUrl} localFileJson={localFileJson} localFileStat={localFileStat} onOpenLocalFile={onOpenLocalFile} onLocalFileContextMenu={onLocalFileContextMenu} />;
   if (!content) return artifactShelf;
   if (!collapsible || pending || content.length <= LONG_REPLY_COLLAPSE_CHARS) {
     return (
       <>
         {pending ? (
-          <StreamingMarkdownBlock content={content} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />
+          <StreamingMarkdownBlock content={content} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} onLocalFileContextMenu={onLocalFileContextMenu} />
         ) : (
-          <MarkdownBlock content={content} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />
+          <MarkdownBlock content={content} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} onLocalFileContextMenu={onLocalFileContextMenu} />
         )}
         {artifactShelf}
       </>
@@ -1838,7 +1947,7 @@ function MainAnswer({ content, pending, collapsible, artifacts = [], extraArtifa
     return (
       <div className="long-answer-disclosure is-expanded">
         <div className="long-answer-full">
-          <MarkdownBlock content={content} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />
+          <MarkdownBlock content={content} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} onLocalFileContextMenu={onLocalFileContextMenu} />
           {artifactShelf}
         </div>
         <button className="long-answer-toggle long-answer-collapse-bottom" type="button" onClick={() => setExpanded(false)}>
@@ -1850,7 +1959,7 @@ function MainAnswer({ content, pending, collapsible, artifacts = [], extraArtifa
   return (
     <div className="long-answer-disclosure">
       <div className="long-answer-preview">
-        <MarkdownBlock content={markdownPreviewContentSafe(content)} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} />
+        <MarkdownBlock content={markdownPreviewContentSafe(content)} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} onLocalFileContextMenu={onLocalFileContextMenu} />
         {artifactShelf}
       </div>
       <button className="long-answer-toggle long-answer-expand-bottom" type="button" onClick={() => setExpanded(true)} title="长回复已默认收起，点击展开完整内容">
@@ -1871,6 +1980,7 @@ export const MessageContent = memo(function MessageContent(props: {
   toolCalls?: ToolCallDisclosure[];
   artifacts?: AgentArtifact[];
   onOpenLocalFile?: (file: LocalFilePayload) => void;
+  onLocalFileContextMenu?: LocalFileContextHandler;
   localFilePreviewUrl?: (filePath: string) => string;
   localFileJson?: (filePath: string) => Promise<LocalJsonResult>;
   localFileStat?: (filePath: string) => Promise<LocalPathStat>;
@@ -1897,9 +2007,10 @@ export const MessageContent = memo(function MessageContent(props: {
         steps={compactedSteps}
         legacySteps={legacySteps}
         onOpenLocalFile={props.onOpenLocalFile}
+        onLocalFileContextMenu={props.onLocalFileContextMenu}
         localFilePreviewUrl={props.localFilePreviewUrl}
       />
-      <MainAnswer content={mainContent} pending={props.pending} collapsible={props.role !== "user"} artifacts={props.artifacts} extraArtifacts={stepArtifacts} localFilePreviewUrl={props.localFilePreviewUrl} localFileJson={props.localFileJson} localFileStat={props.localFileStat} onOpenLocalFile={props.onOpenLocalFile} />
+      <MainAnswer content={mainContent} pending={props.pending} collapsible={props.role !== "user"} artifacts={props.artifacts} extraArtifacts={stepArtifacts} localFilePreviewUrl={props.localFilePreviewUrl} localFileJson={props.localFileJson} localFileStat={props.localFileStat} onOpenLocalFile={props.onOpenLocalFile} onLocalFileContextMenu={props.onLocalFileContextMenu} />
       {props.cancelled ? (
         <div className="agent-cancelled-tag">已中止</div>
       ) : props.pending ? (
