@@ -354,10 +354,13 @@ Base commit: f8ff1db4 chore: stabilize EcoreX v0.1.17 gates
 | `Get-AuthenticodeSignature desktop\release\EcoreX_0.1.18_x64-setup.exe` | PASS | Authenticode status is `Valid`; signer certificate thumbprint `0F678477DFC0A2BDAAB88307126EF657FAF8674F` |
 | `Get-AuthenticodeSignature desktop\release\win-unpacked\EcoreX.exe, resources\elevate.exe, resources\ecorex-runtime\python\python.exe, resources\ecorex-runtime\python\pythonw.exe` | PASS | All required unpacked executable signatures are `Valid`, including the NSIS `resources/elevate.exe` helper after signing the electron-builder cache source before NSIS generation |
 | `npm run smoke:win:installed -- -InstallerPath "C:\CowAgent\desktop\release\EcoreX_0.1.18_x64-setup.exe" -OutputPath "..\docs\v0.1.18\win-installed-smoke.json"` | PASS | Installed-app smoke passed: installer/app/runtime Python signatures `Valid`, runtime version `0.1.18`, sidecar/auth/auth-required/auth-negative checks passed, all negative auth probes returned 401, and cleanup succeeded |
+| `powershell -ExecutionPolicy Bypass -File scripts\dispatch-ecorex-macos-dmg-workflow.ps1` | PASS | macOS unsigned release lane verified on GitHub Actions after two hardening fixes. Run `27925947692` produced and uploaded the arm64 DMG with unsigned install-smoke evidence; run `27926165346` produced and uploaded the x64 DMG after forcing binary wheels for `cryptography`. `scripts\dispatch-ecorex-macos-dmg-workflow.ps1` now uses `Int64` run ids |
+| `powershell -ExecutionPolicy Bypass -File scripts\update-ecorex-desktop-release-manifest.ps1 -Version 0.1.18 -MacArm64DmgPath ... -MacX64DmgPath ...` | PASS | Imported unsigned macOS DMGs into `deploy/ecorex-site/manifest.json` as `ready-unsigned`: arm64 size `213,691,641` SHA256 `2D131EAD984A62F8B5F36135FE1D40B0D5E4EC95736E8A1D3304E58175A7A26E`; x64 size `221,016,893` SHA256 `6E5E04AC1703D71E65F123DDA507C20CE78896EA46E08B7859D4CFFE3B06F435`; both install-smoke JSON files report `status=pass`, `signature=unsigned`, and `gatekeeper=unsigned-user-approved` |
+| `gh release create v0.1.18 ...` / `gh release view v0.1.18 --repo zhangyifanjackson-dotcom/EcoreX --json tagName,url,assets,targetCommitish,isDraft,isPrerelease` | PASS | Published GitHub Release `v0.1.18` at `https://github.com/zhangyifanjackson-dotcom/EcoreX/releases/tag/v0.1.18` with unsigned macOS assets `EcoreX_0.1.18_arm64.dmg` and `EcoreX_0.1.18_x64.dmg`, corresponding `.sha256` files, and both macOS install-smoke JSON files. GitHub asset digests match the local DMG SHA256 values `2D131EAD984A62F8B5F36135FE1D40B0D5E4EC95736E8A1D3304E58175A7A26E` and `6E5E04AC1703D71E65F123DDA507C20CE78896EA46E08B7859D4CFFE3B06F435`; the release is not draft and not prerelease |
 | `powershell -ExecutionPolicy Bypass -File scripts\prepare-ecorex-webui-local-release.ps1 -Version 0.1.18` | PASS | Built WebUI local packages: Windows zip size `80,940,550` SHA256 `4E0765C9D687338D12A63FD7E9EE4A9464E13BAD97DF644C6629550DE53D79F7`; macOS universal zip size `158,050,345` SHA256 `27F7240291B55DCA0264D321BA212C8977A72C5A901AA244E64EC607C1867F12`; dual Win/Mac zip size `239,223,497` SHA256 `F7F4273DE570DC25D7CEC6511A4E8BED52741D024E19AD1871E129ABC4B6758A` |
 | `powershell -ExecutionPolicy Bypass -File scripts\prepare-ecorex-web-release.ps1 -Version 0.1.18` | PASS | Built Web Linux service tarball size `3,349,211` SHA256 `2184ADF0047F3D4FAF52826FAF360F55215A4E982BE82BFC2DE69996BA630B70` |
-| `powershell -ExecutionPolicy Bypass -File scripts\prepare-ecorex-public-release.ps1 -Version 0.1.18` | PASS | Generated validated public release zip `release-artifacts/EcoreX_0.1.18-public-release.zip`, size `401,773,708`, SHA256 `B1C0F696B1D7BB64CB3FCB57EF34FFC71CEB89A8187EDAD8072D9C1BF3A32AD9`; validator passed signed Windows installer, WebUI Windows, WebUI macOS, Web Linux, and public zip checks while correctly skipping pending macOS desktop DMGs |
-| `python scripts\validate-ecorex-release-artifacts.py --version 0.1.18 --public-zip release-artifacts\EcoreX_0.1.18-public-release.zip --desktop-dir desktop\release\win-unpacked` | PASS | Release validator passed signed Windows installer, ready Web artifacts, public zip checksums/download contents, and desktop unpacked host-boundary checks; macOS DMGs remain skipped because manifest status is pending |
+| `powershell -ExecutionPolicy Bypass -File scripts\prepare-ecorex-public-release.ps1 -Version 0.1.18 -MacArm64DmgPath ... -MacX64DmgPath ...` | PASS | Generated validated public release zip `release-artifacts/EcoreX_0.1.18-public-release.zip`, size `834,704,384`, SHA256 `9DC1880DF3AAE35015AF1E7289CB6AC63F1AB87AB57D4762F694D84C03A0D950`; validator passed signed Windows installer, WebUI Windows, WebUI macOS, unsigned macOS arm64/x64 DMGs with install-smoke evidence, Web Linux, and public zip checks |
+| `python scripts\validate-ecorex-release-artifacts.py --version 0.1.18 --public-zip release-artifacts\EcoreX_0.1.18-public-release.zip --desktop-dir desktop\release\win-unpacked` | PASS | Release validator passed signed Windows installer, ready Web artifacts, ready-unsigned macOS DMGs, public zip checksums/download contents, and desktop unpacked host-boundary checks |
 | `python scripts\check-ecorex-v0.1.18-promotion-gate.py --output docs\v0.1.18\promotion-gate.json` | GO | Machine-readable production-agent gate remains GO after release-boundary packaging fixes: 21 checks, 0 blockers, 0 warnings |
 
 ## Change Evidence
@@ -378,10 +381,10 @@ Base commit: f8ff1db4 chore: stabilize EcoreX v0.1.17 gates
 - v0.1.18 Windows installer promotion is no longer blocked: the signed setup
   is Authenticode `Valid`, installed-app smoke passed, and the public manifest
   marks `windows-x64` ready with size/hash/signature evidence.
-- v0.1.18 macOS DMG promotion is blocked until the `codex/ecorex-v0.1.18`
-  branch is pushed and the GitHub macOS DMG workflow produces arm64/x64 DMGs
-  plus install-smoke JSON for manifest import.
-- Full all-platform public download-page deployment and GitHub main/product-
-  branch verification remain blocked on the macOS DMG workflow output; the
-  Windows/Web/Linux public bundle is ready for server install or partial
-  publication.
+- v0.1.18 macOS DMG promotion is no longer blocked for the unsigned release
+  lane requested for this version: arm64/x64 DMGs have install-smoke evidence
+  and are manifest `ready-unsigned`.
+- Remaining release work is operational: deploy
+  `release-artifacts/EcoreX_0.1.18-public-release.zip` to the download host,
+  run public server verification, and perform final GitHub main/product-branch
+  verification.

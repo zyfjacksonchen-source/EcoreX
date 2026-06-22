@@ -1182,6 +1182,13 @@
     signs the electron-builder NSIS `elevate.exe` cache before NSIS generation.
   - The download page now passes the manifest version into `ready-unsigned`
     install-smoke checks and refuses ready links when size/hash are absent.
+  - The macOS release lane now explicitly supports unsigned/unnotarized DMGs:
+    strict signing remains enforced only when notarization is requested. The
+    workflow dispatch helper uses `int64` run ids, because current GitHub run
+    ids exceed PowerShell `Int32`.
+  - macOS capability preinstall now prefers binary wheels and requires a binary
+    `cryptography` wheel, avoiding transient Rust/OpenSSL source builds on
+    GitHub macOS x64 runners.
 - Built, signed, and validated current release artifacts:
   - `desktop/release/EcoreX_0.1.18_x64-setup.exe`, size `157,440,216`,
     SHA256 `AE5E6E702BD431EE2D5FBF5EED2B6DF80A8DE651F8376B56E7BE8E15F9B3281E`;
@@ -1197,9 +1204,17 @@
   - `release-artifacts/EcoreX_0.1.18-web-linux-service.tar.gz`, size
     `3,349,211`, SHA256
     `2184ADF0047F3D4FAF52826FAF360F55215A4E982BE82BFC2DE69996BA630B70`.
+  - `release-artifacts/macos-dmg-workflow/ecorex-macos-arm64/EcoreX_0.1.18_arm64.dmg`,
+    size `213,691,641`, SHA256
+    `2D131EAD984A62F8B5F36135FE1D40B0D5E4EC95736E8A1D3304E58175A7A26E`;
+    unsigned install smoke passed in GitHub Actions run `27925947692`.
+  - `release-artifacts/macos-dmg-workflow/ecorex-macos-x64/EcoreX_0.1.18_x64.dmg`,
+    size `221,016,893`, SHA256
+    `6E5E04AC1703D71E65F123DDA507C20CE78896EA46E08B7859D4CFFE3B06F435`;
+    unsigned install smoke passed in GitHub Actions run `27926165346`.
   - `release-artifacts/EcoreX_0.1.18-public-release.zip`, size
-    `401,773,708`, SHA256
-    `B1C0F696B1D7BB64CB3FCB57EF34FFC71CEB89A8187EDAD8072D9C1BF3A32AD9`.
+    `834,704,384`, SHA256
+    `9DC1880DF3AAE35015AF1E7289CB6AC63F1AB87AB57D4762F694D84C03A0D950`.
 - Windows signing is closed for this release. The provider preflight can still
   report Smart Card / CertProp stopped and no visible SimplySign CSP key
   containers from this non-elevated shell, but actual signing succeeds with the
@@ -1209,6 +1224,9 @@
   signing, and post-sign update-feed regeneration. Installed-app smoke wrote
   `docs/v0.1.18/win-installed-smoke.json` with sidecar/auth/auth-negative
   checks passing and all required signatures `Valid`.
-- macOS DMG dispatch is ready in scripts, but it depends on pushing
-  `codex/ecorex-v0.1.18` to GitHub before
-  `scripts/dispatch-ecorex-macos-dmg-workflow.ps1` can run against that ref.
+- macOS DMG dispatch is closed for the unsigned release lane. The first all-arch
+  run exposed two release-script issues: unsigned bundle validation still
+  enforced strict `codesign --verify`, and x64 `office-pdf` preinstall fell back
+  to a source `cryptography` build. Both were fixed, arm64 and x64 install
+  smoke JSON imported into `deploy/ecorex-site/manifest.json`, and the final
+  public release bundle validates with both DMGs marked `ready-unsigned`.

@@ -29,8 +29,13 @@ The v0.1.18 production-agent runtime gate is GO. Public release publication is
 tracked separately. Windows Authenticode signing and installed smoke now pass:
 `EcoreX_0.1.18_x64-setup.exe` is manifest-ready with SHA256
 `AE5E6E702BD431EE2D5FBF5EED2B6DF80A8DE651F8376B56E7BE8E15F9B3281E`.
-WebUI Windows, WebUI macOS, and Web Linux service artifacts have been rebuilt
-with v0.1.18 hashes and validated in
-`release-artifacts/EcoreX_0.1.18-public-release.zip`. Remaining publication
-blockers are macOS desktop DMG workflow output, GitHub branch/workflow push,
-and final download-page deployment verification.
+macOS desktop DMGs are intentionally unsigned for this release lane and are
+manifest-ready as `ready-unsigned` with install-smoke evidence: arm64 SHA256
+`2D131EAD984A62F8B5F36135FE1D40B0D5E4EC95736E8A1D3304E58175A7A26E`, x64 SHA256
+`6E5E04AC1703D71E65F123DDA507C20CE78896EA46E08B7859D4CFFE3B06F435`. WebUI
+Windows, WebUI macOS, and Web Linux service artifacts have been rebuilt with
+v0.1.18 hashes and validated in
+`release-artifacts/EcoreX_0.1.18-public-release.zip` (SHA256
+`9DC1880DF3AAE35015AF1E7289CB6AC63F1AB87AB57D4762F694D84C03A0D950`). Remaining
+publication work is final download-page deployment verification and GitHub
+main/product-branch verification.
