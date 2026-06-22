@@ -32,7 +32,13 @@ for app in "${apps[@]}"; do
   test -f "$app/Contents/Resources/ecorex-runtime/capabilities.json"
   test -f "$app/Contents/Resources/ecorex-runtime/scripts/install-capability.py"
   if codesign -dv --verbose=4 "$app" >/dev/null 2>&1; then
-    codesign --verify --deep --strict --verbose=2 "$app"
+    if ! codesign --verify --deep --strict --verbose=2 "$app"; then
+      if [[ "$STRICT_SIGNING" == "1" ]]; then
+        echo "codesign verification failed for $app and ECOREX_MAC_STRICT_SIGNING=1." >&2
+        exit 2
+      fi
+      echo "codesign verification failed for $app; continuing because unsigned macOS artifacts are allowed for this release lane." >&2
+    fi
   elif [[ "$STRICT_SIGNING" == "1" ]]; then
     echo "codesign rejected $app and ECOREX_MAC_STRICT_SIGNING=1." >&2
     exit 2

@@ -303,11 +303,24 @@ if [[ -n "$PREINSTALL_PACKS" ]]; then
     pack="$(echo "$pack" | xargs)"
     [[ -z "$pack" ]] && continue
     echo "Preinstalling capability pack $pack"
-    "$RUNTIME_PYTHON" "$RUNTIME_DIR/scripts/install-capability.py" \
+    if ! "$RUNTIME_PYTHON" "$RUNTIME_DIR/scripts/install-capability.py" \
       --pack-id "$pack" \
       --runtime-dir "$RUNTIME_DIR" \
       --manifest "$RUNTIME_DIR/capabilities.json" \
-      --fallback-index-url "https://pypi.tuna.tsinghua.edu.cn/simple"
+      --fallback-index-url "https://pypi.tuna.tsinghua.edu.cn/simple"; then
+      state_file="$RUNTIME_DIR/capability-state/${pack}.json"
+      log_file="$RUNTIME_DIR/capability-state/${pack}.log"
+      if [[ -f "$state_file" ]]; then
+        echo "Capability pack state for $pack:" >&2
+        cat "$state_file" >&2
+      fi
+      if [[ -f "$log_file" ]]; then
+        echo "Capability pack install log for $pack:" >&2
+        tail -n 160 "$log_file" >&2
+      fi
+      echo "Capability pack preinstall failed: $pack" >&2
+      exit 1
+    fi
   done
 fi
 

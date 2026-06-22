@@ -9,7 +9,7 @@ param(
     [string]$OutputDir = "release-artifacts\macos-dmg-workflow",
     [switch]$DispatchOnly,
     [switch]$DownloadOnly,
-    [int]$RunId = 0,
+    [int64]$RunId = 0,
     [switch]$DryRun
 )
 
@@ -79,7 +79,7 @@ function Get-LatestWorkflowDispatchRun {
 function Download-MacArtifacts {
     param(
         [Parameter(Mandatory = $true)][string]$Repo,
-        [Parameter(Mandatory = $true)][int]$RunId,
+        [Parameter(Mandatory = $true)][int64]$RunId,
         [Parameter(Mandatory = $true)][string]$Destination,
         [Parameter(Mandatory = $true)][string]$MacArch
     )
@@ -163,7 +163,7 @@ if (-not $DownloadOnly) {
     }
     Start-Sleep -Seconds 8
     $run = Get-LatestWorkflowDispatchRun -Repo $Repo -Workflow $Workflow -Ref $Ref
-    $RunId = [int]$run.databaseId
+    $RunId = [int64]$run.databaseId
     Write-Host "Dispatched macOS DMG workflow run ${RunId}: $($run.url)"
     if ($DispatchOnly) {
         [ordered]@{
