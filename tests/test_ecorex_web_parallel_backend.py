@@ -2003,6 +2003,61 @@ class TestWebParallelHandlers(unittest.TestCase):
             self.assertEqual(final["status"], "running")
             self.assertIsNone(final["terminal_at"])
 
+    def test_active_request_snapshot_interrupts_stale_orphan_message_run(self):
+        from agent.protocol import reset_run_ledger_for_tests
+        from channel.web import web_channel
+
+        channel = web_channel.WebChannel()
+        channel.request_to_session = {}
+        channel.sse_queues = {}
+        channel.sse_events = {}
+        request_id = "req-v020-stale-orphan"
+        session_id = "session-v020-stale-orphan"
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            ledger.create_run(request_id, session_id, phase="tool_running", status="running")
+            future = time.time() + 600
+
+            with patch.object(web_channel, "_get_workspace_root", return_value=workspace), patch.object(
+                web_channel, "conf", return_value={"web_active_run_stale_seconds": 30}
+            ), patch.object(web_channel.time, "time", return_value=future):
+                snapshot = channel.active_requests_snapshot()
+
+            self.assertEqual(snapshot["requests"], [])
+            final = ledger.get_run(request_id)
+            self.assertEqual(final["status"], "interrupted")
+            self.assertEqual(final["terminal_reason"], "stale_active_recovered")
+            self.assertEqual(final["error_code"], "STALE_ACTIVE_RUN")
+
+    def test_backpressure_snapshot_releases_stale_orphan_message_run(self):
+        from agent.protocol import reset_run_ledger_for_tests
+        from channel.web import web_channel
+
+        channel = web_channel.WebChannel()
+        channel.request_to_session = {}
+        channel.sse_queues = {}
+        channel.sse_events = {}
+        request_id = "req-v020-stale-backpressure"
+        session_id = "session-v020-stale-backpressure"
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+            ledger.create_run(request_id, session_id, phase="tool_running", status="running")
+            future = time.time() + 600
+
+            with patch.object(web_channel, "_get_workspace_root", return_value=workspace), patch.object(
+                web_channel, "conf", return_value={
+                    "web_active_run_stale_seconds": 30,
+                    "web_max_active_requests": 1,
+                    "web_max_active_requests_per_session": 1,
+                }
+            ), patch.object(web_channel.time, "time", return_value=future):
+                rejection = channel._backpressure_rejection_payload(session_id)
+
+            self.assertIsNone(rejection)
+            final = ledger.get_run(request_id)
+            self.assertEqual(final["status"], "interrupted")
+            self.assertEqual(final["terminal_reason"], "stale_active_recovered")
+
     def test_cancel_registry_snapshot_marks_cancelled_request(self):
         from agent.protocol.cancel import CancelTokenRegistry
 

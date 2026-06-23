@@ -48,6 +48,7 @@ SSE_STREAM_TERMINAL_TYPES = SSE_RUN_TERMINAL_TYPES | {"replay_gap"}
 _RUNTIME_STARTED_AT = time.time()
 RECENT_TERMINAL_RUN_MAX_AGE_SECONDS = 30 * 60
 RECENT_TERMINAL_RUN_LIMIT = 50
+ACTIVE_RUN_STALE_SECONDS = 180
 DANGEROUS_OPEN_EXTENSIONS = {
     ".app",
     ".bat",
@@ -1226,13 +1227,20 @@ class WebChannel(ChatChannel):
         try:
             from agent.protocol import get_cancel_registry, get_run_ledger
 
+            registry_rows = get_cancel_registry().snapshot()
+            registry_by_request = {
+                row.get("request_id", ""): row
+                for row in registry_rows
+                if row.get("request_id")
+            }
+            self._recover_stale_active_runs(get_run_ledger(), registry_by_request=registry_by_request)
             for row in get_run_ledger().active_snapshot():
                 request_id = row.get("request_id", "")
                 if request_id in ignored:
                     continue
                 if request_id:
                     active_by_request[request_id] = row
-            for row in get_cancel_registry().snapshot():
+            for row in registry_rows:
                 request_id = row.get("request_id", "")
                 if request_id in ignored:
                     continue
@@ -1377,6 +1385,79 @@ class WebChannel(ChatChannel):
             self._mark_run_phase(request_id, etype, status="running")
         elif etype == "message_end":
             self._mark_run_phase(request_id, "finalizing", status="finalizing")
+
+    def _active_run_stale_seconds(self) -> int:
+        configured = conf().get("web_active_run_stale_seconds", ACTIVE_RUN_STALE_SECONDS)
+        parsed = self._coerce_positive_int(configured, ACTIVE_RUN_STALE_SECONDS)
+        return parsed or ACTIVE_RUN_STALE_SECONDS
+
+    def _recover_stale_active_runs(
+        self,
+        ledger,
+        *,
+        registry_by_request: Dict[str, Dict[str, Any]],
+        stale_locks: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[str]:
+        """Terminalize orphaned active message runs that have no live evidence."""
+        stale_seconds = self._active_run_stale_seconds()
+        now = time.time()
+        interrupted: List[str] = []
+        if stale_locks is None:
+            try:
+                from common.ecorex_workspace import list_session_locks
+
+                stale_locks = list_session_locks(_get_workspace_root(), cleanup=False)
+            except Exception as exc:
+                logger.debug(f"[WebChannel] stale active run lock scan skipped: {exc}")
+                stale_locks = []
+
+        def has_live_session_lock(session_id: str) -> bool:
+            if not session_id:
+                return False
+            for item in stale_locks or []:
+                if str(item.get("session_id") or "") != session_id:
+                    continue
+                if item.get("removed") or item.get("dead_owner"):
+                    continue
+                if item.get("alive") is True:
+                    return True
+                if not item.get("stale"):
+                    return True
+            return False
+
+        for row in ledger.active_snapshot():
+            request_id = str(row.get("request_id") or "")
+            if not request_id or request_id in registry_by_request:
+                continue
+            run_type = str(row.get("run_type") or "message").lower()
+            if run_type != "message":
+                continue
+            if self._sse_request_exists(request_id):
+                continue
+            session_id = str(row.get("session_id") or self.request_to_session.get(request_id, "") or "")
+            if has_live_session_lock(session_id):
+                continue
+            updated_at = float(row.get("updated_at") or row.get("created_at") or now)
+            if now - updated_at < stale_seconds:
+                continue
+            message = (
+                "Active run had no cancel token, stream state, or live session lock "
+                f"for at least {stale_seconds} seconds."
+            )
+            ledger.mark_terminal(
+                request_id,
+                "interrupted",
+                reason="stale_active_recovered",
+                error_code="STALE_ACTIVE_RUN",
+                error_message=message,
+            )
+            self.request_to_session.pop(request_id, None)
+            interrupted.append(request_id)
+            logger.warning(
+                f"[WebChannel] marked stale active run interrupted: "
+                f"request={request_id} session={session_id}"
+            )
+        return interrupted
 
     def active_requests_snapshot(self):
         """Return backend-authoritative active request state for UI recovery.
@@ -1554,6 +1635,12 @@ class WebChannel(ChatChannel):
                             error_message="Runtime session lock owner disappeared before the run reached a terminal state.",
                         )
                         interrupted_request_ids.add(request_id)
+            for request_id in self._recover_stale_active_runs(
+                ledger,
+                registry_by_request=registry_by_request,
+                stale_locks=stale_locks,
+            ):
+                interrupted_request_ids.add(request_id)
             boot_time = float(getattr(self, "runtime_started_at", 0) or 0)
             if boot_time > 0:
                 for row in ledger.active_snapshot():

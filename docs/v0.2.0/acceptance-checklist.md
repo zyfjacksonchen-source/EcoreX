@@ -4,7 +4,7 @@
 | --- | --- | --- | --- | --- |
 | R20-01 | Version | Runtime, WebUI, admin API, package metadata, build scripts, and release scripts default to `0.2.0`. | IN PROGRESS | Version migration started; final proof requires rg check plus build/package output. |
 | R20-02 | Compatibility | v0.1.19 client keys remain accepted during rollout. | IN PROGRESS | Compat entries added in admin API, Electron policy, Web bridge, and stage/install scripts; tests pending. |
-| R20-03 | Runtime Stability | Accepted requests have a single recognized terminal state and cannot leave infinite pending UI. | TODO | Pending implementation/tests. |
+| R20-03 | Runtime Stability | Accepted requests have a single recognized terminal state and cannot leave infinite pending UI. | IN PROGRESS | CowAgent cancel regression fixed; stale orphan active runs now terminalize as `interrupted` and release backpressure. Selected runtime tests passed; broader recovery smoke still pending. |
 | R20-04 | Performance | WebUI typing, switching, deleting, folding, and streaming output are responsive on Win/Mac. | TODO | Pending implementation/Playwright smoke. |
 | R20-05 | State Persistence | WebUI update preserves project folders and project sessions. | TODO | Pending implementation/tests. |
 | R20-06 | Discovery | Knowledge/graph/channels/tools are discoverable after configuration. | TODO | Pending implementation/tests. |
