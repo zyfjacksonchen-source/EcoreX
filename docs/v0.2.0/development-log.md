@@ -13,3 +13,7 @@
   - Install/persistence slice confirmed project drift risk comes from early replace-mode UI-state writes before runtime hydration completes.
 - Implemented shared channel catalog and wired it into `/api/channels`, `/api/extensions`, frontend runtime capabilities, and desktop bridge allowlist.
 - Updated `/api/tools` to use `ToolManager.list_tools()` so loaded MCP/dynamic tools appear in the runtime capability snapshot.
+- Hardened WebUI project/session persistence:
+  - Runtime UI-state hydration now merges runtime projects/session mappings into local state instead of replacing local state with an empty or partial snapshot.
+  - Automatic UI-state sync now uses merge mode; explicit project deletion is the only WebUI path that sends replace mode.
+  - Backend `save_ui_state` ignores empty replace project payloads unless the caller explicitly sets `allowEmptyProjectState`.

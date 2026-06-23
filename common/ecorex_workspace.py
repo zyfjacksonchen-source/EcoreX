@@ -388,7 +388,23 @@ def save_ui_state(workspace: str, incoming: Dict[str, Any]) -> Dict[str, Any]:
         or incoming.get("replace_project_state")
         or incoming.get("projectStateMode") == "replace"
     )
+    allow_empty_project_state = bool(
+        incoming.get("allowEmptyProjectState")
+        or incoming.get("allow_empty_project_state")
+    )
     raw_incoming_projects = incoming.get("projects")
+    if (
+        replace_project_state
+        and "projects" in incoming
+        and isinstance(raw_incoming_projects, list)
+        and len(raw_incoming_projects) == 0
+        and current.get("projects")
+        and not allow_empty_project_state
+    ):
+        logger.warning(
+            "[EcoreXWorkspace] ignoring empty replace project state without explicit allow flag"
+        )
+        replace_project_state = False
     if "projects" in incoming:
         incoming_projects = incoming.get("projects")
         current_projects = current.get("projects")

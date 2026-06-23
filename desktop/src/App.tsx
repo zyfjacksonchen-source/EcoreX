@@ -991,11 +991,13 @@ function mergeProjectFolders(current: ProjectFolder[], incoming?: ProjectFolder[
 function normalizeSessionProjectsForProjects(sessionProjects: unknown, projects: ProjectFolder[]) {
   if (!sessionProjects || typeof sessionProjects !== "object") return {};
   const validProjectIds = new Set(projects.map((project) => project.id).filter(Boolean));
+  const projectIdsKnown = validProjectIds.size > 0;
   const normalized: SessionProjectMap = {};
   Object.entries(sessionProjects as Record<string, unknown>).forEach(([sessionId, projectId]) => {
     const sessionKey = String(sessionId || "").trim();
     const projectKey = String(projectId || "").trim();
-    if (!sessionKey || !projectKey || !validProjectIds.has(projectKey)) return;
+    if (!sessionKey || !projectKey) return;
+    if (projectIdsKnown && !validProjectIds.has(projectKey)) return;
     normalized[sessionKey] = projectKey;
   });
   return normalized;
@@ -1004,10 +1006,12 @@ function normalizeSessionProjectsForProjects(sessionProjects: unknown, projects:
 function normalizePinnedProjectsForProjects(pinnedProjects: unknown, projects: ProjectFolder[]) {
   if (!pinnedProjects || typeof pinnedProjects !== "object") return {};
   const validProjectIds = new Set(projects.map((project) => project.id).filter(Boolean));
+  const projectIdsKnown = validProjectIds.size > 0;
   const normalized: StringBoolMap = {};
   Object.entries(pinnedProjects as Record<string, unknown>).forEach(([projectId, pinned]) => {
     const projectKey = String(projectId || "").trim();
-    if (!projectKey || !validProjectIds.has(projectKey)) return;
+    if (!projectKey) return;
+    if (projectIdsKnown && !validProjectIds.has(projectKey)) return;
     normalized[projectKey] = Boolean(pinned);
   });
   return normalized;
@@ -2395,30 +2399,36 @@ export function App() {
       .then((state) => {
         if (!state) return;
         const runtimeProjects = Array.isArray(state.projects) ? mergeProjectFolders([], state.projects) : null;
+        const mergedProjects = runtimeProjects ? mergeProjectFolders(projects, runtimeProjects) : projects;
         if (runtimeProjects) {
-          setProjects(runtimeProjects);
+          setProjects((current) => mergeProjectFolders(current, runtimeProjects));
         }
         if (state.sessionProjects && typeof state.sessionProjects === "object") {
-          setSessionProjects(normalizeSessionProjectsForProjects(state.sessionProjects, runtimeProjects || projects));
-        } else if (runtimeProjects) {
-          setSessionProjects({});
+          setSessionProjects((current) => normalizeSessionProjectsForProjects(
+            { ...current, ...(state.sessionProjects as Record<string, unknown>) },
+            mergedProjects
+          ));
         }
         if (state.sessionTitles && typeof state.sessionTitles === "object") {
-          setSessionTitles(state.sessionTitles as StringMap);
+          setSessionTitles((current) => ({ ...current, ...(state.sessionTitles as StringMap) }));
         }
         if (state.pinnedSessions && typeof state.pinnedSessions === "object") {
-          setPinnedSessions(state.pinnedSessions as StringBoolMap);
+          setPinnedSessions((current) => ({ ...current, ...(state.pinnedSessions as StringBoolMap) }));
         }
         if (state.pinnedProjects && typeof state.pinnedProjects === "object") {
-          setPinnedProjects(normalizePinnedProjectsForProjects(state.pinnedProjects, runtimeProjects || projects));
-        } else if (runtimeProjects) {
-          setPinnedProjects({});
+          setPinnedProjects((current) => normalizePinnedProjectsForProjects(
+            { ...current, ...(state.pinnedProjects as Record<string, unknown>) },
+            mergedProjects
+          ));
         }
         if (state.sessionUiState && typeof state.sessionUiState === "object") {
-          setSessionUiState(pruneSessionUiState(state.sessionUiState as Record<string, SessionUiState>));
+          setSessionUiState((current) => pruneSessionUiState({
+            ...current,
+            ...(state.sessionUiState as Record<string, SessionUiState>)
+          }));
         }
         if ("activeProjectId" in state) {
-          const validProjectIds = new Set((runtimeProjects || projects).map((project) => project.id));
+          const validProjectIds = new Set(mergedProjects.map((project) => project.id));
           const runtimeActiveProjectId = String(state.activeProjectId || "").trim();
           setActiveProjectId(runtimeActiveProjectId && validProjectIds.has(runtimeActiveProjectId) ? runtimeActiveProjectId : null);
         }
@@ -2462,8 +2472,8 @@ export function App() {
     uiStateSyncTimer.current = window.setTimeout(() => {
       void saveRuntimeUiState({
         version: 1,
-        replaceProjectState: true,
-        projectStateMode: "replace",
+        replaceProjectState: false,
+        projectStateMode: "merge",
         lastActiveSessionId: activeSessionIdRef.current,
         activeProjectId: runtimeActiveProjectId,
         projects,
@@ -3568,21 +3578,35 @@ export function App() {
 
   function deleteProject(project: ProjectFolder) {
     if (!window.confirm(`删除项目「${project.name}」？项目文件夹不会被删除，已有项目会话会变成通用会话。`)) return;
-    setProjects((current) => current.filter((item) => item.id !== project.id));
-    setPinnedProjects((current) => {
-      const next = { ...current };
-      delete next[project.id];
-      return next;
+    const nextProjects = projects.filter((item) => item.id !== project.id);
+    const nextPinnedProjects = { ...pinnedProjects };
+    delete nextPinnedProjects[project.id];
+    const nextSessionProjects = { ...sessionProjects };
+    Object.entries(nextSessionProjects).forEach(([sessionId, projectId]) => {
+      if (projectId === project.id) delete nextSessionProjects[sessionId];
     });
-    setSessionProjects((current) => {
-      const next = { ...current };
-      Object.entries(next).forEach(([sessionId, projectId]) => {
-        if (projectId === project.id) delete next[sessionId];
-      });
-      return next;
-    });
+    setProjects(nextProjects);
+    setPinnedProjects(nextPinnedProjects);
+    setSessionProjects(nextSessionProjects);
     if (activeProjectId === project.id) {
       setActiveProjectId(null);
+    }
+    if (sidecarStatus.state === "running") {
+      void saveRuntimeUiState({
+        version: 1,
+        replaceProjectState: true,
+        projectStateMode: "replace",
+        allowEmptyProjectState: true,
+        lastActiveSessionId: activeSessionIdRef.current,
+        activeProjectId: activeProjectId === project.id ? null : activeProjectId,
+        projects: nextProjects,
+        sessionProjects: nextSessionProjects,
+        sessionTitles,
+        pinnedSessions,
+        pinnedProjects: nextPinnedProjects,
+        sessionUiState,
+        savedAt: new Date().toISOString()
+      }).catch(() => undefined);
     }
     setProjectMenu(null);
   }
@@ -5876,8 +5900,8 @@ export function App() {
     if (sidecarStatus.state !== "running") return;
     await saveRuntimeUiState({
       version: 1,
-      replaceProjectState: true,
-      projectStateMode: "replace",
+      replaceProjectState: false,
+      projectStateMode: "merge",
       lastActiveSessionId: activeSessionId,
       activeProjectId: projectId,
       projects,

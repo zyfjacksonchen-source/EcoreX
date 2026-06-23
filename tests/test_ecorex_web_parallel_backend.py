@@ -80,6 +80,53 @@ class TestEcoreXWorkspaceState(unittest.TestCase):
             self.assertEqual(load_installation_manifest(workspace)["surfaces"]["webui"]["port"], 9899)
             self.assertEqual(load_ui_state(workspace)["activeSessionId"], "s1")
 
+    def test_ui_state_empty_replace_does_not_clear_projects_without_explicit_allow(self):
+        from common.ecorex_workspace import load_ui_state, save_ui_state
+
+        with tempfile.TemporaryDirectory() as workspace:
+            save_ui_state(workspace, {
+                "projects": [{"id": "p1", "name": "Project", "path": os.path.join(workspace, "project")}],
+                "sessionProjects": {"s1": "p1"},
+                "pinnedProjects": {"p1": True},
+                "projectStateMode": "merge",
+            })
+            save_ui_state(workspace, {
+                "projects": [],
+                "sessionProjects": {},
+                "pinnedProjects": {},
+                "replaceProjectState": True,
+                "projectStateMode": "replace",
+            })
+            state = load_ui_state(workspace)
+
+        self.assertEqual([project["id"] for project in state["projects"]], ["p1"])
+        self.assertEqual(state["sessionProjects"], {"s1": "p1"})
+        self.assertEqual(state["pinnedProjects"], {"p1": True})
+
+    def test_ui_state_explicit_empty_replace_can_clear_projects(self):
+        from common.ecorex_workspace import load_ui_state, save_ui_state
+
+        with tempfile.TemporaryDirectory() as workspace:
+            save_ui_state(workspace, {
+                "projects": [{"id": "p1", "name": "Project", "path": os.path.join(workspace, "project")}],
+                "sessionProjects": {"s1": "p1"},
+                "pinnedProjects": {"p1": True},
+                "projectStateMode": "merge",
+            })
+            save_ui_state(workspace, {
+                "projects": [],
+                "sessionProjects": {},
+                "pinnedProjects": {},
+                "replaceProjectState": True,
+                "projectStateMode": "replace",
+                "allowEmptyProjectState": True,
+            })
+            state = load_ui_state(workspace)
+
+        self.assertEqual(state["projects"], [])
+        self.assertEqual(state["sessionProjects"], {})
+        self.assertEqual(state["pinnedProjects"], {})
+
     def test_session_lock_blocks_same_session_until_released(self):
         from common.ecorex_workspace import SessionBusyError, SessionLock
 
@@ -1274,6 +1321,18 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertIn('apiJson<{ channels?: RuntimeChannel[] }>("/api/channels")', api_source)
         self.assertIn('const id = `channel:${name}`;', api_source)
         self.assertIn('type: "connector"', api_source)
+
+    def test_v020_frontend_runtime_ui_state_uses_merge_except_explicit_project_delete(self):
+        root = Path(__file__).resolve().parents[1]
+        app_source = (root / "desktop" / "src" / "App.tsx").read_text(encoding="utf-8")
+
+        self.assertIn("const mergedProjects = runtimeProjects ? mergeProjectFolders(projects, runtimeProjects) : projects;", app_source)
+        self.assertIn("setProjects((current) => mergeProjectFolders(current, runtimeProjects));", app_source)
+        self.assertIn('projectStateMode: "merge"', app_source)
+        self.assertIn("replaceProjectState: false", app_source)
+        self.assertIn("allowEmptyProjectState: true", app_source)
+        self.assertIn("function deleteProject(project: ProjectFolder)", app_source)
+        self.assertIn('projectStateMode: "replace"', app_source)
 
     def test_tool_permission_handler_round_trips_mode_and_audit(self):
         from channel.web import web_channel
