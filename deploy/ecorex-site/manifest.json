@@ -52,11 +52,11 @@
                           "variant":  "Desktop x64 installer",
                           "fileName":  "EcoreX_0.1.19_x64-setup.exe",
                           "href":  "downloads/EcoreX_0.1.19_x64-setup.exe",
-                          "size":  157452928,
-                          "sha256":  "E40DA22FBB6B29D7B8E78D08B5C884A65F8B339514CD20F3D3C325E814F6C3D6",
+                          "size":  157454656,
+                          "sha256":  "6D74A30916318D86C2038727A6F60C82D07054E819DD051FED948CBFC8948D42",
                           "status":  "ready",
                           "source":  "Signed v0.1.19 windows-x64 installer verified by installed smoke evidence.",
-                          "updatedAt":  "2026-06-22",
+                          "updatedAt":  "2026-06-23",
                           "signature":  "Valid"
                       },
                       {
@@ -66,11 +66,11 @@
                           "variant":  "Desktop ia32 installer",
                           "fileName":  "EcoreX_0.1.19_ia32-setup.exe",
                           "href":  "downloads/EcoreX_0.1.19_ia32-setup.exe",
-                          "size":  103631384,
-                          "sha256":  "6BB2579510B1280EE957396C24D8380E94E390CB15F908210EA4FF5A1BC29239",
+                          "size":  103633640,
+                          "sha256":  "6403F790408510B01B15EF502CBA7F7BFF0118148D6B48278B0AD1E130162B7C",
                           "status":  "ready",
                           "source":  "Signed v0.1.19 windows-ia32 installer verified by installed smoke evidence.",
-                          "updatedAt":  "2026-06-22",
+                          "updatedAt":  "2026-06-23",
                           "signature":  "Valid"
                       },
                       {
@@ -80,11 +80,11 @@
                           "variant":  "WebUI one-click local package",
                           "fileName":  "EcoreX_0.1.19-webui-windows-x64.zip",
                           "href":  "downloads/EcoreX_0.1.19-webui-windows-x64.zip",
-                          "size":  24288352,
-                          "sha256":  "F2E35868B5DCEF7D764CC5A0738C5AF38FB6C6EDE3A7040A9927D40639C79FDD",
+                          "size":  80952793,
+                          "sha256":  "9C7D886FA4BB729C3470AEF68E449630B114E25D02ABED8E622A5E2E3BCA6568",
                           "status":  "ready",
-                          "source":  "Local v0.1.19 WebUI artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks.",
-                          "updatedAt":  "2026-06-22"
+                          "source":  "Local v0.1.19 WebUI Windows artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks.",
+                          "updatedAt":  "2026-06-23"
                       },
                       {
                           "id":  "webui-macos-universal",
@@ -93,11 +93,11 @@
                           "variant":  "WebUI one-click local package",
                           "fileName":  "EcoreX_0.1.19-webui-macos-universal.zip",
                           "href":  "downloads/EcoreX_0.1.19-webui-macos-universal.zip",
-                          "size":  158059391,
-                          "sha256":  "6A931438E7B1453FFAB65E709C5349D74492FBDE6F3531A024942A01A258D3E4",
+                          "size":  158060910,
+                          "sha256":  "9CDCB6B129D45403AECABC642C3E9433777EE47C32ECA754BBBE72C38C6EADC9",
                           "status":  "ready",
-                          "source":  "Local v0.1.19 WebUI artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks.",
-                          "updatedAt":  "2026-06-22"
+                          "source":  "Local v0.1.19 WebUI macOS artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks.",
+                          "updatedAt":  "2026-06-23"
                       },
                       {
                           "id":  "macos-arm64-dmg",
@@ -212,12 +212,12 @@
                           "variant":  "Web service deployment package",
                           "fileName":  "EcoreX_0.1.19-web-linux-service.tar.gz",
                           "href":  "downloads/EcoreX_0.1.19-web-linux-service.tar.gz",
-                          "size":  3366337,
-                          "sha256":  "7D022C03284BC984BADAB7C9AE205DF9903470E9062448E06297CE7955125477",
+                          "size":  3369246,
+                          "sha256":  "A84F251D5BEA26DDAD2B695192180C59F365FB036ADD367656A5B9B923B612C1",
                           "status":  "ready",
                           "visible":  false,
-                          "source":  "Local v0.1.19 Web service tarball built by prepare-ecorex-web-release.ps1 and validated by release artifact validator.",
-                          "updatedAt":  "2026-06-22"
+                          "source":  "Local v0.1.19 Web service tarball built by prepare-ecorex-web-release.ps1 and validated by release artifact checks.",
+                          "updatedAt":  "2026-06-23"
                       }
                   ],
     "admin":  {

@@ -9,6 +9,9 @@ param(
     [string]$MacArm64InstallSmokePath = "",
     [string]$MacX64DmgPath = "",
     [string]$MacX64InstallSmokePath = "",
+    [string]$WebUiWindowsPath = "",
+    [string]$WebUiMacosPath = "",
+    [string]$WebLinuxServicePath = "",
     [string]$UpdatedAt = (Get-Date -Format "yyyy-MM-dd"),
     [switch]$DryRun
 )
@@ -301,6 +304,29 @@ function Update-WindowsArtifact {
     Update-CommonMetadata -Artifact $artifact -Metadata $metadata -Status "ready" -Signature "Valid" -Source "Signed v$Version $ArtifactId installer verified by installed smoke evidence."
 }
 
+function Update-ReadyFileArtifact {
+    param(
+        [Parameter(Mandatory = $true)]$Manifest,
+        [Parameter(Mandatory = $true)][string]$ArtifactId,
+        [Parameter(Mandatory = $true)][string]$ArtifactPath,
+        [Parameter(Mandatory = $true)][string]$ExpectedFileName,
+        [Parameter(Mandatory = $true)][string]$Source
+    )
+    $metadata = Get-FileMetadata $ArtifactPath
+    if ($metadata.FileName -ne $ExpectedFileName) {
+        throw "Artifact '$ArtifactId' file '$($metadata.FileName)' does not match expected '$ExpectedFileName'."
+    }
+    $artifact = Get-Artifact -Manifest $Manifest -Id $ArtifactId
+    Set-ArtifactProperty $artifact "version" $Version
+    Set-ArtifactProperty $artifact "fileName" $metadata.FileName
+    Set-ArtifactProperty $artifact "href" "downloads/$($metadata.FileName)"
+    Set-ArtifactProperty $artifact "size" $metadata.Size
+    Set-ArtifactProperty $artifact "sha256" $metadata.Sha256
+    Set-ArtifactProperty $artifact "status" "ready"
+    Set-ArtifactProperty $artifact "updatedAt" $UpdatedAt
+    Set-ArtifactProperty $artifact "source" $Source
+}
+
 function Update-MacArtifact {
     param(
         [Parameter(Mandatory = $true)]$Manifest,
@@ -383,6 +409,33 @@ if ($MacX64DmgPath -or $MacX64InstallSmokePath) {
         throw "Pass both -MacX64DmgPath and -MacX64InstallSmokePath."
     }
     Update-MacArtifact -Manifest $manifest -ArtifactId "macos-x64-dmg" -DmgPath $MacX64DmgPath -SmokePath $MacX64InstallSmokePath
+}
+
+if ($WebUiWindowsPath) {
+    Update-ReadyFileArtifact `
+        -Manifest $manifest `
+        -ArtifactId "webui-windows-x64" `
+        -ArtifactPath $WebUiWindowsPath `
+        -ExpectedFileName "EcoreX_${Version}-webui-windows-x64.zip" `
+        -Source "Local v$Version WebUI Windows artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks."
+}
+
+if ($WebUiMacosPath) {
+    Update-ReadyFileArtifact `
+        -Manifest $manifest `
+        -ArtifactId "webui-macos-universal" `
+        -ArtifactPath $WebUiMacosPath `
+        -ExpectedFileName "EcoreX_${Version}-webui-macos-universal.zip" `
+        -Source "Local v$Version WebUI macOS artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks."
+}
+
+if ($WebLinuxServicePath) {
+    Update-ReadyFileArtifact `
+        -Manifest $manifest `
+        -ArtifactId "web-linux-service" `
+        -ArtifactPath $WebLinuxServicePath `
+        -ExpectedFileName "EcoreX_${Version}-web-linux-service.tar.gz" `
+        -Source "Local v$Version Web service tarball built by prepare-ecorex-web-release.ps1 and validated by release artifact checks."
 }
 
 $json = $manifest | ConvertTo-Json -Depth 12

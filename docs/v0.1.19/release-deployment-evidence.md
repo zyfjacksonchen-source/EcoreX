@@ -96,6 +96,60 @@ Date: 2026-06-22
 - `EcoreX_0.1.19_arm64.dmg`: size `213711048`, SHA256 `9F88702AD25B19EDD906DFA6EBEEB964D32F5D6F77898300124E15BA91DAD32C`, macOS install smoke `pass`, run `27950764344`.
 - `EcoreX_0.1.19_x64.dmg`: size `221020283`, SHA256 `11E03C90B6822D83FF46BE9BE68DEF1026E8223D843E80A0523578F83474CC6A`, macOS install smoke `pass`, run `27951365387`.
 
+## 2026-06-23 Windows/Web Refresh
+
+- Scope: refreshed signed Windows desktop x64/ia32 installers and Web Win/Mac
+  packages. macOS desktop DMGs were intentionally left as the existing
+  v0.1.19 assets while macOS runner work remains paused.
+- Signing tool: `C:\脚本签名工具\signtool.exe`, invoked through
+  `desktop/scripts/sign-win.ps1` with provider preflight skipped for signing
+  steps. A temporary signing probe succeeded before production packaging.
+- Build command: `npm run package:win:all:signed` from `desktop/`.
+- Windows x64 installed smoke passed: `installed=true`, `rendererReady=true`,
+  `sidecarReady=true`, `authReady=true`, `authNegativeReady=true`,
+  `cleaned=true`, `runtimeWinArch=x64`, `runtimePythonBits=64`,
+  `rendererRootHtmlLength=104814`, `rendererBodyTextLength=1529`.
+- Windows ia32 installed smoke passed: `installed=true`, `rendererReady=true`,
+  `sidecarReady=true`, `authReady=true`, `authNegativeReady=true`,
+  `cleaned=true`, `runtimeWinArch=ia32`, `runtimePythonBits=32`,
+  `rendererRootHtmlLength=309`, `rendererBodyTextLength=16`.
+- Refreshed publishable artifacts:
+  - `EcoreX_0.1.19_x64-setup.exe`: size `157454656`, SHA256
+    `6D74A30916318D86C2038727A6F60C82D07054E819DD051FED948CBFC8948D42`,
+    Authenticode `Valid`.
+  - `EcoreX_0.1.19_ia32-setup.exe`: size `103633640`, SHA256
+    `6403F790408510B01B15EF502CBA7F7BFF0118148D6B48278B0AD1E130162B7C`,
+    Authenticode `Valid`.
+  - `EcoreX_0.1.19-webui-windows-x64.zip`: size `80952793`, SHA256
+    `9C7D886FA4BB729C3470AEF68E449630B114E25D02ABED8E622A5E2E3BCA6568`.
+  - `EcoreX_0.1.19-webui-macos-universal.zip`: size `158060910`, SHA256
+    `9CDCB6B129D45403AECABC642C3E9433777EE47C32ECA754BBBE72C38C6EADC9`.
+  - `EcoreX_0.1.19-web-linux-service.tar.gz`: size `3369246`, SHA256
+    `A84F251D5BEA26DDAD2B695192180C59F365FB036ADD367656A5B9B923B612C1`.
+- Public release package: `release-artifacts/EcoreX_0.1.19-public-release.zip`,
+  size `1042061832`, SHA256
+  `18D83C9491D5D62E02DB047D4A30A11A2E0D0D8BCE40C96541376E2F4AC2FE98`.
+- Server deployment:
+  - Install command used expected SHA256
+    `18D83C9491D5D62E02DB047D4A30A11A2E0D0D8BCE40C96541376E2F4AC2FE98`.
+  - Release directory:
+    `/srv/ecorex-agent-download/releases/20260623002106-v0.1.19`.
+  - `scripts/check-ecorex-server-release.sh` passed on the server.
+  - `scripts/verify-ecorex-release.ps1 -SkipGitRemoteCheck` passed with zero
+    blockers. Warnings were the intentional macOS desktop validation deferral
+    and skipped authenticated enterprise policy checks.
+- GitHub Release `v0.1.19` refreshed assets:
+  - `EcoreX_0.1.19_x64-setup.exe`: digest
+    `sha256:6d74a30916318d86c2038727a6f60c82d07054e819dd051fed948cbfc8948d42`.
+  - `EcoreX_0.1.19_ia32-setup.exe`: digest
+    `sha256:6403f790408510b01b15ef502cba7f7bff0118148d6b48278b0ad1e130162b7c`.
+  - `EcoreX_0.1.19-webui-windows-x64.zip`: digest
+    `sha256:9c7d886fa4bb729c3470aef68e449630b114e25d02abed8e622a5e2e3bca6568`.
+  - `EcoreX_0.1.19-webui-macos-universal.zip`: digest
+    `sha256:9cdcb6b129d45403aecabc642c3e9433777ee47c32eca754bbbe72c38c6eadc9`.
+  - `EcoreX_0.1.19-web-linux-service.tar.gz`: digest
+    `sha256:a84f251d5bea26ddad2b695192180c59f365fb036add367656a5b9b923b612c1`.
+
 ## macOS Hotfix Status
 
 - Attempted hotfix DMG workflow: `27962802969` on commit `29025b972501ebd829599cec43ad3b87bb028919`.

@@ -201,3 +201,29 @@ release path was rechecked from current state.
   public site yet. Updating only Web assets would create a mixed release where
   GitHub tag `v0.1.19` still points to `b52999b0...` and signed Win/Mac desktop
   assets are not rebuilt from the same current branch head.
+
+## Windows/Web Release Refresh
+
+On 2026-06-23 the user narrowed the release scope to signed Windows desktop and
+Web Win/Mac packages, with macOS desktop DMGs temporarily deferred.
+
+- The requested signing path `C:\脚本签名工具` was inspected. Its
+  `signtool.exe` successfully signed a temporary probe file with the expected
+  Certum code-signing certificate, so the Windows package flow was allowed to
+  bypass the stricter SimplySign CSP container preflight.
+- `npm run package:win:all:signed` rebuilt and signed both Windows x64 and
+  ia32 installers. Installed smoke passed for both architectures, including
+  renderer nonblank checks, sidecar readiness, auth readiness, negative auth
+  endpoint coverage, and cleanup.
+- After the ia32 desktop package, `npm run stage:runtime:win:x64` was run again
+  before WebUI packaging so the Windows WebUI zip uses an x64 runtime.
+- Web Linux service, WebUI Windows x64, WebUI macOS universal, and combined
+  WebUI Win/Mac packages were regenerated. Archive validation confirmed the
+  current renderer chunk and network recovery markers are present.
+- `update-ecorex-desktop-release-manifest.ps1` now supports refreshing Web
+  artifact metadata, preventing manual manifest edits for WebUI/Web service
+  size and SHA256 changes.
+- The public release zip was rebuilt and deployed to the production download
+  host. Server-side and public verifier checks passed with zero blockers.
+- GitHub Release `v0.1.19` assets for Windows and Web were replaced with the
+  refreshed files. macOS desktop DMG assets were intentionally left unchanged.
