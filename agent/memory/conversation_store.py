@@ -611,15 +611,32 @@ class ConversationStore:
         with self._lock:
             conn = self._connect()
             try:
-                # Latest assistant message (cheap: single row by seq DESC).
-                row = conn.execute(
-                    "SELECT seq FROM messages "
+                # Latest assistant text message. Tool-use-only assistant rows
+                # should not be used as the final visible bot turn for retry or
+                # recovery UI.
+                rows = conn.execute(
+                    "SELECT seq, content FROM messages "
                     "WHERE session_id = ? AND role = 'assistant' "
-                    "ORDER BY seq DESC LIMIT 1",
+                    "ORDER BY seq DESC LIMIT 20",
                     (session_id,),
-                ).fetchone()
-                if row:
-                    result["bot_seq"] = int(row[0])
+                ).fetchall()
+                for seq, content_raw in rows:
+                    try:
+                        content = json.loads(content_raw)
+                    except Exception:
+                        result["bot_seq"] = int(seq)
+                        break
+                    if isinstance(content, str) and content.strip():
+                        result["bot_seq"] = int(seq)
+                        break
+                    if isinstance(content, list) and any(
+                        isinstance(block, dict)
+                        and block.get("type") == "text"
+                        and str(block.get("text") or "").strip()
+                        for block in content
+                    ):
+                        result["bot_seq"] = int(seq)
+                        break
 
                 # Latest visible user message: scan recent user rows and
                 # skip pure tool_result entries.

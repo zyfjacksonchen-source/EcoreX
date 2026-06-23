@@ -233,3 +233,31 @@ Date: 2026-06-22
     `sha256:3acbd1734acd142ccfcf51bf239e46171819e6a1e0b297a2956972d55208e388`.
   - macOS universal WebUI remote digest:
     `sha256:3b0e97d8e02fa8f6dff92d9e8209794621fa79a45e33d1d490416a20bbef600c`.
+
+## Feishu Extraction Finalization WebUI Refresh
+
+- 2026-06-23 WebUI public package after Feishu group-extraction and final
+  answer persistence fixes:
+  - `release-artifacts/EcoreX_0.1.19-public-release.zip`
+  - size `241210510`
+  - SHA256 `F98B31C0B3839579C813F1F81EDDB477EE0D448B6E819403254C7EE719C009FD`
+- Refreshed WebUI artifacts:
+  - `EcoreX_0.1.19-webui-windows-x64.zip`: size `81080696`, SHA256
+    `434ABB586A133DB619683278073BA03988A3A9C3ACAF54B5320A6F26E31AEDB9`.
+  - `EcoreX_0.1.19-webui-macos-universal.zip`: size `158191722`, SHA256
+    `2A134D29644BCCECAB9A07C0B5A6822BE574B7B7D8FE0C6C0BEE18FF644B9193`.
+- Archive marker validation:
+  - Windows/macOS WebUI zips contain `def _feishu_cli_chain_key`,
+    `_ensure_final_response_message`, `_ensure_final_response_in_messages`,
+    `Cancelled by user`, and `get_latest_pair_seqs` in the packaged runtime.
+- Server deployment:
+  - Release directory:
+    `/srv/ecorex-agent-download/releases/20260623132119-v0.1.19`.
+  - `scripts/check-ecorex-server-release.sh` passed on the server.
+  - Public manifest and Windows/macOS WebUI downloads returned HTTP 200 and the
+    manifest reports the refreshed sizes and SHA256 values above.
+- GitHub Release:
+  - Windows WebUI remote digest:
+    `sha256:434abb586a133db619683278073ba03988a3a9c3acaf54b5320a6f26e31aedb9`.
+  - macOS universal WebUI remote digest:
+    `sha256:2a134d29644bccecab9a07c0b5a6822be574b7b7d8fe0c6c0bee18ff644b9193`.

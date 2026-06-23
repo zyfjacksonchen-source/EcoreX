@@ -41,6 +41,58 @@ def _clear_responses_state_for_session(session_id: str) -> None:
         logger.warning(f"[AgentBridge] Failed to clear Responses state for {session_id}: {e}")
 
 
+def _assistant_message_text(message: Dict[str, Any]) -> str:
+    if not isinstance(message, dict) or message.get("role") != "assistant":
+        return ""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: List[str] = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text = str(block.get("text") or "").strip()
+                if text:
+                    parts.append(text)
+        return "\n".join(parts).strip()
+    return ""
+
+
+def _ensure_final_response_in_messages(agent: Agent, new_messages: List[Dict[str, Any]], response: str) -> List[Dict[str, Any]]:
+    text = sanitize_assistant_identity((response or "").strip())
+    if not text:
+        return new_messages
+    normalized = text.strip().lower()
+    if normalized in {"_(cancelled)_", "_(cancelled by user)_"} or "cancelled by user" in normalized:
+        return new_messages
+    for message in reversed(new_messages):
+        if sanitize_assistant_identity(_assistant_message_text(message)).strip() == text:
+            return new_messages
+
+    synthetic_message = {
+        "role": "assistant",
+        "content": [{
+            "type": "text",
+            "text": text,
+        }],
+    }
+    new_messages.append(synthetic_message)
+
+    try:
+        with agent.messages_lock:
+            latest_assistant_text = ""
+            for message in reversed(agent.messages):
+                if isinstance(message, dict) and message.get("role") == "assistant":
+                    latest_assistant_text = sanitize_assistant_identity(_assistant_message_text(message)).strip()
+                    break
+            if latest_assistant_text != text:
+                agent.messages.append(dict(synthetic_message))
+    except Exception as exc:
+        logger.warning(f"[AgentBridge] Failed to mirror synthetic final response into memory: {exc}")
+
+    return new_messages
+
+
 def add_openai_compatible_support(bot_instance):
     """
     Dynamically add OpenAI-compatible tool calling support to a bot instance.
@@ -781,6 +833,7 @@ class AgentBridge:
                             "text": str(context.get("visible_message") or "").strip()
                         }]
                     }
+                new_messages = _ensure_final_response_in_messages(agent, new_messages, response)
                 if new_messages:
                     self._persist_messages(session_id, list(new_messages), channel_type)
                 else:

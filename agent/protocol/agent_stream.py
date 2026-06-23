@@ -610,18 +610,66 @@ class AgentStreamExecutor:
         if len(self.tool_chain_history) > 50:
             self.tool_chain_history = self.tool_chain_history[-50:]
 
+    @staticmethod
+    def _cli_arg_value(cli_args: List[Any], flag: str) -> str:
+        """Return a CLI flag value from a token list without shell parsing."""
+        if not isinstance(cli_args, list) or not flag:
+            return ""
+        for index, token in enumerate(cli_args):
+            text = str(token)
+            if text == flag and index + 1 < len(cli_args):
+                return str(cli_args[index + 1]).strip()
+            prefix = f"{flag}="
+            if text.startswith(prefix):
+                return text[len(prefix):].strip()
+        return ""
+
+    @staticmethod
+    def _cli_subcommand(cli_args: List[Any]) -> str:
+        if not isinstance(cli_args, list):
+            return ""
+        for token in cli_args[1:]:
+            text = str(token).strip().lower()
+            if text.startswith("+"):
+                return text
+        return ""
+
+    def _feishu_cli_chain_key(self, args: dict) -> str:
+        cli_args = args.get("args")
+        domain = ""
+        if isinstance(cli_args, list) and cli_args:
+            domain = str(cli_args[0]).strip().lower()
+        domain = domain or str(args.get("domain") or args.get("scope") or "").strip().lower()
+        action = str(args.get("action") or "").strip().lower()
+
+        if action == "run" and domain == "im" and isinstance(cli_args, list):
+            subcommand = self._cli_subcommand(cli_args) or "command"
+            if subcommand == "+chat-messages-list":
+                target = (
+                    self._cli_arg_value(cli_args, "--chat-id")
+                    or self._cli_arg_value(cli_args, "--user-id")
+                    or "unknown-target"
+                )
+                page = self._cli_arg_value(cli_args, "--page-token") or "first-page"
+                start = self._cli_arg_value(cli_args, "--start") or "no-start"
+                end = self._cli_arg_value(cli_args, "--end") or "no-end"
+                sort = self._cli_arg_value(cli_args, "--sort") or "default-sort"
+                return f"feishu_cli:{action}:{domain}:{subcommand}:{target}:{page}:{start}:{end}:{sort}"
+            if subcommand in {"+chat-list", "+chat-search"}:
+                page = self._cli_arg_value(cli_args, "--page-token") or "first-page"
+                query = self._cli_arg_value(cli_args, "--query") or self._cli_arg_value(cli_args, "--member-ids")
+                sort = self._cli_arg_value(cli_args, "--sort-type") or self._cli_arg_value(cli_args, "--sort")
+                return f"feishu_cli:{action}:{domain}:{subcommand}:{query or 'all'}:{page}:{sort or 'default-sort'}"
+            return f"feishu_cli:{action}:{domain}:{subcommand}"
+
+        return f"feishu_cli:{action}:{domain}"
+
     def _tool_chain_key(self, tool_name: str, args: dict) -> str:
         """Group related tool calls so cross-argument loops can be detected."""
         name = (tool_name or "").strip().lower()
         args = args if isinstance(args, dict) else {}
         if name == "feishu_cli":
-            cli_args = args.get("args")
-            domain = ""
-            if isinstance(cli_args, list) and cli_args:
-                domain = str(cli_args[0]).strip().lower()
-            domain = domain or str(args.get("domain") or args.get("scope") or "").strip().lower()
-            action = str(args.get("action") or "").strip().lower()
-            return f"feishu_cli:{action}:{domain}"
+            return self._feishu_cli_chain_key(args)
         if name in {"bash", "shell", "terminal"}:
             command = str(args.get("command") or args.get("cmd") or "").strip().lower()
             if self._looks_like_feishu_cli_command(command):
@@ -705,6 +753,45 @@ class AgentStreamExecutor:
         """Disable tool schemas for the next model turn so loops close in text."""
         self._force_text_response_next_turn = True
         self._force_text_response_reason = reason or "external-capability-loop"
+
+    @staticmethod
+    def _assistant_message_text(message: dict) -> str:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            return ""
+        content = message.get("content")
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text = str(block.get("text") or "").strip()
+                    if text:
+                        parts.append(text)
+            return "\n".join(parts).strip()
+        return ""
+
+    def _ensure_final_response_message(self, final_response: str) -> None:
+        """Persist internally generated final text as the last assistant turn."""
+        text = sanitize_assistant_identity((final_response or "").strip())
+        if not text:
+            return
+        latest_assistant_text = ""
+        for message in reversed(self.messages):
+            if isinstance(message, dict) and message.get("role") == "assistant":
+                latest_assistant_text = sanitize_assistant_identity(
+                    self._assistant_message_text(message)
+                ).strip()
+                break
+        if latest_assistant_text == text:
+            return
+        self.messages.append({
+            "role": "assistant",
+            "content": [{
+                "type": "text",
+                "text": text,
+            }],
+        })
 
     def _append_internal_hint(self, text: str) -> None:
         """Add a model-only hint and remove it after the next model turn."""
@@ -818,12 +905,28 @@ class AgentStreamExecutor:
         lowered = (user_text or "").lower()
         groups = set()
         for group, keywords in TOOL_SCHEMA_INTENT_KEYWORDS.items():
-            if any(keyword in lowered for keyword in keywords):
+            if any(self._intent_keyword_matches(lowered, keyword) for keyword in keywords):
                 groups.add(group)
         if "mcp" in lowered:
             groups.add("mcp")
             groups.add("diagnostics")
         return groups
+
+    @staticmethod
+    def _intent_keyword_matches(lowered_text: str, keyword: str) -> bool:
+        keyword = str(keyword or "").lower()
+        if not keyword:
+            return False
+        # ASCII words should not match inside larger words: "base" must not
+        # select Feishu Base tools for an unrelated "database" question.
+        if "_" in keyword:
+            return keyword in lowered_text
+        if re.fullmatch(r"[a-z0-9_]+(?:[ -][a-z0-9_]+)*", keyword):
+            return re.search(
+                rf"(?<![a-z0-9_]){re.escape(keyword)}(?![a-z0-9_])",
+                lowered_text,
+            ) is not None
+        return keyword in lowered_text
 
     @staticmethod
     def _is_tool_schema_followup_confirmation(user_text: str) -> bool:
@@ -1176,17 +1279,33 @@ class AgentStreamExecutor:
                     break
         selected: Dict[str, Any] = {}
         reasons: Dict[str, str] = {}
+        has_deferred_mcp = any(str(name or "").lower().startswith("mcp__") for name in self.tools)
 
         for name, tool in (self.tools or {}).items():
             lowered_name = (name or "").strip().lower()
             group = self._tool_schema_group(lowered_name)
+            explicit_tool_name = bool(
+                lowered_name
+                and (
+                    lowered_name in lowered
+                    or lowered_name.replace("_", "-") in lowered
+                    or lowered_name.replace("_", " ") in lowered
+                )
+            )
+            if (
+                lowered_name == "feishu_cli"
+                and has_deferred_mcp
+                and group not in intent_groups
+                and not explicit_tool_name
+            ):
+                continue
             if lowered_name in TOOL_SCHEMA_CORE_NAMES:
                 selected[name] = tool
                 reasons[name] = "core"
             elif group in intent_groups:
                 selected[name] = tool
                 reasons[name] = f"intent:{group}"
-            elif lowered_name and lowered_name in lowered:
+            elif explicit_tool_name:
                 selected[name] = tool
                 reasons[name] = "explicit_tool_name"
             elif lowered_name.startswith("mcp__"):
@@ -1201,7 +1320,6 @@ class AgentStreamExecutor:
                 selected[name] = self.tools[name]
                 reasons[name] = "recent_tool_chain"
 
-        has_deferred_mcp = any(str(name or "").lower().startswith("mcp__") for name in self.tools)
         if len(self.tools) <= 8 and not has_deferred_mcp:
             for name, tool in self.tools.items():
                 lowered_name = (name or "").strip().lower()
@@ -1215,7 +1333,10 @@ class AgentStreamExecutor:
                     selected[name] = tool
                     reasons[name] = "small_custom_toolset"
             else:
-                first_name = next(iter(self.tools))
+                first_name = next(
+                    (name for name in self.tools if str(name or "").strip().lower() != "feishu_cli"),
+                    next(iter(self.tools)),
+                )
                 selected[first_name] = self.tools[first_name]
                 reasons[first_name] = "fallback_first_tool"
 
@@ -1795,6 +1916,8 @@ class AgentStreamExecutor:
         finally:
             final_response = final_response.strip() if final_response else final_response
             final_response = sanitize_assistant_identity(final_response)
+            if final_response and not cancelled:
+                self._ensure_final_response_message(final_response)
             if cancelled:
                 # Emit before agent_end so channels can mark UI as cancelled
                 self._emit_event("agent_cancelled", {"final_response": final_response})

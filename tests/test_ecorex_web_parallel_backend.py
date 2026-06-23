@@ -237,6 +237,30 @@ class TestEcoreXWorkspaceState(unittest.TestCase):
         self.assertEqual(page["messages"][1]["role"], "assistant")
         self.assertEqual(page["messages"][1]["_seq"], page["messages"][0]["_seq"])
 
+    def test_latest_pair_seq_prefers_assistant_text_over_tool_only_row(self):
+        from agent.memory.conversation_store import ConversationStore
+
+        with tempfile.TemporaryDirectory() as workspace:
+            store = ConversationStore(Path(workspace) / "conversation.sqlite3")
+            store.append_messages("session-final-text-seq", [
+                {"role": "user", "content": "查飞书群消息"},
+                {"role": "assistant", "content": "最终摘要：没有待办。"},
+                {
+                    "role": "assistant",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "call_1",
+                        "name": "feishu_cli",
+                        "input": {"action": "run"},
+                    }],
+                },
+            ], channel_type="web")
+
+            seqs = store.get_latest_pair_seqs("session-final-text-seq")
+
+        self.assertEqual(seqs["user_seq"], 0)
+        self.assertEqual(seqs["bot_seq"], 1)
+
     def test_history_page_reads_recent_window_for_long_sessions(self):
         from agent.memory.conversation_store import ConversationStore
 
@@ -4061,6 +4085,140 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertTrue(should_stop)
         self.assertIn("Feishu/Lark tool chain", reason)
 
+    def test_tool_schema_intent_keyword_uses_ascii_word_boundaries(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=types.SimpleNamespace(),
+            system_prompt="",
+            tools=[],
+        )
+
+        self.assertNotIn("feishu", executor._tool_schema_intent_groups("explain this database note"))
+        self.assertIn("feishu", executor._tool_schema_intent_groups("read this Feishu base table"))
+
+    def test_tool_schema_budget_keeps_explicit_feishu_cli_with_mcp_present(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        def tool(name):
+            return types.SimpleNamespace(
+                name=name,
+                description=f"{name} tool",
+                params={"type": "object", "properties": {}},
+            )
+
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=types.SimpleNamespace(),
+            system_prompt="",
+            tools=[tool("read"), tool("feishu_cli"), tool("mcp__server__tool")],
+            messages=[{"role": "user", "content": [{"type": "text", "text": "please use feishu_cli status"}]}],
+        )
+
+        selected, budget = executor._select_tools_for_schema()
+
+        self.assertIn("feishu_cli", selected)
+        self.assertEqual(budget["selection_reasons"]["feishu_cli"], "core")
+
+    def test_tool_schema_budget_fallback_avoids_feishu_cli_with_mcp_present(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        def tool(name):
+            return types.SimpleNamespace(
+                name=name,
+                description=f"{name} tool",
+                params={"type": "object", "properties": {}},
+            )
+
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=types.SimpleNamespace(),
+            system_prompt="",
+            tools=[tool("feishu_cli"), tool("mcp__server__tool")],
+            messages=[{"role": "user", "content": [{"type": "text", "text": "plain unrelated request"}]}],
+        )
+
+        selected, budget = executor._select_tools_for_schema()
+
+        self.assertNotIn("feishu_cli", selected)
+        self.assertEqual(set(selected), {"mcp__server__tool"})
+        self.assertEqual(budget["selection_reasons"]["mcp__server__tool"], "fallback_first_tool")
+
+    def test_feishu_im_message_reads_are_keyed_by_chat_target(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=types.SimpleNamespace(),
+            system_prompt="",
+            tools=[],
+        )
+
+        keys = set()
+        for idx in range(9):
+            args = {
+                "action": "run",
+                "args": [
+                    "im",
+                    "+chat-messages-list",
+                    "--as",
+                    "user",
+                    "--chat-id",
+                    f"oc_chat_{idx}",
+                    "--start",
+                    "2026-06-23T00:00:00+08:00",
+                    "--end",
+                    "2026-06-23T20:35:00+08:00",
+                    "--page-size",
+                    "50",
+                    "--sort",
+                    "asc",
+                ],
+            }
+            keys.add(executor._tool_chain_key("feishu_cli", args))
+            executor._record_tool_result("feishu_cli", args, True)
+            should_stop, _reason = executor._check_tool_chain_budget("feishu_cli", args)
+            self.assertFalse(should_stop)
+
+        self.assertEqual(len(keys), 9)
+
+    def test_feishu_im_message_reads_still_block_same_chat_repeat(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=types.SimpleNamespace(),
+            system_prompt="",
+            tools=[],
+        )
+        args = {
+            "action": "run",
+            "args": [
+                "im",
+                "+chat-messages-list",
+                "--as",
+                "user",
+                "--chat-id",
+                "oc_same_chat",
+                "--start",
+                "2026-06-23T00:00:00+08:00",
+                "--end",
+                "2026-06-23T20:35:00+08:00",
+                "--page-size",
+                "50",
+                "--sort",
+                "asc",
+            ],
+        }
+
+        for _ in range(6):
+            executor._record_tool_result("feishu_cli", args, True)
+
+        should_stop, reason = executor._check_tool_chain_budget("feishu_cli", args)
+        self.assertTrue(should_stop)
+        self.assertIn("Feishu/Lark tool chain", reason)
+
     def test_tool_chain_budget_forces_next_turn_text_only(self):
         from agent.protocol.agent_stream import AgentStreamExecutor
 
@@ -4086,6 +4244,73 @@ class TestAgentHostBoundary(unittest.TestCase):
 
         self.assertEqual(result["status"], "error")
         self.assertTrue(executor._force_text_response_next_turn)
+
+    def test_executor_ensures_internal_final_response_is_assistant_text(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=types.SimpleNamespace(),
+            system_prompt="",
+            tools=[],
+        )
+        executor.messages = [
+            {"role": "user", "content": [{"type": "text", "text": "查飞书群消息"}]},
+            {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "call_1",
+                    "name": "feishu_cli",
+                    "input": {"action": "run"},
+                }],
+            },
+        ]
+
+        executor._ensure_final_response_message("最终结论：已查到 3 个群，剩余 6 个待继续。")
+
+        self.assertEqual(executor.messages[-1]["role"], "assistant")
+        self.assertEqual(executor.messages[-1]["content"][0]["type"], "text")
+        self.assertIn("最终结论", executor.messages[-1]["content"][0]["text"])
+
+    def test_agent_bridge_adds_missing_final_response_message(self):
+        from bridge.agent_bridge import _ensure_final_response_in_messages
+
+        agent = types.SimpleNamespace(messages=[], messages_lock=threading.RLock())
+        new_messages = [
+            {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "call_1",
+                    "name": "feishu_cli",
+                    "input": {"action": "run"},
+                }],
+            }
+        ]
+
+        result = _ensure_final_response_in_messages(agent, new_messages, "最终摘要：没有待办。")
+
+        self.assertEqual(result[-1]["role"], "assistant")
+        self.assertEqual(result[-1]["content"][0]["type"], "text")
+        self.assertEqual(agent.messages[-1]["content"][0]["text"], "最终摘要：没有待办。")
+
+    def test_agent_bridge_does_not_synthesize_cancelled_final_response(self):
+        from bridge.agent_bridge import _ensure_final_response_in_messages
+
+        agent = types.SimpleNamespace(messages=[], messages_lock=threading.RLock())
+        new_messages = [
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "_(Cancelled by user)_"}],
+            }
+        ]
+
+        result = _ensure_final_response_in_messages(agent, new_messages, "_(Cancelled)_")
+
+        self.assertEqual(result, new_messages)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(agent.messages, [])
 
     def test_permission_denial_forces_next_turn_text_only(self):
         from agent.protocol.agent_stream import AgentStreamExecutor

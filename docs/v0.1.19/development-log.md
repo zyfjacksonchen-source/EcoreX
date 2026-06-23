@@ -330,3 +330,48 @@ Local source WebUI smoke:
 - Final source WebUI CDP smoke against `assets/index-BVtTilSA.js` confirmed a
   visible composer, no login page, no ordinary Run Center text, and 3412
   characters reaching the textarea in `5.7ms` with focus still on `TEXTAREA`.
+
+## Feishu Group Extraction Finalization Fix
+
+On 2026-06-23 the user reported that a local WebUI task for Feishu group-chat
+message extraction had found a result/conclusion, but the final answer was not
+displayed as the stable last response. The visible answer also appeared to keep
+thinking or looping after a partial conclusion.
+
+Local log/history inspection of session `ecorex-1782217576934` showed the root
+cause was not frontend truncation. The run discovered 9 active Feishu groups and
+started `im +chat-messages-list` calls, but the agent loop guard collapsed all
+those calls into the same chain key, `feishu_cli:run:im`. The first three group
+message reads completed, then the remaining six distinct chat IDs were blocked
+as repeated probing. The completed answer therefore contained only partial
+results plus a blocker statement.
+
+Implemented fixes:
+
+- `AgentStreamExecutor` now keys Feishu IM message reads by subcommand, chat or
+  user target, page token, time window, and sort order. Distinct group-message
+  reads are allowed in one batch, while true repeats against the same
+  target/page remain protected by the existing loop budget.
+- Tool schema intent matching now uses ASCII word boundaries, so words such as
+  `database` no longer accidentally select Feishu Base tooling through the
+  `base` keyword. Explicit `feishu_cli` requests still select the safe
+  structured tool, and MCP-present fallback avoids choosing `feishu_cli` for
+  unrelated prompts.
+- `AgentStreamExecutor` now enforces a finalization invariant: a non-cancelled,
+  non-empty `final_response` is mirrored into the message list as an assistant
+  text block if it is not already present.
+- `AgentBridge` adds the same idempotent safety net before persistence, while
+  skipping cancellation markers so cancelled runs do not receive duplicate
+  synthetic assistant rows.
+- `ConversationStore.get_latest_pair_seqs()` now prefers the latest assistant
+  row with visible text rather than a tool-use-only assistant row, keeping retry
+  and recovery metadata pointed at the user-visible final answer.
+
+Validation:
+
+- Full backend regression file passed with plugin autoload disabled:
+  `233 passed, 3 warnings, 11 subtests passed`.
+- A local core hand-test verified distinct Feishu chat batches, final text
+  persistence, cancellation no-duplicate behavior, and assistant-text `bot_seq`.
+- Independent read-only reviewers reached PASS consensus after fixing one
+  explicit-tool selection blocker and one cancellation-history blocker.
