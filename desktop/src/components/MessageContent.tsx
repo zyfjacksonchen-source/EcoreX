@@ -283,7 +283,7 @@ function useThrottledStreamingContent(content: string, pending?: boolean) {
       return;
     }
     if (timerRef.current !== null) return;
-    const delay = content.length >= 100000 ? 110 : 48;
+    const delay = content.length >= 100000 ? 48 : 24;
     timerRef.current = window.setTimeout(() => {
       timerRef.current = null;
       setVisible(latestRef.current);
@@ -1718,6 +1718,53 @@ function StreamingMarkdownBlock({
   );
 }
 
+function LiveStreamingText({ content }: { content: string }) {
+  const preRef = useRef<HTMLPreElement | null>(null);
+  const textNodeRef = useRef<Text | null>(null);
+  const renderedRef = useRef("");
+  const targetRef = useRef("");
+  const frameRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!preRef.current || textNodeRef.current) return;
+    const node = document.createTextNode("");
+    preRef.current.appendChild(node);
+    textNodeRef.current = node;
+  }, []);
+
+  useEffect(() => {
+    const target = redactInternalPromptText(content || "").replace(/\r\n/g, "\n");
+    targetRef.current = target;
+    if (frameRef.current !== null) return;
+    frameRef.current = window.requestAnimationFrame(() => {
+      frameRef.current = null;
+      const node = textNodeRef.current;
+      if (!node) return;
+      const next = targetRef.current;
+      const rendered = renderedRef.current;
+      if (!next.startsWith(rendered)) {
+        node.data = next;
+        renderedRef.current = next;
+        return;
+      }
+      const delta = next.slice(rendered.length);
+      if (delta) {
+        node.appendData(delta);
+        renderedRef.current = next;
+      }
+    });
+  }, [content]);
+
+  useEffect(() => () => {
+    if (frameRef.current !== null) {
+      window.cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+    }
+  }, []);
+
+  return <pre className="live-streaming-text" ref={preRef} />;
+}
+
 function ThinkingStep({ content = "", running }: { content?: string; running?: boolean }) {
   const trimmed = redactInternalPromptText(content).trim();
   const shown = truncateReasoning(trimmed);
@@ -1943,7 +1990,7 @@ function MainAnswer({ content, pending, collapsible, artifacts = [], extraArtifa
     return (
       <>
         {pending ? (
-          <StreamingMarkdownBlock content={content} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} onLocalFileContextMenu={onLocalFileContextMenu} />
+          <LiveStreamingText content={content} />
         ) : (
           <MarkdownBlock content={content} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} onLocalFileContextMenu={onLocalFileContextMenu} />
         )}

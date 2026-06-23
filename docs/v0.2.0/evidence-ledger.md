@@ -14,3 +14,6 @@
 | 2026-06-23 | `python -m py_compile common/ecorex_workspace.py` | PASS | Backend UI-state merge/replace guard compiles. |
 | 2026-06-23 | `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py -k "ui_state_empty_replace or ui_state_explicit_empty_replace or v020_frontend_runtime_ui_state" -q` | PASS | 3 selected tests passed; empty replace no longer clears project state unless explicitly allowed, and frontend source markers enforce merge-by-default UI-state sync. |
 | 2026-06-23 | `npm run typecheck` from `desktop/` | PASS | Renderer and Electron TypeScript typecheck passed after project persistence changes. |
+| 2026-06-23 | `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py -k "v020_frontend_streaming or v020_frontend_runtime_ui_state" -q` | PASS | 2 selected tests passed; frontend source markers verify live stream text-node rendering and deferred history token estimation. |
+| 2026-06-23 | `npm run typecheck` from `desktop/` | PASS | Renderer and Electron TypeScript typecheck passed after streaming performance changes. |
+| 2026-06-23 | `npm run build:renderer` from `desktop/` | PASS | Vite production renderer build passed; output `assets/index-Bo0yf0YM.js` and `assets/index-CgbZeUD0.css`. |

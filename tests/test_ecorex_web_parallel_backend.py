@@ -1334,6 +1334,22 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertIn("function deleteProject(project: ProjectFolder)", app_source)
         self.assertIn('projectStateMode: "replace"', app_source)
 
+    def test_v020_frontend_streaming_uses_lightweight_text_and_deferred_token_estimate(self):
+        root = Path(__file__).resolve().parents[1]
+        app_source = (root / "desktop" / "src" / "App.tsx").read_text(encoding="utf-8")
+        message_source = (root / "desktop" / "src" / "components" / "MessageContent.tsx").read_text(encoding="utf-8")
+        css_source = (root / "desktop" / "src" / "styles" / "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("function LiveStreamingText", message_source)
+        self.assertIn("document.createTextNode", message_source)
+        self.assertIn("node.appendData(delta)", message_source)
+        self.assertIn("<LiveStreamingText content={content} />", message_source)
+        self.assertIn(".live-streaming-text", css_source)
+        self.assertIn("const [historyContextUsed, setHistoryContextUsed] = useState", app_source)
+        self.assertIn("setHistoryContextUsed(estimateContextTokens(messagesRef.current, \"\", []));", app_source)
+        self.assertIn("hasLiveMessage ? 900 : 120", app_source)
+        self.assertNotIn("const historyContextUsed = useMemo(() => estimateContextTokens(messages, \"\", []), [messages]);", app_source)
+
     def test_tool_permission_handler_round_trips_mode_and_audit(self):
         from channel.web import web_channel
 

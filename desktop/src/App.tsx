@@ -2186,6 +2186,7 @@ export function App() {
   const [activeSessionTitle, setActiveSessionTitle] = useState(bootSession?.state.title || "新对话");
   const [searchQuery, setSearchQuery] = useState("");
   const [messages, setMessages] = useState<ChatItem[]>(() => normalizePausedMessages(bootSession?.state.messages || []));
+  const [historyContextUsed, setHistoryContextUsed] = useState(() => estimateContextTokens(bootSession?.state.messages || [], "", []));
   const [composerText, setComposerTextState] = useState(bootSession?.state.composerText || "");
   const [composerHasText, setComposerHasText] = useState(Boolean((bootSession?.state.composerText || "").trim()));
   const [attachments, setAttachments] = useState<FileAttachment[]>(bootSession?.state.attachments || []);
@@ -2517,6 +2518,14 @@ export function App() {
 
   useEffect(() => {
     messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
+    const hasLiveMessage = messages.some(isLiveAssistantMessage);
+    const timer = window.setTimeout(() => {
+      setHistoryContextUsed(estimateContextTokens(messagesRef.current, "", []));
+    }, hasLiveMessage ? 900 : 120);
+    return () => window.clearTimeout(timer);
   }, [messages]);
 
   useEffect(() => {
@@ -3017,7 +3026,6 @@ export function App() {
   const weeklyUsed = quotaNumber(quotaSnapshot, "weeklyUsed");
   const dailyLimit = quotaNumber(quotaSnapshot, "dailyLimit");
   const weeklyLimit = quotaNumber(quotaSnapshot, "weeklyLimit");
-  const historyContextUsed = useMemo(() => estimateContextTokens(messages, "", []), [messages]);
   const draftContextUsed = useMemo(() => estimateTokenCount(deferredComposerText, attachments), [deferredComposerText, attachments]);
   const contextUsed = historyContextUsed + draftContextUsed;
   const contextPercent = percentOf(contextUsed, CONTEXT_THRESHOLD_TOKENS);

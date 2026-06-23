@@ -1331,6 +1331,18 @@ html[data-platform="web"] .window-brand {
   gap: 8px;
 }
 
+.live-streaming-text {
+  max-width: 100%;
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: inherit;
+  line-height: 1.56;
+}
+
 .streaming-tail {
   color: var(--color-text);
   white-space: pre-wrap;

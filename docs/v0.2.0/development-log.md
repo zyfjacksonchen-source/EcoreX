@@ -17,3 +17,7 @@
   - Runtime UI-state hydration now merges runtime projects/session mappings into local state instead of replacing local state with an empty or partial snapshot.
   - Automatic UI-state sync now uses merge mode; explicit project deletion is the only WebUI path that sends replace mode.
   - Backend `save_ui_state` ignores empty replace project payloads unless the caller explicitly sets `allowEmptyProjectState`.
+- Improved WebUI streaming responsiveness:
+  - Pending assistant answers now render through `LiveStreamingText`, which appends to a DOM text node on animation frames and skips Markdown parsing while the stream is live.
+  - Long-stream display throttling was tightened from 110/48ms to 48/24ms.
+  - History context token estimation moved out of render-time `useMemo` into a debounced effect so live deltas do not rescan all messages/tool output on every render.
