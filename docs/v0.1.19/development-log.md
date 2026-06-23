@@ -375,3 +375,9 @@ Validation:
   persistence, cancellation no-duplicate behavior, and assistant-text `bot_seq`.
 - Independent read-only reviewers reached PASS consensus after fixing one
   explicit-tool selection blocker and one cancellation-history blocker.
+- The 30-task production validation matrix passed with `30/30` tasks green and
+  wrote durable evidence to `docs/v0.1.19/real-task-matrix.json`. The matrix
+  checks the deployed WebUI artifacts, GitHub Release digests, Win/Mac package
+  runtime markers, online installer resume markers, Feishu multi-group loop
+  budget behavior, tool-selection boundaries, final-response persistence,
+  cancellation no-duplicate behavior, and visible assistant-text history seqs.

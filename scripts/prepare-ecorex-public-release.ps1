@@ -585,6 +585,8 @@ foreach ($ready in $readyArtifacts) {
 
 $windowsReady = $readyArtifacts | Where-Object { $_.Artifact.id -eq "windows-x64" } | Select-Object -First 1
 $macReadyCount = @($readyArtifacts | Where-Object { $_.Artifact.id -like "macos-*" }).Count
+$webuiWindowsReady = $readyArtifacts | Where-Object { $_.Artifact.id -eq "webui-windows-x64" } | Select-Object -First 1
+$webuiMacosReady = $readyArtifacts | Where-Object { $_.Artifact.id -eq "webui-macos-universal" } | Select-Object -First 1
 
 $checksums = [ordered]@{
     product = "EcoreX"
@@ -603,14 +605,38 @@ $checksums = [ordered]@{
         }
     })
     windows = [ordered]@{
-        status = if ($windowsReady) { $windowsReady.Artifact.status } else { "not-included" }
+        status = if ($windowsReady) { $windowsReady.Artifact.status } elseif ($webuiWindowsReady) { "webui-ready" } else { "not-included" }
         fileName = if ($windowsReady) { $windowsReady.Artifact.fileName } else { "" }
         relativePath = if ($windowsReady) { "site/downloads/$($windowsReady.Artifact.fileName)" } else { "" }
         size = if ($windowsReady) { $windowsReady.Size } else { 0 }
         sha256 = if ($windowsReady) { $windowsReady.Sha256 } else { "" }
         authenticode = if ($windowsReady) { $windowsReady.Signature } else { "" }
     }
-    macos = if ($macReadyCount -gt 0) { "included $macReadyCount dmg artifact(s); signing/notarization evidence is external" } else { "deferred to Mac validation" }
+    macos = if ($macReadyCount -gt 0) { "included $macReadyCount dmg artifact(s); signing/notarization evidence is external" } elseif ($webuiMacosReady) { "webui-ready" } else { "deferred to Mac validation" }
+    webui = [ordered]@{
+        windows = if ($webuiWindowsReady) {
+            [ordered]@{
+                status = $webuiWindowsReady.Artifact.status
+                fileName = $webuiWindowsReady.Artifact.fileName
+                relativePath = "site/downloads/$($webuiWindowsReady.Artifact.fileName)"
+                size = $webuiWindowsReady.Size
+                sha256 = $webuiWindowsReady.Sha256
+            }
+        } else {
+            [ordered]@{ status = "not-included"; fileName = ""; relativePath = ""; size = 0; sha256 = "" }
+        }
+        macos = if ($webuiMacosReady) {
+            [ordered]@{
+                status = $webuiMacosReady.Artifact.status
+                fileName = $webuiMacosReady.Artifact.fileName
+                relativePath = "site/downloads/$($webuiMacosReady.Artifact.fileName)"
+                size = $webuiMacosReady.Size
+                sha256 = $webuiMacosReady.Sha256
+            }
+        } else {
+            [ordered]@{ status = "not-included"; fileName = ""; relativePath = ""; size = 0; sha256 = "" }
+        }
+    }
 }
 Write-Utf8NoBom -Path (Join-Path $stagingRoot "checksums.json") -Value (($checksums | ConvertTo-Json -Depth 8) + "`n")
 

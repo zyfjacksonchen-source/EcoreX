@@ -96,7 +96,28 @@ function Save-UrlWithProgress {
                 $request.AddRange($resumeFrom)
             }
 
-            $response = $request.GetResponse()
+            try {
+                $response = $request.GetResponse()
+            } catch [System.Net.WebException] {
+                $webResponse = $_.Exception.Response
+                $statusCode = if ($webResponse) { [int]$webResponse.StatusCode } else { 0 }
+                if ($resumeFrom -gt 0 -and $statusCode -eq 416) {
+                    if ($webResponse) { $webResponse.Dispose() }
+                    try {
+                        $actual = Get-Sha256 -Path $partialPath
+                        if ($actual -eq $ExpectedSha256.ToUpperInvariant()) {
+                            Move-Item -LiteralPath $partialPath -Destination $CachePath -Force
+                            Write-Host "Partial package was already complete; verified SHA256: $CachePath"
+                            return $CachePath
+                        }
+                    } catch {
+                    }
+                    Remove-Item -LiteralPath $partialPath -Force -ErrorAction SilentlyContinue
+                    throw "Server rejected the resume range; the stale partial package was removed and the next attempt will restart from byte 0."
+                }
+                if ($webResponse) { $webResponse.Dispose() }
+                throw
+            }
             if ($resumeFrom -gt 0 -and [int]$response.StatusCode -ne 206) {
                 $response.Dispose()
                 Remove-Item -LiteralPath $partialPath -Force -ErrorAction SilentlyContinue
