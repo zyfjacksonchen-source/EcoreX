@@ -46,13 +46,12 @@ import {
   ZoomIn,
   ZoomOut
 } from "lucide-react";
-import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { ClipboardEvent, CSSProperties, DragEvent, MouseEvent, ReactNode } from "react";
 import { MessageContent, type AgentStepDisclosure, type LocalFilePayload, type ToolCallDisclosure } from "./components/MessageContent";
 import {
   cancelChatRequest,
   cancelSubagentTask,
-  checkForUpdates,
   clearRuntimeContext,
   enterpriseChangePassword,
   checkEnterpriseQuota,
@@ -67,14 +66,13 @@ import {
   generateSessionTitle,
   getEnterpriseSession,
   hasMessageStreamCursor,
-  installDownloadedUpdate,
   listCapabilityPacks,
   loadPermissionState,
   loadMemoryFiles,
+  loadRuntimeUiState,
   loadRuntimeSnapshot,
   loadSessionHistoryWithMeta,
   openLocalPath,
-  openDownloadPage,
   openMessageStream,
   prepareRequestRetry,
   readLocalJson,
@@ -92,7 +90,6 @@ import {
   updatePermissionMode,
   type CapabilityPack,
   type ChatSendResult,
-  type DesktopUpdateStatus,
   type AgentArtifact,
   type EnterpriseQuotaCheckResult,
   type EnterpriseSession,
@@ -368,27 +365,6 @@ const initialSidecar: SidecarStatus = {
   message: "正在启动本地运行时",
   webPort: 9899
 };
-const initialUpdateStatus: DesktopUpdateStatus = {
-  state: "idle",
-  platform: window.ecorexDesktop?.platform || "web",
-  currentVersion: "",
-  message: "尚未检查更新"
-};
-
-function friendlyUpdateErrorMessage(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error || "");
-  if (/app-update\.ya?ml/i.test(message) && /ENOENT|no such file/i.test(message)) {
-    return "当前测试包未配置自动更新通道";
-  }
-  if (/latest\.ya?ml/i.test(message) && /404|not found|Cannot find channel/i.test(message)) {
-    return "当前自动更新通道暂未发布，请打开下载页获取最新版本";
-  }
-  if (/HttpError|at ElectronHttpExecutor|builder-util-runtime|app\.asar/i.test(message)) {
-    return "更新检查失败，请打开下载页获取最新版本";
-  }
-  return message || "更新检查失败";
-}
-
 const PROJECTS_STORAGE_KEY = "ecorex-projects";
 const SESSION_PROJECTS_STORAGE_KEY = "ecorex-session-projects";
 const SESSION_TITLES_STORAGE_KEY = "ecorex-session-titles";
@@ -402,6 +378,16 @@ const SKILL_DEFAULTS_STORAGE_KEY = "ecorex-skill-defaults-v1";
 const RELEASE_NOTES_SEEN_STORAGE_KEY = "ecorex-release-notes-seen-version";
 const SIDEBAR_COLLAPSE_STORAGE_KEY = "ecorex-sidebar-collapse-state-v1";
 const RUN_CENTER_DEV_GATE_STORAGE_KEY = "ecorex-dev-run-center";
+const SESSION_UI_RETAINED_SESSIONS = 10;
+const SESSION_UI_MESSAGE_LIMIT = 10;
+const SESSION_UI_FALLBACK_MESSAGE_LIMIT = 4;
+const SESSION_UI_SESSION_SOFT_BYTES = 36_000;
+const SESSION_UI_TOTAL_SOFT_BYTES = 520_000;
+const SESSION_UI_CONTENT_CHARS = 2400;
+const SESSION_UI_STEP_CHARS = 600;
+const SESSION_UI_TOOL_CHARS = 800;
+const SESSION_UI_REASONING_CHARS = 900;
+const SESSION_UI_PREVIEW_DATA_URL_CHARS = 500;
 const CONTEXT_THRESHOLD_TOKENS = 258_000;
 const EFFECTIVE_MODEL_FALLBACK = "gpt-5.5";
 const EFFECTIVE_MODEL_ALIAS_PREFIXES = ["deepseek-"];
@@ -439,6 +425,211 @@ function writeStorage<T>(key: string, value: T) {
   window.localStorage.setItem(key, JSON.stringify(value));
 }
 
+function truncatePersistedText(value: unknown, limit: number) {
+  const text = String(value ?? "");
+  if (!text || text.length <= limit) return text;
+  return `${text.slice(0, limit)}\n...[truncated ${text.length - limit} chars]`;
+}
+
+function compactPersistedUnknown(value: unknown, limit: number) {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value === "string") return truncatePersistedText(value, limit);
+  try {
+    return truncatePersistedText(JSON.stringify(value), limit);
+  } catch {
+    return truncatePersistedText(String(value), limit);
+  }
+}
+
+function slimPersistedAttachment(file: FileAttachment): FileAttachment {
+  const previewDataUrl = file.previewDataUrl && file.previewDataUrl.length <= SESSION_UI_PREVIEW_DATA_URL_CHARS
+    ? file.previewDataUrl
+    : undefined;
+  return {
+    file_path: file.file_path,
+    file_name: file.file_name,
+    file_type: file.file_type,
+    preview_url: file.preview_url,
+    ...(previewDataUrl ? { previewDataUrl } : {})
+  };
+}
+
+function slimPersistedArtifact(artifact: AgentArtifact): AgentArtifact {
+  const previewUrl = artifact.previewUrl && artifact.previewUrl.length <= 2048 ? artifact.previewUrl : undefined;
+  const thumbnailUrl = artifact.thumbnailUrl && artifact.thumbnailUrl.length <= 2048 ? artifact.thumbnailUrl : undefined;
+  return {
+    id: artifact.id,
+    requestId: artifact.requestId,
+    kind: artifact.kind,
+    intent: artifact.intent,
+    operation: artifact.operation,
+    status: artifact.status,
+    title: truncatePersistedText(artifact.title, 280),
+    path: artifact.path,
+    relativePath: artifact.relativePath,
+    url: artifact.url,
+    mimeType: artifact.mimeType,
+    sizeBytes: artifact.sizeBytes,
+    statusPath: artifact.statusPath,
+    previewUrl,
+    thumbnailUrl,
+    stats: artifact.stats,
+    source: artifact.source ? {
+      toolCallId: artifact.source.toolCallId,
+      toolName: artifact.source.toolName,
+      activityId: artifact.source.activityId,
+      createdAt: artifact.source.createdAt
+    } : undefined
+  };
+}
+
+function slimPersistedStep(step: AgentStepDisclosure): AgentStepDisclosure {
+  if (step.type === "thinking") {
+    return {
+      type: "thinking",
+      content: truncatePersistedText(step.content, SESSION_UI_STEP_CHARS),
+      running: step.running,
+      startedAt: step.startedAt,
+      duration: step.duration
+    };
+  }
+  if (step.type === "content") {
+    return {
+      type: "content",
+      content: truncatePersistedText(step.content, SESSION_UI_STEP_CHARS),
+      intermediate: step.intermediate
+    };
+  }
+  if (step.type === "phase") {
+    return { type: "phase", content: truncatePersistedText(step.content, SESSION_UI_STEP_CHARS) };
+  }
+  if (step.type === "tool") {
+    return {
+      type: "tool",
+      id: step.id,
+      name: step.name,
+      status: step.status,
+      execution_time: step.execution_time,
+      is_error: step.is_error,
+      running: step.running,
+      arguments: compactPersistedUnknown(step.arguments, SESSION_UI_TOOL_CHARS),
+      result: compactPersistedUnknown(step.result, SESSION_UI_TOOL_CHARS)
+    };
+  }
+  return {
+    type: "media",
+    fileType: step.fileType,
+    url: step.url,
+    filePath: step.filePath,
+    previewUrl: step.previewUrl && step.previewUrl.length <= 2048 ? step.previewUrl : undefined,
+    fileName: step.fileName
+  };
+}
+
+function slimPersistedToolCall(tool: ToolCallDisclosure): ToolCallDisclosure {
+  return {
+    name: tool.name,
+    status: tool.status,
+    is_error: tool.is_error,
+    execution_time: tool.execution_time,
+    running: tool.running,
+    arguments: compactPersistedUnknown(tool.arguments, SESSION_UI_TOOL_CHARS),
+    result: compactPersistedUnknown(tool.result, SESSION_UI_TOOL_CHARS)
+  };
+}
+
+function slimPersistedMessage(message: ChatItem): ChatItem {
+  return {
+    id: message.id,
+    role: message.role,
+    content: truncatePersistedText(message.content, SESSION_UI_CONTENT_CHARS),
+    createdAt: message.createdAt,
+    attachments: message.attachments?.slice(0, 8).map(slimPersistedAttachment),
+    pending: message.pending,
+    paused: message.paused,
+    reasoning: message.reasoning ? truncatePersistedText(message.reasoning, SESSION_UI_REASONING_CHARS) : undefined,
+    steps: message.steps?.slice(-10).map(slimPersistedStep),
+    toolCalls: message.toolCalls?.slice(-6).map(slimPersistedToolCall),
+    artifacts: message.artifacts?.slice(-12).map(slimPersistedArtifact),
+    cancelled: message.cancelled,
+    requestId: message.requestId,
+    phaseStartedAt: message.phaseStartedAt,
+    userSeq: message.userSeq,
+    botSeq: message.botSeq,
+    contextExcluded: message.contextExcluded,
+    sendAttempt: message.sendAttempt,
+    recovery: message.recovery
+  };
+}
+
+function compactPersistedMessages(messages: ChatItem[]) {
+  const retained = new Map<string, ChatItem>();
+  for (const message of messages.slice(-SESSION_UI_MESSAGE_LIMIT)) retained.set(message.id, message);
+  for (const message of messages.filter((item) => hasLivePersistedMessages([item]))) retained.set(message.id, message);
+  return [...retained.values()].map(slimPersistedMessage);
+}
+
+function slimPersistedSessionState(value: SessionUiState): SessionUiState {
+  const base: SessionUiState = {
+    ...value,
+    title: truncatePersistedText(value.title, 160),
+    messages: compactPersistedMessages(value.messages || []),
+    composerText: truncatePersistedText(value.composerText, SESSION_UI_CONTENT_CHARS),
+    attachments: (value.attachments || []).slice(0, 12).map(slimPersistedAttachment)
+  };
+  try {
+    if (JSON.stringify(base).length > SESSION_UI_SESSION_SOFT_BYTES) {
+      return {
+        ...base,
+        messages: (base.messages || []).slice(-SESSION_UI_FALLBACK_MESSAGE_LIMIT).map((message) => ({
+          ...message,
+          content: truncatePersistedText(message.content, Math.floor(SESSION_UI_CONTENT_CHARS / 2)),
+          reasoning: message.reasoning ? truncatePersistedText(message.reasoning, 600) : undefined,
+          steps: message.steps?.slice(-4),
+          toolCalls: undefined
+        }))
+      };
+    }
+  } catch {
+    return { ...base, messages: [] };
+  }
+  return base;
+}
+
+function minimalPersistedSessionState(value: SessionUiState): SessionUiState {
+  return {
+    title: truncatePersistedText(value.title, 120),
+    projectId: value.projectId,
+    composerText: truncatePersistedText(value.composerText, 1000),
+    attachments: (value.attachments || []).slice(0, 4).map(slimPersistedAttachment),
+    contextStartSeq: value.contextStartSeq,
+    lastActivityAt: value.lastActivityAt,
+    messages: (value.messages || []).slice(-2).map((message) => ({
+      id: message.id,
+      role: message.role,
+      content: truncatePersistedText(message.content, 900),
+      createdAt: message.createdAt,
+      pending: message.pending,
+      paused: message.paused,
+      cancelled: message.cancelled,
+      requestId: message.requestId,
+      userSeq: message.userSeq,
+      botSeq: message.botSeq,
+      contextExcluded: message.contextExcluded,
+      sendAttempt: message.sendAttempt,
+      recovery: message.recovery
+    }))
+  };
+}
+
+function serializedStateSize(value: unknown) {
+  try {
+    return JSON.stringify(value).length;
+  } catch {
+    return Number.MAX_SAFE_INTEGER;
+  }
+}
+
 function initialSidebarCollapseState(): SidebarCollapseState {
   const saved = readStorage<Partial<SidebarCollapseState>>(SIDEBAR_COLLAPSE_STORAGE_KEY, {});
   return {
@@ -452,18 +643,34 @@ function pruneSessionUiState(state: Record<string, SessionUiState>) {
   const entries = Object.entries(state);
   const liveEntries = entries.filter(([, value]) => hasLivePersistedMessages(value.messages || []));
   const retained = new Map<string, SessionUiState>();
-  for (const [sessionId, value] of entries.slice(-24)) retained.set(sessionId, value);
+  for (const [sessionId, value] of entries.slice(-SESSION_UI_RETAINED_SESSIONS)) retained.set(sessionId, value);
   for (const [sessionId, value] of liveEntries) retained.set(sessionId, value);
-  return Object.fromEntries(
+  const next = Object.fromEntries(
     [...retained.entries()].map(([sessionId, value]) => [
       sessionId,
-      {
-        ...value,
-        messages: value.messages.slice(-60),
-        attachments: value.attachments.slice(0, 12)
-      }
+      slimPersistedSessionState(value)
     ])
   );
+  while (serializedStateSize(next) > SESSION_UI_TOTAL_SOFT_BYTES && Object.keys(next).length > 1) {
+    const candidates = Object.entries(next)
+      .filter(([, value]) => !hasLivePersistedMessages(value.messages || []))
+      .sort(([, left], [, right]) => (timeMs(left.lastActivityAt) || latestMessageMs(left.messages || [])) - (timeMs(right.lastActivityAt) || latestMessageMs(right.messages || [])));
+    const removeId = candidates[0]?.[0] || Object.keys(next)[0];
+    delete next[removeId];
+  }
+  if (serializedStateSize(next) > SESSION_UI_TOTAL_SOFT_BYTES) {
+    for (const [sessionId, value] of Object.entries(next)) {
+      if (!hasLivePersistedMessages(value.messages || [])) {
+        next[sessionId] = minimalPersistedSessionState(value);
+      }
+    }
+  }
+  if (serializedStateSize(next) > SESSION_UI_TOTAL_SOFT_BYTES) {
+    for (const [sessionId, value] of Object.entries(next)) {
+      next[sessionId] = minimalPersistedSessionState(value);
+    }
+  }
+  return next;
 }
 
 function hasLivePersistedMessages(messages: ChatItem[]) {
@@ -478,6 +685,20 @@ function hasLivePersistedMessages(messages: ChatItem[]) {
 
 function hasLiveSessionUiState(state: Record<string, SessionUiState>) {
   return Object.values(state).some((value) => hasLivePersistedMessages(value.messages || []));
+}
+
+function sameAttachments(left: FileAttachment[] = [], right: FileAttachment[] = []) {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  return left.every((item, index) => {
+    const other = right[index];
+    return Boolean(other)
+      && item.file_path === other.file_path
+      && item.file_name === other.file_name
+      && item.file_type === other.file_type
+      && item.preview_url === other.preview_url
+      && item.previewDataUrl === other.previewDataUrl;
+  });
 }
 
 function pickBootSession(state: Record<string, SessionUiState>) {
@@ -729,6 +950,67 @@ function latestTimeValue(...values: Array<string | number | undefined>) {
     }
   }
   return bestValue || values.find((value) => Boolean(value)) || "";
+}
+
+function projectListKey(project: ProjectFolder) {
+  const pathValue = String(project.path || "").trim();
+  if (pathValue) {
+    const normalized = pathValue.replace(/\\/g, "/").replace(/\/+$/, "");
+    return `path:${(window.ecorexDesktop?.platform || "").toLowerCase() === "win32" ? normalized.toLowerCase() : normalized}`;
+  }
+  return `id:${String(project.id || "").trim()}`;
+}
+
+function projectUpdatedMs(project: ProjectFolder) {
+  return timeMs(project.updatedAt) || 0;
+}
+
+function mergeProjectFolders(current: ProjectFolder[], incoming?: ProjectFolder[]) {
+  if (!Array.isArray(incoming) || incoming.length === 0) return current;
+  const merged = new Map<string, ProjectFolder>();
+  const order: string[] = [];
+  for (const project of [...current, ...incoming]) {
+    if (!project || !project.id || !project.path) continue;
+    const key = projectListKey(project);
+    if (!key || key === "id:") continue;
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, project);
+      order.push(key);
+      continue;
+    }
+    const nextProject = projectUpdatedMs(project) >= projectUpdatedMs(existing) ? { ...existing, ...project } : { ...project, ...existing };
+    if (key.startsWith("path:") && existing.id && project.id && existing.id !== project.id) {
+      nextProject.id = existing.id;
+    }
+    merged.set(key, nextProject);
+  }
+  return order.map((key) => merged.get(key)).filter(Boolean) as ProjectFolder[];
+}
+
+function normalizeSessionProjectsForProjects(sessionProjects: unknown, projects: ProjectFolder[]) {
+  if (!sessionProjects || typeof sessionProjects !== "object") return {};
+  const validProjectIds = new Set(projects.map((project) => project.id).filter(Boolean));
+  const normalized: SessionProjectMap = {};
+  Object.entries(sessionProjects as Record<string, unknown>).forEach(([sessionId, projectId]) => {
+    const sessionKey = String(sessionId || "").trim();
+    const projectKey = String(projectId || "").trim();
+    if (!sessionKey || !projectKey || !validProjectIds.has(projectKey)) return;
+    normalized[sessionKey] = projectKey;
+  });
+  return normalized;
+}
+
+function normalizePinnedProjectsForProjects(pinnedProjects: unknown, projects: ProjectFolder[]) {
+  if (!pinnedProjects || typeof pinnedProjects !== "object") return {};
+  const validProjectIds = new Set(projects.map((project) => project.id).filter(Boolean));
+  const normalized: StringBoolMap = {};
+  Object.entries(pinnedProjects as Record<string, unknown>).forEach(([projectId, pinned]) => {
+    const projectKey = String(projectId || "").trim();
+    if (!projectKey || !validProjectIds.has(projectKey)) return;
+    normalized[projectKey] = Boolean(pinned);
+  });
+  return normalized;
 }
 
 function sessionActivityMs(row: SessionRow) {
@@ -1895,7 +2177,6 @@ export function App() {
   const [authChecked, setAuthChecked] = useState(false);
   const [runtimeSnapshot, setRuntimeSnapshot] = useState(initialRuntime);
   const [sidecarStatus, setSidecarStatus] = useState(initialSidecar);
-  const [updateStatus, setUpdateStatus] = useState<DesktopUpdateStatus>(initialUpdateStatus);
   const [quotaSnapshot, setQuotaSnapshot] = useState<UsageQuota | null>(null);
   const [activeSessionId, setActiveSessionId] = useState(bootSession?.id || `ecorex-${Date.now()}`);
   const [activeSessionTitle, setActiveSessionTitle] = useState(bootSession?.state.title || "新对话");
@@ -1923,7 +2204,7 @@ export function App() {
   const [pinnedSessions, setPinnedSessions] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(PINNED_SESSIONS_STORAGE_KEY, {}));
   const [pinnedProjects, setPinnedProjects] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(PINNED_PROJECTS_STORAGE_KEY, {}));
   const [unreadSessionIds, setUnreadSessionIds] = useState<StringBoolMap>({});
-  const [sessionUiState, setSessionUiState] = useState<Record<string, SessionUiState>>(() => readStorage<Record<string, SessionUiState>>(SESSION_UI_STORAGE_KEY, {}));
+  const [sessionUiState, setSessionUiState] = useState<Record<string, SessionUiState>>(() => pruneSessionUiState(readStorage<Record<string, SessionUiState>>(SESSION_UI_STORAGE_KEY, {})));
   const [enabledCapabilityPacks, setEnabledCapabilityPacks] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(CAPABILITY_ENABLED_STORAGE_KEY, {}));
   const [sessionRequestIds, setSessionRequestIds] = useState<StringMap>({});
   const [locallyCompletedRequestIds, setLocallyCompletedRequestIds] = useState<StringBoolMap>({});
@@ -1947,6 +2228,9 @@ export function App() {
   const streamCleanups = useRef<Record<string, () => void>>({});
   const streamCleanupRequestIds = useRef<StringMap>({});
   const streamDeltaBuffers = useRef<Record<string, { sessionId: string; assistantId: string; requestId: string; text: string; timer: number | null }>>({});
+  const composerTextRef = useRef(composerText);
+  const attachmentsRef = useRef(attachments);
+  const draftUiStateTimer = useRef<number | null>(null);
   const sessionRequestIdsRef = useRef<StringMap>({});
   const latestSendAttemptRef = useRef<Record<string, string>>({});
   const installWatchers = useRef<Record<string, number>>({});
@@ -1972,6 +2256,8 @@ export function App() {
   const historyRecoveryTimersRef = useRef<Record<string, number[]>>({});
   const preloadDone = useRef(false);
   const bootHistoryRefreshDone = useRef(false);
+  const runtimeUiStateHydrationStarted = useRef(false);
+  const runtimeUiStateHydrated = useRef(false);
   const releaseNotesDismissedVersion = useRef("");
   const uiStateLocalSyncTimer = useRef<number | null>(null);
   const pendingUiStateStorage = useRef<Record<string, SessionUiState> | null>(null);
@@ -2040,6 +2326,48 @@ export function App() {
   }, [enabledCapabilityPacks]);
 
   useEffect(() => {
+    if (runtimeUiStateHydrationStarted.current) return;
+    if (sidecarStatus.state !== "running") return;
+    runtimeUiStateHydrationStarted.current = true;
+    void loadRuntimeUiState()
+      .then((state) => {
+        if (!state) return;
+        const runtimeProjects = Array.isArray(state.projects) ? mergeProjectFolders([], state.projects) : null;
+        if (runtimeProjects) {
+          setProjects(runtimeProjects);
+        }
+        if (state.sessionProjects && typeof state.sessionProjects === "object") {
+          setSessionProjects(normalizeSessionProjectsForProjects(state.sessionProjects, runtimeProjects || projects));
+        } else if (runtimeProjects) {
+          setSessionProjects({});
+        }
+        if (state.sessionTitles && typeof state.sessionTitles === "object") {
+          setSessionTitles(state.sessionTitles as StringMap);
+        }
+        if (state.pinnedSessions && typeof state.pinnedSessions === "object") {
+          setPinnedSessions(state.pinnedSessions as StringBoolMap);
+        }
+        if (state.pinnedProjects && typeof state.pinnedProjects === "object") {
+          setPinnedProjects(normalizePinnedProjectsForProjects(state.pinnedProjects, runtimeProjects || projects));
+        } else if (runtimeProjects) {
+          setPinnedProjects({});
+        }
+        if (state.sessionUiState && typeof state.sessionUiState === "object") {
+          setSessionUiState(pruneSessionUiState(state.sessionUiState as Record<string, SessionUiState>));
+        }
+        if ("activeProjectId" in state) {
+          const validProjectIds = new Set((runtimeProjects || projects).map((project) => project.id));
+          const runtimeActiveProjectId = String(state.activeProjectId || "").trim();
+          setActiveProjectId(runtimeActiveProjectId && validProjectIds.has(runtimeActiveProjectId) ? runtimeActiveProjectId : null);
+        }
+      })
+      .finally(() => {
+        runtimeUiStateHydrated.current = true;
+      })
+      .catch(() => undefined);
+  }, [sidecarStatus.state]);
+
+  useEffect(() => {
     writeStorage(SIDEBAR_COLLAPSE_STORAGE_KEY, sidebarCollapse);
   }, [sidebarCollapse]);
 
@@ -2064,7 +2392,7 @@ export function App() {
       }
       uiStateLocalSyncTimer.current = null;
     }, hasLiveState ? 1800 : 120);
-    if (sidecarStatus.state !== "running") return;
+    if (sidecarStatus.state !== "running" || !runtimeUiStateHydrated.current) return;
     if (uiStateSyncTimer.current) {
       window.clearTimeout(uiStateSyncTimer.current);
     }
@@ -2072,14 +2400,21 @@ export function App() {
     uiStateSyncTimer.current = window.setTimeout(() => {
       void saveRuntimeUiState({
         version: 1,
+        replaceProjectState: true,
+        projectStateMode: "replace",
         lastActiveSessionId: activeSessionIdRef.current,
         activeProjectId: runtimeActiveProjectId,
+        projects,
+        sessionProjects,
+        sessionTitles,
+        pinnedSessions,
+        pinnedProjects,
         sessionUiState: pruned,
         savedAt: new Date().toISOString()
       }).catch(() => undefined);
       uiStateSyncTimer.current = null;
     }, hasLiveState ? 2500 : 350);
-  }, [sessionUiState, sessionProjects, sidecarStatus.state]);
+  }, [sessionUiState, sessionProjects, sessionTitles, pinnedSessions, pinnedProjects, projects, sidecarStatus.state]);
 
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
@@ -2116,21 +2451,85 @@ export function App() {
   }, [runtimeSnapshot.status, runtimeSnapshot.releaseNotes?.version]);
 
   useEffect(() => {
+    composerTextRef.current = composerText;
+  }, [composerText]);
+
+  useEffect(() => {
+    attachmentsRef.current = attachments;
+  }, [attachments]);
+
+  useEffect(() => {
     const projectId = sessionProjects[activeSessionId] || null;
-    setSessionUiState((current) => ({
-      ...current,
-      [activeSessionId]: {
-        ...(current[activeSessionId] || {}),
-        title: activeSessionTitle,
-        projectId,
-        messages,
-        composerText,
-        attachments,
-        contextStartSeq: current[activeSessionId]?.contextStartSeq,
-        lastActivityAt: latestMessageMs(messages) || current[activeSessionId]?.lastActivityAt || Date.now()
+    const draftText = composerTextRef.current;
+    const draftAttachments = attachmentsRef.current;
+    setSessionUiState((current) => {
+      const existing = current[activeSessionId] || {};
+      const lastActivityAt = latestMessageMs(messages) || existing.lastActivityAt || Date.now();
+      if (
+        existing.title === activeSessionTitle
+        && existing.projectId === projectId
+        && existing.messages === messages
+        && existing.composerText === draftText
+        && sameAttachments(existing.attachments || [], draftAttachments)
+        && existing.lastActivityAt === lastActivityAt
+      ) {
+        return current;
       }
-    }));
-  }, [activeSessionId, activeSessionTitle, sessionProjects, messages, composerText, attachments]);
+      return {
+        ...current,
+        [activeSessionId]: {
+          ...existing,
+          title: activeSessionTitle,
+          projectId,
+          messages,
+          composerText: draftText,
+          attachments: draftAttachments,
+          contextStartSeq: existing.contextStartSeq,
+          lastActivityAt
+        }
+      };
+    });
+  }, [activeSessionId, activeSessionTitle, sessionProjects, messages]);
+
+  useEffect(() => {
+    if (draftUiStateTimer.current) {
+      window.clearTimeout(draftUiStateTimer.current);
+    }
+    const sessionId = activeSessionId;
+    const projectId = sessionProjects[sessionId] || null;
+    draftUiStateTimer.current = window.setTimeout(() => {
+      draftUiStateTimer.current = null;
+      setSessionUiState((current) => {
+        const existing = current[sessionId] || {};
+        if (
+          existing.composerText === composerText
+          && sameAttachments(existing.attachments || [], attachments)
+          && existing.title === activeSessionTitle
+          && existing.projectId === projectId
+        ) {
+          return current;
+        }
+        return {
+          ...current,
+          [sessionId]: {
+            ...existing,
+            title: activeSessionTitle,
+            projectId,
+            messages: existing.messages || (sessionId === activeSessionIdRef.current ? messagesRef.current : []),
+            composerText,
+            attachments,
+            lastActivityAt: existing.lastActivityAt || latestMessageMs(existing.messages) || Date.now()
+          }
+        };
+      });
+    }, 320);
+    return () => {
+      if (draftUiStateTimer.current) {
+        window.clearTimeout(draftUiStateTimer.current);
+        draftUiStateTimer.current = null;
+      }
+    };
+  }, [activeSessionId, activeSessionTitle, sessionProjects, composerText, attachments]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(syncComposerHeight);
@@ -2174,9 +2573,7 @@ export function App() {
 
   useEffect(() => {
     const unsubscribe = window.ecorexDesktop?.onSidecarStatus?.((status) => setSidecarStatus(status));
-    const unsubscribeUpdate = window.ecorexDesktop?.onUpdateStatus?.((status) => setUpdateStatus(status));
     window.ecorexDesktop?.getSidecarStatus?.().then((status) => setSidecarStatus(status)).catch(() => undefined);
-    window.ecorexDesktop?.getUpdateStatus?.().then((status) => setUpdateStatus(status)).catch(() => undefined);
     return () => {
       streamCleanup.current?.();
       Object.values(streamCleanups.current).forEach((cleanup) => cleanup());
@@ -2210,7 +2607,6 @@ export function App() {
         uiStateSyncTimer.current = null;
       }
       unsubscribe?.();
-      unsubscribeUpdate?.();
     };
   }, []);
 
@@ -2289,14 +2685,6 @@ export function App() {
       return null;
     });
   }, [packs]);
-
-  useEffect(() => {
-    if (!session || !window.ecorexDesktop?.checkForUpdates) return;
-    const timer = window.setTimeout(() => {
-      void handleCheckForUpdates();
-    }, 7000);
-    return () => window.clearTimeout(timer);
-  }, [session]);
 
   useEffect(() => {
     if (!chatFileMenu) return undefined;
@@ -2482,15 +2870,29 @@ export function App() {
     () => [...projects].sort((a, b) => Number(Boolean(pinnedProjects[b.id] || b.pinned)) - Number(Boolean(pinnedProjects[a.id] || a.pinned))),
     [projects, pinnedProjects]
   );
-  const projectSessions = visibleSessions.filter((row) => Boolean(row.projectId));
-  const generalSessions = visibleSessions.filter((row) => !row.projectId);
-  const projectSessionGroups = useMemo(
-    () => sortedProjects.map((project) => ({
-      project,
-      sessions: projectSessions.filter((row) => row.projectId === project.id)
-    })),
-    [sortedProjects, projectSessions]
-  );
+  const { projectSessions, generalSessions, projectSessionGroups } = useMemo(() => {
+    const grouped = new Map<string, SessionRow[]>();
+    const general: SessionRow[] = [];
+    const projectRows: SessionRow[] = [];
+    for (const row of visibleSessions) {
+      if (!row.projectId) {
+        general.push(row);
+        continue;
+      }
+      projectRows.push(row);
+      const rows = grouped.get(row.projectId) || [];
+      rows.push(row);
+      grouped.set(row.projectId, rows);
+    }
+    return {
+      projectSessions: projectRows,
+      generalSessions: general,
+      projectSessionGroups: sortedProjects.map((project) => ({
+        project,
+        sessions: grouped.get(project.id) || []
+      }))
+    };
+  }, [visibleSessions, sortedProjects]);
   const selectOrCreateProjectSession = (project: ProjectFolder) => {
     const existing = allSessions.find((row) => row.projectId === project.id);
     if (existing) {
@@ -2500,7 +2902,8 @@ export function App() {
     startNewSession(project);
   };
   const currentModelName = displayModelName(runtimeSnapshot.currentModel);
-  const appVersion = runtimeSnapshot.version || runtimeSnapshot.releaseNotes?.version || updateStatus.currentVersion;
+  const appVersion = runtimeSnapshot.version || runtimeSnapshot.releaseNotes?.version || "0.1.19";
+  const deferredComposerText = useDeferredValue(composerText);
   const skillDisplayRows = useMemo(() => buildSkillDisplayRows(runtimeSnapshot), [runtimeSnapshot]);
   const mentionableSkillRows = useMemo(() => skillDisplayRows.filter((skill) => skill.mentionable), [skillDisplayRows]);
   const backgroundSkillRows = useMemo(() => skillDisplayRows.filter((skill) => !skill.mentionable), [skillDisplayRows]);
@@ -2508,7 +2911,7 @@ export function App() {
     () => mentionableSkillRows.filter((skill) => skill.enabled && skill.installed),
     [mentionableSkillRows]
   );
-  const mentionMatch = /@([\w\u4e00-\u9fa5-]*)$/.exec(composerText);
+  const mentionMatch = /@([\w\u4e00-\u9fa5-]*)$/.exec(deferredComposerText);
   const skillMentionNeedle = mentionMatch ? mentionMatch[1].toLowerCase() : "";
   const skillMatchesNeedle = (skill: SkillDisplayRow) => {
     const haystack = [
@@ -2540,7 +2943,9 @@ export function App() {
   const weeklyUsed = quotaNumber(quotaSnapshot, "weeklyUsed");
   const dailyLimit = quotaNumber(quotaSnapshot, "dailyLimit");
   const weeklyLimit = quotaNumber(quotaSnapshot, "weeklyLimit");
-  const contextUsed = estimateContextTokens(messages, composerText, attachments);
+  const historyContextUsed = useMemo(() => estimateContextTokens(messages, "", []), [messages]);
+  const draftContextUsed = useMemo(() => estimateTokenCount(deferredComposerText, attachments), [deferredComposerText, attachments]);
+  const contextUsed = historyContextUsed + draftContextUsed;
   const contextPercent = percentOf(contextUsed, CONTEXT_THRESHOLD_TOKENS);
   const tokenMeters = [
     {
@@ -2794,7 +3199,43 @@ export function App() {
     return true;
   }
 
+  function flushActiveSessionDraft() {
+    const sessionId = activeSessionIdRef.current;
+    if (!sessionId) return;
+    const projectId = sessionProjects[sessionId] || null;
+    const draftText = composerTextRef.current;
+    const draftAttachments = attachmentsRef.current;
+    const currentMessages = messagesRef.current;
+    setSessionUiState((current) => {
+      const existing = current[sessionId] || {};
+      const lastActivityAt = latestMessageMs(currentMessages) || existing.lastActivityAt || Date.now();
+      if (
+        existing.title === activeSessionTitle
+        && existing.projectId === projectId
+        && existing.messages === currentMessages
+        && existing.composerText === draftText
+        && sameAttachments(existing.attachments || [], draftAttachments)
+        && existing.lastActivityAt === lastActivityAt
+      ) {
+        return current;
+      }
+      return {
+        ...current,
+        [sessionId]: {
+          ...existing,
+          title: activeSessionTitle,
+          projectId,
+          messages: currentMessages,
+          composerText: draftText,
+          attachments: draftAttachments,
+          lastActivityAt
+        }
+      };
+    });
+  }
+
   async function selectSession(row: SessionRow) {
+    flushActiveSessionDraft();
     const switchSeq = ++sessionSwitchSeq.current;
     const nextProjectId = sessionProjects[row.id] || null;
     autoScrollRef.current = true;
@@ -2858,6 +3299,7 @@ export function App() {
   }
 
   function startNewSession(project?: ProjectFolder | null) {
+    flushActiveSessionDraft();
     sessionSwitchSeq.current += 1;
     const id = project ? `ecorex-project-${project.id}-${Date.now()}` : `ecorex-${Date.now()}`;
     const title = project ? `${project.name} · 新会话` : "新对话";
@@ -2955,14 +3397,25 @@ export function App() {
     try {
       const project = await chooseProjectFolder();
       if (!project) return;
-      let nextProject = project;
+      const registeredProject = await registerProjectFolderPath(project.path);
+      if (!registeredProject) {
+        throw new Error("Project folder registration failed.");
+      }
+      const projectForState = registeredProject
+        ? {
+            ...project,
+            ...registeredProject,
+            updatedAt: registeredProject.updatedAt || project.updatedAt
+          }
+        : project;
+      let nextProject = projectForState;
       setProjects((current) => {
-        const existing = current.find((item) => item.path === project.path);
+        const existing = current.find((item) => item.path === projectForState.path);
         if (existing) {
-          nextProject = { ...existing, updatedAt: project.updatedAt };
-          return current.map((item) => item.path === project.path ? nextProject : item);
+          nextProject = { ...projectForState, id: existing.id, pinned: existing.pinned, updatedAt: projectForState.updatedAt };
+          return current.map((item) => item.path === projectForState.path ? nextProject : item);
         }
-        return [project, ...current];
+        return [projectForState, ...current];
       });
       window.setTimeout(() => startNewSession(nextProject), 0);
       setToast("项目已添加");
@@ -3194,6 +3647,34 @@ export function App() {
   }
 
   function updateSessionMessages(sessionId: string, updater: (messages: ChatItem[]) => ChatItem[]) {
+    if (activeSessionIdRef.current === sessionId) {
+      const nextMessages = updater(messagesRef.current);
+      messagesRef.current = nextMessages;
+      setMessages(nextMessages);
+      setSessionUiState((current) => {
+        const existing = current[sessionId] || {
+          title: sessionTitles[sessionId] || activeSessionTitle,
+          projectId: sessionProjects[sessionId] || null,
+          messages: [],
+          composerText: composerTextRef.current,
+          attachments: attachmentsRef.current
+        };
+        const activityAt = latestMessageMs(nextMessages) || existing.lastActivityAt || Date.now();
+        return {
+          ...current,
+          [sessionId]: {
+            ...existing,
+            projectId: sessionProjects[sessionId] || null,
+            messages: nextMessages,
+            composerText: composerTextRef.current,
+            attachments: attachmentsRef.current,
+            lastActivityAt: activityAt
+          }
+        };
+      });
+      return;
+    }
+
     setSessionUiState((current) => {
       const existing = current[sessionId] || {
         title: sessionTitles[sessionId] || activeSessionTitle,
@@ -3214,9 +3695,6 @@ export function App() {
         }
       };
     });
-    if (activeSessionIdRef.current === sessionId) {
-      setMessages(updater);
-    }
   }
 
   function clearSessionUnread(sessionId: string) {
@@ -5248,36 +5726,18 @@ export function App() {
     if (sidecarStatus.state !== "running") return;
     await saveRuntimeUiState({
       version: 1,
+      replaceProjectState: true,
+      projectStateMode: "replace",
       lastActiveSessionId: activeSessionId,
       activeProjectId: projectId,
+      projects,
+      sessionProjects,
+      sessionTitles,
+      pinnedSessions,
+      pinnedProjects,
       sessionUiState: mergedState,
       savedAt: new Date().toISOString()
     }).catch(() => undefined);
-  }
-
-  async function handleCheckForUpdates() {
-    const status = await checkForUpdates().catch((error) => ({
-      ...updateStatus,
-      state: /app-update\.ya?ml|latest\.ya?ml/i.test(error instanceof Error ? error.message : String(error || "")) ? "not-available" as const : "error" as const,
-      message: friendlyUpdateErrorMessage(error)
-    }));
-    if (status) {
-      setUpdateStatus(status);
-      if (status.message) setToast(status.message);
-    }
-  }
-
-  async function handleInstallDownloadedUpdate() {
-    await syncRuntimeUiStateNow();
-    const status = await installDownloadedUpdate().catch((error) => ({
-      ...updateStatus,
-      state: "error" as const,
-      message: friendlyUpdateErrorMessage(error) || "安装更新失败"
-    }));
-    if (status) {
-      setUpdateStatus(status);
-      if (status.message) setToast(status.message);
-    }
   }
 
   function packActionLabel(pack: CapabilityPack, installing = false) {
@@ -6017,12 +6477,6 @@ export function App() {
   const generalSessionsCollapsed = sidebarCollapse.generalSessions && !generalForceRevealed && !searchQuery.trim();
   const currentComposerPermissionMode: PermissionMode = permissionState?.mode || "smart-ask";
   const releaseNotes = runtimeSnapshot.releaseNotes;
-  const updateVisible = ["available", "downloading", "downloaded", "blocked", "error"].includes(updateStatus.state);
-  const updatePrimaryLabel = updateStatus.state === "downloaded"
-    ? "重启安装"
-    : updateStatus.platform === "win32" && updateStatus.state === "downloading"
-      ? "后台下载中"
-      : "打开下载页";
   const settingsNav: Array<{ id: SettingsSection; label: string; icon: ReactNode }> = [
     { id: "account", label: "账号", icon: <UserRound aria-hidden="true" /> },
     { id: "projects", label: "项目", icon: <FolderOpen aria-hidden="true" /> },
@@ -6362,33 +6816,6 @@ export function App() {
             </section>
           )}
         </header>
-
-        <section className={`update-banner is-${updateStatus.state}${updateVisible ? "" : " is-hidden"}`}>
-          {updateVisible && (
-            <>
-              <div>
-                <strong>{updateStatus.version ? `EcoreX ${updateStatus.version}` : "EcoreX 更新"}</strong>
-                <span>{updateStatus.message}</span>
-              </div>
-              <div className="update-actions">
-                {typeof updateStatus.progress === "number" && updateStatus.state === "downloading" && (
-                  <em>{Math.round(updateStatus.progress)}%</em>
-                )}
-                {updateStatus.state === "downloaded" ? (
-                  <button className="primary-action" type="button" onClick={() => void handleInstallDownloadedUpdate()}>{updatePrimaryLabel}</button>
-                ) : updateStatus.state === "downloading" ? (
-                  <button type="button" disabled>{updatePrimaryLabel}</button>
-                ) : (
-                  <button className="primary-action" type="button" onClick={() => void openDownloadPage()}>{updatePrimaryLabel}</button>
-                )}
-                <button type="button" onClick={() => void handleCheckForUpdates()}>重新检查</button>
-                <button className="icon-button" type="button" onClick={() => setUpdateStatus({ ...updateStatus, state: "idle", message: "已关闭更新提醒" })} title="关闭更新提醒" aria-label="关闭更新提醒">
-                  <X aria-hidden="true" />
-                </button>
-              </div>
-            </>
-          )}
-        </section>
 
         <div className="message-list" ref={messageListRef} onScroll={updateJumpLatestState}>
           {visibleMessages.length === 0 ? (

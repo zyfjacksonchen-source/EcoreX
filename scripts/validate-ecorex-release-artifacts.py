@@ -537,13 +537,23 @@ def validate_public_zip(
         site_js = archive.read("site/site.js").decode("utf-8", errors="replace")
         require_contains(
             site_js,
-            "options.find((item) => item.id === preferredId) || options.find((item) => ready(item, manifestVersion)) || options[0]",
-            "public site device recommendation",
+            "install-webui.ps1",
+            "public site WebUI install command",
+        )
+        require_contains(
+            site_js,
+            "webui-windows-x64",
+            "public site WebUI Windows artifact",
+        )
+        require_contains(
+            site_js,
+            "webui-macos-universal",
+            "public site WebUI macOS artifact",
         )
         require_not_contains(
             site_js,
-            "item.id === preferredId && ready(item)",
-            "public site device recommendation",
+            '"windows-x64"',
+            "public site retired desktop Windows card",
         )
         checksums = read_zip_json_no_bom(archive, "checksums.json")
         require(public_manifest.get("version") == manifest.get("version"), "public manifest version mismatch")
@@ -676,6 +686,28 @@ def extract_asar_text(asar_path: pathlib.Path, archive_name: str, node_modules: 
             return result.stdout.decode("utf-8", errors="replace")
         last_detail = result.stderr.decode("utf-8", errors="replace").strip()
     raise ValidationError(f"failed extracting {archive_name} from {asar_path}: {last_detail}")
+
+
+def list_asar_files(asar_path: pathlib.Path, node_modules: pathlib.Path) -> list[str]:
+    asar_module = (node_modules / "@electron" / "asar").resolve()
+    require(asar_module.is_dir(), f"asar module missing: {asar_module}")
+    script = (
+        "const asar=require(process.argv[1]);"
+        "const filesystem=asar.listPackage(process.argv[2]);"
+        "process.stdout.write(JSON.stringify(filesystem));"
+    )
+    result = subprocess.run(
+        ["node", "-e", script, str(asar_module), str(asar_path.resolve())],
+        check=False,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        raise ValidationError(f"failed listing {asar_path}: {detail}")
+    payload = json.loads(result.stdout.decode("utf-8"))
+    if not isinstance(payload, list):
+        raise ValidationError(f"asar file list was not an array for {asar_path}")
+    return [str(item).replace("\\", "/").lstrip("/") for item in payload]
 
 
 def extract_asar_renderer_bundle_text(asar_path: pathlib.Path, node_modules: pathlib.Path) -> str:
@@ -972,16 +1004,10 @@ def validate_desktop_unpacked(desktop_dir: pathlib.Path, node_modules: pathlib.P
     require_contains(api_bridge_text, "/api/logs/snapshot", "desktop api bridge")
     require_contains(api_bridge_text, "This EcoreX desktop API path is not allowed", "desktop api bridge")
 
-    updater_text = extract_asar_text(app_asar, "dist-electron/updater.js", node_modules)
-    require_no_forbidden_release_text("desktop updater", "dist-electron/updater.js", updater_text)
-    require_contains(updater_text, "setFeedURL", "desktop updater")
-    require_contains(updater_text, "ECOREX_UPDATE_FEED_URL", "desktop updater")
-    require_contains(updater_text, "ECOREX_UPDATE_MANIFEST_URL", "desktop updater")
-    require_contains(updater_text, "ECOREX_DOWNLOAD_PAGE_URL", "desktop updater")
-    require_contains(updater_text, "/api/active-requests", "desktop updater")
-    require_contains(updater_text, "quitAndInstall", "desktop updater")
-    require_contains(updater_text, "当前还有", "desktop updater")
-
+    asar_files = set(list_asar_files(app_asar, node_modules))
+    require("dist-electron/updater.js" not in asar_files, "desktop app.asar must not include retired updater.js")
+    require_not_contains(main_text, "EcorexUpdateManager", "desktop main process")
+    require_not_contains(main_text, "electron-updater", "desktop main process")
     permissions_text = extract_asar_text(app_asar, "dist-electron/permissions.js", node_modules)
     require_no_forbidden_release_text("desktop permission manager", "dist-electron/permissions.js", permissions_text)
     require_contains(permissions_text, "authorizeHostCapability", "desktop permission manager")

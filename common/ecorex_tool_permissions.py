@@ -453,6 +453,13 @@ class ToolPermissionBroker:
             "updatedAt": settings.get("updatedAt"),
         }
 
+    def list_workspace_roots(self, cwd: Optional[str] = None) -> list:
+        settings = self._load_settings()
+        profile = settings.get("filesystem")
+        if not isinstance(profile, dict):
+            profile = _default_filesystem_profile(cwd)
+        return _workspace_roots(profile, cwd)
+
     def authorize_noninteractive(self, tool_name: str, arguments: Optional[Dict[str, Any]] = None) -> Decision:
         """Authorize background startup work that cannot surface a UI prompt."""
         normalized_tool = (tool_name or "").strip().lower()

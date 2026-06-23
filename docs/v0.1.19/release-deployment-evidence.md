@@ -185,3 +185,29 @@ Date: 2026-06-22
 
 - Root Windows `latest.yml` remains canonical for x64; ia32 feed remains under `downloads/ia32/latest.yml`.
 - The Windows release gate now rejects smoke evidence without `rendererReady=true`, positive `rendererRootHtmlLength`, and positive `rendererBodyTextLength`.
+
+## WebUI-First Hotfix Deployment
+
+- 2026-06-23 final WebUI-only public release package:
+  - `release-artifacts/EcoreX_0.1.19-public-release.zip`
+  - size `241196466`
+  - SHA256 `8DFDDABE1B80B6A30AAE59B4A86032151973B61CE3D2E896DB10AC7E3A85B636`
+- Final WebUI artifacts:
+  - `EcoreX_0.1.19-webui-windows-x64.zip`: size `81074831`, SHA256
+    `9AD880699B83C339BD60A536E4258873B671ED9EC705FB20EA2A0FACAAC6AB29`.
+  - `EcoreX_0.1.19-webui-macos-universal.zip`: size `158185725`, SHA256
+    `F53F308530C76D2853545196D840C5D0DEF7EDA4FFA3AD554742D36D580AF557`.
+- Server deployment:
+  - Expected SHA256:
+    `8DFDDABE1B80B6A30AAE59B4A86032151973B61CE3D2E896DB10AC7E3A85B636`.
+  - Release directory:
+    `/srv/ecorex-agent-download/releases/20260623084543-v0.1.19`.
+  - `scripts/check-ecorex-server-release.sh` passed on the server.
+- Public checks after deploy:
+  - `https://www.ecoreai.cn/ecorex-agent/` -> 200.
+  - `https://www.ecoreai.cn/ecorex-agent/manifest.json` -> 200.
+  - `https://www.ecoreai.cn/ecorex-agent/install-webui.ps1` -> 200 and contains
+    persistent `.part` / HTTP Range resume markers.
+  - `https://www.ecoreai.cn/ecorex-agent/install-webui.sh` -> 200 and contains
+    `curl -C -` plus retry markers.
+  - Windows and macOS WebUI zip content-length values match manifest sizes.

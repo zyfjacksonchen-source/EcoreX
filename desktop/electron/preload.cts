@@ -8,10 +8,6 @@ contextBridge.exposeInMainWorld("ecorexDesktop", {
   shouldUseDarkColors: nativeTheme?.shouldUseDarkColors ?? false,
   setWindowTheme: (theme: "light" | "dark") => ipcRenderer.invoke("ecorex:set-window-theme", theme) as Promise<unknown>,
   getSidecarStatus: () => ipcRenderer.invoke("ecorex:get-sidecar-status") as Promise<SidecarStatus>,
-  checkForUpdates: () => ipcRenderer.invoke("ecorex:check-for-updates") as Promise<unknown>,
-  getUpdateStatus: () => ipcRenderer.invoke("ecorex:get-update-status") as Promise<unknown>,
-  installDownloadedUpdate: () => ipcRenderer.invoke("ecorex:install-downloaded-update") as Promise<unknown>,
-  openDownloadPage: () => ipcRenderer.invoke("ecorex:open-download-page") as Promise<unknown>,
   listCapabilityPacks: () => ipcRenderer.invoke("ecorex:list-capability-packs") as Promise<CapabilityPack[]>,
   getPermissionState: () => ipcRenderer.invoke("ecorex:get-permission-state") as Promise<PermissionState>,
   setPermissionMode: (mode: PermissionMode) =>
@@ -91,9 +87,4 @@ contextBridge.exposeInMainWorld("ecorexDesktop", {
     ipcRenderer.on("ecorex:sidecar-status", wrapped);
     return () => ipcRenderer.off("ecorex:sidecar-status", wrapped);
   },
-  onUpdateStatus: (listener: (status: unknown) => void) => {
-    const wrapped = (_event: Electron.IpcRendererEvent, status: unknown) => listener(status);
-    ipcRenderer.on("ecorex:update-status", wrapped);
-    return () => ipcRenderer.off("ecorex:update-status", wrapped);
-  }
 });

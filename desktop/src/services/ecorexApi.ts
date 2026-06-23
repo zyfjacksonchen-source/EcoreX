@@ -274,6 +274,24 @@ export type RuntimeSnapshot = {
   modelCapabilities?: Record<string, unknown>;
 };
 
+export type RuntimeUiStateSync = {
+  schemaVersion?: number;
+  projects?: ProjectFolder[];
+  sessionProjects?: Record<string, string>;
+  sessionTitles?: Record<string, string>;
+  sessionUiState?: Record<string, unknown>;
+  pinnedSessions?: Record<string, boolean>;
+  pinnedProjects?: Record<string, boolean>;
+  activeProjectId?: string | null;
+  activeSessionId?: string;
+  lastActiveSessionId?: string;
+  updatedAt?: number;
+  savedAt?: string;
+  replaceProjectState?: boolean;
+  projectStateMode?: "replace" | "merge";
+  [key: string]: unknown;
+};
+
 export type DiagnosticsBundle = {
   [key: string]: unknown;
   status?: string;
@@ -299,19 +317,6 @@ export type DiagnosticsBundle = {
     includesArtifactContents?: boolean;
   };
   message?: string;
-};
-
-export type DesktopUpdateStatus = {
-  state: "idle" | "checking" | "available" | "not-available" | "downloading" | "downloaded" | "blocked" | "installing" | "error";
-  platform: string;
-  currentVersion: string;
-  version?: string;
-  message: string;
-  downloadUrl?: string;
-  releaseDate?: string;
-  progress?: number;
-  activeRequests?: number;
-  checkedAt?: string;
 };
 
 export type UsageQuota = {
@@ -968,27 +973,13 @@ export async function loadPermissionState(): Promise<PermissionState | null> {
   return apiJson<PermissionState & { status?: string }>("/api/tool-permissions");
 }
 
-export async function checkForUpdates(): Promise<DesktopUpdateStatus | null> {
-  if (!window.ecorexDesktop?.checkForUpdates) return null;
-  return window.ecorexDesktop.checkForUpdates() as Promise<DesktopUpdateStatus>;
-}
-
-export async function getUpdateStatus(): Promise<DesktopUpdateStatus | null> {
-  if (!window.ecorexDesktop?.getUpdateStatus) return null;
-  return window.ecorexDesktop.getUpdateStatus() as Promise<DesktopUpdateStatus>;
-}
-
-export async function installDownloadedUpdate(): Promise<DesktopUpdateStatus | null> {
-  if (!window.ecorexDesktop?.installDownloadedUpdate) return null;
-  return window.ecorexDesktop.installDownloadedUpdate() as Promise<DesktopUpdateStatus>;
-}
-
-export async function openDownloadPage() {
-  return window.ecorexDesktop?.openDownloadPage?.();
-}
-
 export async function saveRuntimeUiState(state: unknown) {
   return apiJson<{ status?: string; message?: string }>("/api/ui-state", "POST", state);
+}
+
+export async function loadRuntimeUiState(): Promise<RuntimeUiStateSync | null> {
+  const result = await apiJson<{ status?: string; state?: RuntimeUiStateSync }>("/api/ui-state", "GET");
+  return result.state || null;
 }
 
 export async function requestAgentInstallRequest(input: {

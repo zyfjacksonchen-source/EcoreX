@@ -560,13 +560,18 @@ def _web_app_bridge_script() -> str:
     },
     chooseFiles: chooseFiles,
     chooseProjectFolder: async function () {
+      try {
+        var nativePayload = await apiJson({ path: "/api/project-folder/choose", method: "POST", body: {} });
+        if (nativePayload && nativePayload.project) return nativePayload.project;
+        if (nativePayload && nativePayload.status === "cancelled") return null;
+      } catch (error) {}
       var label = desktopPlatform === "darwin"
         ? "请输入或粘贴本机项目文件夹路径，例如 /Users/name/project"
         : "请输入或粘贴本机项目文件夹路径，例如 C:\\\\Users\\\\name\\\\project";
       var folderPath = window.prompt(label, "");
       folderPath = String(folderPath || "").trim();
       if (!folderPath) return null;
-      var payload = await apiJson({ path: "/api/project-folder", method: "POST", body: { path: folderPath } });
+      var payload = await apiJson({ path: "/api/project-folder", method: "POST", body: { path: folderPath, create: true } });
       return payload.project || null;
     },
     savePastedFile: savePastedFile,
@@ -4354,6 +4359,7 @@ class WebChannel(ChatChannel):
             '/api/file-stat', 'FileStatHandler',
             '/api/file-json', 'FileJsonHandler',
             '/api/open-path', 'OpenPathHandler',
+            '/api/project-folder/choose', 'ProjectFolderChooseHandler',
             '/api/project-folder', 'ProjectFolderHandler',
             '/api/extensions', 'ExtensionsHandler',
             '/api/capabilities', 'CapabilitiesHandler',
@@ -4439,8 +4445,16 @@ class RootHandler:
         return _serve_web_app_asset("")
 
 
+def _web_app_static_dir() -> str:
+    packaged_dir = os.path.realpath(os.path.join(os.path.dirname(__file__), "static", "app"))
+    source_dist = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", "..", "desktop", "dist"))
+    if os.path.isfile(os.path.join(source_dist, "index.html")):
+        return source_dist
+    return packaged_dir
+
+
 def _serve_web_app_asset(file_path: str = ""):
-    app_dir = os.path.realpath(os.path.join(os.path.dirname(__file__), "static", "app"))
+    app_dir = _web_app_static_dir()
     requested = (file_path or "").strip("/")
     knowledge_rel = _knowledge_rel_from_app_path(requested)
     if knowledge_rel:
@@ -4736,21 +4750,15 @@ class FileServeHandler:
             if not raw_path:
                 raise web.notfound()
             # Resolve symlinks and confine access to explicit preview roots.
-            # Default preview is workspace-scoped; serving Home requires an
-            # explicit web_file_serve_root override plus the permission broker.
+            # Project folders selected in WebUI are added through the shared
+            # permission broker, so preview/read/stat use the same root set.
             workspace_root = os.path.realpath(os.path.expanduser(conf().get("agent_workspace", "~/cow")))
             expanded_raw_path = os.path.expanduser(raw_path)
             raw_was_absolute = os.path.isabs(expanded_raw_path)
             file_path = expanded_raw_path if raw_was_absolute else os.path.join(workspace_root, expanded_raw_path.lstrip("/\\"))
             file_path = os.path.realpath(file_path)
             upload_root = os.path.realpath(_get_upload_dir())
-            serve_root = conf().get("web_file_serve_root")
-            allowed_roots = [
-                workspace_root,
-                upload_root,
-            ]
-            if serve_root:
-                allowed_roots.append(os.path.realpath(os.path.expanduser(serve_root)))
+            allowed_roots = _web_file_preview_roots(workspace_root, upload_root)
             within_preview_root = any(_is_within_directory(root, file_path) for root in allowed_roots)
             if not within_preview_root and not (raw_was_absolute and _desktop_runtime_token_matches()):
                 raise web.notfound()
@@ -4790,6 +4798,33 @@ def _resolve_web_local_path(path_value: str) -> str:
     if not os.path.isabs(expanded_path):
         expanded_path = os.path.join(workspace_root, expanded_path.lstrip("/\\"))
     return os.path.realpath(expanded_path)
+
+
+def _web_file_preview_roots(workspace_root: str, upload_root: str) -> List[str]:
+    roots = [
+        os.path.realpath(workspace_root),
+        os.path.realpath(upload_root),
+    ]
+    serve_root = conf().get("web_file_serve_root")
+    if serve_root:
+        roots.append(os.path.realpath(os.path.expanduser(serve_root)))
+    try:
+        from common.ecorex_tool_permissions import get_tool_permission_broker
+
+        for root in get_tool_permission_broker().list_workspace_roots(cwd=workspace_root):
+            if root:
+                roots.append(os.path.realpath(os.path.expanduser(str(root))))
+    except Exception as exc:
+        logger.warning(f"[WebChannel] file preview root lookup failed: {exc}")
+    deduped: List[str] = []
+    seen = set()
+    for root in roots:
+        key = os.path.normcase(root)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(root)
+    return deduped
 
 
 class FileStatHandler:
@@ -5146,20 +5181,33 @@ def _stable_project_id(path_value: str) -> str:
     return f"project-{digest}"
 
 
-def _project_payload_from_path(path_value: str) -> Dict[str, Any]:
+def _project_payload_from_path(path_value: str, create: bool = False, user_selected: bool = False) -> Dict[str, Any]:
     folder_path = os.path.realpath(os.path.expanduser(path_value))
-    if not os.path.isdir(folder_path):
-        raise ValueError(f"project folder not found: {folder_path}")
     try:
         from common.ecorex_tool_permissions import get_tool_permission_broker
 
         broker = get_tool_permission_broker()
+        workspace_root = _get_workspace_root()
         state = broker.get_state()
         if state.get("mode") == "read-only":
             raise PermissionError("Read Only mode blocks project folder registration because it creates .ecorex files.")
-        registered = broker.remember_workspace_root(folder_path, access="write", cwd=_get_workspace_root())
-        if registered.get("status") == "error":
-            raise PermissionError(registered.get("message") or "project folder permission registration failed")
+        if not os.path.isdir(folder_path):
+            if not create:
+                raise ValueError(f"project folder not found: {folder_path}")
+            parent = os.path.dirname(folder_path) or folder_path
+            if not os.path.isdir(parent):
+                raise ValueError(f"parent folder not found: {parent}")
+            parent_decision = broker.authorize_file_access("write", parent, cwd=workspace_root)
+            if not parent_decision.get("allowed", True):
+                raise PermissionError(parent_decision.get("reason") or "project folder parent is not writable")
+            os.makedirs(folder_path, exist_ok=True)
+        if user_selected:
+            registered = broker.remember_workspace_root(folder_path, access="write", cwd=workspace_root)
+            if registered.get("status") == "error":
+                raise PermissionError(registered.get("message") or "project folder permission registration failed")
+        folder_decision = broker.authorize_file_access("write", folder_path, cwd=workspace_root)
+        if not folder_decision.get("allowed", True):
+            raise PermissionError(folder_decision.get("reason") or "project folder is not writable")
     except Exception as exc:
         logger.warning(f"[WebChannel] project folder permission registration failed: {exc}")
         raise
@@ -5170,6 +5218,14 @@ def _project_payload_from_path(path_value: str) -> Dict[str, Any]:
     if not os.path.exists(project_memory_path):
         with open(project_memory_path, "w", encoding="utf-8") as handle:
             handle.write("# Project Memory\n\nEcoreX stores project-specific summaries here. Keep this file concise and do not duplicate global user memory.\n")
+    try:
+        if not user_selected:
+            registered = broker.remember_workspace_root(folder_path, access="write", cwd=workspace_root)
+            if registered.get("status") == "error":
+                raise PermissionError(registered.get("message") or "project folder permission registration failed")
+    except Exception as exc:
+        logger.warning(f"[WebChannel] project folder permission registration failed after project metadata write: {exc}")
+        raise
     return {
         "id": _stable_project_id(folder_path),
         "name": os.path.basename(folder_path) or folder_path,
@@ -5178,6 +5234,56 @@ def _project_payload_from_path(path_value: str) -> Dict[str, Any]:
         "dreamsPath": project_dreams_path,
         "updatedAt": datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
     }
+
+
+def _choose_project_folder_native() -> str:
+    title = "Select Project Root"
+    if os.name == "nt":
+        command = [
+            "powershell",
+            "-NoProfile",
+            "-STA",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            (
+                "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false);"
+                "$OutputEncoding = [System.Text.UTF8Encoding]::new($false);"
+                "Add-Type -AssemblyName System.Windows.Forms;"
+                "$dialog = New-Object System.Windows.Forms.FolderBrowserDialog;"
+                f"$dialog.Description = '{title}';"
+                "$dialog.ShowNewFolderButton = $true;"
+                "if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {"
+                "  Write-Output $dialog.SelectedPath; exit 0"
+                "} exit 2"
+            ),
+        ]
+        result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900)
+        if result.returncode == 2:
+            return ""
+        if result.returncode != 0:
+            raise RuntimeError((result.stderr or result.stdout or "folder picker failed").strip())
+        return (result.stdout or "").strip().splitlines()[-1].strip() if result.stdout.strip() else ""
+    if sys.platform == "darwin":
+        script = f'POSIX path of (choose folder with prompt "{title}")'
+        result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900)
+        if result.returncode != 0:
+            if "User canceled" in (result.stderr or ""):
+                return ""
+            raise RuntimeError((result.stderr or result.stdout or "folder picker failed").strip())
+        return (result.stdout or "").strip()
+    for candidate in (
+        ["zenity", "--file-selection", "--directory", "--title", title],
+        ["kdialog", "--getexistingdirectory", str(Path.home()), title],
+    ):
+        if not shutil.which(candidate[0]):
+            continue
+        result = subprocess.run(candidate, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900)
+        if result.returncode == 0:
+            return (result.stdout or "").strip()
+        if result.returncode in (1, 2):
+            return ""
+    raise RuntimeError("native folder picker is unavailable on this host")
 
 
 class ProjectFolderHandler:
@@ -5192,10 +5298,38 @@ class ProjectFolderHandler:
             path_value = str(body.get("path") or body.get("folder_path") or "").strip()
             if not path_value:
                 return json.dumps({"status": "error", "message": "path is required"}, ensure_ascii=False)
-            project = _project_payload_from_path(path_value)
+            create = bool(body.get("create") or body.get("createDirectory") or body.get("create_directory"))
+            project = _project_payload_from_path(path_value, create=create)
+            try:
+                from common.ecorex_workspace import save_ui_state
+
+                save_ui_state(_get_workspace_root(), {"projects": [project]})
+            except Exception as state_exc:
+                logger.warning(f"[WebChannel] project folder registered but UI state merge failed: {state_exc}")
             return json.dumps({"status": "success", "project": project}, ensure_ascii=False)
         except Exception as exc:
             logger.error(f"[WebChannel] project folder error: {exc}")
+            return json.dumps({"status": "error", "message": str(exc)}, ensure_ascii=False)
+
+
+class ProjectFolderChooseHandler:
+    def POST(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            folder_path = _choose_project_folder_native()
+            if not folder_path:
+                return json.dumps({"status": "cancelled", "project": None}, ensure_ascii=False)
+            project = _project_payload_from_path(folder_path, create=False, user_selected=True)
+            try:
+                from common.ecorex_workspace import save_ui_state
+
+                save_ui_state(_get_workspace_root(), {"projects": [project]})
+            except Exception as state_exc:
+                logger.warning(f"[WebChannel] project folder selected but UI state merge failed: {state_exc}")
+            return json.dumps({"status": "success", "project": project}, ensure_ascii=False)
+        except Exception as exc:
+            logger.error(f"[WebChannel] project folder choose error: {exc}")
             return json.dumps({"status": "error", "message": str(exc)}, ensure_ascii=False)
 
 
@@ -8114,6 +8248,8 @@ class MessageDeleteHandler:
 
 
 class UiStateHandler:
+    MAX_UI_STATE_PAYLOAD_BYTES = 2 * 1024 * 1024
+
     def GET(self):
         _require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
@@ -8125,12 +8261,12 @@ class UiStateHandler:
             logger.error(f"[WebChannel] UI state GET error: {e}")
             return json.dumps({"status": "error", "message": str(e)})
 
-    def PUT(self):
+    def _save(self):
         _require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             raw = web.data() or b"{}"
-            if len(raw) > 1024 * 1024:
+            if len(raw) > self.MAX_UI_STATE_PAYLOAD_BYTES:
                 return json.dumps({"status": "error", "message": "ui state payload too large"})
             body = json.loads(raw)
             incoming = body.get("state", body)
@@ -8138,13 +8274,16 @@ class UiStateHandler:
                 return json.dumps({"status": "error", "message": "state must be an object"})
             from common.ecorex_workspace import save_ui_state
             state = save_ui_state(_get_workspace_root(), incoming)
-            return json.dumps({"status": "success", "state": state}, ensure_ascii=False)
+            return json.dumps({"status": "success", "updatedAt": state.get("updatedAt")}, ensure_ascii=False)
         except Exception as e:
             logger.error(f"[WebChannel] UI state PUT error: {e}")
             return json.dumps({"status": "error", "message": str(e)})
 
     def POST(self):
-        return self.PUT()
+        return self._save()
+
+    def PUT(self):
+        return self._save()
 
 
 class InstallationsHandler:

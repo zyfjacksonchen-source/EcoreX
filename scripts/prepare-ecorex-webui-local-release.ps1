@@ -62,6 +62,44 @@ function Sync-DesktopWebBuild {
     Copy-Item -Path (Join-Path $desktopDist "*") -Destination $appDir -Recurse -Force
 }
 
+function Sync-CurrentRuntimeSources {
+    param([Parameter(Mandatory = $true)][string]$RuntimeDir)
+
+    $sourceItems = @(
+        "agent",
+        "bridge",
+        "channel",
+        "cli",
+        "common",
+        "models",
+        "plugins",
+        "scripts",
+        "skills",
+        "translate",
+        "voice",
+        "app.py",
+        "pyproject.toml",
+        "requirements.txt",
+        "requirements-optional.txt",
+        "core-requirements.txt",
+        "enterprise-policy.json",
+        "capabilities.json",
+        "LICENSE"
+    )
+
+    foreach ($item in $sourceItems) {
+        $source = Join-Path $repoRoot $item
+        if (-not (Test-Path -LiteralPath $source)) {
+            continue
+        }
+        $destination = Join-Path $RuntimeDir $item
+        if (Test-Path -LiteralPath $destination) {
+            Remove-Item -LiteralPath $destination -Recurse -Force
+        }
+        Copy-Item -LiteralPath $source -Destination $destination -Recurse -Force
+    }
+}
+
 function Copy-OptionalLarkCliWindows {
     param([Parameter(Mandatory = $true)][string]$RuntimeDir)
     Write-Host "Skipping bundled lark-cli for Windows WebUI runtime; Feishu/Lark connector is discovery-only and installs through find-skill plus on-demand @larksuite/cli."
@@ -215,6 +253,8 @@ with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED, compres
             stat_result = os.stat(path)
             info = zipfile.ZipInfo(rel, time.localtime(stat_result.st_mtime)[:6])
             mode = 0o100755 if (
+                rel in executable
+                or
                 rel_in_source in executable
                 or rel_in_source.endswith(".command")
                 or rel_in_source.endswith(".sh")
@@ -296,6 +336,7 @@ New-Item -ItemType Directory -Force -Path $windowsStage, $macStage, $combinedSta
 
 $winRuntime = Join-Path $windowsStage "runtime"
 Copy-Item -LiteralPath $runtimeRootResolved -Destination $winRuntime -Recurse -Force
+Sync-CurrentRuntimeSources -RuntimeDir $winRuntime
 Remove-GeneratedNoise -Root $winRuntime
 Sync-DesktopWebBuild -RuntimeDir $winRuntime
 Copy-OptionalLarkCliWindows -RuntimeDir $winRuntime
@@ -365,6 +406,110 @@ function Ensure-LarkCli {
     "lark-cli preinstall skipped. Use find-skill first, then install @larksuite/cli@1.0.56 on demand; npmjs.org timeout should fall back to https://registry.npmmirror.com." | Out-File -FilePath (Join-Path $StateDir "lark-cli-install.log") -Encoding utf8 -Append
 }
 
+function Get-WebUiPythonProcesses {
+    param([Parameter(Mandatory = $true)][string]$RuntimeDir)
+    try {
+        return Get-CimInstance Win32_Process -Filter "Name = 'python.exe' OR Name = 'pythonw.exe'" -ErrorAction Stop |
+            Where-Object { $_.CommandLine -like "*$RuntimeDir*" -and $_.CommandLine -like "*app.py*" }
+    } catch {
+        return Get-WmiObject Win32_Process -Filter "Name = 'python.exe' OR Name = 'pythonw.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -like "*$RuntimeDir*" -and $_.CommandLine -like "*app.py*" }
+    }
+}
+
+function Stop-ExistingWebUi {
+    param([Parameter(Mandatory = $true)][string]$RuntimeDir)
+    $processes = @(Get-WebUiPythonProcesses -RuntimeDir $RuntimeDir)
+    if ($processes.Count -eq 0) { return }
+
+    Write-Host "Stopping existing EcoreX WebUI local service..."
+    $processIds = @()
+    foreach ($process in $processes) {
+        try {
+            $processIds += [int]$process.ProcessId
+            Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+        } catch {
+            Write-Warning "Could not stop process $($process.ProcessId): $($_.Exception.Message)"
+        }
+    }
+
+    $deadline = [DateTime]::UtcNow.AddSeconds(12)
+    do {
+        $remaining = @($processIds | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+        if ($remaining.Count -eq 0) { return }
+        Start-Sleep -Milliseconds 400
+    } while ([DateTime]::UtcNow -lt $deadline)
+
+    $remaining = @($processIds | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
+    if ($remaining.Count -gt 0) {
+        $remainingText = ($remaining -join ", ")
+        throw "Timed out stopping EcoreX WebUI process(es): $remainingText"
+    }
+}
+
+function Add-DesktopCandidate {
+    param(
+        [System.Collections.Generic.List[string]]$Dirs,
+        [string]$Path,
+        [switch]$ExistingOnly
+    )
+    if ([string]::IsNullOrWhiteSpace($Path)) { return }
+    try {
+        $expanded = [Environment]::ExpandEnvironmentVariables($Path)
+        if ([string]::IsNullOrWhiteSpace($expanded)) { return }
+        $full = [System.IO.Path]::GetFullPath($expanded)
+        if ($ExistingOnly -and -not (Test-Path -LiteralPath $full -PathType Container)) { return }
+        if (-not ($Dirs | Where-Object { $_ -ieq $full })) {
+            $Dirs.Add($full) | Out-Null
+        }
+    } catch {
+    }
+}
+
+function Get-DesktopShortcutPaths {
+    $dirs = [System.Collections.Generic.List[string]]::new()
+    Add-DesktopCandidate -Dirs $dirs -Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory))
+    Add-DesktopCandidate -Dirs $dirs -Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Desktop))
+    Add-DesktopCandidate -Dirs $dirs -Path (Join-Path $env:USERPROFILE "Desktop")
+
+    foreach ($name in @("OneDriveCommercial", "OneDriveConsumer", "OneDrive")) {
+        $root = [Environment]::GetEnvironmentVariable($name)
+        if ($root) {
+            Add-DesktopCandidate -Dirs $dirs -Path (Join-Path $root "Desktop") -ExistingOnly
+        }
+    }
+
+    try {
+        $registryDesktop = (Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders" -Name Desktop -ErrorAction Stop).Desktop
+        Add-DesktopCandidate -Dirs $dirs -Path $registryDesktop
+    } catch {
+    }
+
+    return @($dirs.ToArray() | ForEach-Object { Join-Path $_ "EcoreX WebUI.url" })
+}
+
+function Write-WebUiShortcuts {
+    param([Parameter(Mandatory = $true)][string]$Url)
+    $shortcutBody = "[InternetShortcut]`r`nURL=$Url`r`n"
+    $written = @()
+    foreach ($path in Get-DesktopShortcutPaths) {
+        try {
+            $dir = Split-Path -Parent $path
+            if (-not (Test-Path -LiteralPath $dir)) {
+                New-Item -ItemType Directory -Force -Path $dir | Out-Null
+            }
+            $shortcutBody | Set-Content -LiteralPath $path -Encoding ASCII
+            $written += $path
+        } catch {
+            Write-Warning "Could not create desktop shortcut at ${path}: $($_.Exception.Message)"
+        }
+    }
+    if (-not $written.Count) {
+        throw "Could not create EcoreX WebUI desktop shortcut."
+    }
+    return $written
+}
+
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $packageRoot = Split-Path -Parent $scriptDir
 $sourceRuntime = Join-Path $packageRoot "runtime"
@@ -376,10 +521,14 @@ $logPath = Join-Path $stateDir "ecorex-webui.log"
 $errorLogPath = Join-Path $stateDir "ecorex-webui.err.log"
 
 New-Item -ItemType Directory -Force -Path $installRoot, $stateDir, $workspaceRoot | Out-Null
-robocopy $sourceRuntime $runtimeDir /MIR /XD __pycache__ .pytest_cache .mypy_cache .ruff_cache /XF *.pyc *.pyo config.json | Out-Null
+Stop-ExistingWebUi -RuntimeDir $runtimeDir
+
+Write-Host "Copying EcoreX WebUI runtime..."
+robocopy $sourceRuntime $runtimeDir /MIR /R:2 /W:1 /XD __pycache__ .pytest_cache .mypy_cache .ruff_cache /XF *.pyc *.pyo config.json | Out-Null
 if ($LASTEXITCODE -gt 7) {
     throw "Failed to copy runtime to $runtimeDir; robocopy exit code $LASTEXITCODE"
 }
+$global:LASTEXITCODE = 0
 
 $effectivePort = Get-FreePort -Preferred $Port
 $config = [ordered]@{
@@ -431,28 +580,29 @@ if (-not (Test-Path -LiteralPath $python)) {
     throw "Packaged Python runtime is missing: $python"
 }
 
-$existing = Get-CimInstance Win32_Process -Filter "Name = 'python.exe' OR Name = 'pythonw.exe'" |
-    Where-Object { $_.CommandLine -like "*$runtimeDir*" -and $_.CommandLine -like "*app.py*" }
-if (-not $existing) {
-    Start-Process -FilePath $python `
-        -ArgumentList "app.py" `
-        -WorkingDirectory $runtimeDir `
-        -WindowStyle Hidden `
-        -RedirectStandardOutput $logPath `
-        -RedirectStandardError $errorLogPath
-}
-
 $url = "http://127.0.0.1:$effectivePort/app/"
+Write-Host "Starting EcoreX WebUI local service: $url"
+Start-Process -FilePath $python `
+    -ArgumentList "app.py" `
+    -WorkingDirectory $runtimeDir `
+    -WindowStyle Hidden `
+    -RedirectStandardOutput $logPath `
+    -RedirectStandardError $errorLogPath
+
+Write-Host "Waiting for EcoreX WebUI to become ready..."
 Wait-WebUi -Url $url
 
-$shortcut = Join-Path ([Environment]::GetFolderPath("Desktop")) "EcoreX WebUI.url"
-"[InternetShortcut]`r`nURL=$url`r`n" | Set-Content -LiteralPath $shortcut -Encoding ASCII
+$shortcuts = Write-WebUiShortcuts -Url $url
+foreach ($shortcut in $shortcuts) {
+    Write-Host "Desktop shortcut updated: $shortcut"
+}
 
 if (-not $NoBrowser) {
     Start-Process $url
 }
 
 Write-Host "EcoreX WebUI is ready: $url"
+exit 0
 '@
 
 New-Item -ItemType Directory -Force -Path (Join-Path $windowsStage "scripts") | Out-Null
@@ -466,6 +616,7 @@ Compress-Archive -Path (Join-Path $windowsStage "*") -DestinationPath $windowsZi
 
 $macRuntime = Join-Path $macStage "runtime"
 Copy-Item -LiteralPath $runtimeRootResolved -Destination $macRuntime -Recurse -Force
+Sync-CurrentRuntimeSources -RuntimeDir $macRuntime
 Remove-Item -LiteralPath (Join-Path $macRuntime "python") -Recurse -Force -ErrorAction SilentlyContinue
 Remove-GeneratedNoise -Root $macRuntime
 Sync-DesktopWebBuild -RuntimeDir $macRuntime
@@ -511,6 +662,100 @@ clear_quarantine() {
   fi
 }
 
+wait_for_pid_exit() {
+  pid="$1"
+  for _ in 1 2 3 4 5; do
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+stop_existing_webui() {
+  pids=""
+  if [[ -f "$STATE_DIR/ecorex-webui.pid" ]]; then
+    old_pid="$(cat "$STATE_DIR/ecorex-webui.pid" 2>/dev/null || true)"
+    if [[ -n "$old_pid" ]] && kill -0 "$old_pid" >/dev/null 2>&1; then
+      pids="$pids $old_pid"
+    fi
+  fi
+
+  runtime_pids="$(pgrep -f "$RUNTIME_DIR/app.py" 2>/dev/null || true)"
+  if [[ -n "$runtime_pids" ]]; then
+    pids="$pids $runtime_pids"
+  fi
+
+  pids="$(printf '%s\n' $pids | awk 'NF && !seen[$1]++ { print $1 }' || true)"
+  if [[ -z "$pids" ]]; then
+    rm -f "$STATE_DIR/ecorex-webui.pid"
+    return 0
+  fi
+
+  echo "Stopping existing EcoreX WebUI local service..."
+  for pid in $pids; do
+    kill "$pid" >/dev/null 2>&1 || true
+  done
+  for pid in $pids; do
+    if ! wait_for_pid_exit "$pid"; then
+      kill -9 "$pid" >/dev/null 2>&1 || true
+      wait_for_pid_exit "$pid" || true
+    fi
+  done
+  rm -f "$STATE_DIR/ecorex-webui.pid"
+}
+
+add_unique_dir() {
+  candidate="$1"
+  [[ -n "$candidate" ]] || return 0
+  candidate="${candidate%/}"
+  for existing in "${DESKTOP_CANDIDATES[@]:-}"; do
+    [[ "$existing" == "$candidate" ]] && return 0
+  done
+  DESKTOP_CANDIDATES+=("$candidate")
+}
+
+desktop_shortcut_dirs() {
+  DESKTOP_CANDIDATES=()
+  if command -v osascript >/dev/null 2>&1; then
+    finder_desktop="$(osascript -e 'POSIX path of (path to desktop folder)' 2>/dev/null || true)"
+    add_unique_dir "$finder_desktop"
+  fi
+  add_unique_dir "$HOME/Desktop"
+  printf '%s\n' "${DESKTOP_CANDIDATES[@]}"
+}
+
+write_desktop_shortcuts() {
+  url="$1"
+  written=0
+  while IFS= read -r desktop_dir; do
+    [[ -n "$desktop_dir" ]] || continue
+    if [[ ! -d "$desktop_dir" ]]; then
+      mkdir -p "$desktop_dir" 2>/dev/null || true
+    fi
+    [[ -d "$desktop_dir" ]] || continue
+    shortcut_path="$desktop_dir/EcoreX WebUI.webloc"
+    cat > "$shortcut_path" <<WEBLOC
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>URL</key>
+  <string>$url</string>
+</dict>
+</plist>
+WEBLOC
+    echo "Desktop shortcut updated: $shortcut_path"
+    written=1
+  done < <(desktop_shortcut_dirs)
+
+  if [[ "$written" != "1" ]]; then
+    echo "Could not create EcoreX WebUI desktop shortcut." >&2
+    return 1
+  fi
+}
+
 case "$(uname -m)" in
   arm64|aarch64)
     PY_ARCHIVE="$PACKAGE_ROOT/python/cpython-3.11.15+20260602-aarch64-apple-darwin-install_only_stripped.tar.gz"
@@ -530,16 +775,9 @@ mkdir -p "$INSTALL_ROOT" "$STATE_DIR" "$WORKSPACE_ROOT"
 
 clear_quarantine "$PACKAGE_ROOT"
 clear_quarantine "$INSTALL_ROOT"
+stop_existing_webui
 
-if [[ -f "$STATE_DIR/ecorex-webui.pid" ]]; then
-  old_pid="$(cat "$STATE_DIR/ecorex-webui.pid" 2>/dev/null || true)"
-  if [[ -n "$old_pid" ]] && kill -0 "$old_pid" >/dev/null 2>&1; then
-    kill "$old_pid" >/dev/null 2>&1 || true
-    sleep 1
-  fi
-fi
-pkill -f "$RUNTIME_DIR/app.py" >/dev/null 2>&1 || true
-
+echo "Copying EcoreX WebUI runtime..."
 rsync -a --delete --exclude python --exclude __pycache__ --exclude .pytest_cache --exclude .mypy_cache --exclude .ruff_cache --exclude config.json "$PACKAGE_ROOT/runtime/" "$RUNTIME_DIR/"
 
 if [[ ! -x "$PYTHON_HOME/bin/python3" ]]; then
@@ -567,6 +805,7 @@ PYTHON="$PYTHON_HOME/bin/python3"
 clear_quarantine "$PYTHON"
 DEPS_STAMP="$STATE_DIR/deps-$VERSION.ok"
 if [[ ! -f "$DEPS_STAMP" ]]; then
+  echo "Installing Python dependencies from bundled wheelhouse..."
   PIP_NO_CACHE_DIR=1 "$PYTHON" -m pip install --no-index --no-cache-dir --no-compile --find-links "$WHEEL_DIR" -r "$RUNTIME_DIR/core-requirements.txt"
   date -u +"%Y-%m-%dT%H:%M:%SZ" > "$DEPS_STAMP"
 fi
@@ -644,15 +883,15 @@ payload = {
 config_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 PY
 
-if ! pgrep -f "$RUNTIME_DIR/app.py" >/dev/null 2>&1; then
-  (
-    cd "$RUNTIME_DIR"
-    PYTHONPATH="$RUNTIME_DIR:${PYTHONPATH:-}" nohup "$PYTHON" app.py > "$STATE_DIR/ecorex-webui.log" 2> "$STATE_DIR/ecorex-webui.err.log" &
-    echo $! > "$STATE_DIR/ecorex-webui.pid"
-  )
-fi
-
 URL="http://127.0.0.1:$EFFECTIVE_PORT/app/"
+echo "Starting EcoreX WebUI local service: $URL"
+(
+  cd "$RUNTIME_DIR"
+  PYTHONPATH="$RUNTIME_DIR:${PYTHONPATH:-}" nohup "$PYTHON" app.py > "$STATE_DIR/ecorex-webui.log" 2> "$STATE_DIR/ecorex-webui.err.log" &
+  echo $! > "$STATE_DIR/ecorex-webui.pid"
+)
+
+echo "Waiting for EcoreX WebUI to become ready..."
 "$PYTHON" - "$URL" <<'PY'
 import sys
 import time
@@ -676,6 +915,8 @@ PY
 if [[ "$OPEN_BROWSER" == "1" ]]; then
   open "$URL"
 fi
+
+write_desktop_shortcuts "$URL"
 
 echo "EcoreX WebUI is ready: $URL"
 '@

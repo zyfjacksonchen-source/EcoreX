@@ -21,43 +21,6 @@ interface Window {
         recentEvents?: Array<{ ts: string; state: string; phase: string; message: string; reason?: string }>;
       };
     }>;
-    checkForUpdates?: () => Promise<{
-      state: "idle" | "checking" | "available" | "not-available" | "downloading" | "downloaded" | "blocked" | "installing" | "error";
-      platform: string;
-      currentVersion: string;
-      version?: string;
-      message: string;
-      downloadUrl?: string;
-      releaseDate?: string;
-      progress?: number;
-      activeRequests?: number;
-      checkedAt?: string;
-    }>;
-    getUpdateStatus?: () => Promise<{
-      state: "idle" | "checking" | "available" | "not-available" | "downloading" | "downloaded" | "blocked" | "installing" | "error";
-      platform: string;
-      currentVersion: string;
-      version?: string;
-      message: string;
-      downloadUrl?: string;
-      releaseDate?: string;
-      progress?: number;
-      activeRequests?: number;
-      checkedAt?: string;
-    }>;
-    installDownloadedUpdate?: () => Promise<{
-      state: "idle" | "checking" | "available" | "not-available" | "downloading" | "downloaded" | "blocked" | "installing" | "error";
-      platform: string;
-      currentVersion: string;
-      version?: string;
-      message: string;
-      downloadUrl?: string;
-      releaseDate?: string;
-      progress?: number;
-      activeRequests?: number;
-      checkedAt?: string;
-    }>;
-    openDownloadPage?: () => Promise<{ ok: boolean; url: string }>;
     listCapabilityPacks: () => Promise<
       Array<{
         id: string;
@@ -218,20 +181,6 @@ interface Window {
         message: string;
         pid?: number;
         webPort: number;
-      }) => void
-    ) => () => void;
-    onUpdateStatus?: (
-      listener: (status: {
-        state: "idle" | "checking" | "available" | "not-available" | "downloading" | "downloaded" | "blocked" | "installing" | "error";
-        platform: string;
-        currentVersion: string;
-        version?: string;
-        message: string;
-        downloadUrl?: string;
-        releaseDate?: string;
-        progress?: number;
-        activeRequests?: number;
-        checkedAt?: string;
       }) => void
     ) => () => void;
   };

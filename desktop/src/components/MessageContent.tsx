@@ -712,9 +712,13 @@ function ArtifactShelf({
   const statusRetryCounts = useRef<Record<string, number>>({});
   const statusRetryTimers = useRef<Record<string, number>>({});
   const rawItems = useMemo(() => mergeAgentArtifacts(artifacts, legacyArtifacts), [artifacts, legacyArtifacts]);
+  const verificationItems = useMemo(
+    () => expanded ? rawItems : rawItems.slice(0, ARTIFACT_PREVIEW_LIMIT),
+    [expanded, rawItems]
+  );
   useEffect(() => {
     if (!localFileStat) return;
-    rawItems.forEach((artifact) => {
+    verificationItems.forEach((artifact) => {
       if (!shouldVerifyArtifact(artifact)) return;
       const source = artifactPath(artifact);
       const key = artifactSourceKey(artifact);
@@ -749,7 +753,7 @@ function ArtifactShelf({
           setAvailability((current) => ({ ...current, [key]: "error" }));
         });
     });
-  }, [availability, localFileStat, rawItems]);
+  }, [availability, localFileStat, verificationItems]);
   useEffect(() => {
     if (!localFileJson) return;
     const scheduleStatusRetry = (availabilityKey: string, timerKey: string) => {
@@ -768,7 +772,7 @@ function ArtifactShelf({
       }, Math.min(1000 + attempts * 500, 6000));
     };
 
-    rawItems.forEach((artifact) => {
+    verificationItems.forEach((artifact) => {
       if (!shouldVerifyArtifact(artifact) || artifact.status !== "pending" || !artifact.statusPath) return;
       const source = artifactPath(artifact);
       const key = artifactSourceKey(artifact);
@@ -807,7 +811,7 @@ function ArtifactShelf({
           scheduleStatusRetry(key, timerKey);
         });
     });
-  }, [availability, localFileJson, localFileStat, rawItems]);
+  }, [availability, localFileJson, localFileStat, verificationItems]);
   useEffect(() => () => {
     Object.values(statRetryTimers.current).forEach((timer) => window.clearTimeout(timer));
     statRetryTimers.current = {};

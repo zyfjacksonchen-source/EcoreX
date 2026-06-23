@@ -10,7 +10,6 @@ import { openLocalPath, statLocalPath, type OpenPathAction } from "./localPathBr
 import { PermissionManager, type PermissionMode } from "./permissions.js";
 import { resolveRepoRoot, SidecarManager } from "./sidecar.js";
 import { TelemetryReporter } from "./telemetry.js";
-import { EcorexUpdateManager } from "./updater.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
@@ -21,7 +20,6 @@ const capabilities = new CapabilityManager(runtimeRoot, __dirname);
 const telemetry = new TelemetryReporter(runtimeRoot);
 const permissions = new PermissionManager();
 const enterpriseAuth = new EnterpriseAuthManager(runtimeRoot);
-const updates = new EcorexUpdateManager(sidecar);
 nativeTheme.themeSource = "dark";
 
 if (!hasSingleInstanceLock) {
@@ -47,7 +45,8 @@ function safeFileName(name: string, fallback: string) {
 }
 
 function stableProjectId(folderPath: string) {
-  const normalized = path.resolve(folderPath).toLowerCase();
+  const resolved = path.resolve(folderPath);
+  const normalized = (process.platform === "win32" ? resolved.toLowerCase() : resolved).replace(/\\/g, "/");
   return `project-${createHash("sha1").update(normalized).digest("hex").slice(0, 16)}`;
 }
 
@@ -260,17 +259,12 @@ app.whenReady().then(async () => {
   }
   app.setName("EcoreX");
   installApplicationMenu();
-  updates.init();
   ipcMain.handle("ecorex:get-sidecar-status", () => sidecar.getStatus());
   ipcMain.handle("ecorex:set-window-theme", (_event, theme: "light" | "dark") => {
     applyWindowTheme(theme === "dark" ? "dark" : "light");
     return { ok: true };
   });
   ipcMain.handle("ecorex:sidecar-json", (_event, request) => fetchSidecarJson(sidecar, request));
-  ipcMain.handle("ecorex:check-for-updates", () => updates.checkForUpdates());
-  ipcMain.handle("ecorex:get-update-status", () => updates.getStatus());
-  ipcMain.handle("ecorex:install-downloaded-update", () => updates.installDownloadedUpdate());
-  ipcMain.handle("ecorex:open-download-page", () => updates.openDownloadPage());
   ipcMain.handle("ecorex:list-capability-packs", () => capabilities.listPacks());
   ipcMain.handle("ecorex:get-telemetry-state", () => telemetry.getState());
   ipcMain.handle("ecorex:report-telemetry", (_event, event) => telemetry.report(event));
@@ -379,9 +373,6 @@ app.whenReady().then(async () => {
   await sidecar.refreshEnterpriseModelConfig();
   sidecar.start();
   createMainWindow();
-  setTimeout(() => {
-    void updates.checkForUpdates().catch(() => undefined);
-  }, 5000);
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

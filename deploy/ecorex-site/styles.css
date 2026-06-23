@@ -281,6 +281,7 @@ h3 {
 }
 
 .downloads,
+.install-guide,
 .capability-band {
   padding: 56px 0;
 }
@@ -393,6 +394,49 @@ h3 {
   font-size: 13px;
 }
 
+.command-block {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0;
+  padding: 12px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface) 84%, var(--ink) 4%);
+}
+
+.command-block span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.command-block code {
+  display: block;
+  overflow-x: auto;
+  padding: 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  color: var(--ink);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.command-block button {
+  justify-self: start;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--surface-strong);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 720;
+  cursor: pointer;
+}
+
 .arch-select {
   display: grid;
   gap: 6px;
@@ -430,6 +474,63 @@ h3 {
   color: var(--muted);
   border: 1px solid var(--rule);
   background: var(--surface-strong);
+}
+
+.guide-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.guide-panel {
+  display: grid;
+  gap: 18px;
+  padding: 22px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.guide-panel h3 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.guide-steps {
+  display: grid;
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.guide-steps li {
+  display: grid;
+  gap: 7px;
+}
+
+.guide-steps strong {
+  color: var(--ink);
+  font-size: 15px;
+}
+
+.guide-steps span {
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+.guide-steps code {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 12px;
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  background: var(--surface-strong);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: nowrap;
 }
 
 .capability-band {
@@ -494,6 +595,7 @@ h3 {
 
   .release-strip,
   .download-grid,
+  .guide-grid,
   .capability-band {
     grid-template-columns: 1fr;
   }
