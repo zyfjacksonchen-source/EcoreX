@@ -21,3 +21,8 @@
   - Pending assistant answers now render through `LiveStreamingText`, which appends to a DOM text node on animation frames and skips Markdown parsing while the stream is live.
   - Long-stream display throttling was tightened from 110/48ms to 48/24ms.
   - History context token estimation moved out of render-time `useMemo` into a debounced effect so live deltas do not rescan all messages/tool output on every render.
+- Hardened WebUI install/update entry points:
+  - Removed the admin-page manifest link from ordinary Web UI.
+  - Windows and macOS web installers now print script and manifest versions plus fallback instructions when the browser does not auto-open.
+  - The package generator now emits versioned package installers and rejects generated macOS installers containing retired `resume_args` code.
+  - macOS package installer writes desktop shortcuts before attempting to open the browser.

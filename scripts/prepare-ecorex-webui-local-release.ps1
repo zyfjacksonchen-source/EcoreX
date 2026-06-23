@@ -361,6 +361,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+Write-Host "EcoreX WebUI package installer: __ECOREX_VERSION__"
+
 function Test-PortAvailable {
     param([int]$Port)
     $listener = $null
@@ -603,10 +605,12 @@ if (-not $NoBrowser) {
 }
 
 Write-Host "EcoreX WebUI is ready: $url"
+Write-Host "If the browser did not open, double-click a desktop EcoreX WebUI.url shortcut above or open $url manually."
 exit 0
 '@
 
 New-Item -ItemType Directory -Force -Path (Join-Path $windowsStage "scripts") | Out-Null
+$windowsPs1 = $windowsPs1.Replace('__ECOREX_VERSION__', $Version)
 Write-Utf8NoBom -Path (Join-Path $windowsStage "Install EcoreX WebUI.cmd") -Value $windowsCmd
 Write-Utf8NoBom -Path (Join-Path $windowsStage "scripts/install-ecorex-webui-win.ps1") -Value $windowsPs1
 Write-Utf8NoBom -Path (Join-Path $windowsStage "release.json") -Value (New-ReleaseJson -ArtifactId "webui-windows-x64" -Platform "Windows x64" -InstallEntry "Install EcoreX WebUI.cmd")
@@ -656,6 +660,8 @@ WORKSPACE_ROOT="${ECOREX_WORKSPACE_ROOT:-$HOME/EcoreX}"
 PORT="${ECOREX_WEB_PORT:-9909}"
 OPEN_BROWSER="${OPEN_BROWSER:-1}"
 PYTHON_HOME="$INSTALL_ROOT/python"
+
+echo "EcoreX WebUI package installer: $VERSION"
 
 clear_quarantine() {
   if command -v xattr >/dev/null 2>&1 && [[ -e "$1" ]]; then
@@ -931,17 +937,30 @@ open_browser() {
   fi
 }
 
+write_desktop_shortcuts "$URL"
+
 if [[ "$OPEN_BROWSER" == "1" ]]; then
   open_browser "$URL"
 fi
 
-write_desktop_shortcuts "$URL"
-
 echo "EcoreX WebUI is ready: $URL"
+echo "If the browser did not open, double-click a desktop EcoreX WebUI.webloc shortcut above or open $URL manually."
 '@
 
 New-Item -ItemType Directory -Force -Path (Join-Path $macStage "scripts") | Out-Null
 $macInstall = $macInstall.Replace('__ECOREX_VERSION__', $Version)
+foreach ($requiredMacMarker in @(
+    'EcoreX WebUI package installer:',
+    'write_desktop_shortcuts "$URL"',
+    'open_browser "$URL"'
+)) {
+    if (-not $macInstall.Contains($requiredMacMarker)) {
+        throw "Generated macOS WebUI installer is missing marker: $requiredMacMarker"
+    }
+}
+if ($macInstall.Contains('resume_args')) {
+    throw "Generated macOS WebUI installer still contains retired resume_args code"
+}
 Write-Utf8NoBom -Path (Join-Path $macStage "scripts/install-ecorex-webui-mac.sh") -Value $macInstall
 New-MacInstallerApp -AppRoot (Join-Path $macStage "Install EcoreX WebUI.app") -InstallScriptRelative "scripts/install-ecorex-webui-mac.sh"
 Write-Utf8NoBom -Path (Join-Path $macStage "release.json") -Value (New-ReleaseJson -ArtifactId "webui-macos-universal" -Platform "macOS arm64/x64" -InstallEntry "Install EcoreX WebUI.app")

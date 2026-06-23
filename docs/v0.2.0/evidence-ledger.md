@@ -17,3 +17,6 @@
 | 2026-06-23 | `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py -k "v020_frontend_streaming or v020_frontend_runtime_ui_state" -q` | PASS | 2 selected tests passed; frontend source markers verify live stream text-node rendering and deferred history token estimation. |
 | 2026-06-23 | `npm run typecheck` from `desktop/` | PASS | Renderer and Electron TypeScript typecheck passed after streaming performance changes. |
 | 2026-06-23 | `npm run build:renderer` from `desktop/` | PASS | Vite production renderer build passed; output `assets/index-Bo0yf0YM.js` and `assets/index-CgbZeUD0.css`. |
+| 2026-06-23 | `$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py -k "v020_webui_install_pages or v020_frontend_streaming" -q` | PASS | 2 selected tests passed; verifies admin manifest link removal, mac retry code uses `curl_args` not `resume_args`, installer version logging, and mac desktop shortcut/open order. |
+| 2026-06-23 | PowerShell parser checks for `deploy/ecorex-site/install-webui.ps1` and `scripts/prepare-ecorex-webui-local-release.ps1` | PASS | Both scripts parsed without syntax errors. |
+| 2026-06-23 | `bash -n deploy/ecorex-site/install-webui.sh` | PASS | macOS outer installer shell syntax passed. WSL emitted an environment warning outside script parsing. |

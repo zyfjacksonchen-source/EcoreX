@@ -179,6 +179,8 @@ function Save-UrlWithProgress {
 $manifestUrl = Join-Url $BaseUrl "manifest.json"
 Write-Host "Fetching EcoreX manifest: $manifestUrl"
 $manifest = Invoke-RestMethod -Uri $manifestUrl -UseBasicParsing -TimeoutSec 30
+Write-Host "EcoreX WebUI installer script: 0.2.0"
+Write-Host "EcoreX WebUI manifest version: $($manifest.version)"
 if ($Version -and [string]$manifest.version -ne $Version) {
     throw "Manifest version '$($manifest.version)' does not match requested '$Version'."
 }
@@ -218,6 +220,7 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "EcoreX WebUI installer failed with exit code $LASTEXITCODE."
     }
+    Write-Host "EcoreX WebUI install command finished. If the browser did not open, double-click the desktop EcoreX WebUI.url shortcut or rerun this command."
 } finally {
     Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

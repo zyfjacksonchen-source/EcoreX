@@ -1350,6 +1350,29 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertIn("hasLiveMessage ? 900 : 120", app_source)
         self.assertNotIn("const historyContextUsed = useMemo(() => estimateContextTokens(messages, \"\", []), [messages]);", app_source)
 
+    def test_v020_webui_install_pages_hide_manifest_and_harden_mac_retry(self):
+        root = Path(__file__).resolve().parents[1]
+        admin_source = (root / "deploy" / "ecorex-site" / "admin" / "index.html").read_text(encoding="utf-8")
+        mac_installer = (root / "deploy" / "ecorex-site" / "install-webui.sh").read_text(encoding="utf-8")
+        win_installer = (root / "deploy" / "ecorex-site" / "install-webui.ps1").read_text(encoding="utf-8")
+        package_source = (root / "scripts" / "prepare-ecorex-webui-local-release.ps1").read_text(encoding="utf-8")
+
+        self.assertNotIn("查看 manifest", admin_source)
+        self.assertNotIn("manifest.json\">", admin_source)
+        self.assertNotIn("resume_args", mac_installer)
+        self.assertIn("local curl_args=", mac_installer)
+        self.assertIn('curl "${curl_args[@]}" "$url" -o "$partial"', mac_installer)
+        self.assertIn("EcoreX WebUI installer script: 0.2.0", mac_installer)
+        self.assertIn("EcoreX WebUI manifest version:", mac_installer)
+        self.assertIn("EcoreX WebUI installer script: 0.2.0", win_installer)
+        self.assertIn("EcoreX WebUI manifest version:", win_installer)
+        self.assertIn("EcoreX WebUI package installer:", package_source)
+        self.assertIn("Generated macOS WebUI installer still contains retired resume_args code", package_source)
+        self.assertLess(
+            package_source.index('write_desktop_shortcuts "$URL"'),
+            package_source.index('open_browser "$URL"')
+        )
+
     def test_tool_permission_handler_round_trips_mode_and_audit(self):
         from channel.web import web_channel
 
