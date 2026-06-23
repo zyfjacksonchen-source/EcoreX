@@ -25,6 +25,13 @@ import web
 
 from bridge.context import *
 from bridge.reply import Reply, ReplyType
+from channel.channel_catalog import (
+    CHANNEL_CATALOG,
+    active_channel_set,
+    channel_has_config,
+    normalize_channel_name,
+    parse_channel_list,
+)
 from channel.chat_channel import ChatChannel, check_prefix
 from channel.chat_message import ChatMessage
 from collections import OrderedDict
@@ -7405,112 +7412,7 @@ class ModelsHandler:
 class ChannelsHandler:
     """API for managing external channel configurations (feishu, dingtalk, etc)."""
 
-    CHANNEL_DEFS = OrderedDict([
-        ("weixin", {
-            "label": {"zh": "微信", "en": "WeChat"},
-            "icon": "fa-comment",
-            "color": "emerald",
-            "fields": [],
-        }),
-        ("feishu", {
-            "label": {"zh": "飞书", "en": "Feishu"},
-            "icon": "fa-paper-plane",
-            "color": "blue",
-            "fields": [
-                {"key": "feishu_app_id", "label": "App ID", "type": "text"},
-                {"key": "feishu_app_secret", "label": "App Secret", "type": "secret"},
-            ],
-        }),
-        ("dingtalk", {
-            "label": {"zh": "钉钉", "en": "DingTalk"},
-            "icon": "fa-comments",
-            "color": "blue",
-            "fields": [
-                {"key": "dingtalk_client_id", "label": "Client ID", "type": "text"},
-                {"key": "dingtalk_client_secret", "label": "Client Secret", "type": "secret"},
-            ],
-        }),
-        ("wecom_bot", {
-            "label": {"zh": "企微智能机器人", "en": "WeCom Bot"},
-            "icon": "fa-robot",
-            "color": "emerald",
-            "fields": [
-                {"key": "wecom_bot_id", "label": "Bot ID", "type": "text"},
-                {"key": "wecom_bot_secret", "label": "Secret", "type": "secret"},
-            ],
-        }),
-        ("qq", {
-            "label": {"zh": "QQ 机器人", "en": "QQ Bot"},
-            "icon": "fa-comment",
-            "color": "blue",
-            "fields": [
-                {"key": "qq_app_id", "label": "App ID", "type": "text"},
-                {"key": "qq_app_secret", "label": "App Secret", "type": "secret"},
-            ],
-        }),
-        ("wechatcom_app", {
-            "label": {"zh": "企微自建应用", "en": "WeCom App"},
-            "icon": "fa-building",
-            "color": "emerald",
-            "fields": [
-                {"key": "wechatcom_corp_id", "label": "Corp ID", "type": "text"},
-                {"key": "wechatcomapp_agent_id", "label": "Agent ID", "type": "text"},
-                {"key": "wechatcomapp_secret", "label": "Secret", "type": "secret"},
-                {"key": "wechatcomapp_token", "label": "Token", "type": "secret"},
-                {"key": "wechatcomapp_aes_key", "label": "AES Key", "type": "secret"},
-                {"key": "wechatcomapp_port", "label": "Port", "type": "number", "default": 9898},
-            ],
-        }),
-        ("wechat_kf", {
-            "label": {"zh": "微信客服", "en": "WeChat Customer Service"},
-            "icon": "fa-headset",
-            "color": "emerald",
-            "fields": [
-                {"key": "wechat_kf_corp_id", "label": "Corp ID", "type": "text"},
-                {"key": "wechat_kf_secret", "label": "Secret", "type": "secret"},
-                {"key": "wechat_kf_token", "label": "Token", "type": "secret"},
-                {"key": "wechat_kf_aes_key", "label": "AES Key", "type": "secret"},
-                {"key": "wechat_kf_port", "label": "Port", "type": "number", "default": 9888},
-            ],
-        }),
-        ("wechatmp", {
-            "label": {"zh": "公众号", "en": "WeChat MP"},
-            "icon": "fa-comment-dots",
-            "color": "emerald",
-            "fields": [
-                {"key": "wechatmp_app_id", "label": "App ID", "type": "text"},
-                {"key": "wechatmp_app_secret", "label": "App Secret", "type": "secret"},
-                {"key": "wechatmp_token", "label": "Token", "type": "secret"},
-                {"key": "wechatmp_aes_key", "label": "AES Key", "type": "secret"},
-                {"key": "wechatmp_port", "label": "Port", "type": "number", "default": 8080},
-            ],
-        }),
-        ("telegram", {
-            "label": {"zh": "Telegram", "en": "Telegram"},
-            "icon": "fa-paper-plane",
-            "color": "sky",
-            "fields": [
-                {"key": "telegram_token", "label": "Bot Token", "type": "secret"},
-            ],
-        }),
-        ("slack", {
-            "label": {"zh": "Slack", "en": "Slack"},
-            "icon": "fa-hashtag",
-            "color": "purple",
-            "fields": [
-                {"key": "slack_bot_token", "label": "Bot Token (xoxb-)", "type": "secret"},
-                {"key": "slack_app_token", "label": "App Token (xapp-)", "type": "secret"},
-            ],
-        }),
-        ("discord", {
-            "label": {"zh": "Discord", "en": "Discord"},
-            "icon": "fa-discord",
-            "color": "indigo",
-            "fields": [
-                {"key": "discord_token", "label": "Bot Token", "type": "secret"},
-            ],
-        }),
-    ])
+    CHANNEL_DEFS = CHANNEL_CATALOG
 
     @staticmethod
     def _get_weixin_login_status() -> str:
@@ -7534,15 +7436,11 @@ class ChannelsHandler:
 
     @staticmethod
     def _parse_channel_list(raw) -> list:
-        if isinstance(raw, list):
-            return [ch.strip() for ch in raw if ch.strip()]
-        if isinstance(raw, str):
-            return [ch.strip() for ch in raw.split(",") if ch.strip()]
-        return []
+        return parse_channel_list(raw)
 
     @classmethod
     def _active_channel_set(cls) -> set:
-        return set(cls._parse_channel_list(conf().get("channel_type", "")))
+        return active_channel_set(conf())
 
     def GET(self):
         _require_auth()
@@ -7568,10 +7466,16 @@ class ChannelsHandler:
                     })
                 ch_info = {
                     "name": ch_name,
+                    "aliases": ch_def.get("aliases", []),
                     "label": ch_def["label"],
+                    "description": ch_def.get("description", ""),
                     "icon": ch_def["icon"],
                     "color": ch_def["color"],
                     "active": ch_name in active_channels,
+                    "configured": ch_name in active_channels or channel_has_config(local_config, ch_name),
+                    "status": "active" if ch_name in active_channels else (
+                        "configured" if channel_has_config(local_config, ch_name) else "available"
+                    ),
                     "fields": fields_out,
                 }
                 if ch_name == "weixin" and ch_name in active_channels:
@@ -7588,7 +7492,7 @@ class ChannelsHandler:
         try:
             body = json.loads(web.data())
             action = body.get("action")
-            channel_name = body.get("channel")
+            channel_name = normalize_channel_name(body.get("channel"))
 
             if not action or not channel_name:
                 return json.dumps({"status": "error", "message": "action and channel required"})
@@ -8138,15 +8042,14 @@ class ToolsHandler:
             if not tm.tool_classes:
                 tm.load_tools()
             tools = []
-            for name, cls in tm.tool_classes.items():
-                try:
-                    instance = cls()
-                    tools.append({
-                        "name": name,
-                        "description": instance.description,
-                    })
-                except Exception:
-                    tools.append({"name": name, "description": ""})
+            for name, info in tm.list_tools().items():
+                if not isinstance(info, dict):
+                    info = {}
+                tools.append({
+                    "name": name,
+                    "description": info.get("description", ""),
+                    "parameters": info.get("parameters", {}),
+                })
             return json.dumps({"status": "success", "tools": tools}, ensure_ascii=False)
         except Exception as e:
             logger.error(f"[WebChannel] Tools API error: {e}")

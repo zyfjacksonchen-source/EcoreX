@@ -107,6 +107,19 @@ export type RuntimeExtension = {
   mention_hidden_reason?: string;
 };
 
+export type RuntimeChannel = {
+  name?: string;
+  aliases?: string[];
+  label?: {
+    zh?: string;
+    en?: string;
+  };
+  description?: string;
+  active?: boolean;
+  configured?: boolean;
+  status?: string;
+};
+
 export type RuntimeToolCall = {
   id?: string;
   name?: string;
@@ -569,11 +582,42 @@ async function loadRuntimeCapabilities(): Promise<RuntimeCapabilitySnapshot> {
     apiJson<{ tools?: RuntimeTool[] }>("/api/tools").catch(() => ({ tools: [] })),
     apiJson<{ skills?: RuntimeSkill[] }>("/api/skills").catch(() => ({ skills: [] })),
     apiJson<{ providers?: unknown[]; capabilities?: Record<string, unknown> | unknown[] }>("/api/models").catch(() => ({ providers: [], capabilities: {} })),
-    apiJson<{ extensions?: RuntimeExtension[]; count?: number; summary?: Record<string, number> }>("/api/extensions").catch(() => ({ extensions: [], count: 0, summary: {} }))
-  ]).then(([tools, skills, models, extensions]) => {
+    apiJson<{ extensions?: RuntimeExtension[]; count?: number; summary?: Record<string, number> }>("/api/extensions").catch(() => ({ extensions: [], count: 0, summary: {} })),
+    apiJson<{ channels?: RuntimeChannel[] }>("/api/channels").catch(() => ({ channels: [] }))
+  ]).then(([tools, skills, models, extensions, channels]) => {
     const runtimeTools = Array.isArray(tools.tools) ? tools.tools : [];
     const runtimeSkills = Array.isArray(skills.skills) ? skills.skills : [];
-    const runtimeExtensions = Array.isArray(extensions.extensions) ? extensions.extensions : [];
+    const extensionMap = new Map<string, RuntimeExtension>();
+    for (const extension of Array.isArray(extensions.extensions) ? extensions.extensions : []) {
+      if (extension && extension.id) {
+        extensionMap.set(extension.id, extension);
+      }
+    }
+    for (const channel of Array.isArray(channels.channels) ? channels.channels : []) {
+      const name = typeof channel.name === "string" ? channel.name.trim() : "";
+      if (!name) continue;
+      const id = `channel:${name}`;
+      if (!extensionMap.has(id)) {
+        extensionMap.set(id, {
+          id,
+          type: "connector",
+          displayName: channel.label?.zh || channel.label?.en || name,
+          description: channel.description || "",
+          origin: "channel",
+          enabled: Boolean(channel.active),
+          installed: true,
+          policy: "runtime-config",
+          provides: ["channel"],
+          status: channel.status || (channel.active ? "active" : channel.configured ? "configured" : "available")
+        });
+      }
+    }
+    const runtimeExtensions = Array.from(extensionMap.values());
+    const extensionSummary: Record<string, number> = {};
+    for (const extension of runtimeExtensions) {
+      const type = extension.type || "unknown";
+      extensionSummary[type] = (extensionSummary[type] || 0) + 1;
+    }
     const capabilityCount = Array.isArray(models.capabilities)
       ? models.capabilities.length
       : models.capabilities && typeof models.capabilities === "object"
@@ -583,8 +627,8 @@ async function loadRuntimeCapabilities(): Promise<RuntimeCapabilitySnapshot> {
       tools: runtimeTools,
       skills: runtimeSkills,
       extensions: runtimeExtensions,
-      extensionsCount: typeof extensions.count === "number" ? extensions.count : runtimeExtensions.length,
-      extensionSummary: extensions.summary || {},
+      extensionsCount: runtimeExtensions.length,
+      extensionSummary,
       modelsCount: countArray(models.providers) || capabilityCount,
       currentModel: inferCurrentModel(models),
       modelCapabilities: models.capabilities && typeof models.capabilities === "object" ? models.capabilities as Record<string, unknown> : {},

@@ -1180,6 +1180,101 @@ class TestWebParallelHandlers(unittest.TestCase):
             web_channel._validate_web_bind_auth(host)
             self.assertFalse(web_channel._check_auth())
 
+    def test_v020_channel_catalog_matches_factory_and_normalizes_aliases(self):
+        from channel.channel_catalog import CHANNEL_CATALOG, normalize_channel_name, parse_channel_list
+
+        expected = {
+            "weixin", "feishu", "dingtalk", "wecom_bot", "qq", "wechatcom_app",
+            "wechat_kf", "wechatmp", "wechatmp_service", "telegram", "slack", "discord",
+        }
+        self.assertTrue(expected.issubset(set(CHANNEL_CATALOG.keys())))
+        self.assertEqual(normalize_channel_name("wx"), "weixin")
+        self.assertEqual(normalize_channel_name("lark"), "feishu")
+        self.assertEqual(parse_channel_list("web, feishu,wx,lark,wechatmp_service"), [
+            "web", "feishu", "weixin", "wechatmp_service"
+        ])
+
+    def test_v020_extension_registry_discovers_configured_channels_without_secrets(self):
+        from agent.extensions import ExtensionRegistry
+
+        fake_conf = {
+            "channel_type": "web,feishu,wechatmp_service",
+            "feishu_app_id": "cli_aabbcc",
+            "feishu_app_secret": "super-secret-value",
+            "wechatmp_app_id": "wxid",
+            "wechatmp_app_secret": "wechat-secret-value",
+        }
+        with patch("config.conf", return_value=fake_conf):
+            channels = ExtensionRegistry("C:\\workspace")._channels()
+
+        by_id = {entry["id"]: entry for entry in channels}
+        self.assertEqual(by_id["channel:feishu"]["status"], "active")
+        self.assertEqual(by_id["channel:wechatmp_service"]["status"], "active")
+        self.assertEqual(by_id["channel:telegram"]["status"], "available")
+        rendered = json.dumps(channels, ensure_ascii=False)
+        self.assertNotIn("super-secret-value", rendered)
+        self.assertNotIn("wechat-secret-value", rendered)
+
+    def test_v020_channels_handler_uses_shared_catalog_and_masks_secrets(self):
+        from channel.web import web_channel
+
+        fake_conf = {
+            "channel_type": "lark",
+            "feishu_app_id": "cli_aabbcc",
+            "feishu_app_secret": "1234567890abcdef",
+        }
+        with patch.object(web_channel, "_require_auth", return_value=None):
+            with patch.object(web_channel, "conf", return_value=fake_conf):
+                payload = json.loads(web_channel.ChannelsHandler().GET())
+
+        channels = {item["name"]: item for item in payload["channels"]}
+        self.assertIn("wechatmp_service", channels)
+        self.assertTrue(channels["feishu"]["active"])
+        self.assertTrue(channels["feishu"]["configured"])
+        secret_field = next(field for field in channels["feishu"]["fields"] if field["key"] == "feishu_app_secret")
+        self.assertEqual(secret_field["value"], "1234********cdef")
+
+    def test_v020_tools_handler_uses_tool_manager_list_tools(self):
+        from channel.web import web_channel
+
+        class FakeToolManager:
+            tool_classes = {"bash": object}
+
+            def load_tools(self):
+                raise AssertionError("load_tools should not be needed when tool_classes is populated")
+
+            def list_tools(self):
+                return {
+                    "bash": {"description": "Shell command", "parameters": {"type": "object"}},
+                    "mcp__demo__search": {"description": "MCP search", "parameters": {"properties": {"q": {}}}},
+                }
+
+        with patch.object(web_channel, "_require_auth", return_value=None):
+            with patch("agent.tools.tool_manager.ToolManager", FakeToolManager):
+                payload = json.loads(web_channel.ToolsHandler().GET())
+
+        tools = {item["name"]: item for item in payload["tools"]}
+        self.assertIn("mcp__demo__search", tools)
+        self.assertEqual(tools["mcp__demo__search"]["parameters"], {"properties": {"q": {}}})
+
+    def test_v020_bridge_and_frontend_discover_channels_and_knowledge_graph(self):
+        root = Path(__file__).resolve().parents[1]
+        bridge_source = (root / "desktop" / "electron" / "apiBridge.ts").read_text(encoding="utf-8")
+        api_source = (root / "desktop" / "src" / "services" / "ecorexApi.ts").read_text(encoding="utf-8")
+
+        for marker in [
+            '"POST /api/channels"',
+            '"GET /api/weixin/qrlogin"',
+            '"POST /api/weixin/qrlogin"',
+            '"GET /api/feishu/register"',
+            '"POST /api/feishu/register"',
+            '"GET /api/knowledge/graph"',
+        ]:
+            self.assertIn(marker, bridge_source)
+        self.assertIn('apiJson<{ channels?: RuntimeChannel[] }>("/api/channels")', api_source)
+        self.assertIn('const id = `channel:${name}`;', api_source)
+        self.assertIn('type: "connector"', api_source)
+
     def test_tool_permission_handler_round_trips_mode_and_audit(self):
         from channel.web import web_channel
 

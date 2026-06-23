@@ -14,6 +14,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from common.log import logger
+from channel.channel_catalog import (
+    CHANNEL_CATALOG,
+    active_channel_set,
+    channel_config_refs,
+    channel_has_config,
+)
 
 
 ExtensionEntry = Dict[str, Any]
@@ -28,6 +34,7 @@ class ExtensionRegistry:
     def list_extensions(self) -> Dict[str, Any]:
         entries: List[ExtensionEntry] = []
         entries.extend(self._skills())
+        entries.extend(self._channels())
         entries.extend(self._optional_abilities())
         entries.extend(self._mcp_servers())
         entries = self._dedupe(entries)
@@ -40,6 +47,7 @@ class ExtensionRegistry:
                 "builtinSkills": "load-from-catalog",
                 "workspaceSkills": "explicit-user-overlays",
                 "feishuLark": "find-skill-first-on-demand-cli",
+                "channels": "runtime-config-read-only-discovery",
                 "mcp": "discoverable-disabled-by-default",
             },
         }
@@ -123,6 +131,55 @@ class ExtensionRegistry:
                 "displayName": "Skills",
                 "description": "Skill registry unavailable",
                 "origin": "runtime",
+                "enabled": False,
+                "installed": False,
+                "status": "error",
+                "lastError": str(exc),
+            }]
+
+    def _channels(self) -> List[ExtensionEntry]:
+        try:
+            from config import conf
+
+            local_config = conf()
+            active = active_channel_set(local_config)
+            entries: List[ExtensionEntry] = []
+            for name, definition in CHANNEL_CATALOG.items():
+                enabled = name in active
+                configured = enabled or channel_has_config(local_config, name)
+                label = definition.get("label") if isinstance(definition.get("label"), dict) else {}
+                display_name = str(label.get("zh") or label.get("en") or name)
+                entries.append({
+                    "id": f"channel:{name}",
+                    "type": "connector",
+                    "displayName": display_name,
+                    "description": definition.get("description") or "",
+                    "origin": "channel",
+                    "enabled": enabled,
+                    "installed": True,
+                    "policy": "runtime-config",
+                    "permissions": ["user-configured-credentials"],
+                    "requires": [
+                        str(field.get("key") or "")
+                        for field in definition.get("fields", [])
+                        if field.get("key")
+                    ],
+                    "provides": definition.get("provides") or ["channel"],
+                    "configRefs": channel_config_refs(name),
+                    "status": "active" if enabled else ("configured" if configured else "available"),
+                    "aliases": definition.get("aliases") or [],
+                    "channelName": name,
+                    "userConfigurable": True,
+                })
+            return entries
+        except Exception as exc:
+            logger.warning(f"[ExtensionRegistry] channel aggregation failed: {exc}")
+            return [{
+                "id": "channels",
+                "type": "connector",
+                "displayName": "Channels",
+                "description": "Channel registry unavailable",
+                "origin": "channel",
                 "enabled": False,
                 "installed": False,
                 "status": "error",
