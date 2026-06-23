@@ -45,3 +45,44 @@ sidebar groups.
   default to `gpt-image-2-pro` and fail closed on OpenAI model/access
   unavailability instead of silently falling back to `gpt-image-2` or another
   provider family.
+
+## 2026-06-23 WebUI Follow-Up Goal
+
+After the first WebUI-first v0.1.19 deployment, user testing found three
+production blockers to close before the next public refresh:
+
+- Windows WebUI project-folder selection opens a native system picker, but the
+  picker can appear behind the browser and the page showed no pending state.
+- macOS WebUI online installer can fail on Apple Silicon and Intel alike when
+  `/bin/bash` 3.2 expands an empty array under `set -u`; package relaunch must
+  also avoid port drift when an old service survives without a pid file.
+- Feishu/Lark capability state, local CLI discovery/auth, and the model-visible
+  `feishu_cli` structured tool must be aligned so raw `lark-cli` remains blocked
+  while the safe structured path is always available.
+
+Acceptance for this follow-up remains production-grade: source and packaging
+scripts must both be patched, WebUI packages redeployed, GitHub release assets
+updated, and independent read-only review agents must reach PASS consensus.
+
+## 2026-06-23 WebUI Performance / Reconnect Structural Goal
+
+Additional user testing found that the WebUI-first build still felt sluggish on
+Windows and macOS: typed text appeared late, switching/deleting/folding sessions
+lagged, and streaming output did not feel real-time compared with WorkBuddy on
+the same machines. The network recovery bubble also looked like a dead end when
+the SSE channel was briefly interrupted.
+
+Production criteria for this slice:
+
+- Composer typing must not drive whole-app React state updates on every key.
+- Streaming deltas must be coalesced before crossing SSE and React rendering
+  boundaries, while preserving real-time feel and terminal ordering.
+- Runtime snapshots must avoid re-fetching heavy capability/tool/skill data on
+  every lightweight UI refresh.
+- History pagination must load the requested window instead of scanning and
+  slicing full long-session histories.
+- EventSource transient errors must let the browser reconnect to the same run
+  before the UI surfaces a manual recovery bubble; no automatic duplicate
+  execution is allowed when state is uncertain.
+- Ordinary WebUI must not show Run Center entry points or user-facing Run Center
+  copy by default.

@@ -65,8 +65,8 @@
                           "variant":  "WebUI one-click local package",
                           "fileName":  "EcoreX_0.1.19-webui-windows-x64.zip",
                           "href":  "downloads/EcoreX_0.1.19-webui-windows-x64.zip",
-                          "size":  81074831,
-                          "sha256":  "9AD880699B83C339BD60A536E4258873B671ED9EC705FB20EA2A0FACAAC6AB29",
+                          "size":  81078976,
+                          "sha256":  "3ACBD1734ACD142CCFCF51BF239E46171819E6A1E0B297A2956972D55208E388",
                           "status":  "ready",
                           "source":  "Local v0.1.19 WebUI Windows artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks.",
                           "updatedAt":  "2026-06-23"
@@ -78,8 +78,8 @@
                           "variant":  "WebUI one-click local package",
                           "fileName":  "EcoreX_0.1.19-webui-macos-universal.zip",
                           "href":  "downloads/EcoreX_0.1.19-webui-macos-universal.zip",
-                          "size":  158185725,
-                          "sha256":  "F53F308530C76D2853545196D840C5D0DEF7EDA4FFA3AD554742D36D580AF557",
+                          "size":  158190002,
+                          "sha256":  "3B0E97D8E02FA8F6DFF92D9E8209794621FA79A45E33D1D490416A20BBEF600C",
                           "status":  "ready",
                           "source":  "Local v0.1.19 WebUI macOS artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks.",
                           "updatedAt":  "2026-06-23"

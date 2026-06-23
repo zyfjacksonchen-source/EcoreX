@@ -237,6 +237,26 @@ class TestEcoreXWorkspaceState(unittest.TestCase):
         self.assertEqual(page["messages"][1]["role"], "assistant")
         self.assertEqual(page["messages"][1]["_seq"], page["messages"][0]["_seq"])
 
+    def test_history_page_reads_recent_window_for_long_sessions(self):
+        from agent.memory.conversation_store import ConversationStore
+
+        with tempfile.TemporaryDirectory() as workspace:
+            store = ConversationStore(Path(workspace) / "conversation.sqlite3")
+            rows = []
+            for index in range(40):
+                rows.append({"role": "user", "content": f"question {index:02d}"})
+                rows.append({"role": "assistant", "content": f"answer {index:02d}"})
+            store.append_messages("session-long-history", rows, channel_type="web")
+
+            page = store.load_history_page("session-long-history", page=1, page_size=10)
+
+        contents = [message["content"] for message in page["messages"]]
+        self.assertEqual(len(page["messages"]), 10)
+        self.assertTrue(page["has_more"])
+        self.assertEqual(contents[0], "question 35")
+        self.assertEqual(contents[-1], "answer 39")
+        self.assertNotIn("question 00", contents)
+
 
 class TestSubagentTool(unittest.TestCase):
     class _Context:
@@ -5058,7 +5078,7 @@ class TestAgentHostBoundary(unittest.TestCase):
         sent_tools = {entry["name"] for entry in model.requests[0].tools}
         self.assertIn("read", sent_tools)
         self.assertIn("scheduler", sent_tools)
-        self.assertNotIn("feishu_cli", sent_tools)
+        self.assertIn("feishu_cli", sent_tools)
         budget = model.requests[0].tool_schema_budget
         self.assertIn("scheduler", budget["intent_groups"])
         self.assertTrue(budget["inherited_followup_intent"])
@@ -5096,7 +5116,7 @@ class TestAgentHostBoundary(unittest.TestCase):
 
         sent_tools = {entry["name"] for entry in model.requests[0].tools}
         self.assertIn("env_config", sent_tools)
-        self.assertNotIn("feishu_cli", sent_tools)
+        self.assertIn("feishu_cli", sent_tools)
         self.assertIn("diagnostics", model.requests[0].tool_schema_budget["intent_groups"])
 
     def test_tool_schema_budget_expands_env_config_for_api_key_variable_name(self):
@@ -5120,7 +5140,7 @@ class TestAgentHostBoundary(unittest.TestCase):
         selected, budget = executor._select_tools_for_schema()
 
         self.assertIn("env_config", selected)
-        self.assertNotIn("feishu_cli", selected)
+        self.assertIn("feishu_cli", selected)
         self.assertIn("diagnostics", budget["intent_groups"])
 
     def test_tool_schema_budget_keeps_small_custom_toolset_with_core_tool(self):

@@ -11,11 +11,11 @@ CURRENT_RELEASE_NOTES: Dict[str, Any] = {
     "title": "EcoreX 0.1.19 更新说明",
     "summary": (
         "本次更新把桌面端和 WebUI 的 Agent 运行链路推进到生产级稳定性："
-        "会话持久化、运行状态识别、SSE 恢复、取消并发、Run Center、"
+        "会话持久化、运行状态识别、SSE 恢复、取消并发、后台任务恢复、"
         "模型调用治理和图像生成重试都完成了闭环。"
     ),
     "highlights": [
-        "新增 Run Center 一级控制面，集中呈现运行中、可取消、可恢复和失败的任务状态。",
+        "强化运行恢复状态识别，集中处理运行中、可取消、可恢复和失败的任务。",
         "强化请求级运行账本和终态记录，减少刷新、重连或后台任务结束后的状态丢失。",
         "SSE 流式输出增加终态、重放缺口和 request-scoped 历史恢复能力。",
         "模型调用增加 provider capability matrix、模型调用遥测和显式失败/重试策略。",
@@ -29,7 +29,7 @@ CURRENT_RELEASE_NOTES: Dict[str, Any] = {
         "修复发布包中 release notes、client key 和 WebUI version 容易滞后一版的问题。",
     ],
     "howTo": [
-        "需要查看或处理运行中的任务时，进入 Run Center 查看状态、取消、恢复或重试。",
+        "运行中的任务会在会话内呈现状态、取消、恢复或重试入口。",
         "模型不可用、限流或超时时，界面会保留更明确的失败原因，便于切换 provider 或重试。",
         "刷新页面或恢复会话后，EcoreX 会尽量按 request id 和 SSE cursor 恢复流式输出。",
     ],

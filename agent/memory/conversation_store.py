@@ -54,7 +54,10 @@ CREATE INDEX IF NOT EXISTS idx_messages_session
     ON messages (session_id, seq);
 
 CREATE INDEX IF NOT EXISTS idx_sessions_last_active
-    ON sessions (last_active);
+    ON sessions (last_active DESC);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_channel_last_active
+    ON sessions (channel_type, last_active DESC);
 """
 
 # Migration: add channel_type column to existing databases that predate it.
@@ -1108,6 +1111,12 @@ class ConversationStore:
             }
         """
         page = max(1, page)
+        page_size = max(1, min(int(page_size or 20), 200))
+        # The UI asks for display rows, but history is naturally grouped by a
+        # visible user turn plus its assistant/tool output. Fetch by user-turn
+        # boundaries so opening a long session does not read the whole table.
+        page_user_turns = max(1, (page_size + 1) // 2)
+        user_offset = (page - 1) * page_user_turns
         with self._lock:
             conn = self._connect()
             try:
@@ -1117,29 +1126,67 @@ class ConversationStore:
                 ).fetchone()
                 ctx_start = ctx_row[0] if ctx_row else 0
 
+                visible_user_seqs_desc: List[int] = []
+                for seq, raw_content in conn.execute(
+                    """
+                    SELECT seq, content
+                    FROM messages
+                    WHERE session_id = ? AND role = 'user'
+                    ORDER BY seq DESC
+                    """,
+                    (session_id,),
+                ):
+                    try:
+                        content = json.loads(raw_content)
+                    except Exception:
+                        content = raw_content
+                    if _is_visible_user_message(content):
+                        visible_user_seqs_desc.append(int(seq))
+
+                selected_user_seqs = visible_user_seqs_desc[user_offset: user_offset + page_user_turns]
+                has_more = user_offset + page_user_turns < len(visible_user_seqs_desc)
+                if not selected_user_seqs:
+                    return {
+                        "messages": [],
+                        "context_start_seq": ctx_start,
+                        "total": len(visible_user_seqs_desc) * 2,
+                        "page": page,
+                        "page_size": page_size,
+                        "has_more": False,
+                    }
+
+                lower_seq = min(selected_user_seqs)
+                upper_newer_seq = visible_user_seqs_desc[user_offset - 1] if user_offset > 0 else None
+                if upper_newer_seq is None:
+                    where_sql = "session_id = ? AND seq >= ?"
+                    params = (session_id, lower_seq)
+                else:
+                    where_sql = "session_id = ? AND seq >= ? AND seq < ?"
+                    params = (session_id, lower_seq, upper_newer_seq)
+
                 # extras column is added by migration; tolerate older DBs that
                 # might miss it by falling back to a NULL literal.
                 try:
                     rows = conn.execute(
-                        """
+                        f"""
                         SELECT seq, role, content, created_at, extras
                         FROM messages
-                        WHERE session_id = ?
+                        WHERE {where_sql}
                         ORDER BY seq ASC
                         """,
-                        (session_id,),
+                        params,
                     ).fetchall()
                 except sqlite3.OperationalError:
                     rows = [
                         (seq, role, content, created_at, "")
                         for (seq, role, content, created_at) in conn.execute(
-                            """
+                            f"""
                             SELECT seq, role, content, created_at
                             FROM messages
-                            WHERE session_id = ?
+                            WHERE {where_sql}
                             ORDER BY seq ASC
                             """,
-                            (session_id,),
+                            params,
                         ).fetchall()
                     ]
             finally:
@@ -1185,10 +1232,8 @@ class ConversationStore:
             elif turn["role"] == "assistant" and current_visible_user_seq is not None:
                 turn["_seq"] = current_visible_user_seq
 
-        total = len(visible)
-        offset = (page - 1) * page_size
-        page_items = list(reversed(visible))[offset: offset + page_size]
-        page_items = list(reversed(page_items))
+        total = len(visible_user_seqs_desc) * 2
+        page_items = visible[-page_size:]
 
         return {
             "messages": page_items,
@@ -1196,7 +1241,7 @@ class ConversationStore:
             "total": total,
             "page": page,
             "page_size": page_size,
-            "has_more": offset + page_size < total,
+            "has_more": has_more,
         }
 
     def list_sessions(

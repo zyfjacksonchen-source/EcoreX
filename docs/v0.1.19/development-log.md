@@ -227,3 +227,106 @@ Web Win/Mac packages, with macOS desktop DMGs temporarily deferred.
   host. Server-side and public verifier checks passed with zero blockers.
 - GitHub Release `v0.1.19` assets for Windows and Web were replaced with the
   refreshed files. macOS desktop DMG assets were intentionally left unchanged.
+
+## WebUI Follow-Up: Folder Picker, macOS Installer, Feishu CLI
+
+On 2026-06-23, user testing of the WebUI-first build found follow-up blockers:
+
+- Windows native project-folder picker can open away from the browser and leave
+  the WebUI with no visible pending state.
+- macOS online installer can fail with `resume_args[0]: unbound variable` on
+  Apple Silicon because macOS `/bin/bash` 3.2 treats empty array expansion under
+  `set -u` as an error; this is architecture-independent and affects Intel too.
+- Feishu capability enablement can show as installed while local CLI auth is
+  still missing, and raw `lark-cli` shell calls are correctly blocked without a
+  sufficiently visible structured `feishu_cli` path.
+
+Initial fixes applied in source:
+
+- `deploy/ecorex-site/install-webui.sh` now builds one non-empty curl argument
+  array and conditionally appends resume/retry flags, avoiding Bash 3.2 empty
+  array expansion failures.
+- `channel/web/web_channel.py` now raises a topmost owner form for the Windows
+  folder picker and emits Web bridge picker state events/fallback errors.
+- `desktop/src/App.tsx` now shows immediate project-picker pending state,
+  disables duplicate add-project clicks, avoids unnecessary double registration
+  when `/api/project-folder/choose` already returned a complete project, and
+  exposes a Feishu/Lark CLI ability row.
+- `agent/protocol/agent_stream.py` now keeps `feishu_cli` in the core tool
+  schema set so Feishu tasks do not depend on keyword budgeting to see the safe
+  structured tool.
+- `agent/tools/feishu_cli/feishu_cli.py` now honors a configurable writable
+  install root, adds that root to PATH for command resolution, and reports a
+  stable `authState` from short bounded status checks.
+- `scripts/prepare-ecorex-webui-local-release.ps1` now generates Win/Mac WebUI
+  configs with `tools.feishu_cli.install_root` under the writable state
+  directory, logs the structured on-demand install path, starts macOS with an
+  absolute `app.py` path, and improves stale macOS service discovery.
+
+## WebUI Performance and Reconnect Structural Fixes
+
+On 2026-06-23 the user reported that the WebUI on Windows and macOS still felt
+very sluggish compared with WorkBuddy on the same hardware: typed text appeared
+late, switching/deleting/folding sessions lagged, and streaming output felt
+batched instead of live. The visible recovery bubble also suggested manual
+recovery before the browser had a chance to reconnect to the same SSE stream.
+
+Parallel read-only analysis split the issue into three root-cause groups:
+
+- Renderer state topology: composer text, message deltas, session UI state, and
+  sidebar lists were coupled in `App.tsx`, so high-frequency input/stream events
+  could invalidate too much UI.
+- Streaming/runtime transport: backend deltas were emitted one SSE frame at a
+  time and assistant content used repeated string concatenation; frontend
+  EventSource `onerror` treated transient reconnect attempts as immediate
+  failures.
+- Persistence/query load: history pagination scanned and sliced full visible
+  histories; runtime snapshots refetched heavy capability/tool/skill/model data
+  during ordinary lightweight refreshes.
+
+Implemented structural changes:
+
+- Composer draft input is now DOM/ref-first and committed to React state on a
+  short debounce or explicit send/restore boundary, so ordinary typing no longer
+  drives a full app render per key.
+- Assistant stream assembly now stores content parts and joins on message end,
+  avoiding O(n^2) string growth on long streaming replies.
+- Web SSE output coalesces `delta` and `reasoning` frames with short timed/size
+  flushes and explicit boundary flushes before tool events, permissions, errors,
+  cancellation, and message end.
+- `openMessageStream` now lets native EventSource perform safe automatic
+  reconnect for a bounded transient window before surfacing manual recovery; it
+  does not automatically duplicate execution when state is uncertain.
+- Runtime capabilities are cached separately from lightweight runtime state, so
+  ordinary refreshes keep `/api/version`, `/api/sessions`, and
+  `/api/active-requests` hot without repeatedly pulling tools/skills/models.
+- Conversation history pagination now loads recent visible user-turn windows
+  from indexed sequence boundaries instead of always materializing the full
+  session history and slicing in Python.
+- User-facing release notes no longer mention Run Center while the diagnostic
+  surface remains development-gated.
+
+Local source WebUI smoke:
+
+- Current source service was launched on `127.0.0.1:9926` using the repository
+  `app.py`/`web_channel.py` and current renderer. The first performance smoke
+  used `assets/index-D6uvzLTu.js`; the final post-review package uses
+  `assets/index-BVtTilSA.js`.
+- Headless Edge CDP smoke confirmed one visible composer textarea, no login
+  page, no ordinary Run Center text, and release notes JSON without `Run Center`.
+- Synthetic 3374-character input was visible in the textarea in `71.2ms`, with
+  p95 per-input dispatch `0.1ms`, max `1.2ms`, and focus remaining on the
+  textarea.
+- Safe interaction smoke measured New chat `16.6ms`, Project collapse `32.6ms`,
+  and General sessions collapse `32.3ms`. A prior attempt that clicked Add
+  project folder was discarded because it correctly opened a native folder
+  picker and blocked headless automation.
+- UI/performance review found one P1 race: inactive background stream updates
+  could fall back to a stale `sessionUiState` closure after a quiet tool/model
+  gap. The fix introduced `committedSessionMessageSnapshots`, updated it on
+  active/inactive message commits, and prevented stale `sessionUiState` effects
+  from overwriting active or pending message baselines. Darwin re-reviewed the
+  specific P1 and returned PASS.
+- Final source WebUI CDP smoke against `assets/index-BVtTilSA.js` confirmed a
+  visible composer, no login page, no ordinary Run Center text, and 3412
+  characters reaching the textarea in `5.7ms` with focus still on `TEXTAREA`.

@@ -599,6 +599,16 @@ html[data-platform="web"] .window-brand {
   background: var(--color-surface-muted);
 }
 
+.project-empty:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.project-empty:disabled:hover {
+  border-color: transparent;
+  background: transparent;
+}
+
 .project-list span,
 .project-empty span {
   min-width: 0;

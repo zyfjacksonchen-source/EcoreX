@@ -537,6 +537,67 @@ function delay(ms: number) {
   });
 }
 
+type RuntimeCapabilitySnapshot = {
+  tools: RuntimeTool[];
+  skills: RuntimeSkill[];
+  extensions: RuntimeExtension[];
+  extensionsCount: number;
+  extensionSummary: Record<string, number>;
+  modelsCount: number;
+  currentModel: string;
+  modelCapabilities: Record<string, unknown>;
+};
+
+let runtimeCapabilityCache: (RuntimeCapabilitySnapshot & { fetchedAt: number }) | null = null;
+let runtimeCapabilityPromise: Promise<RuntimeCapabilitySnapshot> | null = null;
+const RUNTIME_CAPABILITY_CACHE_MS = 45_000;
+
+function invalidateRuntimeCapabilities() {
+  runtimeCapabilityCache = null;
+  runtimeCapabilityPromise = null;
+}
+
+async function loadRuntimeCapabilities(): Promise<RuntimeCapabilitySnapshot> {
+  const now = Date.now();
+  if (runtimeCapabilityCache && now - runtimeCapabilityCache.fetchedAt < RUNTIME_CAPABILITY_CACHE_MS) {
+    return runtimeCapabilityCache;
+  }
+  if (runtimeCapabilityPromise) {
+    return runtimeCapabilityPromise;
+  }
+  runtimeCapabilityPromise = Promise.all([
+    apiJson<{ tools?: RuntimeTool[] }>("/api/tools").catch(() => ({ tools: [] })),
+    apiJson<{ skills?: RuntimeSkill[] }>("/api/skills").catch(() => ({ skills: [] })),
+    apiJson<{ providers?: unknown[]; capabilities?: Record<string, unknown> | unknown[] }>("/api/models").catch(() => ({ providers: [], capabilities: {} })),
+    apiJson<{ extensions?: RuntimeExtension[]; count?: number; summary?: Record<string, number> }>("/api/extensions").catch(() => ({ extensions: [], count: 0, summary: {} }))
+  ]).then(([tools, skills, models, extensions]) => {
+    const runtimeTools = Array.isArray(tools.tools) ? tools.tools : [];
+    const runtimeSkills = Array.isArray(skills.skills) ? skills.skills : [];
+    const runtimeExtensions = Array.isArray(extensions.extensions) ? extensions.extensions : [];
+    const capabilityCount = Array.isArray(models.capabilities)
+      ? models.capabilities.length
+      : models.capabilities && typeof models.capabilities === "object"
+        ? Object.keys(models.capabilities).length
+        : 0;
+    const snapshot: RuntimeCapabilitySnapshot & { fetchedAt: number } = {
+      tools: runtimeTools,
+      skills: runtimeSkills,
+      extensions: runtimeExtensions,
+      extensionsCount: typeof extensions.count === "number" ? extensions.count : runtimeExtensions.length,
+      extensionSummary: extensions.summary || {},
+      modelsCount: countArray(models.providers) || capabilityCount,
+      currentModel: inferCurrentModel(models),
+      modelCapabilities: models.capabilities && typeof models.capabilities === "object" ? models.capabilities as Record<string, unknown> : {},
+      fetchedAt: Date.now()
+    };
+    runtimeCapabilityCache = snapshot;
+    return snapshot;
+  }).finally(() => {
+    runtimeCapabilityPromise = null;
+  });
+  return runtimeCapabilityPromise;
+}
+
 export async function getEnterpriseSession() {
   return window.ecorexDesktop?.getEnterpriseSession ? window.ecorexDesktop.getEnterpriseSession() : null;
 }
@@ -588,26 +649,14 @@ export async function loadRuntimeSnapshot(): Promise<RuntimeSnapshot> {
         staleLocks: [],
         stale_locks: []
       }));
-    const extensionsPromise = apiJson<{
-      extensions?: RuntimeExtension[];
-      count?: number;
-      summary?: Record<string, number>;
-    }>("/api/extensions").catch(() => ({ extensions: [], count: 0, summary: {} }));
-    const skillsPromise = apiJson<{ skills?: RuntimeSkill[] }>("/api/skills").catch(() => ({ skills: [] }));
-    const [version, sessions, tools, skills, models, activeRequests, extensions] = await Promise.all([
+    const [version, sessions, activeRequests, capabilities] = await Promise.all([
       apiJson<{ version?: string; releaseNotes?: RuntimeReleaseNotes }>("/api/version"),
       apiJson<{ sessions?: RuntimeSession[]; total?: number; message?: string }>("/api/sessions?page=1&page_size=40"),
-      apiJson<{ tools?: RuntimeTool[] }>("/api/tools"),
-      skillsPromise,
-      apiJson<{ providers?: unknown[]; capabilities?: Record<string, unknown> | unknown[] }>("/api/models"),
       activeRequestsPromise,
-      extensionsPromise
+      loadRuntimeCapabilities()
     ]);
 
     const runtimeSessions = Array.isArray(sessions.sessions) ? sessions.sessions : [];
-    const runtimeTools = Array.isArray(tools.tools) ? tools.tools : [];
-    const runtimeSkills = Array.isArray(skills.skills) ? skills.skills : [];
-    const runtimeExtensions = Array.isArray(extensions.extensions) ? extensions.extensions : [];
     const runtimeActiveRequests = Array.isArray(activeRequests.requests) ? activeRequests.requests : [];
     const runtimeRecentTerminalRequests = Array.isArray(activeRequests.recentTerminalRequests)
       ? activeRequests.recentTerminalRequests
@@ -624,11 +673,6 @@ export async function loadRuntimeSnapshot(): Promise<RuntimeSnapshot> {
       : Array.isArray(activeRequests.stale_locks)
         ? activeRequests.stale_locks
         : [];
-    const capabilityCount = Array.isArray(models.capabilities)
-      ? models.capabilities.length
-      : models.capabilities && typeof models.capabilities === "object"
-        ? Object.keys(models.capabilities).length
-        : 0;
     return {
       status: "ready",
       message: "已连接本地 EcoreX 运行时",
@@ -641,16 +685,16 @@ export async function loadRuntimeSnapshot(): Promise<RuntimeSnapshot> {
       activeRequestsStatus: activeRequests.status || "success",
       staleLocks,
       totalSessions: typeof sessions.total === "number" ? sessions.total : runtimeSessions.length,
-      toolsCount: runtimeTools.length,
-      skillsCount: runtimeSkills.length,
-      extensions: runtimeExtensions,
-      extensionsCount: typeof extensions.count === "number" ? extensions.count : runtimeExtensions.length,
-      extensionSummary: extensions.summary || {},
-      modelsCount: countArray(models.providers) || capabilityCount,
-      currentModel: inferCurrentModel(models),
-      tools: runtimeTools,
-      skills: runtimeSkills,
-      modelCapabilities: models.capabilities && typeof models.capabilities === "object" ? models.capabilities as Record<string, unknown> : {}
+      toolsCount: capabilities.tools.length,
+      skillsCount: capabilities.skills.length,
+      extensions: capabilities.extensions,
+      extensionsCount: capabilities.extensionsCount,
+      extensionSummary: capabilities.extensionSummary,
+      modelsCount: capabilities.modelsCount,
+      currentModel: capabilities.currentModel,
+      tools: capabilities.tools,
+      skills: capabilities.skills,
+      modelCapabilities: capabilities.modelCapabilities
     };
   } catch (error) {
     return {
@@ -1094,10 +1138,13 @@ function isCapabilityState(value: string): value is CapabilityState {
 }
 
 export async function setSkillEnabled(name: string, enabled: boolean) {
-  return apiJson<{ status?: string }>("/api/skills", "POST", {
+  invalidateRuntimeCapabilities();
+  const result = await apiJson<{ status?: string }>("/api/skills", "POST", {
     action: enabled ? "open" : "close",
     name
   });
+  invalidateRuntimeCapabilities();
+  return result;
 }
 
 export async function enableDefaultSkills(skills: RuntimeSkill[]) {
@@ -1198,11 +1245,22 @@ export function openMessageStream(input: {
   // request logs, devtools, or copied stream URLs.
   const url = `http://127.0.0.1:${input.webPort}/stream?${params.toString()}`;
   const events = new EventSource(url);
+  let lastEventAt = Date.now();
+  let firstTransientErrorAt = 0;
+  let terminal = false;
+  const STREAM_TRANSIENT_ERROR_GRACE_MS = 12_000;
+  events.onopen = () => {
+    lastEventAt = Date.now();
+    firstTransientErrorAt = 0;
+  };
   events.onmessage = (event) => {
     try {
+      lastEventAt = Date.now();
+      firstTransientErrorAt = 0;
       rememberStreamCursor(input.requestId, event.lastEventId);
       const item = JSON.parse(event.data) as StreamItem;
       if (item.type === "done" || item.type === "error" || item.type === "cancelled" || item.type === "interrupted" || item.type === "replay_gap" || item.type === "voice_attach") {
+        terminal = true;
         scheduleStreamCursorCleanup(input.requestId);
       }
       input.onItem(item);
@@ -1211,6 +1269,17 @@ export function openMessageStream(input: {
     }
   };
   events.onerror = () => {
+    const now = Date.now();
+    if (!terminal) {
+      firstTransientErrorAt = firstTransientErrorAt || now;
+      if (
+        events.readyState !== EventSource.CLOSED
+        && now - lastEventAt < STREAM_TRANSIENT_ERROR_GRACE_MS
+        && now - firstTransientErrorAt < STREAM_TRANSIENT_ERROR_GRACE_MS
+      ) {
+        return;
+      }
+    }
     events.close();
     input.onError();
   };

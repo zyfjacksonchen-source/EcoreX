@@ -211,3 +211,25 @@ Date: 2026-06-22
   - `https://www.ecoreai.cn/ecorex-agent/install-webui.sh` -> 200 and contains
     `curl -C -` plus retry markers.
   - Windows and macOS WebUI zip content-length values match manifest sizes.
+
+## WebUI Performance Final Refresh
+
+- 2026-06-23 final WebUI public package after performance/reconnect and
+  inactive-stream P1 review fix:
+  - `release-artifacts/EcoreX_0.1.19-public-release.zip`
+  - size `241206536`
+  - SHA256 `9706DB4E31F65DBAA02B819F1E842427FE294B2D0E8EF29150558E9B15911BC6`
+- Final WebUI artifacts:
+  - `EcoreX_0.1.19-webui-windows-x64.zip`: size `81078976`, SHA256
+    `3ACBD1734ACD142CCFCF51BF239E46171819E6A1E0B297A2956972D55208E388`.
+  - `EcoreX_0.1.19-webui-macos-universal.zip`: size `158190002`, SHA256
+    `3B0E97D8E02FA8F6DFF92D9E8209794621FA79A45E33D1D490416A20BBEF600C`.
+- Server deployment:
+  - Release directory:
+    `/srv/ecorex-agent-download/releases/20260623121406-v0.1.19`.
+  - `scripts/check-ecorex-server-release.sh` passed on the server.
+- GitHub Release:
+  - Windows WebUI remote digest:
+    `sha256:3acbd1734acd142ccfcf51bf239e46171819e6a1e0b297a2956972d55208e388`.
+  - macOS universal WebUI remote digest:
+    `sha256:3b0e97d8e02fa8f6dff92d9e8209794621fa79a45e33d1d490416a20bbef600c`.

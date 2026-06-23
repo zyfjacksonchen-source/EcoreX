@@ -72,7 +72,7 @@ const REASONING_RENDER_CAP = 4 * 1024;
 const TOOL_DETAIL_RENDER_CAP = 6 * 1024;
 const LONG_REPLY_COLLAPSE_CHARS = 1400;
 const LONG_REPLY_PREVIEW_CHARS = 520;
-const STREAM_RENDER_THROTTLE_CHARS = 12000;
+const STREAM_RENDER_THROTTLE_CHARS = 8000;
 const STREAM_MARKDOWN_CHUNK_CHARS = 8000;
 const STREAM_LIVE_FULL_RENDER_CHARS = 32000;
 const STREAM_LIVE_HEAD_CHARS = 7000;
@@ -283,7 +283,7 @@ function useThrottledStreamingContent(content: string, pending?: boolean) {
       return;
     }
     if (timerRef.current !== null) return;
-    const delay = content.length >= 100000 ? 220 : 110;
+    const delay = content.length >= 100000 ? 110 : 48;
     timerRef.current = window.setTimeout(() => {
       timerRef.current = null;
       setVisible(latestRef.current);

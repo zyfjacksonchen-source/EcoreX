@@ -34,9 +34,9 @@ download_file() {
   local partial="$destination.part"
   local attempt
   local status
-  local retry_all_errors=()
+  local retry_all_errors_flag=""
   if curl --help all 2>/dev/null | grep -q -- '--retry-all-errors'; then
-    retry_all_errors=(--retry-all-errors)
+    retry_all_errors_flag="--retry-all-errors"
   fi
 
   if [[ -f "$destination" ]] && [[ "$(sha256_file "$destination")" == "$expected_sha" ]]; then
@@ -51,25 +51,17 @@ download_file() {
 
   echo "Downloading $url"
   for attempt in 1 2 3 4 5; do
-    local resume_args=()
+    local curl_args=(-fL --retry 5 --retry-delay 5 --retry-max-time 900 --connect-timeout 45 --speed-time 120 --speed-limit 512 --progress-bar)
+    if [[ -n "$retry_all_errors_flag" ]]; then
+      curl_args+=("$retry_all_errors_flag")
+    fi
     if [[ -s "$partial" ]]; then
-      resume_args=(-C -)
+      curl_args+=("-C" "-")
       echo "Resuming partial download, attempt $attempt/5..."
     else
       echo "Starting download, attempt $attempt/5..."
     fi
-    if curl -fL \
-      --retry 5 \
-      "${retry_all_errors[@]}" \
-      --retry-delay 5 \
-      --retry-max-time 900 \
-      --connect-timeout 45 \
-      --speed-time 120 \
-      --speed-limit 512 \
-      --progress-bar \
-      "${resume_args[@]}" \
-      "$url" \
-      -o "$partial"; then
+    if curl "${curl_args[@]}" "$url" -o "$partial"; then
       break
     fi
     status=$?

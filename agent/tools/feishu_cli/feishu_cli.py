@@ -66,6 +66,21 @@ def _prepend_path(env: Dict[str, str], path: Optional[Path]) -> None:
         env["PATH"] = raw + (os.pathsep + current if current else "")
 
 
+def _configured_install_root_from_conf() -> Optional[Path]:
+    try:
+        from config import conf
+
+        tools = conf().get("tools", {})
+        config = tools.get("feishu_cli") if isinstance(tools, dict) else None
+        if isinstance(config, dict):
+            value = config.get("install_root") or config.get("installRoot")
+            if value:
+                return Path(str(value)).expanduser()
+    except Exception:
+        return None
+    return None
+
+
 def _candidate_bin_dirs() -> List[Path]:
     home = Path.home()
     dirs: List[Path] = []
@@ -75,6 +90,12 @@ def _candidate_bin_dirs() -> List[Path]:
         dirs.extend([
             install_root / "bin",
             install_root / "node_modules" / ".bin",
+        ])
+    configured_install_root = _configured_install_root_from_conf()
+    if configured_install_root:
+        dirs.extend([
+            configured_install_root / "bin",
+            configured_install_root / "node_modules" / ".bin",
         ])
     if os.name == "nt":
         for base in (os.environ.get("APPDATA"), os.environ.get("LOCALAPPDATA")):
@@ -127,7 +148,7 @@ def _find_local_lark_runner(env: Dict[str, str]) -> Optional[List[str]]:
     node = _which("node", env)
     if not node:
         return None
-    install_root_override = os.environ.get("ECOREX_LARK_CLI_INSTALL_ROOT")
+    install_root_override = env.get("ECOREX_LARK_CLI_INSTALL_ROOT") or os.environ.get("ECOREX_LARK_CLI_INSTALL_ROOT")
     override_root = Path(install_root_override).expanduser() if install_root_override else None
     candidates = [
         *(([
@@ -259,6 +280,69 @@ def _as_args(raw: Any) -> List[str]:
     if isinstance(raw, list):
         return [str(item) for item in raw]
     return []
+
+
+def _auth_json_bool(payload: Any) -> Optional[bool]:
+    if not isinstance(payload, dict):
+        return None
+    for key in (
+        "authenticated",
+        "isAuthenticated",
+        "is_authenticated",
+        "authorized",
+        "configured",
+        "loggedIn",
+        "logged_in",
+        "login",
+    ):
+        value = payload.get(key)
+        if isinstance(value, bool):
+            return value
+    data = payload.get("data")
+    if isinstance(data, dict):
+        nested = _auth_json_bool(data)
+        if nested is not None:
+            return nested
+        if data.get("defaultAs") or data.get("identity") or data.get("user") or data.get("tenant"):
+            return True
+    if payload.get("defaultAs") or payload.get("identity") or payload.get("user") or payload.get("tenant"):
+        return True
+    if payload.get("ok") is False:
+        return False
+    return None
+
+
+def _auth_state_from_status_result(result: Dict[str, Any]) -> str:
+    if result.get("status") == "timeout":
+        return "unknown"
+    parsed_state = _auth_json_bool(result.get("json"))
+    if parsed_state is True:
+        return "ready"
+    if parsed_state is False:
+        return "needs_login"
+    output = str(result.get("output") or "").lower()
+    if any(marker in output for marker in (
+        "not configured",
+        "not login",
+        "not logged",
+        "unauthorized",
+        "no credential",
+        "未配置",
+        "未登录",
+        "未授权",
+    )):
+        return "needs_login"
+    if any(marker in output for marker in (
+        "logged in",
+        "authenticated",
+        "authorized",
+        "已登录",
+        "已授权",
+    )):
+        return "ready"
+    if result.get("exitCode") not in (0, None):
+        return "needs_login"
+    return "unknown"
 
 
 def _check_expected_paths(paths: Iterable[str]) -> Dict[str, Any]:
@@ -395,14 +479,22 @@ class FeishuCli(BaseTool):
         self.package = str(self.config.get("package") or DEFAULT_LARK_CLI_PACKAGE)
         self.auto_install = bool(self.config.get("auto_install", False))
 
+    def _env(self) -> Dict[str, str]:
+        env = _tool_env()
+        install_root = self._install_root()
+        env["ECOREX_LARK_CLI_INSTALL_ROOT"] = str(install_root)
+        _prepend_path(env, install_root / "bin")
+        _prepend_path(env, install_root / "node_modules" / ".bin")
+        return env
+
     def execute(self, args: Dict[str, Any]) -> ToolResult:
         action = str(args.get("action") or "").strip().lower()
         timeout = int(args.get("timeout") or self.config.get("timeout") or DEFAULT_TIMEOUT_SECONDS)
         install_if_missing = False
-        env = _tool_env()
+        env = self._env()
 
         if action == "status":
-            return ToolResult.success(self._status(env))
+            return ToolResult.success(self._status(env, auth_timeout=max(1, min(timeout, 15))))
         if action == "diagnose":
             return ToolResult.success(self._diagnose(env))
         if action == "ensure":
@@ -428,7 +520,7 @@ class FeishuCli(BaseTool):
             return self._run_cli(args, env, timeout)
         return ToolResult.fail({"status": "error", "message": "action must be one of: status, ensure, diagnose, install, config_init, auth_login, run"})
 
-    def _status(self, env: Dict[str, str]) -> Dict[str, Any]:
+    def _status(self, env: Dict[str, str], auth_timeout: int = 15) -> Dict[str, Any]:
         command = _resolve_lark_command(env)
         payload: Dict[str, Any] = {
             "status": "success",
@@ -437,15 +529,29 @@ class FeishuCli(BaseTool):
             "npm": _which("npm", env),
             "npx": _which("npx", env),
             "package": self.package,
+            "installRoot": str(self._install_root()),
             "sourceUrl": FEISHU_LARK_SOURCE_URL,
             "mirrorUrls": FEISHU_LARK_MIRROR_URLS,
+            "authState": "unknown" if command else "cli_missing",
             "pathHints": [str(path) for path in _candidate_bin_dirs() if path.exists()],
         }
         if command:
-            result = self._safe_run(command + ["auth", "status"], env, 15)
+            result = self._safe_run(command + ["auth", "status", "--json"], env, auth_timeout)
+            output = str(result.get("output") or "").lower()
+            if result.get("exitCode") != 0 and any(marker in output for marker in (
+                "unknown option",
+                "unknown flag",
+                "flag provided but not defined",
+                "unrecognized option",
+                "unrecognized flag",
+                "no such option",
+            )):
+                result = self._safe_run(command + ["auth", "status"], env, auth_timeout)
             payload["authStatus"] = result
-            parsed = result.get("json")
-            payload["authenticated"] = bool(isinstance(parsed, dict) and parsed.get("ok") is not False and (parsed.get("defaultAs") or parsed.get("identity") or parsed.get("data")))
+            payload["authState"] = _auth_state_from_status_result(result)
+            payload["authenticated"] = payload["authState"] == "ready"
+            if payload["authState"] == "needs_login":
+                payload["nextAction"] = {"tool": "feishu_cli", "action": "auth_login", "domain": "base"}
         return payload
 
     def _ensure(self, env: Dict[str, str], timeout: int, install_if_missing: bool) -> ToolResult:
@@ -461,6 +567,9 @@ class FeishuCli(BaseTool):
         override = self.config.get("install_root") or os.environ.get("ECOREX_LARK_CLI_INSTALL_ROOT")
         if override:
             return Path(str(override)).expanduser()
+        configured = _configured_install_root_from_conf()
+        if configured:
+            return configured
         return Path(__file__).resolve().parents[3] / "tools" / "lark-cli"
 
     def _diagnose(self, env: Dict[str, str]) -> Dict[str, Any]:
@@ -516,7 +625,7 @@ class FeishuCli(BaseTool):
                 "output": result.get("output", "")[-1200:],
             })
             if result.get("exitCode") == 0:
-                next_env = _tool_env()
+                next_env = self._env()
                 resolved = _resolve_lark_command(next_env)
                 return ToolResult.success({
                     "status": "success",

@@ -560,19 +560,68 @@ def _web_app_bridge_script() -> str:
     },
     chooseFiles: chooseFiles,
     chooseProjectFolder: async function () {
-      try {
-        var nativePayload = await apiJson({ path: "/api/project-folder/choose", method: "POST", body: {} });
-        if (nativePayload && nativePayload.project) return nativePayload.project;
-        if (nativePayload && nativePayload.status === "cancelled") return null;
-      } catch (error) {}
+      function notifyProjectPicker(state, message) {
+        try {
+          window.dispatchEvent(new CustomEvent("ecorex:project-folder-picker", {
+            detail: { state: state, message: message || "" }
+          }));
+        } catch (error) {}
+      }
+      function isLocalProjectPickerHost() {
+        var host = String(window.location.hostname || "").toLowerCase();
+        return !host || host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]" || /(^|\\.)localhost$/.test(host);
+      }
+      function canFallbackProjectPicker(error) {
+        var message = String((error && error.message) || error || "").toLowerCase();
+        return /not found|404|failed to fetch|networkerror|load failed|native folder picker is unavailable|folder picker failed|osascript|zenity|kdialog/.test(message);
+      }
+      var nativeError = null;
+      if (isLocalProjectPickerHost()) {
+        try {
+          notifyProjectPicker("opening", "Opening native folder picker");
+          var nativePayload = await apiJson({ path: "/api/project-folder/choose", method: "POST", body: {} });
+          if (nativePayload && nativePayload.project) {
+            notifyProjectPicker("selected", nativePayload.project.path || "");
+            return nativePayload.project;
+          }
+          if (nativePayload && nativePayload.status === "cancelled") {
+            notifyProjectPicker("cancelled", "Folder picker cancelled");
+            return null;
+          }
+          if (nativePayload && nativePayload.status === "error") {
+            throw new Error(nativePayload.message || "Native folder picker failed");
+          }
+        } catch (error) {
+          if (!canFallbackProjectPicker(error)) {
+            notifyProjectPicker("error", error && error.message ? error.message : "Folder picker failed");
+            throw error;
+          }
+          nativeError = error;
+          notifyProjectPicker("fallback", error && error.message ? error.message : "Native folder picker unavailable");
+        }
+      } else {
+        notifyProjectPicker("fallback", "Manual project path is required for non-local WebUI");
+      }
       var label = desktopPlatform === "darwin"
         ? "请输入或粘贴本机项目文件夹路径，例如 /Users/name/project"
         : "请输入或粘贴本机项目文件夹路径，例如 C:\\\\Users\\\\name\\\\project";
+      if (nativeError && nativeError.message) {
+        label += "\\n\\nNative picker note: " + nativeError.message;
+      }
       var folderPath = window.prompt(label, "");
       folderPath = String(folderPath || "").trim();
-      if (!folderPath) return null;
-      var payload = await apiJson({ path: "/api/project-folder", method: "POST", body: { path: folderPath, create: true } });
-      return payload.project || null;
+      if (!folderPath) {
+        notifyProjectPicker("cancelled", "Folder picker cancelled");
+        return null;
+      }
+      try {
+        var payload = await apiJson({ path: "/api/project-folder", method: "POST", body: { path: folderPath, create: true } });
+        notifyProjectPicker("selected", folderPath);
+        return payload.project || null;
+      } catch (error) {
+        notifyProjectPicker("error", error && error.message ? error.message : "Folder registration failed");
+        throw error;
+      }
     },
     savePastedFile: savePastedFile,
     statPath: async function (filePath) {
@@ -3160,6 +3209,64 @@ class WebChannel(ChatChannel):
         # subsequent agent_end handler can skip its "empty final_response"
         # fallback (which would otherwise overwrite the real error).
         streamed_error: List[str] = []
+        stream_coalesce_lock = threading.RLock()
+        stream_pending: Dict[str, List[str]] = {"delta": [], "reasoning": []}
+        stream_pending_chars: Dict[str, int] = {"delta": 0, "reasoning": 0}
+        stream_flush_timer: List[threading.Timer] = [None]
+        STREAM_FLUSH_SECONDS = 0.032
+        STREAM_FLUSH_CHARS = 220
+
+        def flush_stream_pending(kind: str = None) -> None:
+            payloads: List[Dict[str, Any]] = []
+            with stream_coalesce_lock:
+                timer = stream_flush_timer[0]
+                stream_flush_timer[0] = None
+                if timer:
+                    try:
+                        timer.cancel()
+                    except Exception:
+                        pass
+                pending_kinds = [kind] if kind else ["delta", "reasoning"]
+                for pending_kind in pending_kinds:
+                    parts = stream_pending.get(pending_kind) or []
+                    if not parts:
+                        continue
+                    content = "".join(parts)
+                    stream_pending[pending_kind] = []
+                    stream_pending_chars[pending_kind] = 0
+                    payloads.append({"type": pending_kind, "content": content})
+            for payload in payloads:
+                self._push_sse_event(request_id, payload)
+            if kind:
+                with stream_coalesce_lock:
+                    has_other_pending = any(parts for pending_kind, parts in stream_pending.items() if pending_kind != kind)
+                if has_other_pending:
+                    schedule_stream_flush()
+
+        def schedule_stream_flush() -> None:
+            with stream_coalesce_lock:
+                if stream_flush_timer[0] is not None:
+                    return
+                timer = threading.Timer(STREAM_FLUSH_SECONDS, flush_stream_pending)
+                timer.daemon = True
+                stream_flush_timer[0] = timer
+                timer.start()
+
+        def push_stream_delta(kind: str, delta: str) -> None:
+            if not delta:
+                return
+            with stream_coalesce_lock:
+                stream_pending[kind].append(delta)
+                stream_pending_chars[kind] += len(delta)
+                should_flush = stream_pending_chars[kind] >= STREAM_FLUSH_CHARS
+            if should_flush:
+                flush_stream_pending(kind)
+            else:
+                schedule_stream_flush()
+
+        def push_boundary_event(item: Dict[str, Any]) -> bool:
+            flush_stream_pending()
+            return self._push_sse_event(request_id, item)
 
         def on_event(event: dict):
             if not self._sse_request_exists(request_id):
@@ -3200,6 +3307,7 @@ class WebChannel(ChatChannel):
                 if remaining <= 0:
                     if not reasoning_capped_notified[0]:
                         reasoning_capped_notified[0] = True
+                        flush_stream_pending("reasoning")
                         self._push_sse_event(request_id, {
                             "type": "reasoning",
                             "content": "\n\n... [reasoning truncated for display] ...",
@@ -3208,14 +3316,15 @@ class WebChannel(ChatChannel):
                 if len(delta) > remaining:
                     delta = delta[:remaining]
                 reasoning_chars_sent[0] += len(delta)
-                self._push_sse_event(request_id, {"type": "reasoning", "content": delta})
+                push_stream_delta("reasoning", delta)
 
             elif event_type == "message_update":
                 delta = data.get("delta", "")
                 if delta:
-                    self._push_sse_event(request_id, {"type": "delta", "content": delta})
+                    push_stream_delta("delta", delta)
 
             elif event_type == "tool_execution_start":
+                flush_stream_pending()
                 tool_name = data.get("tool_name", "tool")
                 arguments = data.get("arguments", {})
                 self._push_sse_event(request_id, {
@@ -3226,6 +3335,7 @@ class WebChannel(ChatChannel):
                 })
 
             elif event_type == "tool_permission_request":
+                flush_stream_pending()
                 self._push_sse_event(request_id, {
                     "type": "tool_permission_request",
                     "permission_request_id": data.get("id", ""),
@@ -3238,6 +3348,7 @@ class WebChannel(ChatChannel):
                 })
 
             elif event_type == "tool_execution_end":
+                flush_stream_pending()
                 tool_name = data.get("tool_name", "tool")
                 status = data.get("status", "success")
                 result = data.get("result", "")
@@ -3281,9 +3392,12 @@ class WebChannel(ChatChannel):
             elif event_type == "message_end":
                 tool_calls = data.get("tool_calls", [])
                 if tool_calls:
-                    self._push_sse_event(request_id, {"type": "message_end", "has_tool_calls": True})
+                    push_boundary_event({"type": "message_end", "has_tool_calls": True})
+                else:
+                    flush_stream_pending()
 
             elif event_type == "error":
+                flush_stream_pending()
                 # Agent raised an exception (LLM 401/timeout/etc). Surface the
                 # real message instead of letting the empty-response fallback
                 # below hide it as "(模型未返回任何内容)".
@@ -3338,6 +3452,7 @@ class WebChannel(ChatChannel):
                 })
 
             elif event_type == "agent_cancelled":
+                flush_stream_pending()
                 # Push an explicit cancelled SSE event so the frontend
                 # marks the bubble as stopped with a single terminal event.
                 final_response = data.get("final_response", "")
@@ -3349,6 +3464,7 @@ class WebChannel(ChatChannel):
                 })
 
             elif event_type == "agent_end":
+                flush_stream_pending()
                 # Safety net: if the agent finishes with an empty final_response,
                 # chat_channel skips _send_reply (because reply.content is empty),
                 # which means no "done" event is ever emitted and the SSE stream
@@ -3377,6 +3493,7 @@ class WebChannel(ChatChannel):
                         })
 
             elif event_type == "file_to_send":
+                flush_stream_pending()
                 artifact = self._artifact_from_file_event(request_id, data)
                 if not artifact:
                     return
@@ -5239,6 +5356,7 @@ def _project_payload_from_path(path_value: str, create: bool = False, user_selec
 def _choose_project_folder_native() -> str:
     title = "Select Project Root"
     if os.name == "nt":
+        ps_title = title.replace("'", "''")
         command = [
             "powershell",
             "-NoProfile",
@@ -5250,12 +5368,25 @@ def _choose_project_folder_native() -> str:
                 "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false);"
                 "$OutputEncoding = [System.Text.UTF8Encoding]::new($false);"
                 "Add-Type -AssemblyName System.Windows.Forms;"
+                "Add-Type -AssemblyName System.Drawing;"
+                "$owner = New-Object System.Windows.Forms.Form;"
+                "$owner.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen;"
+                "$owner.Width = 1; $owner.Height = 1;"
+                "$owner.ShowInTaskbar = $false;"
+                "$owner.TopMost = $true;"
+                "$owner.Opacity = 0;"
                 "$dialog = New-Object System.Windows.Forms.FolderBrowserDialog;"
-                f"$dialog.Description = '{title}';"
+                f"$dialog.Description = '{ps_title}';"
                 "$dialog.ShowNewFolderButton = $true;"
-                "if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {"
+                "$owner.Show();"
+                "$owner.Activate();"
+                "$owner.BringToFront();"
+                "$result = $dialog.ShowDialog($owner);"
+                "$owner.Close();"
+                "$owner.Dispose();"
+                "if ($result -eq [System.Windows.Forms.DialogResult]::OK) {"
                 "  Write-Output $dialog.SelectedPath; exit 0"
-                "} exit 2"
+                "} exit 2;"
             ),
         ]
         result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900)

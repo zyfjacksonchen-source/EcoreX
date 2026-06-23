@@ -403,7 +403,7 @@ function Ensure-LarkCli {
         [Parameter(Mandatory = $true)][string]$RuntimeDir,
         [Parameter(Mandatory = $true)][string]$StateDir
     )
-    "lark-cli preinstall skipped. Use find-skill first, then install @larksuite/cli@1.0.56 on demand; npmjs.org timeout should fall back to https://registry.npmmirror.com." | Out-File -FilePath (Join-Path $StateDir "lark-cli-install.log") -Encoding utf8 -Append
+    "lark-cli preinstall skipped. The structured feishu_cli tool remains visible and installs @larksuite/cli@1.0.56 on demand into the writable state directory after the find-skill gate; npmjs.org timeout should fall back to https://registry.npmmirror.com." | Out-File -FilePath (Join-Path $StateDir "lark-cli-install.log") -Encoding utf8 -Append
 }
 
 function Get-WebUiPythonProcesses {
@@ -557,6 +557,7 @@ $config = [ordered]@{
         feishu_cli = [ordered]@{
             package = "@larksuite/cli@1.0.56"
             auto_install = $false
+            install_root = (Join-Path $stateDir "tools\lark-cli")
         }
     }
     mcp_servers = @(
@@ -686,6 +687,10 @@ stop_existing_webui() {
   if [[ -n "$runtime_pids" ]]; then
     pids="$pids $runtime_pids"
   fi
+  python_app_pids="$(pgrep -f "$PYTHON_HOME/bin/python3.*app.py" 2>/dev/null || true)"
+  if [[ -n "$python_app_pids" ]]; then
+    pids="$pids $python_app_pids"
+  fi
 
   pids="$(printf '%s\n' $pids | awk 'NF && !seen[$1]++ { print $1 }' || true)"
   if [[ -z "$pids" ]]; then
@@ -811,7 +816,7 @@ if [[ ! -f "$DEPS_STAMP" ]]; then
 fi
 
 export PATH="$RUNTIME_DIR/tools/bin:$HOME/.npm-global/bin:$HOME/.npm/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
-echo "lark-cli preinstall skipped. Use find-skill first, then install @larksuite/cli@1.0.56 on demand; npmjs.org timeout should fall back to https://registry.npmmirror.com." >> "$STATE_DIR/lark-cli-install.log"
+echo "lark-cli preinstall skipped. The structured feishu_cli tool remains visible and installs @larksuite/cli@1.0.56 on demand into the writable state directory after the find-skill gate; npmjs.org timeout should fall back to https://registry.npmmirror.com." >> "$STATE_DIR/lark-cli-install.log"
 
 EFFECTIVE_PORT="$("$PYTHON" - "$PORT" <<'PY'
 import socket
@@ -868,6 +873,7 @@ payload = {
         "feishu_cli": {
             "package": "@larksuite/cli@1.0.56",
             "auto_install": False,
+            "install_root": str(state / "tools" / "lark-cli"),
         }
     },
     "mcp_servers": [
@@ -887,7 +893,7 @@ URL="http://127.0.0.1:$EFFECTIVE_PORT/app/"
 echo "Starting EcoreX WebUI local service: $URL"
 (
   cd "$RUNTIME_DIR"
-  PYTHONPATH="$RUNTIME_DIR:${PYTHONPATH:-}" nohup "$PYTHON" app.py > "$STATE_DIR/ecorex-webui.log" 2> "$STATE_DIR/ecorex-webui.err.log" &
+  PYTHONPATH="$RUNTIME_DIR:${PYTHONPATH:-}" nohup "$PYTHON" "$RUNTIME_DIR/app.py" > "$STATE_DIR/ecorex-webui.log" 2> "$STATE_DIR/ecorex-webui.err.log" &
   echo $! > "$STATE_DIR/ecorex-webui.pid"
 )
 
@@ -912,8 +918,21 @@ for _ in range(60):
 raise SystemExit(f"EcoreX WebUI did not become ready at {url}")
 PY
 
+open_browser() {
+  url="$1"
+  if [[ "$OPEN_BROWSER" != "1" ]]; then
+    return 0
+  fi
+  echo "Opening EcoreX WebUI in your default browser: $url"
+  if command -v open >/dev/null 2>&1; then
+    open "$url" >/dev/null 2>&1 || echo "Could not auto-open browser. Open this URL manually: $url" >&2
+  else
+    echo "Could not find macOS open command. Open this URL manually: $url" >&2
+  fi
+}
+
 if [[ "$OPEN_BROWSER" == "1" ]]; then
-  open "$URL"
+  open_browser "$URL"
 fi
 
 write_desktop_shortcuts "$URL"

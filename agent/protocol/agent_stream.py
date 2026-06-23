@@ -64,6 +64,8 @@ TOOL_SCHEMA_CORE_NAMES = {
     "host_diagnostics",
     "optional_abilities",
     "agent_capability",
+    "feishu_cli",
+    "ecorex_cli",
 }
 
 TOOL_SCHEMA_INTENT_KEYWORDS = {

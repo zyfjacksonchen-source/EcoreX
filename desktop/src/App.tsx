@@ -2182,7 +2182,8 @@ export function App() {
   const [activeSessionTitle, setActiveSessionTitle] = useState(bootSession?.state.title || "新对话");
   const [searchQuery, setSearchQuery] = useState("");
   const [messages, setMessages] = useState<ChatItem[]>(() => normalizePausedMessages(bootSession?.state.messages || []));
-  const [composerText, setComposerText] = useState(bootSession?.state.composerText || "");
+  const [composerText, setComposerTextState] = useState(bootSession?.state.composerText || "");
+  const [composerHasText, setComposerHasText] = useState(Boolean((bootSession?.state.composerText || "").trim()));
   const [attachments, setAttachments] = useState<FileAttachment[]>(bootSession?.state.attachments || []);
   const [composerDragActive, setComposerDragActive] = useState(false);
   const [, setActiveRequestId] = useState("");
@@ -2199,6 +2200,7 @@ export function App() {
   const [permissionState, setPermissionState] = useState<PermissionState | null>(null);
   const [projects, setProjects] = useState<ProjectFolder[]>(() => readStorage<ProjectFolder[]>(PROJECTS_STORAGE_KEY, []));
   const [sessionProjects, setSessionProjects] = useState<SessionProjectMap>(() => bootSessionProjects);
+  const [projectPickerBusy, setProjectPickerBusy] = useState(false);
   const [sessionTitles, setSessionTitles] = useState<StringMap>(() => readStorage<StringMap>(SESSION_TITLES_STORAGE_KEY, {}));
   const [lockedSessionTitles, setLockedSessionTitles] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(LOCKED_SESSION_TITLES_STORAGE_KEY, {}));
   const [pinnedSessions, setPinnedSessions] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(PINNED_SESSIONS_STORAGE_KEY, {}));
@@ -2231,6 +2233,7 @@ export function App() {
   const composerTextRef = useRef(composerText);
   const attachmentsRef = useRef(attachments);
   const draftUiStateTimer = useRef<number | null>(null);
+  const composerDraftCommitTimer = useRef<number | null>(null);
   const sessionRequestIdsRef = useRef<StringMap>({});
   const latestSendAttemptRef = useRef<Record<string, string>>({});
   const installWatchers = useRef<Record<string, number>>({});
@@ -2262,6 +2265,55 @@ export function App() {
   const uiStateLocalSyncTimer = useRef<number | null>(null);
   const pendingUiStateStorage = useRef<Record<string, SessionUiState> | null>(null);
   const uiStateSyncTimer = useRef<number | null>(null);
+  const runtimeSnapshotRefreshTimer = useRef<number | null>(null);
+  const sessionUiMessageSyncTimers = useRef<Record<string, number>>({});
+  const pendingSessionMessageSnapshots = useRef<Record<string, ChatItem[]>>({});
+  const committedSessionMessageSnapshots = useRef<Record<string, ChatItem[]>>(
+    Object.fromEntries(
+      Object.entries(sessionUiState).map(([sessionId, state]) => [sessionId, state.messages || []])
+    ) as Record<string, ChatItem[]>
+  );
+
+  function commitComposerDraft(value = composerTextRef.current) {
+    if (composerDraftCommitTimer.current) {
+      window.clearTimeout(composerDraftCommitTimer.current);
+      composerDraftCommitTimer.current = null;
+    }
+    setComposerTextState(value);
+  }
+
+  function scheduleComposerDraftCommit(delay = 220) {
+    if (composerDraftCommitTimer.current) {
+      window.clearTimeout(composerDraftCommitTimer.current);
+    }
+    composerDraftCommitTimer.current = window.setTimeout(() => {
+      composerDraftCommitTimer.current = null;
+      setComposerTextState(composerTextRef.current);
+    }, delay);
+  }
+
+  function setComposerDraft(next: string | ((current: string) => string), options: { immediate?: boolean; syncDom?: boolean } = {}) {
+    const value = typeof next === "function" ? next(composerTextRef.current) : next;
+    composerTextRef.current = value;
+    setComposerHasText(Boolean(value.trim()));
+    const textarea = composerRef.current;
+    if (options.syncDom !== false && textarea && textarea.value !== value) {
+      textarea.value = value;
+    }
+    if (options.immediate) {
+      commitComposerDraft(value);
+    } else {
+      scheduleComposerDraftCommit();
+    }
+    window.requestAnimationFrame(syncComposerHeight);
+  }
+
+  function handleComposerDraftInput(value: string) {
+    composerTextRef.current = value;
+    setComposerHasText(Boolean(value.trim()));
+    scheduleComposerDraftCommit();
+    window.requestAnimationFrame(syncComposerHeight);
+  }
 
   function beginSessionPreflight(sessionId: string) {
     const generation = (sendGenerationRef.current[sessionId] || 0) + 1;
@@ -2289,6 +2341,16 @@ export function App() {
     const next = { ...preflightAbortRef.current };
     delete next[sessionId];
     preflightAbortRef.current = next;
+  }
+
+  function scheduleRuntimeSnapshotRefresh(delay = 300) {
+    if (runtimeSnapshotRefreshTimer.current) {
+      window.clearTimeout(runtimeSnapshotRefreshTimer.current);
+    }
+    runtimeSnapshotRefreshTimer.current = window.setTimeout(() => {
+      runtimeSnapshotRefreshTimer.current = null;
+      void loadRuntimeSnapshot().then(setRuntimeSnapshot).catch(() => undefined);
+    }, delay);
   }
 
   useEffect(() => {
@@ -2435,6 +2497,15 @@ export function App() {
   }, [sessionRequestIds]);
 
   useEffect(() => {
+    const nextCommitted: Record<string, ChatItem[]> = { ...committedSessionMessageSnapshots.current };
+    Object.entries(sessionUiState).forEach(([sessionId, state]) => {
+      if (sessionId === activeSessionIdRef.current || pendingSessionMessageSnapshots.current[sessionId]) return;
+      nextCommitted[sessionId] = state.messages || [];
+    });
+    committedSessionMessageSnapshots.current = nextCommitted;
+  }, [sessionUiState]);
+
+  useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
 
@@ -2451,27 +2522,16 @@ export function App() {
   }, [runtimeSnapshot.status, runtimeSnapshot.releaseNotes?.version]);
 
   useEffect(() => {
-    composerTextRef.current = composerText;
-  }, [composerText]);
-
-  useEffect(() => {
     attachmentsRef.current = attachments;
   }, [attachments]);
 
   useEffect(() => {
     const projectId = sessionProjects[activeSessionId] || null;
-    const draftText = composerTextRef.current;
-    const draftAttachments = attachmentsRef.current;
     setSessionUiState((current) => {
       const existing = current[activeSessionId] || {};
-      const lastActivityAt = latestMessageMs(messages) || existing.lastActivityAt || Date.now();
       if (
         existing.title === activeSessionTitle
         && existing.projectId === projectId
-        && existing.messages === messages
-        && existing.composerText === draftText
-        && sameAttachments(existing.attachments || [], draftAttachments)
-        && existing.lastActivityAt === lastActivityAt
       ) {
         return current;
       }
@@ -2481,15 +2541,15 @@ export function App() {
           ...existing,
           title: activeSessionTitle,
           projectId,
-          messages,
-          composerText: draftText,
-          attachments: draftAttachments,
+          messages: existing.messages || messagesRef.current,
+          composerText: existing.composerText ?? composerTextRef.current,
+          attachments: existing.attachments || attachmentsRef.current,
           contextStartSeq: existing.contextStartSeq,
-          lastActivityAt
+          lastActivityAt: existing.lastActivityAt || latestMessageMs(existing.messages) || Date.now()
         }
       };
     });
-  }, [activeSessionId, activeSessionTitle, sessionProjects, messages]);
+  }, [activeSessionId, activeSessionTitle, sessionProjects]);
 
   useEffect(() => {
     if (draftUiStateTimer.current) {
@@ -2605,6 +2665,10 @@ export function App() {
       if (uiStateSyncTimer.current) {
         window.clearTimeout(uiStateSyncTimer.current);
         uiStateSyncTimer.current = null;
+      }
+      if (composerDraftCommitTimer.current) {
+        window.clearTimeout(composerDraftCommitTimer.current);
+        composerDraftCommitTimer.current = null;
       }
       unsubscribe?.();
     };
@@ -3039,7 +3103,7 @@ export function App() {
   function insertSkillMention(skill: Pick<SkillDisplayRow, "name" | "displayName">) {
     const label = skill.displayName || skill.name || "";
     if (!label) return;
-    setComposerText((current) => current.replace(/@([\w\u4e00-\u9fa5-]*)$/, `@${label} `));
+    setComposerDraft((current) => current.replace(/@([\w\u4e00-\u9fa5-]*)$/, `@${label} `), { immediate: true });
     window.setTimeout(() => composerRef.current?.focus(), 0);
   }
 
@@ -3094,12 +3158,12 @@ export function App() {
   }
 
   function insertComposerNewline(textarea: HTMLTextAreaElement) {
-    const start = textarea.selectionStart ?? composerText.length;
+    const start = textarea.selectionStart ?? composerTextRef.current.length;
     const end = textarea.selectionEnd ?? start;
     const value = textarea.value;
     const next = `${value.slice(0, start)}\n${value.slice(end)}`;
     const nextCursor = start + 1;
-    setComposerText(next);
+    setComposerDraft(next, { immediate: true });
     window.requestAnimationFrame(() => {
       const current = composerRef.current;
       if (!current) return;
@@ -3175,7 +3239,7 @@ export function App() {
       inactiveRequestGraceMs: 45_000
     });
     setMessages(nextMessages);
-    setComposerText(cached.composerText);
+    setComposerDraft(cached.composerText || "", { immediate: true });
     setAttachments(cached.attachments);
     setActiveSessionTitle(sessionTitles[sessionId] || cached.title || "新对话");
     setActiveProjectId(projectId);
@@ -3202,6 +3266,7 @@ export function App() {
   function flushActiveSessionDraft() {
     const sessionId = activeSessionIdRef.current;
     if (!sessionId) return;
+    flushPendingSessionMessagesSnapshot(sessionId);
     const projectId = sessionProjects[sessionId] || null;
     const draftText = composerTextRef.current;
     const draftAttachments = attachmentsRef.current;
@@ -3235,6 +3300,11 @@ export function App() {
   }
 
   async function selectSession(row: SessionRow) {
+    if (row.id === activeSessionIdRef.current) {
+      clearSessionUnread(row.id);
+      focusComposerSoon();
+      return;
+    }
     flushActiveSessionDraft();
     const switchSeq = ++sessionSwitchSeq.current;
     const nextProjectId = sessionProjects[row.id] || null;
@@ -3263,7 +3333,7 @@ export function App() {
       }
     }));
     setMessages([]);
-    setComposerText("");
+    setComposerDraft("", { immediate: true });
     setAttachments([]);
     focusComposerSoon();
     try {
@@ -3298,8 +3368,10 @@ export function App() {
     }
   }
 
-  function startNewSession(project?: ProjectFolder | null) {
-    flushActiveSessionDraft();
+  function startNewSession(project?: ProjectFolder | null, options?: { skipFlush?: boolean }) {
+    if (!options?.skipFlush) {
+      flushActiveSessionDraft();
+    }
     sessionSwitchSeq.current += 1;
     const id = project ? `ecorex-project-${project.id}-${Date.now()}` : `ecorex-${Date.now()}`;
     const title = project ? `${project.name} · 新会话` : "新对话";
@@ -3313,7 +3385,7 @@ export function App() {
     }
     setMessages([]);
     setAttachments([]);
-    setComposerText("");
+    setComposerDraft("", { immediate: true });
     setApproval(null);
     setSessionUiState((current) => ({
       ...current,
@@ -3350,7 +3422,7 @@ export function App() {
       if (row.id === activeSessionId) {
         setActiveSessionTitle(nextTitle);
       }
-      setRuntimeSnapshot(await loadRuntimeSnapshot());
+      scheduleRuntimeSnapshotRefresh(300);
       setToast("会话已重命名");
     } catch (error) {
       if (row.id === activeSessionId) {
@@ -3362,42 +3434,93 @@ export function App() {
 
   async function removeSession(row: SessionRow) {
     if (!window.confirm(`删除会话「${row.title}」？该操作会清除这条会话记录。`)) return;
+    flushPendingSessionMessagesSnapshot(row.id);
+    closeSessionStream(row.id);
+    abortSessionPreflight(row.id);
+    const previousSnapshot = runtimeSnapshot;
+    const previousSessionState = sessionUiState[row.id];
+    const previousProjectId = sessionProjects[row.id];
+    const previousLocked = lockedSessionTitles[row.id];
+    const previousPinned = pinnedSessions[row.id];
+    setRuntimeSnapshot((current) => ({
+      ...current,
+      sessions: current.sessions.filter((session, index) => (session.session_id || session.id || `runtime-${index}`) !== row.id),
+      totalSessions: Math.max(0, current.totalSessions - 1)
+    }));
+    setSessionUiState((current) => {
+      if (!current[row.id]) return current;
+      const next = { ...current };
+      delete next[row.id];
+      return next;
+    });
+    setSessionProjects((current) => {
+      const next = { ...current };
+      delete next[row.id];
+      return next;
+    });
+    setLockedSessionTitles((current) => {
+      const next = { ...current };
+      delete next[row.id];
+      lockedSessionTitlesRef.current = next;
+      return next;
+    });
+    setPinnedSessions((current) => {
+      const next = { ...current };
+      delete next[row.id];
+      return next;
+    });
+    setUnreadSessionIds((current) => {
+      if (!current[row.id]) return current;
+      const next = { ...current };
+      delete next[row.id];
+      return next;
+    });
+    if (row.id === activeSessionId) {
+      startNewSession(null, { skipFlush: true });
+    }
+    setToast("会话已删除");
     try {
       const result = await deleteRuntimeSession(row.id);
       if (result.status === "error") {
         throw new Error(result.message || "删除失败");
       }
-      setSessionProjects((current) => {
-        const next = { ...current };
-        delete next[row.id];
-        return next;
-      });
-      setLockedSessionTitles((current) => {
-        const next = { ...current };
-        delete next[row.id];
-        lockedSessionTitlesRef.current = next;
-        return next;
-      });
-      setPinnedSessions((current) => {
-        const next = { ...current };
-        delete next[row.id];
-        return next;
-      });
-      if (row.id === activeSessionId) {
-        startNewSession(null);
-      }
-      setRuntimeSnapshot(await loadRuntimeSnapshot());
-      setToast("会话已删除");
+      scheduleRuntimeSnapshotRefresh(500);
     } catch (error) {
+      setRuntimeSnapshot(previousSnapshot);
+      if (previousSessionState) {
+        setSessionUiState((current) => ({ ...current, [row.id]: previousSessionState }));
+      }
+      if (previousProjectId) {
+        setSessionProjects((current) => ({ ...current, [row.id]: previousProjectId }));
+      }
+      if (previousLocked) {
+        setLockedSessionTitles((current) => {
+          const next = { ...current, [row.id]: previousLocked };
+          lockedSessionTitlesRef.current = next;
+          return next;
+        });
+      }
+      if (previousPinned) {
+        setPinnedSessions((current) => ({ ...current, [row.id]: previousPinned }));
+      }
+      scheduleRuntimeSnapshotRefresh(0);
       setApproval({ type: "error", title: "会话删除失败", message: error instanceof Error ? error.message : "请稍后重试。" });
     }
   }
 
   async function addProject() {
+    if (projectPickerBusy) return;
+    setProjectPickerBusy(true);
+    setToast("正在打开本地文件夹选择窗口，请在弹出的系统窗口中选择项目文件夹");
     try {
       const project = await chooseProjectFolder();
-      if (!project) return;
-      const registeredProject = await registerProjectFolderPath(project.path);
+      if (!project) {
+        setToast("已取消选择项目文件夹");
+        return;
+      }
+      const registeredProject = project.memoryPath && project.dreamsPath
+        ? project
+        : await registerProjectFolderPath(project.path);
       if (!registeredProject) {
         throw new Error("Project folder registration failed.");
       }
@@ -3421,6 +3544,8 @@ export function App() {
       setToast("项目已添加");
     } catch (error) {
       setToast(error instanceof Error ? error.message : "添加项目失败");
+    } finally {
+      setProjectPickerBusy(false);
     }
   }
 
@@ -3650,40 +3775,29 @@ export function App() {
     if (activeSessionIdRef.current === sessionId) {
       const nextMessages = updater(messagesRef.current);
       messagesRef.current = nextMessages;
+      committedSessionMessageSnapshots.current[sessionId] = nextMessages;
       setMessages(nextMessages);
-      setSessionUiState((current) => {
-        const existing = current[sessionId] || {
-          title: sessionTitles[sessionId] || activeSessionTitle,
-          projectId: sessionProjects[sessionId] || null,
-          messages: [],
-          composerText: composerTextRef.current,
-          attachments: attachmentsRef.current
-        };
-        const activityAt = latestMessageMs(nextMessages) || existing.lastActivityAt || Date.now();
-        return {
-          ...current,
-          [sessionId]: {
-            ...existing,
-            projectId: sessionProjects[sessionId] || null,
-            messages: nextMessages,
-            composerText: composerTextRef.current,
-            attachments: attachmentsRef.current,
-            lastActivityAt: activityAt
-          }
-        };
-      });
+      scheduleSessionMessagesSnapshot(sessionId, nextMessages);
       return;
     }
 
+    const existingMessages = pendingSessionMessageSnapshots.current[sessionId]
+      || committedSessionMessageSnapshots.current[sessionId]
+      || [];
+    const nextMessages = updater(existingMessages);
+    scheduleSessionMessagesSnapshot(sessionId, nextMessages);
+  }
+
+  function commitSessionMessagesSnapshot(sessionId: string, nextMessages: ChatItem[]) {
+    committedSessionMessageSnapshots.current[sessionId] = nextMessages;
     setSessionUiState((current) => {
       const existing = current[sessionId] || {
         title: sessionTitles[sessionId] || activeSessionTitle,
         projectId: sessionProjects[sessionId] || null,
-        messages: sessionId === activeSessionIdRef.current ? messages : [],
-        composerText: "",
-        attachments: []
+        messages: sessionId === activeSessionIdRef.current ? messagesRef.current : [],
+        composerText: sessionId === activeSessionIdRef.current ? composerTextRef.current : "",
+        attachments: sessionId === activeSessionIdRef.current ? attachmentsRef.current : []
       };
-      const nextMessages = updater(existing.messages);
       const activityAt = latestMessageMs(nextMessages) || existing.lastActivityAt || Date.now();
       return {
         ...current,
@@ -3691,10 +3805,45 @@ export function App() {
           ...existing,
           projectId: sessionProjects[sessionId] || null,
           messages: nextMessages,
+          composerText: sessionId === activeSessionIdRef.current ? composerTextRef.current : existing.composerText,
+          attachments: sessionId === activeSessionIdRef.current ? attachmentsRef.current : existing.attachments,
           lastActivityAt: activityAt
         }
       };
     });
+  }
+
+  function flushPendingSessionMessagesSnapshot(sessionId?: string) {
+    const ids = sessionId ? [sessionId] : Object.keys(pendingSessionMessageSnapshots.current);
+    ids.forEach((id) => {
+      const timer = sessionUiMessageSyncTimers.current[id];
+      if (timer) {
+        window.clearTimeout(timer);
+        delete sessionUiMessageSyncTimers.current[id];
+      }
+      const pending = pendingSessionMessageSnapshots.current[id];
+      if (!pending) return;
+      delete pendingSessionMessageSnapshots.current[id];
+      commitSessionMessagesSnapshot(id, pending);
+    });
+  }
+
+  function scheduleSessionMessagesSnapshot(sessionId: string, nextMessages: ChatItem[]) {
+    pendingSessionMessageSnapshots.current[sessionId] = nextMessages;
+    const hasLiveMessage = nextMessages.some((message) => message.role === "assistant" && Boolean(message.pending || message.paused));
+    const delay = activeSessionIdRef.current === sessionId
+      ? (hasLiveMessage ? 650 : 80)
+      : (hasLiveMessage ? 1200 : 160);
+    if (sessionUiMessageSyncTimers.current[sessionId]) {
+      window.clearTimeout(sessionUiMessageSyncTimers.current[sessionId]);
+    }
+    sessionUiMessageSyncTimers.current[sessionId] = window.setTimeout(() => {
+      delete sessionUiMessageSyncTimers.current[sessionId];
+      const pending = pendingSessionMessageSnapshots.current[sessionId];
+      if (!pending) return;
+      delete pendingSessionMessageSnapshots.current[sessionId];
+      commitSessionMessagesSnapshot(sessionId, pending);
+    }, delay);
   }
 
   function clearSessionUnread(sessionId: string) {
@@ -4598,7 +4747,7 @@ export function App() {
     const currentLength = activeSessionIdRef.current === sessionId
       ? messagesRef.current.find((message) => message.id === assistantId)?.content.length || 0
       : 0;
-    const flushDelay = currentLength >= 100000 ? 180 : currentLength >= 30000 ? 90 : 34;
+    const flushDelay = currentLength >= 100000 ? 90 : currentLength >= 30000 ? 45 : 16;
     buffer.timer = window.setTimeout(() => {
       const current = streamDeltaBuffers.current[key];
       if (current) current.timer = null;
@@ -5021,7 +5170,7 @@ export function App() {
       createdAt
     };
     const assistantId = `a-compact-${Date.now()}`;
-    setComposerText("");
+    setComposerDraft("", { immediate: true });
     setAttachments([]);
     updateSessionMessages(requestSessionId, (current) => [
       ...current,
@@ -5075,7 +5224,8 @@ export function App() {
   }
 
   async function sendNow(skipCapabilityCheck = false) {
-    const text = composerText.trim();
+    commitComposerDraft(composerTextRef.current);
+    const text = composerTextRef.current.trim();
     if (!text && !attachments.length) return;
     const previousRequestId = activeSessionRequestId;
     const previousSessionId = activeSessionId;
@@ -5146,7 +5296,7 @@ export function App() {
       clearAssistantPhaseTimers(assistantId);
       clearSessionPreflight(requestSessionId, preflightController);
       updateSessionMessages(requestSessionId, (current) => current.filter((item) => item.id !== userMessage.id && item.id !== assistantId));
-      setComposerText(text);
+      setComposerDraft(text, { immediate: true });
       setAttachments(attachments);
       setApproval({
         type: "info",
@@ -5207,7 +5357,7 @@ export function App() {
     if (activeProject) {
       setSessionProjects((current) => ({ ...current, [requestSessionId]: activeProject.id }));
     }
-    setComposerText("");
+    setComposerDraft("", { immediate: true });
     setAttachments([]);
     setApproval(null);
 
@@ -5716,7 +5866,7 @@ export function App() {
         title: activeSessionTitle,
         projectId,
         messages,
-        composerText,
+        composerText: composerTextRef.current,
         attachments,
         contextStartSeq: sessionUiState[activeSessionId]?.contextStartSeq,
         lastActivityAt: latestMessageMs(messages) || sessionUiState[activeSessionId]?.lastActivityAt || Date.now()
@@ -6181,7 +6331,7 @@ export function App() {
         setToast(result.message || "This request cannot be safely retried yet");
         return false;
       }
-      setComposerText(result.prompt);
+      setComposerDraft(result.prompt, { immediate: true });
       setAttachments((result.attachments || []).filter(isDurableLocalAttachment));
       focusComposerSoon();
       setToast(result.exactReplay || result.exact_replay ? "Retry draft prepared; review and send." : "Retry draft prepared from latest history; review before sending.");
@@ -6402,6 +6552,7 @@ export function App() {
   }
 
   const browserPack = packs.find((pack) => pack.id === "browser-automation");
+  const feishuPack = packs.find((pack) => pack.id === "feishu-lark");
   const abilityRows = [
     {
       id: "web_search",
@@ -6441,6 +6592,18 @@ export function App() {
       icon: <WandSparkles aria-hidden="true" />
     },
     {
+      id: "feishu_cli",
+      name: "飞书 / Lark CLI",
+      detail: toolEnabled(runtimeSnapshot.tools, "feishu_cli")
+        ? "结构化 feishu_cli 已加载；授权缺失时会引导登录，不走 raw lark-cli"
+        : feishuPack?.installed
+          ? "能力包已安装，等待结构化工具刷新"
+          : "飞书任务会先走结构化 feishu_cli，再按需安装官方 CLI",
+      enabled: toolEnabled(runtimeSnapshot.tools, "feishu_cli"),
+      icon: <Database aria-hidden="true" />,
+      pack: feishuPack
+    },
+    {
       id: "browser",
       name: "Playwright 浏览器",
       detail: toolEnabled(runtimeSnapshot.tools, "browser")
@@ -6463,7 +6626,7 @@ export function App() {
   const activeProjectMemoryPath = activeProject?.memoryPath || (activeProject ? `${activeProject.path}\\.ecorex\\project-memory.md` : "");
   const hasPendingAssistantMessage = messages.some(isUiLiveAssistantMessage);
   const visibleMessages = messages.filter((message) => !isSilentPausedAssistantMessage(message));
-  const composerHasPayload = Boolean(composerText.trim() || attachments.length);
+  const composerHasPayload = Boolean(composerHasText || attachments.length);
   const sessionRowNeedsReveal = (row: SessionRow) => {
     const cachedMessages = sessionUiState[row.id]?.messages || [];
     const isRunning = row.status === "waiting" || row.status === "cancelling" || Boolean(row.requestId) || Boolean(sessionRequestIds[row.id]) || cachedMessages.some(isUiLiveAssistantMessage);
@@ -6680,14 +6843,14 @@ export function App() {
               {projectsSectionCollapsed ? <ChevronRight aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
               <span>项目</span>
             </button>
-            <button className="icon-button" type="button" onClick={() => void addProject()} title="添加项目文件夹">
+            <button className="icon-button" type="button" onClick={() => void addProject()} title={projectPickerBusy ? "正在选择项目文件夹" : "添加项目文件夹"} disabled={projectPickerBusy} aria-busy={projectPickerBusy}>
               <FolderPlus aria-hidden="true" />
             </button>
           </div>
           {projectsSectionCollapsed ? null : projectSessionGroups.length === 0 ? (
-            <button className="project-empty" type="button" onClick={() => void addProject()} title="选择一个本地文件夹作为项目">
+            <button className="project-empty" type="button" onClick={() => void addProject()} title={projectPickerBusy ? "正在等待本地文件夹选择窗口" : "选择一个本地文件夹作为项目"} disabled={projectPickerBusy} aria-busy={projectPickerBusy}>
               <FolderOpen aria-hidden="true" />
-              <span>添加项目文件夹</span>
+              <span>{projectPickerBusy ? "正在选择项目文件夹" : "添加项目文件夹"}</span>
             </button>
           ) : (
             <div className="project-list">
@@ -6973,9 +7136,9 @@ export function App() {
             <button type="button" className="round-button" onClick={chooseFiles} title="添加本地文件"><Paperclip aria-hidden="true" /></button>
             <textarea
               ref={composerRef}
-              value={composerText}
+              defaultValue={composerText}
               placeholder="给 EcoreX 发送消息，支持粘贴图片或文件"
-              onChange={(event) => setComposerText(event.target.value)}
+              onChange={(event) => handleComposerDraftInput(event.target.value)}
               onKeyDown={handleComposerKey}
               onPaste={(event) => void handlePaste(event)}
               rows={1}
@@ -7128,7 +7291,7 @@ export function App() {
                     <div className="settings-list">
                       <article>
                         <div><strong>添加项目</strong><span>选择一个本地文件夹作为项目工作区</span></div>
-                        <button onClick={() => void addProject()}><FolderPlus aria-hidden="true" />添加</button>
+                        <button onClick={() => void addProject()} disabled={projectPickerBusy} aria-busy={projectPickerBusy} title={projectPickerBusy ? "正在选择项目文件夹" : "添加项目"}><FolderPlus aria-hidden="true" />{projectPickerBusy ? "选择中" : "添加"}</button>
                       </article>
                       {projects.map((project) => (
                         <article key={project.id}>
