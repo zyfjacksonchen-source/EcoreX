@@ -3,7 +3,7 @@
 EcoreX is a desktop and WebUI AI agent product maintained in the
 `zhangyifanjackson-dotcom/EcoreX` GitHub repository.
 
-The v0.1.19 distribution is built as:
+The v0.2.0 distribution is built as:
 
 - Electron desktop application
 - Local React frontend
@@ -18,7 +18,7 @@ handling.
 
 ## Release Notes
 
-Current development target: `v0.1.19`.
+Current development target: `v0.2.0`.
 
 Main areas in this release:
 

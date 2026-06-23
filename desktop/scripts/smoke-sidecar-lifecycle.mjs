@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const desktopRoot = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(desktopRoot, "..");
-const outputPath = path.resolve(process.argv[2] || path.join(repoRoot, "docs", "v0.1.19", "sidecar-lifecycle-smoke.json"));
+const outputPath = path.resolve(process.argv[2] || path.join(repoRoot, "docs", "v0.2.0", "sidecar-lifecycle-smoke.json"));
 
 class FakeChild extends EventEmitter {
   constructor(pid) {
@@ -95,7 +95,7 @@ try {
     broadcastStatus: (status) => statuses.push(status),
     fetchImpl: async () => {
       fetchCalls += 1;
-      return response({ version: "0.1.19", desktopRuntimeVerified: probeMode === "ready" }, probeMode === "ready");
+      return response({ version: "0.2.0", desktopRuntimeVerified: probeMode === "ready" }, probeMode === "ready");
     },
     spawnProcess: (command, args) => {
       if (String(command).toLowerCase().includes("taskkill")) {
@@ -218,7 +218,7 @@ try {
 
   const payload = {
     status: "pass",
-    version: "0.1.19",
+    version: "0.2.0",
     generatedAt: new Date().toISOString(),
     changeIds: ["STAB-004"],
     checks: [

@@ -15,8 +15,9 @@ export type EnterprisePolicy = {
 const ASCII_HEADER_RE = /^[\x20-\x7E]*$/;
 const SAFE_DEVICE_ID_RE = /^[A-Za-z0-9._:@+-]{1,180}$/;
 
-export const DEFAULT_CLIENT_EVENT_KEY = "ecorex-desktop-v0.1.19";
+export const DEFAULT_CLIENT_EVENT_KEY = "ecorex-desktop-v0.2.0";
 export const DEFAULT_COMPAT_CLIENT_EVENT_KEYS = [
+  "ecorex-desktop-v0.2.0",
   "ecorex-desktop-v0.1.19",
   "ecorex-desktop-v0.1.18",
   "ecorex-desktop-v0.1.17",

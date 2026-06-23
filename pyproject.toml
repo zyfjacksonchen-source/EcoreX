@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ecorex-agent-runtime"
-version = "0.1.19"
+version = "0.2.0"
 description = "EcoreX local agent runtime"
 requires-python = ">=3.7"
 dependencies = [

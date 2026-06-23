@@ -2,7 +2,7 @@ param(
     [string]$DistDir = "dist",
     [string]$OutputDir = "..\tmp\ecorex-desktop-visual",
     [string]$EdgePath = "",
-    [string]$EvidencePath = "..\docs\v0.1.19\acceptance-smoke.json"
+    [string]$EvidencePath = "..\docs\v0.2.0\acceptance-smoke.json"
 )
 
 $ErrorActionPreference = "Stop"
@@ -778,7 +778,7 @@ try {
         "| Artifacts | Renderer | Pass |",
         "",
         "```json",
-        "{\"version\":\"0.1.19\",\"gate\":\"visual-smoke\"}",
+        "{\"version\":\"0.2.0\",\"gate\":\"visual-smoke\"}",
         "```",
         "",
         "1. Keep the first paint rendered as HTML.",
@@ -881,7 +881,7 @@ try {
       "| Switchback | Pass |",
       "",
       "```json",
-      "{\"stream\":\"ok\",\"version\":\"0.1.19\"}",
+      "{\"stream\":\"ok\",\"version\":\"0.2.0\"}",
       "```",
       "",
       (modeName === "switch" || modeName === "switchrace") ? "Switchback verified after returning to the original session." : "Streaming markdown rendered without raw marker flash.",
@@ -959,7 +959,7 @@ try {
     openPath: async () => "",
     apiJson: async (request) => {
       const path = request.path || "";
-      if (path === "/api/version") return { version: "0.1.19" };
+      if (path === "/api/version") return { version: "0.2.0" };
       if (path.startsWith("/api/sessions/") && path.endsWith("/generate_title")) return { status: "success", title: "Ad delivery report" };
       if (path.startsWith("/api/sessions")) return {
         sessions: [
@@ -1037,7 +1037,7 @@ try {
 
     $result = [ordered]@{
         status = "pass"
-        version = "0.1.19"
+        version = "0.2.0"
         changeIds = @("STAB-004", "UX-004", "PERF-001")
         scenarios = [ordered]@{
             noResponseDeadLoop = [ordered]@{

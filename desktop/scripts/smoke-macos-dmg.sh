@@ -3,7 +3,7 @@ set -euo pipefail
 
 DMG_PATH="${1:?Usage: smoke-macos-dmg.sh /path/to/EcoreX_VERSION_ARCH.dmg /path/to/evidence.json}"
 OUTPUT_PATH="${2:?Usage: smoke-macos-dmg.sh /path/to/EcoreX_VERSION_ARCH.dmg /path/to/evidence.json}"
-VERSION="${VERSION:-0.1.19}"
+VERSION="${VERSION:-0.2.0}"
 ARCH="${MAC_ARCH:-}"
 PORT="${ECOREX_WEB_PORT:-19133}"
 STRICT_SIGNING="${ECOREX_MAC_STRICT_SIGNING:-0}"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${VERSION:-0.1.19}"
+VERSION="${VERSION:-0.2.0}"
 RELEASE_ROOT="${RELEASE_ROOT:-/srv/ecorex-agent-download}"
 ADMIN_ROOT="${ADMIN_ROOT:-/srv/ecorex-agent-admin}"
 PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-https://www.ecoreai.cn/ecorex-agent}"

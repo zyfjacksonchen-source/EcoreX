@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke checks for the v0.1.19 Xiaohongshu markdown + image reliability gate."""
+"""Smoke checks for the v0.2.0 Xiaohongshu markdown + image reliability gate."""
 
 from __future__ import annotations
 
@@ -128,7 +128,7 @@ def run_generic_bad_image_probe(root: pathlib.Path, tmp_dir: pathlib.Path) -> di
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=".")
-    parser.add_argument("--version", default="0.1.19")
+    parser.add_argument("--version", default="0.2.0")
     parser.add_argument("--output", default="")
     args = parser.parse_args(argv)
 

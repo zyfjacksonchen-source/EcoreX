@@ -88,7 +88,7 @@ function Save-UrlWithProgress {
 
             $request = [System.Net.HttpWebRequest][System.Net.WebRequest]::Create($Uri)
             $request.Method = "GET"
-            $request.UserAgent = "EcoreX-WebUI-Installer/0.1.19"
+            $request.UserAgent = "EcoreX-WebUI-Installer/0.2.0"
             $request.Timeout = 30000
             $request.ReadWriteTimeout = 30000
             $request.AllowAutoRedirect = $true

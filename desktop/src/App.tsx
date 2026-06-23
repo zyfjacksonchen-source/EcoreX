@@ -2966,7 +2966,7 @@ export function App() {
     startNewSession(project);
   };
   const currentModelName = displayModelName(runtimeSnapshot.currentModel);
-  const appVersion = runtimeSnapshot.version || runtimeSnapshot.releaseNotes?.version || "0.1.19";
+  const appVersion = runtimeSnapshot.version || runtimeSnapshot.releaseNotes?.version || "0.2.0";
   const deferredComposerText = useDeferredValue(composerText);
   const skillDisplayRows = useMemo(() => buildSkillDisplayRows(runtimeSnapshot), [runtimeSnapshot]);
   const mentionableSkillRows = useMemo(() => skillDisplayRows.filter((skill) => skill.mentionable), [skillDisplayRows]);

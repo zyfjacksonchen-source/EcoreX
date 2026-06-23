@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${VERSION:-0.1.19}"
+VERSION="${VERSION:-0.2.0}"
 SERVICE_NAME="${SERVICE_NAME:-ecorex-web}"
 SERVICE_USER="${SERVICE_USER:-ecorex}"
 SERVICE_GROUP="${SERVICE_GROUP:-$SERVICE_USER}"

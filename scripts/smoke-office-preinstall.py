@@ -158,7 +158,7 @@ def check_staged_runtime(runtime_dir: pathlib.Path, checks: list[dict[str, Any]]
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=".")
-    parser.add_argument("--version", default="0.1.19")
+    parser.add_argument("--version", default="0.2.0")
     parser.add_argument("--output", default="")
     parser.add_argument("--runtime-dir", default="")
     parser.add_argument("--require-staged-runtime", action="store_true")

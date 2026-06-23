@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Run a 30-task EcoreX v0.1.19 validation matrix.
+"""Run a 30-task EcoreX v0.2.0 validation matrix.
 
 The matrix intentionally avoids model calls while still exercising real local
 runtime, public release, packaged archive, and backend invariants that map to
-the v0.1.19 production fixes.
+the v0.2.0 production fixes.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from types import SimpleNamespace
 from typing import Any, Callable
 
 
-VERSION = "0.1.19"
+VERSION = "0.2.0"
 PUBLIC_BASE = "https://www.ecoreai.cn/ecorex-agent"
 EXPECTED_PUBLIC_SHA = "F98B31C0B3839579C813F1F81EDDB477EE0D448B6E819403254C7EE719C009FD"
 EXPECTED_WIN_SHA = "434ABB586A133DB619683278073BA03988A3A9C3ACAF54B5320A6F26E31AEDB9"
@@ -45,7 +45,7 @@ def sha256_file(path: Path) -> str:
 
 
 def http_json(url: str, timeout: int = 20) -> dict[str, Any]:
-    req = urllib.request.Request(url, headers={"User-Agent": "EcoreX-v019-matrix/1"})
+    req = urllib.request.Request(url, headers={"User-Agent": "EcoreX-v020-matrix/1"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         if resp.status != 200:
             raise MatrixFailure(f"{url} returned HTTP {resp.status}")
@@ -53,7 +53,7 @@ def http_json(url: str, timeout: int = 20) -> dict[str, Any]:
 
 
 def http_text(url: str, timeout: int = 20) -> str:
-    req = urllib.request.Request(url, headers={"User-Agent": "EcoreX-v019-matrix/1"})
+    req = urllib.request.Request(url, headers={"User-Agent": "EcoreX-v020-matrix/1"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         if resp.status != 200:
             raise MatrixFailure(f"{url} returned HTTP {resp.status}")
@@ -61,7 +61,7 @@ def http_text(url: str, timeout: int = 20) -> str:
 
 
 def http_head(url: str, timeout: int = 20) -> tuple[int, int]:
-    req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "EcoreX-v019-matrix/1"})
+    req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "EcoreX-v020-matrix/1"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         length = int(resp.headers.get("Content-Length") or 0)
         return resp.status, length
@@ -85,7 +85,7 @@ def http_sha256_cached(url: str, expected_length: int, expected_sha: str, cache_
         partial_path.unlink()
         resume_from = 0
 
-    headers = {"User-Agent": "EcoreX-v019-matrix/1"}
+    headers = {"User-Agent": "EcoreX-v020-matrix/1"}
     if resume_from > 0:
         headers["Range"] = f"bytes={resume_from}-"
     req = urllib.request.Request(url, headers=headers)
@@ -120,7 +120,7 @@ def http_sha256_cached(url: str, expected_length: int, expected_sha: str, cache_
 
 
 def http_sha256(url: str, expected_length: int, timeout: int = 120) -> dict[str, Any]:
-    req = urllib.request.Request(url, headers={"User-Agent": "EcoreX-v019-matrix/1"})
+    req = urllib.request.Request(url, headers={"User-Agent": "EcoreX-v020-matrix/1"})
     h = hashlib.sha256()
     total = 0
     with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -873,7 +873,7 @@ def run_matrix(root: Path) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=str(Path(__file__).resolve().parents[1]))
-    parser.add_argument("--output", default="docs/v0.1.19/real-task-matrix.json")
+    parser.add_argument("--output", default="docs/v0.2.0/real-task-matrix.json")
     args = parser.parse_args()
 
     root = Path(args.root).resolve()

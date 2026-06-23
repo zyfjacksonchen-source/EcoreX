@@ -16,11 +16,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 
-VERSION = "0.1.19"
+VERSION = "0.2.0"
 PASSWORD_ITERATIONS = 180000
 SESSION_DAYS = 7
-DEFAULT_CLIENT_EVENT_KEY = "ecorex-desktop-v0.1.19"
+DEFAULT_CLIENT_EVENT_KEY = "ecorex-desktop-v0.2.0"
 DEFAULT_COMPAT_CLIENT_EVENT_KEYS = (
+    "ecorex-desktop-v0.2.0",
     "ecorex-desktop-v0.1.19",
     "ecorex-desktop-v0.1.10",
     "ecorex-desktop-v0.1.11",
@@ -31,6 +32,7 @@ DEFAULT_COMPAT_CLIENT_EVENT_KEYS = (
     "ecorex-desktop-v0.1.16",
     "ecorex-desktop-v0.1.18",
     "ecorex-desktop-v0.1.17",
+    "ecorex-web-v0.2.0-web.1",
     "ecorex-web-v0.1.19-web.1",
     "ecorex-web-v0.1.11-web.1",
     "ecorex-web-v0.1.12-web.1",
@@ -57,7 +59,7 @@ DEFAULT_USAGE = [
 ]
 
 DEFAULT_LOGS = [
-    ("error", "Desktop", "EcoreX desktop failure collection is ready for v0.1.19 validation.", "unread"),
+    ("error", "Desktop", "EcoreX desktop failure collection is ready for v0.2.0 validation.", "unread"),
 ]
 
 DEFAULT_CAPABILITIES = [
@@ -974,7 +976,7 @@ class AdminStore:
         return self.upsert_global_model(payload)
 
     def delete_model_credential(self, credential_id, payload):
-        raise ValueError("global model cannot be deleted in v0.1.19")
+        raise ValueError("global model cannot be deleted in v0.2.0")
 
     def resolve_client_model_config(self, user_email="", device_id="", token=""):
         user = self.require_session(token, device_id)
