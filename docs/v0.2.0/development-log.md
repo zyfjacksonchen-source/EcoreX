@@ -38,3 +38,8 @@
   - Merge-mode `sessionProjects`, `pinnedProjects`, `sessionTitles`, and `pinnedSessions` now let incoming explicit values override existing values while preserving keys omitted by partial clients.
   - Added a regression test for moving a session between project folders, updating titles, and explicitly unpinning project/session entries.
   - Rebuilt v0.2.0 WebUI packages and public release artifacts again so the packaged runtime contains the corrected merge semantics.
+- Completed final v0.2.0 release closure.
+  - Three independent read-only review agents reached PASS consensus across UI/performance, runtime/state, and cross-platform/security.
+  - Published GitHub release `v0.2.0` with Windows WebUI, macOS WebUI, combined Win/Mac, and public-release zip assets.
+  - Deployed the public release bundle to `https://www.ecoreai.cn/ecorex-agent/` and verified the public manifest and Win/Mac WebUI downloads.
+  - Ran a Windows package installer live smoke; the local desktop shortcut was generated and the installed WebUI returned version `0.2.0` on port `9909`.
