@@ -91,6 +91,25 @@ async function copyText(text) {
   await navigator.clipboard.writeText(text);
 }
 
+function bindCommandCopyButton(button, command) {
+  button.addEventListener("click", async () => {
+    const ok = await copyText(command).then(() => true).catch(() => false);
+    button.textContent = ok ? "已复制" : "复制失败";
+    setTimeout(() => {
+      button.textContent = "复制命令";
+    }, 1400);
+  });
+}
+
+function setupInstallGuideCopyButtons() {
+  document.querySelectorAll("[data-copy-install-command]").forEach((button) => {
+    const commandKey = button.getAttribute("data-copy-install-command");
+    const command = INSTALL_COMMANDS[commandKey];
+    if (!command) return;
+    bindCommandCopyButton(button, command);
+  });
+}
+
 function renderCard(grid, manifest, cardId, recommended) {
   const artifact = artifactById(manifest, cardId);
   const copy = cardCopy(cardId);
@@ -120,14 +139,8 @@ function renderCard(grid, manifest, cardId, recommended) {
         : '<span class="download-link is-disabled">待发布</span>'
     }
   `;
-  article.querySelector("[data-copy-command]")?.addEventListener("click", async (event) => {
-    const button = event.currentTarget;
-    const ok = await copyText(command).then(() => true).catch(() => false);
-    button.textContent = ok ? "已复制" : "复制失败";
-    setTimeout(() => {
-      button.textContent = "复制命令";
-    }, 1400);
-  });
+  const button = article.querySelector("[data-copy-command]");
+  if (button) bindCommandCopyButton(button, command);
   grid.appendChild(article);
 }
 
@@ -146,6 +159,8 @@ function renderDownloads(manifest) {
       : ["webui-windows-x64", "webui-macos-universal"];
   order.forEach((cardId, index) => renderCard(grid, manifest, cardId, index === 0));
 }
+
+setupInstallGuideCopyButtons();
 
 fetch("./manifest.json", { cache: "no-store" })
   .then((response) => {

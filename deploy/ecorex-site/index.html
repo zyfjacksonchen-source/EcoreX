@@ -22,8 +22,8 @@
           <small data-site-version></small>
         </a>
         <nav class="nav-links" aria-label="页面导航">
-          <a href="#download">下载</a>
           <a href="#install-guide">如何安装</a>
+          <a href="#download">下载</a>
           <a href="#workflow">更新逻辑</a>
           <a href="./admin/">管理端</a>
           <button class="icon-button" type="button" data-theme-toggle aria-label="切换明暗模式">
@@ -43,8 +43,8 @@
               桌面端自动更新通道已停止作为默认路径。
             </p>
             <div class="hero-actions">
-              <a class="button primary" href="#download">选择系统安装</a>
-              <a class="button ghost" href="#install-guide">查看安装步骤</a>
+              <a class="button primary" href="#install-guide">查看安装步骤</a>
+              <a class="button ghost" href="#download">选择系统下载</a>
             </div>
           </div>
         </section>
@@ -68,20 +68,6 @@
           </div>
         </section>
 
-        <section class="downloads" id="download" aria-label="下载 EcoreX WebUI">
-          <div class="section-heading">
-            <p class="eyebrow">Install / Update</p>
-            <h2>一条命令完成安装或更新</h2>
-          </div>
-          <div class="download-grid" data-downloads>
-            <article class="download-card skeleton">
-              <span class="platform-icon">...</span>
-              <h3>正在读取版本</h3>
-              <p>请稍候。</p>
-            </article>
-          </div>
-        </section>
-
         <section class="install-guide" id="install-guide" aria-label="如何安装 EcoreX WebUI">
           <div class="section-heading">
             <p class="eyebrow">How to install</p>
@@ -97,7 +83,10 @@
                 </li>
                 <li>
                   <strong>Windows：粘贴命令并回车</strong>
-                  <code>powershell -ExecutionPolicy Bypass -NoProfile -Command "iwr https://www.ecoreai.cn/ecorex-agent/install-webui.ps1 -UseB | iex"</code>
+                  <div class="command-block guide-command">
+                    <code>powershell -ExecutionPolicy Bypass -NoProfile -Command "iwr https://www.ecoreai.cn/ecorex-agent/install-webui.ps1 -UseB | iex"</code>
+                    <button type="button" data-copy-install-command="win32">复制命令</button>
+                  </div>
                 </li>
                 <li>
                   <strong>macOS：打开终端</strong>
@@ -105,7 +94,10 @@
                 </li>
                 <li>
                   <strong>macOS：粘贴命令并回车</strong>
-                  <code>curl -fsSL https://www.ecoreai.cn/ecorex-agent/install-webui.sh | bash</code>
+                  <div class="command-block guide-command">
+                    <code>curl -fsSL https://www.ecoreai.cn/ecorex-agent/install-webui.sh | bash</code>
+                    <button type="button" data-copy-install-command="darwin">复制命令</button>
+                  </div>
                 </li>
                 <li>
                   <strong>等待自动完成</strong>
@@ -150,6 +142,20 @@
           </div>
         </section>
 
+        <section class="downloads" id="download" aria-label="下载 EcoreX WebUI">
+          <div class="section-heading">
+            <p class="eyebrow">Install / Update</p>
+            <h2>一条命令完成安装或更新</h2>
+          </div>
+          <div class="download-grid" data-downloads>
+            <article class="download-card skeleton">
+              <span class="platform-icon">...</span>
+              <h3>正在读取版本</h3>
+              <p>请稍候。</p>
+            </article>
+          </div>
+        </section>
+
         <section class="capability-band" id="workflow" aria-label="WebUI 更新逻辑">
           <img src="./assets/ecorex-ecosystem-hub.png" alt="EcoreX 能力结构预览" />
           <div>
@@ -169,6 +175,6 @@
         <span>EcoreX WebUI</span>
       </footer>
     </div>
-    <script src="./site.js?v=0.2.0-webui-0003"></script>
+    <script src="./site.js?v=0.2.0-webui-0004"></script>
   </body>
 </html>

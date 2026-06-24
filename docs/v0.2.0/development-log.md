@@ -54,3 +54,4 @@
 - Added persisted `visibleOutputSettled` UI state so a pre-`done` visible artifact/media bubble remains recoverable after reload instead of being misclassified as a terminal assistant answer.
 - Independent read-only review found and rechecked two UI-state P1 issues: premature terminal classification during reconnect and missing `visibleOutputSettled` persistence. Both were fixed before packaging.
 - Rebuilt v0.2.0 WebUI packages and public release artifacts with the hotfix.
+- Updated the public download page so the installation guide appears before package download cards, with one-click copy buttons for both Windows PowerShell and macOS Terminal install/update commands.
