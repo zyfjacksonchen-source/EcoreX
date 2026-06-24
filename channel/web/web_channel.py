@@ -287,7 +287,10 @@ def _web_app_bridge_script() -> str:
       if (!modelReady.ready) {
         return {
           status: "error",
-          message: modelReady.message || "请先登录企业账号，或在设置 > 模型中配置可用的 API Key 后再发送。"
+          code: modelReady.code || "MODEL_CONFIG_UNAVAILABLE",
+          error_type: "model_config",
+          recoverable: modelReady.recoverable !== false,
+          message: modelReady.message || "当前账号暂时没有可用模型，请重新登录或联系管理员检查企业模型配置。"
         };
       }
     }
@@ -433,7 +436,13 @@ def _web_app_bridge_script() -> str:
       if (isInvalidClientKey(response, payload) && i < keys.length - 1) {
         continue;
       }
-      if (!response.ok) throw new Error(payload.error || payload.message || "Client request failed");
+      if (!response.ok) {
+        var err = new Error(payload.error || payload.message || "Client request failed");
+        err.status = response.status;
+        err.code = payload.code || payload.error_code || "";
+        err.payload = payload;
+        throw err;
+      }
       return payload;
     }
     throw new Error((lastPayload && (lastPayload.error || lastPayload.message)) || (lastResponse && lastResponse.statusText) || "Client request failed");
@@ -485,12 +494,26 @@ def _web_app_bridge_script() -> str:
     try {
       var overview = await apiJson({ path: "/api/models", method: "GET" });
       var providers = Array.isArray(overview.providers) ? overview.providers : [];
-      var configured = providers.some(function (provider) { return provider && provider.configured; });
+      var configuredProviders = providers.filter(function (provider) { return provider && provider.configured; });
+      var configured = configuredProviders.length > 0;
       var chat = overview.capabilities && overview.capabilities.chat ? overview.capabilities.chat : {};
-      return Boolean(configured && (chat.current_provider || chat.current_model));
+      if (!configured) return false;
+      if (chat.current_provider || chat.current_model) return true;
+      return configuredProviders.some(function (provider) {
+        return provider && provider.id && Array.isArray(provider.models) && provider.models.length > 0;
+      });
     } catch (error) {
       return false;
     }
+  }
+
+  function modelConfigNotReady(code, message) {
+    return {
+      ready: false,
+      code: code || "MODEL_CONFIG_UNAVAILABLE",
+      recoverable: true,
+      message: message || "当前账号暂时没有可用模型，请重新登录或联系管理员检查企业模型配置。"
+    };
   }
 
   async function ensureModelReady() {
@@ -503,15 +526,17 @@ def _web_app_bridge_script() -> str:
         return { ready: true };
       }
     } catch (error) {
-      return {
-        ready: false,
-        message: "企业模型配置同步失败，请先登录企业账号或联系管理员检查后台模型配置。"
-      };
+      var status = Number((error && error.status) || 0);
+      var text = String((error && error.message) || error || "").toLowerCase();
+      if (status === 401 || /missing user token|invalid user token|expired|token|login|登录|未登录/.test(text)) {
+        return modelConfigNotReady("ENTERPRISE_LOGIN_REQUIRED", "登录状态已失效，请重新登录后再发送。");
+      }
+      if (status === 403 || /invalid client key|client key/.test(text)) {
+        return modelConfigNotReady("ENTERPRISE_POLICY_UNAVAILABLE", "企业模型配置暂时无法同步，请稍后重试；如持续出现，请联系管理员更新服务端配置。");
+      }
+      return modelConfigNotReady("ENTERPRISE_POLICY_SYNC_FAILED", "企业模型配置同步失败，请稍后重试；如持续出现，请联系管理员检查后台模型配置。");
     }
-    return {
-      ready: false,
-      message: "当前网页版没有可用模型配置。请先登录企业账号，或在设置 > 模型中配置可用的 API Key。"
-    };
+    return modelConfigNotReady("MODEL_CONFIG_UNAVAILABLE", "当前账号暂时没有可用模型，请重新登录或联系管理员检查企业模型配置。");
   }
 
   var updateStatus = {
@@ -1528,6 +1553,7 @@ class WebChannel(ChatChannel):
                     "failed",
                     "cancelled",
                     "interrupted",
+                    "timeout",
                 }
                 is_subagent = (
                     run_type == "subagent"
@@ -1566,6 +1592,14 @@ class WebChannel(ChatChannel):
                 retry_disabled_reason = ""
                 if is_subagent:
                     retry_disabled_reason = "subagent_replay_unavailable"
+                    role = str(metadata.get("role") or "subagent")
+                    fallback_name = f"{role} {str(metadata.get('task_id') or request_id or session_id)[-4:]}"
+                    row["display_name"] = metadata.get("name") or metadata.get("summary") or fallback_name
+                    row["title"] = row.get("display_name")
+                    row["task_id"] = metadata.get("task_id") or request_id.replace("subagent-", "")
+                    row["parent_request_id"] = metadata.get("parent_request_id") or ""
+                    row["deadline_at"] = metadata.get("deadline_at")
+                    row["timeout_seconds"] = metadata.get("timeout_seconds")
                 elif is_scheduler:
                     retry_disabled_reason = "scheduler_replay_unavailable"
                 elif not session_id:
@@ -1593,6 +1627,7 @@ class WebChannel(ChatChannel):
                         and not terminal
                         and not (is_subagent and not request_id)
                     ),
+                    "collect": bool(is_subagent and terminal),
                     "diagnostics": True,
                 }
                 if cancelling and not terminal:
@@ -1748,11 +1783,42 @@ class WebChannel(ChatChannel):
                 bump_status_count(item)
                 if session_id and not item.get("cancelled") and is_primary_chat_request(item, request_id, session_id):
                     sessions.setdefault(session_id, []).append(request_id)
+            children_by_parent = {}
+            for item in [*requests, *recent_terminal_requests]:
+                run_type = str((item or {}).get("run_type") or "").lower()
+                request_id = str((item or {}).get("request_id") or "")
+                session_id = str((item or {}).get("session_id") or "")
+                if run_type != "subagent" and not request_id.startswith("subagent-") and not session_id.startswith("subagent-"):
+                    continue
+                metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+                parent_key = (
+                    str(metadata.get("parent_request_id") or "").strip()
+                    or str(metadata.get("parent_session_id") or "").strip()
+                    or str(item.get("parent_id") or "").strip()
+                )
+                if not parent_key:
+                    continue
+                children_by_parent.setdefault(parent_key, []).append({
+                    "request_id": request_id,
+                    "session_id": session_id,
+                    "task_id": metadata.get("task_id") or item.get("task_id") or request_id.replace("subagent-", ""),
+                    "name": item.get("display_name") or metadata.get("name") or request_id,
+                    "role": metadata.get("role") or "subagent",
+                    "status": item.get("status") or item.get("state") or "",
+                    "phase": item.get("phase") or "",
+                    "created_at": item.get("created_at"),
+                    "updated_at": item.get("updated_at"),
+                    "terminal_at": item.get("terminal_at"),
+                    "deadline_at": metadata.get("deadline_at") or item.get("deadline_at"),
+                    "actions": item.get("actions") or {},
+                })
             return {
                 "status": "success",
                 "requests": requests,
                 "recent_terminal_requests": recent_terminal_requests,
                 "recentTerminalRequests": recent_terminal_requests,
+                "children_by_parent": children_by_parent,
+                "childrenByParent": children_by_parent,
                 "run_status_counts": run_status_counts,
                 "runStatusCounts": run_status_counts,
                 "sessions": sessions,
@@ -1820,6 +1886,7 @@ class WebChannel(ChatChannel):
             event.setdefault("recoverable", True)
         elif legacy_type in ("delta", "message_update"):
             event.setdefault("event_type", "model.delta")
+            event.setdefault("update_mode", "replace" if legacy_type == "message_update" else "append")
             event.setdefault("state", "running")
         elif legacy_type in ("reasoning", "thinking"):
             event.setdefault("event_type", "reasoning.update")
@@ -3016,10 +3083,32 @@ class WebChannel(ChatChannel):
     def _build_done_event(self, request_id: str, session_id: str, content: str):
         self._persist_request_artifacts(request_id, session_id)
         seqs = self._fetch_latest_pair_seqs(session_id)
+        turn_id = request_id or ""
+        if not turn_id and seqs.get("user_seq") is not None and seqs.get("bot_seq") is not None:
+            turn_id = f"{seqs.get('user_seq')}:{seqs.get('bot_seq')}"
+        identity_extras = {
+            "request_id": request_id,
+            "turn_id": turn_id,
+            "user_seq": seqs.get("user_seq"),
+            "bot_seq": seqs.get("bot_seq"),
+        }
+        try:
+            from agent.memory import get_conversation_store
+            store = get_conversation_store()
+            bot_seq = seqs.get("bot_seq")
+            if bot_seq is not None:
+                store.attach_extras_to_assistant_seq(session_id, int(bot_seq), identity_extras)
+            else:
+                store.attach_extras_to_last_assistant(session_id, identity_extras)
+        except Exception as e:
+            logger.debug(f"[WebChannel] request identity persist skipped for {request_id}: {e}")
         payload = {
             "type": "done",
             "content": content,
+            "final_text": content,
+            "update_mode": "replace",
             "request_id": request_id,
+            "turn_id": turn_id,
             "timestamp": time.time(),
             "user_seq": seqs.get("user_seq"),
             "bot_seq": seqs.get("bot_seq"),
@@ -3364,6 +3453,21 @@ class WebChannel(ChatChannel):
             flush_stream_pending()
             return self._push_sse_event(request_id, item)
 
+        def _extract_subagent_task(value: Any) -> Dict[str, Any]:
+            payload = value
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except Exception:
+                    payload = {}
+            if not isinstance(payload, dict):
+                return {}
+            if isinstance(payload.get("task"), dict):
+                return payload.get("task") or {}
+            if isinstance(payload.get("data"), dict) and isinstance(payload["data"].get("task"), dict):
+                return payload["data"].get("task") or {}
+            return {}
+
         def on_event(event: dict):
             if not self._sse_request_exists(request_id):
                 return
@@ -3423,6 +3527,19 @@ class WebChannel(ChatChannel):
                 flush_stream_pending()
                 tool_name = data.get("tool_name", "tool")
                 arguments = data.get("arguments", {})
+                if not isinstance(arguments, dict):
+                    arguments = {}
+                if str(tool_name) == "subagent":
+                    self._push_sse_event(request_id, {
+                        "type": "subagent_start",
+                        "tool_call_id": data.get("tool_call_id", ""),
+                        "name": str(arguments.get("name") or arguments.get("summary") or arguments.get("task") or "Subagent")[:48],
+                        "role": arguments.get("role") or "explorer",
+                        "summary": arguments.get("summary") or arguments.get("task") or "",
+                        "status": "starting",
+                        "request_id": request_id,
+                        "timestamp": time.time(),
+                    })
                 self._push_sse_event(request_id, {
                     "type": "tool_start",
                     "tool": tool_name,
@@ -3450,6 +3567,31 @@ class WebChannel(ChatChannel):
                 result = data.get("result", "")
                 exec_time = data.get("execution_time", 0)
                 tool_call_id = data.get("tool_call_id", "")
+                if str(tool_name) == "subagent":
+                    task = _extract_subagent_task(result)
+                    if task:
+                        status_value = str(task.get("status") or status or "running")
+                        event_type_name = {
+                            "completed": "subagent_complete",
+                            "failed": "subagent_failed",
+                            "timeout": "subagent_timeout",
+                            "cancelled": "subagent_cancelled",
+                            "interrupted": "subagent_failed",
+                        }.get(status_value, "subagent_update")
+                        self._push_sse_event(request_id, {
+                            "type": event_type_name,
+                            "tool_call_id": tool_call_id,
+                            "task": task,
+                            "task_id": task.get("id") or task.get("task_id") or "",
+                            "child_request_id": task.get("requestId") or task.get("childSessionId") or "",
+                            "name": task.get("name") or task.get("summary") or task.get("id") or "Subagent",
+                            "role": task.get("role") or "subagent",
+                            "summary": task.get("summary") or "",
+                            "status": status_value,
+                            "result_preview": str(task.get("result") or task.get("error") or "")[:400],
+                            "request_id": request_id,
+                            "timestamp": time.time(),
+                        })
                 for artifact in self._artifacts_from_tool_result(request_id, tool_name, tool_call_id, status, result):
                     omitted_artifact_count = int(artifact.pop("_omitted_artifact_count", 0) or 0)
                     if artifact.pop("_artifact_limit_only", False):
@@ -4288,8 +4430,10 @@ class WebChannel(ChatChannel):
         # tail so async post-processing (TTS auto-synthesis) can deliver a
         # `voice_attach` event before the client disconnects.
         POST_DONE_TAIL_SECONDS = 12
+        HEARTBEAT_SECONDS = 15
         post_done = terminal_consumed
         post_deadline = time.time() + POST_DONE_TAIL_SECONDS if terminal_consumed else 0.0
+        last_heartbeat_at = 0.0
 
         try:
             if replay_gap_event is not None:
@@ -4313,7 +4457,18 @@ class WebChannel(ChatChannel):
                 if item is None:
                     if post_done and time.time() >= post_deadline:
                         break
-                    yield b": keepalive\n\n"
+                    now = time.time()
+                    if now - last_heartbeat_at >= HEARTBEAT_SECONDS:
+                        heartbeat = {
+                            "type": "heartbeat",
+                            "request_id": request_id,
+                            "timestamp": now,
+                        }
+                        payload = json.dumps(heartbeat, ensure_ascii=False)
+                        yield f"data: {payload}\n\n".encode("utf-8")
+                        last_heartbeat_at = now
+                    else:
+                        yield b": keepalive\n\n"
                     continue
 
                 deadline = time.time() + idle_timeout
@@ -5678,8 +5833,9 @@ class AgentInstallRequestHandler:
 
 
 class _SubagentContext:
-    def __init__(self, session_id: str, workspace_dir: str):
+    def __init__(self, session_id: str, workspace_dir: str, request_id: str = ""):
         self._current_session_id = session_id
+        self._current_request_id = request_id
         self.workspace_dir = workspace_dir
 
 
@@ -5709,7 +5865,11 @@ class SubagentsHandler:
 
             action = str(data.get("action") or "start").strip().lower()
             tool = SubagentTool()
-            tool.context = _SubagentContext(str(data.get("sessionId") or data.get("session_id") or ""), _get_workspace_root())
+            tool.context = _SubagentContext(
+                str(data.get("sessionId") or data.get("session_id") or ""),
+                _get_workspace_root(),
+                str(data.get("requestId") or data.get("request_id") or ""),
+            )
             return json.dumps(_tool_result_to_payload(tool.execute({"action": action, **data})), ensure_ascii=False)
         except Exception as exc:
             logger.exception("[WebChannel] subagent action failed")
@@ -7414,6 +7574,7 @@ class ChannelsHandler:
     """API for managing external channel configurations (feishu, dingtalk, etc)."""
 
     CHANNEL_DEFS = CHANNEL_CATALOG
+    CHANNEL_RUNTIME_STATE: Dict[str, Dict[str, Any]] = {}
 
     @staticmethod
     def _get_weixin_login_status() -> str:
@@ -7443,14 +7604,56 @@ class ChannelsHandler:
     def _active_channel_set(cls) -> set:
         return active_channel_set(conf())
 
+    @classmethod
+    def _set_runtime_state(cls, channel_name: str, **updates) -> Dict[str, Any]:
+        state = dict(cls.CHANNEL_RUNTIME_STATE.get(channel_name) or {})
+        state.update({k: v for k, v in updates.items() if v is not None})
+        state["updated_at"] = time.time()
+        cls.CHANNEL_RUNTIME_STATE[channel_name] = state
+        return state
+
+    @classmethod
+    def _runtime_state(cls, channel_name: str) -> Dict[str, Any]:
+        return dict(cls.CHANNEL_RUNTIME_STATE.get(channel_name) or {})
+
+    @staticmethod
+    def _running_channel_names() -> set:
+        try:
+            import sys
+            app_module = sys.modules.get('__main__') or sys.modules.get('app')
+            mgr = getattr(app_module, '_channel_mgr', None) if app_module else None
+            if not mgr:
+                return set()
+            running = set()
+            for name in CHANNEL_CATALOG.keys():
+                try:
+                    if mgr.get_channel(name) is not None:
+                        running.add(name)
+                except Exception:
+                    continue
+            return running
+        except Exception:
+            return set()
+
+    @staticmethod
+    def _refresh_runtime_capabilities(reason: str = "") -> None:
+        try:
+            from bridge.bridge import Bridge
+            Bridge().reset_bot()
+            logger.info(f"[WebChannel] Runtime capabilities refresh requested: {reason}")
+        except Exception as e:
+            logger.debug(f"[WebChannel] Runtime capability refresh skipped: {e}")
+
     def GET(self):
         _require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
             local_config = conf()
             active_channels = self._active_channel_set()
+            running_channels = self._running_channel_names()
             channels = []
             for ch_name, ch_def in self.CHANNEL_DEFS.items():
+                runtime_state = self._runtime_state(ch_name)
                 fields_out = []
                 for f in ch_def["fields"]:
                     raw_val = local_config.get(f["key"], f.get("default", ""))
@@ -7474,9 +7677,14 @@ class ChannelsHandler:
                     "color": ch_def["color"],
                     "active": ch_name in active_channels,
                     "configured": ch_name in active_channels or channel_has_config(local_config, ch_name),
-                    "status": "active" if ch_name in active_channels else (
+                    "running": ch_name in running_channels,
+                    "last_error": runtime_state.get("last_error") or "",
+                    "started_at": runtime_state.get("started_at"),
+                    "operation_id": runtime_state.get("operation_id") or "",
+                    "dependency_missing": bool(runtime_state.get("dependency_missing") or False),
+                    "status": runtime_state.get("status") or ("active" if ch_name in active_channels else (
                         "configured" if channel_has_config(local_config, ch_name) else "available"
-                    ),
+                    )),
                     "fields": fields_out,
                 }
                 if ch_name == "weixin" and ch_name in active_channels:
@@ -7569,10 +7777,12 @@ class ChannelsHandler:
             except Exception as e:
                 logger.warning(f"[WebChannel] Failed to restart channel '{channel_name}': {e}")
 
+        self._refresh_runtime_capabilities(f"channel-save:{channel_name}")
         return json.dumps({
             "status": "success",
             "applied": list(applied.keys()),
             "restarted": should_restart,
+            "capability_refresh_required": True,
         }, ensure_ascii=False)
 
     def _handle_connect(self, channel_name: str, updates: dict):
@@ -7622,6 +7832,14 @@ class ChannelsHandler:
             json.dump(file_cfg, f, indent=4, ensure_ascii=False)
 
         logger.info(f"[WebChannel] Channel '{channel_name}' connecting, channel_type={new_channel_type}")
+        operation_id = f"{channel_name}-{int(time.time() * 1000)}"
+        self._set_runtime_state(
+            channel_name,
+            status="starting",
+            operation_id=operation_id,
+            last_error="",
+            dependency_missing=False,
+        )
 
         def _do_start():
             try:
@@ -7630,7 +7848,9 @@ class ChannelsHandler:
                 clear_fn = getattr(app_module, '_clear_singleton_cache', None) if app_module else None
                 mgr = getattr(app_module, '_channel_mgr', None) if app_module else None
                 if mgr is None:
-                    logger.warning(f"[WebChannel] ChannelManager not available, cannot start '{channel_name}'")
+                    msg = f"ChannelManager not available, cannot start '{channel_name}'"
+                    self._set_runtime_state(channel_name, status="error", last_error=msg, operation_id=operation_id)
+                    logger.warning(f"[WebChannel] {msg}")
                     return
                 # Stop existing instance first if still running (e.g. re-connect without disconnect)
                 existing_ch = mgr.get_channel(channel_name)
@@ -7645,8 +7865,22 @@ class ChannelsHandler:
                     clear_fn(channel_name)
                 logger.info(f"[WebChannel] Starting channel '{channel_name}'...")
                 mgr.start([channel_name], first_start=False)
+                self._set_runtime_state(
+                    channel_name,
+                    status="active",
+                    started_at=time.time(),
+                    last_error="",
+                    operation_id=operation_id,
+                )
+                self._refresh_runtime_capabilities(f"channel-connect:{channel_name}")
                 logger.info(f"[WebChannel] Channel '{channel_name}' start completed")
             except Exception as e:
+                self._set_runtime_state(
+                    channel_name,
+                    status="error",
+                    last_error=str(e),
+                    operation_id=operation_id,
+                )
                 logger.error(f"[WebChannel] Failed to start channel '{channel_name}': {e}",
                              exc_info=True)
 
@@ -7655,6 +7889,9 @@ class ChannelsHandler:
         return json.dumps({
             "status": "success",
             "channel_type": new_channel_type,
+            "starting": True,
+            "operation_id": operation_id,
+            "capability_refresh_required": True,
         }, ensure_ascii=False)
 
     def _handle_disconnect(self, channel_name: str):
@@ -7688,9 +7925,12 @@ class ChannelsHandler:
                     logger.warning(f"[WebChannel] ChannelManager not found, cannot stop '{channel_name}'")
                 if clear_fn:
                     clear_fn(channel_name)
+                self._set_runtime_state(channel_name, status="configured", operation_id="", started_at=None, last_error="")
+                self._refresh_runtime_capabilities(f"channel-disconnect:{channel_name}")
                 logger.info(f"[WebChannel] Channel '{channel_name}' disconnected, "
                             f"channel_type={new_channel_type}")
             except Exception as e:
+                self._set_runtime_state(channel_name, status="error", last_error=str(e))
                 logger.warning(f"[WebChannel] Failed to stop channel '{channel_name}': {e}",
                                exc_info=True)
 
@@ -7699,6 +7939,8 @@ class ChannelsHandler:
         return json.dumps({
             "status": "success",
             "channel_type": new_channel_type,
+            "starting": False,
+            "capability_refresh_required": True,
         }, ensure_ascii=False)
 
 

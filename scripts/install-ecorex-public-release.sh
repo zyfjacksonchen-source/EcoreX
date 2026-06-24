@@ -6,6 +6,9 @@ ZIP_PATH="${1:-${ZIP_PATH:-release-artifacts/EcoreX_${VERSION}-public-release.zi
 RELEASE_ROOT="${RELEASE_ROOT:-/srv/ecorex-agent-download}"
 ADMIN_ROOT="${ADMIN_ROOT:-/srv/ecorex-agent-admin}"
 SERVICE_NAME="${SERVICE_NAME:-ecorex-admin-api}"
+COMPOSE_ROOT="${COMPOSE_ROOT:-/opt/xhs-report}"
+COMPOSE_SERVICE="${COMPOSE_SERVICE:-ecorex-admin-api}"
+COMPOSE_ADMIN_CONTEXT="${COMPOSE_ADMIN_CONTEXT:-$COMPOSE_ROOT/_ecorex_admin_api}"
 EXPECTED_SHA256="${EXPECTED_SHA256:-}"
 RESTART_SERVICE="${RESTART_SERVICE:-1}"
 
@@ -127,6 +130,9 @@ install -d "$ADMIN_ROOT/server"
 
 cp -a "$tmp_dir/site" "$release_dir"
 cp -a "$tmp_dir/admin-api/." "$ADMIN_ROOT/app/"
+if [[ -d "$COMPOSE_ADMIN_CONTEXT" ]]; then
+  cp -a "$tmp_dir/admin-api/." "$COMPOSE_ADMIN_CONTEXT/"
+fi
 if [[ -d "$tmp_dir/server" ]]; then
   cp -a "$tmp_dir/server/." "$ADMIN_ROOT/server/"
 fi
@@ -182,11 +188,28 @@ merge_client_keys "$active_env_file"
 
 ln -sfn "$release_dir" "$RELEASE_ROOT/current"
 
-if [[ "$RESTART_SERVICE" == "1" ]] && command -v systemctl >/dev/null 2>&1; then
-  if systemctl list-unit-files "$SERVICE_NAME.service" >/dev/null 2>&1; then
-    systemctl restart "$SERVICE_NAME.service"
+if [[ "$RESTART_SERVICE" == "1" ]]; then
+  compose_cmd=()
+  if [[ -f "$COMPOSE_ROOT/docker-compose.yml" || -f "$COMPOSE_ROOT/compose.yml" ]]; then
+    if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+      compose_cmd=(docker compose)
+    elif command -v docker-compose >/dev/null 2>&1; then
+      compose_cmd=(docker-compose)
+    fi
+  fi
+  if [[ ${#compose_cmd[@]} -gt 0 && -d "$COMPOSE_ADMIN_CONTEXT" ]]; then
+    (
+      cd "$COMPOSE_ROOT"
+      "${compose_cmd[@]}" up -d --build --force-recreate "$COMPOSE_SERVICE"
+    )
+  elif command -v systemctl >/dev/null 2>&1; then
+    if systemctl list-unit-files "$SERVICE_NAME.service" | grep -q "^$SERVICE_NAME\\.service"; then
+      systemctl restart "$SERVICE_NAME.service"
+    else
+      echo "systemd service $SERVICE_NAME.service not found and compose service not detected; skipped restart." >&2
+    fi
   else
-    echo "systemd service $SERVICE_NAME.service not found; skipped restart." >&2
+    echo "No supported service manager detected; skipped restart." >&2
   fi
 fi
 
@@ -198,5 +221,6 @@ releaseDir: $release_dir
 current: $RELEASE_ROOT/current
 adminApp: $ADMIN_ROOT/app
 adminEnv: $env_file
+adminComposeContext: $COMPOSE_ADMIN_CONTEXT
 serverHelpers: $ADMIN_ROOT/server
 EOF

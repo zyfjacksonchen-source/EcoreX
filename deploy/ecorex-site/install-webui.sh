@@ -56,16 +56,26 @@ download_file() {
       curl_args+=("$retry_all_errors_flag")
     fi
     if [[ -s "$partial" ]]; then
-      curl_args+=("-C" "-")
+      local resume_from
+      resume_from="$(wc -c < "$partial" | tr -d '[:space:]')"
+      curl_args+=("-H" "Range: bytes=${resume_from}-")
       echo "Resuming partial download, attempt $attempt/5..."
     else
       echo "Starting download, attempt $attempt/5..."
     fi
-    if curl "${curl_args[@]}" "$url" -o "$partial"; then
+    if curl "${curl_args[@]}" "$url" >> "$partial"; then
+      status=0
+    else
+      status=$?
+    fi
+    if [[ "$status" == "0" ]]; then
       break
     fi
-    status=$?
-    if [[ "$status" == "33" ]]; then
+    if [[ -s "$partial" ]] && [[ "$(sha256_file "$partial")" == "$expected_sha" ]]; then
+      echo "Partial package was already complete."
+      break
+    fi
+    if [[ "$status" == "33" || "$status" == "22" ]]; then
       echo "Server did not resume the partial download; restarting from byte 0." >&2
       rm -f "$partial"
     fi

@@ -211,6 +211,10 @@ def _extract_tool_results(content: Any) -> Dict[str, dict]:
     return results
 
 
+def _display_text_key(value: str) -> str:
+    return " ".join(str(value or "").split())
+
+
 def _group_into_display_turns(
     rows: List[tuple],
     include_thinking: bool = True,
@@ -242,7 +246,12 @@ def _group_into_display_turns(
     cur_rest: List[tuple] = []
     started = False
 
-    for role, raw_content, created_at, raw_extras in rows:
+    for row in rows:
+        if len(row) >= 5:
+            seq, role, raw_content, created_at, raw_extras = row[:5]
+        else:
+            seq = None
+            role, raw_content, created_at, raw_extras = row[:4]
         try:
             content = json.loads(raw_content)
         except Exception:
@@ -257,11 +266,11 @@ def _group_into_display_turns(
         if role == "user" and _is_visible_user_message(content):
             if started:
                 groups.append((cur_user, cur_rest))
-            cur_user = (content, created_at, extras)
+            cur_user = (seq, content, created_at, extras)
             cur_rest = []
             started = True
         else:
-            cur_rest.append((role, content, created_at, extras))
+            cur_rest.append((seq, role, content, created_at, extras))
 
     if started:
         groups.append((cur_user, cur_rest))
@@ -274,13 +283,15 @@ def _group_into_display_turns(
     for user_row, rest in groups:
         # User turn
         if user_row:
-            content, created_at, _u_extras = user_row
+            user_seq, content, created_at, _u_extras = user_row
             text = _extract_display_text(content)
             # Hide internal injection markers (scheduler / self-evolution) so the
             # user never sees a synthetic "[SCHEDULED] self-evolution" bubble;
             # the assistant reply that follows is still rendered.
             if text and not _is_internal_user_marker(text):
                 user_turn = {"role": "user", "content": text, "created_at": created_at}
+                if user_seq is not None:
+                    user_turn["user_seq"] = int(user_seq)
                 if isinstance(_u_extras, dict) and _u_extras:
                     user_turn["extras"] = _u_extras
                 turns.append(user_turn)
@@ -291,9 +302,10 @@ def _group_into_display_turns(
         tool_results: Dict[str, str] = {}
         final_text = ""
         final_ts: Optional[int] = None
+        final_seq: Optional[int] = None
         merged_extras: Dict[str, Any] = {}
 
-        for role, content, created_at, extras in rest:
+        for seq, role, content, created_at, extras in rest:
             if role == "assistant" and isinstance(extras, dict):
                 merged_extras.update(extras)
             if role == "user":
@@ -316,6 +328,7 @@ def _group_into_display_turns(
                             if txt:
                                 steps.append({"type": "content", "content": txt})
                                 final_text = txt
+                                final_seq = int(seq) if seq is not None else final_seq
                         elif btype == "tool_use":
                             steps.append({
                                 "type": "tool",
@@ -326,6 +339,7 @@ def _group_into_display_turns(
                 elif isinstance(content, str) and content.strip():
                     steps.append({"type": "content", "content": content.strip()})
                     final_text = content.strip()
+                    final_seq = int(seq) if seq is not None else final_seq
                 final_ts = created_at
 
         # Attach tool results to tool steps
@@ -345,17 +359,57 @@ def _group_into_display_turns(
         # both the final content and the mirrored content step so the rendered
         # bubble shows clean text while the stored message keeps the markers.
         final_text = _clean_display_text(final_text)
+        final_text_key = _display_text_key(final_text)
+        seen_content_keys = set()
+        filtered_steps: List[Dict[str, Any]] = []
         for step in steps:
             if step.get("type") == "content":
-                step["content"] = _clean_display_text(step.get("content", ""))
+                cleaned = _clean_display_text(step.get("content", ""))
+                step["content"] = cleaned
+                key = _display_text_key(cleaned)
+                # The last visible assistant text is rendered as the main
+                # answer. Keep intermediate different content steps, but do
+                # not also render the final answer inside the process area.
+                if final_text_key and key == final_text_key:
+                    continue
+                if key and key in seen_content_keys:
+                    continue
+                if key:
+                    seen_content_keys.add(key)
+            filtered_steps.append(step)
+        steps = filtered_steps
 
         if steps or final_text:
             turn = {
                 "role": "assistant",
                 "content": final_text,
                 "steps": steps,
-                "created_at": final_ts or (user_row[1] if user_row else 0),
+                "created_at": final_ts or (user_row[2] if user_row else 0),
             }
+            user_seq = None
+            if user_row and user_row[0] is not None:
+                user_seq = int(user_row[0])
+            if isinstance(merged_extras, dict):
+                user_seq = merged_extras.get("user_seq", user_seq)
+            bot_seq = None
+            if isinstance(merged_extras, dict):
+                bot_seq = merged_extras.get("bot_seq")
+            if bot_seq is None and final_seq is not None:
+                bot_seq = final_seq
+            if user_seq is not None:
+                turn["user_seq"] = int(user_seq)
+            if bot_seq is not None:
+                turn["bot_seq"] = int(bot_seq)
+            request_id = str((merged_extras or {}).get("request_id") or "").strip()
+            if request_id:
+                turn["request_id"] = request_id
+            turn_id = str((merged_extras or {}).get("turn_id") or "").strip()
+            if not turn_id and request_id:
+                turn_id = request_id
+            if not turn_id and user_seq is not None and bot_seq is not None:
+                turn_id = f"{user_seq}:{bot_seq}"
+            if turn_id:
+                turn["turn_id"] = turn_id
             if is_evolution:
                 turn["kind"] = "evolution"
             if merged_extras:
@@ -1217,12 +1271,9 @@ class ConversationStore:
         except Exception:
             include_thinking = False
 
-        # Strip seq for display grouping, but record max seq per visible user group
-        plain_rows = [
-            (role, content, created_at, extras_raw)
-            for _seq, role, content, created_at, extras_raw in rows
-        ]
-        visible = _group_into_display_turns(plain_rows, include_thinking=include_thinking)
+        # Keep raw seqs through display grouping so assistant turns can expose
+        # stable request/turn identity for SSE/history reconciliation.
+        visible = _group_into_display_turns(rows, include_thinking=include_thinking)
 
         # Build a mapping: find the seq of each visible user message to annotate context boundary.
         # Walk through rows to find visible user message seqs in order.
@@ -1245,9 +1296,11 @@ class ConversationStore:
             if turn["role"] == "user" and user_turn_idx < len(visible_user_seqs):
                 current_visible_user_seq = visible_user_seqs[user_turn_idx]
                 turn["_seq"] = current_visible_user_seq
+                turn.setdefault("user_seq", int(current_visible_user_seq))
                 user_turn_idx += 1
             elif turn["role"] == "assistant" and current_visible_user_seq is not None:
                 turn["_seq"] = current_visible_user_seq
+                turn.setdefault("user_seq", int(current_visible_user_seq))
 
         total = len(visible_user_seqs_desc) * 2
         page_items = visible[-page_size:]

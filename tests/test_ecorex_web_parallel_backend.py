@@ -1421,10 +1421,25 @@ class TestWebParallelHandlers(unittest.TestCase):
     def test_v020_webui_local_auth_falls_back_without_admin_client(self):
         root = Path(__file__).resolve().parents[1]
         web_source = (root / "channel" / "web" / "web_channel.py").read_text(encoding="utf-8")
+        app_source = (root / "desktop" / "src" / "App.tsx").read_text(encoding="utf-8")
+        install_source = (root / "scripts" / "install-ecorex-public-release.sh").read_text(encoding="utf-8")
 
         self.assertIn('if (!auth.auth_required) return webSession(false, true, null, true);', web_source)
         self.assertIn("invalid client key|client key", web_source)
         self.assertIn("if (isMissingClientBridge(error)) return webSession(Boolean(auth.auth_required), true);", web_source)
+        self.assertIn('code: modelReady.code || "MODEL_CONFIG_UNAVAILABLE"', web_source)
+        self.assertIn("err.status = response.status;", web_source)
+        self.assertIn('modelConfigNotReady("ENTERPRISE_LOGIN_REQUIRED"', web_source)
+        self.assertIn('modelConfigNotReady("ENTERPRISE_POLICY_UNAVAILABLE"', web_source)
+        self.assertIn("configuredProviders", web_source)
+        self.assertIn("isModelConfigSendError", app_source)
+        self.assertIn('label: "重新登录"', app_source)
+        self.assertIn("restoreUnacceptedDraft(message, result)", app_source)
+        self.assertIn("COMPOSE_ADMIN_CONTEXT", install_source)
+        self.assertIn("--force-recreate", install_source)
+        self.assertIn('"$COMPOSE_SERVICE"', install_source)
+        self.assertNotIn("当前网页版没有可用模型配置", web_source)
+        self.assertNotIn("请先登录企业账号，或在设置 > 模型中配置可用的 API Key", web_source)
 
     def test_tool_permission_handler_round_trips_mode_and_audit(self):
         from channel.web import web_channel

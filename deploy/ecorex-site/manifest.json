@@ -65,8 +65,8 @@
                           "variant":  "WebUI one-click local package",
                           "fileName":  "EcoreX_0.2.0-webui-windows-x64.zip",
                           "href":  "downloads/EcoreX_0.2.0-webui-windows-x64.zip",
-                          "size":  81093961,
-                          "sha256":  "F97A17E5A72F4932478946E8396E77DA4EDA5069ED8AB2B4BEEBBD31D67F6641",
+                          "size":  81098382,
+                          "sha256":  "57441EAEFFAF5B1EE0A93EA5B3DD2524953FB6D1D1F0881F238E77D8605A08E8",
                           "status":  "ready",
                           "source":  "Local v0.2.0 WebUI Windows artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks.",
                           "updatedAt":  "2026-06-24"
@@ -78,8 +78,8 @@
                           "variant":  "WebUI one-click local package",
                           "fileName":  "EcoreX_0.2.0-webui-macos-universal.zip",
                           "href":  "downloads/EcoreX_0.2.0-webui-macos-universal.zip",
-                          "size":  158205186,
-                          "sha256":  "3DA292C890CF1DD1786EE0D591542481805AD1337CCD01978FFF1BECE0A869CF",
+                          "size":  158209713,
+                          "sha256":  "E3A8D57AA99AD1710AEACBE0834EC9002ED10BA2222EDAA9EC12594FED0E68D6",
                           "status":  "ready",
                           "source":  "Local v0.2.0 WebUI macOS artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks.",
                           "updatedAt":  "2026-06-24"
@@ -194,17 +194,17 @@
                       },
                       {
                           "id":  "web-linux-service",
-                          "version":  "0.1.19",
+                          "version":  "0.2.0",
                           "platform":  "Linux",
                           "variant":  "Web service deployment package",
-                          "fileName":  "EcoreX_0.1.19-web-linux-service.tar.gz",
-                          "href":  "downloads/EcoreX_0.1.19-web-linux-service.tar.gz",
-                          "size":  3369246,
-                          "sha256":  "A84F251D5BEA26DDAD2B695192180C59F365FB036ADD367656A5B9B923B612C1",
-                          "status":  "retired",
+                          "fileName":  "EcoreX_0.2.0-web-linux-service.tar.gz",
+                          "href":  "downloads/EcoreX_0.2.0-web-linux-service.tar.gz",
+                          "size":  3389500,
+                          "sha256":  "7C0B248A37187F480196A00AEB92FA57182B1372D72043F72EC4D1593096CBD7",
+                          "status":  "ready",
                           "visible":  false,
-                          "source":  "Retired from WebUI-first public packaging; server-side Web service deployments are no longer part of this release path.",
-                          "updatedAt":  "2026-06-23"
+                          "source":  "Local v0.2.0 Web service tarball built by prepare-ecorex-web-release.ps1 and validated by release artifact checks.",
+                          "updatedAt":  "2026-06-24"
                       }
                   ],
     "admin":  {

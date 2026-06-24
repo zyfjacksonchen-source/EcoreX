@@ -750,13 +750,12 @@ function _toWebUrl(url) {
 function _buildVideoHtml(url) {
     const webUrl = _toWebUrl(url);
     const fileName = url.split('/').pop().split('?')[0];
-    return `<div style="margin:10px 0;">` +
+    return `<div class="artifact-card" data-artifact-url="${escapeHtml(webUrl)}" data-artifact-kind="video" style="margin:10px 0;">` +
         `<video controls preload="metadata" ` +
         `style="max-width:100%;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,0.15);display:block;">` +
         `<source src="${webUrl}"></video>` +
-        `<a href="${webUrl}" target="_blank" ` +
-        `style="display:inline-flex;align-items:center;gap:4px;margin-top:4px;font-size:12px;color:#8b8fa8;text-decoration:none;">` +
-        `<i class="fas fa-download"></i> ${escapeHtml(fileName)}</a></div>`;
+        _buildArtifactActionsHtml(webUrl, fileName, "video") +
+        `</div>`;
 }
 
 function _openImageLightbox(src) {
@@ -781,11 +780,30 @@ function _openImageLightbox(src) {
 function _buildImageHtml(url) {
     const webUrl = _toWebUrl(url);
     const safeUrl = webUrl.replace(/"/g, '&quot;');
-    return `<div style="margin:10px 0;">` +
+    const fileName = url.split('/').pop().split('?')[0] || 'image';
+    return `<div class="artifact-card" data-artifact-url="${escapeHtml(webUrl)}" data-artifact-kind="image" style="margin:10px 0;">` +
         `<img src="${safeUrl}" alt="image" loading="lazy" ` +
         `onclick="_openImageLightbox(this.src)" ` +
         `style="max-width:520px;width:100%;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,0.15);display:block;cursor:zoom-in;">` +
+        _buildArtifactActionsHtml(webUrl, fileName, "image") +
         `</div>`;
+}
+
+function _buildArtifactActionsHtml(webUrl, fileName, kind) {
+    const safeUrl = escapeHtml(webUrl || '');
+    const safeName = escapeHtml(fileName || 'artifact');
+    const canCopyBinary = kind === 'image';
+    return `
+        <div class="artifact-actions">
+            ${canCopyBinary ? `<button type="button" class="artifact-action-btn artifact-copy-image" data-url="${safeUrl}" title="${currentLang === 'zh' ? '复制图片' : 'Copy image'}"><i class="fas fa-copy"></i></button>` : ''}
+            <a class="artifact-action-btn" href="${safeUrl}" download="${safeName}" target="_blank" title="${currentLang === 'zh' ? '下载' : 'Download'}"><i class="fas fa-download"></i></a>
+            <button type="button" class="artifact-action-btn artifact-menu-btn" aria-expanded="false" title="${currentLang === 'zh' ? '更多' : 'More'}"><i class="fas fa-ellipsis"></i></button>
+            <div class="artifact-action-menu">
+                <button type="button" class="artifact-copy-link" data-url="${safeUrl}">${currentLang === 'zh' ? '复制链接' : 'Copy link'}</button>
+                <button type="button" class="artifact-copy-path" data-url="${safeUrl}">${currentLang === 'zh' ? '复制路径' : 'Copy path'}</button>
+                <a href="${safeUrl}" target="_blank">${currentLang === 'zh' ? '本地打开' : 'Open'}</a>
+            </div>
+        </div>`;
 }
 
 function injectVideoPlayers(html) {
@@ -1145,6 +1163,61 @@ messagesDiv.addEventListener('scroll', () => {
 
 // Intercept internal navigation links in chat messages
 messagesDiv.addEventListener('click', (e) => {
+    const artifactMenuBtn = e.target.closest('.artifact-menu-btn');
+    if (artifactMenuBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const actions = artifactMenuBtn.closest('.artifact-actions');
+        const willOpen = actions && !actions.classList.contains('menu-open');
+        closeArtifactMenus(actions);
+        if (actions && willOpen) {
+            actions.classList.add('menu-open');
+            artifactMenuBtn.setAttribute('aria-expanded', 'true');
+        }
+        return;
+    }
+
+    const artifactCopyImageBtn = e.target.closest('.artifact-copy-image');
+    if (artifactCopyImageBtn) {
+        e.preventDefault();
+        const url = artifactCopyImageBtn.dataset.url || '';
+        copyImageToClipboard(url).then(() => _setButtonDone(artifactCopyImageBtn));
+        closeArtifactMenus();
+        return;
+    }
+
+    const artifactCopyLinkBtn = e.target.closest('.artifact-copy-link, .artifact-copy-path');
+    if (artifactCopyLinkBtn) {
+        e.preventDefault();
+        const url = artifactCopyLinkBtn.dataset.url || '';
+        copyToClipboard(url).then(() => _setButtonDone(artifactCopyLinkBtn));
+        closeArtifactMenus();
+        return;
+    }
+
+    const subagentActionBtn = e.target.closest('.subagent-action-btn');
+    if (subagentActionBtn) {
+        e.preventDefault();
+        const action = subagentActionBtn.dataset.action || '';
+        const id = subagentActionBtn.dataset.id || '';
+        if (!action || !id) return;
+        subagentActionBtn.disabled = true;
+        fetch(`/api/subagents/${encodeURIComponent(id)}/${encodeURIComponent(action)}`, { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                const task = data && (data.task || (data.data && data.data.task));
+                if (task) {
+                    const card = subagentActionBtn.closest('.agent-subagent-step');
+                    const wrapper = document.createElement('div');
+                    wrapper.innerHTML = renderSubagentCardHtml(task);
+                    if (card && wrapper.firstElementChild) card.replaceWith(wrapper.firstElementChild);
+                }
+            })
+            .catch(() => {})
+            .finally(() => { subagentActionBtn.disabled = false; });
+        return;
+    }
+
     const longAnswerBtn = e.target.closest('[data-long-answer-toggle]');
     if (longAnswerBtn) {
         e.preventDefault();
@@ -1186,6 +1259,19 @@ messagesDiv.addEventListener('click', (e) => {
                 const icon = copyBtn.querySelector('i');
                 if (icon) { icon.className = 'fas fa-check'; setTimeout(() => { icon.className = 'fas fa-copy'; }, 1500); }
             });
+        }
+        return;
+    }
+
+    const copyXhsBtn = e.target.closest('.copy-xhs-btn');
+    if (copyXhsBtn) {
+        e.preventDefault();
+        const msgRoot = copyXhsBtn.closest('.flex.gap-3');
+        const answerEl = msgRoot && msgRoot.querySelector('.answer-content');
+        const rawMd = answerEl && answerEl.dataset.rawMd;
+        const copyText = extractPlatformCopyText(rawMd, 'xhs');
+        if (copyText) {
+            copyToClipboard(copyText).then(() => _setButtonDone(copyXhsBtn));
         }
         return;
     }
@@ -1257,6 +1343,14 @@ messagesDiv.addEventListener('click', (e) => {
         navigateTo('memory');
         setTimeout(() => { switchMemoryTab('files'); openMemoryFile('MEMORY.md', 'memory'); }, 50);
     }
+});
+
+document.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('.artifact-actions')) return;
+    closeArtifactMenus();
+}, true);
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeArtifactMenus();
 });
 const attachmentPreview = document.getElementById('attachment-preview');
 
@@ -2008,6 +2102,45 @@ function copyToClipboard(text) {
     });
 }
 
+function copyImageToClipboard(url) {
+    if (!navigator.clipboard || !window.ClipboardItem || !window.isSecureContext) {
+        return copyToClipboard(url);
+    }
+    return fetch(url)
+        .then(r => r.blob())
+        .then(blob => {
+            const type = blob.type || 'image/png';
+            return navigator.clipboard.write([new ClipboardItem({ [type]: blob })]);
+        })
+        .catch(() => copyToClipboard(url));
+}
+
+function extractPlatformCopyText(rawMd, platform) {
+    const text = String(rawMd || '').trim();
+    if (!text) return '';
+    if (platform !== 'xhs') return text;
+    const lines = text.split(/\r?\n/);
+    const start = lines.findIndex(line => /小红书|xiaohongshu|xhs/i.test(line));
+    return (start >= 0 ? lines.slice(start).join('\n') : text).trim();
+}
+
+function _setButtonDone(btn) {
+    const icon = btn && btn.querySelector('i');
+    if (!icon) return;
+    const prev = icon.className;
+    icon.className = 'fas fa-check';
+    setTimeout(() => { icon.className = prev || 'fas fa-copy'; }, 1500);
+}
+
+function closeArtifactMenus(exceptMenu) {
+    document.querySelectorAll('.artifact-actions.menu-open').forEach(el => {
+        if (exceptMenu && el === exceptMenu) return;
+        el.classList.remove('menu-open');
+        const btn = el.querySelector('.artifact-menu-btn');
+        if (btn) btn.setAttribute('aria-expanded', 'false');
+    });
+}
+
 // Edit user message: extract content, remove this and subsequent messages, fill input
 async function editUserMessage(msgEl) {
     const rawContent = msgEl.dataset.rawContent;
@@ -2329,6 +2462,9 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                     <button class="copy-msg-btn text-xs text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400 transition-colors cursor-pointer" title="${currentLang === 'zh' ? '复制' : 'Copy'}" style="display:none">
                         <i class="fas fa-copy"></i>
                     </button>
+                    <button class="copy-xhs-btn text-xs text-slate-300 dark:text-slate-600 hover:text-rose-500 dark:hover:text-rose-400 transition-colors cursor-pointer" title="Copy XHS" style="display:none">
+                        <i class="fas fa-note-sticky"></i>
+                    </button>
                     <button class="speak-msg-btn text-xs text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400 transition-colors cursor-pointer" title="${t('speak_msg')}" style="display:none;">
                         <i class="fas fa-volume-up"></i>
                     </button>
@@ -2344,20 +2480,29 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
         mediaEl = botEl.querySelector('.media-content');
     }
 
-    // Holds the live EventSource so terminal events (done/voice_attach/error)
+    // Holds the live EventSource so terminal/error events can close it.
     // can close it. During replay there is no live connection (null).
     let currentEs = null;
     let streamingAnswerPre = null;
     let streamingAnswerTextNode = null;
     let streamingAnswerPendingText = '';
     let streamingAnswerRafScheduled = false;
+    let streamingAnswerMode = 'pre';
     let currentPhaseEl = null;
+    const STREAMING_MARKDOWN_PREVIEW_CHARS = 12000;
 
     function resetStreamingAnswerPreview() {
         streamingAnswerPre = null;
         streamingAnswerTextNode = null;
         streamingAnswerPendingText = '';
         streamingAnswerRafScheduled = false;
+        streamingAnswerMode = 'pre';
+    }
+
+    function shouldRenderStreamingMarkdown(text) {
+        const value = String(text || '');
+        if (!value || value.length > STREAMING_MARKDOWN_PREVIEW_CHARS) return false;
+        return /(^|\n)\s{0,3}(#{1,6}\s|[-*]\s+|\d+\.\s+|>\s+|```|\|.+\|)/.test(value);
     }
 
     function renderStreamError(message) {
@@ -2379,9 +2524,32 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
 
     function appendStreamingAnswerPreview(chunk) {
         const text = String(chunk || '');
-        if (!text) return;
+        if (!text && !accumulatedText) return;
         ensureBotEl();
         botEl?.querySelector('.agent-loading-dots')?.remove();
+        if (shouldRenderStreamingMarkdown(accumulatedText)) {
+            streamingAnswerPendingText = accumulatedText;
+            if (streamingAnswerRafScheduled) return;
+            streamingAnswerRafScheduled = true;
+            requestAnimationFrame(() => {
+                streamingAnswerRafScheduled = false;
+                const latest = streamingAnswerPendingText;
+                streamingAnswerPendingText = '';
+                if (!contentEl || !contentEl.isConnected) return;
+                streamingAnswerMode = 'markdown';
+                streamingAnswerPre = null;
+                streamingAnswerTextNode = null;
+                contentEl.innerHTML = `<div class="agent-content-body streaming-markdown-preview">${renderMarkdown(latest)}</div>`;
+                scrollChatToBottom();
+            });
+            return;
+        }
+        if (streamingAnswerMode === 'markdown') {
+            contentEl.innerHTML = '';
+            streamingAnswerMode = 'pre';
+            streamingAnswerPre = null;
+            streamingAnswerTextNode = null;
+        }
         if (!streamingAnswerPre || !streamingAnswerPre.isConnected) {
             contentEl.innerHTML = '<pre class="answer-stream-pre"></pre>';
             streamingAnswerPre = contentEl.querySelector('.answer-stream-pre');
@@ -2421,7 +2589,10 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
     // Render one SSE event into the bubble. Used by the live handler and by
     // re-attach replay alike, so both paths produce identical UI.
     function processSSEItem(item) {
-            if (item.type === 'reasoning') {
+            if (item.type === 'heartbeat') {
+                return;
+
+            } else if (item.type === 'reasoning') {
                 ensureBotEl();
                 reasoningText += item.content;
                 if (!currentReasoningEl) {
@@ -2491,7 +2662,8 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                     reasoningText = '';
                 }
                 const chunk = String(item.content || item.text || item.message || '');
-                accumulatedText += chunk;
+                const replaceMode = item.type === 'message_update' && (item.update_mode || 'replace') !== 'append';
+                accumulatedText = replaceMode ? chunk : accumulatedText + chunk;
                 appendStreamingAnswerPreview(chunk);
 
             } else if (item.type === 'message_end') {
@@ -2518,6 +2690,19 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                 accumulatedText = '';
                 contentEl.innerHTML = '';
                 resetStreamingAnswerPreview();
+                if (item.tool === 'subagent') {
+                    const wrapper = document.createElement('div');
+                    wrapper.innerHTML = renderSubagentCardHtml({
+                        id: item.task_id || '',
+                        name: item.name || item.summary || 'Subagent',
+                        role: item.role || 'subagent',
+                        status: item.status || 'starting',
+                        summary: item.summary || '',
+                    }, { toolCallId: item.tool_call_id || '' });
+                    stepsEl.appendChild(wrapper.firstElementChild);
+                    scrollChatToBottom();
+                    return;
+                }
 
                 // Add tool execution indicator (collapsible)
                 currentToolEl = document.createElement('div');
@@ -2541,6 +2726,9 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                 scrollChatToBottom();
 
             } else if (item.type === 'tool_end') {
+                if (item.tool === 'subagent') {
+                    return;
+                }
                 if (currentToolEl) {
                     const isError = item.status !== 'success';
                     const icon = currentToolEl.querySelector('.tool-icon');
@@ -2610,6 +2798,39 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                 // Coarse progress (e.g. cow install-browser); must not close SSE (unlike "done")
                 replaceCurrentPhase(item.content || item.message || '');
 
+            } else if (item.type && item.type.startsWith('subagent_')) {
+                ensureBotEl();
+                const task = item.task || {
+                    id: item.task_id || '',
+                    name: item.name || '',
+                    role: item.role || '',
+                    status: item.status || '',
+                    summary: item.summary || '',
+                    result: item.result_preview || '',
+                    requestId: item.child_request_id || '',
+                };
+                const selector = item.task_id
+                    ? `.agent-subagent-step[data-subagent-id="${cssEscape(String(item.task_id))}"]`
+                    : `.agent-subagent-step[data-tool-call-id="${cssEscape(String(item.tool_call_id || ''))}"]`;
+                let existing = stepsEl.querySelector(selector);
+                const wrapper = document.createElement('div');
+                wrapper.innerHTML = renderSubagentCardHtml(task, {
+                    toolCallId: item.tool_call_id || '',
+                    taskId: item.task_id || '',
+                    role: item.role || '',
+                    status: item.status || '',
+                    summary: item.summary || '',
+                    resultPreview: item.result_preview || '',
+                    childRequestId: item.child_request_id || '',
+                });
+                const nextEl = wrapper.firstElementChild;
+                if (existing && nextEl) {
+                    existing.replaceWith(nextEl);
+                } else if (nextEl) {
+                    stepsEl.appendChild(nextEl);
+                }
+                scrollChatToBottom();
+
             } else if (item.type === 'cancelled') {
                 // Agent acknowledged the stop; mark the bubble. A trailing
                 // "done" still arrives with the partial answer.
@@ -2636,7 +2857,7 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                 clearOwnerRequest();
                 resetSendBtnSendMode();
 
-                const finalTextRaw = item.content || accumulatedText;
+                const finalTextRaw = item.final_text || item.content || accumulatedText;
                 const finalText = localizeCancelMarker(finalTextRaw);
 
                 if (!botEl && finalText) {
@@ -2650,6 +2871,8 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                     contentEl.dataset.rawMd = finalText || finalTextRaw || '';
                     const copyBtn = botEl.querySelector('.copy-msg-btn');
                     if (copyBtn && finalText) copyBtn.style.display = '';
+                    const copyXhsBtn = botEl.querySelector('.copy-xhs-btn');
+                    if (copyXhsBtn && finalText) copyXhsBtn.style.display = '';
                     applyHighlighting(botEl);
                 }
 
@@ -2735,7 +2958,7 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
             // buffer above still grows so returning to the session can rebuild
             // the bubble and resume live rendering.
             if (ownerSession !== sessionId) {
-                if (item.type === 'done' || item.type === 'error' || item.type === 'voice_attach') {
+                if (item.type === 'done' || item.type === 'error') {
                     done = true;
                     es.close();
                     delete activeStreams[requestId];
@@ -2798,7 +3021,7 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
     if (replayItems && replayItems.length) {
         for (const item of replayItems) {
             try { processSSEItem(item); } catch (_) {}
-            if (item.type === 'done' || item.type === 'error' || item.type === 'voice_attach') {
+            if (item.type === 'done' || item.type === 'error') {
                 done = true;
             }
         }
@@ -2909,6 +3132,13 @@ function createUserMessageEl(content, timestamp, attachments) {
 function renderToolCallsHtml(toolCalls) {
     if (!toolCalls || toolCalls.length === 0) return '';
     return toolCalls.map(tc => {
+        if ((tc.name || '') === 'subagent') {
+            return renderSubagentCardHtml(_extractSubagentTask(tc.result), {
+                toolCallId: tc.id || '',
+                fallbackName: 'Subagent',
+                status: tc.is_error ? 'failed' : 'completed',
+            });
+        }
         const argsStr = formatToolArgs(tc.arguments || {});
         const resultStr = tc.result ? escapeHtml(String(tc.result)) : '';
         const hasResult = !!resultStr;
@@ -2932,6 +3162,57 @@ function renderToolCallsHtml(toolCalls) {
     </div>
 </div>`;
     }).join('');
+}
+
+function _extractSubagentTask(value) {
+    let payload = value;
+    if (typeof payload === 'string') {
+        try { payload = JSON.parse(payload); } catch (_) { payload = {}; }
+    }
+    if (!payload || typeof payload !== 'object') return {};
+    if (payload.task && typeof payload.task === 'object') return payload.task;
+    if (payload.data && payload.data.task && typeof payload.data.task === 'object') return payload.data.task;
+    return payload.id || payload.name || payload.status ? payload : {};
+}
+
+function _subagentStatusClass(status) {
+    const value = String(status || '').toLowerCase();
+    if (value === 'completed' || value === 'collectable') return 'is-complete';
+    if (value === 'failed' || value === 'timeout' || value === 'interrupted') return 'is-failed';
+    if (value === 'cancelled' || value === 'cancelling') return 'is-cancelled';
+    return 'is-running';
+}
+
+function renderSubagentCardHtml(task, opts) {
+    opts = opts || {};
+    task = task || {};
+    const taskId = task.id || task.task_id || opts.taskId || '';
+    const name = task.name || task.summary || opts.fallbackName || (taskId ? `Subagent ${String(taskId).slice(-4)}` : 'Subagent');
+    const role = task.role || opts.role || 'subagent';
+    const status = task.status || opts.status || 'running';
+    const summary = task.summary || task.prompt || opts.summary || '';
+    const result = task.result || task.error || opts.resultPreview || '';
+    const childRequestId = task.requestId || task.childSessionId || opts.childRequestId || '';
+    const statusClass = _subagentStatusClass(status);
+    const terminal = ['completed', 'failed', 'timeout', 'cancelled', 'interrupted'].includes(String(status).toLowerCase());
+    return `
+<div class="agent-step agent-subagent-step ${statusClass}" data-subagent-id="${escapeHtml(taskId)}" data-tool-call-id="${escapeHtml(opts.toolCallId || '')}">
+    <div class="subagent-header">
+        <i class="fas fa-user-gear subagent-icon"></i>
+        <div class="subagent-title-wrap">
+            <div class="subagent-title">${escapeHtml(name)}</div>
+            <div class="subagent-meta">${escapeHtml(role)} · ${escapeHtml(status)}</div>
+        </div>
+        <span class="subagent-state-pill">${escapeHtml(status)}</span>
+    </div>
+    ${summary ? `<div class="subagent-summary">${escapeHtml(summary)}</div>` : ''}
+    ${result ? `<details class="subagent-result"><summary>${currentLang === 'zh' ? '查看结果' : 'View result'}</summary><pre>${escapeHtml(String(result).slice(0, 2000))}</pre></details>` : ''}
+    <div class="subagent-actions">
+        ${taskId && !terminal ? `<button type="button" class="subagent-action-btn" data-action="cancel" data-id="${escapeHtml(taskId)}">${currentLang === 'zh' ? '停止' : 'Stop'}</button>` : ''}
+        ${taskId && terminal ? `<button type="button" class="subagent-action-btn" data-action="collect" data-id="${escapeHtml(taskId)}">${currentLang === 'zh' ? '收集' : 'Collect'}</button>` : ''}
+        ${childRequestId ? `<span class="subagent-request">${escapeHtml(childRequestId)}</span>` : ''}
+    </div>
+</div>`;
 }
 
 // Cap for rendering reasoning content in the bubble. Beyond this size,
@@ -3007,6 +3288,14 @@ function renderStepsHtml(steps) {
                 html += `<div class="agent-step agent-content-step"><div class="agent-content-body">${renderMarkdown(step.content)}</div></div>`;
             }
         } else if (step.type === 'tool') {
+            if ((step.name || '') === 'subagent') {
+                html += renderSubagentCardHtml(_extractSubagentTask(step.result), {
+                    toolCallId: step.id || '',
+                    fallbackName: 'Subagent',
+                    status: step.is_error ? 'failed' : 'completed',
+                });
+                continue;
+            }
             const argsStr = formatToolArgs(step.arguments || {});
             const resultStr = step.result ? escapeHtml(String(step.result)) : '';
             const isErr = step.is_error === true;
@@ -3161,6 +3450,14 @@ function createBotMessageEl(content, timestamp, requestId, msg) {
         </div>
     `;
     el.querySelector('.answer-content').dataset.rawMd = displayContent;
+    const historySpeakBtn = el.querySelector('.speak-msg-btn');
+    if (historySpeakBtn && !el.querySelector('.copy-xhs-btn')) {
+        const xhsBtn = document.createElement('button');
+        xhsBtn.className = 'copy-xhs-btn text-xs text-slate-300 dark:text-slate-600 hover:text-rose-500 dark:hover:text-rose-400 transition-colors cursor-pointer';
+        xhsBtn.title = 'Copy XHS';
+        xhsBtn.innerHTML = '<i class="fas fa-note-sticky"></i>';
+        historySpeakBtn.parentElement.insertBefore(xhsBtn, historySpeakBtn);
+    }
     // Existing TTS attachment (history replay): mount the player up-front.
     const existingAudio = msg && msg.extras && msg.extras.audio && msg.extras.audio.url;
     if (existingAudio) {
@@ -3454,6 +3751,9 @@ function addLoadingIndicator() {
                 <span class="text-xs text-slate-400 dark:text-slate-500">${formatTime(new Date())}</span>
                 <button class="copy-msg-btn text-xs text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400 transition-colors cursor-pointer" title="${currentLang === 'zh' ? '复制' : 'Copy'}" style="display:none">
                     <i class="fas fa-copy"></i>
+                </button>
+                <button class="copy-xhs-btn text-xs text-slate-300 dark:text-slate-600 hover:text-rose-500 dark:hover:text-rose-400 transition-colors cursor-pointer" title="Copy XHS" style="display:none">
+                    <i class="fas fa-note-sticky"></i>
                 </button>
                 <button class="speak-msg-btn text-xs text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400 transition-colors cursor-pointer" title="${t('speak_msg')}" style="display:none;">
                     <i class="fas fa-volume-up"></i>
@@ -4033,6 +4333,13 @@ function escapeHtml(str) {
     const div = document.createElement('div');
     div.appendChild(document.createTextNode(str));
     return div.innerHTML;
+}
+
+function cssEscape(value) {
+    if (window.CSS && typeof window.CSS.escape === 'function') {
+        return window.CSS.escape(String(value));
+    }
+    return String(value).replace(/["\\]/g, '\\$&');
 }
 
 function ChannelsHandler_maskSecret(val) {

@@ -16,8 +16,10 @@ from config import conf
 
 MAX_CONCURRENT_SUBAGENTS = 6
 MAX_SUBAGENT_DEPTH = 1
+DEFAULT_TIMEOUT_SECONDS = 12 * 60
+MAX_TIMEOUT_SECONDS = 60 * 60
 DEFAULT_ROLE = "explorer"
-TERMINAL_STATUSES = {"completed", "failed", "cancelled", "interrupted"}
+TERMINAL_STATUSES = {"completed", "failed", "cancelled", "interrupted", "timeout"}
 ROLES = {
     "default": "General child agent for scoped execution and concise result reporting.",
     "worker": "Implementation-oriented child agent for concrete tasks.",
@@ -80,8 +82,29 @@ def _active_count(tasks: Dict[str, Any]) -> int:
     return sum(
         1
         for task in tasks.values()
-        if isinstance(task, dict) and task.get("status") in {"queued", "running", "cancelling"}
+        if isinstance(task, dict) and task.get("status") in {"queued", "starting", "running", "waiting_model", "waiting_tool", "cancelling"}
     )
+
+
+def _clamp_timeout_seconds(value: Any) -> int:
+    try:
+        seconds = int(value)
+    except Exception:
+        seconds = DEFAULT_TIMEOUT_SECONDS
+    if seconds <= 0:
+        seconds = DEFAULT_TIMEOUT_SECONDS
+    return max(30, min(seconds, MAX_TIMEOUT_SECONDS))
+
+
+def _derive_task_name(role: str, prompt: str, task_id: str, explicit: str = "") -> str:
+    explicit = str(explicit or "").strip()
+    if explicit:
+        return explicit[:32]
+    first_line = " ".join(str(prompt or "").strip().split())
+    if first_line:
+        return first_line[:24]
+    role_label = {"worker": "Worker", "explorer": "Explorer", "default": "Agent"}.get(role, "Agent")
+    return f"{role_label} #{task_id[-4:]}"
 
 
 def _reserve_task_slot(workspace: Path, task: Dict[str, Any]) -> tuple[bool, int]:
@@ -113,9 +136,15 @@ def _mark_subagent_run_created(task: Dict[str, Any]) -> None:
             status=str(task.get("status") or "queued"),
             metadata={
                 "task_id": task.get("id", ""),
+                "name": task.get("name", ""),
+                "summary": task.get("summary", ""),
+                "expected_output": task.get("expectedOutput", ""),
                 "role": task.get("role", ""),
                 "parent_session_id": task.get("parentSessionId", ""),
+                "parent_request_id": task.get("parentRequestId", ""),
                 "depth": task.get("depth", 0),
+                "timeout_seconds": task.get("timeoutSeconds", 0),
+                "deadline_at": task.get("deadlineAt"),
             },
         )
     except Exception as exc:
@@ -283,6 +312,7 @@ def _run_child(workspace: Path, task: Dict[str, Any]) -> None:
     registry = get_cancel_registry()
     cancel_event = None
     token_registered = False
+    timeout_timer = None
 
     def _cancel_requested() -> bool:
         return bool(cancel_event and cancel_event.is_set())
@@ -292,9 +322,37 @@ def _run_child(workspace: Path, task: Dict[str, Any]) -> None:
             return "parent_cancelled_before_start"
         return "cancelled_before_start"
 
+    def _mark_timeout() -> None:
+        current = _task_snapshot(workspace, task_id)
+        if str(current.get("status") or "") in TERMINAL_STATUSES:
+            return
+        if cancel_event:
+            cancel_event.set()
+        now = int(time.time())
+        final_task = _update_task(workspace, task_id, {
+            "status": "timeout",
+            "completedAt": now,
+            "terminalReason": "subagent_timeout",
+            "errorCode": "SUBAGENT_TIMEOUT",
+            "error": "Subagent exceeded its timeout and was stopped.",
+            "lastHeartbeatAt": now,
+        })
+        _mark_subagent_run_terminal(
+            final_task or task,
+            "timeout",
+            reason="subagent_timeout",
+            error_code="SUBAGENT_TIMEOUT",
+            error_message="Subagent exceeded its timeout and was stopped.",
+        )
+
     try:
         cancel_event = registry.register(child_session_id, session_id=child_session_id)
         token_registered = bool(child_session_id)
+        deadline_at = float(task.get("deadlineAt") or 0)
+        if deadline_at > time.time():
+            timeout_timer = threading.Timer(max(1, deadline_at - time.time()), _mark_timeout)
+            timeout_timer.daemon = True
+            timeout_timer.start()
         current = _task_snapshot(workspace, task_id)
         current_status = str(current.get("status") or "")
         if current_status in {"cancelled", "cancelling"} or _cancel_requested():
@@ -303,7 +361,11 @@ def _run_child(workspace: Path, task: Dict[str, Any]) -> None:
             return
         if current_status in TERMINAL_STATUSES:
             return
-        running_task = _update_task(workspace, task_id, {"status": "running", "startedAt": int(time.time())})
+        running_task = _update_task(workspace, task_id, {
+            "status": "running",
+            "startedAt": int(time.time()),
+            "lastHeartbeatAt": int(time.time()),
+        })
         current = _task_snapshot(workspace, task_id)
         current_status = str(current.get("status") or "")
         if current_status in {"cancelled", "cancelling"} or _cancel_requested():
@@ -329,11 +391,15 @@ def _run_child(workspace: Path, task: Dict[str, Any]) -> None:
         from bridge.bridge import Bridge
         from bridge.context import Context, ContextType
 
+        _update_task(workspace, task_id, {"status": "waiting_model", "lastHeartbeatAt": int(time.time())})
+        _mark_subagent_run_phase(task, "waiting_model", status="running", preserve_cancelling=True)
         context = Context(ContextType.TEXT, task["prompt"], {
             "session_id": child_session_id,
             "request_id": child_session_id,
             "cancel_token_owner": "subagent",
             "subagent_parent_id": task.get("parentSessionId", ""),
+            "subagent_name": task.get("name", ""),
+            "subagent_expected_output": task.get("expectedOutput", ""),
         })
         result = Bridge().get_agent_bridge().agent_reply(task["prompt"], context=context, clear_history=True)
         current = _task_snapshot(workspace, task_id)
@@ -352,6 +418,7 @@ def _run_child(workspace: Path, task: Dict[str, Any]) -> None:
                 "status": "completed",
                 "result": str(result or ""),
                 "completedAt": int(time.time()),
+                "lastHeartbeatAt": int(time.time()),
             })
             _mark_subagent_run_terminal(final_task or task, "completed", reason="subagent_completed")
     except Exception as exc:
@@ -377,6 +444,7 @@ def _run_child(workspace: Path, task: Dict[str, Any]) -> None:
             "status": "failed",
             "error": str(exc),
             "completedAt": int(time.time()),
+            "lastHeartbeatAt": int(time.time()),
         })
         _mark_subagent_run_terminal(
             final_task or task,
@@ -386,6 +454,11 @@ def _run_child(workspace: Path, task: Dict[str, Any]) -> None:
             error_message=str(exc),
         )
     finally:
+        if timeout_timer:
+            try:
+                timeout_timer.cancel()
+            except Exception:
+                pass
         if token_registered:
             registry.unregister(child_session_id)
 
@@ -402,6 +475,10 @@ class SubagentTool(BaseTool):
             "action": {"type": "string", "description": "One of: start, status, list, collect, cancel."},
             "task": {"type": "string", "description": "Child task prompt for action=start."},
             "role": {"type": "string", "description": "default, worker, or explorer. Default explorer."},
+            "name": {"type": "string", "description": "Short display name for the child agent."},
+            "summary": {"type": "string", "description": "Short task summary for UI display."},
+            "expected_output": {"type": "string", "description": "Expected result shape or collection criteria."},
+            "timeout_seconds": {"type": "integer", "description": "Timeout for this child task; default 720 seconds, max 3600."},
             "id": {"type": "string", "description": "Subagent task id for status/collect/cancel."},
             "depth": {"type": "integer", "description": "Current depth. v1 allows only 0 -> child depth 1."},
         },
@@ -441,17 +518,30 @@ class SubagentTool(BaseTool):
             role = DEFAULT_ROLE
         task_id = uuid.uuid4().hex[:12]
         child_session_id = f"subagent-{task_id}"
+        timeout_seconds = _clamp_timeout_seconds(params.get("timeout_seconds") or params.get("timeoutSeconds"))
+        name = _derive_task_name(role, prompt, task_id, params.get("name") or params.get("title") or "")
+        summary = str(params.get("summary") or "").strip() or prompt[:160]
+        expected_output = str(params.get("expected_output") or params.get("expectedOutput") or "").strip()
+        parent_request_id = str(getattr(getattr(self, "context", None), "_current_request_id", "") or "")
+        now = int(time.time())
         task = {
             "id": task_id,
             "status": "queued",
+            "name": name,
+            "summary": summary,
+            "expectedOutput": expected_output,
             "role": role,
             "roleDescription": ROLES[role],
             "prompt": prompt,
             "parentSessionId": parent_session_id,
+            "parentRequestId": parent_request_id,
             "childSessionId": child_session_id,
             "requestId": child_session_id,
             "depth": depth + 1,
-            "createdAt": int(time.time()),
+            "createdAt": now,
+            "timeoutSeconds": timeout_seconds,
+            "deadlineAt": now + timeout_seconds,
+            "lastHeartbeatAt": now,
         }
         reserved, active_count = _reserve_task_slot(workspace, task)
         if not reserved:

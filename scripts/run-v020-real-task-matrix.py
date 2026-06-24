@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import http.server
+import ipaddress
 import json
 import subprocess
 import sys
@@ -212,9 +213,10 @@ def _wsl_path(path: Path) -> str:
 
 
 def _wsl_url_for_windows_localhost(url: str) -> str:
+    host = ""
     try:
         proc = subprocess.run(
-            ["bash", "-lc", "awk '/^nameserver /{print $2; exit}' /etc/resolv.conf"],
+            ["bash", "-lc", "ip route show default; cat /etc/resolv.conf"],
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -223,9 +225,32 @@ def _wsl_url_for_windows_localhost(url: str) -> str:
             timeout=60,
             check=False,
         )
-        host = proc.stdout.strip() if proc.returncode == 0 else ""
+        if proc.returncode == 0:
+            for line in proc.stdout.splitlines():
+                parts = line.strip().split()
+                if len(parts) >= 3 and parts[0] == "default" and parts[1] == "via":
+                    candidate = parts[2].strip()
+                    if candidate and not any(char.isspace() for char in candidate):
+                        host = candidate
+                        break
+            for line in proc.stdout.splitlines():
+                if host:
+                    break
+                parts = line.strip().split()
+                if len(parts) >= 2 and parts[0] == "nameserver":
+                    candidate = parts[1].strip()
+                    if candidate and not any(char.isspace() for char in candidate):
+                        host = candidate
+                        break
     except subprocess.TimeoutExpired:
         host = ""
+    if host:
+        try:
+            host_ip = ipaddress.ip_address(host)
+            if not host_ip.is_private:
+                host = ""
+        except ValueError:
+            host = ""
     if host:
         return url.replace("127.0.0.1", host)
     return url
@@ -544,7 +569,7 @@ def _macos_installer_resume_simulation(root: Path) -> dict[str, Any]:
     text = script_path.read_text(encoding="utf-8")
     end = text.index("need_cmd curl")
     functions = text[:end]
-    assert_true('curl_args+=("-C" "-")' in functions, "macOS installer missing curl resume args")
+    assert_true('Range: bytes=${resume_from}-' in functions, "macOS installer missing explicit curl resume range")
     payload = (b"EcoreX-macOS-WebUI-resume-test-" * 4096) + bytes(range(255, -1, -1)) * 1024
     expected_sha = hashlib.sha256(payload).hexdigest().upper()
 

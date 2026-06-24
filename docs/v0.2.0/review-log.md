@@ -38,3 +38,22 @@ Final gate used three independent read-only review agents. The implementation wr
 ## Final Consensus
 
 All three review slices returned PASS with no remaining P0/P1 blockers. P2 notes are tracked as future hardening only and do not block v0.2.0 deployment.
+
+## 2026-06-24 Hotfix Review: Model Config Admission
+
+Hotfix gate used independent read-only review agents after deployment. The implementation writer did not self-review.
+
+| Agent | Slice | Result | Blocking Findings |
+| --- | --- | --- | --- |
+| Meitner | Source/UI recovery copy, `/message` model-config response shape, package source scan | PASS | One prior P1 fixed before PASS |
+| Nash | Production release, public manifest, package SHA parity, runtime version | PASS | None |
+| Hypatia | Admin API client gate, user-token boundary, frontend draft recovery | PASS | None |
+
+Resolved hotfix finding:
+
+- P1: `/message` still had the old fallback copy `请先登录企业账号，或在设置 > 模型中配置可用的 API Key 后再发送。`
+  - Fix: replaced the fallback with the account/model recovery copy, kept stable model-config error metadata, and added `assertNotIn` checks for both retired copies.
+  - Coverage: `TestWebParallelHandlers.test_v020_webui_local_auth_falls_back_without_admin_client`.
+  - Re-review: Meitner confirmed old prompts are gone from source/build paths; Nash and Hypatia confirmed production release and model-config/Admin API paths have no P0/P1 blockers.
+
+Final model-config hotfix consensus: PASS.

@@ -896,6 +896,21 @@ function chatSendErrorMessage(result: ChatSendResult) {
   return result.message || "发送失败";
 }
 
+function isModelConfigSendError(result?: Pick<ChatSendResult, "code" | "error_type" | "message"> | null) {
+  if (!result) return false;
+  const code = String(result.code || "").toUpperCase();
+  if (
+    code === "MODEL_CONFIG_UNAVAILABLE"
+    || code === "ENTERPRISE_LOGIN_REQUIRED"
+    || code === "ENTERPRISE_POLICY_SYNC_FAILED"
+    || code === "ENTERPRISE_POLICY_UNAVAILABLE"
+  ) {
+    return true;
+  }
+  if (String(result.error_type || "") === "model_config") return true;
+  return /模型配置|可用模型|登录状态已失效|企业模型/.test(String(result.message || ""));
+}
+
 function BrandMark() {
   const [failed, setFailed] = useState(false);
   return (
@@ -5399,18 +5414,14 @@ export function App() {
     const clientAttemptId = `attempt-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     latestSendAttemptRef.current[requestSessionId] = clientAttemptId;
     const { generation: sendGeneration, controller: preflightController } = beginSessionPreflight(requestSessionId);
-    const restoreUnacceptedDraft = (message: string) => {
+    const restoreUnacceptedDraft = (message: string, result?: ChatSendResult) => {
       if (latestSendAttemptRef.current[requestSessionId] !== clientAttemptId) return;
       clearAssistantPhaseTimers(assistantId);
       clearSessionPreflight(requestSessionId, preflightController);
       updateSessionMessages(requestSessionId, (current) => current.filter((item) => item.id !== userMessage.id && item.id !== assistantId));
       setComposerDraft(text, { immediate: true });
       setAttachments(attachments);
-      setApproval({
-        type: "info",
-        title: "消息未发送",
-        message,
-        actions: [
+      const actions: Array<{ label: string; primary?: boolean; onClick: () => void }> = [
           {
             label: "重试发送",
             primary: true,
@@ -5418,12 +5429,26 @@ export function App() {
               setApproval(null);
               void sendNow(skipCapabilityCheck);
             }
-          },
-          {
-            label: "保留草稿",
-            onClick: () => setApproval(null)
           }
-        ]
+        ];
+      if (isModelConfigSendError(result)) {
+        actions.push({
+          label: "重新登录",
+          onClick: () => {
+            setApproval(null);
+            void logout();
+          }
+        });
+      }
+      actions.push({
+        label: "保留草稿",
+        onClick: () => setApproval(null)
+      });
+      setApproval({
+        type: "info",
+        title: "消息未发送",
+        message,
+        actions
       });
       markSessionOutputReady(requestSessionId);
     };
@@ -5638,7 +5663,7 @@ export function App() {
             }
           });
         }
-        restoreUnacceptedDraft(message);
+        restoreUnacceptedDraft(message, result);
         return;
       }
       updateSessionMessages(requestSessionId, (current) => current.map((item) => (

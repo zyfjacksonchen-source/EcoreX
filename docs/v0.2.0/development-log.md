@@ -55,3 +55,24 @@
 - Independent read-only review found and rechecked two UI-state P1 issues: premature terminal classification during reconnect and missing `visibleOutputSettled` persistence. Both were fixed before packaging.
 - Rebuilt v0.2.0 WebUI packages and public release artifacts with the hotfix.
 - Updated the public download page so the installation guide appears before package download cards, with one-click copy buttons for both Windows PowerShell and macOS Terminal install/update commands.
+
+## 2026-06-24 Hotfix: WebUI Model Config Admission
+
+- Investigated user `shzhoujiehuan@ecoremedia.net` seeing `消息未发送 / 当前网页版没有可用模型配置`.
+- Root cause: the production `/ecorex-agent/client/*` route is served by the Docker Compose `ecorex-admin-api` container under `/opt/xhs-report`, not the copied `/srv/ecorex-agent-admin/app` files alone. The container still carried v0.1.15-era client keys, so v0.2.0 WebUI requests were rejected as `403 invalid client key` before model policy delivery.
+- Hot-fixed production by syncing the v0.2.0 Admin API into `/opt/xhs-report/_ecorex_admin_api` and rebuilding/recreating the Compose service. The v0.2.0 WebUI client key now passes the client gate and returns `401 missing user token` without a user token, which is the expected authenticated boundary.
+- Confirmed production has an enabled global model policy (`openai` / `gpt-5.5`) and `shzhoujiehuan@ecoremedia.net` is an active member, so a valid enterprise session can receive model configuration.
+- Hardened `scripts/install-ecorex-public-release.sh` so future public deployments copy Admin API files into the Compose build context and run `docker compose up -d --build --force-recreate ecorex-admin-api` when that production layout is present.
+- Hardened WebUI model admission errors with stable `MODEL_CONFIG_UNAVAILABLE`, `ENTERPRISE_LOGIN_REQUIRED`, `ENTERPRISE_POLICY_SYNC_FAILED`, and `ENTERPRISE_POLICY_UNAVAILABLE` codes.
+- Added a user-facing recovery path: model-config send failures now preserve the draft/attachments and include a `重新登录` recovery action in addition to retry/keep-draft.
+- Follow-up user validation still showed the old `当前网页版没有可用模型配置` copy. Root cause: public `/ecorex-agent/app/` was still served by `ecorex-web.service` from `/opt/ecorex-web/releases/20260619130611-v0.1.15`; only the static download/admin bundle had been updated.
+- Rebuilt the v0.2.0 renderer, Win/Mac WebUI packages, Web Linux service tarball, manifest, and public release zip. Deployed both chains:
+  - static download/admin bundle to `/srv/ecorex-agent-download/releases/20260624032435-v0.2.0`;
+  - live WebUI runtime to `/opt/ecorex-web/releases/20260624032517-v0.2.0`.
+- Verified public `/ecorex-agent/api/version` now returns `0.2.0`, public `/app/` references `assets/index-oN65WZHT.js`, and the old model-config copy is absent from the served HTML.
+- Independent review found one remaining P1 after the first model-config hotfix: `/message` still had the old fallback copy `请先登录企业账号，或在设置 > 模型中配置可用的 API Key 后再发送。`
+- Removed that fallback, added regression assertions that both old model-config copies stay out of `channel/web/web_channel.py`, and kept the recoverable model-config response shape (`code`, `error_type`, `recoverable`) intact.
+- Rebuilt and redeployed both production chains again:
+  - static download/admin bundle to `/srv/ecorex-agent-download/releases/20260624044918-v0.2.0`;
+  - live WebUI runtime to `/opt/ecorex-web/releases/20260624045012-v0.2.0`.
+- Verified public `/ecorex-agent/api/version` returns `0.2.0`, the v0.2.0 client key reaches `401 missing user token` on `/client/model-config`, public manifest hashes match the rebuilt packages, and the active WebUI runtime source has no old model-config fallback copy.

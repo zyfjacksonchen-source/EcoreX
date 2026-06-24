@@ -20,7 +20,7 @@ from common.log import logger
 
 
 RUN_STATUS_ACTIVE = {"queued", "running", "cancelling", "finalizing", "recovering"}
-RUN_STATUS_TERMINAL = {"completed", "failed", "cancelled", "interrupted"}
+RUN_STATUS_TERMINAL = {"completed", "failed", "cancelled", "interrupted", "timeout"}
 
 
 _DDL = """
