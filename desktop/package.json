@@ -18,7 +18,7 @@
     "build:renderer": "vite build",
     "build:electron": "tsc -p tsconfig.electron.json",
     "webui:package": "npm run build:renderer && powershell -ExecutionPolicy Bypass -Command \"Set-Location ..; ./scripts/prepare-ecorex-webui-local-release.ps1 -Version 0.2.0\"",
-    "webui:stage-public": "npm run webui:package && powershell -ExecutionPolicy Bypass -Command \"Set-Location ..; ./scripts/update-ecorex-desktop-release-manifest.ps1 -Version 0.2.0 -WebUiWindowsPath release-artifacts/EcoreX_0.2.0-webui-windows-x64.zip -WebUiMacosPath release-artifacts/EcoreX_0.2.0-webui-macos-universal.zip; ./scripts/prepare-ecorex-public-release.ps1 -Version 0.2.0\"",
+    "webui:stage-public": "npm run webui:package && powershell -ExecutionPolicy Bypass -Command \"Set-Location ..; ./scripts/update-ecorex-desktop-release-manifest.ps1 -Version 0.2.0 -PromoteVersion -WebUiWindowsPath release-artifacts/EcoreX_0.2.0-webui-windows-x64.zip -WebUiMacosPath release-artifacts/EcoreX_0.2.0-webui-macos-universal.zip; ./scripts/prepare-ecorex-public-release.ps1 -Version 0.2.0\"",
     "package": "npm run package:win",
     "package:dir": "npm run build && npm run stage:runtime:win && electron-builder --dir --publish never",
     "package:win": "npm run build && npm run stage:runtime:win:x64 && electron-builder --win --x64 --publish never",

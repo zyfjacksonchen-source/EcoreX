@@ -1,8 +1,8 @@
 {
     "product":  "EcoreX",
-    "version":  "0.1.19",
-    "updatedAt":  "2026-06-23",
-    "notes":  "EcoreX v0.1.19 WebUI-first release. Desktop updater is retired; Windows and macOS use manifest-verified WebUI packages for install/update.",
+    "version":  "0.2.0",
+    "updatedAt":  "2026-06-24",
+    "notes":  "EcoreX v0.2.0 WebUI-first release. Desktop updater is retired; Windows and macOS use manifest-verified WebUI packages for install/update.",
     "update":  {
                    "webui":  {
                                  "mode":  "manifest-download",
@@ -60,29 +60,29 @@
                       },
                       {
                           "id":  "webui-windows-x64",
-                          "version":  "0.1.19",
+                          "version":  "0.2.0",
                           "platform":  "Windows",
                           "variant":  "WebUI one-click local package",
-                          "fileName":  "EcoreX_0.1.19-webui-windows-x64.zip",
-                          "href":  "downloads/EcoreX_0.1.19-webui-windows-x64.zip",
-                          "size":  81080696,
-                          "sha256":  "434ABB586A133DB619683278073BA03988A3A9C3ACAF54B5320A6F26E31AEDB9",
+                          "fileName":  "EcoreX_0.2.0-webui-windows-x64.zip",
+                          "href":  "downloads/EcoreX_0.2.0-webui-windows-x64.zip",
+                          "size":  81093375,
+                          "sha256":  "25A815E3C2B5EA69B591D2550CCE309BB0EE1D9E72F934B955A422AAE92F09AB",
                           "status":  "ready",
-                          "source":  "Local v0.1.19 WebUI Windows artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks.",
-                          "updatedAt":  "2026-06-23"
+                          "source":  "Local v0.2.0 WebUI Windows artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks.",
+                          "updatedAt":  "2026-06-24"
                       },
                       {
                           "id":  "webui-macos-universal",
-                          "version":  "0.1.19",
+                          "version":  "0.2.0",
                           "platform":  "macOS",
                           "variant":  "WebUI one-click local package",
-                          "fileName":  "EcoreX_0.1.19-webui-macos-universal.zip",
-                          "href":  "downloads/EcoreX_0.1.19-webui-macos-universal.zip",
-                          "size":  158191722,
-                          "sha256":  "2A134D29644BCCECAB9A07C0B5A6822BE574B7B7D8FE0C6C0BEE18FF644B9193",
+                          "fileName":  "EcoreX_0.2.0-webui-macos-universal.zip",
+                          "href":  "downloads/EcoreX_0.2.0-webui-macos-universal.zip",
+                          "size":  158204600,
+                          "sha256":  "F375BC84B76774EF3E69171004715D5DEFF96C3CF6669A7C3013EFA74CD90EE7",
                           "status":  "ready",
-                          "source":  "Local v0.1.19 WebUI macOS artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks.",
-                          "updatedAt":  "2026-06-23"
+                          "source":  "Local v0.2.0 WebUI macOS artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks.",
+                          "updatedAt":  "2026-06-24"
                       },
                       {
                           "id":  "macos-arm64-dmg",

@@ -26,3 +26,15 @@
   - Windows and macOS web installers now print script and manifest versions plus fallback instructions when the browser does not auto-open.
   - The package generator now emits versioned package installers and rejects generated macOS installers containing retired `resume_args` code.
   - macOS package installer writes desktop shortcuts before attempting to open the browser.
+- Prepared v0.2.0 WebUI release artifacts:
+  - Added an explicit `-PromoteVersion` gate to the public manifest updater so advancing `deploy/ecorex-site/manifest.json` from v0.1.19 to v0.2.0 is intentional and test-covered.
+  - Built v0.2.0 WebUI Windows and macOS local packages plus the combined public release zip.
+  - Verified package contents include the WebUI installers, desktop shortcut creation paths, v0.2.0 version markers, and no retired macOS `resume_args` retry code.
+- Fixed WebUI local auth fallback after package smoke found the release page could stop at the login panel on loopback when the admin client bridge returned `403 invalid client key`.
+  - No-password loopback WebUI now creates a local fallback session before probing admin model config.
+  - Missing/invalid admin client keys are treated as local-client-unavailable for fallback purposes.
+  - Rebuilt v0.2.0 WebUI packages and public release artifacts after the fix.
+- Fixed independent review P1 for WebUI project/session state merging.
+  - Merge-mode `sessionProjects`, `pinnedProjects`, `sessionTitles`, and `pinnedSessions` now let incoming explicit values override existing values while preserving keys omitted by partial clients.
+  - Added a regression test for moving a session between project folders, updating titles, and explicitly unpinning project/session entries.
+  - Rebuilt v0.2.0 WebUI packages and public release artifacts again so the packaged runtime contains the corrected merge semantics.

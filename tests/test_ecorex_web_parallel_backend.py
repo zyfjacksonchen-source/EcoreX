@@ -127,6 +127,39 @@ class TestEcoreXWorkspaceState(unittest.TestCase):
         self.assertEqual(state["sessionProjects"], {})
         self.assertEqual(state["pinnedProjects"], {})
 
+    def test_ui_state_merge_updates_existing_mapping_values(self):
+        from common.ecorex_workspace import load_ui_state, save_ui_state
+
+        with tempfile.TemporaryDirectory() as workspace:
+            project_a = os.path.join(workspace, "project-a")
+            project_b = os.path.join(workspace, "project-b")
+            projects = [
+                {"id": "p1", "name": "Project A", "path": project_a},
+                {"id": "p2", "name": "Project B", "path": project_b},
+            ]
+            save_ui_state(workspace, {
+                "projects": projects,
+                "sessionProjects": {"s1": "p1", "s2": "p1"},
+                "pinnedProjects": {"p1": True},
+                "sessionTitles": {"s1": "Old title", "s2": "Keep title"},
+                "pinnedSessions": {"s1": True, "s2": True},
+                "projectStateMode": "merge",
+            })
+            save_ui_state(workspace, {
+                "projects": projects,
+                "sessionProjects": {"s1": "p2"},
+                "pinnedProjects": {"p1": False, "p2": True},
+                "sessionTitles": {"s1": "New title"},
+                "pinnedSessions": {"s1": False},
+                "projectStateMode": "merge",
+            })
+            state = load_ui_state(workspace)
+
+        self.assertEqual(state["sessionProjects"], {"s1": "p2", "s2": "p1"})
+        self.assertEqual(state["pinnedProjects"], {"p1": False, "p2": True})
+        self.assertEqual(state["sessionTitles"], {"s1": "New title", "s2": "Keep title"})
+        self.assertEqual(state["pinnedSessions"], {"s1": False, "s2": True})
+
     def test_session_lock_blocks_same_session_until_released(self):
         from common.ecorex_workspace import SessionBusyError, SessionLock
 
@@ -1372,6 +1405,26 @@ class TestWebParallelHandlers(unittest.TestCase):
             package_source.index('write_desktop_shortcuts "$URL"'),
             package_source.index('open_browser "$URL"')
         )
+
+    def test_v020_release_manifest_promotion_is_explicit(self):
+        root = Path(__file__).resolve().parents[1]
+        script_source = (root / "scripts" / "update-ecorex-desktop-release-manifest.ps1").read_text(encoding="utf-8")
+        package_source = (root / "desktop" / "package.json").read_text(encoding="utf-8")
+
+        self.assertIn("[switch]$PromoteVersion", script_source)
+        self.assertIn("Pass -PromoteVersion to intentionally advance the public manifest.", script_source)
+        self.assertIn('Set-ArtifactProperty $manifest "version" $Version', script_source)
+        self.assertIn('Set-ArtifactProperty $manifest "updatedAt" $UpdatedAt', script_source)
+        self.assertIn("EcoreX v$Version WebUI-first release", script_source)
+        self.assertIn("-PromoteVersion -WebUiWindowsPath", package_source)
+
+    def test_v020_webui_local_auth_falls_back_without_admin_client(self):
+        root = Path(__file__).resolve().parents[1]
+        web_source = (root / "channel" / "web" / "web_channel.py").read_text(encoding="utf-8")
+
+        self.assertIn('if (!auth.auth_required) return webSession(false, true, null, true);', web_source)
+        self.assertIn("invalid client key|client key", web_source)
+        self.assertIn("if (isMissingClientBridge(error)) return webSession(Boolean(auth.auth_required), true);", web_source)
 
     def test_tool_permission_handler_round_trips_mode_and_audit(self):
         from channel.web import web_channel

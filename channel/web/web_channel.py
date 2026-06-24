@@ -440,7 +440,7 @@ def _web_app_bridge_script() -> str:
   }
 
   function isMissingClientBridge(error) {
-    return /not found|404|failed to fetch|networkerror|load failed/i.test(String((error && error.message) || error || ""));
+    return /not found|404|failed to fetch|networkerror|load failed|invalid client key|client key/i.test(String((error && error.message) || error || ""));
   }
 
   async function applyModelPolicy(payload) {
@@ -685,6 +685,7 @@ def _web_app_bridge_script() -> str:
       if (admin && admin.user && admin.token) return admin;
       var auth = await apiJson({ path: "/auth/check", method: "GET" });
       if (auth.auth_required && !auth.authenticated) return null;
+      if (!auth.auth_required) return webSession(false, true, null, true);
       try {
         await clientJson("/model-config", "GET", undefined, false);
       } catch (error) {

@@ -13,6 +13,7 @@ param(
     [string]$WebUiMacosPath = "",
     [string]$WebLinuxServicePath = "",
     [string]$UpdatedAt = (Get-Date -Format "yyyy-MM-dd"),
+    [switch]$PromoteVersion,
     [switch]$DryRun
 )
 
@@ -380,8 +381,13 @@ function Update-MacArtifact {
 $manifestResolved = Resolve-RequiredPath $ManifestPath
 $manifest = Read-JsonFile $manifestResolved
 if ([string]$manifest.version -ne $Version) {
-    throw "Manifest version '$($manifest.version)' does not match '$Version'."
+    if (-not $PromoteVersion) {
+        throw "Manifest version '$($manifest.version)' does not match '$Version'. Pass -PromoteVersion to intentionally advance the public manifest."
+    }
+    Set-ArtifactProperty $manifest "version" $Version
+    Set-ArtifactProperty $manifest "notes" "EcoreX v$Version WebUI-first release. Desktop updater is retired; Windows and macOS use manifest-verified WebUI packages for install/update."
 }
+Set-ArtifactProperty $manifest "updatedAt" $UpdatedAt
 
 if ($WindowsInstallerPath -or $WindowsInstalledSmokePath) {
     if (-not $WindowsInstallerPath -or -not $WindowsInstalledSmokePath) {

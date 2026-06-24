@@ -425,7 +425,7 @@ def save_ui_state(workspace: str, incoming: Dict[str, Any]) -> Dict[str, Any]:
         if replace_project_state:
             incoming["sessionProjects"] = normalized_incoming
         else:
-            incoming["sessionProjects"] = _merge_mapping(normalized_current, normalized_incoming, prefer_incoming=False)
+            incoming["sessionProjects"] = _merge_mapping(normalized_current, normalized_incoming, prefer_incoming=True)
     elif id_aliases and current.get("sessionProjects"):
         normalized_current = _normalize_session_project_mapping(current.get("sessionProjects"), id_aliases, valid_project_ids, project_ids_known)
         if normalized_current != current.get("sessionProjects"):
@@ -436,7 +436,7 @@ def save_ui_state(workspace: str, incoming: Dict[str, Any]) -> Dict[str, Any]:
         if replace_project_state:
             incoming["pinnedProjects"] = normalized_incoming_pins
         else:
-            incoming["pinnedProjects"] = _merge_mapping(normalized_current_pins, normalized_incoming_pins, prefer_incoming=False)
+            incoming["pinnedProjects"] = _merge_mapping(normalized_current_pins, normalized_incoming_pins, prefer_incoming=True)
     elif id_aliases and current.get("pinnedProjects"):
         normalized_current_pins = _normalize_project_keyed_mapping(current.get("pinnedProjects"), id_aliases, valid_project_ids, project_ids_known)
         if normalized_current_pins != current.get("pinnedProjects"):
@@ -448,7 +448,7 @@ def save_ui_state(workspace: str, incoming: Dict[str, Any]) -> Dict[str, Any]:
                 incoming[key] = merged_map
                 continue
             else:
-                merged_map = _merge_mapping(current.get(key), incoming.get(key), prefer_incoming=False)
+                merged_map = _merge_mapping(current.get(key), incoming.get(key), prefer_incoming=True)
             if merged_map or not current.get(key):
                 incoming[key] = merged_map
             else:
