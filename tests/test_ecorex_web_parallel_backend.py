@@ -7711,7 +7711,7 @@ class TestAgentHostBoundary(unittest.TestCase):
             'markStreamTerminal(sessionId, requestId, "failed")',
             "finishSessionRequest(sessionId, requestId)",
             "void refreshSessionFromHistoryForRequest(sessionId, requestId).then((restored) =>",
-            "Response stream history expired",
+            "响应记录暂时没有接上",
             'label: "stream_replay_gap"',
             "requestedLastEventId",
             "retainedFromEventId",
@@ -7720,6 +7720,61 @@ class TestAgentHostBoundary(unittest.TestCase):
             self.assertIn(marker, helper_source)
         self.assertGreaterEqual(app_source.count("handleReplayGapStreamItem("), 3)
         self.assertGreaterEqual(app_source.count("if (isReplayGapStreamItem(item))"), 2)
+
+    def test_v020_send_attempt_uses_user_facing_copy_and_preserves_live_placeholder(self):
+        root = Path(__file__).resolve().parents[1]
+        app_source = (root / "desktop" / "src" / "App.tsx").read_text(encoding="utf-8")
+        helper_start = app_source.index("function historyHasFinalAssistantAfterUserTurn")
+        helper_end = app_source.index("function mergeHistoryAndLocalRequestMessage", helper_start)
+        helper_source = app_source[helper_start:helper_end]
+        merge_start = app_source.index("function mergeHistoryWithLocalMessages")
+        merge_end = app_source.index("function plainTextForMessage", merge_start)
+        merge_source = app_source[merge_start:merge_end]
+        recovery_start = app_source.index("function renderRecoveryActions")
+        recovery_end = app_source.index("if (!authChecked)", recovery_start)
+        recovery_source = app_source[recovery_start:recovery_end]
+
+        self.assertIn("function historyHasTerminalAssistantForPending", app_source)
+        self.assertIn("function historyHasFinalAssistantAfterUserTurn", app_source)
+        self.assertIn("for (let index = userIndex + 1; index < history.length; index += 1)", helper_source)
+        self.assertIn('if (message.role === "user") return false;', helper_source)
+        self.assertIn('if (message.role === "assistant" && isTerminalAssistantMessage(message)) return true;', helper_source)
+        self.assertIn("historyHasTerminalAssistantForPending(history, message)", merge_source)
+        self.assertIn("historyUserIndicesByContentKey", merge_source)
+        self.assertIn("localUserTotalsByContentKey", merge_source)
+        self.assertIn("localUserSeenByContentKey", merge_source)
+        self.assertIn("firstComparableHistoryIndex = Math.max(0, historyIndices.length - localTotal)", merge_source)
+        self.assertIn("skipPendingAssistantAfterMatchedUser = historyHasFinalAssistantAfterUserTurn(history, matchedHistoryUserIndex);", merge_source)
+        self.assertNotIn("historyHasFinalAssistantAfterUserTurn(history, message)", merge_source)
+        self.assertNotIn("const historyHasFinalAssistant", merge_source)
+        self.assertNotIn('skipPendingAssistantAfterMatchedUser = message.role === "user";', merge_source)
+        self.assertNotIn('skipPendingAssistantAfterMatchedUser = historyHasFinalAssistant && message.role === "user";', merge_source)
+        self.assertNotIn("Sending while stopping the previous response", app_source)
+        self.assertNotIn("Response stalled; reconnecting", app_source)
+        self.assertIn("visibleOutputSettled?: boolean", app_source)
+        self.assertIn("&& !message.visibleOutputSettled", app_source)
+        self.assertGreaterEqual(app_source.count("visibleOutputSettled: message.visibleOutputSettled"), 2)
+        self.assertIn("function settleVisibleStreamOutput", app_source)
+        self.assertIn("options: { awaitingStreamDone?: boolean }", app_source)
+        self.assertIn("visibleOutputSettled: options.awaitingStreamDone ?? true", app_source)
+        self.assertIn("recovery: undefined", app_source)
+        self.assertGreaterEqual(app_source.count("const next = appendArtifact(message, item, false);"), 2)
+        self.assertGreaterEqual(app_source.count("return next === message ? message : settleVisibleStreamOutput(next, { awaitingStreamDone: !postDoneTail });"), 2)
+        self.assertGreaterEqual(app_source.count('const visibleTerminalOutput = item.type !== "voice_attach" || terminalVoiceAttach;'), 2)
+        self.assertGreaterEqual(app_source.count("? settleVisibleStreamOutput(next, { awaitingStreamDone: !postDoneTail && !terminalVoiceAttach })"), 2)
+        self.assertIn("if (!message.pending && !message.visibleOutputSettled) return message;", app_source)
+        self.assertIn("message.visibleOutputSettled && isTransientPhaseContent(phaseContent)", app_source)
+        self.assertIn("const canReconnect = Boolean(requestId && (message.pending || message.visibleOutputSettled));", recovery_source)
+        for marker in [
+            "正在发送新消息",
+            "正在切换到这条新消息",
+            "正在准备响应",
+            "重新连接",
+            "恢复记录",
+            "准备重试",
+            "诊断信息",
+        ]:
+            self.assertIn(marker, recovery_source)
 
     def test_v019_retry_prepare_returns_safe_manual_draft(self):
         with isolated_run_ledger():
@@ -8025,7 +8080,7 @@ class TestAgentHostBoundary(unittest.TestCase):
             "stop_before_retry",
             "activeStillRunning: true",
             "stopAllowed",
-            "Network interrupted after output started",
+            "网络连接中断。为避免重复执行",
         ]:
             self.assertIn(marker, app_source)
         self.assertIn('"retry_mode": "manual_retry_prepare" if retryable else "unavailable"', (root / "agent" / "protocol" / "agent_stream.py").read_text(encoding="utf-8"))

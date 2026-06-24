@@ -175,6 +175,7 @@ type ChatItem = {
   attachments?: FileAttachment[];
   pending?: boolean;
   paused?: boolean;
+  visibleOutputSettled?: boolean;
   reasoning?: string;
   steps?: AgentStepDisclosure[];
   toolCalls?: ToolCallDisclosure[];
@@ -547,6 +548,7 @@ function slimPersistedMessage(message: ChatItem): ChatItem {
     attachments: message.attachments?.slice(0, 8).map(slimPersistedAttachment),
     pending: message.pending,
     paused: message.paused,
+    visibleOutputSettled: message.visibleOutputSettled,
     reasoning: message.reasoning ? truncatePersistedText(message.reasoning, SESSION_UI_REASONING_CHARS) : undefined,
     steps: message.steps?.slice(-10).map(slimPersistedStep),
     toolCalls: message.toolCalls?.slice(-6).map(slimPersistedToolCall),
@@ -611,6 +613,7 @@ function minimalPersistedSessionState(value: SessionUiState): SessionUiState {
       createdAt: message.createdAt,
       pending: message.pending,
       paused: message.paused,
+      visibleOutputSettled: message.visibleOutputSettled,
       cancelled: message.cancelled,
       requestId: message.requestId,
       userSeq: message.userSeq,
@@ -1542,6 +1545,7 @@ function isTerminalAssistantMessage(message?: ChatItem) {
     && message.role === "assistant"
     && !message.pending
     && !message.paused
+    && !message.visibleOutputSettled
     && !message.cancelled
     && messageHasTerminalPayload(message));
 }
@@ -1551,6 +1555,30 @@ function isSameAssistantTurn(left: ChatItem, right: ChatItem) {
   if (left.requestId && right.requestId && left.requestId === right.requestId) return true;
   if (typeof left.botSeq === "number" && typeof right.botSeq === "number" && left.botSeq === right.botSeq) return true;
   if (typeof left.userSeq === "number" && typeof right.userSeq === "number" && left.userSeq === right.userSeq) return true;
+  return false;
+}
+
+function historyHasTerminalAssistantForPending(history: ChatItem[], pendingAssistant: ChatItem) {
+  if (pendingAssistant.role !== "assistant") return false;
+  const requestKey = messageRequestKey(pendingAssistant);
+  const sequenceKey = messageSequenceKey(pendingAssistant);
+  return history.some((message) => (
+    message.role === "assistant"
+    && isTerminalAssistantMessage(message)
+    && (
+      (requestKey && messageRequestKey(message) === requestKey)
+      || (sequenceKey && messageSequenceKey(message) === sequenceKey)
+    )
+  ));
+}
+
+function historyHasFinalAssistantAfterUserTurn(history: ChatItem[], userIndex: number) {
+  if (userIndex < 0 || history[userIndex]?.role !== "user") return false;
+  for (let index = userIndex + 1; index < history.length; index += 1) {
+    const message = history[index];
+    if (message.role === "user") return false;
+    if (message.role === "assistant" && isTerminalAssistantMessage(message)) return true;
+  }
   return false;
 }
 
@@ -1588,11 +1616,24 @@ function mergeHistoryAndLocalRequestMessage(historyMessage: ChatItem, localMessa
 
 function mergeHistoryWithLocalMessages(history: ChatItem[], local: ChatItem[]) {
   if (!history.length || !local.length) return history.length ? history : local;
-  const historyHasFinalAssistant = history.some((message) => (
-    message.role === "assistant"
-    && !message.pending
-    && messageHasTerminalPayload(message)
-  ));
+  const historyUserIndexBySequenceKey = new Map(history
+    .map((message, index) => [messageSequenceKey(message), index] as [string, number])
+    .filter(([key, index]) => Boolean(key) && history[index]?.role === "user"));
+  const historyUserIndicesByContentKey = new Map<string, number[]>();
+  history.forEach((message, index) => {
+    if (message.role !== "user") return;
+    const key = messageContentKey(message);
+    if (!key) return;
+    historyUserIndicesByContentKey.set(key, [...(historyUserIndicesByContentKey.get(key) || []), index]);
+  });
+  const localUserTotalsByContentKey = new Map<string, number>();
+  local.forEach((message) => {
+    if (message.role !== "user") return;
+    const key = messageContentKey(message);
+    if (!key) return;
+    localUserTotalsByContentKey.set(key, (localUserTotalsByContentKey.get(key) || 0) + 1);
+  });
+  const localUserSeenByContentKey = new Map<string, number>();
   const sequenceKeys = new Set(history.map(messageSequenceKey).filter(Boolean));
   const requestKeys = new Set(history.map(messageRequestKey).filter(Boolean));
   const contentKeys = new Set(history.map(messageContentKey).filter(Boolean));
@@ -1609,12 +1650,29 @@ function mergeHistoryWithLocalMessages(history: ChatItem[], local: ChatItem[]) {
   ));
 
   for (const message of local) {
-    if (historyHasFinalAssistant && message.role === "assistant" && message.pending && message.id.startsWith("a-resume-")) {
+    let matchedHistoryUserIndex = -1;
+    if (message.role === "user") {
+      const userSequenceKey = messageSequenceKey(message);
+      const userContentKey = messageContentKey(message);
+      if (userContentKey) {
+        localUserSeenByContentKey.set(userContentKey, (localUserSeenByContentKey.get(userContentKey) || 0) + 1);
+      }
+      if (userSequenceKey && historyUserIndexBySequenceKey.has(userSequenceKey)) {
+        matchedHistoryUserIndex = historyUserIndexBySequenceKey.get(userSequenceKey) ?? -1;
+      } else if (userContentKey) {
+        const historyIndices = historyUserIndicesByContentKey.get(userContentKey) || [];
+        const localTotal = localUserTotalsByContentKey.get(userContentKey) || 1;
+        const localSeen = localUserSeenByContentKey.get(userContentKey) || 1;
+        const firstComparableHistoryIndex = Math.max(0, historyIndices.length - localTotal);
+        matchedHistoryUserIndex = historyIndices[Math.min(historyIndices.length - 1, firstComparableHistoryIndex + localSeen - 1)] ?? -1;
+      }
+    }
+    if (message.role === "assistant" && message.pending && message.id.startsWith("a-resume-") && historyHasTerminalAssistantForPending(history, message)) {
       continue;
     }
     const sequenceKey = messageSequenceKey(message);
     if (sequenceKey && sequenceKeys.has(sequenceKey)) {
-      skipPendingAssistantAfterMatchedUser = message.role === "user";
+      skipPendingAssistantAfterMatchedUser = historyHasFinalAssistantAfterUserTurn(history, matchedHistoryUserIndex);
       continue;
     }
     const requestKey = messageRequestKey(message);
@@ -1624,7 +1682,7 @@ function mergeHistoryWithLocalMessages(history: ChatItem[], local: ChatItem[]) {
     }
     const contentKey = messageContentKey(message);
     if (contentKey && contentKeys.has(contentKey)) {
-      skipPendingAssistantAfterMatchedUser = message.role === "user";
+      skipPendingAssistantAfterMatchedUser = historyHasFinalAssistantAfterUserTurn(history, matchedHistoryUserIndex);
       continue;
     }
 
@@ -4055,7 +4113,7 @@ export function App() {
     const message = redactInternalPromptText(
       item.message
       || item.content
-      || `Response stream history expired${detail ? ` (${detail})` : ""}. Refreshed saved conversation; retry if the final answer is missing.`
+      || `响应记录暂时没有接上${detail ? `（${detail}）` : ""}，已刷新保存的会话；如果最终答案缺失，可以准备重试。`
     );
     markStreamTerminal(sessionId, requestId, "failed");
     finishSessionRequest(sessionId, requestId);
@@ -4315,6 +4373,7 @@ export function App() {
   }
 
   function appendReasoningStep(message: ChatItem, chunk: string): ChatItem {
+    if (message.visibleOutputSettled) return message;
     chunk = redactInternalPromptText(chunk);
     if (!chunk) return message;
     const steps = [...(message.steps || [])];
@@ -4467,6 +4526,16 @@ export function App() {
     return { ...message, pending, paused: false, artifacts: nextArtifacts };
   }
 
+  function settleVisibleStreamOutput(message: ChatItem, options: { awaitingStreamDone?: boolean } = {}): ChatItem {
+    return {
+      ...clearTransientSendSteps(finishRunningSteps(message)),
+      pending: false,
+      paused: false,
+      visibleOutputSettled: options.awaitingStreamDone ?? true,
+      recovery: undefined
+    };
+  }
+
   function rememberPostDoneTailArtifacts(requestId: string, item: StreamItem) {
     const artifacts = streamItemArtifacts(item, requestId);
     if (!requestId || !artifacts.length) return;
@@ -4582,8 +4651,8 @@ export function App() {
     const reason = item.retry_suppressed_reason || item.terminal_reason || item.error_taxonomy || item.error_type || item.error_code || "";
     const suppressedAfterOutput = Boolean(item.retry_suppressed && item.retry_suppressed_reason === "stream_output_started");
     const message = suppressedAfterOutput
-      ? "Network interrupted after output started. Automatic replay is paused to avoid duplicate work; recover history or prepare a retry draft."
-      : fallbackMessage || "Response interrupted. Recover saved history or prepare a retry draft.";
+      ? "网络连接中断。为避免重复执行，已暂停自动重放；可以恢复记录或准备重试。"
+      : fallbackMessage || "响应中断了，可以恢复记录或准备重试。";
     return {
       kind,
       requestId,
@@ -4599,20 +4668,21 @@ export function App() {
   }
 
   function markStreamConnectionInterrupted(sessionId: string, assistantId: string, requestId: string) {
-    updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => (
-      message.pending ? {
-        ...replaceCurrentPhase(message, "Response stalled; reconnecting"),
+    updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => {
+      if (!message.pending && !message.visibleOutputSettled) return message;
+      return {
+        ...(message.pending ? replaceCurrentPhase(message, "正在重新连接") : message),
         recovery: {
           kind: "stalled",
           requestId,
-          message: "Connection interrupted. Reconnecting to the same run; recover saved history if it does not resume.",
+          message: "连接中断，正在尝试接回同一次任务；如果没有恢复，可以先恢复记录。",
           recoverable: true,
           retryable: false,
           reason: "eventsource_error",
           retryMode: "stream_reconnect"
         }
-      } : message
-    ));
+      };
+    });
   }
 
   function markStreamReconnectExhausted(sessionId: string, assistantId: string, requestId: string, options: { activeStillRunning?: boolean } = {}) {
@@ -4627,8 +4697,8 @@ export function App() {
         kind: "failed",
         requestId,
         message: activeStillRunning
-          ? "Response channel could not be restored, but the original run still appears active. Recover saved history or stop it before retrying."
-          : "Response channel could not be restored. Recover saved history or prepare a retry draft.",
+          ? "响应通道暂时没有接回，但原任务仍在运行。可以恢复记录，或先停止后再重试。"
+          : "响应通道暂时没有接回。可以恢复记录或准备重试。",
         recoverable: true,
         retryable: !activeStillRunning,
         reason: activeStillRunning ? "active_stream_unavailable" : "stream_reconnect_exhausted",
@@ -4646,18 +4716,19 @@ export function App() {
       const state = getStreamRequestState(sessionId, requestId);
       if (isTerminalStreamPhase(state?.phase) || completedRequestIds.current[requestId]) return;
       setStreamRequestPhase(sessionId, requestId, "stalled");
-      updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => (
-        message.pending ? {
-          ...replaceCurrentPhase(message, "Response stalled; reconnecting"),
+      updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => {
+        if (!message.pending && !message.visibleOutputSettled) return message;
+        return {
+          ...(message.pending ? replaceCurrentPhase(message, "正在重新连接") : message),
           recovery: {
             kind: "stalled",
             requestId,
-            message: "Response stalled; reconnecting. You can reconnect or recover from saved history.",
+            message: "连接中断，正在尝试接回同一次任务；如果没有恢复，可以先恢复记录。",
             recoverable: true,
             retryable: false
           }
-        } : message
-      ));
+        };
+      });
       scheduleStreamReconnect(sessionId, assistantId, requestId);
     }, delayMs);
   }
@@ -5035,6 +5106,7 @@ export function App() {
                 ...clearTransientSendSteps(nextMessage),
                 content: doneItemContent(item, message.content),
                 pending: false,
+                visibleOutputSettled: undefined,
                 requestId,
                 userSeq: typeof item.user_seq === "number" ? item.user_seq : message.userSeq,
                 botSeq: typeof item.bot_seq === "number" ? item.bot_seq : message.botSeq
@@ -5125,13 +5197,12 @@ export function App() {
         if (item.type === "artifact") {
           const postDoneTail = Boolean(completedRequestIds.current[requestId]);
           if (postDoneTail) rememberPostDoneTailArtifacts(requestId, item);
-          updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => (
-            postDoneTail
-              ? clearTransientSendSteps(appendArtifact(finishRunningSteps(message), item, false))
-              : appendArtifact(message, item)
-          ));
+          updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => {
+            const next = appendArtifact(message, item, false);
+            return next === message ? message : settleVisibleStreamOutput(next, { awaitingStreamDone: !postDoneTail });
+          });
+          markSessionOutputReady(sessionId);
           if (postDoneTail) {
-            markSessionOutputReady(sessionId);
             window.setTimeout(() => {
               void refreshSessionFromHistory(sessionId);
             }, 0);
@@ -5142,14 +5213,15 @@ export function App() {
           const postDoneTail = Boolean(completedRequestIds.current[requestId]);
           const terminalVoiceAttach = isTerminalVoiceAttach(item);
           updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => {
-            const next = appendMediaStep(message, item, !postDoneTail);
-            return postDoneTail || terminalVoiceAttach
-              ? { ...clearTransientSendSteps(finishRunningSteps(next)), pending: false, paused: false }
+            const visibleTerminalOutput = item.type !== "voice_attach" || terminalVoiceAttach;
+            const next = appendMediaStep(message, item, !visibleTerminalOutput);
+            return visibleTerminalOutput
+              ? settleVisibleStreamOutput(next, { awaitingStreamDone: !postDoneTail && !terminalVoiceAttach })
               : next;
           });
-          if (postDoneTail || terminalVoiceAttach) {
+          if (item.type !== "voice_attach" || terminalVoiceAttach) {
             markSessionOutputReady(sessionId);
-            if (!postDoneTail && terminalVoiceAttach) {
+            if (terminalVoiceAttach) {
               markRequestLocallyCompleted(requestId);
               setStreamRequestPhase(sessionId, requestId, "text_done_tail_open");
               clearHistoryRecovery(sessionId, requestId);
@@ -5159,12 +5231,16 @@ export function App() {
           }
           return;
         }
-            if (item.type === "phase" && (item.content || item.message)) {
-              const phaseContent = redactInternalPromptText(item.content || item.message || "");
-              if (!phaseContent) return;
-              updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => replaceCurrentPhase(message, phaseContent));
-              return;
-            }
+        if (item.type === "phase" && (item.content || item.message)) {
+          const phaseContent = redactInternalPromptText(item.content || item.message || "");
+          if (!phaseContent) return;
+          updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => (
+            message.visibleOutputSettled && isTransientPhaseContent(phaseContent)
+              ? message
+              : replaceCurrentPhase(message, phaseContent)
+          ));
+          return;
+        }
             if (item.type === "message_update" || item.type === "delta") {
               enqueueAssistantDelta(sessionId, assistantId, requestId, streamItemText(item));
             }
@@ -5582,7 +5658,7 @@ export function App() {
           item.role === "assistant" && item.requestId && replacedRequestIds.includes(item.requestId) && item.pending
             ? {
                 ...finishRunningSteps(item, "cancelled"),
-                content: item.content || "Stopped because a newer message was accepted or recovered.",
+                content: item.content || "已切换到新的消息处理。",
                 pending: false,
                 cancelled: true
               }
@@ -5658,6 +5734,7 @@ export function App() {
                   ...clearTransientSendSteps(nextMessage),
                   content: doneItemContent(item, message.content),
                   pending: false,
+                  visibleOutputSettled: undefined,
                   requestId,
                   recovery: undefined,
                   userSeq: typeof item.user_seq === "number" ? item.user_seq : message.userSeq,
@@ -5750,13 +5827,12 @@ export function App() {
             if (item.type === "artifact") {
               const postDoneTail = Boolean(completedRequestIds.current[requestId]);
               if (postDoneTail) rememberPostDoneTailArtifacts(requestId, item);
-              updateAssistantMessageForRequest(requestSessionId, assistantId, requestId, (message) => (
-                postDoneTail
-                  ? clearTransientSendSteps(appendArtifact(finishRunningSteps(message), item, false))
-                  : appendArtifact(message, item)
-              ));
+              updateAssistantMessageForRequest(requestSessionId, assistantId, requestId, (message) => {
+                const next = appendArtifact(message, item, false);
+                return next === message ? message : settleVisibleStreamOutput(next, { awaitingStreamDone: !postDoneTail });
+              });
+              markSessionOutputReady(requestSessionId);
               if (postDoneTail) {
-                markSessionOutputReady(requestSessionId);
                 window.setTimeout(() => {
                   void refreshSessionFromHistory(requestSessionId);
                 }, 0);
@@ -5767,14 +5843,15 @@ export function App() {
               const postDoneTail = Boolean(completedRequestIds.current[requestId]);
               const terminalVoiceAttach = isTerminalVoiceAttach(item);
               updateAssistantMessageForRequest(requestSessionId, assistantId, requestId, (message) => {
-                const next = appendMediaStep(message, item, !postDoneTail);
-                return postDoneTail || terminalVoiceAttach
-                  ? { ...clearTransientSendSteps(finishRunningSteps(next)), pending: false, paused: false }
+                const visibleTerminalOutput = item.type !== "voice_attach" || terminalVoiceAttach;
+                const next = appendMediaStep(message, item, !visibleTerminalOutput);
+                return visibleTerminalOutput
+                  ? settleVisibleStreamOutput(next, { awaitingStreamDone: !postDoneTail && !terminalVoiceAttach })
                   : next;
               });
-              if (postDoneTail || terminalVoiceAttach) {
+              if (item.type !== "voice_attach" || terminalVoiceAttach) {
                 markSessionOutputReady(requestSessionId);
-                if (!postDoneTail && terminalVoiceAttach) {
+                if (terminalVoiceAttach) {
                   markRequestLocallyCompleted(requestId);
                   setStreamRequestPhase(requestSessionId, requestId, "text_done_tail_open");
                   clearHistoryRecovery(requestSessionId, requestId);
@@ -5787,7 +5864,11 @@ export function App() {
             if (item.type === "phase" && (item.content || item.message)) {
               const phaseContent = redactInternalPromptText(item.content || item.message || "");
               if (!phaseContent) return;
-              updateAssistantMessageForRequest(requestSessionId, assistantId, requestId, (message) => replaceCurrentPhase(message, phaseContent));
+              updateAssistantMessageForRequest(requestSessionId, assistantId, requestId, (message) => (
+                message.visibleOutputSettled && isTransientPhaseContent(phaseContent)
+                  ? message
+                  : replaceCurrentPhase(message, phaseContent)
+              ));
               return;
             }
             if (item.type === "message_update" || item.type === "delta") {
@@ -6360,16 +6441,16 @@ export function App() {
         void refreshSessionFromHistory(sessionId);
       }
       if (result.status === "error" || !result.retryable || !result.prompt) {
-        setToast(result.message || "This request cannot be safely retried yet");
+        setToast(result.message || "当前还不能安全重试，请稍后再试。");
         return false;
       }
       setComposerDraft(result.prompt, { immediate: true });
       setAttachments((result.attachments || []).filter(isDurableLocalAttachment));
       focusComposerSoon();
-      setToast(result.exactReplay || result.exact_replay ? "Retry draft prepared; review and send." : "Retry draft prepared from latest history; review before sending.");
+      setToast(result.exactReplay || result.exact_replay ? "已准备好重试草稿，请确认后发送。" : "已基于最新记录准备好重试草稿，请确认后发送。");
       return true;
     } catch (error) {
-      setToast(error instanceof Error ? error.message : "Retry prepare failed");
+      setToast(error instanceof Error ? error.message : "准备重试失败");
       return false;
     }
   }
@@ -6808,38 +6889,44 @@ export function App() {
     const requestId = recovery?.requestId || message.requestId || "";
     if (!recovery && !message.sendAttempt) return null;
     if (message.sendAttempt && message.sendAttempt.state !== "accepted") {
-      return <div className="message-recovery-actions"><span>Sending while stopping the previous response</span></div>;
+      const label = message.sendAttempt.state === "stopping-previous"
+        ? (message.role === "user" ? "正在发送新消息" : "正在切换到这条新消息")
+        : message.sendAttempt.state === "restore-available"
+          ? "消息未发出，可在输入框中重试"
+          : (message.role === "user" ? "正在发送" : "正在准备响应");
+      return <div className="message-recovery-actions"><span>{label}</span></div>;
     }
     if (!recovery) return null;
-    const showStop = Boolean(requestId && (message.pending || recovery.stopAllowed));
+    const canReconnect = Boolean(requestId && (message.pending || message.visibleOutputSettled));
+    const showStop = Boolean(requestId && (message.pending || message.visibleOutputSettled || recovery.stopAllowed));
     return (
       <div className="message-recovery-actions">
         <span>{recovery.message}</span>
-        {requestId && message.pending && (
+        {canReconnect && (
           <button type="button" onClick={() => attachMessageStream(sessionId, message.id, requestId)}>
-            <RefreshCw aria-hidden="true" />Reconnect
+            <RefreshCw aria-hidden="true" />重新连接
           </button>
         )}
         {recovery.recoverable && (
           <button type="button" onClick={() => void refreshSessionFromHistory(sessionId)}>
-            <BookOpen aria-hidden="true" />Recover
+            <BookOpen aria-hidden="true" />恢复记录
           </button>
         )}
         {showStop && (
           <button type="button" onClick={() => void cancelChatRequest({ requestId, sessionId }).then(() => stopActiveRequest()).catch(() => undefined)}>
-            <Square aria-hidden="true" />Stop
+            <Square aria-hidden="true" />停止
           </button>
         )}
         {requestId && recovery.retryable && (
           <button type="button" onClick={() => void prepareRetryDraft(requestId, sessionId)}>
-            <RefreshCw aria-hidden="true" />Retry draft
+            <RefreshCw aria-hidden="true" />准备重试
           </button>
         )}
         <button type="button" onClick={() => void exportDiagnosticsBundle({ sessionId, requestId: requestId || undefined }).then((bundle) => {
           const stamp = new Date().toISOString().replace(/[:.]/g, "-");
           downloadJsonFile(`ecorex-recovery-diagnostics-${stamp}.json`, bundle);
-        }).catch((error) => setToast(error instanceof Error ? error.message : "Diagnostics export failed"))}>
-          <FileText aria-hidden="true" />Diagnostics
+        }).catch((error) => setToast(error instanceof Error ? error.message : "诊断信息导出失败"))}>
+          <FileText aria-hidden="true" />诊断信息
         </button>
       </div>
     );

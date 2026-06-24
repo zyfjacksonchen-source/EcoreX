@@ -43,3 +43,14 @@
   - Published GitHub release `v0.2.0` with Windows WebUI, macOS WebUI, combined Win/Mac, and public-release zip assets.
   - Deployed the public release bundle to `https://www.ecoreai.cn/ecorex-agent/` and verified the public manifest and Win/Mac WebUI downloads.
   - Ran a Windows package installer live smoke; the local desktop shortcut was generated and the installed WebUI returned version `0.2.0` on port `9909`.
+
+## 2026-06-24 Hotfix: Send/Interrupt UX
+
+- Removed the user-visible English technical status `Sending while stopping the previous response`.
+- Localized retry/reconnect/recovery controls and network interruption explanations in the chat surface.
+- Fixed a live-placeholder merge race: when saved history contains the accepted user turn but the assistant answer is still running, WebUI now preserves the local pending assistant instead of hiding it.
+- Tightened the live-placeholder merge race for repeated identical user prompts by matching accepted user turns from the comparable history tail instead of using the first content match.
+- Fixed artifact/media-only completion UX: when a visible artifact, image, video, audio, or file event arrives, WebUI clears transient connecting/thinking phases and marks the visible assistant bubble settled while leaving the underlying stream open for later `done` or tail events.
+- Added persisted `visibleOutputSettled` UI state so a pre-`done` visible artifact/media bubble remains recoverable after reload instead of being misclassified as a terminal assistant answer.
+- Independent read-only review found and rechecked two UI-state P1 issues: premature terminal classification during reconnect and missing `visibleOutputSettled` persistence. Both were fixed before packaging.
+- Rebuilt v0.2.0 WebUI packages and public release artifacts with the hotfix.
