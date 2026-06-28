@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${VERSION:-0.2.0}"
+VERSION="${VERSION:-0.2.4}"
 SERVICE_NAME="${SERVICE_NAME:-ecorex-web}"
 SERVICE_USER="${SERVICE_USER:-ecorex}"
 SERVICE_GROUP="${SERVICE_GROUP:-$SERVICE_USER}"
@@ -15,7 +15,7 @@ SERVICE_FILE="${SERVICE_FILE:-/etc/systemd/system/$SERVICE_NAME.service}"
 WEB_HOST="${WEB_HOST:-127.0.0.1}"
 WEB_PORT="${WEB_PORT:-9909}"
 PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-}"
-RELEASE_BASE_URL="${RELEASE_BASE_URL:-https://www.ecoreai.cn/ecorex-agent/downloads}"
+RELEASE_BASE_URL="${RELEASE_BASE_URL:-https://mvdcm.ecoremedia.net/ecorex-agent/downloads}"
 RELEASE_URL="${RELEASE_URL:-$RELEASE_BASE_URL/EcoreX_${VERSION}-web-linux-service.tar.gz}"
 EXPECTED_SHA256="${EXPECTED_SHA256:-}"
 START_SERVICE="${START_SERVICE:-1}"
@@ -141,6 +141,27 @@ read_env_value() {
   printf '%s' "$fallback"
 }
 
+upsert_env_value() {
+  local key="$1"
+  local value="$2"
+  if [[ -f "$ENV_FILE" ]] && grep -q "^${key}=" "$ENV_FILE"; then
+    python3 - "$ENV_FILE" "$key" "$value" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+key = sys.argv[2]
+value = sys.argv[3]
+lines = path.read_text(encoding="utf-8").splitlines()
+prefix = key + "="
+next_lines = [prefix + value if line.startswith(prefix) else line for line in lines]
+path.write_text("\n".join(next_lines).rstrip() + "\n", encoding="utf-8")
+PY
+  else
+    printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
+  fi
+}
+
 ensure_user() {
   if ! getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
     groupadd --system "$SERVICE_GROUP"
@@ -218,6 +239,14 @@ write_env_file() {
     existing_password="$(random_secret)"
   fi
 
+  local public_base
+  local client_base
+  public_base="${PUBLIC_BASE_URL%/}"
+  client_base=""
+  if [[ -n "$public_base" ]]; then
+    client_base="$public_base/client"
+  fi
+
   if [[ ! -f "$ENV_FILE" ]]; then
     cat > "$ENV_FILE" <<EOF
 CHANNEL_TYPE=web
@@ -226,6 +255,11 @@ WEB_PORT=$WEB_PORT
 WEB_PASSWORD=$existing_password
 AGENT_WORKSPACE=$WORKSPACE_ROOT
 ECOREX_WEB_PUBLIC_BASE_URL=$PUBLIC_BASE_URL
+ECOREX_WEB_CLIENT_BASE=$client_base
+ECOREX_TOOL_EXECUTION_LEASE_SECONDS=900
+ECOREX_TOOL_EXECUTION_EXTENSION_SECONDS=900
+ECOREX_TOOL_EXECUTION_MAX_SECONDS=5400
+ECOREX_BASH_MAX_TIMEOUT_SECONDS=7200
 PYTHONUNBUFFERED=1
 EOF
     chmod 0640 "$ENV_FILE"
@@ -237,6 +271,17 @@ EOF
     grep -q '^WEB_PASSWORD=' "$ENV_FILE" || printf 'WEB_PASSWORD=%s\n' "$existing_password" >> "$ENV_FILE"
     grep -q '^AGENT_WORKSPACE=' "$ENV_FILE" || printf 'AGENT_WORKSPACE=%s\n' "$WORKSPACE_ROOT" >> "$ENV_FILE"
     grep -q '^PYTHONUNBUFFERED=' "$ENV_FILE" || printf 'PYTHONUNBUFFERED=1\n' >> "$ENV_FILE"
+    grep -q '^ECOREX_TOOL_EXECUTION_LEASE_SECONDS=' "$ENV_FILE" || printf 'ECOREX_TOOL_EXECUTION_LEASE_SECONDS=900\n' >> "$ENV_FILE"
+    grep -q '^ECOREX_TOOL_EXECUTION_EXTENSION_SECONDS=' "$ENV_FILE" || printf 'ECOREX_TOOL_EXECUTION_EXTENSION_SECONDS=900\n' >> "$ENV_FILE"
+    grep -q '^ECOREX_TOOL_EXECUTION_MAX_SECONDS=' "$ENV_FILE" || printf 'ECOREX_TOOL_EXECUTION_MAX_SECONDS=5400\n' >> "$ENV_FILE"
+    grep -q '^ECOREX_BASH_MAX_TIMEOUT_SECONDS=' "$ENV_FILE" || printf 'ECOREX_BASH_MAX_TIMEOUT_SECONDS=7200\n' >> "$ENV_FILE"
+    if [[ -n "$PUBLIC_BASE_URL" ]]; then
+      upsert_env_value ECOREX_WEB_PUBLIC_BASE_URL "$PUBLIC_BASE_URL"
+      upsert_env_value ECOREX_WEB_CLIENT_BASE "$client_base"
+    else
+      grep -q '^ECOREX_WEB_PUBLIC_BASE_URL=' "$ENV_FILE" || printf 'ECOREX_WEB_PUBLIC_BASE_URL=\n' >> "$ENV_FILE"
+      grep -q '^ECOREX_WEB_CLIENT_BASE=' "$ENV_FILE" || printf 'ECOREX_WEB_CLIENT_BASE=\n' >> "$ENV_FILE"
+    fi
   fi
 }
 
@@ -251,6 +296,10 @@ write_runtime_config() {
   effective_port="$(read_env_value WEB_PORT "$WEB_PORT")"
 
   install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$STATE_DIR"
+  install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_GROUP" \
+    "$STATE_DIR/capability-state" \
+    "$STATE_DIR/capability-packages" \
+    "$STATE_DIR/playwright-browsers"
 
   ECOREX_CONFIG_PATH="$STATE_DIR/config.json" \
   ECOREX_TEMPLATE_PATH="$runtime_dir/config-template.json" \
@@ -384,6 +433,10 @@ Group=$SERVICE_GROUP
 WorkingDirectory=$INSTALL_ROOT/current/runtime
 EnvironmentFile=$ENV_FILE
 Environment=PYTHONPATH=$INSTALL_ROOT/current/runtime
+Environment=ECOREX_CAPABILITY_STATE_DIR=$STATE_DIR/capability-state
+Environment=ECOREX_CAPABILITY_TARGET_DIR=$STATE_DIR/capability-packages
+Environment=ECOREX_PLAYWRIGHT_BROWSERS_DIR=$STATE_DIR/playwright-browsers
+Environment=PLAYWRIGHT_BROWSERS_PATH=$STATE_DIR/playwright-browsers
 ExecStart=$VENV_DIR/bin/python $INSTALL_ROOT/current/runtime/app.py
 Restart=on-failure
 RestartSec=3
@@ -547,17 +600,38 @@ fi
 
 final_port="$(read_env_value WEB_PORT "$WEB_PORT")"
 final_password="$(read_env_value WEB_PASSWORD "")"
+final_host="$(read_env_value WEB_HOST "$WEB_HOST")"
+local_host="$final_host"
+if [[ "$local_host" == "0.0.0.0" || "$local_host" == "::" ]]; then
+  local_host="127.0.0.1"
+fi
+local_url="http://${local_host}:${final_port}/app/"
 if [[ -n "$PUBLIC_BASE_URL" ]]; then
   final_url="${PUBLIC_BASE_URL%/}/app/"
 else
-  final_host="$(read_env_value WEB_HOST "$WEB_HOST")"
-  if [[ "$final_host" == "0.0.0.0" || "$final_host" == "::" ]]; then
-    final_host="127.0.0.1"
-  fi
-  final_url="http://${final_host}:${final_port}/app/"
+  final_url="$local_url"
 fi
 
-wait_for_webui "$final_url"
+wait_for_webui "$local_url"
+if [[ -n "$PUBLIC_BASE_URL" ]]; then
+  if ! python3 - "$final_url" <<'PY'
+import sys
+import urllib.error
+import urllib.request
+
+try:
+    with urllib.request.urlopen(sys.argv[1], timeout=5) as response:
+        raise SystemExit(0 if response.status < 500 else 1)
+except urllib.error.HTTPError as exc:
+    raise SystemExit(0 if exc.code < 500 else 1)
+except Exception:
+    raise SystemExit(1)
+PY
+  then
+    log "Public proxy smoke did not pass yet: $final_url"
+    log "Local WebUI is healthy at: $local_url"
+  fi
+fi
 open_browser "$final_url"
 
 cat <<EOF
@@ -570,6 +644,7 @@ workspace: $WORKSPACE_ROOT
 stateConfig: $STATE_DIR/config.json
 envFile: $ENV_FILE
 service: $SERVICE_NAME.service
-localUrl: $final_url
-webPassword: $final_password
+localUrl: $local_url
+publicUrl: $final_url
+webPassword: [redacted; read WEB_PASSWORD from $ENV_FILE if you need the bootstrap credential]
 EOF

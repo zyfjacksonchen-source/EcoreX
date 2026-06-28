@@ -1,6 +1,8 @@
 # encoding:utf-8
+import ast
 import hashlib
 import json
+import importlib
 import os
 import socket
 import subprocess
@@ -38,16 +40,4009 @@ if "web" not in sys.modules:
     sys.modules["web"] = web_stub
 
 
+def python_function_literal_return(path: Path, function_name: str) -> str:
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(path))
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == function_name:
+            for statement in node.body:
+                if (
+                    isinstance(statement, ast.Return)
+                    and isinstance(statement.value, ast.Constant)
+                    and isinstance(statement.value.value, str)
+                ):
+                    return statement.value.value
+    raise AssertionError(f"{function_name} literal return not found in {path.name}")
+
+
 @contextmanager
 def isolated_run_ledger():
-    from agent.protocol import reset_run_ledger_for_tests
+    from agent.protocol import reset_run_event_ledger_for_tests, reset_run_ledger_for_tests
 
     with tempfile.TemporaryDirectory() as workspace:
-        reset_run_ledger_for_tests(Path(workspace) / "run-ledger.db")
+        db_path = Path(workspace) / "run-ledger.db"
+        reset_run_ledger_for_tests(db_path)
+        reset_run_event_ledger_for_tests(db_path)
         try:
             yield
         finally:
             reset_run_ledger_for_tests(Path(tempfile.gettempdir()) / "ecorex-run-ledger-test-reset.db")
+            reset_run_event_ledger_for_tests(Path(tempfile.gettempdir()) / "ecorex-run-event-ledger-test-reset.db")
+
+
+class TestV022RunEventLedger(unittest.TestCase):
+    def test_v022_run_event_ledger_appends_replays_and_projects_request(self):
+        from agent.protocol import RuntimeProjectionService, reset_run_event_ledger_for_tests
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            first = ledger.append_event(
+                request_id="req-v022-ledger",
+                session_id="session-v022",
+                turn_id="turn-v022",
+                event_type="run.accepted",
+                payload={"status": "running"},
+                idempotency_key="req-v022-ledger:accepted",
+            )
+            duplicate = ledger.append_event(
+                request_id="req-v022-ledger",
+                session_id="session-v022",
+                turn_id="turn-v022",
+                event_type="run.accepted",
+                payload={"status": "running"},
+                idempotency_key="req-v022-ledger:accepted",
+            )
+            ledger.append_event(
+                request_id="req-v022-ledger",
+                session_id="session-v022",
+                turn_id="turn-v022",
+                event_type="message.user.accepted",
+                payload={"content": "hello"},
+                idempotency_key="req-v022-ledger:user",
+            )
+            ledger.append_event(
+                request_id="req-v022-ledger",
+                session_id="session-v022",
+                turn_id="turn-v022",
+                event_type="message.assistant.created",
+                payload={},
+                idempotency_key="req-v022-ledger:assistant-created",
+            )
+            ledger.append_event(
+                request_id="req-v022-ledger",
+                session_id="session-v022",
+                turn_id="turn-v022",
+                event_type="assistant.delta",
+                payload={"content": "partial"},
+                idempotency_key="req-v022-ledger:delta-1",
+            )
+            ledger.append_event(
+                request_id="req-v022-ledger",
+                session_id="session-v022",
+                turn_id="turn-v022",
+                event_type="message.assistant.finalized",
+                payload={"content": "final answer"},
+                idempotency_key="req-v022-ledger:final",
+            )
+            ledger.append_event(
+                request_id="req-v022-ledger",
+                session_id="session-v022",
+                turn_id="turn-v022",
+                event_type="run.completed",
+                payload={"terminal_reason": "done"},
+                idempotency_key="req-v022-ledger:completed",
+            )
+
+            events = ledger.events_for_request("req-v022-ledger")
+            limited_events = ledger.events_for_request("req-v022-ledger", limit=2)
+            full_events = ledger.events_for_request("req-v022-ledger", limit=0)
+            projection = RuntimeProjectionService(ledger).request_projection("req-v022-ledger")
+
+        self.assertEqual(first["event_id"], duplicate["event_id"])
+        self.assertEqual([event["event_seq"] for event in events], [1, 2, 3, 4, 5, 6])
+        self.assertEqual(len(limited_events), 2)
+        self.assertEqual(len(full_events), 6)
+        self.assertEqual([event["event_type"] for event in events][0], "run.accepted")
+        self.assertEqual(projection["state"], "completed")
+        self.assertEqual(projection["messages"][0]["content"], "hello")
+        self.assertEqual(projection["messages"][1]["content"], "final answer")
+        self.assertFalse(projection["messages"][1]["pending"])
+
+    def test_v022_run_event_ledger_replays_by_session_cursor(self):
+        from agent.protocol import RuntimeProjectionService, reset_run_event_ledger_for_tests
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            first = ledger.append_event(
+                request_id="req-v022-cursor-a",
+                session_id="session-v022-cursor",
+                event_type="run.accepted",
+                payload={},
+                idempotency_key="req-v022-cursor-a:accepted",
+            )
+            ledger.append_event(
+                request_id="req-v022-cursor-b",
+                session_id="session-v022-cursor",
+                event_type="run.accepted",
+                payload={},
+                idempotency_key="req-v022-cursor-b:accepted",
+            )
+            ledger.append_event(
+                request_id="req-v022-cursor-b",
+                session_id="session-v022-cursor",
+                event_type="message.assistant.finalized",
+                payload={"content": "cursor final"},
+                idempotency_key="req-v022-cursor-b:final",
+            )
+            after_first = ledger.list_events(
+                session_id="session-v022-cursor",
+                after_event_id=first["event_id"],
+            )
+            session_projection = RuntimeProjectionService(ledger).session_projection("session-v022-cursor")
+
+        self.assertEqual([event["request_id"] for event in after_first], ["req-v022-cursor-b", "req-v022-cursor-b"])
+        self.assertEqual(session_projection["latest_event_id"], after_first[-1]["event_id"])
+        self.assertEqual(
+            [request["request_id"] for request in session_projection["requests"]],
+            ["req-v022-cursor-a", "req-v022-cursor-b"],
+        )
+
+    def test_v022_session_history_projection_overlays_runtime_truth(self):
+        from agent.memory.conversation_store import ConversationStore
+        from agent.protocol import RuntimeProjectionService, reset_run_event_ledger_for_tests
+
+        with tempfile.TemporaryDirectory() as workspace:
+            store = ConversationStore(Path(workspace) / "conversation.sqlite3")
+            store.append_messages("session-v022-history-projection", [
+                {"role": "user", "content": "make image"},
+                {"role": "assistant", "content": "old draft"},
+            ], channel_type="web")
+            store.attach_extras_to_assistant_seq("session-v022-history-projection", 1, {
+                "request_id": "req-v022-history-projection",
+                "turn_id": "turn-v022-history-projection",
+                "user_seq": 0,
+                "bot_seq": 1,
+            })
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "events.sqlite3")
+            ledger.append_event(
+                request_id="req-v022-history-projection",
+                session_id="session-v022-history-projection",
+                turn_id="turn-v022-history-projection",
+                event_type="message.user.accepted",
+                payload={"content": "make image"},
+                source="test",
+            )
+            ledger.append_event(
+                request_id="req-v022-history-projection",
+                session_id="session-v022-history-projection",
+                turn_id="turn-v022-history-projection",
+                event_type="artifact.created",
+                payload={"artifact": {"title": "final.png", "path": r"C:\tmp\final.png", "kind": "image"}},
+                source="test",
+            )
+            ledger.append_event(
+                request_id="req-v022-history-projection",
+                session_id="session-v022-history-projection",
+                turn_id="turn-v022-history-projection",
+                event_type="message.assistant.finalized",
+                payload={"content": "runtime final"},
+                source="test",
+            )
+            projection = RuntimeProjectionService(ledger).session_history_projection(
+                "session-v022-history-projection",
+                page=1,
+                page_size=20,
+                history_store=store,
+            )
+
+        history = projection["history"]
+        assistant = next(item for item in history["messages"] if item["role"] == "assistant")
+        self.assertEqual(projection["history_source"], "conversation_store+runtime_projection")
+        self.assertEqual(assistant["content"], "runtime final")
+        self.assertEqual(assistant["runtime_projection"]["state"], "completed")
+        self.assertEqual(assistant["runtime_projection"]["latest_event_id"], projection["latest_event_id"])
+        self.assertEqual(assistant["extras"]["artifacts"][0]["title"], "final.png")
+        self.assertEqual(history["runtime_projection"]["request_count"], 1)
+
+    def test_v022_session_history_projection_limits_runtime_requests_to_page(self):
+        from agent.memory.conversation_store import ConversationStore
+        from agent.protocol import RuntimeProjectionService, reset_run_event_ledger_for_tests
+
+        session_id = "session-v022-history-page-scope"
+        with tempfile.TemporaryDirectory() as workspace:
+            store = ConversationStore(Path(workspace) / "conversation.sqlite3")
+            with patch("agent.memory.conversation_store.time.time", return_value=1000):
+                store.append_messages(session_id, [
+                    {"role": "user", "content": "old page prompt"},
+                    {"role": "assistant", "content": "old stale history"},
+                ], channel_type="web")
+            store.attach_extras_to_assistant_seq(session_id, 1, {
+                "request_id": "req-history-page-old",
+                "turn_id": "turn-history-page-old",
+                "user_seq": 0,
+                "bot_seq": 1,
+            })
+            with patch("agent.memory.conversation_store.time.time", return_value=2000):
+                store.append_messages(session_id, [
+                    {"role": "user", "content": "new page prompt"},
+                    {"role": "assistant", "content": "new stale history"},
+                ], channel_type="web")
+            store.attach_extras_to_assistant_seq(session_id, 3, {
+                "request_id": "req-history-page-new",
+                "turn_id": "turn-history-page-new",
+                "user_seq": 2,
+                "bot_seq": 3,
+            })
+
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "events.sqlite3")
+            for request_id, turn_id, prompt, final_text, created_at in (
+                ("req-history-page-old", "turn-history-page-old", "old page prompt", "old runtime final", 1000),
+                ("req-history-page-new", "turn-history-page-new", "new page prompt", "new runtime final", 2000),
+            ):
+                ledger.append_event(
+                    request_id=request_id,
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    event_type="message.user.accepted",
+                    payload={"content": prompt},
+                    source="test",
+                    created_at=created_at,
+                )
+                ledger.append_event(
+                    request_id=request_id,
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    event_type="message.assistant.finalized",
+                    payload={"content": final_text},
+                    source="test",
+                    created_at=created_at + 1,
+                )
+
+            service = RuntimeProjectionService(ledger)
+            page_one = service.session_history_projection(
+                session_id,
+                page=1,
+                page_size=2,
+                history_store=store,
+            )
+            page_two = service.session_history_projection(
+                session_id,
+                page=2,
+                page_size=2,
+                history_store=store,
+            )
+
+        page_one_request_ids = [request["request_id"] for request in page_one["requests"]]
+        page_two_request_ids = [request["request_id"] for request in page_two["requests"]]
+        page_one_text = "\n".join(str(item.get("content") or "") for item in page_one["history"]["messages"])
+        page_two_text = "\n".join(str(item.get("content") or "") for item in page_two["history"]["messages"])
+
+        self.assertEqual(page_one_request_ids, ["req-history-page-new"])
+        self.assertEqual(page_two_request_ids, ["req-history-page-old"])
+        self.assertIn("new runtime final", page_one_text)
+        self.assertNotIn("old runtime final", page_one_text)
+        self.assertIn("old runtime final", page_two_text)
+        self.assertNotIn("new runtime final", page_two_text)
+        self.assertEqual(page_one["history"]["runtime_projection"]["request_count"], 1)
+        self.assertEqual(page_two["history"]["runtime_projection"]["request_count"], 1)
+        self.assertGreater(page_one["latest_event_id"], page_two["requests"][0]["latest_event_id"])
+
+    def test_v022_image_job_service_emits_incremental_artifacts_and_projection(self):
+        from agent.protocol import ImageJobService, RuntimeProjectionService, reset_run_event_ledger_for_tests
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            service = ImageJobService(ledger)
+
+            def runner(task, emit_progress, cancel_event):
+                self.assertFalse(cancel_event.is_set())
+                emit_progress(
+                    "provider_request",
+                    progress=0.5,
+                    detail={
+                        "provider": "openai",
+                        "resolved_model": "gpt-image-2-pro",
+                        "api_key": "sk-test-secret",
+                    },
+                )
+                return {
+                    "path": str(Path(workspace) / f"{task['task_id']}.png"),
+                    "title": f"{task['task_id']}.png",
+                    "kind": "image",
+                }
+
+            service.start(
+                request_id="req-image-job",
+                session_id="session-image-job",
+                operation="generate",
+                tasks=[
+                    {"task_id": "image-1", "operation": "generate", "output_count": 1},
+                    {"task_id": "image-2", "operation": "generate", "output_count": 1},
+                ],
+                runner=runner,
+                metadata={
+                    "provider": "openai",
+                    "resolved_model": "gpt-image-2-pro",
+                    "api_key": "sk-live-secret",
+                },
+                synchronous=True,
+            )
+            events = ledger.events_for_request("req-image-job", limit=0)
+            projection = RuntimeProjectionService(ledger).request_projection("req-image-job")
+
+        event_types = [event["event_type"] for event in events]
+        self.assertEqual(event_types[0], "image_job.started")
+        self.assertEqual(event_types[-1], "image_job.completed")
+        self.assertEqual(event_types.count("artifact.created"), 2)
+        self.assertEqual(event_types.count("image_job.artifact"), 2)
+        self.assertTrue(all(event["source"] == "image_job_service" for event in events))
+        self.assertNotIn("sk-live-secret", json.dumps(events, ensure_ascii=False))
+        self.assertNotIn("sk-test-secret", json.dumps(events, ensure_ascii=False))
+        self.assertIn("[redacted]", json.dumps(events, ensure_ascii=False))
+
+        self.assertEqual(len(projection["image_jobs"]), 1)
+        job = projection["image_jobs"][0]
+        self.assertTrue(job["job_id"].startswith("image-job-"))
+        self.assertEqual(job["status"], "completed")
+        self.assertEqual(job["operation"], "generate")
+        self.assertEqual(job["artifact_count"], 2)
+        self.assertEqual(len(job["artifacts"]), 2)
+        self.assertEqual([task["status"] for task in job["tasks"]], ["completed", "completed"])
+        self.assertEqual(projection["messages"][0]["role"], "assistant")
+        self.assertEqual(len(projection["messages"][0]["artifacts"]), 2)
+
+    def test_v022_image_job_service_cancel_is_replayable(self):
+        from agent.protocol import ImageJobCancelled, ImageJobService, RuntimeProjectionService, reset_run_event_ledger_for_tests
+
+        started = threading.Event()
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            service = ImageJobService(ledger)
+
+            def runner(task, emit_progress, cancel_event):
+                started.set()
+                while not cancel_event.is_set():
+                    time.sleep(0.01)
+                raise ImageJobCancelled("cancelled by test")
+
+            service.start(
+                request_id="req-image-cancel",
+                session_id="session-image-cancel",
+                operation="generate",
+                tasks=[{"task_id": "slow-image"}],
+                runner=runner,
+                job_id="image-job-cancel-test",
+            )
+            self.assertTrue(started.wait(timeout=2))
+            cancel_status = service.cancel("image-job-cancel-test", reason="user_stop")
+            collected = service.collect("image-job-cancel-test", wait=True, timeout=2)
+            projection = RuntimeProjectionService(ledger).request_projection("req-image-cancel")
+            events = ledger.events_for_request("req-image-cancel", limit=0)
+
+        self.assertTrue(cancel_status["cancelled"])
+        self.assertEqual(collected["status"], "cancelled")
+        event_types = [event["event_type"] for event in events]
+        self.assertIn("image_job.started", event_types)
+        self.assertIn("image_job.cancelled", event_types)
+        self.assertEqual(projection["image_jobs"][0]["status"], "cancelled")
+        self.assertIn(projection["image_jobs"][0]["cancel_reason"], {"user_stop", "cancelled by test"})
+
+    def test_v022_image_job_service_cancel_remains_terminal_after_late_runner_events(self):
+        from agent.protocol import ImageJobService, RuntimeProjectionService, reset_run_event_ledger_for_tests
+
+        started = threading.Event()
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            service = ImageJobService(ledger)
+
+            def runner(task, emit_progress, cancel_event):
+                started.set()
+                while not cancel_event.is_set():
+                    time.sleep(0.01)
+                emit_progress("late_provider_progress", progress=0.9, detail={"provider": "openai"})
+                raise RuntimeError("provider noticed cancel late")
+
+            service.start(
+                request_id="req-image-cancel-terminal",
+                session_id="session-image-cancel-terminal",
+                operation="generate",
+                tasks=[{"task_id": "slow-image"}],
+                runner=runner,
+                job_id="image-job-cancel-terminal-test",
+            )
+            self.assertTrue(started.wait(timeout=2))
+            service.cancel("image-job-cancel-terminal-test", reason="user_stop")
+            collected = service.collect("image-job-cancel-terminal-test", wait=True, timeout=2)
+            events = ledger.events_for_request("req-image-cancel-terminal", limit=0)
+            projection = RuntimeProjectionService(ledger).request_projection("req-image-cancel-terminal")
+
+        self.assertEqual(collected["status"], "cancelled")
+        event_types = [event["event_type"] for event in events]
+        self.assertIn("image_job.cancelled", event_types)
+        self.assertNotIn("image_job.failed", event_types)
+        self.assertFalse(any(event["payload"].get("status") == "late_provider_progress" for event in events))
+        self.assertEqual(projection["image_jobs"][0]["status"], "cancelled")
+        self.assertEqual({task["terminal_job_status"] for task in projection["image_jobs"][0]["tasks"]}, {"cancelled"})
+        self.assertNotIn("running", {task.get("status") for task in projection["image_jobs"][0]["tasks"]})
+
+    def test_v022_image_job_service_cancel_reason_does_not_persist_raw_text(self):
+        from agent.protocol import ImageJobCancelled, ImageJobService, RuntimeProjectionService, reset_run_event_ledger_for_tests
+
+        raw_text = "private prompt"
+        started = threading.Event()
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            service = ImageJobService(ledger)
+
+            def runner(task, emit_progress, cancel_event):
+                started.set()
+                while not cancel_event.is_set():
+                    time.sleep(0.01)
+                raise ImageJobCancelled(raw_text)
+
+            service.start(
+                request_id="req-image-safe-cancel-reason",
+                session_id="session-image-safe-cancel-reason",
+                operation="generate",
+                tasks=[{"task_id": "safe-cancel", "operation": "generate"}],
+                runner=runner,
+                job_id="image-job-safe-cancel-reason",
+            )
+            self.assertTrue(started.wait(timeout=2))
+            service.cancel("image-job-safe-cancel-reason", reason=raw_text)
+            service.collect("image-job-safe-cancel-reason", wait=True, timeout=2)
+            events = ledger.events_for_request("req-image-safe-cancel-reason", limit=0)
+            projection = RuntimeProjectionService(ledger).request_projection("req-image-safe-cancel-reason")
+
+        serialized_events = json.dumps(events, ensure_ascii=False)
+        self.assertNotIn("private prompt", serialized_events)
+        self.assertEqual(projection["image_jobs"][0]["status"], "cancelled")
+        self.assertEqual(projection["image_jobs"][0]["cancel_reason"], "cancelled")
+
+    def test_v022_image_job_service_runs_tasks_with_bounded_parallelism(self):
+        from agent.protocol import ImageJobService, RuntimeProjectionService, reset_run_event_ledger_for_tests
+
+        active = 0
+        max_active = 0
+        lock = threading.Lock()
+        two_active = threading.Event()
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            service = ImageJobService(ledger)
+
+            def runner(task, emit_progress, cancel_event):
+                nonlocal active, max_active
+                with lock:
+                    active += 1
+                    max_active = max(max_active, active)
+                    self.assertLessEqual(active, 2)
+                    if active >= 2:
+                        two_active.set()
+                try:
+                    emit_progress("provider_request", progress=0.25, detail={"provider": "openai"})
+                    two_active.wait(timeout=1)
+                    time.sleep(0.02)
+                    self.assertFalse(cancel_event.is_set())
+                    return {
+                        "path": str(Path(workspace) / f"{task['task_id']}.png"),
+                        "title": f"{task['task_id']}.png",
+                        "kind": "image",
+                    }
+                finally:
+                    with lock:
+                        active -= 1
+
+            service.start(
+                request_id="req-image-parallel",
+                session_id="session-image-parallel",
+                operation="generate",
+                tasks=[
+                    {"task_id": f"parallel-{index}", "operation": "generate", "output_count": 1}
+                    for index in range(4)
+                ],
+                runner=runner,
+                metadata={"provider": "openai", "resolved_model": "gpt-image-2-pro"},
+                max_parallel=2,
+                synchronous=True,
+            )
+            events = ledger.events_for_request("req-image-parallel", limit=0)
+            projection = RuntimeProjectionService(ledger).request_projection("req-image-parallel")
+
+        started_payload = events[0]["payload"]
+        self.assertEqual(started_payload["max_parallel"], 2)
+        self.assertEqual(max_active, 2)
+        event_types = [event["event_type"] for event in events]
+        self.assertEqual(event_types[0], "image_job.started")
+        self.assertEqual(event_types[-1], "image_job.completed")
+        self.assertEqual(event_types.count("artifact.created"), 4)
+        self.assertEqual(event_types.count("image_job.artifact"), 4)
+        provider_progress = [
+            event for event in events
+            if event["event_type"] == "image_job.progress"
+            and event["payload"].get("status") == "provider_request"
+        ]
+        self.assertEqual(len(provider_progress), 4)
+
+        job = projection["image_jobs"][0]
+        self.assertEqual(job["status"], "completed")
+        self.assertEqual(job["artifact_count"], 4)
+        self.assertEqual(len(job["artifacts"]), 4)
+        self.assertEqual([task["status"] for task in job["tasks"]], ["completed"] * 4)
+        self.assertEqual(len(projection["messages"][0]["artifacts"]), 4)
+
+    def test_v022_image_job_service_parallel_failure_does_not_start_queued_tasks(self):
+        from agent.protocol import ImageJobService, RuntimeProjectionService, reset_run_event_ledger_for_tests
+
+        started = []
+        lock = threading.Lock()
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            service = ImageJobService(ledger)
+
+            def runner(task, emit_progress, cancel_event):
+                with lock:
+                    started.append(task["task_id"])
+                if task["task_id"] == "task-1":
+                    raise RuntimeError("first task failed")
+                while not cancel_event.is_set():
+                    time.sleep(0.01)
+                return {
+                    "path": str(Path(workspace) / f"{task['task_id']}.png"),
+                    "title": f"{task['task_id']}.png",
+                    "kind": "image",
+                }
+
+            status = service.start(
+                request_id="req-image-parallel-failure",
+                session_id="session-image-parallel-failure",
+                operation="generate",
+                tasks=[{"task_id": f"t{index}", "operation": "generate"} for index in range(4)],
+                runner=runner,
+                max_parallel=2,
+                synchronous=True,
+            )
+            events = ledger.events_for_request("req-image-parallel-failure", limit=0)
+            projection = RuntimeProjectionService(ledger).request_projection("req-image-parallel-failure")
+
+        self.assertEqual(status["status"], "failed")
+        self.assertIn("task-1", started)
+        self.assertNotIn("task-3", started)
+        self.assertNotIn("task-4", started)
+        self.assertIn("image_job.failed", [event["event_type"] for event in events])
+        self.assertEqual(projection["image_jobs"][0]["status"], "failed")
+        self.assertEqual({task["terminal_job_status"] for task in projection["image_jobs"][0]["tasks"]}, {"failed"})
+        self.assertNotIn("running", {task.get("status") for task in projection["image_jobs"][0]["tasks"]})
+
+    def test_v022_image_job_service_parallel_failure_is_observable_before_sibling_exit(self):
+        from agent.protocol import ImageJobService, RuntimeProjectionService, reset_run_event_ledger_for_tests
+
+        sibling_started = threading.Event()
+        release_sibling = threading.Event()
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            service = ImageJobService(ledger)
+
+            def runner(task, emit_progress, cancel_event):
+                if task["task_id"] == "task-1":
+                    self.assertTrue(sibling_started.wait(timeout=1))
+                    raise RuntimeError("first task failed")
+                sibling_started.set()
+                release_sibling.wait(timeout=2)
+                return {
+                    "path": str(Path(workspace) / f"{task['task_id']}.png"),
+                    "title": f"{task['task_id']}.png",
+                    "kind": "image",
+                }
+
+            service.start(
+                request_id="req-image-fast-failed-event",
+                session_id="session-image-fast-failed-event",
+                operation="generate",
+                tasks=[{"task_id": f"t{index}", "operation": "generate"} for index in range(3)],
+                runner=runner,
+                job_id="image-job-fast-failed-event",
+                max_parallel=2,
+            )
+            deadline = time.time() + 1
+            events_before_release = []
+            while time.time() < deadline:
+                events_before_release = ledger.events_for_request("req-image-fast-failed-event", limit=0)
+                if "image_job.failed" in [event["event_type"] for event in events_before_release]:
+                    break
+                time.sleep(0.02)
+            projection_before_release = RuntimeProjectionService(ledger).request_projection("req-image-fast-failed-event")
+            release_sibling.set()
+            collected = service.collect("image-job-fast-failed-event", wait=True, timeout=3)
+
+        event_types = [event["event_type"] for event in events_before_release]
+        self.assertIn("image_job.failed", event_types)
+        self.assertEqual(projection_before_release["image_jobs"][0]["status"], "failed")
+        self.assertEqual(collected["status"], "failed")
+
+    def test_v022_image_job_service_drops_artifacts_after_parallel_terminal_race(self):
+        import agent.protocol.image_job_service as image_job_module
+        from agent.protocol import ImageJobService, RuntimeProjectionService, reset_run_event_ledger_for_tests
+
+        artifact_window = threading.Event()
+        failure_emitted = threading.Event()
+        original_coerce_artifacts = image_job_module._coerce_artifacts
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            service = ImageJobService(ledger)
+            original_emit = service._emit
+
+            def emit_spy(state, event_type, payload, *, suffix):
+                emitted = original_emit(state, event_type, payload, suffix=suffix)
+                if event_type == "image_job.failed":
+                    failure_emitted.set()
+                return emitted
+
+            def delayed_coerce_artifacts(result):
+                if isinstance(result, dict) and result.get("title") == "slow-artifact.png":
+                    artifact_window.set()
+                    self.assertTrue(failure_emitted.wait(timeout=1))
+                return original_coerce_artifacts(result)
+
+            def runner(task, emit_progress, cancel_event):
+                if task["task_id"] == "task-1":
+                    self.assertTrue(artifact_window.wait(timeout=1))
+                    raise RuntimeError("first task failed")
+                return {
+                    "path": str(Path(workspace) / "slow-artifact.png"),
+                    "title": "slow-artifact.png",
+                    "kind": "image",
+                }
+
+            service._emit = emit_spy
+            with patch.object(image_job_module, "_coerce_artifacts", side_effect=delayed_coerce_artifacts):
+                status = service.start(
+                    request_id="req-image-terminal-artifact-race",
+                    session_id="session-image-terminal-artifact-race",
+                    operation="generate",
+                    tasks=[{"task_id": f"t{index}", "operation": "generate"} for index in range(2)],
+                    runner=runner,
+                    max_parallel=2,
+                    synchronous=True,
+                )
+            events = ledger.events_for_request("req-image-terminal-artifact-race", limit=0)
+            projection = RuntimeProjectionService(ledger).request_projection("req-image-terminal-artifact-race")
+
+        self.assertEqual(status["status"], "failed")
+        event_types = [event["event_type"] for event in events]
+        self.assertIn("image_job.failed", event_types)
+        self.assertNotIn("artifact.created", event_types)
+        self.assertNotIn("image_job.artifact", event_types)
+        self.assertEqual(projection["image_jobs"][0]["status"], "failed")
+        self.assertEqual(projection["image_jobs"][0].get("artifacts") or [], [])
+        self.assertEqual(projection["messages"][0].get("artifacts") or [], [])
+
+    def test_v022_image_job_service_uniquifies_duplicate_task_ids_for_artifact_events(self):
+        from agent.protocol import ImageJobService, RuntimeProjectionService, reset_run_event_ledger_for_tests
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            service = ImageJobService(ledger)
+
+            def runner(task, emit_progress, cancel_event):
+                emit_progress("provider_request", progress=0.25, detail={"provider": "openai"})
+                return {
+                    "path": str(Path(workspace) / f"{task['task_id']}.png"),
+                    "title": f"{task['task_id']}.png",
+                    "kind": "image",
+                }
+
+            service.start(
+                request_id="req-image-duplicate-task-id",
+                session_id="session-image-duplicate-task-id",
+                operation="generate",
+                tasks=[
+                    {"task_id": "duplicate", "operation": "generate", "output_count": 1},
+                    {"task_id": "duplicate", "operation": "generate", "output_count": 1},
+                ],
+                runner=runner,
+                synchronous=True,
+            )
+            events = ledger.events_for_request("req-image-duplicate-task-id", limit=0)
+            projection = RuntimeProjectionService(ledger).request_projection("req-image-duplicate-task-id")
+
+        started_tasks = events[0]["payload"]["tasks"]
+        self.assertEqual([task["task_id"] for task in started_tasks], ["task-1", "task-2"])
+        self.assertNotIn("source_task_id", started_tasks[1])
+        self.assertFalse(any(event["event_type"] == "ledger.idempotency_conflict" for event in events))
+        event_types = [event["event_type"] for event in events]
+        self.assertEqual(event_types.count("artifact.created"), 2)
+        self.assertEqual(event_types.count("image_job.artifact"), 2)
+
+        job = projection["image_jobs"][0]
+        self.assertEqual(job["status"], "completed")
+        self.assertEqual(job["artifact_count"], 2)
+        self.assertEqual([task["task_id"] for task in job["tasks"]], ["task-1", "task-2"])
+        self.assertEqual([task["status"] for task in job["tasks"]], ["completed", "completed"])
+        self.assertEqual(len(job["artifacts"]), 2)
+
+    def test_v022_image_job_service_artifact_events_use_stable_sanitized_dto(self):
+        from agent.protocol import ImageJobService, RuntimeProjectionService, reset_run_event_ledger_for_tests
+
+        raw_b64 = "a" * 9000
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            service = ImageJobService(ledger)
+
+            def runner(task, emit_progress, cancel_event):
+                return {
+                    "path": str(Path(workspace) / "stable.png"),
+                    "url": f"data:image/png;base64,{raw_b64}",
+                    "fileName": "stable.png",
+                    "fileType": "image",
+                    "b64_json": raw_b64,
+                    "provider_raw_response": {"secret": "provider-private"},
+                    "nested": {"ignored": True},
+                }
+
+            service.start(
+                request_id="req-image-artifact-dto",
+                session_id="session-image-artifact-dto",
+                operation="generate",
+                tasks=[{"task_id": "dto", "operation": "generate"}],
+                runner=runner,
+                synchronous=True,
+            )
+            events = ledger.events_for_request("req-image-artifact-dto", limit=0)
+            projection = RuntimeProjectionService(ledger).request_projection("req-image-artifact-dto")
+
+        serialized_events = json.dumps(events, ensure_ascii=False)
+        self.assertNotIn("b64_json", serialized_events)
+        self.assertNotIn("data:image", serialized_events)
+        self.assertNotIn(raw_b64, serialized_events)
+        self.assertNotIn("provider_raw_response", serialized_events)
+        self.assertNotIn("provider-private", serialized_events)
+        artifact_events = [event for event in events if event["event_type"] == "image_job.artifact"]
+        self.assertEqual(len(artifact_events), 1)
+        artifact = artifact_events[0]["payload"]["artifact"]
+        self.assertEqual(artifact["title"], "stable.png")
+        self.assertEqual(artifact["kind"], "image")
+        self.assertTrue(artifact["artifact_sanitized"])
+        self.assertGreaterEqual(artifact["omitted_field_count"], 3)
+        self.assertNotIn("url", artifact)
+        self.assertEqual(projection["image_jobs"][0]["artifacts"][0], artifact)
+
+    def test_v022_image_job_service_metadata_and_progress_detail_omit_raw_provider_payloads(self):
+        from agent.protocol import ImageJobService, reset_run_event_ledger_for_tests
+
+        raw_b64 = "b" * 9000
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            service = ImageJobService(ledger)
+
+            def runner(task, emit_progress, cancel_event):
+                emit_progress(
+                    "provider_request",
+                    progress=0.25,
+                    detail={
+                        "provider": "openai",
+                        "provider_raw_response": {"data": [{"b64_json": raw_b64}]},
+                        "debug_payload": {"nested": "summary-only"},
+                        "debug": '{"provider-private":"private prompt"}',
+                    },
+                )
+                return {"path": str(Path(workspace) / "safe.png"), "title": "safe.png", "kind": "image"}
+
+            service.start(
+                request_id="req-image-safe-metadata",
+                session_id="session-image-safe-metadata",
+                operation="generate",
+                tasks=[{"task_id": "safe-meta", "operation": "generate"}],
+                runner=runner,
+                metadata={
+                    "provider": "openai",
+                    "provider_raw_response": {"data": [{"b64_json": raw_b64}]},
+                    "provider_body": '{"provider-private":"private prompt"}',
+                    "api_key": "sk-test-secret",
+                },
+                synchronous=True,
+            )
+            events = ledger.events_for_request("req-image-safe-metadata", limit=0)
+
+        serialized_events = json.dumps(events, ensure_ascii=False)
+        self.assertNotIn("provider_raw_response", serialized_events)
+        self.assertNotIn("b64_json", serialized_events)
+        self.assertNotIn(raw_b64, serialized_events)
+        self.assertNotIn("provider-private", serialized_events)
+        self.assertNotIn("private prompt", serialized_events)
+        self.assertNotIn("sk-test-secret", serialized_events)
+        self.assertIn("[redacted]", serialized_events)
+        self.assertIn("omitted_metadata_field_count", serialized_events)
+
+    def test_v022_image_job_service_rejects_token_shaped_telemetry_values(self):
+        from agent.protocol import ImageJobService, RuntimeProjectionService, reset_run_event_ledger_for_tests
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            service = ImageJobService(ledger)
+
+            def runner(task, emit_progress, cancel_event):
+                emit_progress(
+                    "fallback",
+                    progress=0.7,
+                    detail={
+                        "provider": "sk-progress-provider",
+                        "model": "bearer:progress-model",
+                        "fallback_provider": "api_key-provider",
+                        "fallback_from_model": "authorization:old-model",
+                        "fallback_to_model": "gpt-image-2",
+                        "fallback_reason": "client_error",
+                    },
+                )
+                return {"path": str(Path(workspace) / "safe.png"), "title": "safe.png", "kind": "image"}
+
+            service.start(
+                request_id="req-image-token-shaped-telemetry",
+                session_id="session-image-token-shaped-telemetry",
+                operation="generate",
+                tasks=[{"task_id": "task-1", "operation": "generate"}],
+                runner=runner,
+                metadata={
+                    "provider": "sk-metadata-provider",
+                    "model": "bearer:metadata-model",
+                    "fallback_provider": "api_key-provider",
+                    "fallback_from_model": "authorization:old-model",
+                    "fallback_to_model": "gpt-image-2",
+                    "fallback_reason": "client_error",
+                },
+                synchronous=True,
+            )
+            events = ledger.events_for_request("req-image-token-shaped-telemetry", limit=0)
+            projection = RuntimeProjectionService(ledger).request_projection("req-image-token-shaped-telemetry")
+
+        serialized_events = json.dumps(events, ensure_ascii=False)
+        serialized_projection = json.dumps(projection, ensure_ascii=False)
+        for unsafe in ("sk-progress-provider", "sk-metadata-provider", "bearer:", "api_key-provider", "authorization:"):
+            self.assertNotIn(unsafe, serialized_events)
+            self.assertNotIn(unsafe, serialized_projection)
+        self.assertIn("gpt-image-2", serialized_events)
+        self.assertIn("client_error", serialized_events)
+        self.assertIn("omitted_metadata_field_count", serialized_events)
+        job = projection["image_jobs"][0]
+        self.assertEqual(job["fallback_to_model"], "gpt-image-2")
+        self.assertEqual(job["fallback_reason"], "client_error")
+        self.assertNotIn("provider", job["tasks"][0])
+
+    def test_v024_image_job_service_rejects_url_and_path_shaped_telemetry_values(self):
+        from agent.protocol import ImageJobService, RuntimeProjectionService, reset_run_event_ledger_for_tests
+
+        unsafe_url = "https://example.test/customer-roadmap"
+        unsafe_path = "C:/Users/Alice/customer-roadmap.png"
+        unsafe_retry = "C:/Users/Alice/retry-reason.png"
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            service = ImageJobService(ledger)
+
+            def runner(task, emit_progress, cancel_event):
+                emit_progress(
+                    "retry",
+                    progress=0.5,
+                    detail={
+                        "provider": unsafe_url,
+                        "model": unsafe_path,
+                        "retry_gate": "non-blank",
+                        "retry_reason": unsafe_retry,
+                        "quality_status": "fail",
+                    },
+                )
+                return {"path": str(Path(workspace) / "safe.png"), "title": "safe.png", "kind": "image"}
+
+            service.start(
+                request_id="req-image-path-shaped-telemetry",
+                session_id="session-image-path-shaped-telemetry",
+                operation="generate",
+                tasks=[{"task_id": "task-1", "operation": "generate"}],
+                runner=runner,
+                metadata={"provider": unsafe_url, "model": unsafe_path},
+                synchronous=True,
+            )
+            events = ledger.events_for_request("req-image-path-shaped-telemetry", limit=0)
+            projection = RuntimeProjectionService(ledger).request_projection("req-image-path-shaped-telemetry")
+
+        serialized_events = json.dumps(events, ensure_ascii=False)
+        serialized_projection = json.dumps(projection, ensure_ascii=False)
+        for unsafe in (unsafe_url, unsafe_path, unsafe_retry, "example.test", "C:/Users/Alice"):
+            self.assertNotIn(unsafe, serialized_events)
+            self.assertNotIn(unsafe, serialized_projection)
+        self.assertIn("non-blank", serialized_events)
+        self.assertIn("fail", serialized_events)
+        self.assertIn("omitted_metadata_field_count", serialized_events)
+
+    def test_v022_image_job_service_error_and_progress_status_do_not_persist_raw_text(self):
+        from agent.protocol import ImageJobService, reset_run_event_ledger_for_tests
+
+        raw_text = '{"provider-private":"private prompt"}'
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            service = ImageJobService(ledger)
+
+            def progress_runner(task, emit_progress, cancel_event):
+                emit_progress(raw_text, progress=0.5, detail={"provider": "openai"})
+                return {"path": str(Path(workspace) / "safe.png"), "title": "safe.png", "kind": "image"}
+
+            def failure_runner(task, emit_progress, cancel_event):
+                raise RuntimeError(raw_text)
+
+            UnicodeErrorType = type("私人提示词", (RuntimeError,), {})
+            SensitiveAsciiErrorType = type("privateprompt", (RuntimeError,), {})
+
+            def unicode_error_type_runner(task, emit_progress, cancel_event):
+                raise UnicodeErrorType("boom")
+
+            def sensitive_ascii_error_type_runner(task, emit_progress, cancel_event):
+                raise SensitiveAsciiErrorType("boom")
+
+            service.start(
+                request_id="req-image-safe-progress-status",
+                session_id="session-image-safe-progress-status",
+                operation="generate",
+                tasks=[{"task_id": "safe-progress", "operation": "generate"}],
+                runner=progress_runner,
+                synchronous=True,
+            )
+            service.start(
+                request_id="req-image-safe-error-message",
+                session_id="session-image-safe-error-message",
+                operation="generate",
+                tasks=[{"task_id": "safe-error", "operation": "generate"}],
+                runner=failure_runner,
+                synchronous=True,
+            )
+            service.start(
+                request_id="req-image-safe-error-type",
+                session_id="session-image-safe-error-type",
+                operation="generate",
+                tasks=[{"task_id": "safe-error-type", "operation": "generate"}],
+                runner=unicode_error_type_runner,
+                synchronous=True,
+            )
+            service.start(
+                request_id="req-image-safe-ascii-error-type",
+                session_id="session-image-safe-ascii-error-type",
+                operation="generate",
+                tasks=[{"task_id": "safe-ascii-error-type", "operation": "generate"}],
+                runner=sensitive_ascii_error_type_runner,
+                synchronous=True,
+            )
+            progress_events = ledger.events_for_request("req-image-safe-progress-status", limit=0)
+            failed_events = ledger.events_for_request("req-image-safe-error-message", limit=0)
+            unsafe_type_events = ledger.events_for_request("req-image-safe-error-type", limit=0)
+            unsafe_ascii_type_events = ledger.events_for_request("req-image-safe-ascii-error-type", limit=0)
+
+        serialized_events = json.dumps(progress_events + failed_events + unsafe_type_events + unsafe_ascii_type_events, ensure_ascii=False)
+        self.assertNotIn("provider-private", serialized_events)
+        self.assertNotIn("private prompt", serialized_events)
+        self.assertNotIn("privateprompt", serialized_events)
+        self.assertNotIn("私人提示词", serialized_events)
+        raw_progress_events = [
+            event for event in progress_events
+            if event["event_type"] == "image_job.progress" and event["payload"].get("progress") == 0.5
+        ]
+        self.assertEqual(raw_progress_events[0]["payload"]["status"], "progress")
+        failed_event = next(event for event in failed_events if event["event_type"] == "image_job.failed")
+        self.assertEqual(failed_event["payload"]["error_message"], "RuntimeError: image job failed")
+        unsafe_type_failed_event = next(event for event in unsafe_type_events if event["event_type"] == "image_job.failed")
+        self.assertEqual(unsafe_type_failed_event["payload"]["error_type"], "Error")
+        self.assertEqual(unsafe_type_failed_event["payload"]["error_message"], "Error: image job failed")
+        unsafe_ascii_type_failed_event = next(event for event in unsafe_ascii_type_events if event["event_type"] == "image_job.failed")
+        self.assertEqual(unsafe_ascii_type_failed_event["payload"]["error_type"], "Error")
+        self.assertEqual(unsafe_ascii_type_failed_event["payload"]["error_message"], "Error: image job failed")
+
+    def test_v022_image_job_service_telemetry_fields_do_not_persist_raw_text(self):
+        from agent.protocol import ImageJobService, RuntimeProjectionService, reset_run_event_ledger_for_tests
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            service = ImageJobService(ledger)
+
+            def runner(task, emit_progress, cancel_event):
+                return {"path": str(Path(workspace) / "safe.png"), "title": "safe.png", "kind": "image"}
+
+            service.start(
+                request_id="req-image-safe-telemetry",
+                session_id="session-image-safe-telemetry",
+                job_id="image-job-私人提示词",
+                operation="private prompt",
+                tasks=[{"task_id": "private prompt", "source_task_id": "private prompt", "operation": "private prompt"}],
+                runner=runner,
+                metadata={
+                    "provider": "私人提示词",
+                    "resolved_model": "private prompt",
+                    "model": "私人提示词",
+                    "image_mode": "private prompt",
+                    "source": "privateprompt",
+                    "status_code": -503,
+                    "attempt": -2,
+                    "retry_after_seconds": -0.5,
+                    "retryable": "私人提示词",
+                    "progress": 2,
+                },
+                synchronous=True,
+            )
+            events = ledger.events_for_request("req-image-safe-telemetry", limit=0)
+            projection = RuntimeProjectionService(ledger).request_projection("req-image-safe-telemetry")
+
+        serialized = json.dumps({"events": events, "projection": projection}, ensure_ascii=False)
+        self.assertNotIn("private prompt", serialized)
+        self.assertNotIn("privateprompt", serialized)
+        self.assertNotIn("私人提示词", serialized)
+        started_payload = events[0]["payload"]
+        self.assertTrue(started_payload["job_id"].startswith("image-job-"))
+        self.assertEqual(started_payload["operation"], "generate")
+        self.assertEqual(started_payload["status_code"], 0)
+        self.assertEqual(started_payload["attempt"], 0)
+        self.assertEqual(started_payload["retry_after_seconds"], 0.0)
+        self.assertEqual(started_payload["progress"], 1.0)
+        self.assertEqual(started_payload["tasks"][0]["task_id"], "task-1")
+        self.assertEqual(started_payload["tasks"][0]["operation"], "generate")
+
+    def test_v022_image_job_service_drops_progress_after_parallel_terminal_race(self):
+        from agent.protocol import ImageJobService, reset_run_event_ledger_for_tests
+
+        sibling_started = threading.Event()
+        failure_emitted = threading.Event()
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            service = ImageJobService(ledger)
+            original_emit = service._emit
+
+            def emit_spy(state, event_type, payload, *, suffix):
+                emitted = original_emit(state, event_type, payload, suffix=suffix)
+                if event_type == "image_job.failed":
+                    failure_emitted.set()
+                return emitted
+
+            def runner(task, emit_progress, cancel_event):
+                if task["task_id"] == "task-1":
+                    self.assertTrue(sibling_started.wait(timeout=1))
+                    raise RuntimeError("first task failed")
+                sibling_started.set()
+                self.assertTrue(failure_emitted.wait(timeout=1))
+                emit_progress("provider_request", progress=0.9, detail={"provider": "openai"})
+                return {"path": str(Path(workspace) / "late.png"), "title": "late.png", "kind": "image"}
+
+            service._emit = emit_spy
+            service.start(
+                request_id="req-image-terminal-progress-race",
+                session_id="session-image-terminal-progress-race",
+                operation="generate",
+                tasks=[{"task_id": f"t{index}", "operation": "generate"} for index in range(2)],
+                runner=runner,
+                max_parallel=2,
+                synchronous=True,
+            )
+            events = ledger.events_for_request("req-image-terminal-progress-race", limit=0)
+
+        event_types = [event["event_type"] for event in events]
+        failed_index = event_types.index("image_job.failed")
+        late_progress = [
+            event for event in events[failed_index + 1:]
+            if event["event_type"] == "image_job.progress"
+        ]
+        self.assertEqual(late_progress, [])
+
+    def test_v022_runtime_projection_ignores_image_artifacts_after_terminal_job(self):
+        from agent.protocol import RuntimeProjectionService, reset_run_event_ledger_for_tests
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            ledger.append_event(
+                request_id="req-image-terminal-artifact-projection",
+                session_id="session-image-terminal-artifact-projection",
+                event_type="image_job.started",
+                payload={"job_id": "image-job-terminal-artifact", "tasks": [{"task_id": "task-1"}]},
+            )
+            ledger.append_event(
+                request_id="req-image-terminal-artifact-projection",
+                session_id="session-image-terminal-artifact-projection",
+                event_type="image_job.failed",
+                payload={"job_id": "image-job-terminal-artifact", "error_message": "failed"},
+            )
+            late_artifact = {"title": "late.png", "path": str(Path(workspace) / "late.png"), "kind": "image"}
+            ledger.append_event(
+                request_id="req-image-terminal-artifact-projection",
+                session_id="session-image-terminal-artifact-projection",
+                event_type="artifact.created",
+                payload={"job_id": "image-job-terminal-artifact", "task_id": "task-1", "artifact": late_artifact},
+            )
+            ledger.append_event(
+                request_id="req-image-terminal-artifact-projection",
+                session_id="session-image-terminal-artifact-projection",
+                event_type="image_job.artifact",
+                payload={"job_id": "image-job-terminal-artifact", "task_id": "task-1", "artifact": late_artifact},
+            )
+            projection = RuntimeProjectionService(ledger).request_projection("req-image-terminal-artifact-projection")
+
+        self.assertEqual(projection["image_jobs"][0]["status"], "failed")
+        self.assertEqual(projection["image_jobs"][0].get("artifacts") or [], [])
+        self.assertEqual(projection["messages"][0].get("artifacts") or [], [])
+
+    def test_v022_runtime_projection_sanitizes_legacy_artifact_created_payloads(self):
+        from agent.protocol import RuntimeProjectionService, reset_run_event_ledger_for_tests
+
+        raw_b64 = "c" * 9000
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            ledger.append_event(
+                request_id="req-legacy-artifact-sanitized",
+                session_id="session-legacy-artifact-sanitized",
+                event_type="artifact.created",
+                idempotency_key="req-legacy-artifact-sanitized:private prompt",
+                source="private prompt",
+                payload={
+                    "debug": "private prompt",
+                    "job_id": "privateprompt",
+                    "task_id": "privateprompt",
+                    "source": "private prompt",
+                    "artifact_index": "private prompt",
+                    "artifact": {
+                        "path": str(Path(workspace) / "legacy.png"),
+                        "url": f"data:image/png;base64,{raw_b64}",
+                        "fileName": "legacy.png",
+                        "fileType": "image",
+                        "b64_json": raw_b64,
+                        "provider_raw_response": {"message": "private prompt"},
+                        "nested": {"ignored": True},
+                    }
+                },
+            )
+            ledger.append_event(
+                request_id="req-legacy-artifact-sanitized",
+                session_id="session-legacy-artifact-sanitized",
+                event_type="artifact.created",
+                payload={
+                    "title": "top-level.png",
+                    "kind": "image",
+                    "job_id": "privateprompt",
+                    "task_id": "privateprompt",
+                    "provider_body": "private prompt",
+                    "source": "private prompt",
+                    "artifact_index": "private prompt",
+                    "path": f"data:image/png;base64,{raw_b64}",
+                    "url": f"data:image/png;base64,{raw_b64}",
+                },
+            )
+            projection = RuntimeProjectionService(ledger).request_projection("req-legacy-artifact-sanitized")
+
+        serialized_projection = json.dumps(projection, ensure_ascii=False)
+        self.assertNotIn("b64_json", serialized_projection)
+        self.assertNotIn("data:image", serialized_projection)
+        self.assertNotIn(raw_b64, serialized_projection)
+        self.assertNotIn("provider_raw_response", serialized_projection)
+        self.assertNotIn("private prompt", serialized_projection)
+        self.assertNotIn("privateprompt", serialized_projection)
+        artifact = projection["messages"][0]["artifacts"][0]
+        self.assertEqual(artifact["title"], "legacy.png")
+        self.assertEqual(artifact["kind"], "image")
+        self.assertTrue(artifact["artifact_sanitized"])
+        self.assertGreaterEqual(artifact["omitted_field_count"], 3)
+
+    def test_v024_runtime_projection_projects_office_pdf_quality_evidence_safely(self):
+        from agent.protocol import RuntimeProjectionService, get_run_event_ledger
+        from channel.web.web_channel import RuntimeProjectionHandler
+
+        quality_evidence = {
+            "schemaVersion": "v0.2.4",
+            "kind": "pdf",
+            "sourceRef": r"C:\Users\Alice\customer-roadmap.pdf",
+            "qualityGates": [
+                "text-orientation",
+                "page-render",
+                "layout-inspection",
+                "Customer merger roadmap paragraph from PDF page 7",
+            ],
+            "checks": [
+                {"id": "text-orientation", "status": "pass", "detail": "rotated=0"},
+                {
+                    "id": "page-render",
+                    "status": "fail",
+                    "detail": r"rendered=0; expected_min=1; path=C:\Users\private\secret.pdf; note=token=abc",
+                },
+                {
+                    "id": "layout-inspection",
+                    "status": "warn",
+                    "detail": "blank_pages=2; note=Customer merger roadmap paragraph from PDF page 7; page_count=5",
+                },
+                {
+                    "id": "Customer merger roadmap paragraph from PDF page 7",
+                    "status": "warn",
+                    "detail": "Customer merger roadmap paragraph from PDF page 7",
+                },
+            ],
+            "missingQualityGates": ["layout-inspection"],
+            "status": "fail",
+            "renderedArtifacts": [
+                {
+                    "page": 1,
+                    "artifactRef": r"C:\Users\Alice\render.png",
+                    "sourceRef": "https://example.test/customer-roadmap.pdf",
+                    "extension": ".png",
+                    "width": 1200,
+                    "height": 900,
+                    "renderProof": "hmac:private-proof",
+                    "path": r"C:\Users\private\render.png",
+                }
+            ],
+            "pdfAnalysis": {
+                "summary": {
+                    "pageCount": 1,
+                    "totalExtractedTextChars": 120,
+                    "customerFinding": "Customer merger roadmap paragraph from PDF page 7",
+                    "rawText": "private prompt",
+                    "source": "private prompt",
+                },
+                "pageEvidence": [
+                    {
+                        "page": 1,
+                        "pageRef": "https://example.test/customer-roadmap.pdf#1",
+                        "textLengthBucket": "100",
+                        "customerFinding": "Customer merger roadmap paragraph from PDF page 7",
+                        "rawText": "private prompt",
+                        "renderProof": "hmac:private-proof",
+                    }
+                ],
+            },
+            "debug": "private prompt sk-private-1234567890",
+            "redacted": True,
+        }
+
+        with isolated_run_ledger():
+            ledger = get_run_event_ledger()
+            ledger.append_event(
+                request_id="req-v024-quality-projection",
+                session_id="session-v024-quality-projection",
+                event_type="tool.completed",
+                payload={
+                    "tool_call_id": "tool-quality",
+                    "tool": "office-pdf",
+                    "status": "done",
+                    "result": {
+                        "qualityEvidence": quality_evidence,
+                        "content": "private prompt body",
+                    },
+                },
+                idempotency_key="req-v024-quality-projection:tool",
+            )
+            ledger.append_event(
+                request_id="req-v024-quality-projection",
+                session_id="session-v024-quality-projection",
+                event_type="artifact.created",
+                payload={
+                    "artifact": {
+                        "title": "report.pdf",
+                        "kind": "file",
+                        "path": "outputs/report.pdf",
+                        "quality_evidence": quality_evidence,
+                        "provider_raw_response": {"message": "private prompt"},
+                    }
+                },
+                idempotency_key="req-v024-quality-projection:artifact",
+            )
+            projection = RuntimeProjectionService(ledger).request_projection("req-v024-quality-projection")
+            with patch("channel.web.web_channel.web.input", return_value=types.SimpleNamespace(
+                request_id="req-v024-quality-projection",
+                session_id="",
+                after_event_id="0",
+                limit="1000",
+                include_events="1",
+            )):
+                api_payload = json.loads(RuntimeProjectionHandler().GET())
+
+        assistant = next(message for message in projection["messages"] if message["role"] == "assistant")
+        tool_evidence = assistant["tool_calls"][0]["qualityEvidence"]
+        artifact_evidence = assistant["artifacts"][0]["qualityEvidence"]
+        event_payloads = [event.get("payload") or {} for event in api_payload["projection"]["events"]]
+        serialized = json.dumps({"projection": projection, "api": api_payload}, ensure_ascii=False)
+
+        self.assertEqual(tool_evidence["status"], "fail")
+        self.assertEqual(tool_evidence["kind"], "pdf")
+        self.assertEqual(artifact_evidence["status"], "fail")
+        self.assertEqual(artifact_evidence["pdfAnalysis"]["summary"]["pageCount"], 1)
+        self.assertEqual(artifact_evidence["pdfAnalysis"]["summary"]["totalExtractedTextChars"], 120)
+        self.assertNotIn("Customer merger roadmap", serialized)
+        self.assertNotIn("customer-roadmap", serialized)
+        self.assertNotIn("example.test", serialized)
+        self.assertNotIn("Alice", serialized)
+        self.assertIn("unknown-check", {check["id"] for check in tool_evidence["checks"]})
+        layout_check = next(check for check in tool_evidence["checks"] if check["id"] == "layout-inspection")
+        self.assertEqual(layout_check["detail"], "blank_pages=2; page_count=5")
+        render_check = next(check for check in tool_evidence["checks"] if check["id"] == "page-render")
+        self.assertEqual(render_check["detail"], "rendered=0; expected_min=1")
+        self.assertIn("qualityEvidence", event_payloads[0])
+        self.assertNotIn("renderProof", serialized)
+        self.assertNotIn("private prompt", serialized)
+        self.assertNotIn("sk-private", serialized)
+        self.assertNotIn("secret.pdf", serialized)
+        self.assertNotIn("C:\\Users", serialized)
+        self.assertNotIn("rawText", serialized)
+        self.assertNotIn("provider_raw_response", serialized)
+
+    def test_v024_runtime_projection_preserves_image_finalization_retry_gate_summary(self):
+        from agent.protocol import RuntimeProjectionService, get_run_event_ledger
+
+        quality_evidence = {
+            "schemaVersion": "v0.2.4",
+            "kind": "image",
+            "sourceRef": "quality-ref-safe",
+            "qualityGates": ["visual-inspection", "non-blank"],
+            "checks": [
+                {
+                    "id": "visual-inspection",
+                    "status": "fail",
+                    "detail": "retry_count=1; max_retries=1; retry_gate=non-blank; finalized=0",
+                }
+            ],
+            "status": "fail",
+            "imageAnalysis": {
+                "summary": {
+                    "finalizationStatus": "retry",
+                    "retryGate": "non-blank",
+                    "retryRecommended": True,
+                    "retryCount": 1,
+                    "maxRetries": 1,
+                    "unsafeRetryGate": "C:/Users/Alice/private-reference.png",
+                }
+            },
+            "redacted": True,
+        }
+
+        with isolated_run_ledger():
+            ledger = get_run_event_ledger()
+            ledger.append_event(
+                request_id="req-v024-image-finalization-summary",
+                session_id="session-v024-image-finalization-summary",
+                event_type="tool.completed",
+                payload={
+                    "tool_call_id": "tool-image-finalization",
+                    "tool": "imagegen",
+                    "status": "done",
+                    "result": {"qualityEvidence": quality_evidence},
+                },
+                idempotency_key="req-v024-image-finalization-summary:tool",
+            )
+            projection = RuntimeProjectionService(ledger).request_projection(
+                "req-v024-image-finalization-summary"
+            )
+
+        assistant = next(message for message in projection["messages"] if message["role"] == "assistant")
+        tool_evidence = assistant["tool_calls"][0]["qualityEvidence"]
+        summary = tool_evidence["imageAnalysis"]["summary"]
+        visual_check = next(check for check in tool_evidence["checks"] if check["id"] == "visual-inspection")
+        serialized = json.dumps(projection, ensure_ascii=False)
+
+        self.assertEqual(summary["retryGate"], "non-blank")
+        self.assertEqual(summary["finalizationStatus"], "retry")
+        self.assertEqual(summary["retryCount"], 1)
+        self.assertEqual(summary["maxRetries"], 1)
+        self.assertIn("retry_gate=non-blank", visual_check["detail"])
+        self.assertIn("max_retries=1", visual_check["detail"])
+        self.assertNotIn("unsafeRetryGate", serialized)
+        self.assertNotIn("C:/Users/Alice", serialized)
+
+    def test_v022_runtime_projection_sanitizes_legacy_image_job_artifact_payloads(self):
+        from agent.protocol import RuntimeProjectionService, reset_run_event_ledger_for_tests
+
+        raw_b64 = "d" * 9000
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            ledger.append_event(
+                request_id="req-legacy-image-job-artifact-sanitized",
+                session_id="session-legacy-image-job-artifact-sanitized",
+                event_type="image_job.started",
+                payload={"job_id": "image-job-legacy-artifact", "tasks": [{"task_id": "task-1"}]},
+            )
+            ledger.append_event(
+                request_id="req-legacy-image-job-artifact-sanitized",
+                session_id="session-legacy-image-job-artifact-sanitized",
+                event_type="image_job.artifact",
+                payload={
+                    "job_id": "image-job-legacy-artifact",
+                    "task_id": "task-1",
+                    "debug": "private prompt",
+                    "artifact": {
+                        "path": str(Path(workspace) / "legacy-image-job.png"),
+                        "previewUrl": f"data:image/png;base64,{raw_b64}",
+                        "fileName": "legacy-image-job.png",
+                        "fileType": "image",
+                        "b64_json": raw_b64,
+                        "provider_raw_response": {"message": "private prompt"},
+                        "nested": {"ignored": True},
+                    },
+                },
+            )
+            projection = RuntimeProjectionService(ledger).request_projection("req-legacy-image-job-artifact-sanitized")
+
+        serialized_projection = json.dumps(projection, ensure_ascii=False)
+        self.assertNotIn("b64_json", serialized_projection)
+        self.assertNotIn("data:image", serialized_projection)
+        self.assertNotIn(raw_b64, serialized_projection)
+        self.assertNotIn("provider_raw_response", serialized_projection)
+        self.assertNotIn("private prompt", serialized_projection)
+        artifact = projection["image_jobs"][0]["artifacts"][0]
+        self.assertEqual(artifact["title"], "legacy-image-job.png")
+        self.assertEqual(artifact["kind"], "image")
+        self.assertTrue(artifact["artifact_sanitized"])
+        self.assertGreaterEqual(artifact["omitted_field_count"], 3)
+
+    def test_v022_runtime_projection_sanitizes_legacy_image_job_task_and_error_payloads(self):
+        from agent.protocol import RuntimeProjectionService, reset_run_event_ledger_for_tests
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            ledger.append_event(
+                request_id="req-legacy-image-job-task-error-sanitized",
+                session_id="session-legacy-image-job-task-error-sanitized",
+                event_type="image_job.started",
+                payload={
+                    "job_id": "image-job-legacy-task-error",
+                    "operation": "private prompt",
+                    "provider": "私人提示词",
+                    "resolved_model": "private prompt",
+                    "model": "私人提示词",
+                    "image_mode": "private prompt",
+                    "retryable": "私人提示词",
+                    "debug": "private prompt",
+                    "tasks": [{
+                        "task_id": "task-1",
+                        "operation": "generate",
+                        "status": "private prompt",
+                        "provider_raw_response": {"message": "private prompt"},
+                        "debug": "private prompt",
+                    }],
+                },
+            )
+            ledger.append_event(
+                request_id="req-legacy-image-job-task-error-sanitized",
+                session_id="session-legacy-image-job-task-error-sanitized",
+                event_type="image_job.failed",
+                payload={
+                    "job_id": "image-job-legacy-task-error",
+                    "error_type": "privateprompt",
+                    "error_message": "private prompt",
+                    "provider_body": "private prompt",
+                },
+            )
+            projection = RuntimeProjectionService(ledger).request_projection("req-legacy-image-job-task-error-sanitized")
+
+        serialized_projection = json.dumps(projection, ensure_ascii=False)
+        self.assertNotIn("provider_raw_response", serialized_projection)
+        self.assertNotIn("private prompt", serialized_projection)
+        self.assertNotIn("privateprompt", serialized_projection)
+        self.assertNotIn("私人提示词", serialized_projection)
+        job = projection["image_jobs"][0]
+        self.assertEqual(job["error_type"], "Error")
+        self.assertEqual(job["error_message"], "Error: image job failed")
+        self.assertEqual(job["tasks"][0]["task_id"], "task-1")
+        self.assertEqual(job["tasks"][0]["terminal_job_status"], "failed")
+
+    def test_v022_runtime_projection_rejects_token_shaped_image_job_telemetry(self):
+        from agent.protocol import RuntimeProjectionService, reset_run_event_ledger_for_tests
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            ledger.append_event(
+                request_id="req-legacy-image-job-token-telemetry",
+                session_id="session-legacy-image-job-token-telemetry",
+                event_type="image_job.started",
+                payload={
+                    "job_id": "image-job-legacy-telemetry-shape",
+                    "operation": "generate",
+                    "provider": "sk-started-provider",
+                    "model": "bearer:started-model",
+                    "fallback_provider": "api_key-provider",
+                    "fallback_from_model": "authorization:old-model",
+                    "fallback_to_model": "gpt-image-2",
+                    "fallback_reason": "client_error",
+                    "tasks": [{
+                        "task_id": "task-1",
+                        "operation": "generate",
+                        "provider": "sk-task-provider",
+                        "model": "bearer:task-model",
+                    }],
+                },
+            )
+            ledger.append_event(
+                request_id="req-legacy-image-job-token-telemetry",
+                session_id="session-legacy-image-job-token-telemetry",
+                event_type="image_job.progress",
+                payload={
+                    "job_id": "image-job-legacy-telemetry-shape",
+                    "task_id": "task-1",
+                    "status": "provider_response",
+                    "provider": "sk-progress-provider",
+                    "model": "bearer:progress-model",
+                    "fallback_provider": "api_key-progress-provider",
+                    "fallback_from_model": "authorization:progress-old-model",
+                    "fallback_to_model": "gpt-image-2",
+                    "fallback_reason": "client_error",
+                    "attempted_provider_count": 1,
+                },
+            )
+            projection = RuntimeProjectionService(ledger).request_projection("req-legacy-image-job-token-telemetry")
+
+        serialized_projection = json.dumps(projection, ensure_ascii=False)
+        for unsafe in ("sk-started-provider", "sk-task-provider", "sk-progress-provider", "bearer:", "api_key-", "authorization:"):
+            self.assertNotIn(unsafe, serialized_projection)
+        job = projection["image_jobs"][0]
+        task = job["tasks"][0]
+        self.assertEqual(job["fallback_to_model"], "gpt-image-2")
+        self.assertEqual(job["fallback_reason"], "client_error")
+        self.assertEqual(job["attempted_provider_count"], 1)
+        self.assertNotIn("provider", job)
+        self.assertNotIn("provider", task)
+        self.assertNotIn("model", task)
+
+    def test_v022_runtime_projection_sanitizes_legacy_image_job_progress_status(self):
+        from agent.protocol import RuntimeProjectionService, reset_run_event_ledger_for_tests
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            ledger.append_event(
+                request_id="req-legacy-image-job-progress-status",
+                session_id="session-legacy-image-job-progress-status",
+                event_type="image_job.started",
+                payload={"job_id": "image-job-legacy-progress", "tasks": [{"task_id": "task-1"}]},
+            )
+            ledger.append_event(
+                request_id="req-legacy-image-job-progress-status",
+                session_id="session-legacy-image-job-progress-status",
+                event_type="image_job.progress",
+                payload={
+                    "job_id": "image-job-legacy-progress",
+                    "task_id": "task-1",
+                    "status": "private prompt",
+                    "provider_body": "private prompt",
+                    "progress": 0.5,
+                },
+            )
+            projection = RuntimeProjectionService(ledger).request_projection("req-legacy-image-job-progress-status")
+
+        serialized_projection = json.dumps(projection, ensure_ascii=False)
+        self.assertNotIn("private prompt", serialized_projection)
+        self.assertEqual(projection["image_jobs"][0]["tasks"][0]["status"], "progress")
+        progress_event = next(event for event in projection["events"] if event["event_type"] == "image_job.progress")
+        self.assertEqual(progress_event["payload"]["status"], "progress")
+
+    def test_v022_runtime_projection_sanitizes_legacy_image_job_numeric_fields(self):
+        from agent.protocol import RuntimeProjectionService, reset_run_event_ledger_for_tests
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            ledger.append_event(
+                request_id="req-legacy-image-job-numeric-sanitized",
+                session_id="session-legacy-image-job-numeric-sanitized",
+                event_type="image_job.started",
+                payload={
+                    "job_id": "image-job-legacy-numeric",
+                    "task_count": "privateprompt",
+                    "latency_ms": "privateprompt",
+                    "progress": "privateprompt",
+                    "total_latency_ms": "privateprompt",
+                    "tasks": [{
+                        "task_id": "task-1",
+                        "task_index": "privateprompt",
+                        "progress": "privateprompt",
+                    }],
+                },
+            )
+            ledger.append_event(
+                request_id="req-legacy-image-job-numeric-sanitized",
+                session_id="session-legacy-image-job-numeric-sanitized",
+                event_type="image_job.progress",
+                payload={
+                    "job_id": "image-job-legacy-numeric",
+                    "task_id": "task-1",
+                    "progress": "privateprompt",
+                    "latency_ms": "privateprompt",
+                },
+            )
+            ledger.append_event(
+                request_id="req-legacy-image-job-numeric-sanitized",
+                session_id="session-legacy-image-job-numeric-sanitized",
+                event_type="image_job.completed",
+                payload={
+                    "job_id": "image-job-legacy-numeric",
+                    "artifact_count": "privateprompt",
+                    "total_latency_ms": "privateprompt",
+                },
+            )
+            projection = RuntimeProjectionService(ledger).request_projection("req-legacy-image-job-numeric-sanitized")
+
+        serialized_projection = json.dumps(projection, ensure_ascii=False)
+        self.assertNotIn("privateprompt", serialized_projection)
+        job = projection["image_jobs"][0]
+        self.assertEqual(job["task_count"], 0)
+        self.assertEqual(job["artifact_count"], 0)
+        self.assertNotIn("total_latency_ms", job)
+        started_event = next(event for event in projection["events"] if event["event_type"] == "image_job.started")
+        self.assertTrue(started_event["payload"]["payload_sanitized"])
+        self.assertNotIn("latency_ms", started_event["payload"])
+
+    def test_v022_runtime_projection_omits_legacy_image_job_events_with_hostile_ids(self):
+        from agent.protocol import RuntimeProjectionService, reset_run_event_ledger_for_tests
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            ledger.append_event(
+                request_id="req-legacy-image-job-hostile-ids",
+                session_id="session-legacy-image-job-hostile-ids",
+                event_type="image_job.started",
+                payload={
+                    "job_id": "private prompt",
+                    "tasks": [{
+                        "task_id": "private prompt",
+                        "source_task_id": "private prompt",
+                        "operation": "generate",
+                    }],
+                },
+            )
+            ledger.append_event(
+                request_id="req-legacy-image-job-hostile-ids",
+                session_id="session-legacy-image-job-hostile-ids",
+                event_type="image_job.started",
+                payload={
+                    "job_id": "image-job-privateprompt",
+                    "tasks": [{"task_id": "task-privateprompt"}],
+                },
+            )
+            ledger.append_event(
+                request_id="req-legacy-image-job-hostile-ids",
+                session_id="session-legacy-image-job-hostile-ids",
+                event_type="image_job.started",
+                payload={
+                    "job_id": "image-job-私人提示词",
+                    "tasks": [{"task_id": "task-私人提示词"}],
+                },
+            )
+            ledger.append_event(
+                request_id="req-legacy-image-job-hostile-ids",
+                session_id="session-legacy-image-job-hostile-ids",
+                event_type="image_job.started",
+                payload={
+                    "job_id": "image-job-safe-legacy",
+                    "tasks": [{"task_id": "task-privateprompt"}],
+                },
+            )
+            projection = RuntimeProjectionService(ledger).request_projection("req-legacy-image-job-hostile-ids")
+
+        serialized_projection = json.dumps(projection, ensure_ascii=False)
+        self.assertNotIn("private prompt", serialized_projection)
+        self.assertNotIn("privateprompt", serialized_projection)
+        self.assertNotIn("私人提示词", serialized_projection)
+        self.assertEqual([job["job_id"] for job in projection["image_jobs"]], ["image-job-safe-legacy"])
+        self.assertNotIn("task-privateprompt", json.dumps(projection["image_jobs"], ensure_ascii=False))
+        self.assertNotIn("task-私人提示词", json.dumps(projection["image_jobs"], ensure_ascii=False))
+
+    def test_v022_webchannel_sse_dual_writes_runtime_events(self):
+        from agent.protocol import RuntimeProjectionService, get_run_event_ledger
+        from channel.web.web_channel import WebChannel
+
+        with isolated_run_ledger():
+            channel = WebChannel()
+            request_id = "req-v022-webchannel"
+            session_id = "session-v022-webchannel"
+            channel.request_to_session[request_id] = session_id
+            channel._ensure_sse_state(request_id)
+            try:
+                channel._record_request_accepted_events(
+                    request_id,
+                    session_id,
+                    visible_message="write a short answer",
+                    client_attempt_id="attempt-v022",
+                )
+                self.assertTrue(channel._push_sse_event(request_id, {"type": "delta", "content": "draft"}))
+                self.assertTrue(channel._push_sse_event(request_id, {"type": "done", "content": "done answer"}))
+
+                ledger = get_run_event_ledger()
+                event_types = [event["event_type"] for event in ledger.events_for_request(request_id)]
+                projection = RuntimeProjectionService(ledger).request_projection(request_id)
+            finally:
+                channel._cleanup_sse_request(request_id)
+
+        self.assertIn("run.accepted", event_types)
+        self.assertIn("message.user.accepted", event_types)
+        self.assertIn("message.assistant.created", event_types)
+        self.assertIn("assistant.delta", event_types)
+        self.assertIn("message.assistant.finalized", event_types)
+        self.assertIn("run.completed", event_types)
+        self.assertEqual(projection["state"], "completed")
+        self.assertEqual(projection["messages"][0]["content"], "write a short answer")
+        self.assertEqual(projection["messages"][1]["content"], "done answer")
+
+    def test_v022_webchannel_terminal_runtime_event_matrix(self):
+        from agent.protocol import RuntimeProjectionService, get_run_event_ledger
+        from channel.web.web_channel import WebChannel
+
+        cases = [
+            ("error", {"type": "error", "message": "boom"}, "run.failed", "failed"),
+            ("cancelled", {"type": "cancelled", "message": "stopped"}, "run.cancelled", "cancelled"),
+            ("interrupted", {"type": "interrupted", "message": "lost"}, "run.interrupted", "interrupted"),
+        ]
+        with isolated_run_ledger():
+            channel = WebChannel()
+            ledger = get_run_event_ledger()
+            for suffix, event, expected_type, expected_state in cases:
+                request_id = f"req-v022-terminal-{suffix}"
+                session_id = "session-v022-terminal"
+                channel.request_to_session[request_id] = session_id
+                channel._ensure_sse_state(request_id)
+                try:
+                    channel._record_request_accepted_events(request_id, session_id, visible_message=suffix)
+                    self.assertTrue(channel._push_sse_event(request_id, event))
+                    event_types = [item["event_type"] for item in ledger.events_for_request(request_id)]
+                    projection = RuntimeProjectionService(ledger).request_projection(request_id)
+                finally:
+                    channel._cleanup_sse_request(request_id)
+                self.assertIn(expected_type, event_types)
+                self.assertEqual(projection["state"], expected_state)
+
+            request_id = "req-v022-terminal-timeout"
+            channel.request_to_session[request_id] = "session-v022-terminal"
+            channel._ensure_sse_state(request_id)
+            try:
+                channel._record_request_accepted_events(request_id, "session-v022-terminal", visible_message="timeout")
+                self.assertTrue(channel._push_sse_event(request_id, {
+                    "type": "tool_end",
+                    "tool": "bash",
+                    "tool_call_id": "tool-timeout",
+                    "status": "timeout",
+                    "result": "timed out",
+                }))
+                projection = RuntimeProjectionService(ledger).request_projection(request_id)
+            finally:
+                channel._cleanup_sse_request(request_id)
+
+        self.assertEqual(projection["messages"][1]["tool_calls"][0]["status"], "timeout")
+
+    def test_v022_webchannel_subagent_sse_events_are_durable_and_projected(self):
+        from agent.protocol import RuntimeProjectionService, get_run_event_ledger
+        from channel.web.web_channel import WebChannel
+
+        with isolated_run_ledger():
+            channel = WebChannel()
+            request_id = "req-v022-subagent-parent"
+            session_id = "session-v022-subagent-parent"
+            child_request_id = "subagent-child-abc123"
+            task_id = "task-subagent-abc123"
+            channel.request_to_session[request_id] = session_id
+            channel._ensure_sse_state(request_id)
+            try:
+                channel._record_request_accepted_events(
+                    request_id,
+                    session_id,
+                    visible_message="delegate review",
+                )
+                task = {
+                    "id": task_id,
+                    "name": "Reviewer",
+                    "role": "explorer",
+                    "summary": "Review projection",
+                    "status": "running",
+                    "requestId": child_request_id,
+                    "childSessionId": child_request_id,
+                    "parentRequestId": request_id,
+                    "parentSessionId": session_id,
+                    "deadlineAt": 1782345600,
+                    "timeoutSeconds": 900,
+                    "lastHeartbeatAt": 1782345000,
+                }
+                self.assertTrue(channel._push_sse_event(request_id, {
+                    "type": "subagent_start",
+                    "tool_call_id": "tool-subagent-review",
+                    "task": task,
+                    "task_id": task_id,
+                    "child_request_id": child_request_id,
+                    "name": "Reviewer",
+                    "role": "explorer",
+                    "summary": "Review projection",
+                    "status": "starting",
+                }))
+                self.assertTrue(channel._push_sse_event(request_id, {
+                    "type": "subagent_update",
+                    "tool_call_id": "tool-subagent-review",
+                    "task": {**task, "status": "running", "lastHeartbeatAt": 1782345060},
+                    "task_id": task_id,
+                    "child_request_id": child_request_id,
+                    "status": "running",
+                }))
+                running_projection = RuntimeProjectionService(get_run_event_ledger()).request_projection(request_id)
+                self.assertTrue(channel._push_sse_event(request_id, {
+                    "type": "subagent_complete",
+                    "tool_call_id": "tool-subagent-review",
+                    "task": {**task, "status": "completed", "result": "PASS"},
+                    "task_id": task_id,
+                    "child_request_id": child_request_id,
+                    "status": "completed",
+                    "result_preview": "PASS",
+                }))
+                ledger = get_run_event_ledger()
+                events = ledger.events_for_request(request_id)
+                projection = RuntimeProjectionService(ledger).request_projection(request_id)
+            finally:
+                channel._cleanup_sse_request(request_id)
+
+        running_tool = running_projection["messages"][1]["tool_calls"][0]
+        self.assertEqual(running_tool["name"], "subagent")
+        self.assertEqual(running_tool["status"], "running")
+        self.assertEqual(running_tool["child_request_id"], child_request_id)
+        self.assertEqual(running_tool["parent_request_id"], request_id)
+        self.assertEqual(running_tool["task_id"], task_id)
+        self.assertEqual(running_tool["result"]["task"]["lastHeartbeatAt"], 1782345060)
+
+        event_types = [event["event_type"] for event in events]
+        self.assertIn("subagent.started", event_types)
+        self.assertIn("subagent.updated", event_types)
+        self.assertIn("subagent.completed", event_types)
+        safe_subagent_events = [event for event in projection["events"] if str(event.get("event_type", "")).startswith("subagent.")]
+        self.assertTrue(safe_subagent_events)
+        self.assertEqual(safe_subagent_events[-1]["payload"]["parent_request_id"], request_id)
+        self.assertEqual(safe_subagent_events[-1]["payload"]["child_request_id"], child_request_id)
+        self.assertEqual(safe_subagent_events[-1]["payload"]["deadline_at"], 1782345600)
+        self.assertEqual(safe_subagent_events[-1]["payload"]["last_heartbeat_at"], 1782345000)
+        tool = projection["messages"][1]["tool_calls"][0]
+        self.assertEqual(tool["name"], "subagent")
+        self.assertEqual(tool["status"], "completed")
+        self.assertEqual(tool["child_request_id"], child_request_id)
+        self.assertEqual(tool["parent_request_id"], request_id)
+        self.assertEqual(tool["task_id"], task_id)
+        self.assertEqual(tool["result"]["task"]["result"], "PASS")
+        self.assertEqual(tool["result"]["task"]["deadlineAt"], 1782345600)
+        self.assertEqual(tool["result"]["task"]["lastHeartbeatAt"], 1782345000)
+
+    def test_v022_webchannel_subagent_terminal_variants_are_durable_and_projected(self):
+        from agent.protocol import RuntimeProjectionService, get_run_event_ledger
+        from channel.web.web_channel import WebChannel
+
+        terminal_cases = {
+            "subagent_failed": ("subagent.failed", "failed", "review failed"),
+            "subagent_timeout": ("subagent.timeout", "timeout", "review timed out"),
+            "subagent_cancelled": ("subagent.cancelled", "cancelled", "review cancelled"),
+        }
+        projections = {}
+        event_types_by_case = {}
+
+        with isolated_run_ledger():
+            channel = WebChannel()
+            ledger = get_run_event_ledger()
+            try:
+                for legacy_type, (canonical_type, expected_status, result_preview) in terminal_cases.items():
+                    suffix = expected_status.replace("_", "-")
+                    request_id = f"req-v022-subagent-{suffix}"
+                    session_id = f"session-v022-subagent-{suffix}"
+                    child_request_id = f"subagent-child-{suffix}"
+                    task_id = f"task-subagent-{suffix}"
+                    channel.request_to_session[request_id] = session_id
+                    channel._ensure_sse_state(request_id)
+                    channel._record_request_accepted_events(
+                        request_id,
+                        session_id,
+                        visible_message=f"delegate {expected_status}",
+                    )
+                    self.assertTrue(channel._push_sse_event(request_id, {
+                        "type": "subagent_start",
+                        "tool_call_id": f"tool-subagent-{suffix}",
+                        "task": {
+                            "id": task_id,
+                            "name": f"Reviewer {expected_status}",
+                            "role": "worker",
+                            "summary": f"Review {expected_status}",
+                            "requestId": child_request_id,
+                            "parentRequestId": request_id,
+                            "parentSessionId": session_id,
+                            "deadlineAt": 1782346600,
+                            "timeoutSeconds": 300,
+                            "lastHeartbeatAt": 1782346000,
+                        },
+                        "task_id": task_id,
+                        "child_request_id": child_request_id,
+                    }))
+                    self.assertTrue(channel._push_sse_event(request_id, {
+                        "type": legacy_type,
+                        "tool_call_id": f"tool-subagent-{suffix}",
+                        "task": {
+                            "id": task_id,
+                            "name": f"Reviewer {expected_status}",
+                            "role": "worker",
+                            "summary": f"Review {expected_status}",
+                            "requestId": child_request_id,
+                            "parentRequestId": request_id,
+                            "parentSessionId": session_id,
+                            "deadlineAt": 1782346600,
+                            "timeoutSeconds": 300,
+                            "lastHeartbeatAt": 1782346060,
+                        },
+                        "task_id": task_id,
+                        "child_request_id": child_request_id,
+                        "result_preview": result_preview,
+                    }))
+                    event_types_by_case[expected_status] = [
+                        event["event_type"] for event in ledger.events_for_request(request_id)
+                    ]
+                    projections[expected_status] = RuntimeProjectionService(ledger).request_projection(request_id)
+            finally:
+                for expected_status in terminal_cases.values():
+                    suffix = expected_status[1].replace("_", "-")
+                    channel._cleanup_sse_request(f"req-v022-subagent-{suffix}")
+
+        for _legacy_type, (canonical_type, expected_status, result_preview) in terminal_cases.items():
+            projection = projections[expected_status]
+            self.assertIn(canonical_type, event_types_by_case[expected_status])
+            safe_subagent_events = [
+                event for event in projection["events"]
+                if event.get("event_type") == canonical_type
+            ]
+            self.assertTrue(safe_subagent_events)
+            payload = safe_subagent_events[-1]["payload"]
+            self.assertEqual(payload["child_request_id"], f"subagent-child-{expected_status}")
+            self.assertEqual(payload["parent_request_id"], f"req-v022-subagent-{expected_status}")
+            tool = projection["messages"][1]["tool_calls"][0]
+            self.assertEqual(tool["name"], "subagent")
+            self.assertEqual(tool["status"], expected_status)
+            self.assertEqual(tool["child_request_id"], f"subagent-child-{expected_status}")
+            self.assertEqual(tool["parent_request_id"], f"req-v022-subagent-{expected_status}")
+            self.assertEqual(tool["task_id"], f"task-subagent-{expected_status}")
+            self.assertEqual(tool["result"]["task"]["status"], expected_status)
+            self.assertEqual(tool["result"]["task"]["result"], result_preview)
+            self.assertEqual(tool["result"]["task"]["lastHeartbeatAt"], 1782346060)
+
+    def test_v022_subagent_projection_sanitizes_hostile_metadata_and_parent_identity(self):
+        from agent.protocol import RuntimeProjectionService, get_run_event_ledger
+        from channel.web.web_channel import WebChannel
+
+        with isolated_run_ledger():
+            channel = WebChannel()
+            request_id = "req-v022-subagent-parent-safe"
+            session_id = "session-v022-subagent-parent-safe"
+            channel.request_to_session[request_id] = session_id
+            channel._ensure_sse_state(request_id)
+            try:
+                channel._record_request_accepted_events(
+                    request_id,
+                    session_id,
+                    visible_message="delegate hostile metadata",
+                )
+                self.assertTrue(channel._push_sse_event(request_id, {
+                    "type": "subagent_failed",
+                    "tool_call_id": "<img src=x onerror=alert(1)>",
+                    "task": {
+                        "id": "task-secret-token",
+                        "name": "<img src=x onerror=alert(2)>",
+                        "role": "<script>alert(3)</script>",
+                        "summary": "<b>" + ("x" * 9000),
+                        "status": "<script>alert(4)</script>",
+                        "requestId": "subagent-child-safe",
+                        "parentRequestId": "req-spoofed-parent",
+                        "parentSessionId": "session-spoofed-parent",
+                        "deadlineAt": 1782347600,
+                        "timeoutSeconds": 300,
+                        "lastHeartbeatAt": 1782347060,
+                        "result": "sk-raw-task-result-should-not-project",
+                    },
+                    "task_id": "task-secret-token",
+                    "child_request_id": "subagent-child-safe",
+                    "parent_request_id": "req-spoofed-parent",
+                    "parent_session_id": "session-spoofed-parent",
+                    "name": "<img src=x onerror=alert(2)>",
+                    "role": "<script>alert(3)</script>",
+                    "summary": "<b>" + ("x" * 9000),
+                    "status": "<script>alert(4)</script>",
+                    "result_preview": "sk-result-preview-should-redact",
+                }))
+                projection = RuntimeProjectionService(get_run_event_ledger()).request_projection(request_id)
+            finally:
+                channel._cleanup_sse_request(request_id)
+
+        safe_events = [
+            event for event in projection["events"]
+            if event.get("event_type") == "subagent.failed"
+        ]
+        self.assertTrue(safe_events)
+        safe_payload = safe_events[-1]["payload"]
+        self.assertEqual(safe_payload["parent_request_id"], request_id)
+        self.assertEqual(safe_payload["parent_session_id"], session_id)
+        self.assertEqual(safe_payload["child_request_id"], "subagent-child-safe")
+        self.assertNotIn("task_id", safe_payload)
+        self.assertEqual(safe_payload["status"], "failed")
+        self.assertIn("&lt;img", safe_payload["name"])
+        self.assertIn("&lt;b&gt;", safe_payload["summary"])
+        self.assertTrue(safe_payload["payload_sanitized"])
+        self.assertTrue(safe_payload["payload_truncated"])
+
+        tool = projection["messages"][1]["tool_calls"][0]
+        self.assertEqual(tool["name"], "subagent")
+        self.assertEqual(tool["status"], "failed")
+        self.assertEqual(tool["child_request_id"], "subagent-child-safe")
+        self.assertEqual(tool["parent_request_id"], request_id)
+        self.assertEqual(tool["task_id"], "")
+        task = tool["result"]["task"]
+        self.assertEqual(task["status"], "failed")
+        self.assertEqual(task["result"], "[redacted]")
+        self.assertIn("&lt;img", task["name"])
+        self.assertIn("&lt;script&gt;", task["role"])
+        self.assertIn("&lt;b&gt;", task["summary"])
+        self.assertLessEqual(len(task["summary"]), 540)
+        projection_json = json.dumps(projection, ensure_ascii=False)
+        self.assertNotIn("req-spoofed-parent", projection_json)
+        self.assertNotIn("session-spoofed-parent", projection_json)
+        self.assertNotIn("task-secret-token", projection_json)
+        self.assertNotIn("sk-result-preview", projection_json)
+        self.assertNotIn("<script", projection_json)
+        self.assertNotIn("<img", projection_json)
+
+    def test_v022_subagent_tool_execution_end_does_not_project_raw_task_result(self):
+        from agent.protocol import RuntimeProjectionService, get_run_event_ledger
+        from channel.web.web_channel import WebChannel
+
+        with isolated_run_ledger():
+            channel = WebChannel()
+            request_id = "req-v022-subagent-tool-end"
+            session_id = "session-v022-subagent-tool-end"
+            channel.request_to_session[request_id] = session_id
+            channel._ensure_sse_state(request_id)
+            try:
+                channel._record_request_accepted_events(
+                    request_id,
+                    session_id,
+                    visible_message="delegate production result",
+                )
+                callback = channel._make_sse_callback(request_id)
+                callback({
+                    "type": "tool_execution_end",
+                    "data": {
+                        "tool_name": "subagent",
+                        "tool_call_id": "tool-subagent-prod",
+                        "status": "failed",
+                        "result": {
+                            "task": {
+                                "id": "task-subagent-prod",
+                                "name": "Production Reviewer",
+                                "role": "worker",
+                                "summary": "Review production callback",
+                                "status": "failed",
+                                "requestId": "subagent-child-prod",
+                                "parentRequestId": "req-spoofed-prod",
+                                "parentSessionId": "session-spoofed-prod",
+                                "deadlineAt": 1782348600,
+                                "timeoutSeconds": 300,
+                                "lastHeartbeatAt": 1782348060,
+                                "result": "sk-raw-production-result",
+                                "error": "secret raw production error",
+                            }
+                        },
+                        "execution_time": 1.0,
+                    },
+                })
+                ledger = get_run_event_ledger()
+                events = ledger.events_for_request(request_id)
+                projection = RuntimeProjectionService(ledger).request_projection(request_id)
+            finally:
+                channel._cleanup_sse_request(request_id)
+
+        event_types = [event["event_type"] for event in events]
+        self.assertIn("subagent.failed", event_types)
+        self.assertNotIn("tool.failed", event_types)
+        tool = projection["messages"][1]["tool_calls"][0]
+        self.assertEqual(tool["name"], "subagent")
+        self.assertEqual(tool["status"], "failed")
+        self.assertEqual(tool["child_request_id"], "subagent-child-prod")
+        self.assertEqual(tool["parent_request_id"], request_id)
+        self.assertEqual(tool["task_id"], "task-subagent-prod")
+        self.assertEqual(tool["result"]["task"]["result"], "")
+        projection_json = json.dumps(projection, ensure_ascii=False)
+        self.assertNotIn("sk-raw-production-result", projection_json)
+        self.assertNotIn("secret raw production error", projection_json)
+        self.assertNotIn("req-spoofed-prod", projection_json)
+        self.assertNotIn("session-spoofed-prod", projection_json)
+
+    def test_v022_subagent_tool_execution_timeout_does_not_emit_generic_tool_failed(self):
+        from agent.protocol import RuntimeProjectionService, get_run_event_ledger
+        from channel.web.web_channel import WebChannel
+
+        with isolated_run_ledger():
+            channel = WebChannel()
+            request_id = "req-v022-subagent-timeout-prod"
+            session_id = "session-v022-subagent-timeout-prod"
+            channel.request_to_session[request_id] = session_id
+            channel._ensure_sse_state(request_id)
+            try:
+                channel._record_request_accepted_events(
+                    request_id,
+                    session_id,
+                    visible_message="delegate timeout production result",
+                )
+                callback = channel._make_sse_callback(request_id)
+                callback({
+                    "type": "tool_execution_start",
+                    "data": {
+                        "tool_name": "subagent",
+                        "tool_call_id": "tool-subagent-timeout-prod",
+                        "arguments": {
+                            "name": "Timeout Reviewer",
+                            "role": "worker",
+                            "summary": "Review timeout callback",
+                        },
+                    },
+                })
+                callback({
+                    "type": "tool_execution_timeout",
+                    "data": {
+                        "tool_name": "subagent",
+                        "tool_call_id": "tool-subagent-timeout-prod",
+                        "elapsed_seconds": 901,
+                        "timeout_seconds": 900,
+                        "message": "sk-raw-timeout-message",
+                        "task": {
+                            "id": "task-subagent-timeout-prod",
+                            "name": "Timeout Reviewer",
+                            "role": "worker",
+                            "summary": "Review timeout callback",
+                            "requestId": "subagent-child-timeout-prod",
+                            "parentRequestId": "req-spoofed-timeout",
+                            "parentSessionId": "session-spoofed-timeout",
+                            "deadlineAt": 1782349600,
+                            "timeoutSeconds": 900,
+                            "lastHeartbeatAt": 1782349060,
+                            "result": "sk-raw-timeout-result",
+                            "error": "secret raw timeout error",
+                        },
+                    },
+                })
+                ledger = get_run_event_ledger()
+                events = ledger.events_for_request(request_id)
+                projection = RuntimeProjectionService(ledger).request_projection(request_id)
+            finally:
+                channel._cleanup_sse_request(request_id)
+
+        event_types = [event["event_type"] for event in events]
+        self.assertIn("subagent.started", event_types)
+        self.assertIn("subagent.timeout", event_types)
+        self.assertNotIn("tool.started", event_types)
+        self.assertNotIn("tool.failed", event_types)
+        tool = projection["messages"][1]["tool_calls"][0]
+        self.assertEqual(tool["name"], "subagent")
+        self.assertEqual(tool["status"], "timeout")
+        self.assertEqual(tool["child_request_id"], "subagent-child-timeout-prod")
+        self.assertEqual(tool["parent_request_id"], request_id)
+        self.assertEqual(tool["task_id"], "task-subagent-timeout-prod")
+        self.assertEqual(tool["result"]["task"]["result"], "")
+        projection_json = json.dumps(projection, ensure_ascii=False)
+        self.assertNotIn("sk-raw-timeout-message", projection_json)
+        self.assertNotIn("sk-raw-timeout-result", projection_json)
+        self.assertNotIn("secret raw timeout error", projection_json)
+        self.assertNotIn("req-spoofed-timeout", projection_json)
+        self.assertNotIn("session-spoofed-timeout", projection_json)
+
+    def test_v022_webchannel_permission_artifact_cancel_are_durable_and_projected(self):
+        from agent.protocol import RuntimeProjectionService, get_run_event_ledger
+        from channel.web.web_channel import WebChannel
+
+        with isolated_run_ledger():
+            channel = WebChannel()
+            request_id = "req-v022-permission-artifact-cancel"
+            session_id = "session-v022-permission-artifact-cancel"
+            channel.request_to_session[request_id] = session_id
+            channel._ensure_sse_state(request_id)
+            try:
+                channel._record_request_accepted_events(
+                    request_id,
+                    session_id,
+                    visible_message="create an auditable file",
+                )
+                self.assertTrue(channel._push_sse_event(request_id, {
+                    "type": "tool_permission_request",
+                    "permission_request_id": "perm-v022-file",
+                    "id": "perm-v022-file",
+                    "tool": "file_write",
+                    "title": "Write report.txt",
+                    "message": "Approve writing report.txt",
+                    "request_id": request_id,
+                }))
+                ledger = get_run_event_ledger()
+                permission_projection = RuntimeProjectionService(ledger).request_projection(request_id)
+
+                self.assertTrue(channel._push_sse_event(request_id, {
+                    "type": "artifact",
+                    "artifact": {
+                        "kind": "file",
+                        "title": "report.txt",
+                        "path": "C:/CowAgent/out/report.txt",
+                        "sizeBytes": 120,
+                        "content": "raw file content should not project",
+                        "metadata": {"secret": "hidden"},
+                    },
+                    "request_id": request_id,
+                }))
+                artifact_projection = RuntimeProjectionService(ledger).request_projection(request_id)
+
+                self.assertTrue(channel._push_cancelled_event_once(request_id, {
+                    "type": "cancelled",
+                    "content": "Cancelled by user",
+                    "terminal_reason": "user_cancelled",
+                    "request_id": request_id,
+                }))
+                events = ledger.events_for_request(request_id)
+                cancelled_projection = RuntimeProjectionService(ledger).request_projection(request_id)
+            finally:
+                channel._cleanup_sse_request(request_id)
+
+        self.assertEqual(permission_projection["state"], "waiting_permission")
+        self.assertTrue(permission_projection["messages"][1]["pending"])
+        permission_events = [
+            event for event in permission_projection["events"]
+            if event.get("event_type") == "permission.requested"
+        ]
+        self.assertTrue(permission_events)
+        self.assertEqual(permission_events[-1]["payload"]["permission_request_id"], "perm-v022-file")
+        self.assertEqual(permission_events[-1]["payload"]["tool"], "file_write")
+
+        artifact = artifact_projection["messages"][1]["artifacts"][0]
+        self.assertEqual(artifact["title"], "report.txt")
+        self.assertEqual(artifact["path"], "C:/CowAgent/out/report.txt")
+        self.assertEqual(artifact["sizeBytes"], 120)
+        artifact_projection_json = json.dumps(artifact_projection, ensure_ascii=False)
+        self.assertNotIn("raw file content should not project", artifact_projection_json)
+        self.assertNotIn("hidden", artifact_projection_json)
+        artifact_events = [
+            event for event in artifact_projection["events"]
+            if event.get("event_type") == "artifact.created"
+        ]
+        self.assertTrue(artifact_events)
+        self.assertTrue(artifact_events[-1]["payload"]["artifact"]["artifact_sanitized"])
+
+        event_types = [event["event_type"] for event in events]
+        self.assertIn("permission.requested", event_types)
+        self.assertIn("artifact.created", event_types)
+        self.assertIn("run.cancelled", event_types)
+        durable_artifact_event = next(event for event in events if event["event_type"] == "artifact.created")
+        durable_artifact_json = json.dumps(durable_artifact_event["payload"], ensure_ascii=False)
+        self.assertNotIn("raw file content should not project", durable_artifact_json)
+        self.assertNotIn("hidden", durable_artifact_json)
+        self.assertNotIn("metadata", durable_artifact_json)
+        self.assertTrue(durable_artifact_event["payload"]["artifact"]["artifact_sanitized"])
+        self.assertEqual(cancelled_projection["state"], "cancelled")
+        self.assertEqual(cancelled_projection["terminal_reason"], "user_cancelled")
+        self.assertEqual(cancelled_projection["terminal_message"], "Cancelled by user")
+        self.assertFalse(cancelled_projection["messages"][1]["pending"])
+        self.assertEqual(cancelled_projection["messages"][1]["artifacts"][0]["title"], "report.txt")
+
+    def test_v022_webchannel_done_artifacts_are_sanitized_before_durable_finalize(self):
+        from agent.protocol import RuntimeProjectionService, get_run_event_ledger
+        from channel.web.web_channel import WebChannel
+
+        with isolated_run_ledger():
+            channel = WebChannel()
+            request_id = "req-v022-finalized-artifact-sanitized"
+            session_id = "session-v022-finalized-artifact-sanitized"
+            channel.request_to_session[request_id] = session_id
+            channel._ensure_sse_state(request_id)
+            try:
+                channel._record_request_accepted_events(
+                    request_id,
+                    session_id,
+                    visible_message="finalize with artifact",
+                )
+                self.assertTrue(channel._push_sse_event(request_id, {
+                    "type": "done",
+                    "final_text": "Here is the final artifact",
+                    "artifacts": [{
+                        "kind": "file",
+                        "title": "final-report.txt",
+                        "path": "C:/CowAgent/out/final-report.txt",
+                        "content": "raw finalized content should not persist",
+                        "data": "raw-final-bytes",
+                        "metadata": {"secret": "hidden-final"},
+                    }],
+                    "request_id": request_id,
+                }))
+                ledger = get_run_event_ledger()
+                events = ledger.events_for_request(request_id)
+                projection = RuntimeProjectionService(ledger).request_projection(request_id)
+            finally:
+                channel._cleanup_sse_request(request_id)
+
+        finalized_event = next(event for event in events if event["event_type"] == "message.assistant.finalized")
+        completed_event = next(event for event in events if event["event_type"] == "run.completed")
+        for event in (finalized_event, completed_event):
+            payload_json = json.dumps(event["payload"], ensure_ascii=False)
+            self.assertNotIn("raw finalized content should not persist", payload_json)
+            self.assertNotIn("raw-final-bytes", payload_json)
+            self.assertNotIn("hidden-final", payload_json)
+            self.assertNotIn("metadata", payload_json)
+            self.assertTrue(event["payload"]["artifacts"][0]["artifact_sanitized"])
+        self.assertEqual(projection["state"], "completed")
+        self.assertEqual(projection["messages"][1]["content"], "Here is the final artifact")
+        self.assertEqual(projection["messages"][1]["artifacts"][0]["title"], "final-report.txt")
+
+    def test_v022_run_event_ledger_redacts_structural_secrets(self):
+        from agent.protocol import reset_run_event_ledger_for_tests
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            ledger.append_event(
+                request_id="req-v022-redaction",
+                session_id="session-v022",
+                event_type="tool.started",
+                payload={
+                    "content": "visible transcript remains replayable",
+                    "authorization": "Bearer should-not-persist",
+                    "open_ai_api_key": "sk-openai-should-not-persist",
+                    "arguments": {
+                        "api_key": "sk-should-not-persist",
+                        "plain": "kept",
+                        "env": {"key": "BOCHA_API_KEY", "value": "bocha-should-not-persist"},
+                        "command": "curl -H \"Authorization: Bearer token-should-not-persist\" --api-key cli-should-not-persist",
+                    },
+                    "result": "OPENAI_API_KEY=sk-result-should-not-persist",
+                    "headers": [{"cookie": "session=should-not-persist"}],
+                },
+                idempotency_key="req-v022-redaction:tool-started",
+            )
+            event = ledger.events_for_request("req-v022-redaction")[0]
+
+        self.assertEqual(event["payload"]["content"], "visible transcript remains replayable")
+        self.assertEqual(event["payload"]["authorization"], "[redacted]")
+        self.assertEqual(event["payload"]["open_ai_api_key"], "[redacted]")
+        self.assertEqual(event["payload"]["arguments"]["api_key"], "[redacted]")
+        self.assertEqual(event["payload"]["arguments"]["plain"], "kept")
+        self.assertEqual(event["payload"]["arguments"]["env"]["value"], "[redacted]")
+        self.assertNotIn("token-should-not-persist", event["payload"]["arguments"]["command"])
+        self.assertNotIn("cli-should-not-persist", event["payload"]["arguments"]["command"])
+        self.assertNotIn("sk-result-should-not-persist", event["payload"]["result"])
+        self.assertEqual(event["payload"]["headers"][0]["cookie"], "[redacted]")
+
+    def test_v022_run_event_ledger_records_idempotency_conflicts(self):
+        from agent.protocol import reset_run_event_ledger_for_tests
+
+        with tempfile.TemporaryDirectory() as workspace:
+            ledger = reset_run_event_ledger_for_tests(Path(workspace) / "runtime-events.db")
+            first = ledger.append_event(
+                request_id="req-v022-conflict",
+                event_type="run.accepted",
+                payload={"status": "running"},
+                idempotency_key="same-key",
+            )
+            duplicate = ledger.append_event(
+                request_id="req-v022-conflict",
+                event_type="run.failed",
+                payload={"status": "failed"},
+                idempotency_key="same-key",
+            )
+            events = ledger.events_for_request("req-v022-conflict")
+
+        self.assertEqual(first["event_id"], duplicate["event_id"])
+        self.assertTrue(duplicate["idempotency_conflict"])
+        self.assertIn("ledger.idempotency_conflict", [event["event_type"] for event in events])
+
+    def test_v022_stream_replays_from_runtime_projection_when_sse_state_is_missing(self):
+        from agent.protocol import get_run_event_ledger
+        from channel.web.web_channel import WebChannel
+
+        with isolated_run_ledger():
+            channel = WebChannel()
+            ledger = get_run_event_ledger()
+            request_id = "req-v022-projection-replay"
+            session_id = "session-v022-projection"
+            ledger.append_event(
+                request_id=request_id,
+                session_id=session_id,
+                event_type="run.accepted",
+                payload={},
+                idempotency_key=f"{request_id}:accepted",
+            )
+            ledger.append_event(
+                request_id=request_id,
+                session_id=session_id,
+                event_type="message.assistant.finalized",
+                payload={"content": "restored answer"},
+                idempotency_key=f"{request_id}:final",
+            )
+            ledger.append_event(
+                request_id=request_id,
+                session_id=session_id,
+                event_type="run.completed",
+                payload={"terminal_reason": "done"},
+                idempotency_key=f"{request_id}:completed",
+            )
+            chunks = list(channel.stream_response(request_id))
+
+        payloads = []
+        event_ids = []
+        for chunk in chunks:
+            text = chunk.decode("utf-8")
+            for line in text.splitlines():
+                if line.startswith("id: "):
+                    event_ids.append(int(line[len("id: "):]))
+                if line.startswith("data: "):
+                    payloads.append(json.loads(line[len("data: "):]))
+
+        self.assertEqual([payload["type"] for payload in payloads], ["message_update", "done"])
+        self.assertEqual(event_ids, sorted(set(event_ids)))
+        self.assertTrue(all(payload.get("runtime_projection_replay") for payload in payloads))
+        self.assertEqual(payloads[0]["content"], "restored answer")
+
+    def test_v023_stream_replay_rejects_request_session_mismatch(self):
+        from agent.protocol import get_run_event_ledger
+        from channel.web.web_channel import WebChannel
+
+        with isolated_run_ledger():
+            channel = WebChannel()
+            ledger = get_run_event_ledger()
+            request_id = "req-v023-stream-owner"
+            ledger.append_event(
+                request_id=request_id,
+                session_id="session-v023-owner-a",
+                event_type="message.assistant.finalized",
+                payload={"content": "private owner answer"},
+                idempotency_key=f"{request_id}:final",
+            )
+            chunks = list(channel.stream_response(request_id, session_id="session-v023-owner-b"))
+
+        payloads = []
+        for chunk in chunks:
+            text = chunk.decode("utf-8")
+            for line in text.splitlines():
+                if line.startswith("data: "):
+                    payloads.append(json.loads(line[len("data: "):]))
+
+        self.assertEqual(len(payloads), 1)
+        self.assertEqual(payloads[0]["type"], "error")
+        self.assertEqual(payloads[0]["code"], "SESSION_MISMATCH")
+        self.assertNotIn("private owner answer", json.dumps(payloads[0], ensure_ascii=False))
+
+    def test_v022_terminal_projection_replay_preempts_sidecar_interruption_recovery(self):
+        from agent.protocol import get_run_event_ledger
+        from channel.web.web_channel import WebChannel
+
+        with isolated_run_ledger():
+            channel = WebChannel()
+            ledger = get_run_event_ledger()
+            request_id = "req-v022-terminal-projection-preempts-sidecar"
+            session_id = "session-v022-projection"
+            ledger.append_event(
+                request_id=request_id,
+                session_id=session_id,
+                event_type="run.accepted",
+                payload={},
+                idempotency_key=f"{request_id}:accepted",
+            )
+            ledger.append_event(
+                request_id=request_id,
+                session_id=session_id,
+                event_type="message.assistant.finalized",
+                payload={"content": "completed in durable stream"},
+                idempotency_key=f"{request_id}:final",
+            )
+            ledger.append_event(
+                request_id=request_id,
+                session_id=session_id,
+                event_type="run.completed",
+                payload={"terminal_reason": "done"},
+                idempotency_key=f"{request_id}:completed",
+            )
+            with patch.object(
+                channel,
+                "_recover_sidecar_interrupted_stream_event",
+                side_effect=AssertionError("sidecar recovery must not override durable terminal replay"),
+            ):
+                chunks = list(channel.stream_response(request_id))
+
+        payloads = []
+        for chunk in chunks:
+            text = chunk.decode("utf-8")
+            for line in text.splitlines():
+                if line.startswith("data: "):
+                    payloads.append(json.loads(line[len("data: "):]))
+
+        self.assertEqual(payloads[-1]["type"], "done")
+        self.assertEqual(payloads[-1]["content"], "completed in durable stream")
+
+    def test_v022_failed_projection_replay_preserves_terminal_message_after_partial_delta(self):
+        from agent.protocol import get_run_event_ledger
+        from channel.web.web_channel import WebChannel
+
+        with isolated_run_ledger():
+            channel = WebChannel()
+            ledger = get_run_event_ledger()
+            request_id = "req-v022-failed-terminal-message"
+            session_id = "session-v022-failed-terminal"
+            ledger.append_event(
+                request_id=request_id,
+                session_id=session_id,
+                event_type="assistant.delta",
+                payload={"content": "partial answer"},
+                idempotency_key=f"{request_id}:delta",
+            )
+            ledger.append_event(
+                request_id=request_id,
+                session_id=session_id,
+                event_type="run.failed",
+                payload={"message": "actual terminal failure"},
+                idempotency_key=f"{request_id}:failed",
+            )
+            chunks = list(channel.stream_response(request_id))
+
+        payloads = []
+        for chunk in chunks:
+            text = chunk.decode("utf-8")
+            for line in text.splitlines():
+                if line.startswith("data: "):
+                    payloads.append(json.loads(line[len("data: "):]))
+
+        self.assertEqual([payload["type"] for payload in payloads], ["message_update", "error"])
+        self.assertEqual(payloads[0]["content"], "partial answer")
+        self.assertEqual(payloads[1]["content"], "actual terminal failure")
+
+    def test_v022_runtime_projection_api_returns_request_and_session_projection(self):
+        from agent.protocol import get_run_event_ledger
+        from channel.web.web_channel import RuntimeProjectionHandler
+
+        with isolated_run_ledger():
+            ledger = get_run_event_ledger()
+            ledger.append_event(
+                request_id="req-v022-api-a",
+                session_id="session-v022-api",
+                event_type="run.accepted",
+                payload={},
+                idempotency_key="req-v022-api-a:accepted",
+            )
+            ledger.append_event(
+                request_id="req-v022-api-a",
+                session_id="session-v022-api",
+                event_type="message.user.accepted",
+                payload={"content": "api user"},
+                idempotency_key="req-v022-api-a:user",
+            )
+            first_delta = ledger.append_event(
+                request_id="req-v022-api-a",
+                session_id="session-v022-api",
+                event_type="assistant.delta",
+                payload={"content": "api "},
+                idempotency_key="req-v022-api-a:delta",
+            )
+            ledger.append_event(
+                request_id="req-v022-api-a",
+                session_id="session-v022-api",
+                event_type="tool.started",
+                payload={"tool_call_id": "tool-api", "tool": "bash", "arguments": {"cmd": "echo ok"}},
+                idempotency_key="req-v022-api-a:tool-started",
+            )
+            ledger.append_event(
+                request_id="req-v022-api-a",
+                session_id="session-v022-api",
+                event_type="artifact.created",
+                payload={
+                    "artifact": {
+                        "title": "out.txt",
+                        "kind": "file",
+                        "path": "out.txt",
+                        "provider_raw_response": {"message": "private prompt"},
+                        "b64_json": "e" * 9000,
+                    }
+                },
+                idempotency_key="req-v022-api-a:artifact",
+            )
+            ledger.append_event(
+                request_id="req-v022-api-a",
+                session_id="session-v022-api",
+                event_type="message.assistant.finalized",
+                payload={"content": "api projection", "artifacts": [{"title": "final.png", "kind": "image"}]},
+                idempotency_key="req-v022-api-a:final",
+            )
+            ledger.append_event(
+                request_id="req-v022-api-b",
+                session_id="session-v022-api",
+                event_type="assistant.delta",
+                payload={"content": "partial before failure"},
+                idempotency_key="req-v022-api-b:delta",
+            )
+            ledger.append_event(
+                request_id="req-v022-api-b",
+                session_id="session-v022-api",
+                event_type="run.failed",
+                payload={"message": "terminal text survived"},
+                idempotency_key="req-v022-api-b:failed",
+            )
+            with patch("channel.web.web_channel.web.input", return_value=types.SimpleNamespace(
+                request_id="req-v022-api-a",
+                session_id="",
+                after_event_id="0",
+                limit="1000",
+                include_events="",
+            )):
+                request_payload = json.loads(RuntimeProjectionHandler().GET())
+            with patch("channel.web.web_channel.web.input", return_value=types.SimpleNamespace(
+                request_id="req-v022-api-a",
+                session_id="",
+                after_event_id="0",
+                limit="2",
+                include_events="1",
+            )):
+                limited_request_payload = json.loads(RuntimeProjectionHandler().GET())
+            with patch("channel.web.web_channel.web.input", return_value=types.SimpleNamespace(
+                request_id="",
+                session_id="session-v022-api",
+                after_event_id=str(first_delta["event_id"] - 1),
+                limit="1000",
+                include_events="",
+            )):
+                session_payload = json.loads(RuntimeProjectionHandler().GET())
+            with patch("channel.web.web_channel.web.input", return_value=types.SimpleNamespace(
+                request_id="",
+                session_id="session-v022-api",
+                after_event_id=str(first_delta["event_id"] - 1),
+                limit="2",
+                include_events="1",
+            )):
+                session_include_payload = json.loads(RuntimeProjectionHandler().GET())
+            with patch("channel.web.web_channel.web.input", return_value=types.SimpleNamespace(
+                request_id="missing-v022-api",
+                session_id="",
+                after_event_id="0",
+                limit="1000",
+                include_events="",
+            )):
+                empty_payload = json.loads(RuntimeProjectionHandler().GET())
+            with patch("channel.web.web_channel.web.input", return_value=types.SimpleNamespace(
+                request_id="req-v022-api-b",
+                session_id="",
+                after_event_id="0",
+                limit="1000",
+                include_events="",
+            )):
+                failed_payload = json.loads(RuntimeProjectionHandler().GET())
+
+        self.assertEqual(request_payload["status"], "success")
+        self.assertEqual(request_payload["mode"], "request")
+        self.assertNotIn("events", request_payload["projection"])
+        self.assertEqual(request_payload["projection"]["messages"][0]["content"], "api user")
+        self.assertEqual(request_payload["projection"]["messages"][1]["tool_calls"][0]["name"], "bash")
+        self.assertEqual(request_payload["projection"]["messages"][1]["artifacts"][0]["title"], "out.txt")
+        self.assertEqual(request_payload["projection"]["messages"][1]["artifacts"][1]["title"], "final.png")
+        self.assertGreater(limited_request_payload["projection"]["event_count"], 2)
+        self.assertEqual(len(limited_request_payload["projection"]["events"]), 2)
+        self.assertNotIn("provider_raw_response", json.dumps(limited_request_payload["projection"], ensure_ascii=False))
+        self.assertNotIn("private prompt", json.dumps(limited_request_payload["projection"], ensure_ascii=False))
+        self.assertNotIn("b64_json", json.dumps(limited_request_payload["projection"], ensure_ascii=False))
+        self.assertEqual(session_payload["status"], "success")
+        self.assertEqual(session_payload["mode"], "session")
+        self.assertEqual(session_payload["projection"]["requests"][0]["request_id"], "req-v022-api-a")
+        self.assertEqual(session_payload["projection"]["requests"][0]["messages"][0]["content"], "api user")
+        self.assertNotIn("events", session_payload["projection"])
+        self.assertEqual(len(session_include_payload["projection"]["events"]), 2)
+        self.assertNotIn("events", session_include_payload["projection"]["requests"][0])
+        self.assertEqual(empty_payload["projection"]["event_count"], 0)
+        self.assertEqual(empty_payload["projection"]["messages"], [])
+        self.assertEqual(failed_payload["projection"]["messages"][0]["content"], "partial before failure")
+        self.assertEqual(failed_payload["projection"]["terminal_message"], "terminal text survived")
+
+    def test_v023_runtime_projection_api_rejects_request_session_mismatch(self):
+        from agent.protocol import get_run_event_ledger
+        from channel.web.web_channel import RuntimeProjectionHandler
+
+        with isolated_run_ledger():
+            ledger = get_run_event_ledger()
+            ledger.append_event(
+                request_id="req-v023-api-owner",
+                session_id="session-v023-api-owner-a",
+                event_type="message.assistant.finalized",
+                payload={"content": "private api answer"},
+                idempotency_key="req-v023-api-owner:final",
+            )
+            with patch("channel.web.web_channel.web.input", return_value=types.SimpleNamespace(
+                request_id="req-v023-api-owner",
+                session_id="session-v023-api-owner-b",
+                after_event_id="0",
+                limit="1000",
+                include_events="1",
+            )):
+                payload = json.loads(RuntimeProjectionHandler().GET())
+
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["code"], "SESSION_MISMATCH")
+        self.assertNotIn("projection", payload)
+        self.assertNotIn("private api answer", json.dumps(payload, ensure_ascii=False))
+
+    def test_v023_runtime_projection_include_events_redacts_generic_event_bodies(self):
+        from agent.protocol import get_run_event_ledger
+        from channel.web.web_channel import RuntimeProjectionHandler
+
+        with isolated_run_ledger():
+            ledger = get_run_event_ledger()
+            ledger.append_event(
+                request_id="req-v023-event-body-redact",
+                session_id="session-v023-event-body-redact",
+                event_type="diagnostic.updated",
+                payload={
+                    "content": "private raw body without token markers",
+                    "message": "plain terminal details",
+                    "visible_message": "private visible body no marker",
+                    "messageText": "private camel text no marker",
+                    "messageId": "msg-visible-1",
+                    "contentHash": "0" * 64,
+                    "promptTokens": 123,
+                    "promptHash": "1" * 64,
+                    "promptId": "prompt-safe-1",
+                    "instructionCount": 2,
+                    "instructionId": "instruction-safe-1",
+                    "status": "ok",
+                },
+                idempotency_key="req-v023-event-body-redact:diagnostic",
+            )
+            ledger.append_event(
+                request_id="req-v023-event-body-redact",
+                session_id="session-v023-event-body-redact",
+                event_type="diagnostic.updated",
+                payload={
+                    "reason": "private reason body without token markers",
+                    "detail": "private detail body without token markers",
+                    "contentHash": "private content hash body without token markers",
+                    "messageId": "private message id body without token markers",
+                    "outputCount": "private output count body without token markers",
+                    "status": "CustomerAccountAlpha123",
+                    "messageType": "InternalCaseABC987",
+                    "promptId": "a" * 64,
+                    "instructionId": "b" * 64,
+                },
+                idempotency_key="req-v023-event-body-redact:invalid-structural",
+            )
+            ledger.append_event(
+                request_id="req-v023-event-body-redact",
+                session_id="session-v023-event-body-redact",
+                event_type="diagnostic.updated",
+                payload={
+                    "promptId": "prompt-secretRoadmap42",
+                    "instructionId": "instruction-tokenRoadmap42",
+                },
+                idempotency_key="req-v023-event-body-redact:prefixed-sensitive",
+            )
+            ledger.append_event(
+                request_id="req-v023-event-body-redact",
+                session_id="session-v023-event-body-redact",
+                event_type="diagnostic.updated",
+                payload={
+                    "unknownCodename": "AcmeRoadmap",
+                    "mode": "internalMode",
+                    "status": "ok",
+                },
+                idempotency_key="req-v023-event-body-redact:unknown-identifier",
+            )
+            ledger.append_event(
+                request_id="req-v023-message-payload-redact",
+                session_id="session-v023-event-body-redact",
+                event_type="message.user.accepted",
+                payload={"content": "renderable user text"},
+                idempotency_key="req-v023-message-payload-redact:user",
+            )
+            with patch("channel.web.web_channel.web.input", return_value=types.SimpleNamespace(
+                request_id="req-v023-event-body-redact",
+                session_id="",
+                after_event_id="0",
+                limit="1000",
+                include_events="1",
+            )):
+                diagnostic_payload = json.loads(RuntimeProjectionHandler().GET())
+            with patch("channel.web.web_channel.web.input", return_value=types.SimpleNamespace(
+                request_id="req-v023-message-payload-redact",
+                session_id="",
+                after_event_id="0",
+                limit="1000",
+                include_events="1",
+            )):
+                message_payload = json.loads(RuntimeProjectionHandler().GET())
+
+        diagnostic_projection = json.dumps(diagnostic_payload["projection"], ensure_ascii=False)
+        diagnostic_event = diagnostic_payload["projection"]["events"][0]
+        invalid_structural_event = diagnostic_payload["projection"]["events"][1]
+        prefixed_sensitive_event = diagnostic_payload["projection"]["events"][2]
+        unknown_identifier_event = diagnostic_payload["projection"]["events"][3]
+        message_event = message_payload["projection"]["events"][0]
+
+        self.assertEqual(diagnostic_event["payload"]["contentPreview"], "[redacted-content]")
+        self.assertTrue(diagnostic_event["payload"]["contentHash"])
+        self.assertEqual(diagnostic_event["payload"]["contentLength"], len("private raw body without token markers"))
+        self.assertEqual(diagnostic_event["payload"]["messagePreview"], "[redacted-content]")
+        self.assertEqual(diagnostic_event["payload"]["visibleMessagePreview"], "[redacted-content]")
+        self.assertEqual(diagnostic_event["payload"]["messageTextPreview"], "[redacted-content]")
+        self.assertEqual(diagnostic_event["payload"]["messageId"], "msg-visible-1")
+        self.assertEqual(diagnostic_event["payload"]["contentHash"], "0" * 64)
+        self.assertEqual(diagnostic_event["payload"]["promptTokens"], 123)
+        self.assertEqual(diagnostic_event["payload"]["promptHash"], "1" * 64)
+        self.assertEqual(diagnostic_event["payload"]["promptId"], "prompt-safe-1")
+        self.assertEqual(diagnostic_event["payload"]["instructionCount"], 2)
+        self.assertEqual(diagnostic_event["payload"]["instructionId"], "instruction-safe-1")
+        self.assertNotIn("promptTokensPreview", diagnostic_event["payload"])
+        self.assertNotIn("promptHashPreview", diagnostic_event["payload"])
+        self.assertNotIn("instructionCountPreview", diagnostic_event["payload"])
+        self.assertEqual(diagnostic_event["payload"]["status"], "ok")
+        self.assertNotIn("private raw body without token markers", diagnostic_projection)
+        self.assertNotIn("plain terminal details", diagnostic_projection)
+        self.assertNotIn("private visible body no marker", diagnostic_projection)
+        self.assertNotIn("private camel text no marker", diagnostic_projection)
+        self.assertEqual(invalid_structural_event["payload"]["reasonPreview"], "[redacted-content]")
+        self.assertEqual(invalid_structural_event["payload"]["detailPreview"], "[redacted-content]")
+        self.assertNotIn("contentHash", invalid_structural_event["payload"])
+        self.assertNotIn("messageId", invalid_structural_event["payload"])
+        self.assertNotIn("outputCount", invalid_structural_event["payload"])
+        self.assertNotIn("status", invalid_structural_event["payload"])
+        self.assertNotIn("messageType", invalid_structural_event["payload"])
+        self.assertNotIn("promptId", invalid_structural_event["payload"])
+        self.assertNotIn("instructionId", invalid_structural_event["payload"])
+        self.assertTrue(invalid_structural_event["payload"]["payload_sanitized"])
+        self.assertNotIn("private reason body without token markers", diagnostic_projection)
+        self.assertNotIn("private detail body without token markers", diagnostic_projection)
+        self.assertNotIn("private content hash body without token markers", diagnostic_projection)
+        self.assertNotIn("private message id body without token markers", diagnostic_projection)
+        self.assertNotIn("private output count body without token markers", diagnostic_projection)
+        self.assertNotIn("CustomerAccountAlpha123", diagnostic_projection)
+        self.assertNotIn("InternalCaseABC987", diagnostic_projection)
+        self.assertNotIn("a" * 64, diagnostic_projection)
+        self.assertNotIn("b" * 64, diagnostic_projection)
+        self.assertNotIn("promptId", prefixed_sensitive_event["payload"])
+        self.assertNotIn("instructionId", prefixed_sensitive_event["payload"])
+        self.assertTrue(prefixed_sensitive_event["payload"]["payload_sanitized"])
+        self.assertNotIn("prompt-secretRoadmap42", diagnostic_projection)
+        self.assertNotIn("instruction-tokenRoadmap42", diagnostic_projection)
+        self.assertEqual(unknown_identifier_event["payload"]["unknownCodenamePreview"], "[redacted-content]")
+        self.assertEqual(unknown_identifier_event["payload"]["modePreview"], "[redacted-content]")
+        self.assertEqual(unknown_identifier_event["payload"]["status"], "ok")
+        self.assertNotIn("AcmeRoadmap", diagnostic_projection)
+        self.assertNotIn("internalMode", diagnostic_projection)
+        self.assertEqual(message_payload["projection"]["messages"][0]["content"], "renderable user text")
+        self.assertEqual(message_event["payload"]["contentPreview"], "[redacted-content]")
+        self.assertNotIn("content", message_event["payload"])
+        self.assertNotIn("renderable user text", json.dumps(message_event, ensure_ascii=False))
+
+    def test_v022_image_jobs_api_starts_collects_and_projects_backend_job(self):
+        from agent.protocol import get_run_event_ledger, reset_image_job_service_for_tests
+        from channel.web import web_channel
+
+        with isolated_run_ledger():
+            ledger = get_run_event_ledger()
+            reset_image_job_service_for_tests(ledger)
+            start_body = {
+                "action": "start",
+                "dry_run": True,
+                "synchronous": True,
+                "include_events": True,
+                "request_id": "req-privateprompt",
+                "session_id": "session-image-api",
+                "job_id": "image-job-privateprompt",
+                "prompt": "draw a quiet test image",
+                "count": 2,
+                "max_parallel": 2,
+                "provider": "privateprompt",
+                "model": "privateprompt",
+            }
+            with patch.object(web_channel, "_require_auth", return_value=None), \
+                patch.object(web_channel, "_get_workspace_root", return_value=tempfile.gettempdir()), \
+                patch.object(web_channel.web, "data", return_value=json.dumps(start_body).encode("utf-8")):
+                start_payload = json.loads(web_channel.ImageJobsHandler().POST())
+
+            job = start_payload["job"]
+            safe_request_id = job["request_id"]
+            safe_job_id = job["job_id"]
+            with patch.object(web_channel, "_require_auth", return_value=None), \
+                patch.object(web_channel.web, "input", return_value=types.SimpleNamespace(
+                    job_id=safe_job_id,
+                    wait="",
+                    timeout="",
+                    include_events="",
+                )):
+                status_payload = json.loads(web_channel.ImageJobsHandler().GET())
+            with patch.object(web_channel, "_require_auth", return_value=None), \
+                patch.object(web_channel.web, "input", return_value=types.SimpleNamespace(
+                    job_id=safe_job_id,
+                    wait="1",
+                    timeout="1",
+                    include_events="1",
+                )):
+                collect_payload = json.loads(web_channel.ImageJobsHandler().GET())
+            with patch.object(web_channel, "_require_auth", return_value=None), \
+                patch.object(web_channel.web, "data", return_value=json.dumps({
+                    "action": "status",
+                    "include_events": True,
+                }).encode("utf-8")):
+                action_status_payload = json.loads(web_channel.ImageJobActionHandler().POST(safe_job_id))
+            with patch.object(web_channel, "_require_auth", return_value=None), \
+                patch.object(web_channel.web, "data", return_value=json.dumps({
+                    "action": "collect",
+                    "wait": False,
+                    "include_events": True,
+                }).encode("utf-8")):
+                action_collect_payload = json.loads(web_channel.ImageJobActionHandler().POST(safe_job_id))
+            with patch.object(web_channel, "_require_auth", return_value=None), \
+                patch.object(web_channel.web, "data", return_value=json.dumps({
+                    "action": "cancel",
+                    "include_events": True,
+                }).encode("utf-8")):
+                cancel_payload = json.loads(web_channel.ImageJobActionHandler().POST(safe_job_id))
+            events = ledger.events_for_request(safe_request_id, limit=0)
+
+        serialized = json.dumps({
+            "start": start_payload,
+            "status": status_payload,
+            "collect": collect_payload,
+            "action_status": action_status_payload,
+            "action_collect": action_collect_payload,
+            "cancel": cancel_payload,
+            "events": events,
+        }, ensure_ascii=False)
+        self.assertEqual(start_payload["status"], "success")
+        self.assertEqual(job["status"], "completed")
+        self.assertTrue(safe_request_id.startswith("req-image-job-"))
+        self.assertTrue(safe_job_id.startswith("image-job-"))
+        self.assertNotIn("privateprompt", serialized)
+        self.assertEqual(start_payload["projection"]["state"], "unknown")
+        self.assertEqual(start_payload["projection"]["image_jobs"][0]["status"], "completed")
+        self.assertEqual(len(start_payload["projection"]["image_jobs"][0]["artifacts"]), 2)
+        self.assertIn("events", start_payload["projection"])
+        self.assertEqual(status_payload["job"]["status"], "completed")
+        self.assertEqual(collect_payload["job"]["status"], "completed")
+        self.assertEqual(action_status_payload["job"]["status"], "completed")
+        self.assertEqual(action_collect_payload["job"]["status"], "completed")
+        self.assertEqual(cancel_payload["job"]["status"], "completed")
+        self.assertEqual([event["event_type"] for event in events][0], "image_job.started")
+        self.assertIn("image_job.completed", [event["event_type"] for event in events])
+
+    def test_v022_image_jobs_api_projects_auditable_parallelism_policy(self):
+        from agent.protocol import get_run_event_ledger, reset_image_job_service_for_tests
+        from channel.web import web_channel
+
+        with isolated_run_ledger():
+            ledger = get_run_event_ledger()
+            reset_image_job_service_for_tests(ledger)
+            start_body = {
+                "action": "start",
+                "dry_run": True,
+                "synchronous": True,
+                "include_events": True,
+                "request_id": "req-image-policy",
+                "session_id": "session-image-policy",
+                "job_id": "image-job-policy",
+                "prompt": "draw a bounded image policy test",
+                "count": 6,
+                "max_parallel": 99,
+                "provider": "test-provider",
+                "model": "test-model",
+            }
+            with patch.object(web_channel, "_require_auth", return_value=None), \
+                patch.object(web_channel, "_get_workspace_root", return_value=tempfile.gettempdir()), \
+                patch.object(web_channel, "conf", return_value={
+                    "image_job_max_parallel": 3,
+                    "image_provider_concurrency": 2,
+                    "image_job_hard_max_parallel": 4,
+                }), \
+                patch.object(web_channel.web, "data", return_value=json.dumps(start_body).encode("utf-8")):
+                start_payload = json.loads(web_channel.ImageJobsHandler().POST())
+            events = ledger.events_for_request("req-image-policy", limit=0)
+
+        started_payload = next(event["payload"] for event in events if event["event_type"] == "image_job.started")
+        projected_job = start_payload["projection"]["image_jobs"][0]
+
+        self.assertEqual(start_payload["status"], "success")
+        self.assertEqual(start_payload["job"]["status"], "completed")
+        for payload in (started_payload, projected_job):
+            self.assertEqual(payload["parallelism_policy_version"], "v1")
+            self.assertEqual(payload["task_count"], 6)
+            self.assertEqual(payload["requested_max_parallel"], 99)
+            self.assertEqual(payload["configured_max_parallel"], 3)
+            self.assertEqual(payload["provider_max_parallel"], 2)
+            self.assertEqual(payload["hard_max_parallel"], 4)
+            self.assertEqual(payload["effective_max_parallel"], 2)
+            self.assertTrue(payload["parallelism_clamped"])
+            self.assertEqual(payload["parallelism_clamp_reason"], "provider_max_parallel")
+        self.assertEqual(started_payload["max_parallel"], 2)
+        self.assertEqual(projected_job["max_parallel"], 2)
+
+    def test_v022_image_job_service_reuses_ocr_brief_by_input_hash_without_public_leak(self):
+        from agent.protocol import ImageJobService, RuntimeProjectionService, get_run_event_ledger
+
+        provider_calls = []
+        runner_briefs = []
+
+        def ocr_provider(payload):
+            provider_calls.append(dict(payload))
+            return {
+                "brief": "visible OCR text privateprompt sk-test-token should stay internal",
+                "provider": "test",
+            }
+
+        def runner(task, emit_progress, cancel_event):
+            runner_briefs.append(task.get("_ocr_brief"))
+            emit_progress("provider_request", progress=0.5, detail={"source": "test", "provider": "test"})
+            return {
+                "kind": "image",
+                "title": f"{task['task_id']}.png",
+                "path": str(Path(tempfile.gettempdir()) / f"{task['task_id']}.png"),
+            }
+
+        with isolated_run_ledger():
+            ledger = get_run_event_ledger()
+            service = ImageJobService(ledger)
+            status = service.start(
+                request_id="req-image-ocr-reuse",
+                session_id="session-image-ocr-reuse",
+                operation="edit",
+                tasks=[
+                    {
+                        "prompt": "edit without leaking prompt",
+                        "image_url": "https://example.invalid/reference.png?token=privateprompt",
+                    },
+                    {
+                        "prompt": "edit again",
+                        "image_url": "https://example.invalid/reference.png?token=privateprompt",
+                    },
+                ],
+                runner=runner,
+                job_id="image-job-ocr-reuse",
+                metadata={"source": "test"},
+                max_parallel=2,
+                ocr_provider=ocr_provider,
+                ocr_reuse=True,
+                synchronous=True,
+            )
+            events = ledger.events_for_request("req-image-ocr-reuse", limit=0)
+            projection = RuntimeProjectionService(ledger).request_projection("req-image-ocr-reuse")
+
+        ocr_payloads = [event["payload"] for event in events if event["event_type"] == "image_job.progress" and event["payload"].get("status") == "ocr"]
+        hits = sorted(payload["ocr_cache_hit"] for payload in ocr_payloads)
+        cache_keys = {payload["ocr_cache_key"] for payload in ocr_payloads}
+        brief_hashes = {payload["ocr_brief_hash"] for payload in ocr_payloads}
+        projected_job = projection["image_jobs"][0]
+        projected_tasks = projected_job["tasks"]
+        serialized_public = json.dumps({"events": events, "projection": projection}, ensure_ascii=False)
+
+        self.assertEqual(status["status"], "completed")
+        self.assertEqual(len(provider_calls), 1)
+        self.assertEqual(len(runner_briefs), 2)
+        self.assertEqual(runner_briefs[0], runner_briefs[1])
+        self.assertEqual(len(ocr_payloads), 2)
+        self.assertEqual(hits, [False, True])
+        self.assertEqual(len(cache_keys), 1)
+        self.assertEqual(len(brief_hashes), 1)
+        self.assertEqual(projected_job["ocr_cache_hit_count"], 1)
+        self.assertEqual(projected_job["ocr_cache_miss_count"], 1)
+        self.assertGreaterEqual(projected_job["ocr_total_ms"], 0)
+        self.assertEqual(sorted(task["ocr_cache_hit"] for task in projected_tasks), [False, True])
+        self.assertTrue(all(task.get("ocr_brief_hash") for task in projected_tasks))
+        self.assertNotIn("visible OCR text", serialized_public)
+        self.assertNotIn("privateprompt", serialized_public)
+        self.assertNotIn("sk-test-token", serialized_public)
+
+    def test_v022_image_jobs_api_projects_ocr_reuse_from_backend_events(self):
+        from agent.protocol import get_run_event_ledger, reset_image_job_service_for_tests
+        from channel.web import web_channel
+
+        with isolated_run_ledger():
+            ledger = get_run_event_ledger()
+            reset_image_job_service_for_tests(ledger)
+            start_body = {
+                "action": "start",
+                "dry_run": True,
+                "synchronous": True,
+                "include_events": True,
+                "ocr_reuse": True,
+                "request_id": "req-image-ocr-api",
+                "session_id": "session-image-ocr-api",
+                "job_id": "image-job-ocr-api",
+                "prompt": "draw from a reference without public OCR text",
+                "image_url": "https://example.invalid/reference.png?token=privateprompt",
+                "count": 2,
+                "max_parallel": 2,
+            }
+            with patch.object(web_channel, "_require_auth", return_value=None), \
+                patch.object(web_channel, "_get_workspace_root", return_value=tempfile.gettempdir()), \
+                patch.object(web_channel, "_image_job_output_dir", return_value=tempfile.gettempdir()), \
+                patch.object(web_channel, "conf", return_value={}), \
+                patch.object(web_channel.web, "data", return_value=json.dumps(start_body).encode("utf-8")):
+                payload = json.loads(web_channel.ImageJobsHandler().POST())
+            events = ledger.events_for_request("req-image-ocr-api", limit=0)
+
+        progress_payloads = [event["payload"] for event in events if event["event_type"] == "image_job.progress"]
+        ocr_payloads = [item for item in progress_payloads if item.get("status") == "ocr"]
+        started_payload = next(event["payload"] for event in events if event["event_type"] == "image_job.started")
+        projected_job = payload["projection"]["image_jobs"][0]
+        projected_tasks = projected_job["tasks"]
+        serialized_public = json.dumps(payload, ensure_ascii=False)
+
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["job"]["status"], "completed")
+        self.assertTrue(started_payload["ocr_cache_enabled"])
+        self.assertEqual(len(ocr_payloads), 2)
+        self.assertEqual(sorted(item["ocr_cache_hit"] for item in ocr_payloads), [False, True])
+        self.assertEqual(len({item["ocr_cache_key"] for item in ocr_payloads}), 1)
+        self.assertEqual(projected_job["ocr_cache_hit_count"], 1)
+        self.assertEqual(projected_job["ocr_cache_miss_count"], 1)
+        self.assertGreaterEqual(projected_job["ocr_total_ms"], 0)
+        self.assertEqual(sorted(task["ocr_cache_hit"] for task in projected_tasks), [False, True])
+        self.assertTrue(all(task.get("ocr_brief_hash") for task in projected_tasks))
+        self.assertNotIn("dry-run-image-brief", serialized_public)
+        self.assertNotIn("privateprompt", serialized_public)
+        self.assertNotIn("draw from a reference", serialized_public)
+
+    def test_v022_image_jobs_vision_ocr_provider_requires_tool_permission(self):
+        from channel.web import web_channel
+
+        class FakeBroker:
+            def __init__(self, allowed):
+                self.allowed = allowed
+                self.calls = []
+
+            def authorize_noninteractive(self, tool_name, arguments=None):
+                self.calls.append((tool_name, dict(arguments or {})))
+                return {"allowed": self.allowed, "reason": "test"}
+
+        denied_broker = FakeBroker(False)
+        allowed_broker = FakeBroker(True)
+
+        with patch("common.ecorex_tool_permissions.get_tool_permission_broker", return_value=denied_broker), \
+            patch("agent.tools.vision.vision.Vision.execute", return_value={"content": "should not run"}) as denied_execute:
+            with self.assertRaises(RuntimeError):
+                web_channel._image_job_vision_ocr_provider({
+                    "image": "https://example.invalid/privateprompt.png?token=sk-test-token",
+                })
+            denied_execute.assert_not_called()
+
+        denied_args = denied_broker.calls[0][1]
+        self.assertEqual(denied_broker.calls[0][0], "vision")
+        self.assertTrue(denied_args["image"].startswith("image-input-"))
+        self.assertNotIn("privateprompt", json.dumps(denied_args, ensure_ascii=False))
+        self.assertNotIn("sk-test-token", json.dumps(denied_args, ensure_ascii=False))
+
+        with patch("common.ecorex_tool_permissions.get_tool_permission_broker", return_value=allowed_broker), \
+            patch.object(web_channel, "_get_workspace_root", return_value=tempfile.gettempdir()), \
+            patch("agent.tools.vision.vision.Vision.execute", return_value={"content": "allowed brief"}) as allowed_execute:
+            result = web_channel._image_job_vision_ocr_provider({"image": "https://example.invalid/reference.png"})
+
+        self.assertEqual(result["content"], "allowed brief")
+        allowed_execute.assert_called_once()
+        self.assertEqual(allowed_broker.calls[0][0], "vision")
+
+    def test_v022_image_job_ocr_provider_failure_is_observable_without_raw_error(self):
+        from agent.protocol import ImageJobService, get_run_event_ledger
+
+        class FailedVisionResult:
+            status = "error"
+            result = "privateprompt raw provider failure sk-test-token"
+
+        runner_tasks = []
+
+        def runner(task, emit_progress, cancel_event):
+            runner_tasks.append(dict(task))
+            return {
+                "kind": "image",
+                "title": "ocr-failure-continues.png",
+                "path": str(Path(tempfile.gettempdir()) / "ocr-failure-continues.png"),
+            }
+
+        with isolated_run_ledger():
+            ledger = get_run_event_ledger()
+            service = ImageJobService(ledger)
+            status = service.start(
+                request_id="req-image-ocr-fail",
+                session_id="session-image-ocr-fail",
+                operation="edit",
+                tasks=[{
+                    "prompt": "edit after ocr failure",
+                    "image_url": "https://example.invalid/privateprompt.png",
+                }],
+                runner=runner,
+                job_id="image-job-ocr-fail",
+                metadata={"source": "test"},
+                ocr_provider=lambda payload: FailedVisionResult(),
+                ocr_reuse=True,
+                synchronous=True,
+            )
+            events = ledger.events_for_request("req-image-ocr-fail", limit=0)
+
+        ocr_payload = next(
+            event["payload"] for event in events
+            if event["event_type"] == "image_job.progress" and event["payload"].get("status") == "ocr"
+        )
+        serialized_events = json.dumps(events, ensure_ascii=False)
+
+        self.assertEqual(status["status"], "completed")
+        self.assertEqual(ocr_payload["taxonomy"], "ocr_failed")
+        self.assertFalse(ocr_payload["ocr_cache_hit"])
+        self.assertIn("ocr_cache_key", ocr_payload)
+        self.assertEqual(runner_tasks[0].get("_ocr_brief"), None)
+        self.assertNotIn("raw provider failure", serialized_events)
+        self.assertNotIn("sk-test-token", serialized_events)
+        self.assertNotIn("privateprompt", serialized_events)
+
+    def test_v022_image_job_skill_runner_keeps_sensitive_args_in_memory_payload(self):
+        from channel.web import web_channel
+
+        calls = {}
+
+        def fake_provider_run(payload, **kwargs):
+            calls["payload"] = dict(payload)
+            calls["kwargs"] = dict(kwargs)
+            return {
+                "returncode": 0,
+                "payload": {"images": [{"url": str(Path(tempfile.gettempdir()) / "safe.png")}]},
+                "stderr": "",
+            }
+
+        with patch.object(web_channel, "run_image_generation_payload", side_effect=fake_provider_run), \
+            patch.object(web_channel, "_image_job_output_dir", return_value=tempfile.gettempdir()):
+            result = web_channel._image_job_skill_runner(
+                {
+                    "prompt": "private user prompt",
+                    "provider": "privateprompt",
+                    "model": "privateprompt",
+                    "_ocr_brief": "visible OCR text privateprompt should stay out of argv",
+                },
+                lambda *args, **kwargs: None,
+                threading.Event(),
+            )
+
+        serialized_runner_args = json.dumps(
+            {
+                "script_path": str(calls["kwargs"]["script_path"]),
+                "output_dir": str(calls["kwargs"]["output_dir"]),
+            },
+            ensure_ascii=False,
+        )
+        self.assertNotIn("private user prompt", serialized_runner_args)
+        self.assertNotIn("privateprompt", serialized_runner_args)
+        self.assertNotIn("visible OCR text", serialized_runner_args)
+        self.assertIn("private user prompt", calls["payload"]["prompt"])
+        self.assertIn("privateprompt", calls["payload"]["provider"])
+        self.assertIn("visible OCR text", calls["payload"]["ocr_brief"])
+        self.assertEqual(result["artifacts"][0]["kind"], "image")
+
+    def test_v022_image_jobs_api_surfaces_skill_model_fallback_telemetry(self):
+        from agent.protocol import get_run_event_ledger, reset_image_job_service_for_tests
+        from channel.web import web_channel
+
+        calls = {}
+        image_path = str(Path(tempfile.gettempdir()) / "fallback-from-skill.png")
+
+        def fake_provider_run(payload, **kwargs):
+            calls["payload"] = dict(payload)
+            calls["kwargs"] = dict(kwargs)
+            return {
+                "returncode": 0,
+                "payload": {
+                    "provider": "OpenAI",
+                    "model": "gpt-image-2",
+                    "attempted_provider_count": 1,
+                    "model_fallback": {
+                        "used": True,
+                        "provider": "OpenAI",
+                        "from_model": "gpt-image-2-pro",
+                        "to_model": "gpt-image-2",
+                        "reason": "client_error",
+                        "message": "model unavailable private prompt should not persist",
+                    },
+                    "images": [{"url": image_path}],
+                },
+                "stderr": "provider stderr with private prompt should not persist",
+            }
+
+        with isolated_run_ledger():
+            ledger = get_run_event_ledger()
+            reset_image_job_service_for_tests(ledger)
+            body = {
+                "action": "start",
+                "synchronous": True,
+                "include_events": True,
+                "request_id": "req-image-provider-fallback",
+                "session_id": "session-image-provider-fallback",
+                "job_id": "image-job-provider-fallback",
+                "prompt": "draw fallback telemetry without leaking this prompt",
+                "provider": "openai",
+                "model": "gpt-image-2-pro",
+            }
+            with patch.object(web_channel, "_require_auth", return_value=None), \
+                patch.object(web_channel, "run_image_generation_payload", side_effect=fake_provider_run), \
+                patch.object(web_channel, "_image_job_output_dir", return_value=tempfile.gettempdir()), \
+                patch.object(web_channel.web, "data", return_value=json.dumps(body).encode("utf-8")):
+                payload = json.loads(web_channel.ImageJobsHandler().POST())
+            events = ledger.events_for_request("req-image-provider-fallback", limit=0)
+
+        progress_events = [event for event in events if event["event_type"] == "image_job.progress"]
+        progress_payloads = [event["payload"] for event in progress_events]
+        fallback_payload = next(item for item in progress_payloads if item.get("status") == "fallback")
+        provider_response = next(item for item in progress_payloads if item.get("status") == "provider_response")
+        projected_job = payload["projection"]["image_jobs"][0]
+        projected_task = projected_job["tasks"][0]
+        serialized_public = json.dumps(payload, ensure_ascii=False)
+        serialized_events = json.dumps(events, ensure_ascii=False)
+
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["job"]["status"], "completed")
+        serialized_runner_args = json.dumps(
+            {
+                "script_path": str(calls["kwargs"]["script_path"]),
+                "output_dir": str(calls["kwargs"]["output_dir"]),
+            },
+            ensure_ascii=False,
+        )
+        self.assertNotIn("draw fallback telemetry", serialized_runner_args)
+        self.assertIn("draw fallback telemetry", calls["payload"]["prompt"])
+        self.assertEqual(fallback_payload["fallback_used"], True)
+        self.assertEqual(fallback_payload["fallback_provider"], "OpenAI")
+        self.assertEqual(fallback_payload["fallback_from_model"], "gpt-image-2-pro")
+        self.assertEqual(fallback_payload["fallback_to_model"], "gpt-image-2")
+        self.assertEqual(fallback_payload["fallback_reason"], "client_error")
+        self.assertEqual(provider_response["attempted_provider_count"], 1)
+        self.assertEqual(projected_job["fallback_used"], True)
+        self.assertEqual(projected_job["fallback_provider"], "OpenAI")
+        self.assertEqual(projected_job["fallback_from_model"], "gpt-image-2-pro")
+        self.assertEqual(projected_job["fallback_to_model"], "gpt-image-2")
+        self.assertEqual(projected_job["fallback_reason"], "client_error")
+        self.assertEqual(projected_job["last_provider"], "OpenAI")
+        self.assertEqual(projected_job["last_model"], "gpt-image-2")
+        self.assertEqual(projected_job["attempted_provider_count"], 1)
+        self.assertEqual(projected_task["fallback_to_model"], "gpt-image-2")
+        self.assertNotIn("model unavailable private prompt", serialized_public)
+        self.assertNotIn("provider stderr", serialized_events)
+        self.assertNotIn("draw fallback telemetry", serialized_public)
+
+    def test_v022_image_jobs_api_recovers_status_from_projection_after_service_reset(self):
+        from agent.protocol import get_run_event_ledger, reset_image_job_service_for_tests
+        from channel.web import web_channel
+
+        with isolated_run_ledger():
+            ledger = get_run_event_ledger()
+            reset_image_job_service_for_tests(ledger)
+            with patch.object(web_channel, "_require_auth", return_value=None), \
+                patch.object(web_channel.web, "data", return_value=json.dumps({
+                    "action": "start",
+                    "dry_run": True,
+                    "synchronous": True,
+                    "request_id": "req-image-recovery",
+                    "session_id": "session-image-recovery",
+                    "prompt": "draw a recoverable test image",
+                    "count": 1,
+                }).encode("utf-8")):
+                start_payload = json.loads(web_channel.ImageJobsHandler().POST())
+            safe_job_id = start_payload["job"]["job_id"]
+            reset_image_job_service_for_tests(ledger)
+            with patch.object(web_channel, "_require_auth", return_value=None), \
+                patch.object(web_channel.web, "input", return_value=types.SimpleNamespace(
+                    job_id=safe_job_id,
+                    wait="",
+                    timeout="",
+                    include_events="1",
+                )):
+                recovered_status = json.loads(web_channel.ImageJobsHandler().GET())
+            with patch.object(web_channel, "_require_auth", return_value=None), \
+                patch.object(web_channel.web, "data", return_value=json.dumps({
+                    "action": "status",
+                    "include_events": True,
+                }).encode("utf-8")):
+                recovered_action_status = json.loads(web_channel.ImageJobActionHandler().POST(safe_job_id))
+
+        self.assertEqual(recovered_status["job"]["status"], "completed")
+        self.assertTrue(recovered_status["job"]["recovered_from_projection"])
+        self.assertEqual(recovered_status["projection"]["image_jobs"][0]["status"], "completed")
+        self.assertEqual(len(recovered_status["projection"]["image_jobs"][0]["artifacts"]), 1)
+        self.assertEqual(recovered_action_status["job"]["status"], "completed")
+        self.assertTrue(recovered_action_status["job"]["recovered_from_projection"])
+
+    def test_v022_image_jobs_api_recovery_sanitizes_legacy_request_id(self):
+        from agent.protocol import get_run_event_ledger, reset_image_job_service_for_tests
+        from channel.web import web_channel
+
+        with isolated_run_ledger():
+            ledger = get_run_event_ledger()
+            reset_image_job_service_for_tests(ledger)
+            legacy_request_id = "req-privateprompt"
+            job_id = "image-job-safe"
+            ledger.append_event(
+                request_id=legacy_request_id,
+                session_id="session-privateprompt",
+                turn_id="turn-privateprompt",
+                event_type="image_job.started",
+                payload={
+                    "job_id": job_id,
+                    "operation": "generate",
+                    "task_count": 1,
+                    "tasks": [{"task_id": "task-1", "operation": "generate", "output_count": 1}],
+                },
+                idempotency_key="legacy-image-started",
+                source="image_job_service",
+            )
+            ledger.append_event(
+                request_id=legacy_request_id,
+                session_id="session-privateprompt",
+                turn_id="turn-privateprompt",
+                event_type="image_job.completed",
+                payload={"job_id": job_id, "artifact_count": 0},
+                idempotency_key="legacy-image-completed",
+                source="image_job_service",
+            )
+            ledger.append_event(
+                request_id="req-image-decoy",
+                session_id="session-image-decoy",
+                turn_id="turn-image-decoy",
+                event_type="image_job.started",
+                payload={
+                    "job_id": f"{job_id}-suffix",
+                    "operation": "generate",
+                    "task_count": 1,
+                    "tasks": [{"task_id": "task-1", "operation": "generate", "output_count": 1}],
+                },
+                idempotency_key="legacy-image-decoy",
+                source="image_job_service",
+            )
+            with patch.object(web_channel, "_require_auth", return_value=None), \
+                patch.object(web_channel.web, "input", return_value=types.SimpleNamespace(
+                    job_id=job_id,
+                    wait="",
+                    timeout="",
+                    include_events="1",
+                )):
+                payload = json.loads(web_channel.ImageJobsHandler().GET())
+
+        serialized = json.dumps(payload, ensure_ascii=False)
+        safe_request_id = payload["job"]["request_id"]
+        safe_session_id = payload["job"]["session_id"]
+        safe_turn_id = payload["job"]["turn_id"]
+        self.assertEqual(payload["job"]["status"], "completed")
+        self.assertTrue(payload["job"]["recovered_from_projection"])
+        self.assertTrue(safe_request_id.startswith("req-image-job-"))
+        self.assertTrue(safe_session_id.startswith("session-image-job-"))
+        self.assertTrue(safe_turn_id.startswith("turn-image-job-"))
+        self.assertEqual(payload["projection"]["request_id"], safe_request_id)
+        self.assertEqual(payload["projection"]["session_id"], safe_session_id)
+        self.assertEqual(payload["projection"]["turn_id"], safe_turn_id)
+        self.assertEqual(payload["projection"]["events"][0]["request_id"], safe_request_id)
+        self.assertEqual(payload["projection"]["events"][0]["session_id"], safe_session_id)
+        self.assertEqual(payload["projection"]["events"][0]["turn_id"], safe_turn_id)
+        self.assertNotIn("privateprompt", serialized)
+
+    def test_v022_image_jobs_api_recovered_cancel_does_not_write_terminal_event(self):
+        from agent.protocol import get_run_event_ledger, reset_image_job_service_for_tests
+        from channel.web import web_channel
+
+        with isolated_run_ledger():
+            ledger = get_run_event_ledger()
+            reset_image_job_service_for_tests(ledger)
+            request_id = "req-image-running"
+            job_id = "image-job-running"
+            ledger.append_event(
+                request_id=request_id,
+                session_id="session-image-running",
+                turn_id="turn-image-running",
+                event_type="image_job.started",
+                payload={
+                    "job_id": job_id,
+                    "operation": "generate",
+                    "task_count": 1,
+                    "tasks": [{"task_id": "task-1", "operation": "generate", "output_count": 1}],
+                },
+                idempotency_key="running-image-started",
+                source="image_job_service",
+            )
+            with patch.object(web_channel, "_require_auth", return_value=None), \
+                patch.object(web_channel.web, "data", return_value=json.dumps({
+                    "action": "cancel",
+                    "include_events": True,
+                }).encode("utf-8")):
+                payload = json.loads(web_channel.ImageJobActionHandler().POST(job_id))
+            events = ledger.events_for_request(request_id, limit=0)
+
+        self.assertEqual(payload["job"]["status"], "running")
+        self.assertTrue(payload["job"]["recovered_from_projection"])
+        self.assertFalse(payload["job"]["cancelled"])
+        self.assertEqual(payload["job"]["cancel_unavailable_reason"], "recovered_projection_no_live_worker")
+        self.assertEqual(payload["projection"]["image_jobs"][0]["status"], "running")
+        self.assertNotIn("image_job.cancelled", [event["event_type"] for event in events])
+
+    def test_v022_image_jobs_api_rejects_missing_prompt_without_runtime_events(self):
+        from agent.protocol import get_run_event_ledger, reset_image_job_service_for_tests
+        from channel.web import web_channel
+
+        with isolated_run_ledger():
+            ledger = get_run_event_ledger()
+            reset_image_job_service_for_tests(ledger)
+            with patch.object(web_channel, "_require_auth", return_value=None), \
+                patch.object(web_channel.web, "data", return_value=json.dumps({
+                    "action": "start",
+                    "dry_run": True,
+                }).encode("utf-8")):
+                payload = json.loads(web_channel.ImageJobsHandler().POST())
+            with patch.object(web_channel, "_require_auth", return_value=None), \
+                patch.object(web_channel.web, "data", return_value=json.dumps({
+                    "action": "start",
+                    "dry_run": True,
+                    "tasks": [{"provider": "privateprompt"}],
+                }).encode("utf-8")):
+                task_payload = json.loads(web_channel.ImageJobsHandler().POST())
+            events = ledger.list_events(limit=100)
+
+        self.assertEqual(payload["status"], "error")
+        self.assertIn("prompt or tasks is required", payload["message"])
+        self.assertEqual(task_payload["status"], "error")
+        self.assertIn("each image task requires prompt", task_payload["message"])
+        self.assertEqual(events, [])
+
+    def test_v022_runtime_projection_api_returns_history_projection_page(self):
+        from agent.memory.conversation_store import ConversationStore
+        from agent.protocol import get_run_event_ledger
+        from channel.web.web_channel import RuntimeProjectionHandler
+
+        with tempfile.TemporaryDirectory() as workspace:
+            store = ConversationStore(Path(workspace) / "conversation.sqlite3")
+            store.append_messages("session-v022-api-history", [
+                {"role": "user", "content": "history prompt"},
+                {"role": "assistant", "content": "old history answer"},
+            ], channel_type="web")
+            store.attach_extras_to_assistant_seq("session-v022-api-history", 1, {
+                "request_id": "req-v022-api-history",
+                "user_seq": 0,
+                "bot_seq": 1,
+            })
+            with isolated_run_ledger():
+                ledger = get_run_event_ledger()
+                ledger.append_event(
+                    request_id="req-v022-api-history",
+                    session_id="session-v022-api-history",
+                    event_type="message.assistant.finalized",
+                    payload={"content": "projection-owned answer"},
+                    idempotency_key="req-v022-api-history:final",
+                )
+                with patch("agent.memory.get_conversation_store", return_value=store), \
+                    patch("channel.web.web_channel.web.input", return_value=types.SimpleNamespace(
+                        request_id="",
+                        session_id="session-v022-api-history",
+                        after_event_id="0",
+                        limit="1000",
+                        include_events="",
+                        history_page="1",
+                        page_size="20",
+                    )):
+                    payload = json.loads(RuntimeProjectionHandler().GET())
+
+        assistant = next(
+            item for item in payload["projection"]["history"]["messages"]
+            if item["role"] == "assistant"
+        )
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["mode"], "session_history")
+        self.assertEqual(payload["projection"]["history_source"], "conversation_store+runtime_projection")
+        self.assertEqual(assistant["content"], "projection-owned answer")
+        self.assertEqual(assistant["runtime_projection"]["state"], "completed")
+        self.assertNotIn("events", payload["projection"])
+
+    def test_v022_frontend_has_typed_runtime_projection_fetch_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        api_source = (root / "desktop" / "src" / "services" / "ecorexApi.ts").read_text(encoding="utf-8")
+        app_source = (root / "desktop" / "src" / "App.tsx").read_text(encoding="utf-8")
+
+        self.assertIn("export type RuntimeProjectionEvent", api_source)
+        self.assertIn("export type RuntimeRequestProjection", api_source)
+        self.assertIn("export type RuntimeSessionProjection", api_source)
+        self.assertIn("terminal_message?: string", api_source)
+        self.assertIn("export type RuntimeProjectionInput", api_source)
+        self.assertIn("mode: \"request\";", api_source)
+        self.assertIn("mode: \"session\";", api_source)
+        self.assertIn("export async function loadRuntimeProjection", api_source)
+        self.assertIn("`/api/runtime-projection?", api_source)
+        self.assertIn('params.set("request_id", input.requestId)', api_source)
+        self.assertIn('params.set("session_id", input.sessionId)', api_source)
+        self.assertIn('params.set("after_event_id"', api_source)
+        self.assertIn("loadRuntimeProjection,", app_source)
+        self.assertIn("async function recoverRequestFromProjection", app_source)
+        self.assertIn("projectionRecoveryDecision(projection)", app_source)
+        self.assertIn("Array.isArray(item.artifacts) ? item.artifacts : item.extras?.artifacts", app_source)
+        self.assertLess(
+            app_source.index("clearStreamDeltaBuffers(sessionId, requestId);"),
+            app_source.index("const projectedContent = redactInternalPromptText(decision.content")
+        )
+        self.assertIn('loadRuntimeProjection({ mode: "request", requestId, sessionId })', app_source)
+        self.assertIn("sessionId?: string;", api_source)
+        self.assertIn("sessionId?: string;", api_source[api_source.index("export function openMessageStream"):])
+        self.assertIn("params.set(\"session_id\", input.sessionId)", api_source[api_source.index("export function openMessageStream"):])
+        self.assertIn("sessionId,", app_source[app_source.index("const cleanup = openMessageStream({"):])
+        self.assertIn("sessionId: requestSessionId,", app_source)
+        self.assertIn("async function handleStreamError", app_source)
+        self.assertIn("if (await recoverRequestFromProjection(sessionId, assistantId, requestId)) return;", app_source)
+        self.assertIn("void handleStreamError(sessionId, assistantId, requestId);", app_source)
+        self.assertIn("void handleStreamError(requestSessionId, assistantId, requestId);", app_source)
+        self.assertIn("function hasScheduledStreamReconnect", app_source)
+        self.assertIn("if (hasScheduledStreamReconnect(sessionId, requestId)) return;", app_source)
+        self.assertIn("streamReconnectChecks.current[reconnectKey] = true;", app_source)
+        self.assertIn("delete streamReconnectChecks.current[reconnectKey];", app_source)
+        self.assertIn("streamReconnectTimers.current[reconnectKey] = window.setTimeout(() => {", app_source)
+        self.assertIn("delete streamReconnectTimers.current[reconnectKey];", app_source)
+
+    def test_v022_frontend_projection_recovery_decision_executes_terminal_cases(self):
+        root = Path(__file__).resolve().parents[1]
+        node_script = r"""
+const fs = require("fs");
+const vm = require("vm");
+const ts = require("typescript");
+const source = fs.readFileSync("src/utils/runtimeProjectionRecovery.ts", "utf8");
+const compiled = ts.transpileModule(source, {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+}).outputText;
+const exportsObject = {};
+const sandbox = { exports: exportsObject, module: { exports: exportsObject }, console };
+vm.createContext(sandbox);
+vm.runInContext(compiled, sandbox, { filename: "runtimeProjectionRecovery.js" });
+const { projectionRecoveryDecision } = sandbox.module.exports;
+const empty = projectionRecoveryDecision({ event_count: 0, messages: [] });
+const failed = projectionRecoveryDecision({
+  event_count: 3,
+  state: "failed",
+  terminal_message: "actual failure",
+  messages: [{ role: "assistant", content: "partial" }]
+});
+const completed = projectionRecoveryDecision({
+  event_count: 2,
+  state: "completed",
+  messages: [{ role: "assistant", content: "final answer" }]
+});
+const running = projectionRecoveryDecision({
+  event_count: 2,
+  state: "streaming",
+  messages: [{ role: "assistant", content: "partial" }]
+});
+process.stdout.write(JSON.stringify({ empty, failed, completed, running }));
+"""
+        result = subprocess.run(
+            ["node", "-e", node_script],
+            cwd=root / "desktop",
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        payload = json.loads(result.stdout)
+
+        self.assertEqual(payload["empty"]["reason"], "empty")
+        self.assertEqual(payload["running"]["reason"], "non-terminal")
+        self.assertFalse(payload["running"]["handled"])
+        self.assertTrue(payload["failed"]["handled"])
+        self.assertEqual(payload["failed"]["terminalPhase"], "failed")
+        self.assertEqual(payload["failed"]["content"], "actual failure")
+        self.assertTrue(payload["completed"]["markCompleted"])
+        self.assertEqual(payload["completed"]["content"], "final answer")
+
+    def test_v022_frontend_runtime_projection_fetch_executes_request_and_session_modes(self):
+        root = Path(__file__).resolve().parents[1]
+        node_script = r"""
+const fs = require("fs");
+const vm = require("vm");
+const ts = require("typescript");
+const source = fs.readFileSync("src/services/ecorexApi.ts", "utf8");
+const compiled = ts.transpileModule(source, {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+}).outputText;
+const calls = [];
+const exportsObject = {};
+const sandbox = {
+  exports: exportsObject,
+  module: { exports: exportsObject },
+  console,
+  URLSearchParams,
+  Map,
+  Promise,
+  setTimeout,
+  clearTimeout,
+  window: {
+    setTimeout,
+    clearTimeout,
+      ecorexDesktop: {
+        apiJson: async (request) => {
+          calls.push(request);
+        if (String(request.path).includes("request_id=")) {
+          return {
+            status: "success",
+            mode: "request",
+            latest_event_id: 7,
+            projection: { request_id: "req-a", messages: [{ role: "assistant", content: "ok" }], latest_event_id: 7 }
+          };
+        }
+        if (String(request.path).includes("session_id=")) {
+          return {
+            status: "success",
+            mode: "session",
+            latest_event_id: 12,
+            projection: { session_id: "session-a", requests: [], latest_event_id: 12 }
+          };
+        }
+        return {
+          status: "error",
+          message: "unexpected runtime projection path"
+        };
+      }
+    }
+  }
+};
+vm.createContext(sandbox);
+vm.runInContext(compiled, sandbox, { filename: "ecorexApi.js" });
+(async () => {
+  const requestResult = await sandbox.module.exports.loadRuntimeProjection({ mode: "request", requestId: "req-a", sessionId: "session-a", limit: 2 });
+  const sessionResult = await sandbox.module.exports.loadRuntimeProjection({ mode: "session", sessionId: "session-a", afterEventId: 5, limit: 3 });
+  process.stdout.write(JSON.stringify({ calls, requestResult, sessionResult }));
+})().catch((error) => {
+  console.error(error && error.stack ? error.stack : error);
+  process.exit(1);
+});
+"""
+        result = subprocess.run(
+            ["node", "-e", node_script],
+            cwd=root / "desktop",
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        payload = json.loads(result.stdout)
+
+        self.assertEqual(payload["requestResult"]["mode"], "request")
+        self.assertEqual(payload["requestResult"]["projection"]["request_id"], "req-a")
+        self.assertEqual(payload["sessionResult"]["mode"], "session")
+        self.assertEqual(payload["sessionResult"]["projection"]["session_id"], "session-a")
+        self.assertEqual(payload["calls"][0]["path"], "/api/runtime-projection?request_id=req-a&session_id=session-a&limit=2")
+        self.assertEqual(
+            payload["calls"][1]["path"],
+            "/api/runtime-projection?session_id=session-a&after_event_id=5&limit=3",
+        )
+
+
+class TestWebPhase1SyncProducerSource(unittest.TestCase):
+    def _console_source(self):
+        return (Path(__file__).resolve().parents[1] / "channel" / "web" / "static" / "js" / "console.js").read_text(encoding="utf-8")
+
+    def _web_channel_source(self):
+        return (Path(__file__).resolve().parents[1] / "channel" / "web" / "web_channel.py").read_text(encoding="utf-8")
+
+    def _agent_bridge_source(self):
+        return (Path(__file__).resolve().parents[1] / "bridge" / "agent_bridge.py").read_text(encoding="utf-8")
+
+    def test_phase1_producer_reports_before_background_render_skip(self):
+        source = self._console_source()
+
+        self.assertIn("type: 'phase1_sync'", source)
+        self.assertIn("async function reportPhase1StreamItem", source)
+        self.assertIn("void reportPhase1RunEvent(ownerSession, requestId, 'run.accepted'", source)
+        self.assertIn("eventType: 'run.completed'", source)
+        self.assertIn("eventType: 'artifact.updated'", source)
+        self.assertLess(
+            source.index("void reportPhase1StreamItem(ownerSession, requestId, item);"),
+            source.index("if (ownerSession !== sessionId)"),
+        )
+
+    def test_phase1_artifact_metadata_does_not_emit_raw_paths_or_bodies(self):
+        source = self._console_source()
+        deny_block = source[
+            source.index("const PHASE1_DETAIL_DENY_KEYS"):
+            source.index("function phase1SyncEnabled")
+        ]
+        for key in ("content", "final_text", "message", "prompt", "response", "result", "path", "url"):
+            self.assertIn(f"'{key}'", deny_block)
+
+        metadata_function = source[
+            source.index("async function phase1ArtifactMetadata"):
+            source.index("async function reportPhase1Telemetry")
+        ]
+        for raw_field in ("path", "url", "previewUrl", "relativePath", "content", "final_text", "finalText"):
+            self.assertNotRegex(metadata_function, rf"\b{raw_field}\s*:")
+        self.assertIn("pathHash:", metadata_function)
+        self.assertIn("pathExt:", metadata_function)
+
+    def test_web_app_bridge_observes_sse_without_desktop_source_changes(self):
+        source = self._web_channel_source()
+
+        self.assertIn("function installPhase1EventSourceSync()", source)
+        self.assertIn("new NativeEventSource(url, options)", source)
+        self.assertIn('clientJson("/sync/events"', source)
+        self.assertIn('type: "phase1_sync"', source)
+        self.assertIn('eventType: "run.completed"', source)
+        self.assertIn('eventType: "artifact.updated"', source)
+        self.assertIn("pathHash:", source)
+        bridge_function = source[
+            source.index("async function phase1ArtifactMetadata"):
+            source.index("async function phase1Emit")
+        ]
+        for raw_field in ("path", "url", "previewUrl", "relativePath", "content", "final_text", "finalText"):
+            self.assertNotRegex(bridge_function, rf"\b{raw_field}\s*:")
+
+    def test_web_app_bridge_phase2_messages_are_policy_gated(self):
+        source = self._web_channel_source()
+
+        self.assertIn("function phase2LocalSwitchEnabled()", source)
+        self.assertIn("async function phase2SyncEnabled()", source)
+        self.assertIn('clientJson("/sync/policy", "GET", undefined, true)', source)
+        self.assertIn("phase2 && phase2.chatBodiesEnabled", source)
+        self.assertIn('clientJson("/sync/messages", "POST"', source)
+        self.assertIn("phase2EmitUserMessage(request, payload).catch", source)
+        self.assertIn("var assistantContent = item.final_text !== undefined ? item.final_text : item.content", source)
+        self.assertIn('role: "user"', source)
+        self.assertIn('role: "assistant"', source)
+
+    def test_web_app_bridge_phase3_artifact_files_are_policy_gated_and_chunked(self):
+        source = self._web_channel_source()
+
+        self.assertIn("function phase3LocalSwitchEnabled()", source)
+        self.assertIn("async function phase3Policy()", source)
+        self.assertIn("phase3 && phase3.artifactFilesEnabled && phase3.killSwitch !== true", source)
+        self.assertIn('clientJson("/sync/policy", "GET", undefined, true)', source)
+        self.assertIn('clientJson("/sync/artifact-blobs/" + encodeURIComponent(artifactId), "PUT"', source)
+        self.assertIn("contentSha256: contentSha256", source)
+        self.assertIn("chunkIndex: i", source)
+        self.assertIn("chunkCount: chunkCount", source)
+        self.assertIn("chunkSha256: chunkHash", source)
+        self.assertIn("contentBase64: phase3ArrayBufferToBase64", source)
+        self.assertIn("await phase3Sleep(Math.ceil((chunk.byteLength / bytesPerSecond) * 1000))", source)
+        self.assertIn("phase3EmitArtifactFile(phase3Artifacts[j].raw", source)
+
+
+class TestProjectSessionSourceContracts(unittest.TestCase):
+    def _app_source(self):
+        return (Path(__file__).resolve().parents[1] / "desktop" / "src" / "App.tsx").read_text(encoding="utf-8")
+
+    def _api_source(self):
+        return (Path(__file__).resolve().parents[1] / "desktop" / "src" / "services" / "ecorexApi.ts").read_text(encoding="utf-8")
+
+    def _web_channel_source(self):
+        return (Path(__file__).resolve().parents[1] / "channel" / "web" / "web_channel.py").read_text(encoding="utf-8")
+
+    def _agent_bridge_source(self):
+        return (Path(__file__).resolve().parents[1] / "bridge" / "agent_bridge.py").read_text(encoding="utf-8")
+
+    def test_react_project_session_uses_pending_start_and_structured_binding(self):
+        source = self._app_source()
+
+        self.assertIn("SESSION_PROJECT_BINDINGS_STORAGE_KEY", source)
+        self.assertIn("pendingProjectStart", source)
+        self.assertIn("ecorex-pending-project-", source)
+        self.assertIn("bindSessionToProject", source)
+        self.assertIn('const projectBinding = project ? projectBindingFromProject(project, "project-new-session") : null;', source)
+        self.assertIn("setSessionProjects((current) => ({ ...current, [id]: projectBinding.projectId }))", source)
+        self.assertIn("setSessionProjectBindings((current) => ({ ...current, [id]: projectBinding }))", source)
+        self.assertIn("data-session-ownership={rowProjectId ? \"project\" : \"general\"}", source)
+        self.assertIn("draggable={false}", source)
+        self.assertIn("onDragStart={(event) => event.preventDefault()}", source)
+        self.assertIn("type ProjectBindingLookupOptions", source)
+        self.assertIn("allowFallbackProject?: boolean;", source)
+        self.assertIn("const projectId = sessionProjectIdFromState(sessionId, sessionProjects, sessionUiState);", source)
+        self.assertNotIn("sessionProjectIdFromState(sessionId, sessionProjects, sessionUiState, fallbackProject?.id || null)", source)
+        self.assertNotIn("projectBindingForSession(sessionId, sessionProjectBindingsRef.current, sessionProjectsRef.current, current, projectCatalog, activeProject)", source)
+        self.assertNotIn("projectBindingForSession(activeSessionId, sessionProjectBindings, sessionProjects, sessionUiState, projectCatalog, activeProject)", source)
+        self.assertIn("pendingProjectSessionId", source)
+        self.assertIn("delete nextSessionProjects[pendingProjectSessionId]", source)
+        self.assertIn("delete nextSessionProjectBindings[pendingProjectSessionId]", source)
+        self.assertIn("projectContext: projectBindingForRequest || null", source)
+        self.assertIn("let projectBindingForRequest = projectBindingForSession(requestSessionId, sessionProjectBindingsRef.current, sessionProjectsRef.current, sessionUiState, projectCatalog);", source)
+        self.assertIn("let projectForRequest: ProjectFolder | null = pendingProject || (projectBindingForRequest ? projectFolderFromBinding(projectBindingForRequest) : null);", source)
+        self.assertIn("} else if (projectBindingForRequest) {", source)
+        self.assertNotIn("let projectForRequest: ProjectFolder | null = activeProject;", source)
+        self.assertNotIn('bindSessionToProject(requestSessionId, projectForRequest, "project-session-send")', source)
+        self.assertIn('let hiddenContext = "";', source)
+        self.assertNotIn("function projectContextPrompt", source)
+        self.assertNotIn("projectForRequest ? projectContextPrompt(projectForRequest)", source)
+        self.assertIn("projectCatalog", source)
+        self.assertNotIn("!isPendingProjectSessionId(activeSessionId) && !rows.some", source)
+
+    def test_react_project_session_composer_autosize_and_general_isolation(self):
+        source = self._app_source()
+
+        self.assertIn("function syncComposerHeight()", source)
+        self.assertIn('textarea.style.height = "auto";', source)
+        self.assertIn("const nextHeight = Math.min(textarea.scrollHeight, maxHeight);", source)
+        self.assertIn("textarea.style.overflowY = textarea.scrollHeight > maxHeight ? \"auto\" : \"hidden\";", source)
+        self.assertIn("window.requestAnimationFrame(syncComposerHeight);", source)
+        self.assertIn('setComposerDraft("", { immediate: true });', source)
+        self.assertIn("focusComposerSoon();", source)
+        self.assertIn("function createDraftSessionId(project?: ProjectFolder | null)", source)
+        self.assertIn("const id = createDraftSessionId(project);", source)
+        self.assertIn("protectBlankDraftSession(id);", source)
+        self.assertIn("pendingProjectStartRef.current = project || null;", source)
+        self.assertIn("setPendingProjectStart(project || null);", source)
+        self.assertIn("setSessionProjects((current) => ({ ...current, [id]: projectBinding.projectId }))", source)
+        self.assertIn("setSessionProjectBindings((current) => ({ ...current, [id]: projectBinding }))", source)
+        self.assertIn("for (const row of visibleSessions)", source)
+        self.assertIn("if (!row.projectId) {\n        general.push(row);\n        continue;\n      }", source)
+        self.assertIn("projectSessions: projectRows", source)
+        self.assertIn("generalSessions: general", source)
+
+    def test_session_list_normal_rows_have_no_left_type_icons(self):
+        source = self._app_source()
+        start = source.index("const renderSessionRow = (row: SessionRow) => {")
+        end = source.index("function renderMessageRunTiming", start)
+        block = source[start:end]
+
+        self.assertIn("const hasLeadingSessionStatus = isRunning || hasUnread;", block)
+        self.assertIn('hasLeadingSessionStatus ? " has-leading-status" : ""', block)
+        self.assertIn("isRunning ? <ThinkingIndicator compact /> : hasUnread ? <span className=\"session-unread-dot\" aria-hidden=\"true\" /> : null", block)
+        self.assertNotIn("rowProjectId ? <FolderOpen", block)
+        self.assertNotIn(": <Bot aria-hidden=\"true\" />", block)
+        css = (Path(__file__).resolve().parents[1] / "desktop" / "src" / "styles" / "app.css").read_text(encoding="utf-8")
+        self.assertIn(".session-main.has-leading-status", css)
+        self.assertIn("grid-template-columns: minmax(0, 1fr) auto;", css)
+
+    def test_v024_session_list_visual_cleanup_browser_smoke_contract(self):
+        script = (Path(__file__).resolve().parents[1] / "scripts" / "smoke-v024-session-list-visual-cleanup-browser.py").read_text(encoding="utf-8")
+
+        self.assertIn("General Normal", script)
+        self.assertIn("Project Normal", script)
+        self.assertIn("Unread Ready", script)
+        self.assertIn("Running Task", script)
+        self.assertIn("normal row rendered a direct SVG icon", script)
+        self.assertIn("unread row missing orange dot", script)
+        self.assertIn("running row missing thinking indicator", script)
+        self.assertIn("unread clears after read", script)
+        self.assertIn("columnCount(item.main) === 2", script)
+        self.assertIn("columnCount(unread.main) === 3", script)
+
+    def test_api_posts_project_context_meta(self):
+        source = self._api_source()
+
+        self.assertIn("export type ProjectSessionBinding", source)
+        self.assertIn("projectContext?: ProjectSessionBinding | null", source)
+        self.assertIn("project_context_meta: input.projectContext || null", source)
+        self.assertIn("projectContext: result.project_context || null", source)
+
+    def test_web_message_persists_structured_project_context_without_prompt_injection(self):
+        source = self._web_channel_source()
+
+        self.assertIn("def _normalize_project_context_meta", source)
+        self.assertIn("def _persist_project_session_binding", source)
+        self.assertIn("def _project_context_event_summary", source)
+        self.assertIn("project_context_meta = _normalize_project_context_meta", source)
+        self.assertIn("_persist_project_session_binding(session_id, project_context_meta)", source)
+        self.assertIn("\"project_context\": _project_context_event_summary(project_context_meta)", source)
+        self.assertIn("context[\"project_context_meta\"] = project_context_meta", source)
+        self.assertIn("hidden_context = json_data.get('hidden_context') or ''", source)
+        self.assertIn("legacy_project_context = json_data.get('project_context')", source)
+        self.assertIn("or (legacy_project_context if isinstance(legacy_project_context, dict) else None)", source)
+        self.assertNotIn("def _build_project_context_prompt", source)
+        self.assertNotIn("def _safe_read_project_memory_excerpt", source)
+        self.assertNotIn("server_project_context", source)
+        self.assertNotIn("json_data.get('project_context') or ''", source)
+        self.assertNotIn('"activeProjectId": binding.get("projectId")', source)
+
+        bridge_source = self._agent_bridge_source()
+        self.assertIn('project_context=context.get("project_context_meta") if context else None', bridge_source)
+        self.assertIn('context.get("project_context_meta") if context else None', bridge_source)
+
+    def test_server_project_binding_does_not_switch_active_project(self):
+        from common.ecorex_workspace import load_ui_state, save_ui_state
+        from channel.web import web_channel
+
+        with tempfile.TemporaryDirectory() as workspace:
+            save_ui_state(workspace, {
+                "projects": [
+                    {"id": "p1", "name": "Project A", "path": os.path.join(workspace, "project-a")},
+                    {"id": "p2", "name": "Project B", "path": os.path.join(workspace, "project-b")},
+                ],
+                "activeProjectId": "p1",
+                "projectStateMode": "merge",
+            })
+            binding = {
+                "projectId": "p2",
+                "projectName": "Project B",
+                "projectPath": os.path.join(workspace, "project-b"),
+                "memoryPath": os.path.join(workspace, "project-b", ".ecorex", "project-memory.md"),
+                "dreamsPath": os.path.join(workspace, "project-b", ".ecorex", "dreams"),
+            }
+            with patch.object(web_channel, "_get_workspace_root", return_value=workspace):
+                web_channel._persist_project_session_binding("session-p2", binding)
+
+            state = load_ui_state(workspace)
+
+        self.assertEqual(state["activeProjectId"], "p1")
+        self.assertEqual(state["sessionProjects"]["session-p2"], "p2")
+        self.assertEqual(state["sessionProjectBindings"]["session-p2"]["projectId"], "p2")
 
 
 class TestEcoreXWorkspaceState(unittest.TestCase):
@@ -159,6 +4154,40 @@ class TestEcoreXWorkspaceState(unittest.TestCase):
         self.assertEqual(state["pinnedProjects"], {"p1": False, "p2": True})
         self.assertEqual(state["sessionTitles"], {"s1": "New title", "s2": "Keep title"})
         self.assertEqual(state["pinnedSessions"], {"s1": False, "s2": True})
+
+    def test_ui_state_merge_preserves_session_project_bindings(self):
+        from common.ecorex_workspace import load_ui_state, save_ui_state
+
+        with tempfile.TemporaryDirectory() as workspace:
+            project_a = os.path.join(workspace, "project-a")
+            project_b = os.path.join(workspace, "project-b")
+            projects = [
+                {"id": "p1", "name": "Project A", "path": project_a},
+                {"id": "p2", "name": "Project B", "path": project_b},
+            ]
+            save_ui_state(workspace, {
+                "projects": projects,
+                "sessionProjects": {"s1": "p1", "s2": "p1"},
+                "sessionProjectBindings": {
+                    "s1": {"projectId": "p1", "projectName": "Project A", "projectPath": project_a},
+                    "s2": {"projectId": "p1", "projectName": "Project A", "projectPath": project_a},
+                },
+                "projectStateMode": "merge",
+            })
+            save_ui_state(workspace, {
+                "projects": projects,
+                "sessionProjects": {"s1": "p2"},
+                "sessionProjectBindings": {
+                    "s1": {"projectId": "p2", "projectName": "Project B", "projectPath": project_b, "source": "project-session-send"}
+                },
+                "projectStateMode": "merge",
+            })
+            state = load_ui_state(workspace)
+
+        self.assertEqual(state["sessionProjects"], {"s1": "p2", "s2": "p1"})
+        self.assertEqual(state["sessionProjectBindings"]["s1"]["projectId"], "p2")
+        self.assertEqual(state["sessionProjectBindings"]["s1"]["projectPath"], project_b)
+        self.assertEqual(state["sessionProjectBindings"]["s2"]["projectId"], "p1")
 
     def test_session_lock_blocks_same_session_until_released(self):
         from common.ecorex_workspace import SessionBusyError, SessionLock
@@ -316,6 +4345,124 @@ class TestEcoreXWorkspaceState(unittest.TestCase):
         self.assertEqual(page["messages"][0]["role"], "user")
         self.assertEqual(page["messages"][1]["role"], "assistant")
         self.assertEqual(page["messages"][1]["_seq"], page["messages"][0]["_seq"])
+
+    def test_history_page_keeps_final_answer_out_of_steps(self):
+        from agent.memory.conversation_store import ConversationStore
+
+        with tempfile.TemporaryDirectory() as workspace:
+            store = ConversationStore(Path(workspace) / "conversation.sqlite3")
+            store.append_messages("session-final-dedupe", [
+                {"role": "user", "content": "make a note"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "draft outline"},
+                        {"type": "text", "text": "# final note\n\nbody"},
+                        {"type": "text", "text": "# final note\n\nbody"},
+                    ],
+                },
+            ], channel_type="web")
+
+            page = store.load_history_page("session-final-dedupe", page=1, page_size=20)
+
+        assistant = page["messages"][1]
+        self.assertEqual(assistant["content"], "# final note\n\nbody")
+        self.assertEqual([step["content"] for step in assistant["steps"] if step["type"] == "content"], ["draft outline"])
+
+    def test_history_page_exposes_request_turn_identity_from_assistant_extras(self):
+        from agent.memory.conversation_store import ConversationStore
+
+        with tempfile.TemporaryDirectory() as workspace:
+            store = ConversationStore(Path(workspace) / "conversation.sqlite3")
+            store.append_messages("session-request-identity", [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "world"},
+            ], channel_type="web")
+            store.attach_extras_to_assistant_seq("session-request-identity", 1, {
+                "request_id": "req_123",
+                "turn_id": "turn_123",
+                "user_seq": 0,
+                "bot_seq": 1,
+            })
+
+            page = store.load_history_page("session-request-identity", page=1, page_size=20)
+
+        assistant = page["messages"][1]
+        self.assertEqual(assistant["request_id"], "req_123")
+        self.assertEqual(assistant["turn_id"], "turn_123")
+        self.assertEqual(assistant["user_seq"], 0)
+        self.assertEqual(assistant["bot_seq"], 1)
+
+    def test_history_page_and_list_sessions_return_project_context(self):
+        from agent.memory.conversation_store import ConversationStore
+
+        with tempfile.TemporaryDirectory() as workspace:
+            project_path = os.path.join(workspace, "project-a")
+            store = ConversationStore(Path(workspace) / "conversation.sqlite3")
+            store.append_messages(
+                "session-project-context",
+                [{"role": "user", "content": "项目第一条消息"}],
+                channel_type="web",
+                project_context={
+                    "projectId": "p1",
+                    "projectName": "Project A",
+                    "projectPath": project_path,
+                    "memoryPath": os.path.join(project_path, ".ecorex", "project-memory.md"),
+                    "dreamsPath": os.path.join(project_path, ".ecorex", "dreams"),
+                },
+            )
+            page = store.load_history_page("session-project-context", page=1, page_size=20)
+            sessions = store.list_sessions(channel_type="web")["sessions"]
+
+        self.assertEqual(page["project_context"]["projectId"], "p1")
+        self.assertEqual(page["project_context"]["projectName"], "Project A")
+        self.assertEqual(page["project_context"]["projectPath"], project_path)
+        self.assertEqual(sessions[0]["projectId"], "p1")
+        self.assertEqual(sessions[0]["projectPath"], project_path)
+
+    def test_sessions_api_includes_requested_ids_outside_first_page(self):
+        from agent.memory.conversation_store import ConversationStore
+        from channel.web import web_channel
+
+        cases = [
+            {"include_ids": "session-old-pinned", "include_session_ids": "", "include_pinned": "", "pinned_ids": ""},
+            {"include_ids": "", "include_session_ids": "session-old-pinned", "include_pinned": "", "pinned_ids": ""},
+            {"include_ids": "", "include_session_ids": "", "include_pinned": "1", "pinned_ids": "session-old-pinned"},
+        ]
+        for query in cases:
+            with self.subTest(query=query):
+                with tempfile.TemporaryDirectory() as workspace:
+                    store = ConversationStore(Path(workspace) / "conversation.sqlite3")
+                    for session_id in ("session-old-pinned", "session-middle", "session-newest"):
+                        store.append_messages(
+                            session_id,
+                            [{"role": "user", "content": session_id}],
+                            channel_type="web",
+                        )
+                    with store._lock:
+                        conn = store._connect()
+                        try:
+                            conn.execute("UPDATE sessions SET last_active = ? WHERE session_id = ?", (100, "session-old-pinned"))
+                            conn.execute("UPDATE sessions SET last_active = ? WHERE session_id = ?", (200, "session-middle"))
+                            conn.execute("UPDATE sessions SET last_active = ? WHERE session_id = ?", (300, "session-newest"))
+                            conn.commit()
+                        finally:
+                            conn.close()
+
+                    with patch.object(web_channel, "_require_auth", return_value=None), \
+                        patch("agent.memory.get_conversation_store", return_value=store), \
+                        patch.object(web_channel.web, "input", return_value=types.SimpleNamespace(
+                            page="1",
+                            page_size="1",
+                            **query,
+                        )):
+                        payload = json.loads(web_channel.SessionsHandler().GET())
+
+                ids = [item["session_id"] for item in payload["sessions"]]
+                self.assertEqual(payload["status"], "success")
+                self.assertEqual(ids[0], "session-newest")
+                self.assertIn("session-old-pinned", ids)
+                self.assertIn("session-old-pinned", payload["included_session_ids"])
 
     def test_latest_pair_seq_prefers_assistant_text_over_tool_only_row(self):
         from agent.memory.conversation_store import ConversationStore
@@ -1078,6 +5225,526 @@ class TestAgentCapabilityPermissions(unittest.TestCase):
             else:
                 os.environ["PYTHONPATH"] = original_pythonpath
 
+    def test_v022_capability_policy_marks_runtime_capabilities_and_blocks_install(self):
+        from agent.tools.optional_abilities import optional_abilities
+        from agent.tools.optional_abilities.optional_abilities import OptionalAbilities
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace) / "runtime"
+            root.mkdir()
+            policy_path = Path(workspace) / "capability-policy.json"
+            policy_path.write_text(json.dumps({
+                "policy": {
+                    "mode": "ask",
+                    "mirror": "https://user:secret@mirror.example/simple?token=sk-test",
+                    "offlineCache": "C:/private/cache",
+                    "updatedAt": "2026-06-25T01:02:03Z",
+                },
+                "capabilities": [
+                    {
+                        "id": "office-pdf",
+                        "name": "Office PDF",
+                        "mode": "disabled",
+                        "status": "blocked-by-admin",
+                        "updatedAt": "2026-06-25T01:02:04Z",
+                    }
+                ],
+            }), encoding="utf-8")
+            with patch.dict(os.environ, {"ECOREX_CAPABILITY_POLICY_FILE": str(policy_path)}, clear=False), \
+                    patch.object(optional_abilities, "RUNTIME_ROOT", root):
+                listed = OptionalAbilities().execute({"action": "list", "ability": "office-pdf"})
+                blocked = OptionalAbilities().execute({"action": "install", "ability": "office-pdf"})
+
+        ability = listed.result["abilities"][0]
+        serialized = json.dumps({"ability": ability, "blocked": blocked.result}, ensure_ascii=False)
+        self.assertEqual(ability["policyMode"], "disabled")
+        self.assertFalse(ability["installAllowed"])
+        self.assertFalse(ability["agentCanInstall"])
+        self.assertIn("Administrator disabled", ability["disabledReason"])
+        self.assertEqual(ability["policyUpdatedAt"], "2026-06-25T01:02:04Z")
+        self.assertEqual(ability["policySource"], "admin-cache")
+        self.assertTrue(ability["mirrorConfigured"])
+        self.assertTrue(ability["offlineCacheConfigured"])
+        self.assertEqual(blocked.status, "error")
+        self.assertEqual(blocked.result["errorType"], "capability_policy_blocked")
+        self.assertEqual(blocked.result["policy"]["policyMode"], "disabled")
+        self.assertNotIn("C:/private/cache", serialized)
+        self.assertNotIn("user:secret", serialized)
+        self.assertNotIn("sk-test", serialized)
+        self.assertNotIn("mirror.example", serialized)
+
+    def test_v022_capability_policy_does_not_disable_builtin_runtime_abilities(self):
+        from agent.tools.optional_abilities import optional_abilities
+        from agent.tools.optional_abilities.optional_abilities import OptionalAbilities
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace) / "runtime"
+            root.mkdir()
+            policy_path = Path(workspace) / "capability-policy.json"
+            policy_path.write_text(json.dumps({
+                "policy": {"mode": "disabled", "updatedAt": "2026-06-25T01:02:03Z"},
+                "capabilities": [],
+            }), encoding="utf-8")
+            with patch.dict(os.environ, {"ECOREX_CAPABILITY_POLICY_FILE": str(policy_path)}, clear=False), \
+                    patch.object(optional_abilities, "RUNTIME_ROOT", root):
+                listed = OptionalAbilities().execute({"action": "list", "ability": "find-skill"})
+
+        ability = listed.result["abilities"][0]
+        self.assertEqual(ability["id"], "find-skill")
+        self.assertTrue(ability["enabled"])
+        self.assertNotIn("policyMode", ability)
+        self.assertNotIn("disabledReason", ability)
+
+    def test_v022_capability_policy_blocks_disabled_builtin_install_before_state_write(self):
+        from agent.tools.optional_abilities import optional_abilities
+        from agent.tools.optional_abilities.optional_abilities import OptionalAbilities
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace) / "runtime"
+            root.mkdir()
+            policy_path = Path(workspace) / "capability-policy.json"
+            policy_path.write_text(json.dumps({
+                "policy": {"mode": "ask", "updatedAt": "2026-06-25T01:02:03Z"},
+                "capabilities": [{"id": "browser-automation", "mode": "disabled", "updatedAt": "2026-06-25T01:02:04Z"}],
+            }), encoding="utf-8")
+            with patch.dict(os.environ, {"ECOREX_CAPABILITY_POLICY_FILE": str(policy_path)}, clear=False), \
+                    patch.object(optional_abilities, "RUNTIME_ROOT", root), \
+                    patch.object(optional_abilities, "_module_available", return_value=True):
+                result = OptionalAbilities().execute({
+                    "action": "install",
+                    "ability": "browser-automation",
+                    "timeout": 30,
+                })
+
+            state_file = root / "capability-state" / "browser-automation.json"
+
+        self.assertEqual(result.status, "error")
+        self.assertEqual(result.result["errorType"], "capability_policy_blocked")
+        self.assertFalse(state_file.exists())
+
+    def test_v022_capability_policy_redacts_sensitive_pack_ids_in_optional_blocked_payloads(self):
+        from agent.tools.optional_abilities import optional_abilities
+        from agent.tools.optional_abilities.optional_abilities import OptionalAbilities
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace) / "runtime"
+            root.mkdir()
+            policy_path = Path(workspace) / "capability-policy.json"
+            policy_path.write_text(json.dumps({
+                "policy": {"mode": "disabled", "updatedAt": "2026-06-25T01:02:03Z"},
+                "capabilities": [],
+            }), encoding="utf-8")
+            with patch.dict(os.environ, {"ECOREX_CAPABILITY_POLICY_FILE": str(policy_path)}, clear=False), \
+                    patch.object(optional_abilities, "RUNTIME_ROOT", root):
+                results = [
+                    OptionalAbilities()._install_capability_pack("office-pdf-secret-token", 30),
+                    OptionalAbilities()._install_capability_pack("office-pdf-ghp_abcd", 30),
+                ]
+
+        for result in results:
+            serialized = json.dumps(result.result, ensure_ascii=False).lower()
+            self.assertEqual(result.status, "error")
+            self.assertEqual(result.result["errorType"], "capability_policy_blocked")
+            self.assertEqual(result.result["packId"], "redacted-capability-pack")
+            self.assertTrue(result.result["packIdRedacted"])
+            self.assertTrue(result.result["policy"]["packIdRedacted"])
+            self.assertNotIn("office-pdf-secret-token", serialized)
+            self.assertNotIn("office-pdf-ghp", serialized)
+            self.assertNotIn("secret", serialized)
+            self.assertNotIn("token", serialized)
+            self.assertNotIn("ghp", serialized)
+
+    def test_v022_agent_capability_admin_disabled_policy_blocks_before_optional_install_and_writes_event(self):
+        from agent.tools.agent_capability import agent_capability
+        from agent.tools.agent_capability.agent_capability import AgentCapabilityTool
+        from agent.protocol import get_run_event_ledger
+
+        with tempfile.TemporaryDirectory() as workspace, isolated_run_ledger():
+            policy_path = Path(workspace) / "capability-policy.json"
+            policy_path.write_text(json.dumps({
+                "policy": {"mode": "ask", "updatedAt": "2026-06-25T01:02:03Z"},
+                "capabilities": [{"id": "office-pdf", "mode": "disabled", "updatedAt": "2026-06-25T01:02:04Z"}],
+            }), encoding="utf-8")
+            tool = AgentCapabilityTool()
+            tool.context = types.SimpleNamespace(_current_request_id="req-cap-policy", _current_session_id="session-cap-policy")
+            with patch.dict(os.environ, {"ECOREX_CAPABILITY_POLICY_FILE": str(policy_path)}, clear=False), \
+                    patch.object(agent_capability, "OptionalAbilities", side_effect=AssertionError("optional install should be blocked before execution")):
+                result = tool.execute({"action": "install_pack", "pack_id": "office-pdf"})
+            events = get_run_event_ledger().events_for_request("req-cap-policy", limit=0)
+            from channel.web import web_channel
+
+            with patch.object(web_channel, "_require_auth", return_value=None), \
+                    patch.object(web_channel.web, "input", return_value=types.SimpleNamespace(
+                        request_id="req-cap-policy",
+                        session_id="",
+                        after_event_id="0",
+                        limit="100",
+                        include_events="1",
+                        history_page="",
+                        page_size="20",
+                    )):
+                projection_payload = json.loads(web_channel.RuntimeProjectionHandler().GET())
+
+        self.assertEqual(result.status, "error")
+        self.assertEqual(result.result["errorType"], "capability_policy_blocked")
+        self.assertEqual([event["event_type"] for event in events], ["capability.policy_blocked"])
+        self.assertEqual(events[0]["payload"]["pack_id"], "office-pdf")
+        self.assertEqual(events[0]["payload"]["policy_mode"], "disabled")
+        public_event = projection_payload["projection"]["events"][0]
+        self.assertEqual(public_event["event_type"], "capability.policy_blocked")
+        self.assertEqual(public_event["payload"]["pack_id"], "office-pdf")
+        self.assertFalse(public_event["payload"]["install_allowed"])
+
+    def test_v022_agent_capability_policy_block_skips_event_for_unsafe_request_id(self):
+        from agent.tools.agent_capability import agent_capability
+        from agent.tools.agent_capability.agent_capability import AgentCapabilityTool
+        from agent.protocol import get_run_event_ledger
+
+        with tempfile.TemporaryDirectory() as workspace, isolated_run_ledger():
+            policy_path = Path(workspace) / "capability-policy.json"
+            policy_path.write_text(json.dumps({
+                "policy": {"mode": "ask", "updatedAt": "2026-06-25T01:02:03Z"},
+                "capabilities": [{"id": "office-pdf", "mode": "disabled", "updatedAt": "2026-06-25T01:02:04Z"}],
+            }), encoding="utf-8")
+            tool = AgentCapabilityTool()
+            tool.context = types.SimpleNamespace(_current_request_id="req-secret\nbad", _current_session_id="session-secret\nbad")
+            with patch.dict(os.environ, {"ECOREX_CAPABILITY_POLICY_FILE": str(policy_path)}, clear=False), \
+                    patch.object(agent_capability, "OptionalAbilities", side_effect=AssertionError("optional install should be blocked before execution")):
+                result = tool.execute({"action": "install_pack", "pack_id": "office-pdf"})
+            events = get_run_event_ledger().list_events(limit=100)
+
+        self.assertEqual(result.status, "error")
+        self.assertEqual(result.result["errorType"], "capability_policy_blocked")
+        self.assertEqual(events, [])
+
+    def test_v022_agent_capability_policy_block_redacts_sensitive_pack_id_from_event(self):
+        from agent.tools.agent_capability import agent_capability
+        from agent.tools.agent_capability.agent_capability import AgentCapabilityTool
+        from agent.protocol import get_run_event_ledger
+
+        with tempfile.TemporaryDirectory() as workspace, isolated_run_ledger():
+            policy_path = Path(workspace) / "capability-policy.json"
+            policy_path.write_text(json.dumps({
+                "policy": {"mode": "disabled", "updatedAt": "2026-06-25T01:02:03Z"},
+                "capabilities": [],
+            }), encoding="utf-8")
+            tool = AgentCapabilityTool()
+            tool.context = types.SimpleNamespace(_current_request_id="req-cap-redact", _current_session_id="session-cap-redact")
+            with patch.dict(os.environ, {"ECOREX_CAPABILITY_POLICY_FILE": str(policy_path)}, clear=False), \
+                    patch.object(agent_capability, "OptionalAbilities", side_effect=AssertionError("optional install should be blocked before execution")):
+                result = tool.execute({"action": "install_pack", "pack_id": "office-pdf-ghp_abcd"})
+            events = get_run_event_ledger().events_for_request("req-cap-redact", limit=0)
+            from channel.web import web_channel
+
+            with patch.object(web_channel, "_require_auth", return_value=None), \
+                    patch.object(web_channel.web, "input", return_value=types.SimpleNamespace(
+                        request_id="req-cap-redact",
+                        session_id="",
+                        after_event_id="0",
+                        limit="100",
+                        include_events="1",
+                        history_page="",
+                        page_size="20",
+                    )):
+                projection_payload = json.loads(web_channel.RuntimeProjectionHandler().GET())
+
+        serialized = json.dumps({
+            "result": result.result,
+            "events": events,
+            "projection": projection_payload,
+        }, ensure_ascii=False).lower()
+        self.assertEqual(result.status, "error")
+        self.assertEqual(result.result["packId"], "redacted-capability-pack")
+        self.assertTrue(result.result["packIdRedacted"])
+        self.assertEqual(events[0]["payload"]["pack_id"], "redacted-capability-pack")
+        self.assertTrue(events[0]["payload"]["pack_id_redacted"])
+        public_event = projection_payload["projection"]["events"][0]
+        self.assertEqual(public_event["payload"]["pack_id"], "redacted-capability-pack")
+        self.assertTrue(public_event["payload"]["pack_id_redacted"])
+        self.assertNotIn("office-pdf-secret-token", serialized)
+        self.assertNotIn("office-pdf-ghp", serialized)
+        self.assertNotIn("secret", serialized)
+        self.assertNotIn("token", serialized)
+        self.assertNotIn("ghp", serialized)
+
+    def test_v022_web_capabilities_api_flattens_policy_capability_packs_for_frontend_contract(self):
+        from agent.tools.agent_capability import agent_capability
+        from agent.tools.base_tool import ToolResult
+        from channel.web import web_channel
+
+        nested_payload = {
+            "status": "success",
+            "abilities": {
+                "status": "success",
+                "abilities": [
+                    {
+                        "id": "office-pdf",
+                        "packId": "office-pdf",
+                        "kind": "capability-pack",
+                        "label": "Office PDF",
+                        "agentCanInstall": False,
+                        "policyMode": "disabled",
+                        "installAllowed": False,
+                        "disabledReason": "Administrator disabled self-service installation for Office PDF.",
+                        "policySource": "admin-cache",
+                    }
+                ],
+            },
+            "skills": [],
+            "mcpStatus": {},
+        }
+        with patch.object(web_channel, "_require_auth", return_value=None), \
+                patch.object(agent_capability.AgentCapabilityTool, "execute", return_value=ToolResult.success(nested_payload)):
+            payload = json.loads(web_channel.CapabilitiesHandler().GET())
+
+        self.assertEqual(payload["status"], "success")
+        self.assertIsInstance(payload["abilities"], list)
+        self.assertEqual(payload["abilities"][0]["packId"], "office-pdf")
+        self.assertEqual(payload["abilities"][0]["policyMode"], "disabled")
+        self.assertFalse(payload["abilities"][0]["installAllowed"])
+        self.assertIsInstance(payload["abilityDiagnostics"], dict)
+        self.assertNotIn("abilities", payload["abilityDiagnostics"])
+
+    def test_v022_web_agent_install_request_blocks_admin_disabled_capability_policy(self):
+        from agent.protocol import get_run_event_ledger
+        from channel.web import web_channel
+
+        with tempfile.TemporaryDirectory() as workspace, isolated_run_ledger():
+            policy_path = Path(workspace) / "capability-policy.json"
+            policy_path.write_text(json.dumps({
+                "policy": {"mode": "ask", "updatedAt": "2026-06-25T01:02:03Z"},
+                "capabilities": [{"id": "office-pdf", "name": "Office PDF", "mode": "disabled", "updatedAt": "2026-06-25T01:02:04Z"}],
+            }), encoding="utf-8")
+            body = {
+                "packId": "office-pdf",
+                "packName": "Office PDF",
+                "sessionId": "session-cap-web",
+                "requestId": "req-cap-web",
+            }
+            with patch.dict(os.environ, {"ECOREX_CAPABILITY_POLICY_FILE": str(policy_path)}, clear=False), \
+                    patch.object(web_channel, "_require_auth", return_value=None), \
+                    patch.object(web_channel.web, "data", return_value=json.dumps(body).encode("utf-8")):
+                payload = json.loads(web_channel.AgentInstallRequestHandler().POST())
+            events = get_run_event_ledger().events_for_request("req-cap-web", limit=0)
+
+        serialized = json.dumps(payload, ensure_ascii=False)
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["errorType"], "capability_policy_blocked")
+        self.assertNotIn("agent_capability", serialized)
+        self.assertEqual([event["event_type"] for event in events], ["capability.policy_blocked"])
+        self.assertEqual(events[0]["source"], "web_channel")
+
+    def test_v022_web_agent_install_request_blocks_feishu_alias_before_prompt(self):
+        from agent.protocol import get_run_event_ledger
+        from channel.web import web_channel
+
+        with tempfile.TemporaryDirectory() as workspace, isolated_run_ledger():
+            policy_path = Path(workspace) / "capability-policy.json"
+            policy_path.write_text(json.dumps({
+                "policy": {"mode": "ask", "updatedAt": "2026-06-25T01:02:03Z"},
+                "capabilities": [{"id": "feishu-lark", "name": "Feishu/Lark", "mode": "disabled", "updatedAt": "2026-06-25T01:02:04Z"}],
+            }), encoding="utf-8")
+            body = {
+                "packId": "lark-cli",
+                "packName": "Lark CLI",
+                "sessionId": "session-cap-web-alias",
+                "requestId": "req-cap-web-alias",
+            }
+            with patch.dict(os.environ, {"ECOREX_CAPABILITY_POLICY_FILE": str(policy_path)}, clear=False), \
+                    patch.object(web_channel, "_require_auth", return_value=None), \
+                    patch.object(web_channel.web, "data", return_value=json.dumps(body).encode("utf-8")):
+                payload = json.loads(web_channel.AgentInstallRequestHandler().POST())
+            events = get_run_event_ledger().events_for_request("req-cap-web-alias", limit=0)
+
+        serialized = json.dumps(payload, ensure_ascii=False)
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["errorType"], "capability_policy_blocked")
+        self.assertEqual(payload["packId"], "feishu-lark")
+        self.assertEqual(payload["requestedPackId"], "lark-cli")
+        self.assertNotIn("agent_capability", serialized)
+        self.assertEqual([event["event_type"] for event in events], ["capability.policy_blocked"])
+        self.assertEqual(events[0]["payload"]["pack_id"], "feishu-lark")
+
+    def test_v022_web_agent_install_request_redacts_sensitive_pack_id_before_event(self):
+        from agent.protocol import get_run_event_ledger
+        from channel.web import web_channel
+
+        with tempfile.TemporaryDirectory() as workspace, isolated_run_ledger():
+            policy_path = Path(workspace) / "capability-policy.json"
+            policy_path.write_text(json.dumps({
+                "policy": {"mode": "disabled", "updatedAt": "2026-06-25T01:02:03Z"},
+                "capabilities": [],
+            }), encoding="utf-8")
+            body = {
+                "packId": "office-pdf-secret-token",
+                "packName": "secret token connector",
+                "sessionId": "session-cap-web-redact",
+                "requestId": "req-cap-web-redact",
+            }
+            with patch.dict(os.environ, {"ECOREX_CAPABILITY_POLICY_FILE": str(policy_path)}, clear=False), \
+                    patch.object(web_channel, "_require_auth", return_value=None), \
+                    patch.object(web_channel.web, "data", return_value=json.dumps(body).encode("utf-8")):
+                payload = json.loads(web_channel.AgentInstallRequestHandler().POST())
+            events = get_run_event_ledger().events_for_request("req-cap-web-redact", limit=0)
+
+        serialized = json.dumps({"payload": payload, "events": events}, ensure_ascii=False).lower()
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["packId"], "redacted-capability-pack")
+        self.assertEqual(payload["packName"], "Capability pack")
+        self.assertTrue(payload["packIdRedacted"])
+        self.assertNotIn("requestedPackId", payload)
+        self.assertEqual(events[0]["payload"]["pack_id"], "redacted-capability-pack")
+        self.assertTrue(events[0]["payload"]["pack_id_redacted"])
+        self.assertNotIn("office-pdf-secret-token", serialized)
+        self.assertNotIn("secret token connector", serialized)
+        self.assertNotIn("secret", serialized)
+        self.assertNotIn("token", serialized)
+
+    def test_v022_extension_registry_projects_admin_capability_policy(self):
+        from agent.extensions import ExtensionRegistry
+        from agent.tools.optional_abilities import optional_abilities
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace) / "runtime"
+            root.mkdir()
+            policy_path = Path(workspace) / "capability-policy.json"
+            policy_path.write_text(json.dumps({
+                "policy": {"mode": "ask", "updatedAt": "2026-06-25T01:02:03Z"},
+                "capabilities": [{"id": "office-pdf", "name": "Office PDF", "mode": "disabled", "updatedAt": "2026-06-25T01:02:04Z"}],
+            }), encoding="utf-8")
+            with patch.dict(os.environ, {"ECOREX_CAPABILITY_POLICY_FILE": str(policy_path)}, clear=False), \
+                    patch.object(optional_abilities, "RUNTIME_ROOT", root):
+                entries = ExtensionRegistry(str(root))._optional_abilities()
+
+        by_id = {entry["id"]: entry for entry in entries}
+        office = by_id["ability:office-pdf"]
+        self.assertEqual(office["policyMode"], "disabled")
+        self.assertFalse(office["installAllowed"])
+        self.assertEqual(office["permissions"], [])
+        self.assertEqual(office["status"], "disabled")
+        self.assertIn("Administrator disabled", office["disabledReason"])
+
+    def test_v023_extension_registry_exposes_first_party_tools_after_cold_start(self):
+        from agent.extensions import ExtensionRegistry
+        from agent.tools.tool_manager import ToolManager
+
+        manager = ToolManager()
+        old_classes = dict(getattr(manager, "tool_classes", {}) or {})
+        old_configs = getattr(manager, "tool_configs", None)
+        try:
+            manager.tool_classes = {}
+
+            payload = ExtensionRegistry("C:\\workspace").list_extensions()
+        finally:
+            manager.tool_classes = old_classes
+            if old_configs is not None:
+                manager.tool_configs = old_configs
+
+        by_id = {entry["id"]: entry for entry in payload["extensions"]}
+        for tool_name in ("bash", "read", "write", "edit", "ls", "find", "host_diagnostics", "feishu_cli"):
+            with self.subTest(tool_name=tool_name):
+                row = by_id[f"tool:{tool_name}"]
+                self.assertEqual(row["type"], "builtin_tool")
+                self.assertEqual(row["status"], "ready")
+                self.assertTrue(row["enabled"])
+                self.assertTrue(row["installed"])
+                self.assertTrue(row["toolSchemaCallable"])
+
+    def test_v023_channel_tool_snapshot_self_loads_builtin_feishu_cli(self):
+        from agent.tools.tool_manager import ToolManager
+        from channel.web.web_channel import ChannelsHandler
+
+        manager = ToolManager()
+        old_classes = dict(getattr(manager, "tool_classes", {}) or {})
+        old_configs = getattr(manager, "tool_configs", None)
+        try:
+            manager.tool_classes = {}
+
+            names = ChannelsHandler._agent_tool_names()
+        finally:
+            manager.tool_classes = old_classes
+            if old_configs is not None:
+                manager.tool_configs = old_configs
+
+        self.assertIsInstance(names, set)
+        self.assertIn("bash", names)
+        self.assertIn("feishu_cli", names)
+
+    def test_v022_capability_policy_runtime_source_contracts(self):
+        root = Path(__file__).resolve().parents[1]
+        web_source = (root / "channel" / "web" / "web_channel.py").read_text(encoding="utf-8")
+        api_source = (root / "desktop" / "src" / "services" / "ecorexApi.ts").read_text(encoding="utf-8")
+        optional_source = (root / "agent" / "tools" / "optional_abilities" / "optional_abilities.py").read_text(encoding="utf-8")
+        agent_capability_source = (root / "agent" / "tools" / "agent_capability" / "agent_capability.py").read_text(encoding="utf-8")
+        registry_source = (root / "agent" / "extensions" / "registry.py").read_text(encoding="utf-8")
+        policy_source = (root / "common" / "ecorex_capability_policy.py").read_text(encoding="utf-8")
+
+        self.assertIn("policyMode: item.policyMode || state.policyMode || \"ask\"", web_source)
+        self.assertIn("Array.isArray(abilityPayload.abilities)", web_source)
+        self.assertIn("installAllowed: item.installAllowed !== false", web_source)
+        self.assertIn("_flatten_capability_payload(_tool_result_to_payload(result))", web_source)
+        self.assertIn("normalize_capability_pack_id(pack_id)", web_source)
+        self.assertIn("blocked_install_payload(policy_lookup_id, pack_name=pack_name, action=\"agent_install_request\")", web_source)
+        self.assertIn("packIdRedacted", web_source)
+        self.assertIn("capability.policy_blocked", web_source)
+        self.assertIn("policyMode: item.policyMode === \"disabled\"", api_source)
+        self.assertIn("Array.isArray((abilitiesPayload as Record<string, unknown>).abilities)", api_source)
+        self.assertIn("installAllowed: item.installAllowed !== false", api_source)
+        self.assertIn("apply_policy_to_capability(item)", optional_source)
+        self.assertIn("blocked_install_payload(pack_id, action=\"install\")", optional_source)
+        self.assertIn("blocked_install_payload(policy_pack_id, action=\"install_pack\")", agent_capability_source)
+        self.assertIn("capability.policy_blocked", agent_capability_source)
+        self.assertIn("\"policyMode\": policy_mode", registry_source)
+        self.assertIn("\"installAllowed\": bool(install_allowed)", registry_source)
+        self.assertIn("ECOREX_CAPABILITY_POLICY_FILE", policy_source)
+        self.assertIn("normalize_capability_pack_id", policy_source)
+        self.assertIn("redacted-capability-pack", policy_source)
+        self.assertIn("_looks_sensitive", policy_source)
+        self.assertIn("packIdRedacted", policy_source)
+        self.assertIn("offlineCacheConfigured", policy_source)
+        self.assertIn("mirrorConfigured", policy_source)
+        self.assertNotIn("offlineCache\": _safe_text", policy_source)
+
+    def test_browser_automation_reports_built_in_when_playwright_exists(self):
+        from agent.tools.optional_abilities import optional_abilities
+        from agent.tools.optional_abilities.optional_abilities import OptionalAbilities
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            with patch.object(optional_abilities, "RUNTIME_ROOT", root), \
+                    patch.object(optional_abilities, "_module_available", return_value=True):
+                result = OptionalAbilities().execute({"action": "list", "ability": "browser-automation"})
+
+        self.assertEqual(result.status, "success")
+        abilities = result.result["abilities"]
+        self.assertEqual(len(abilities), 1)
+        state = abilities[0]["capabilityState"]
+        self.assertTrue(state["installed"])
+        self.assertTrue(state["builtIn"])
+
+    def test_browser_automation_install_short_circuits_built_in_runtime(self):
+        from agent.tools.optional_abilities import optional_abilities
+        from agent.tools.optional_abilities.optional_abilities import OptionalAbilities
+
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            with patch.object(optional_abilities, "RUNTIME_ROOT", root), \
+                    patch.object(optional_abilities, "_module_available", return_value=True):
+                result = OptionalAbilities().execute({
+                    "action": "install",
+                    "ability": "browser-automation",
+                    "timeout": 30,
+                })
+
+            state_file = root / "capability-state" / "browser-automation.json"
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+
+        self.assertEqual(result.status, "success")
+        self.assertTrue(result.result["builtIn"])
+        self.assertTrue(state["installed"])
+        self.assertTrue(state["builtIn"])
+        self.assertNotEqual(result.result.get("message"), "capability installer not found")
+
     def test_agent_capability_safe_diagnostics_do_not_require_prompt(self):
         from common.ecorex_tool_permissions import get_tool_permission_broker
 
@@ -1201,12 +5868,20 @@ class TestWebParallelHandlers(unittest.TestCase):
         raw_runtime = r"C:\Users\private-user\.ecorex"
         raw_log = r"C:\Users\private-user\EcoreX\logs\run.log"
         raw_lock = r"C:\Users\private-user\EcoreX\.locks\session-private.json"
+        raw_active_session = "session-current-private"
+        raw_active_request = "request-current-private"
         raw_line = f"2026-06-20 ERROR secret prompt text from {raw_workspace}"
 
         class FakeChannel:
             def active_requests_snapshot(self):
                 return {
-                    "requests": [],
+                    "requests": [{
+                        "request_id": raw_active_request,
+                        "session_id": raw_active_session,
+                        "cancelled": False,
+                        "created_at": "2026-06-25T08:00:00Z",
+                        "stream_available": True,
+                    }],
                     "stale_locks": [{
                         "session_id": "session-private",
                         "pid": 1234,
@@ -1226,13 +5901,237 @@ class TestWebParallelHandlers(unittest.TestCase):
                         payload = web_channel._diagnostic_bundle_payload("session-current", "request-current")
 
         rendered = json.dumps(payload, ensure_ascii=False)
-        for secret in (raw_workspace, raw_runtime, raw_log, raw_lock, raw_line, "secret prompt text", "session-private"):
+        for secret in (
+            raw_workspace,
+            raw_runtime,
+            raw_log,
+            raw_lock,
+            raw_line,
+            "secret prompt text",
+            "session-private",
+            "session-current",
+            "request-current",
+            raw_active_session,
+            raw_active_request,
+        ):
             self.assertNotIn(secret, rendered)
         self.assertTrue(payload["runtime"]["workspaceRoot"]["redacted"])
         self.assertTrue(payload["runtime"]["runtimeRoot"]["redacted"])
         self.assertTrue(payload["logs"]["path"]["redacted"])
         self.assertTrue(payload["staleLocks"][0]["redacted"])
         self.assertTrue(payload["logs"]["recentEvents"][0]["redacted"])
+        self.assertTrue(payload["current"]["redacted"])
+        self.assertTrue(payload["current"]["sessionHash"])
+        self.assertTrue(payload["current"]["requestHash"])
+        self.assertTrue(payload["activeRequests"][0]["redacted"])
+        self.assertTrue(payload["activeRequests"][0]["sessionHash"])
+        self.assertTrue(payload["activeRequests"][0]["requestHash"])
+        self.assertFalse(payload["privacy"]["includesRawRuntimePayloads"])
+        self.assertFalse(payload["privacy"]["includesRawCapabilityPolicyPaths"])
+
+    def test_v022_diagnostic_bundle_summarizes_runtime_events_without_raw_payloads(self):
+        import config
+        from agent.protocol import get_run_event_ledger
+        from channel.web import web_channel
+
+        class FakeChannel:
+            def active_requests_snapshot(self):
+                return {"requests": [], "stale_locks": []}
+
+        with isolated_run_ledger():
+            ledger = get_run_event_ledger()
+            raw_private_status = r"C:\Users\private-user\workspace\private prompt status"
+            raw_private_event_type = r"C:\Users\private-user\workspace\hyper sensitive user journal event"
+            ledger.append_event(
+                request_id="req-secret-diagnostic",
+                session_id="session-secret-diagnostic",
+                event_type="assistant.delta",
+                payload={
+                    "text": "do not leak prompt text",
+                    "api_key": "sk-diagnostic-secret",
+                },
+                idempotency_key="diag:assistant-delta",
+                source=r"C:\Users\private-user\source.py",
+            )
+            ledger.append_event(
+                request_id="req-secret-diagnostic",
+                session_id="session-secret-diagnostic",
+                event_type="capability.policy_blocked",
+                payload={
+                    "action": "install",
+                    "error_type": "capability_policy_blocked",
+                    "pack_id": "office-pdf-ghp_abcd",
+                    "pack_id_redacted": True,
+                    "policy_mode": "disabled",
+                    "policy_source": "admin-cache",
+                },
+                idempotency_key="diag:capability-policy-blocked",
+            )
+            ledger.append_event(
+                request_id="req-secret-diagnostic",
+                session_id="session-secret-diagnostic",
+                event_type="run.failed",
+                payload={
+                    "status": raw_private_status,
+                    "error_type": r"C:\Users\private-user\workspace\private prompt error",
+                },
+                idempotency_key="diag:run-failed",
+            )
+            ledger.append_event(
+                request_id="req-secret-diagnostic",
+                session_id="session-secret-diagnostic",
+                event_type=raw_private_event_type,
+                payload={"status": "completed"},
+                idempotency_key="diag:private-event-type",
+            )
+
+            with patch.object(web_channel, "_log_snapshot_payload", return_value={"log": {"exists": False, "lines": []}}):
+                with patch.object(web_channel, "_get_workspace_root", return_value=r"C:\private\workspace"):
+                    with patch.object(config, "get_root", return_value=Path(r"C:\private\runtime")):
+                        with patch.object(web_channel, "WebChannel", return_value=FakeChannel()):
+                            payload = web_channel._diagnostic_bundle_payload()
+
+        rendered = json.dumps(payload, ensure_ascii=False)
+        for raw in (
+            "req-secret-diagnostic",
+            "session-secret-diagnostic",
+            "do not leak prompt text",
+            "sk-diagnostic-secret",
+            "office-pdf-ghp_abcd",
+            r"C:\Users\private-user\source.py",
+            raw_private_status,
+            raw_private_event_type,
+            "hyper sensitive user journal event",
+            "hyper_sensitive_user_journal_event",
+            r"C:\Users\private-user\workspace\private prompt error",
+            r"C:\private\workspace",
+            r"C:\private\runtime",
+        ):
+            self.assertNotIn(raw, rendered)
+        runtime = payload["runtimeEvents"]
+        self.assertEqual(runtime["status"], "success")
+        self.assertEqual(runtime["source"], "runtime-event-ledger")
+        self.assertEqual(runtime["capabilityPolicyBlockedCount"], 1)
+        self.assertEqual(runtime["eventTypeCounts"]["capability.policy_blocked"], 1)
+        self.assertEqual(runtime["eventTypeCounts"]["unknown"], 1)
+        unknown = [item for item in runtime["recent"] if item["eventType"] == "unknown"][0]
+        self.assertTrue(unknown["eventTypeHash"])
+        self.assertTrue(unknown["eventTypeRedacted"])
+        blocked = [item for item in runtime["recent"] if item["eventType"] == "capability.policy_blocked"][0]
+        self.assertTrue(blocked["redacted"])
+        self.assertTrue(blocked["requestHash"])
+        self.assertTrue(blocked["sessionHash"])
+        self.assertEqual(blocked["payload"]["errorType"], "capability_policy_blocked")
+        self.assertEqual(blocked["payload"]["policyMode"], "disabled")
+        self.assertTrue(blocked["payload"]["packIdRedacted"])
+        self.assertTrue(blocked["payload"]["packHash"])
+        failed = [item for item in runtime["recent"] if item["eventType"] == "run.failed"][0]
+        self.assertTrue(failed["payload"]["statusHash"])
+        self.assertTrue(failed["payload"]["errorTypeHash"])
+        self.assertNotIn("status", failed["payload"])
+        self.assertNotIn("errorType", failed["payload"])
+
+    def test_v022_diagnostic_bundle_capability_policy_summary_omits_paths_and_tokens(self):
+        import config
+        from channel.web import web_channel
+
+        class FakeChannel:
+            def active_requests_snapshot(self):
+                return {"requests": [], "stale_locks": []}
+
+        with tempfile.TemporaryDirectory() as workspace:
+            raw_mirror = "https://user:secret-token@example.com/simple"
+            raw_cache = str(Path(workspace) / "offline-cache-secret-token")
+            raw_updated_at = str(Path(workspace) / "private prompt updated")
+            raw_policy_status = str(Path(workspace) / "private prompt status")
+            policy_path = Path(workspace) / "capability-policy.json"
+            policy_path.write_text(json.dumps({
+                "policy": {
+                    "mode": "disabled",
+                    "mirror": raw_mirror,
+                    "offlineCache": raw_cache,
+                    "updatedAt": raw_updated_at,
+                },
+                "capabilities": [
+                    {
+                        "id": "office-pdf",
+                        "name": "Office PDF",
+                        "mode": "disabled",
+                        "status": raw_policy_status,
+                        "updatedAt": "2026-06-25T08:00:00Z",
+                    },
+                    {
+                        "id": "office-pdf-ghp_abcd",
+                        "name": "token shaped id must not appear",
+                        "mode": "disabled",
+                        "status": "secret-token-status",
+                    },
+                ],
+            }), encoding="utf-8")
+
+            with patch.dict(os.environ, {"ECOREX_CAPABILITY_POLICY_FILE": str(policy_path)}):
+                with patch.object(web_channel, "_log_snapshot_payload", return_value={"log": {"exists": False, "lines": []}}):
+                    with patch.object(web_channel, "_get_workspace_root", return_value=str(Path(workspace) / "workspace")):
+                        with patch.object(config, "get_root", return_value=Path(workspace) / "runtime"):
+                            with patch.object(web_channel, "WebChannel", return_value=FakeChannel()):
+                                payload = web_channel._diagnostic_bundle_payload()
+
+        rendered = json.dumps(payload, ensure_ascii=False)
+        for raw in (
+            raw_mirror,
+            raw_cache,
+            raw_updated_at,
+            raw_policy_status,
+            str(policy_path),
+            "office-pdf-ghp_abcd",
+            "secret-token-status",
+            "token shaped id must not appear",
+        ):
+            self.assertNotIn(raw, rendered)
+        policy = payload["capabilityPolicy"]
+        self.assertEqual(policy["status"], "success")
+        self.assertEqual(policy["source"], "admin-cache")
+        self.assertTrue(policy["policyAvailable"])
+        self.assertEqual(policy["globalMode"], "disabled")
+        self.assertTrue(policy["mirrorConfigured"])
+        self.assertTrue(policy["offlineCacheConfigured"])
+        self.assertEqual(policy["capabilityCount"], 1)
+        self.assertEqual(policy["disabledPackCount"], 1)
+        self.assertTrue(policy["disabledPacks"][0]["packHash"])
+        self.assertTrue(policy["disabledPacks"][0]["policyStatusHash"])
+        self.assertTrue(policy["disabledPacks"][0]["redacted"])
+        self.assertTrue(policy["policyUpdatedAtHash"])
+        self.assertNotIn("policyUpdatedAt", policy)
+
+    def test_v022_diagnostic_bundle_error_branches_hash_private_messages(self):
+        from channel.web import web_channel
+
+        raw_runtime_error = r"C:\Users\private-user\workspace\hyper sensitive runtime failure"
+        raw_policy_error = r"C:\Users\private-user\workspace\hyper sensitive policy failure"
+
+        with patch("agent.protocol.get_run_event_ledger", side_effect=RuntimeError(raw_runtime_error)):
+            runtime = web_channel._diagnostic_runtime_events_payload()
+        with patch("common.ecorex_capability_policy.load_capability_policy", side_effect=RuntimeError(raw_policy_error)):
+            policy = web_channel._diagnostic_capability_policy_payload()
+
+        rendered = json.dumps({"runtime": runtime, "policy": policy}, ensure_ascii=False)
+        for raw in (
+            raw_runtime_error,
+            raw_policy_error,
+            "hyper sensitive runtime failure",
+            "hyper_sensitive_runtime_failure",
+            "hyper sensitive policy failure",
+            "hyper_sensitive_policy_failure",
+        ):
+            self.assertNotIn(raw, rendered)
+        self.assertEqual(runtime["status"], "error")
+        self.assertEqual(runtime["message"], "runtime event summary unavailable")
+        self.assertTrue(runtime["messageHash"])
+        self.assertTrue(runtime["redacted"])
+        self.assertEqual(policy["status"], "error")
+        self.assertEqual(policy["message"], "capability policy summary unavailable")
+        self.assertTrue(policy["messageHash"])
+        self.assertTrue(policy["redacted"])
 
     def test_public_web_bind_requires_password(self):
         from channel.web import web_channel
@@ -1270,6 +6169,8 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertTrue(expected.issubset(set(CHANNEL_CATALOG.keys())))
         self.assertEqual(normalize_channel_name("wx"), "weixin")
         self.assertEqual(normalize_channel_name("lark"), "feishu")
+        self.assertEqual(normalize_channel_name("wecom"), "wecom_bot")
+        self.assertEqual(normalize_channel_name("wecom_app"), "wechatcom_app")
         self.assertEqual(parse_channel_list("web, feishu,wx,lark,wechatmp_service"), [
             "web", "feishu", "weixin", "wechatmp_service"
         ])
@@ -1283,6 +6184,8 @@ class TestWebParallelHandlers(unittest.TestCase):
             "feishu_app_secret": "super-secret-value",
             "wechatmp_app_id": "wxid",
             "wechatmp_app_secret": "wechat-secret-value",
+            "wechatmp_token": "wechat-token-value",
+            "wechatmp_aes_key": "wechat-aes-value",
         }
         with patch("config.conf", return_value=fake_conf):
             channels = ExtensionRegistry("C:\\workspace")._channels()
@@ -1313,6 +6216,238 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertTrue(channels["feishu"]["configured"])
         secret_field = next(field for field in channels["feishu"]["fields"] if field["key"] == "feishu_app_secret")
         self.assertEqual(secret_field["value"], "1234********cdef")
+
+    def test_v022_channel_observability_separates_transport_auth_and_agent_surface(self):
+        from channel.channel_catalog import channel_observability
+
+        fake_conf = {
+            "channel_type": "web,lark",
+            "feishu_app_id": "cli_aabbcc",
+            "feishu_app_secret": "super-secret-value",
+            "slack_bot_token": "xoxb-secret",
+            "slack_app_token": "xapp-secret",
+        }
+
+        feishu = channel_observability(
+            fake_conf,
+            "lark",
+            running_channels={"feishu"},
+            tool_names={"feishu_cli"},
+        )
+        self.assertTrue(feishu["active"])
+        self.assertTrue(feishu["running"])
+        self.assertEqual(feishu["configState"], "configured")
+        self.assertEqual(feishu["auth"]["mode"], "bot_app_credentials")
+        self.assertEqual(feishu["auth"]["authEndpoint"], "/api/feishu/register")
+        self.assertEqual(feishu["auth"]["agentAuthorizationAction"]["action"], "auth_login")
+        self.assertEqual(feishu["agentSurface"]["tool"], "feishu_cli")
+        self.assertTrue(feishu["agentSurface"]["schemaVisible"])
+        self.assertTrue(feishu["agentSurface"]["toolSchemaCallable"])
+        self.assertFalse(feishu["agentSurface"]["callable"])
+        self.assertEqual(feishu["agentSurface"]["status"], "schema_visible_unverified")
+        self.assertEqual(feishu["agentSurface"]["readiness"], "unverified")
+        self.assertTrue(feishu["agentSurface"]["requiresStatusProbe"])
+        self.assertTrue(feishu["agentSurface"]["permissionGated"])
+
+        missing_cli = channel_observability(fake_conf, "feishu", tool_names=set())
+        self.assertEqual(missing_cli["agentSurface"]["status"], "tool_not_loaded")
+        self.assertFalse(missing_cli["agentSurface"]["callable"])
+
+        slack = channel_observability(fake_conf, "slack", tool_names={"feishu_cli"})
+        self.assertEqual(slack["configState"], "configured")
+        self.assertTrue(slack["auth"]["channelAuthSupported"])
+        self.assertFalse(slack["auth"]["agentAuthSupported"])
+        self.assertEqual(slack["agentSurface"]["status"], "not_applicable")
+        self.assertFalse(slack["agentSurface"]["callable"])
+
+    def test_v022_channels_handler_reports_auth_and_agent_schema_without_cli_probe(self):
+        from agent.tools.feishu_cli.feishu_cli import FeishuCli
+        from channel.web import web_channel
+
+        class FakeToolManager:
+            tool_classes = {"feishu_cli": object}
+
+            def load_tools(self):
+                raise AssertionError("GET /api/channels must not load tools or start MCP")
+
+            def list_tools(self):
+                raise AssertionError("GET /api/channels should read the existing registry snapshot")
+
+        fake_conf = {
+            "channel_type": "web,lark",
+            "feishu_app_id": "cli_aabbcc",
+            "feishu_app_secret": "short",
+        }
+        fake_manager = FakeToolManager()
+        fake_manager.tool_classes = {"feishu_cli": object}
+        with patch.object(web_channel, "_require_auth", return_value=None), \
+                patch.object(web_channel, "conf", return_value=fake_conf), \
+                patch("agent.tools.tool_manager.ToolManager", return_value=fake_manager), \
+                patch.object(FeishuCli, "execute", side_effect=AssertionError("GET /api/channels must not run lark-cli")) as execute:
+            payload = json.loads(web_channel.ChannelsHandler().GET())
+
+        execute.assert_not_called()
+        channels = {item["name"]: item for item in payload["channels"]}
+        feishu = channels["feishu"]
+        self.assertEqual(feishu["auth"]["authEndpoint"], "/api/feishu/register")
+        self.assertEqual(feishu["auth"]["channelConfigState"], "configured")
+        self.assertEqual(feishu["agentSurface"]["tool"], "feishu_cli")
+        self.assertTrue(feishu["agentSurface"]["schemaVisible"])
+        self.assertTrue(feishu["agentSurface"]["toolSchemaCallable"])
+        self.assertFalse(feishu["agentSurface"]["callable"])
+        self.assertEqual(feishu["agentSurface"]["readiness"], "unverified")
+        secret_field = next(field for field in feishu["fields"] if field["key"] == "feishu_app_secret")
+        self.assertEqual(secret_field["value"], "*****")
+        self.assertFalse(channels["slack"]["agentSurface"]["callable"])
+
+    def test_v022_channels_handler_does_not_treat_failed_transport_object_as_running(self):
+        from channel.web import web_channel
+
+        class FakeToolManager:
+            tool_classes = {"feishu_cli": object}
+            _mcp_tool_instances = {}
+
+        class FakeThread:
+            def is_alive(self):
+                return False
+
+        class FakeChannel:
+            def __init__(self):
+                self._startup_error = "missing Feishu credentials"
+                self._startup_event = threading.Event()
+                self._startup_event.set()
+
+        class FakeManager:
+            _threads = {"feishu": FakeThread()}
+
+            def get_channel(self, name):
+                return FakeChannel() if name == "feishu" else None
+
+        fake_conf = {
+            "channel_type": "web,feishu",
+            "feishu_app_id": "",
+            "feishu_app_secret": "",
+        }
+        main_module = sys.modules.get("__main__")
+        previous_manager = getattr(main_module, "_channel_mgr", None)
+        had_manager = hasattr(main_module, "_channel_mgr")
+        try:
+            setattr(main_module, "_channel_mgr", FakeManager())
+            with patch.object(web_channel, "_require_auth", return_value=None), \
+                    patch.object(web_channel, "conf", return_value=fake_conf), \
+                    patch("agent.tools.tool_manager.ToolManager", return_value=FakeToolManager()):
+                payload = json.loads(web_channel.ChannelsHandler().GET())
+        finally:
+            if had_manager:
+                setattr(main_module, "_channel_mgr", previous_manager)
+            else:
+                try:
+                    delattr(main_module, "_channel_mgr")
+                except AttributeError:
+                    pass
+
+        channels = {item["name"]: item for item in payload["channels"]}
+        feishu = channels["feishu"]
+        self.assertTrue(feishu["active"])
+        self.assertFalse(feishu["running"])
+        self.assertEqual(feishu["status"], "error")
+        self.assertEqual(feishu["last_error"], "missing Feishu credentials")
+
+    def test_v022_extension_registry_reuses_channel_observability_contract(self):
+        from agent.extensions import ExtensionRegistry
+
+        class FakeToolManager:
+            tool_classes = {"feishu_cli": object}
+            _mcp_tool_instances = {}
+
+            def load_tools(self):
+                raise AssertionError("extension registry status read must not load tools or start MCP")
+
+            def list_tools(self):
+                raise AssertionError("extension registry should read the existing registry snapshot")
+
+        fake_conf = {
+            "channel_type": "web,feishu,slack",
+            "feishu_app_id": "cli_aabbcc",
+            "feishu_app_secret": "super-secret-value",
+            "slack_bot_token": "xoxb-secret",
+            "slack_app_token": "xapp-secret",
+        }
+        with patch("config.conf", return_value=fake_conf), \
+                patch("agent.tools.tool_manager.ToolManager", FakeToolManager):
+            channels = ExtensionRegistry("C:\\workspace")._channels()
+
+        by_id = {entry["id"]: entry for entry in channels}
+        self.assertEqual(by_id["channel:feishu"]["status"], "active")
+        self.assertTrue(by_id["channel:feishu"]["active"])
+        self.assertTrue(by_id["channel:feishu"]["configured"])
+        self.assertFalse(by_id["channel:feishu"]["running"])
+        self.assertEqual(by_id["channel:feishu"]["auth"]["channelConfigState"], "configured")
+        self.assertTrue(by_id["channel:feishu"]["agentSurface"]["toolSchemaCallable"])
+        self.assertFalse(by_id["channel:feishu"]["agentSurface"]["callable"])
+        self.assertEqual(by_id["channel:slack"]["auth"]["channelConfigState"], "configured")
+        self.assertTrue(by_id["channel:slack"]["configured"])
+        self.assertEqual(by_id["channel:slack"]["agentSurface"]["status"], "not_applicable")
+        rendered = json.dumps(channels, ensure_ascii=False)
+        self.assertNotIn("super-secret-value", rendered)
+        self.assertNotIn("xoxb-secret", rendered)
+
+    def test_v022_web_channels_observability_ui_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        console_source = (root / "channel" / "web" / "static" / "js" / "console.js").read_text(encoding="utf-8")
+        console_css = (root / "channel" / "web" / "static" / "css" / "console.css").read_text(encoding="utf-8")
+        smoke_source = (root / "scripts" / "smoke-web-channels-observability-browser.py").read_text(encoding="utf-8")
+
+        self.assertIn("function buildChannelObservabilityHtml", console_source)
+        self.assertIn("function channelTransportSummary", console_source)
+        self.assertIn("function channelSafeColor", console_source)
+        self.assertIn("function channelSafeIcon", console_source)
+        self.assertIn("function ensureChannelActionDelegation", console_source)
+        self.assertIn("function channelInputsFor", console_source)
+        self.assertIn("ch.running === true", console_source)
+        self.assertIn("channels_enabled_not_running", console_source)
+        self.assertIn("data-channel-state-row=\"transport\"", console_source)
+        self.assertIn("data-channel-state-row=\"auth\"", console_source)
+        self.assertIn("data-channel-state-row=\"agent\"", console_source)
+        self.assertIn("data-agent-callable", console_source)
+        self.assertIn("agent.callable === true", console_source)
+        self.assertIn("agent.schemaVisible === true", console_source)
+        self.assertIn("agent.requiresStatusProbe", console_source)
+        self.assertIn("agent.permissionGated", console_source)
+        self.assertIn("agent.callableReason", console_source)
+        self.assertIn("data-channel-action=\"connect\"", console_source)
+        self.assertIn("data-channel-action=\"save\"", console_source)
+        self.assertIn("data-channel-action=\"disconnect\"", console_source)
+        self.assertIn("event.target.closest('[data-channel-action][data-channel-name]')", console_source)
+        self.assertIn("CHANNEL_COLOR_TOKENS", console_source)
+        self.assertIn("ChannelsHandler_maskSecret(String(f.value))", console_source)
+        self.assertIn("channelInputsFor(card, chName)", console_source)
+        self.assertNotIn("${t('channels_connected')}", console_source)
+        self.assertNotIn("onclick=\"connectChannelConfig('${ch.name}')", console_source)
+        self.assertNotIn("onclick=\"saveChannelConfig('${ch.name}')", console_source)
+        self.assertNotIn("onclick=\"disconnectChannel('${ch.name}')", console_source)
+        self.assertNotIn("document.getElementById(`channel-card-${chName}`)", console_source)
+        self.assertNotIn("querySelectorAll('input[data-ch=\"' + chName", console_source)
+
+        self.assertIn(".channel-observability-panel", console_css)
+        self.assertIn(".channel-state-badge.is-danger", console_css)
+        self.assertIn(".channel-state-badge.is-warn", console_css)
+        self.assertIn("@media (max-width: 640px)", console_css)
+
+        self.assertIn("base_api_stub_script", smoke_source)
+        self.assertIn("schema_visible_unverified", smoke_source)
+        self.assertIn("callable: false", smoke_source)
+        self.assertIn("assert(feishuText.includes('Enabled, not running')", smoke_source)
+        self.assertIn("assert(!feishuText.includes('Connected')", smoke_source)
+        self.assertIn("assert(feishuAgent.dataset.agentCallable === 'false'", smoke_source)
+        self.assertIn("super-secret-value", smoke_source)
+        self.assertIn("xoxb-secret-value", smoke_source)
+        self.assertIn("xapp-star*raw-secret-value", smoke_source)
+        self.assertIn("evil-raw-secret-value", smoke_source)
+        self.assertIn("inputValues", smoke_source)
+        self.assertIn("attrText", smoke_source)
+        self.assertIn("connectChannelConfig inline handler remains", smoke_source)
+        self.assertIn("hostile channel metadata executed", smoke_source)
 
     def test_v020_tools_handler_uses_tool_manager_list_tools(self):
         from channel.web import web_channel
@@ -1367,21 +6502,1756 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertIn("function deleteProject(project: ProjectFolder)", app_source)
         self.assertIn('projectStateMode: "replace"', app_source)
 
-    def test_v020_frontend_streaming_uses_lightweight_text_and_deferred_token_estimate(self):
+    def test_v021_frontend_preserves_project_session_ownership_from_cached_state(self):
+        root = Path(__file__).resolve().parents[1]
+        app_source = (root / "desktop" / "src" / "App.tsx").read_text(encoding="utf-8")
+
+        self.assertIn("function sessionProjectIdFromState", app_source)
+        self.assertIn("sessionUiState?.[sessionId]?.projectId", app_source)
+        self.assertIn("const sessionProjectsRef = useRef<SessionProjectMap>(sessionProjects);", app_source)
+        self.assertIn("const activeProjectIdRef = useRef(activeProjectId);", app_source)
+        self.assertIn("row.projectId || sessionProjectIdFromState(row.id, sessionProjects, sessionUiState)", app_source)
+        self.assertIn("sessionProjectIdFromState(sessionId, sessionProjectsRef.current, current", app_source)
+        self.assertNotIn("projectId: sessionProjects[sessionId] || null", app_source)
+        self.assertNotIn("const nextProjectId = sessionProjects[row.id] || null;", app_source)
+        self.assertIn("const priority = (project: ProjectFolder) =>", app_source)
+        self.assertIn("cachedMessages.some((message) => Boolean(message.recovery) || isLiveAssistantMessage(message))", app_source)
+
+    def test_v021_frontend_treats_transient_stream_disconnect_as_reconnecting(self):
+        root = Path(__file__).resolve().parents[1]
+        app_source = (root / "desktop" / "src" / "App.tsx").read_text(encoding="utf-8")
+        css_source = (root / "desktop" / "src" / "styles" / "app.css").read_text(encoding="utf-8")
+        api_source = (root / "desktop" / "src" / "services" / "ecorexApi.ts").read_text(encoding="utf-8")
+
+        self.assertIn('kind: "reconnecting"', app_source)
+        self.assertIn("function streamReconnectingRecovery", app_source)
+        self.assertIn("function clearTransientStreamRecovery", app_source)
+        self.assertIn("function hasTransientStreamRecovery", app_source)
+        self.assertIn("const streamReconnectTimers = useRef<Record<string, number>>({});", app_source)
+        self.assertIn("const streamReconnectChecks = useRef<StringBoolMap>({});", app_source)
+        self.assertIn("function clearStreamReconnectState", app_source)
+        self.assertIn("if (streamReconnectTimers.current[reconnectKey] || streamReconnectChecks.current[reconnectKey]) return;", app_source)
+        self.assertIn('recovery: streamReconnectingRecovery(requestId, "eventsource_error")', app_source)
+        self.assertIn('recovery: streamReconnectingRecovery(requestId, "stream_idle_timeout")', app_source)
+        self.assertIn('if (recovery.kind === "reconnecting")', app_source)
+        self.assertIn('className="message-recovery-actions is-reconnecting ecorex-activity-status"', app_source)
+        self.assertIn("if (hasTransientStreamRecovery(sessionId, assistantId, requestId))", app_source)
+        self.assertIn("recovery: undefined", app_source)
+        self.assertIn(".message-recovery-actions.is-reconnecting", css_source)
+        self.assertIn("const STREAM_TRANSIENT_ERROR_GRACE_MS = 75_000;", api_source)
+        self.assertIn("events.readyState !== EventSource.CLOSED", api_source)
+        self.assertIn("function isTerminalVoiceStreamItem", api_source)
+        self.assertNotIn("now - lastEventAt < STREAM_TRANSIENT_ERROR_GRACE_MS", api_source)
+
+    def test_v021_tool_lease_heartbeat_and_observability_ui_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        agent_source = (root / "agent" / "protocol" / "agent_stream.py").read_text(encoding="utf-8")
+        web_source = (root / "channel" / "web" / "web_channel.py").read_text(encoding="utf-8")
+        app_source = (root / "desktop" / "src" / "App.tsx").read_text(encoding="utf-8")
+        api_source = (root / "desktop" / "src" / "services" / "ecorexApi.ts").read_text(encoding="utf-8")
+        message_source = (root / "desktop" / "src" / "components" / "MessageContent.tsx").read_text(encoding="utf-8")
+        css_source = (root / "desktop" / "src" / "styles" / "app.css").read_text(encoding="utf-8")
+        console_source = (root / "channel" / "web" / "static" / "js" / "console.js").read_text(encoding="utf-8")
+        console_css = (root / "channel" / "web" / "static" / "css" / "console.css").read_text(encoding="utf-8")
+        bash_source = (root / "agent" / "tools" / "bash" / "bash.py").read_text(encoding="utf-8")
+
+        self.assertIn("TOOL_EXECUTION_DEFAULT_LEASE_SECONDS", agent_source)
+        self.assertIn("tool_execution_heartbeat", agent_source)
+        self.assertIn("tool_execution_deadline_extended", agent_source)
+        self.assertIn("tool_execution_timeout", agent_source)
+        self.assertIn("ECOREX_TOOL_EXECUTION_MAX_SECONDS", agent_source)
+        self.assertIn("ECOREX_BASH_MAX_TIMEOUT_SECONDS", bash_source)
+        self.assertIn("LONG_RUNNING_DEFAULT_TIMEOUT_SECONDS = 30 * 60", bash_source)
+        self.assertIn("_looks_long_running_command(command)", bash_source)
+        self.assertIn("openai-image-vision|vision\\.sh", bash_source)
+        self.assertIn("生图|图片生成|图片重生|图像生成", bash_source)
+        self.assertIn("Use a larger value for long builds, deployments, image generation, or installs.", bash_source)
+
+        self.assertIn('"type": "tool_heartbeat"', web_source)
+        self.assertIn('"type": "tool_deadline_extended"', web_source)
+        self.assertIn('reason="tool_timeout"', web_source)
+        self.assertIn('terminal_status = "timeout"', web_source)
+
+        self.assertIn('if (item.type === "tool_heartbeat")', app_source)
+        self.assertIn('if (item.type === "tool_deadline_extended")', app_source)
+        self.assertIn("function appendToolHeartbeat", app_source)
+        self.assertIn("function appendToolDeadlineExtended", app_source)
+        self.assertIn('params.get("ecorexRunCenter") === "1"', app_source)
+        self.assertIn('window.localStorage.getItem(RUN_CENTER_DEV_GATE_STORAGE_KEY) === "1"', app_source)
+        self.assertNotIn('isRunning ? " ecorex-activity-status" : ""', app_source)
+        for marker in ("deadline_seconds", "max_seconds", "extension_count", "lastHeartbeatAt"):
+            self.assertIn(marker, api_source)
+            self.assertIn(marker, message_source)
+
+        self.assertIn(".ecorex-activity-dot", css_source)
+        self.assertNotIn("@keyframes ecorex-text-sweep", css_source)
+        self.assertNotIn("ecorex-text-sweep", css_source)
+        self.assertNotIn("background-clip: text", css_source)
+        self.assertNotIn(".ecorex-activity-status::after", css_source)
+        self.assertIn("@media (prefers-reduced-motion: reduce)", css_source)
+        self.assertNotIn(".thinking-ring::after", css_source)
+        self.assertIn("window.EventSource.CONNECTING = NativeEventSource.CONNECTING;", console_source)
+        self.assertIn("item.type === 'tool_heartbeat'", console_source)
+        self.assertIn("item.type === 'tool_deadline_extended'", console_source)
+        self.assertIn("function updateStreamToolMeta", console_source)
+        self.assertIn(".tool-live-meta", console_css)
+        self.assertIn(".tool-live-meta.is-live", console_css)
+        self.assertIn("metaEl.classList.add('is-live')", console_source)
+        self.assertIn("metaEl.classList.remove('is-live')", console_source)
+        self.assertNotIn("@keyframes ecorexTextSweep", console_css)
+        self.assertNotIn("ecorexTextSweep", console_css)
+        self.assertIn(".ecorex-activity-status .agent-current-phase-text", console_css)
+        self.assertNotIn("background-clip: text", console_css)
+        self.assertNotIn("-webkit-text-fill-color: transparent", console_css)
+        self.assertIn("@media (prefers-reduced-motion: reduce)", console_css)
+        self.assertNotIn(".ecorex-activity-status::after", console_css)
+
+    def test_v022_web_status_motion_browser_smoke_harness_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        script = (root / "scripts" / "smoke-web-status-motion-browser.py").read_text(encoding="utf-8")
+
+        self.assertIn("web_asset_server", script)
+        self.assertIn("base_api_stub_script", script)
+        self.assertIn("data-status-motion-smoke", script)
+        self.assertIn("MotionSmokeEventSource", script)
+        self.assertIn("typeof startSSE === 'function'", script)
+        self.assertIn("startSSE('req-status-motion-smoke'", script)
+        self.assertIn("ecorex-activity-status", script)
+        self.assertIn("agent-current-phase-text", script)
+        self.assertIn("tool-live-meta", script)
+        self.assertIn("tool-motion-live", script)
+        self.assertIn("tool-motion-terminal", script)
+        self.assertIn("styleMetrics(statusText)", script)
+        self.assertIn("window.getComputedStyle(status, '::after')", script)
+        self.assertNotIn("ecorexTextSweep", script)
+        self.assertIn("should not sweep animate", script)
+        self.assertIn("should not be background-clipped to glyphs", script)
+        self.assertIn("status container should not animate", script)
+        self.assertIn("status ::after should not carry a light band", script)
+        self.assertIn("terminal tool meta kept live animation class", script)
+        self.assertIn("terminal tool meta should not animate", script)
+        self.assertIn("terminal done left phase status animating", script)
+        self.assertIn('page.emulate_media(reduced_motion="reduce")', script)
+        self.assertIn("reduced-motion status text still animates", script)
+        self.assertIn("reduced-motion changed live tool meta width", script)
+        self.assertIn("web-status-motion-browser-smoke.png", script)
+
+    def test_v022_hotfix_auth_identity_feishu_and_artifact_contracts(self):
+        root = Path(__file__).resolve().parents[1]
+        web_source = (root / "channel" / "web" / "web_channel.py").read_text(encoding="utf-8")
+        app_source = (root / "desktop" / "src" / "App.tsx").read_text(encoding="utf-8")
+        console_source = (root / "channel" / "web" / "static" / "js" / "console.js").read_text(encoding="utf-8")
+        message_source = (root / "desktop" / "src" / "components" / "MessageContent.tsx").read_text(encoding="utf-8")
+        release_script = (root / "scripts" / "prepare-ecorex-webui-local-release.ps1").read_text(encoding="utf-8")
+        core_requirements = (root / "desktop" / "runtime-packs" / "core-requirements.txt").read_text(encoding="utf-8")
+        runtime_core_requirements = (root / "desktop" / "runtime" / "ecorex-runtime" / "core-requirements.txt").read_text(encoding="utf-8")
+
+        self.assertIn("localFallback: !hasProvidedIdentity", web_source)
+        self.assertIn('authProvider: hasProvidedIdentity ? "web-password" : "local-fallback"', web_source)
+        self.assertIn('identitySource: hasProvidedIdentity ? "login-email" : "local-fallback"', web_source)
+        self.assertIn("if (authRequired && !(identity && identity.email)) return null;", web_source)
+        self.assertIn('body: { email: input.email, password: input.password }', web_source)
+        self.assertIn('"localFallback": not has_provided_identity', web_source)
+        self.assertIn('"identitySource": "login-email" if has_provided_identity else "local-fallback"', web_source)
+        self.assertIn("def _create_auth_token(email: str = \"\")", web_source)
+        self.assertIn("def _auth_token_email(token: str) -> str:", web_source)
+        self.assertIn('payload["session"] = AuthLoginHandler._session_payload(email)', web_source)
+        self.assertIn("writeLocalSession(auth.session);", web_source)
+
+        self.assertIn("def _connect_registered_app(app_id: str, app_secret: str)", web_source)
+        self.assertIn('ChannelsHandler()._handle_connect("feishu"', web_source)
+        self.assertIn('"capability_refresh_required": bool(payload.get("capability_refresh_required"))', web_source)
+        self.assertIn('"channel_configured": writeback.get("status") == "success"', web_source)
+        self.assertIn("def _redact_feishu_register_text(value: Any) -> str:", web_source)
+        self.assertIn('"credential": _feishu_register_secret_presence(app_id, app_secret)', web_source)
+        self.assertIn("extract_feishu_register_credentials(result)", web_source)
+        self.assertNotIn('"app_secret": app_secret', web_source)
+        self.assertIn("lark-oapi>=1.5.5", core_requirements)
+        self.assertIn("lark-oapi>=1.5.5", runtime_core_requirements)
+        self.assertIn('Install-WindowsRuntimeDependency -RuntimeDir $winRuntime -ModuleName "lark_oapi"', release_script)
+        self.assertNotIn('Ensure-PythonDependency -Python $python -StateDir $stateDir -ModuleName "lark_oapi"', release_script)
+        self.assertIn('Write-OptionalPythonDependencyNotice -StateDir $stateDir -ModuleName "lark_oapi"', release_script)
+        self.assertIn("function refreshFeishuAfterRegister()", console_source)
+        self.assertNotIn("connectFeishuAfterRegister", console_source)
+
+        self.assertIn("function artifactMergeKey", app_source)
+        self.assertIn("function normalizeArtifactKeySource(value?: string)", app_source)
+        self.assertNotIn('return `image:${fileName}`;', app_source)
+        self.assertIn("function canonicalArtifactKey", message_source)
+        self.assertNotIn('return `image:${fileName}`;', message_source)
+        self.assertIn("function canonicalArtifactDedupeKey", console_source)
+        self.assertNotIn("image:${basename}", console_source)
+        self.assertIn("function appendArtifactCard(mediaEl, artifact)", console_source)
+        self.assertIn('data-artifact-key', console_source)
+        self.assertIn("if (appendArtifactCard(mediaEl, artifact)) scrollChatToBottom();", console_source)
+
+        self.assertIn("const emptyMessages: ChatItem[] = []", app_source)
+        self.assertIn("messagesRef.current = emptyMessages", app_source)
+        self.assertIn("messagesRef.current = nextMessages", app_source)
+        self.assertIn('const isNewSessionView = visibleMessages.length === 0 && !hasPendingAssistantMessage;', app_source)
+        self.assertIn('generalSessions.some((row) => sessionRowNeedsReveal(row, { includeActive: false }))', app_source)
+        self.assertIn("function createCodexLikeWelcomeScreen()", console_source)
+        self.assertIn("和EcoreX一起开始工作", console_source)
+
+        self.assertIn("const STREAM_RENDER_THROTTLE_CHARS = 1200;", message_source)
+        self.assertIn("const STREAM_MARKDOWN_CHUNK_CHARS = 5000;", message_source)
+        self.assertIn("function StreamingMarkdownBlock", message_source)
+        self.assertIn("<StreamingStableMarkdown content={liveContent}", message_source)
+        self.assertNotIn("function streamingWindowMarkdown(content: string)", message_source)
+        self.assertNotIn("chars streaming", message_source)
+
+    def test_v022_feishu_register_redaction_handles_json_and_colon_secret_shapes(self):
+        from channel.web import web_channel
+
+        raw = (
+            '{"client_secret":"json-secret-123","app_secret":"app-secret-456",'
+            '"open_id":"ou_secret_user","chat_id":"oc_secret_chat"} '
+            "client_secret: colon-secret app_secret=equals-secret "
+            "https://example.com/callback?token=secret-token"
+        )
+        redacted = web_channel._redact_feishu_register_text(raw)
+
+        for leaked in (
+            "json-secret-123",
+            "app-secret-456",
+            "ou_secret_user",
+            "oc_secret_chat",
+            "colon-secret",
+            "equals-secret",
+            "secret-token",
+            "example.com",
+        ):
+            self.assertNotIn(leaked, redacted)
+        self.assertIn("[redacted]", redacted)
+        self.assertIn("[redacted-url]", redacted)
+
+    def test_v022_feishu_register_credentials_accepts_sdk_shape_variants(self):
+        from common.feishu_register_credentials import (
+            extract_feishu_register_credentials,
+            summarize_feishu_register_result_shape,
+        )
+
+        cases = [
+            ({"client_id": "cli_client", "client_secret": "sec_client"}, ("cli_client", "sec_client")),
+            ({"app_id": "cli_app", "app_secret": "sec_app"}, ("cli_app", "sec_app")),
+            ({"data": {"app_id": "cli_data", "app_secret": "sec_data"}}, ("cli_data", "sec_data")),
+            ({"data": {"app": {"clientId": "cli_nested", "clientSecret": "sec_nested"}}}, ("cli_nested", "sec_nested")),
+        ]
+
+        for payload, expected in cases:
+            with self.subTest(payload=payload):
+                self.assertEqual(extract_feishu_register_credentials(payload), expected)
+
+        summary = summarize_feishu_register_result_shape({
+            "data": {"app": {"app_id": "cli_no_leak", "app_secret": "super-secret-value"}},
+        })
+        summary_text = json.dumps(summary, ensure_ascii=False)
+        self.assertNotIn("cli_no_leak", summary_text)
+        self.assertNotIn("super-secret-value", summary_text)
+        self.assertTrue(summary["appIdFieldPresent"])
+        self.assertTrue(summary["appSecretFieldPresent"])
+
+    def test_v022_hotfix_font_baseline_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        token_source = (root / "desktop" / "src" / "styles" / "tokens.css").read_text(encoding="utf-8")
+        app_css = (root / "desktop" / "src" / "styles" / "app.css").read_text(encoding="utf-8")
+        console_css = (root / "channel" / "web" / "static" / "css" / "console.css").read_text(encoding="utf-8")
+        site_css = (root / "deploy" / "ecorex-site" / "styles.css").read_text(encoding="utf-8")
+        admin_css = (root / "deploy" / "ecorex-site" / "admin" / "admin.css").read_text(encoding="utf-8")
+        chat_html = (root / "channel" / "web" / "chat.html").read_text(encoding="utf-8")
+
+        for source in (token_source, console_css, site_css, admin_css, chat_html):
+            self.assertIn("-apple-system", source)
+            self.assertIn("BlinkMacSystemFont", source)
+            self.assertIn('"Segoe UI"', source)
+            self.assertIn("ui-monospace", source)
+            self.assertIn('"SFMono-Regular"', source)
+            self.assertIn("Consolas", source)
+
+        self.assertIn("font-family: var(--font-sans)", app_css)
+        self.assertIn("font-family: var(--font-mono)", app_css)
+        self.assertNotIn("JetBrains Mono", console_css)
+        self.assertNotIn("Fira Code", console_css)
+
+    def test_v021_frontend_history_merge_drops_unanchored_recovery_cards(self):
+        root = Path(__file__).resolve().parents[1]
+        app_source = (root / "desktop" / "src" / "App.tsx").read_text(encoding="utf-8")
+
+        self.assertIn("function isRecoveryAssistantMessage", app_source)
+        self.assertIn("if (isRecoveryAssistantMessage(message))", app_source)
+        self.assertIn("if (message.role === \"user\" && nextLocalMessage && isRecoveryAssistantMessage(nextLocalMessage))", app_source)
+        self.assertIn("Boolean(localAssistant && isSameAssistantTurn(message, localAssistant))", app_source)
+        self.assertIn("function rememberStreamTurnSequence", app_source)
+        self.assertGreaterEqual(app_source.count("rememberStreamTurnSequence(sessionId, assistantId, requestId, item);"), 2)
+
+    def test_v022_frontend_streaming_uses_markdown_blocks_and_deferred_token_estimate(self):
         root = Path(__file__).resolve().parents[1]
         app_source = (root / "desktop" / "src" / "App.tsx").read_text(encoding="utf-8")
         message_source = (root / "desktop" / "src" / "components" / "MessageContent.tsx").read_text(encoding="utf-8")
         css_source = (root / "desktop" / "src" / "styles" / "app.css").read_text(encoding="utf-8")
 
-        self.assertIn("function LiveStreamingText", message_source)
-        self.assertIn("document.createTextNode", message_source)
-        self.assertIn("node.appendData(delta)", message_source)
-        self.assertIn("<LiveStreamingText content={content} />", message_source)
-        self.assertIn(".live-streaming-text", css_source)
+        self.assertIn("function StreamingMarkdownBlock", message_source)
+        self.assertIn("function StreamingStableMarkdown", message_source)
+        self.assertIn("normalizeMarkdownForRender(redactInternalPromptText(content || \"\"))", message_source)
+        self.assertIn("data-ecorex-file-path=/i.test(`${before} ${after}`)", message_source)
+        self.assertIn("<StreamingMarkdownBlock content={content}", message_source)
+        self.assertIn("<StreamingStableMarkdown content={liveContent}", message_source)
+        self.assertIn(".streaming-markdown", css_source)
+        self.assertNotIn(".streaming-tail .markdown-content", css_source)
+        self.assertNotIn(".streaming-code", css_source)
+        self.assertNotIn("function LiveStreamingText", message_source)
+        self.assertNotIn("<LiveStreamingText content={content} />", message_source)
+        self.assertNotIn(".live-streaming-text", css_source)
         self.assertIn("const [historyContextUsed, setHistoryContextUsed] = useState", app_source)
         self.assertIn("setHistoryContextUsed(estimateContextTokens(messagesRef.current, \"\", []));", app_source)
         self.assertIn("hasLiveMessage ? 900 : 120", app_source)
         self.assertNotIn("const historyContextUsed = useMemo(() => estimateContextTokens(messages, \"\", []), [messages]);", app_source)
+
+    def test_v024_frontend_quality_evidence_projection_display_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        app_source = (root / "desktop" / "src" / "App.tsx").read_text(encoding="utf-8")
+        api_source = (root / "desktop" / "src" / "services" / "ecorexApi.ts").read_text(encoding="utf-8")
+        message_source = (root / "desktop" / "src" / "components" / "MessageContent.tsx").read_text(encoding="utf-8")
+        css_source = (root / "desktop" / "src" / "styles" / "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("export type QualityEvidence", api_source)
+        self.assertIn("qualityEvidence?: QualityEvidence", api_source)
+        self.assertIn("function normalizeQualityEvidence", app_source)
+        self.assertIn("const QUALITY_EVIDENCE_ALLOWED_GATES", app_source)
+        self.assertIn("function sanitizeQualityDetail", app_source)
+        self.assertIn("decode-valid", app_source)
+        self.assertIn("seam-check", app_source)
+        self.assertIn("overlay-ghosting-check", app_source)
+        self.assertIn("text-glyph-check", app_source)
+        self.assertIn("watermark-check", app_source)
+        self.assertIn("subject-structure-check", app_source)
+        self.assertIn("anomaly-check", app_source)
+        self.assertIn("reference-fidelity", app_source)
+        self.assertIn("max_retries", app_source)
+        self.assertIn("retry_count", app_source)
+        self.assertIn("retry_gate", app_source)
+        self.assertIn("retry_recommended", app_source)
+        self.assertIn("finalized", app_source)
+        self.assertIn("decode-valid", message_source)
+        self.assertIn("seam-check", message_source)
+        self.assertIn("text-glyph-check", message_source)
+        self.assertIn("watermark-check", message_source)
+        self.assertIn("anomaly-check", message_source)
+        self.assertIn("reference-fidelity", message_source)
+        self.assertIn("max_retries", message_source)
+        self.assertIn("retry_count", message_source)
+        self.assertIn("retry_gate", message_source)
+        self.assertIn("retry_recommended", message_source)
+        self.assertIn("finalized", message_source)
+        self.assertIn("reference-fidelity-skipped-review", message_source)
+        self.assertIn("shouldSurfaceSkippedQualityCheck", message_source)
+        self.assertIn("qualityEvidence: normalizeQualityEvidence(tool.qualityEvidence", app_source)
+        self.assertIn("merged.qualityEvidence = incoming.qualityEvidence || existing.qualityEvidence", app_source)
+        self.assertIn("const qualityEvidence = normalizeQualityEvidence(raw.qualityEvidence || raw.quality_evidence)", app_source)
+        self.assertIn("qualityEvidence,", app_source)
+        self.assertIn("function QualityEvidenceBadge", message_source)
+        self.assertIn("function qualityEvidenceDetail", message_source)
+        self.assertNotIn("return record as QualityEvidence", message_source)
+        self.assertIn("<QualityEvidencePanel evidence={qualityEvidence} />", message_source)
+        self.assertIn("<QualityEvidenceBadge evidence={artifact.qualityEvidence} compact />", message_source)
+        self.assertIn(".quality-evidence-badge", css_source)
+        self.assertIn(".quality-evidence-panel", css_source)
+
+    def test_v022_web_markdown_it_streaming_contract_uses_single_renderer(self):
+        root = Path(__file__).resolve().parents[1]
+        chat_source = (root / "channel" / "web" / "chat.html").read_text(encoding="utf-8")
+        console_source = (root / "channel" / "web" / "static" / "js" / "console.js").read_text(encoding="utf-8")
+        console_css = (root / "channel" / "web" / "static" / "css" / "console.css").read_text(encoding="utf-8")
+
+        self.assertIn("assets/vendor/markdown-it/markdown-it.min.js", chat_source)
+        self.assertIn("assets/vendor/highlightjs/highlight.min.js", chat_source)
+        self.assertIn("html: false, breaks: true, linkify: true, typographer: true", console_source)
+        self.assertIn("tokens[idx].attrPush(['target', '_blank']);", console_source)
+        self.assertIn("tokens[idx].attrPush(['rel', 'noopener noreferrer']);", console_source)
+        self.assertIn("function renderMarkdown(text)", console_source)
+        self.assertIn("function renderStreamingMarkdown(text)", console_source)
+        self.assertIn("contentEl.innerHTML = renderStreamingMarkdown(latest);", console_source)
+        self.assertIn("contentEl.dataset.rawMd = latest;", console_source)
+        self.assertIn("applyHighlighting(contentEl);", console_source)
+        self.assertIn("bindChatKnowledgeLinks(contentEl);", console_source)
+        self.assertIn("applyHighlighting(frozenEl);", console_source)
+        self.assertIn("return escapeHtml(String(text || '')).replace(/\\n/g, '<br>');", console_source)
+        self.assertIn("renderAnswerHtml(finalText)", console_source)
+        self.assertIn("renderMarkdown(text)", console_source)
+        self.assertIn("_ensureSafeBlankTargets(html)", console_source)
+        self.assertIn("const projectedSeedContentEl = loadingEl && loadingEl.querySelector", console_source)
+        self.assertIn("let projectionSeedReplayOffset = 0;", console_source)
+        self.assertIn("let projectionSeedReplayActive = false;", console_source)
+        self.assertIn("expectedReplayChunk", console_source)
+        self.assertIn("const replayIndex = accumulatedText.indexOf(chunk, projectionSeedReplayOffset);", console_source)
+        self.assertIn("(contentEl || projectedSeedContentEl).dataset.rawMd === accumulatedText", console_source)
+        self.assertIn(".agent-subagent-step[data-tool-call-id=", console_source)
+        self.assertIn("const projectedReplayToolEl = projectionSeedReplayActive ? findStreamToolEl(item) : null;", console_source)
+        self.assertIn("currentToolEl = projectedReplayToolEl;", console_source)
+        self.assertIn("projectionSeedReplayOffset = accumulatedText.length;", console_source)
+        self.assertIn("projectionSeedReplayActive && loadingEl && loadingEl.classList && loadingEl.classList.contains('bot-message-group')", console_source)
+        self.assertNotIn("streamLastEventIds[requestId] = projectedSeedEventId;", console_source)
+        self.assertIn('data-tool-call-id="${escapeHtml(toolCallId)}"', console_source)
+        self.assertNotIn("LONG_REPLY_PREVIEW_CHARS", console_source)
+        self.assertIn('<div class="long-answer-preview">${renderMarkdown(text)}</div>', console_source)
+        self.assertIn('target="_blank" rel="noopener noreferrer"', chat_source)
+        self.assertIn(".msg-content p { margin: 0.5em 0; line-height: 1.7; }", console_css)
+        self.assertIn("overflow-x: auto;", console_css)
+        self.assertIn(".long-answer-preview", console_css)
+        self.assertIn(".code-block-wrapper", console_css)
+        self.assertNotIn("answer-stream-pre", console_source)
+        self.assertNotIn("answer-stream-pre", console_css)
+        self.assertNotIn("shouldRenderStreamingMarkdown", console_source)
+        self.assertNotIn("STREAMING_MARKDOWN_PREVIEW_CHARS", console_source)
+
+    def test_v022_web_streaming_markdown_hides_unstable_markers(self):
+        root = Path(__file__).resolve().parents[1]
+        node_script = r"""
+const fs = require("fs");
+const source = fs.readFileSync("channel/web/static/js/console.js", "utf8");
+
+function extractFunction(name) {
+  const marker = `function ${name}(`;
+  const start = source.indexOf(marker);
+  if (start < 0) throw new Error(`missing ${name}`);
+  const braceStart = source.indexOf("{", start);
+  let depth = 0;
+  for (let i = braceStart; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === "{") depth += 1;
+    if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, i + 1);
+    }
+  }
+  throw new Error(`unterminated ${name}`);
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function renderMarkdown(value) {
+  const text = String(value || "");
+  if (/^#\s+/.test(text)) return `<h1>${escapeHtml(text.replace(/^#\s+/, ""))}</h1>`;
+  if (/^-\s+/.test(text)) return `<ul><li>${escapeHtml(text.replace(/^-\s+/, ""))}</li></ul>`;
+  return `<p>${escapeHtml(text)}</p>`;
+}
+
+eval([
+  "_splitStreamingOpenFence",
+  "_isUnstableStreamingMarkdownLine",
+  "_trimStreamingUnstableTail",
+  "_renderStreamingOpenFencePreview",
+  "renderStreamingMarkdown",
+].map(extractFunction).join("\n"));
+
+const samples = {
+  loneHeading: renderStreamingMarkdown("#"),
+  heading: renderStreamingMarkdown("# Title"),
+  listMarker: renderStreamingMarkdown("- "),
+  list: renderStreamingMarkdown("- item"),
+  openFence: renderStreamingMarkdown("```js\nconst x = 1 < 2"),
+  partialFence: renderStreamingMarkdown("``"),
+  tableDelimiter: renderStreamingMarkdown("| --- |"),
+  xss: renderStreamingMarkdown("<img src=x onerror=alert(1)>"),
+};
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+assert(!/>#\s*</.test(samples.loneHeading), "lone heading marker leaked");
+assert(samples.heading.includes("<h1>Title</h1>"), "stable heading did not render");
+assert(!/>-\s*</.test(samples.listMarker), "dangling list marker leaked");
+assert(samples.list.includes("<ul><li>item</li></ul>"), "stable list did not render");
+assert(!samples.openFence.includes("```"), "open code fence marker leaked");
+assert(samples.openFence.includes("streaming-open-code"), "open fence did not render code preview");
+assert(samples.openFence.includes("language-js"), "open fence language was not preserved");
+assert(samples.openFence.includes("&lt;"), "open fence body was not escaped");
+assert(!/>``\s*</.test(samples.partialFence), "partial code fence marker leaked");
+assert(!/>\|\s+---\s+\|\s*</.test(samples.tableDelimiter), "partial table delimiter leaked");
+assert(samples.xss.includes("&lt;img"), "html fallback was not escaped");
+process.stdout.write(JSON.stringify(samples));
+"""
+        result = subprocess.run(
+            ["node", "-e", node_script],
+            cwd=root,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            check=True,
+        )
+        payload = json.loads(result.stdout)
+        self.assertIn("streaming-markdown-preview", payload["heading"])
+        self.assertIn("streaming-markdown-preview", payload["openFence"])
+
+    def test_v022_web_markdown_it_vendor_golden_fixture_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        node_script = r"""
+const fs = require("fs");
+
+global.window = global;
+global.currentLang = "en";
+global.__ecorexRuntimePath = (value) => /^\/(?:api|uploads)\//.test(String(value || "")) ? `/runtime${value}` : value;
+global.window.markdownit = require("./channel/web/static/vendor/markdown-it/markdown-it.min.js");
+global.window.hljs = require("./channel/web/static/vendor/highlightjs/highlight.min.js");
+require("./channel/web/static/vendor/highlightjs/languages/javascript.min.js");
+require("./channel/web/static/vendor/highlightjs/languages/python.min.js");
+require("./channel/web/static/vendor/highlightjs/languages/bash.min.js");
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+const source = fs.readFileSync("channel/web/static/js/console.js", "utf8");
+const start = source.indexOf("// Markdown Renderer");
+const end = source.indexOf("// =====================================================================\r\n// Chat Module");
+if (start < 0 || end < 0) throw new Error("renderer section markers missing");
+eval(source.slice(start, end));
+
+const finalFixture = [
+  "# 标题 ✨",
+  "",
+  "第一行",
+  "第二行 😀",
+  "",
+  "- 项目一",
+  "- 项目二",
+  "",
+  "> 引用内容",
+  "",
+  "| A | B |",
+  "| --- | --- |",
+  "| 1 | 2 |",
+  "",
+  "```javascript",
+  "const x = 1 < 2;",
+  "```",
+  "",
+  "See https://example.com/page",
+  "",
+  "https://example.com/a.png",
+  "",
+  "![local](/C/Users/user/Pictures/a.png)",
+  "",
+  "<img src=x onerror=alert(1)>",
+].join("\n");
+
+const finalHtml = renderMarkdown(finalFixture);
+const streamingHeading = renderStreamingMarkdown("# 标题 ✨");
+const streamingLoneHeading = renderStreamingMarkdown("#");
+const streamingListMarker = renderStreamingMarkdown("- ");
+const streamingList = renderStreamingMarkdown("- 项目一");
+const streamingTableDelimiter = renderStreamingMarkdown("| --- |");
+const streamingPartialTableRow = renderStreamingMarkdown("| A | B");
+const streamingPartialLink = renderStreamingMarkdown("[label](");
+const streamingPartialImage = renderStreamingMarkdown("![alt");
+const streamingPartialStrong = renderStreamingMarkdown("**bold");
+const streamingStarList = renderStreamingMarkdown("* item");
+const streamingOpenFence = renderStreamingMarkdown("```javascript\nconst x = 1 < 2");
+const streamingXss = renderStreamingMarkdown("<img src=x onerror=alert(1)>");
+const hostileVideo = _buildVideoHtml('https://example.com/a.mp4" onerror="alert(9)');
+const hostileImage = _buildImageHtml('https://example.com/a.png" onerror="alert(8)');
+const uploadUrl = _toWebUrl('/uploads/voice.mp3');
+const localPosixUrl = _toWebUrl('/tmp/image.png');
+const softBreak = renderMarkdown("第一行\n第二行");
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+assert(finalHtml.includes("<h1>标题 ✨</h1>"), "heading/emoji did not render");
+assert(softBreak.includes("<br>"), "breaks:true soft break was not preserved");
+assert(finalHtml.includes("<ul>") && finalHtml.includes("<li>项目一</li>"), "list did not render");
+assert(finalHtml.includes("<blockquote>") && finalHtml.includes("引用内容"), "blockquote did not render");
+assert(finalHtml.includes("<table>") && finalHtml.includes("<td>1</td>"), "table did not render");
+assert(finalHtml.includes("language-javascript"), "fenced code language class missing");
+assert(finalHtml.includes("&lt;") && finalHtml.includes("hljs-keyword"), "code block was not escaped/highlighted safely");
+assert(finalHtml.includes('<a href="https://example.com/page" target="_blank" rel="noopener noreferrer"'), "safe markdown link attributes missing");
+assert(finalHtml.includes('data-artifact-kind="image"'), "image preview artifact wrapper missing");
+assert(finalHtml.includes('download="a.png" target="_blank" rel="noopener noreferrer"'), "artifact action safe link attributes missing");
+assert(finalHtml.includes("/runtime/api/file?path="), "local image path was not rewritten through runtime file API");
+assert(finalHtml.includes("&lt;img src=x onerror=alert(1)&gt;"), "raw HTML was not escaped");
+assert(!finalHtml.includes("<img src=x onerror=alert(1)>"), "raw scriptable HTML leaked");
+
+assert(streamingHeading.includes("<h1>标题 ✨</h1>"), "stable streaming heading did not render");
+assert(!/>#\s*</.test(streamingLoneHeading), "lone streaming heading marker leaked");
+assert(!/>-\s*</.test(streamingListMarker), "dangling streaming list marker leaked");
+assert(streamingList.includes("<ul>") && streamingList.includes("<li>项目一</li>"), "stable streaming list did not render with real markdown-it");
+assert(!/>\|\s+---\s+\|\s*</.test(streamingTableDelimiter), "streaming table delimiter leaked");
+assert(!streamingPartialTableRow.includes("| A | B"), "partial streaming table row leaked");
+assert(!streamingPartialLink.includes("[label]("), "partial streaming link leaked");
+assert(!streamingPartialImage.includes("![alt"), "partial streaming image leaked");
+assert(!streamingPartialStrong.includes("**bold"), "partial streaming strong marker leaked");
+assert(streamingStarList.includes("<ul>") && streamingStarList.includes("<li>item</li>"), "star list was mistaken for partial emphasis");
+assert(streamingOpenFence.includes("streaming-open-code"), "open code fence preview missing");
+assert(streamingOpenFence.includes("language-javascript"), "open code fence language missing");
+assert(!streamingOpenFence.includes("```"), "open code fence marker leaked");
+assert(streamingOpenFence.includes("const x = 1 &lt; 2"), "open code fence body was not escaped");
+assert(streamingXss.includes("&lt;img src=x onerror=alert(1)&gt;"), "streaming XSS was not escaped by real renderer");
+assert(!streamingXss.includes("<img src=x onerror=alert(1)>"), "streaming raw scriptable HTML leaked");
+assert(!hostileVideo.includes('" onerror="'), "video URL broke out of source src attribute");
+assert(hostileVideo.includes("&quot; onerror=&quot;alert(9)"), "video URL quote was not attribute-escaped");
+assert(hostileVideo.includes('target="_blank" rel="noopener noreferrer"'), "video artifact action safe rel missing");
+assert(!hostileImage.includes('" onerror="'), "image URL broke out of img src attribute");
+assert(hostileImage.includes("&quot; onerror=&quot;alert(8)"), "image URL quote was not attribute-escaped");
+assert(hostileImage.includes('target="_blank" rel="noopener noreferrer"'), "image artifact action safe rel missing");
+assert(uploadUrl === "/runtime/uploads/voice.mp3", "runtime uploads path was incorrectly routed through file API");
+assert(localPosixUrl.includes("/runtime/api/file?path="), "local POSIX path was not routed through backend file API");
+
+process.stdout.write(JSON.stringify({
+  finalHtml,
+  streamingHeading,
+  streamingList,
+  streamingStarList,
+  streamingOpenFence,
+  streamingXss,
+  hostileVideo,
+  hostileImage,
+  uploadUrl,
+  localPosixUrl,
+}));
+"""
+        result = subprocess.run(
+            ["node", "-e", node_script],
+            cwd=root,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            check=True,
+        )
+        payload = json.loads(result.stdout)
+        self.assertIn("标题 ✨", payload["finalHtml"])
+        self.assertIn("streaming-markdown-preview", payload["streamingHeading"])
+        self.assertIn("项目一", payload["streamingList"])
+        self.assertIn("<li>item</li>", payload["streamingStarList"])
+        self.assertIn("streaming-open-code", payload["streamingOpenFence"])
+        self.assertIn("&lt;img", payload["streamingXss"])
+        self.assertIn("&quot; onerror=&quot;alert(9)", payload["hostileVideo"])
+        self.assertIn("&quot; onerror=&quot;alert(8)", payload["hostileImage"])
+        self.assertIn('target="_blank" rel="noopener noreferrer"', payload["hostileVideo"])
+        self.assertIn('target="_blank" rel="noopener noreferrer"', payload["hostileImage"])
+
+    def test_v022_web_code_block_header_dom_postprocess_is_idempotent(self):
+        root = Path(__file__).resolve().parents[1]
+        node_script = r"""
+const fs = require("fs");
+const source = fs.readFileSync("channel/web/static/js/console.js", "utf8");
+
+function extractFunction(name) {
+  const marker = `function ${name}(`;
+  const start = source.indexOf(marker);
+  if (start < 0) throw new Error(`missing ${name}`);
+  const braceStart = source.indexOf("{", start);
+  let depth = 0;
+  for (let i = braceStart; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === "{") depth += 1;
+    if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, i + 1);
+    }
+  }
+  throw new Error(`unterminated ${name}`);
+}
+
+class FakeClassList {
+  constructor(owner, values = []) {
+    this.owner = owner;
+    this.values = Array.from(values);
+  }
+  contains(value) { return this.values.includes(value); }
+  [Symbol.iterator]() { return this.values[Symbol.iterator](); }
+  setFromClassName(value) {
+    this.values = String(value || "").split(/\s+/).filter(Boolean);
+  }
+}
+
+class FakeElement {
+  constructor(tagName, classNames = []) {
+    this.tagName = String(tagName || "").toLowerCase();
+    this.children = [];
+    this.parentNode = null;
+    this.parentElement = null;
+    this._className = "";
+    this.classList = new FakeClassList(this, classNames);
+    this.innerHTML = "";
+  }
+  set className(value) {
+    this._className = String(value || "");
+    this.classList.setFromClassName(this._className);
+  }
+  get className() { return this._className; }
+  appendChild(child) {
+    if (child.parentNode) child.parentNode.children = child.parentNode.children.filter(item => item !== child);
+    this.children.push(child);
+    child.parentNode = this;
+    child.parentElement = this;
+  }
+  insertBefore(newNode, referenceNode) {
+    if (newNode.parentNode) newNode.parentNode.children = newNode.parentNode.children.filter(item => item !== newNode);
+    const index = this.children.indexOf(referenceNode);
+    this.children.splice(index >= 0 ? index : this.children.length, 0, newNode);
+    newNode.parentNode = this;
+    newNode.parentElement = this;
+  }
+  querySelector(selector) {
+    return this.querySelectorAll(selector)[0] || null;
+  }
+  querySelectorAll(selector) {
+    const wanted = String(selector || "").toLowerCase();
+    const out = [];
+    function visit(node) {
+      for (const child of node.children) {
+        if (wanted === child.tagName) out.push(child);
+        visit(child);
+      }
+    }
+    visit(this);
+    return out;
+  }
+}
+
+global.document = {
+  createElement(tagName) {
+    return new FakeElement(tagName);
+  },
+};
+
+eval(extractFunction("_addCodeBlockHeaders"));
+
+const container = new FakeElement("div");
+const pre = new FakeElement("pre");
+const code = new FakeElement("code", ["language-python"]);
+pre.appendChild(code);
+container.appendChild(pre);
+
+_addCodeBlockHeaders(container);
+_addCodeBlockHeaders(container);
+
+const wrappers = container.children.filter(child => child.classList.contains("code-block-wrapper"));
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+assert(wrappers.length === 1, "duplicate code-block wrapper was added");
+const wrapper = wrappers[0];
+assert(wrapper.children.length === 2, "wrapper should contain header and pre");
+assert(wrapper.children[0].classList.contains("code-block-header"), "code block header missing");
+assert(wrapper.children[0].innerHTML.includes("Python"), "language label was not normalized");
+assert(wrapper.children[0].innerHTML.includes("code-copy-btn"), "copy button missing");
+assert(wrapper.children[1] === pre, "pre was not moved into wrapper");
+
+const unknownContainer = new FakeElement("div");
+const unknownPre = new FakeElement("pre");
+const unknownCode = new FakeElement("code", ["language-undefined"]);
+unknownPre.appendChild(unknownCode);
+unknownContainer.appendChild(unknownPre);
+_addCodeBlockHeaders(unknownContainer);
+const unknownHeader = unknownContainer.children[0].children[0];
+assert(!unknownHeader.innerHTML.includes("Undefined"), "undefined language label should be hidden");
+
+process.stdout.write(JSON.stringify({
+  wrapperCount: wrappers.length,
+  headerHtml: wrapper.children[0].innerHTML,
+  unknownHeaderHtml: unknownHeader.innerHTML,
+}));
+"""
+        result = subprocess.run(
+            ["node", "-e", node_script],
+            cwd=root,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            check=True,
+        )
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["wrapperCount"], 1)
+        self.assertIn("code-copy-btn", payload["headerHtml"])
+        self.assertNotIn("Undefined", payload["unknownHeaderHtml"])
+
+    def test_v022_web_markdown_browser_smoke_harness_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        smoke_source = (root / "scripts" / "smoke-web-markdown-browser.py").read_text(encoding="utf-8")
+        support_source = (root / "scripts" / "web_smoke_support.py").read_text(encoding="utf-8")
+
+        self.assertIn("from web_smoke_support import ROOT, base_api_stub_script, web_asset_server", smoke_source)
+        self.assertIn("class WebAssetHandler", support_source)
+        self.assertIn("STATIC_ROOT = WEB_ROOT / \"static\"", support_source)
+        self.assertIn("def base_api_stub_script", support_source)
+        self.assertIn("class QuietThreadingHTTPServer", support_source)
+        self.assertIn("def handle_error", support_source)
+        self.assertIn("from playwright.sync_api import sync_playwright", smoke_source)
+        self.assertIn("page.add_init_script(_stubbed_api_script())", smoke_source)
+        self.assertIn("typeof renderMarkdown === 'function'", smoke_source)
+        self.assertIn("typeof renderStreamingMarkdown === 'function'", smoke_source)
+        self.assertIn("renderAnswerHtml(finalFixture)", smoke_source)
+        self.assertIn("renderStreamingMarkdown(source)", smoke_source)
+        self.assertIn("createBotMessageEl(finalFixture", smoke_source)
+        self.assertIn("renderRuntimeProjectionRequest(runningProjection", smoke_source)
+        self.assertIn("rawMdPreserved", smoke_source)
+        self.assertIn("console_errors", smoke_source)
+        self.assertIn("\"# Browser Smoke \\u2713\"", smoke_source)
+        self.assertIn("\"second line \\U0001f600\"", smoke_source)
+        self.assertIn("parser.add_argument(\"--screenshot\"", smoke_source)
+
+    def test_v022_web_project_session_browser_smoke_harness_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        smoke_source = (root / "scripts" / "smoke-web-project-session-browser.py").read_text(encoding="utf-8")
+        support_source = (root / "scripts" / "web_smoke_support.py").read_text(encoding="utf-8")
+
+        self.assertIn("class StaticSiteHandler", support_source)
+        self.assertIn("def static_site_server(root: Path", support_source)
+        self.assertIn("from web_smoke_support import ROOT, static_site_server", smoke_source)
+        self.assertIn("parser.add_argument(\"--app-root\", default=\"desktop/dist\"", smoke_source)
+        self.assertIn("window.ecorexDesktop = {", smoke_source)
+        self.assertIn("getEnterpriseSession: () => makeResult", smoke_source)
+        self.assertIn("getSidecarStatus: () => makeResult", smoke_source)
+        self.assertIn("apiJson: ({ path, method, body }) =>", smoke_source)
+        self.assertIn("pathname === '/api/sessions'", smoke_source)
+        self.assertIn("pathname === '/message'", smoke_source)
+        self.assertIn("sentBodies.push(JSON.parse(JSON.stringify(body || {})))", smoke_source)
+        self.assertIn("project_context_meta", smoke_source)
+        self.assertIn("project_context_meta.projectId === 'proj-a'", smoke_source)
+        self.assertIn("sent.hidden_context", smoke_source)
+        self.assertIn("file_type === 'directory'", smoke_source)
+        self.assertIn("projectRows().some((row) => text(row).includes('Project Saved'))", smoke_source)
+        self.assertIn("generalRows().some((row) => text(row).includes('General Saved'))", smoke_source)
+        self.assertIn("project session leaked into general list", smoke_source)
+        self.assertIn("general session leaked into project list", smoke_source)
+        self.assertIn("row.getAttribute('draggable') === 'false'", smoke_source)
+        self.assertIn("new DragEvent('dragstart'", smoke_source)
+        self.assertIn("event.defaultPrevented || allowed === false", smoke_source)
+        self.assertIn("row.dataset.sessionOwnership === 'project'", smoke_source)
+        self.assertIn("row.dataset.sessionOwnership === 'general'", smoke_source)
+        self.assertIn("composer autosize", smoke_source)
+        self.assertIn("textarea.getBoundingClientRect().height > initialHeight", smoke_source)
+        self.assertIn("expandedHeight <= maxHeight + 2", smoke_source)
+        self.assertIn("ecorex-project-proj-a-", smoke_source)
+        self.assertIn("!Object.keys(state).some((key) => key.startsWith('ecorex-pending-project-'))", smoke_source)
+        self.assertIn("parser.add_argument(\"--screenshot\"", smoke_source)
+
+    def test_v023_session_cross_talk_browser_smoke_harness_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        smoke_path = root / "scripts" / "smoke-web-session-cross-talk-browser.py"
+        smoke_source = smoke_path.read_text(encoding="utf-8")
+        probe_script = python_function_literal_return(smoke_path, "_probe_script")
+
+        self.assertIn("from web_smoke_support import ROOT, static_site_server", smoke_source)
+        self.assertIn("parser.add_argument(\"--app-root\", default=\"desktop/dist\"", smoke_source)
+        self.assertIn("localStorage.setItem('ecorex-pinned-sessions'", smoke_source)
+        self.assertIn("url.searchParams.get('include_pinned') === '1'", smoke_source)
+        self.assertIn("pinnedCount: pinnedIds.length", smoke_source)
+        self.assertIn("assert(!hasProject('General Backend Wins')", probe_script)
+        self.assertIn("backend general session leaked into project bucket through stale local binding", probe_script)
+        self.assertIn("assert(!hasGeneral('Project Backend Wins')", probe_script)
+        self.assertIn("backend project session leaked into general bucket", probe_script)
+        self.assertIn("assert(pinnedNewerIndex < pinnedOldIndex", probe_script)
+        self.assertIn("pinned sessions were not sorted newest-first inside pinned group", probe_script)
+        self.assertIn("assert(pinnedOldIndex < unpinnedFreshIndex", probe_script)
+        self.assertIn("pinned group did not stay above newer unpinned sessions", probe_script)
+        self.assertIn("assert(pinnedAfterRename['session-general-backend'] !== true", probe_script)
+        self.assertIn("rename auto-pinned a previously unpinned session", probe_script)
+        self.assertIn("renameDidNotPin", probe_script)
+        self.assertIn("fixtureHash", smoke_source)
+        self.assertIn("parser.add_argument(\"--artifact\"", smoke_source)
+
+    def test_v023_session_refresh_replay_browser_smoke_harness_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        smoke_path = root / "scripts" / "smoke-web-session-cross-talk-refresh-replay.py"
+        smoke_source = smoke_path.read_text(encoding="utf-8")
+        stub_script = python_function_literal_return(smoke_path, "_stub_script")
+        race_script = python_function_literal_return(smoke_path, "_race_probe_script")
+        refresh_script = python_function_literal_return(smoke_path, "_refresh_probe_script")
+
+        self.assertIn("from web_smoke_support import ROOT, static_site_server", smoke_source)
+        self.assertIn("parser.add_argument(\"--app-root\", default=\"desktop/dist\"", smoke_source)
+        self.assertNotIn("B cached before smoke", stub_script + race_script + refresh_script)
+        self.assertNotIn("window.ecorexDesktop.apiJson", race_script)
+        self.assertIn("A LATE CONTENT MUST NOT APPEAR", stub_script + race_script + refresh_script)
+        self.assertIn("B CLEAN CONTENT STAYS VISIBLE", stub_script + race_script + refresh_script)
+        self.assertIn("late A history polluted active B session", race_script)
+        self.assertIn("SESSION_MISMATCH", stub_script)
+        self.assertIn("streamExpectedSessionObserved", race_script)
+        self.assertIn("mismatchDiagnosticObserved", race_script)
+        self.assertIn("renderer mismatch diagnostic polluted UI", race_script)
+        self.assertIn("assert(projectionCallCount <= 6", race_script)
+        self.assertIn("assert(streamCallCount <= 6", race_script)
+        self.assertIn("assert(backendHistoryFetched", refresh_script)
+        self.assertIn("call.target === 'session-b'", refresh_script)
+        self.assertIn("page.reload", smoke_source)
+        self.assertIn("refreshRejectedLateSession", refresh_script)
+        self.assertIn("backendHistoryFetched", refresh_script)
+        self.assertIn("fixtureHash", smoke_source)
+        self.assertIn("parser.add_argument(\"--artifact\"", smoke_source)
+
+    def test_v022_web_long_answer_preview_renders_full_markdown_before_css_clip(self):
+        root = Path(__file__).resolve().parents[1]
+        node_script = r"""
+const fs = require("fs");
+const source = fs.readFileSync("channel/web/static/js/console.js", "utf8");
+
+function extractFunction(name) {
+  const marker = `function ${name}(`;
+  const start = source.indexOf(marker);
+  if (start < 0) throw new Error(`missing ${name}`);
+  const braceStart = source.indexOf("{", start);
+  let depth = 0;
+  for (let i = braceStart; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === "{") depth += 1;
+    if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, i + 1);
+    }
+  }
+  throw new Error(`unterminated ${name}`);
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+global.currentLang = "en";
+function renderMarkdown(value) {
+  return `<rendered data-len="${String(value || "").length}">${escapeHtml(value)}</rendered>`;
+}
+
+eval([
+  "const LONG_REPLY_COLLAPSE_CHARS = 1800;",
+  extractFunction("longAnswerLabel"),
+  extractFunction("renderAnswerHtml"),
+].join("\n"));
+
+const markdown = [
+  "```javascript",
+  "const value = 1 < 2;",
+  "```",
+  "",
+  "tail-" + "x".repeat(1900),
+].join("\n");
+const html = renderAnswerHtml(markdown, false);
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+assert(html.includes("long-answer-preview"), "collapsed long-answer preview missing");
+assert(html.includes(`data-len="${markdown.length}"`), "collapsed preview did not render full markdown");
+assert(html.includes("```javascript"), "fence opening was sliced out");
+assert(html.includes("tail-"), "tail content was sliced out");
+assert(!html.includes("..."), "collapsed preview should rely on CSS clipping, not raw markdown ellipsis");
+process.stdout.write(JSON.stringify({ html, len: markdown.length }));
+"""
+        result = subprocess.run(
+            ["node", "-e", node_script],
+            cwd=root,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            check=True,
+        )
+        payload = json.loads(result.stdout)
+        self.assertIn("long-answer-preview", payload["html"])
+        self.assertGreater(payload["len"], 1800)
+
+    def test_v022_web_tool_result_file_urls_are_attribute_escaped(self):
+        root = Path(__file__).resolve().parents[1]
+        node_script = r"""
+const fs = require("fs");
+global.window = global;
+global.currentLang = "en";
+global.__ecorexRuntimePath = (value) => value;
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+const source = fs.readFileSync("channel/web/static/js/console.js", "utf8");
+const rendererStart = source.indexOf("// Markdown Renderer");
+const rendererEnd = source.indexOf("// =====================================================================\r\n// Chat Module");
+if (rendererStart < 0 || rendererEnd < 0) throw new Error("renderer section markers missing");
+eval(source.slice(rendererStart, rendererEnd));
+
+function extractFunction(name) {
+  const marker = `function ${name}(`;
+  const start = source.indexOf(marker);
+  if (start < 0) throw new Error(`missing ${name}`);
+  const braceStart = source.indexOf("{", start);
+  let depth = 0;
+  for (let i = braceStart; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === "{") depth += 1;
+    if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, i + 1);
+    }
+  }
+  throw new Error(`unterminated ${name}`);
+}
+eval(extractFunction("_renderSentFileFromToolResult"));
+
+const payload = {
+  type: "file_to_send",
+  path: 'https://example.com/report.txt" onclick="alert(1)',
+  file_type: "file",
+  file_name: 'bad" onclick="alert(2).txt',
+};
+const html = _renderSentFileFromToolResult({ result: JSON.stringify(payload) });
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+assert(html.includes('rel="noopener noreferrer"'), "file link safe rel missing");
+assert(!html.includes('" onclick="alert'), "hostile file URL/name broke out of attribute");
+assert(html.includes("&quot; onclick=&quot;alert(1)"), "file URL quote was not escaped");
+assert(html.includes("bad&quot; onclick=&quot;alert(2).txt"), "file name quote was not escaped");
+
+process.stdout.write(JSON.stringify({ html }));
+"""
+        result = subprocess.run(
+            ["node", "-e", node_script],
+            cwd=root,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            check=True,
+        )
+        payload = json.loads(result.stdout)
+        self.assertIn('rel="noopener noreferrer"', payload["html"])
+        self.assertNotIn('" onclick="alert', payload["html"])
+
+    def test_v022_web_stream_terminal_and_loss_converge_from_runtime_projection(self):
+        root = Path(__file__).resolve().parents[1]
+        console_source = (root / "channel" / "web" / "static" / "js" / "console.js").read_text(encoding="utf-8")
+
+        self.assertIn("async function loadRequestRuntimeProjection(requestId, opts)", console_source)
+        self.assertIn("fetch(`/api/runtime-projection?${params.toString()}`", console_source)
+        self.assertIn("function applyRuntimeProjectionSnapshot(projection, reason)", console_source)
+        self.assertIn("function refreshRuntimeProjectionSnapshot(reason)", console_source)
+        self.assertIn("function startNonSseProjectionLoop(reason)", console_source)
+        self.assertIn("typeof window.EventSource !== 'function'", console_source)
+        self.assertIn("falling back to runtime projection polling", console_source)
+        self.assertIn("renderRuntimeProjectionRequest(projection, 'poll_projection')", console_source)
+        self.assertIn("runtimeProjectionBotSelector(rid)", console_source)
+        self.assertIn("botEl.dataset.runtimeProjectionSource", console_source)
+        self.assertIn("botEl.dataset.runtimeProjectionEventId", console_source)
+        self.assertIn("runtimeProjectionAssistantMessage(projection)", console_source)
+        self.assertIn("runtimeProjectionArtifacts(assistant, projection)", console_source)
+        self.assertIn("runtimeProjectionIsTerminal(projection, assistant)", console_source)
+        self.assertIn("void refreshRuntimeProjectionSnapshot('sse_terminal');", console_source)
+        self.assertIn("void refreshRuntimeProjectionSnapshot('sse_error');", console_source)
+        self.assertIn("void refreshRuntimeProjectionSnapshot('stream_lost').then(applied =>", console_source)
+        self.assertLess(
+            console_source.index("void refreshRuntimeProjectionSnapshot('stream_lost').then(applied =>"),
+            console_source.index("if (!applied) renderLegacyStreamLoss();"),
+        )
+
+        node_script = r"""
+const fs = require("fs");
+const source = fs.readFileSync("channel/web/static/js/console.js", "utf8");
+
+function extractFunction(name) {
+  const marker = `function ${name}(`;
+  const start = source.indexOf(marker);
+  if (start < 0) throw new Error(`missing ${name}`);
+  const braceStart = source.indexOf("{", start);
+  let depth = 0;
+  for (let i = braceStart; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === "{") depth += 1;
+    if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, i + 1);
+    }
+  }
+  throw new Error(`unterminated ${name}`);
+}
+
+eval([
+  "runtimeProjectionAssistantMessage",
+  "runtimeProjectionImageJobs",
+  "runtimeProjectionIsTerminal",
+  "normalizeArtifactSourceForDedupe",
+  "canonicalArtifactDedupeKey",
+  "runtimeProjectionArtifacts",
+].map(extractFunction).join("\n"));
+
+const projection = {
+  state: "completed",
+  messages: [
+    { role: "user", content: "prompt" },
+    { role: "assistant", content: "older", artifacts: [{ title: "same.png", path: "/tmp/same.png" }] },
+    { role: "assistant", content: "final", pending: false, artifacts: [{ title: "same.png", path: "/tmp/same.png" }] },
+  ],
+  image_jobs: [
+    { artifacts: [
+      { title: "same.png", path: "/tmp/same.png" },
+      { title: "second.png", path: "/tmp/second.png" },
+      { title: "output.png", path: "/tmp/run-a/output.png" },
+      { title: "output.png", path: "/tmp/run-b/output.png" },
+    ] }
+  ]
+};
+
+const assistant = runtimeProjectionAssistantMessage(projection);
+const artifacts = runtimeProjectionArtifacts(assistant, projection);
+const payload = {
+  assistantContent: assistant.content,
+  terminal: runtimeProjectionIsTerminal(projection, assistant),
+  artifacts: artifacts.map(item => ({ title: item.title, path: item.path })),
+};
+if (payload.assistantContent !== "final") throw new Error("did not choose latest assistant message");
+if (!payload.terminal) throw new Error("terminal projection not detected");
+if (payload.artifacts.length !== 4) throw new Error("artifacts were over- or under-deduped");
+process.stdout.write(JSON.stringify(payload));
+"""
+        result = subprocess.run(
+            ["node", "-e", node_script],
+            cwd=root,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["assistantContent"], "final")
+        self.assertEqual(
+            [item["path"] for item in payload["artifacts"]],
+            ["/tmp/same.png", "/tmp/second.png", "/tmp/run-a/output.png", "/tmp/run-b/output.png"],
+        )
+
+    def test_v022_web_history_load_refreshes_session_runtime_projection(self):
+        root = Path(__file__).resolve().parents[1]
+        console_source = (root / "channel" / "web" / "static" / "js" / "console.js").read_text(encoding="utf-8")
+
+        for marker in (
+            "let sessionRuntimeProjectionCursors = {};",
+            "async function loadSessionRuntimeProjection(sid, opts)",
+            "function updateSessionRuntimeProjectionCursor(ownerSession, latestEventId)",
+            "params.set('session_id', ownerSession);",
+            "function runtimeProjectionUserMessage(projection)",
+            "function runtimeProjectionActiveState(projection, assistant)",
+            "function updateBotMessageElFromRuntimeProjection(botEl, projection, reason)",
+            "function renderRuntimeProjectionRequest(projection, reason)",
+            "async function refreshSessionRuntimeProjection(reason, opts)",
+            "function normalizeRuntimeProjectionHistoryPayload(payload)",
+            "function fetchHistoryPage(ownerSession, page)",
+            "params.set('history_page', String(page));",
+            "return fetch(`/api/runtime-projection?${params.toString()}`, { cache: 'no-store' })",
+            "throw new Error('runtime projection history unavailable');",
+            "fetch(`/api/history?session_id=${encodeURIComponent(ownerSession)}&page=${page}&page_size=20`)",
+            "const ownerSession = sessionId;",
+            "fetchHistoryPage(ownerSession, page)",
+            "const messages = Array.isArray(data.messages) ? data.messages : [];",
+            "(messages.length === 0 && runtimeRequests.length === 0)",
+            "messages.forEach(msg => {",
+            "if (ownerSession !== sessionId) return;",
+            "renderRuntimeProjectionRequest(requestProjection, 'history_projection');",
+            "updateSessionRuntimeProjectionCursor(ownerSession, data.runtime_projection.latest_event_id);",
+            "void refreshSessionRuntimeProjection('history_load_recheck', {",
+            "afterEventId: sessionRuntimeProjectionCursors[ownerSession] || 0",
+            "sessionActiveRequest[sessionId] = requestId;",
+            "startSSE(requestId, botEl, new Date(), null);",
+            "botEl.dataset.runtimeProjectionState",
+            "artifact.preview_url",
+            "artifact.relative_path",
+            "artifact.file_name",
+        ):
+            self.assertIn(marker, console_source)
+
+        self.assertLess(
+            console_source.index("const ownerSession = sessionId;"),
+            console_source.index("fetchHistoryPage(ownerSession, page)"),
+        )
+        self.assertLess(
+            console_source.index("return fetch(`/api/runtime-projection?${params.toString()}`, { cache: 'no-store' })"),
+            console_source.index("fetch(`/api/history?session_id=${encodeURIComponent(ownerSession)}&page=${page}&page_size=20`)"),
+        )
+        self.assertLess(
+            console_source.index("void refreshSessionRuntimeProjection('history_load_recheck', {"),
+            console_source.index("}).catch(err => console.warn('[runtime-projection] session refresh failed:', err));"),
+        )
+
+        node_script = r"""
+const fs = require("fs");
+const source = fs.readFileSync("channel/web/static/js/console.js", "utf8");
+
+function extractFunction(name) {
+  const marker = `function ${name}(`;
+  const start = source.indexOf(marker);
+  if (start < 0) throw new Error(`missing ${name}`);
+  const braceStart = source.indexOf("{", start);
+  let depth = 0;
+  for (let i = braceStart; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === "{") depth += 1;
+    if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, i + 1);
+    }
+  }
+  throw new Error(`unterminated ${name}`);
+}
+
+eval([
+  "runtimeProjectionUserMessage",
+  "runtimeProjectionAssistantMessage",
+  "runtimeProjectionActiveState",
+].map(extractFunction).join("\n"));
+
+const active = {
+  state: "streaming",
+  messages: [
+    { role: "user", content: "prompt" },
+    { role: "assistant", content: "partial", pending: true },
+  ],
+};
+const terminal = {
+  state: "completed",
+  messages: [
+    { role: "assistant", content: "done", pending: false },
+  ],
+};
+const payload = {
+  userContent: runtimeProjectionUserMessage(active).content,
+  assistantContent: runtimeProjectionAssistantMessage(active).content,
+  activeState: runtimeProjectionActiveState(active, runtimeProjectionAssistantMessage(active)),
+  terminalState: runtimeProjectionActiveState(terminal, runtimeProjectionAssistantMessage(terminal)),
+};
+if (payload.userContent !== "prompt") throw new Error("user projection not found");
+if (payload.assistantContent !== "partial") throw new Error("assistant projection not found");
+if (!payload.activeState) throw new Error("active state not detected");
+if (payload.terminalState) throw new Error("terminal state treated as active");
+process.stdout.write(JSON.stringify(payload));
+"""
+        result = subprocess.run(
+            ["node", "-e", node_script],
+            cwd=root,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["activeState"])
+        self.assertFalse(payload["terminalState"])
+
+    def test_v022_web_runtime_projection_reconnect_browser_smoke_harness_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        console_source = (root / "channel" / "web" / "static" / "js" / "console.js").read_text(encoding="utf-8")
+        script = (root / "scripts" / "smoke-web-runtime-projection-reconnect-browser.py").read_text(encoding="utf-8")
+
+        self.assertIn("function _hasUnsafeUrlScheme(url)", console_source)
+        self.assertIn("const rawUrl = String(url).trim();", console_source)
+        self.assertIn("if (_hasUnsafeUrlScheme(rawUrl)) return '';", console_source)
+        self.assertIn("return _hasUnsafeUrlScheme(webUrl) ? '' : webUrl;", console_source)
+        self.assertIn("if (!webUrl) return '';", console_source)
+        self.assertIn("artifact-card-disabled", console_source)
+        self.assertIn("const toolName = escapeHtml(String(item.tool || 'tool'));", console_source)
+        self.assertIn("timeEl.textContent = `${String(item.execution_time)}s`;", console_source)
+        self.assertIn("existingSameRequestBubble", console_source)
+        self.assertIn("Always", console_source)
+        self.assertIn("function ensureRuntimeProjectionUserMessage(projection, requestId, botEl, reason)", console_source)
+        self.assertIn("userEl.dataset.runtimeProjectionUserForRequest = requestId;", console_source)
+        self.assertIn("ensureRuntimeProjectionUserMessage(projection, requestId, botEl, reason);", console_source)
+
+        self.assertIn("web_asset_server", script)
+        self.assertIn("base_api_stub_script", script)
+        self.assertIn("localStorage.setItem('cow_session_id', 'session-projection-smoke')", script)
+        self.assertIn("path === '/api/runtime-projection'", script)
+        self.assertIn("url.searchParams.has('history_page')", script)
+        self.assertIn("historyProjectionFetches", script)
+        self.assertIn("historyFallbackCalls", script)
+        self.assertIn("req-history-projection", script)
+        self.assertIn("req-history-active", script)
+        self.assertIn("PassiveEventSource", script)
+        self.assertIn("Active History Projection", script)
+        self.assertIn("history projection user prompt missing", script)
+        self.assertIn("active projection user prompt missing", script)
+        self.assertIn("req-stable-stream", script)
+        self.assertIn("StableEventSource", script)
+        self.assertIn("<img src=x onerror=alert(1)>", script)
+        self.assertIn("stable hostile tool HTML created an image", script)
+        self.assertIn("stable hostile tool HTML created an event handler", script)
+        self.assertIn("stable stream unexpectedly reconnected", script)
+        self.assertIn("message-recovery-actions", script)
+        self.assertIn("stable stream showed recovery actions", script)
+        self.assertIn("startSSE('req-projection-loss'", script)
+        self.assertIn("LostEventSource", script)
+        self.assertIn("Math.min(Number(delay) || 0, 2)", script)
+        self.assertIn("dataset.runtimeProjectionSource === 'stream_lost'", script)
+        self.assertIn("lostState.lostStreamUrls || []).length >= 11", script)
+        self.assertIn("Recovered after stream loss", script)
+        self.assertIn("javascript:alert(1)", script)
+        self.assertIn("file:///C:/Users/user/private.txt", script)
+        self.assertIn("disabledUnsafeArtifacts.length === 2", script)
+        self.assertIn("disabled unsafe artifact titles missing", script)
+        self.assertIn("disabled unsafe artifacts exposed links or actions", script)
+        self.assertIn("!/^file:/i.test(href)", script)
+        self.assertIn("!href.includes('/api/file?path=')", script)
+        self.assertIn("unsafe projection artifact href survived", script)
+        self.assertIn("stream-loss projection created duplicate bot bubbles", script)
+        self.assertIn("req-poll-image-job", script)
+        self.assertIn("pollProjectionReady", script)
+        self.assertIn("stale poll placeholder should update", script)
+        self.assertIn("poll projection image job rendered", script)
+        self.assertIn("poll stale bubble was not updated from projection", script)
+        self.assertIn("legacy poll fallback should not render", script)
+        self.assertIn("rendered instead of projection", script)
+        self.assertIn("req-non-sse-image-job", script)
+        self.assertIn("window.EventSource = undefined", script)
+        self.assertIn("non-SSE image job projection rendered", script)
+        self.assertIn("non-SSE projection endpoint was not polled", script)
+        self.assertIn("non-SSE fallback showed recovery actions", script)
+        self.assertIn("legacy /api/history fallback was used", script)
+        self.assertIn("web-runtime-projection-reconnect-browser.py", str(root / "scripts" / "smoke-web-runtime-projection-reconnect-browser.py"))
+
+    def test_v022_web_runtime_projection_history_pagination_browser_smoke_harness_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        console_source = (root / "channel" / "web" / "static" / "js" / "console.js").read_text(encoding="utf-8")
+        script = (root / "scripts" / "smoke-web-runtime-projection-history-pagination-browser.py").read_text(encoding="utf-8")
+
+        for marker in (
+            "function updateSessionRuntimeProjectionCursor(ownerSession, latestEventId)",
+            "updateSessionRuntimeProjectionCursor(ownerSession, projection.latest_event_id);",
+            "updateSessionRuntimeProjectionCursor(ownerSession, data.runtime_projection.latest_event_id);",
+            "afterEventId: sessionRuntimeProjectionCursors[ownerSession] || 0",
+            "fetch(`/api/runtime-projection?${params.toString()}`, { cache: 'no-store' })",
+            "fetch(`/api/history?session_id=${encodeURIComponent(ownerSession)}&page=${page}&page_size=20`)",
+        ):
+            self.assertIn(marker, console_source)
+
+        for marker in (
+            "web_asset_server",
+            "base_api_stub_script",
+            "localStorage.setItem('cow_session_id', 'session-history-pagination-smoke')",
+            "path === '/api/runtime-projection'",
+            "url.searchParams.has('history_page')",
+            "state.historyProjectionFetches.push(url.search)",
+            "req-history-page1",
+            "req-history-page2",
+            "req-new-after-cursor",
+            "req-should-not-full-replay",
+            "Page One Projection",
+            "Page Two Projection",
+            "Cursor Delta",
+            "page one cursor recheck used after_event_id=200",
+            "paramsFor(search).get('after_event_id') === '200'",
+            "paramsFor(search).get('after_event_id') === '210'",
+            "page 1 request duplicated between history messages and runtime requests",
+            "page 2 request duplicated between history messages and runtime requests",
+            "legacy history fallback was used during primary projection page 1",
+            "legacy history fallback was used during primary projection page 2",
+            "weak-network fallback history response",
+            "weak-network fallback was not isolated to the forced projection failure",
+        ):
+            self.assertIn(marker, script)
+        self.assertIn(
+            "web-runtime-projection-history-pagination-browser.py",
+            str(root / "scripts" / "smoke-web-runtime-projection-history-pagination-browser.py"),
+        )
+
+    def test_v022_web_runtime_real_network_browser_smoke_harness_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        console_source = (root / "channel" / "web" / "static" / "js" / "console.js").read_text(encoding="utf-8")
+        script = (root / "scripts" / "smoke-web-runtime-real-network-browser.py").read_text(encoding="utf-8")
+
+        for marker in (
+            "new EventSource(`/stream?request_id=${encodeURIComponent(requestId)}${cursor}`)",
+            "last_event_id=${encodeURIComponent(String(lastEventId))}",
+            "void refreshRuntimeProjectionSnapshot('stream_lost').then(applied => {",
+            "void refreshRuntimeProjectionSnapshot('sse_terminal');",
+        ):
+            self.assertIn(marker, console_source)
+
+        for marker in (
+            "class RealNetworkSmokeHandler(WebAssetHandler)",
+            "QuietThreadingHTTPServer((\"127.0.0.1\", 0), handler)",
+            "Content-Type\", \"text/event-stream; charset=utf-8\"",
+            "def _write_sse_event(self, event_id: str, payload: dict[str, Any])",
+            "id: {event_id}\\n",
+            "data: {body}\\n\\n",
+            "req-real-stable",
+            "req-real-loss",
+            "rn-loss-1",
+            "last_event_id",
+            "streamAttempts",
+            "runtimeProjectionRequests",
+            "legacy /api/history fallback was used",
+            "page.add_init_script(f\"localStorage.setItem('cow_session_id'",
+            "--artifact",
+        ):
+            self.assertIn(marker, script)
+        self.assertNotIn("base_api_stub_script", script)
+        self.assertNotIn("window.fetch =", script)
+        self.assertNotIn("window.EventSource =", script)
+        self.assertIn(
+            "web-runtime-real-network-browser.py",
+            str(root / "scripts" / "smoke-web-runtime-real-network-browser.py"),
+        )
+
+    def test_v022_web_image_jobs_browser_api_smoke_harness_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        console_source = (root / "channel" / "web" / "static" / "js" / "console.js").read_text(encoding="utf-8")
+        smoke_source = (root / "scripts" / "smoke-web-image-jobs-browser.py").read_text(encoding="utf-8")
+
+        for marker in (
+            "function _isRuntimeWebPath(url)",
+            "pathname.startsWith('/uploads/')",
+            "function runtimeProjectionImageJobs(projection)",
+            "function runtimeProjectionImageJobSummary(projection)",
+            "function runtimeProjectionRenderableText(projection, assistant)",
+            "function runtimeProjectionHasRenderableContent(projection, assistant)",
+            "runtimeProjectionImageJobSummary(projection)",
+            "runtimeProjectionArtifacts(assistant, projection).length > 0",
+            "if (!runtimeProjectionHasRenderableContent(projection, assistant)) return false;",
+            "const content = runtimeProjectionRenderableText(projection, assistant);",
+        ):
+            self.assertIn(marker, console_source)
+
+        for marker in (
+            "Image generation completed with",
+            "Image generation failed.",
+            "Image generation cancelled.",
+            "Image generation is running.",
+        ):
+            self.assertIn(marker, console_source)
+
+        for marker in (
+            "class ImageJobSmokeHandler(WebAssetHandler)",
+            "web_channel.ImageJobsHandler().POST()",
+            "web_channel.ImageJobsHandler().GET()",
+            "web_channel.ImageJobActionHandler().POST(job_id)",
+            "reset_image_job_service_for_tests(self.ledger)",
+            "reset_run_event_ledger_for_tests(db_path)",
+            "reset_run_ledger_for_tests(db_path)",
+            "base_api_stub_script(extra_fetch_cases)",
+            "path === '/api/image-jobs'",
+            "window.__ecorexNativeFetch(input, init)",
+            "dry_run: true",
+            "synchronous: true",
+            "include_events: true",
+            "req-privateprompt",
+            "image-job-privateprompt",
+            "parallelism_policy_version === 'v1'",
+            "requested_max_parallel === 2",
+            "hard_max_parallel === 8",
+            "effective_max_parallel === 2",
+            "parallelism_clamped === false",
+            "parallelism_clamp_reason === 'none'",
+            "private identifiers leaked",
+            "runtime /uploads path was incorrectly routed through file API",
+            "runtime /uploads path should not use backend file API",
+            "local POSIX artifact path did not use backend file API",
+            "pure image job projection should not depend on assistant messages",
+            "service reset did not force projection recovery",
+            "const pureImageJobProjection = {",
+            "renderRuntimeProjectionRequest(pureImageJobProjection, 'image_job_api_smoke')",
+            "pure image job projection was not renderable",
+            "Image generation completed",
+            "image artifacts did not route through backend file API",
+            "image preview did not use backend file API",
+            "artifact-card-disabled",
+            "image_job.progress",
+            "image_job.artifact",
+            "image_job.completed",
+            "serverApiCalls",
+        ):
+            self.assertIn(marker, smoke_source)
+        self.assertIn("smoke-web-image-jobs-browser.py", str(root / "scripts" / "smoke-web-image-jobs-browser.py"))
+
+    def test_v022_image_jobs_provider_fallback_smoke_harness_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        smoke_source = (root / "scripts" / "smoke-image-jobs-provider-fallback.py").read_text(encoding="utf-8")
+        web_source = (root / "channel" / "web" / "web_channel.py").read_text(encoding="utf-8")
+        projection_source = (root / "agent" / "protocol" / "runtime_projection.py").read_text(encoding="utf-8")
+
+        for marker in (
+            "ImageJobsHandler -> ImageJobService -> _image_job_skill_runner",
+            "generate.py --stdin",
+            "FakeImageApiServer",
+            "FakeImageApiHandler.calls",
+            "GENERATION_ROUTE_SUFFIX = \"/images/generations\"",
+            "EDIT_ROUTE_SUFFIX = \"/images/edits\"",
+            "OPENAI_API_BASE",
+            "OPENAI_API_KEY",
+            "reset_image_job_service_for_tests(ledger)",
+            "reset_run_event_ledger_for_tests(db_path)",
+            "web_channel.ImageJobsHandler().POST()",
+            "\"synchronous\": True",
+            "\"include_events\": True",
+            "\"provider\": \"openai\"",
+            "\"model\": \"gpt-image-2-pro\"",
+            "\"image_url\": str(edit_input)",
+            "\"fallback_used\": projected.get(\"fallback_used\")",
+            "\"fallback_from_model\": projected.get(\"fallback_from_model\")",
+            "\"fallback_to_model\": projected.get(\"fallback_to_model\")",
+            "\"last_provider\": projected.get(\"last_provider\")",
+            "\"last_model\": projected.get(\"last_model\")",
+            "durable fallback progress missing",
+            "leaked fake API key",
+            "leaked provider raw error message",
+        ):
+            self.assertIn(marker, smoke_source)
+
+        for marker in (
+            "encoding=\"utf-8\"",
+            "errors=\"replace\"",
+            "\"fallback_used\": bool(model_fallback.get(\"used\"",
+            "\"fallback_provider\": model_fallback.get(\"provider\")",
+            "\"fallback_from_model\": model_fallback.get(\"from_model\")",
+            "\"fallback_to_model\": model_fallback.get(\"to_model\")",
+            "\"fallback_reason\": model_fallback.get(\"reason\")",
+            "\"attempted_provider_count\": payload.get(\"attempted_provider_count\")",
+        ):
+            self.assertIn(marker, web_source)
+
+        for marker in (
+            "\"fallback_used\"",
+            "\"fallback_provider\"",
+            "\"fallback_from_model\"",
+            "\"fallback_to_model\"",
+            "\"fallback_reason\"",
+            "job[\"fallback_used\"] = value",
+            "job[key] = value",
+            "job[f\"last_{key}\"] = value",
+            "\"attempted_provider_count\"",
+        ):
+            self.assertIn(marker, projection_source)
+
+    def test_v022_image_jobs_seven_scenario_smoke_harness_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        smoke_source = (root / "scripts" / "smoke-image-jobs-seven-scenarios.py").read_text(encoding="utf-8")
+
+        for marker in (
+            "Seven-scenario smoke for v0.2.2 backend-led image jobs",
+            "OPENAI_API_KEY",
+            "OPENAI_API_BASE",
+            "credential_source",
+            "web_channel.ImageJobsHandler().POST()",
+            "web_channel.ImageJobsHandler().GET()",
+            "web_channel.ImageJobActionHandler().POST(job_id)",
+            "scenario_external_generation",
+            "scenario_fake_edit_fallback",
+            "scenario_parallel_artifacts",
+            "scenario_ocr_reuse",
+            "scenario_projection_recovery",
+            "scenario_cancel_running",
+            "scenario_validation_no_events",
+            "FakeImageApiServer",
+            "FakeImageApiHandler.calls",
+            "\"image_url\": str(edit_input)",
+            "\"ocr_reuse\": True",
+            "reset_image_job_service_for_tests(ledger)",
+            "recovered_from_projection",
+            "ImageJobCancelled",
+            "validation failures wrote runtime events",
+            "_assert_no_secret_leak",
+            "dry-run-image-brief",
+            "base_url_hash",
+            "scenario_count",
+        ):
+            self.assertIn(marker, smoke_source)
+
+        self.assertNotRegex(smoke_source, r"sk-[0-9a-f]{32,}")
+
+    def test_v022_web_scheduler_projection_management_surface(self):
+        root = Path(__file__).resolve().parents[1]
+        chat_source = (root / "channel" / "web" / "chat.html").read_text(encoding="utf-8")
+        console_source = (root / "channel" / "web" / "static" / "js" / "console.js").read_text(encoding="utf-8")
+        console_css = (root / "channel" / "web" / "static" / "css" / "console.css").read_text(encoding="utf-8")
+        smoke_source = (root / "scripts" / "smoke-web-scheduler-browser.py").read_text(encoding="utf-8")
+
+        self.assertIn('id="tasks-refresh-btn"', chat_source)
+        self.assertIn('id="tasks-runtime-status"', chat_source)
+        self.assertIn('data-i18n="tasks_refresh"', chat_source)
+        self.assertIn("tasks_refresh", console_source)
+
+        self.assertIn("function loadTasksViewLegacyEnabledOnly()", console_source)
+        self.assertIn("function renderSchedulerRuntime(projection)", console_source)
+        self.assertIn("function renderSchedulerProjection(projection)", console_source)
+        self.assertIn("function readSchedulerTaskForm(taskId, task)", console_source)
+        self.assertIn("function schedulerRequest(body)", console_source)
+        self.assertIn("function schedulerPayloadHasProjection(data)", console_source)
+        self.assertIn("schedulerPayloadHasProjection(data)", console_source)
+        self.assertLess(
+            console_source.find("function loadTasksViewLegacyEnabledOnly()"),
+            console_source.rfind("function loadTasksView(force)"),
+        )
+        self.assertLess(
+            console_source.find("function readSchedulerTaskForm(taskId, task)"),
+            console_source.rfind("function renderSchedulerProjection(projection)"),
+        )
+
+        for marker in (
+            "projection.counts",
+            "projection.taskStore",
+            "projection.canModify",
+            "projection.modifyBlockingReason",
+            "projection.blockingReason",
+            "schedulerProjection.tasks",
+            "task.scheduleDescription",
+            "task.nextRunAt",
+            "task.lastRunAt",
+            "task.lastError",
+            "task.action",
+        ):
+            self.assertIn(marker, console_source)
+
+        for marker in (
+            "fetch('/api/scheduler').then",
+            "fetch('/api/scheduler', {",
+            "method: 'POST'",
+            "payload.schedule_type",
+            "payload.schedule_value",
+            "payload.taskDescription",
+            "payload.content",
+            "data-scheduler-action=\"start\"",
+            "data-scheduler-action=\"stop\"",
+            "data-scheduler-action=\"refresh\"",
+            "data-scheduler-action=\"save\"",
+            "data-scheduler-action=\"delete\"",
+            "task.enabled ? 'disable' : 'enable'",
+        ):
+            self.assertIn(marker, console_source)
+
+        active_scheduler_source = console_source[console_source.find("function schedulerString(value)"):]
+        self.assertIn("scheduler-task-editor", active_scheduler_source)
+        self.assertIn("schedulerScheduleTypeOptions(scheduleType)", active_scheduler_source)
+        self.assertIn("readSchedulerTaskForm(taskId, task)", active_scheduler_source)
+        self.assertNotIn("window.prompt", active_scheduler_source)
+
+        for marker in (
+            ".scheduler-runtime-panel",
+            ".scheduler-task-card",
+            ".scheduler-runtime-main",
+            ".scheduler-task-grid",
+            ".scheduler-task-editor",
+            ".scheduler-btn-primary",
+            ".scheduler-btn-danger",
+            "@media (max-width: 720px)",
+        ):
+            self.assertIn(marker, console_css)
+
+        for marker in (
+            "from web_smoke_support import ROOT, base_api_stub_script, web_asset_server",
+            "function cloneProjection()",
+            "path === '/api/scheduler'",
+            "window.__ecorexSmoke.scheduler",
+            "renderSchedulerProjection === 'function'",
+            "loadTasksView === 'function'",
+            "navigateTo('tasks')",
+            "loadTasksView(true)",
+            "scheduler-task-card[data-task-id=\"task-daily\"]",
+            "scheduler-task-card[data-task-id=\"task-disabled\"]",
+            "data-scheduler-action=\"save\"",
+            "data-scheduler-action=\"disable\"",
+            "data-scheduler-action=\"start\"",
+            "failNextStart",
+            "scheduler start failed",
+            "unexpected scheduler payload key",
+            "private receiver leaked into scheduler UI",
+            "secret token leaked into scheduler UI",
+            "private-open-id",
+            "sk-test-secret",
+        ):
+            self.assertIn(marker, smoke_source)
+
+    def test_v022_web_has_no_run_center_user_surface(self):
+        root = Path(__file__).resolve().parents[1]
+        frontend_sources = {
+            "channel/web/chat.html": (root / "channel" / "web" / "chat.html").read_text(encoding="utf-8"),
+            "channel/web/static/js/console.js": (root / "channel" / "web" / "static" / "js" / "console.js").read_text(encoding="utf-8"),
+            "channel/web/static/css/console.css": (root / "channel" / "web" / "static" / "css" / "console.css").read_text(encoding="utf-8"),
+        }
+        forbidden_markers = (
+            "Run Center",
+            "RUNCENTER",
+            "runCenter",
+            "RUN_CENTER",
+            "run-center",
+            "运行中心",
+        )
+        for path, source in frontend_sources.items():
+            for marker in forbidden_markers:
+                self.assertNotIn(marker, source, f"{path} exposes {marker!r} to ordinary Web users")
+
+        web_channel_source = (root / "channel" / "web" / "web_channel.py").read_text(encoding="utf-8")
+        self.assertIn("def attach_run_center_policy", web_channel_source)
+        self.assertIn("RuntimeProjectionHandler", web_channel_source)
+
+    def test_v022_web_run_center_hidden_browser_smoke_harness_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        script = (root / "scripts" / "smoke-web-run-center-hidden-browser.py").read_text(encoding="utf-8")
+
+        self.assertIn("web_asset_server", script)
+        self.assertIn("base_api_stub_script", script)
+        self.assertIn("Run Center", script)
+        self.assertIn("runCenter", script)
+        self.assertIn("RUN_CENTER", script)
+        self.assertIn("run-center", script)
+        self.assertIn("运行中心", script)
+        self.assertIn("document.body.innerText", script)
+        self.assertIn("document.documentElement.outerHTML", script)
+        self.assertIn("[class*=\"run-center\" i]", script)
+        self.assertIn("[aria-label*=\"Run Center\" i]", script)
+        self.assertIn("buttonLeaks", script)
+        self.assertIn("Run Center visible text leaked", script)
+        self.assertIn("Run Center DOM/source marker leaked", script)
+        self.assertIn("Run Center selector surfaced", script)
+        self.assertIn("web-run-center-hidden-browser-smoke.png", script)
+
+    def test_v022_web_ui_polish_browser_smoke_harness_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        script = (root / "scripts" / "smoke-web-ui-polish-browser.py").read_text(encoding="utf-8")
+
+        self.assertIn("from web_smoke_support import ROOT, base_api_stub_script, web_asset_server", script)
+        self.assertIn("from playwright.sync_api import sync_playwright", script)
+        self.assertIn("page.add_init_script(base_api_stub_script())", script)
+        self.assertIn("typeof renderMarkdown === 'function'", script)
+        self.assertIn("typeof createBotMessageEl === 'function'", script)
+        self.assertIn("typeof _buildArtifactHtml === 'function'", script)
+        self.assertIn("createBotMessageEl(finalFixture", script)
+        self.assertIn("window.copyToClipboard = async (text)", script)
+        self.assertIn("window.copyImageToClipboard = async (url)", script)
+        self.assertIn(".copy-msg-btn", script)
+        self.assertIn(".code-copy-btn", script)
+        self.assertIn("renderAnswerHtml(longFixture)", script)
+        self.assertIn("[data-long-answer-toggle=\"expand\"]", script)
+        self.assertIn("renderThinkingHtml(thinkingFixture)", script)
+        self.assertIn(".thinking-full h2", script)
+        self.assertIn("_buildArtifactHtml", script)
+        self.assertIn(".artifact-copy-image", script)
+        self.assertIn(".artifact-menu-btn", script)
+        self.assertIn(".artifact-copy-link", script)
+        self.assertIn("image:/assets/icon.png", script)
+        self.assertIn("PointerEvent('pointerdown'", script)
+        self.assertIn(".menu-group[data-group=\"manage\"]", script)
+        self.assertIn("attach-btn", script)
+        self.assertIn("Run Center", script)
+        self.assertIn("message copy did not write raw Markdown", script)
+        self.assertIn("artifact image copy did not write image payload", script)
+        self.assertIn("artifact action menu did not open", script)
+        self.assertIn("thinking disclosure did not toggle", script)
+        self.assertIn("ordinary Web UI leaked Run Center text", script)
+        self.assertIn("parser.add_argument(\"--screenshot\"", script)
 
     def test_v020_webui_install_pages_hide_manifest_and_harden_mac_retry(self):
         root = Path(__file__).resolve().parents[1]
@@ -1395,9 +8265,9 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertNotIn("resume_args", mac_installer)
         self.assertIn("local curl_args=", mac_installer)
         self.assertIn('curl "${curl_args[@]}" "$url" -o "$partial"', mac_installer)
-        self.assertIn("EcoreX WebUI installer script: 0.2.0", mac_installer)
+        self.assertIn("EcoreX WebUI installer script: 0.2.2", mac_installer)
         self.assertIn("EcoreX WebUI manifest version:", mac_installer)
-        self.assertIn("EcoreX WebUI installer script: 0.2.0", win_installer)
+        self.assertIn("EcoreX WebUI installer script: 0.2.2", win_installer)
         self.assertIn("EcoreX WebUI manifest version:", win_installer)
         self.assertIn("EcoreX WebUI package installer:", package_source)
         self.assertIn("Generated macOS WebUI installer still contains retired resume_args code", package_source)
@@ -1405,6 +8275,44 @@ class TestWebParallelHandlers(unittest.TestCase):
             package_source.index('write_desktop_shortcuts "$URL"'),
             package_source.index('open_browser "$URL"')
         )
+
+    def test_v021_web_deploy_paths_and_client_base_are_mvdcm_ready(self):
+        root = Path(__file__).resolve().parents[1]
+        web_source = (root / "channel" / "web" / "web_channel.py").read_text(encoding="utf-8")
+        nginx_source = (root / "deploy" / "ecorex-site" / "nginx" / "ecorex-agent.conf.example").read_text(encoding="utf-8")
+        web_nginx_source = (root / "deploy" / "ecorex-site" / "nginx" / "ecorex-web.conf.example").read_text(encoding="utf-8")
+        web_caddy_source = (root / "deploy" / "ecorex-site" / "caddy" / "ecorex-web.routes.caddy").read_text(encoding="utf-8")
+        installer_source = (root / "scripts" / "install-ecorex-web.sh").read_text(encoding="utf-8")
+        site_source = (root / "deploy" / "ecorex-site" / "site.js").read_text(encoding="utf-8")
+
+        self.assertIn('var DEFAULT_WEB_CLIENT_KEY = "ecorex-web-v0.2.2-web.1"', web_source)
+        self.assertIn("ecorex-web-v0.2.1-web.1", web_source)
+        self.assertIn("https://mvdcm.ecoremedia.net/ecorex-agent/manifest.json", web_source)
+        self.assertIn("public_base = str(os.environ.get(\"ECOREX_WEB_PUBLIC_BASE_URL\")", web_source)
+        self.assertIn("or (f\"{public_base}/client\" if public_base else \"\")", web_source)
+        self.assertIn("EcoreX-WebUI/0.2.2", web_source)
+        self.assertIn("function runtimePath(path)", web_source)
+        self.assertIn('fetch(runtimePath("/api/knowledge/read?path=" + encodeURIComponent(relPath))', web_source)
+        self.assertIn("location ^~ /ecorex-agent/assets/", nginx_source)
+        self.assertIn("proxy_request_buffering off;", nginx_source)
+        self.assertIn("client_max_body_size 256m;", nginx_source)
+        self.assertIn("location ^~ /ecorex-agent/client/", web_nginx_source)
+        self.assertIn("location = /ecorex-agent/message", web_nginx_source)
+        self.assertIn("location = /ecorex-agent/upload", web_nginx_source)
+        self.assertIn("proxy_request_buffering off;", web_nginx_source)
+        self.assertIn("client_max_body_size 256m;", web_nginx_source)
+        self.assertIn("handle /ecorex-agent/client/*", web_caddy_source)
+        self.assertIn("read_timeout 1200s", web_caddy_source)
+        self.assertIn("write_timeout 1200s", web_caddy_source)
+        self.assertIn('VERSION="${VERSION:-0.2.2}"', installer_source)
+        self.assertIn("https://mvdcm.ecoremedia.net/ecorex-agent/downloads", installer_source)
+        self.assertIn("ECOREX_WEB_CLIENT_BASE=$client_base", installer_source)
+        self.assertIn("ECOREX_TOOL_EXECUTION_LEASE_SECONDS=900", installer_source)
+        self.assertIn("ECOREX_TOOL_EXECUTION_MAX_SECONDS=5400", installer_source)
+        self.assertIn("ECOREX_BASH_MAX_TIMEOUT_SECONDS=7200", installer_source)
+        self.assertIn("wait_for_webui \"$local_url\"", installer_source)
+        self.assertIn("Public proxy smoke did not pass yet", installer_source)
+        self.assertIn("mvdcm.ecoremedia.net/ecorex-agent/install-webui", site_source)
 
     def test_v020_release_manifest_promotion_is_explicit(self):
         root = Path(__file__).resolve().parents[1]
@@ -1426,7 +8334,7 @@ class TestWebParallelHandlers(unittest.TestCase):
 
         self.assertIn('if (!auth.auth_required) return webSession(false, true, null, true);', web_source)
         self.assertIn("invalid client key|client key", web_source)
-        self.assertIn("if (isMissingClientBridge(error)) return webSession(Boolean(auth.auth_required), true);", web_source)
+        self.assertIn("if (isMissingClientBridge(error)) return webSession(Boolean(auth.auth_required), true, authIdentity, true);", web_source)
         self.assertIn('code: modelReady.code || "MODEL_CONFIG_UNAVAILABLE"', web_source)
         self.assertIn("err.status = response.status;", web_source)
         self.assertIn('modelConfigNotReady("ENTERPRISE_LOGIN_REQUIRED"', web_source)
@@ -1635,7 +8543,8 @@ class TestWebParallelHandlers(unittest.TestCase):
                 self.assertEqual(snapshot["requests"], [])
                 stale = snapshot["staleLocks"]
                 self.assertEqual(len(stale), 1)
-                self.assertEqual(stale[0]["session_id"], "session-dead-active-snapshot")
+                self.assertNotIn("session_id", stale[0])
+                self.assertTrue(stale[0]["sessionHash"])
                 self.assertTrue(stale[0]["removed"])
                 self.assertFalse(lock.path.exists())
 
@@ -2253,8 +9162,10 @@ class TestWebParallelHandlers(unittest.TestCase):
             active = [item for item in snapshot["requests"] if item.get("request_id") == request_id]
             self.assertEqual(len(active), 1)
             self.assertEqual(active[0]["status"], "running")
-            stale = [item for item in snapshot["staleLocks"] if item.get("session_id") == session_id]
+            stale = snapshot["staleLocks"]
             self.assertEqual(len(stale), 1)
+            self.assertNotIn("session_id", stale[0])
+            self.assertTrue(stale[0]["sessionHash"])
             self.assertTrue(stale[0]["stale"])
             self.assertTrue(stale[0]["alive"])
             self.assertFalse(stale[0]["dead_owner"])
@@ -3750,7 +10661,9 @@ class TestWebParallelHandlers(unittest.TestCase):
         channel._ensure_sse_state(request_id)
 
         first_stream = channel.stream_response(request_id)
-        self.assertTrue(next(first_stream).startswith(b": keepalive"))
+        heartbeat_chunk = next(first_stream)
+        self.assertIn(b'"type": "heartbeat"', heartbeat_chunk)
+        self.assertIn(request_id.encode("utf-8"), heartbeat_chunk)
 
         channel._push_sse_event(request_id, {
             "type": "done",
@@ -3920,7 +10833,7 @@ class TestWebParallelHandlers(unittest.TestCase):
             keepalive = next(resumed)
             resumed.close()
 
-        self.assertTrue(keepalive.startswith(b": keepalive"))
+        self.assertIn(b'"type": "heartbeat"', keepalive)
         self.assertFalse(channel._sse_request_exists(request_id))
 
     def test_done_event_is_emitted_once_per_request(self):
@@ -5624,6 +12537,34 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertIn("scheduler", budget["intent_groups"])
         self.assertTrue(budget["inherited_followup_intent"])
 
+    def test_tool_schema_budget_inherits_browser_intent_after_login_confirmation(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        def tool(name):
+            return types.SimpleNamespace(
+                name=name,
+                description=f"{name} tool",
+                params={"type": "object", "properties": {}},
+            )
+
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=types.SimpleNamespace(),
+            system_prompt="",
+            tools=[tool("read"), tool("bash"), tool("browser"), tool("host_diagnostics")],
+            messages=[
+                {"role": "user", "content": [{"type": "text", "text": "打开小红书网页版 搜索圣都装饰"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "页面需要登录。"}]},
+                {"role": "user", "content": [{"type": "text", "text": "已登录"}]},
+            ],
+        )
+
+        selected, budget = executor._select_tools_for_schema()
+
+        self.assertIn("browser", selected)
+        self.assertIn("browser", budget["intent_groups"])
+        self.assertTrue(budget["inherited_followup_intent"])
+
     def test_tool_schema_budget_expands_env_config_for_key_intent(self):
         from agent.protocol.agent_stream import AgentStreamExecutor
 
@@ -5804,6 +12745,28 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertTrue(should_stop)
         self.assertIn("Browser/CDP tool chain", reason)
 
+    def test_cdp_raw_bash_reroute_points_to_browser_tool_when_available(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        def tool(name):
+            return types.SimpleNamespace(name=name)
+
+        executor = AgentStreamExecutor(
+            agent=types.SimpleNamespace(last_usage={}),
+            model=types.SimpleNamespace(),
+            system_prompt="",
+            tools=[tool("bash"), tool("browser"), tool("host_diagnostics")],
+        )
+
+        reason = executor._external_capability_reroute(
+            "bash",
+            {"command": "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:9222/json')\""},
+        )
+
+        self.assertIn("Use the `browser` tool directly", reason)
+        self.assertIn("Do not read", reason)
+        self.assertNotIn("Call `host_diagnostics` first", reason)
+
     def test_simple_raw_lark_cli_bash_autoroutes_to_feishu_tool(self):
         from agent.protocol.agent_stream import AgentStreamExecutor
         from agent.tools.base_tool import ToolResult
@@ -5929,6 +12892,7 @@ class TestAgentHostBoundary(unittest.TestCase):
 
     def test_chrome_devtools_mcp_startup_is_allowed_noninteractive(self):
         from common.ecorex_tool_permissions import ToolPermissionBroker
+        from config import chrome_devtools_mcp_args
 
         old_desktop = os.environ.get("ECOREX_DESKTOP")
         old_user_data = os.environ.get("ECOREX_DESKTOP_USER_DATA")
@@ -5941,12 +12905,7 @@ class TestAgentHostBoundary(unittest.TestCase):
                     {
                         "server": "chrome-devtools",
                         "command": "npx",
-                        "args": [
-                            "chrome-devtools-mcp@latest",
-                            "--browserUrl",
-                            "http://127.0.0.1:9222",
-                            "--no-usage-statistics",
-                        ],
+                        "args": chrome_devtools_mcp_args(),
                         "trusted_default_chrome_devtools": True,
                     },
                 )
@@ -5965,6 +12924,7 @@ class TestAgentHostBoundary(unittest.TestCase):
 
     def test_chrome_devtools_mcp_startup_rejects_spoof_and_read_only(self):
         from common.ecorex_tool_permissions import ToolPermissionBroker
+        from config import chrome_devtools_mcp_args
 
         old_desktop = os.environ.get("ECOREX_DESKTOP")
         old_user_data = os.environ.get("ECOREX_DESKTOP_USER_DATA")
@@ -5983,18 +12943,50 @@ class TestAgentHostBoundary(unittest.TestCase):
                 )
                 self.assertFalse(spoof["allowed"])
 
+                remote_endpoint = broker.authorize_noninteractive(
+                    "browser",
+                    {
+                        "server": "chrome-devtools",
+                        "command": "npx",
+                        "args": chrome_devtools_mcp_args("http://192.168.1.10:9222"),
+                        "trusted_default_chrome_devtools": True,
+                    },
+                )
+                self.assertFalse(remote_endpoint["allowed"])
+
+                unknown_flag = broker.authorize_noninteractive(
+                    "browser",
+                    {
+                        "server": "chrome-devtools",
+                        "command": "npx",
+                        "args": chrome_devtools_mcp_args() + ["--chromeArg", "--disable-web-security"],
+                        "trusted_default_chrome_devtools": True,
+                    },
+                )
+                self.assertFalse(unknown_flag["allowed"])
+
+                missing_privacy_flag = broker.authorize_noninteractive(
+                    "browser",
+                    {
+                        "server": "chrome-devtools",
+                        "command": "npx",
+                        "args": [
+                            item
+                            for item in chrome_devtools_mcp_args()
+                            if item not in {"--no-performance-crux", "--redactNetworkHeaders"}
+                        ],
+                        "trusted_default_chrome_devtools": True,
+                    },
+                )
+                self.assertFalse(missing_privacy_flag["allowed"])
+
                 broker.set_mode("read-only")
                 read_only = broker.authorize_noninteractive(
                     "browser",
                     {
                         "server": "chrome-devtools",
                         "command": "npx",
-                        "args": [
-                            "chrome-devtools-mcp@latest",
-                            "--browserUrl",
-                            "http://127.0.0.1:9222",
-                            "--no-usage-statistics",
-                        ],
+                        "args": chrome_devtools_mcp_args(),
                         "trusted_default_chrome_devtools": True,
                     },
                 )
@@ -6009,6 +13001,9 @@ class TestAgentHostBoundary(unittest.TestCase):
                     os.environ["ECOREX_DESKTOP_USER_DATA"] = old_user_data
 
         self.assertFalse(read_only["allowed"])
+        self.assertFalse(remote_endpoint["allowed"])
+        self.assertFalse(unknown_flag["allowed"])
+        self.assertFalse(missing_privacy_flag["allowed"])
         self.assertIn("read-only", read_only["reason"])
 
     def test_mcp_tool_error_result_is_not_reported_as_success(self):
@@ -6627,6 +13622,13 @@ class TestAgentHostBoundary(unittest.TestCase):
                     cancel_event=cancel_event,
                     timeout_seconds=1,
                 )
+                imagegen_decision = broker.authorize(
+                    "imagegen",
+                    "tool-imagegen",
+                    {"prompt": "edit image", "image_url": "C:/secret.png", "output_dir": "C:/out"},
+                    cancel_event=cancel_event,
+                    timeout_seconds=1,
+                )
             finally:
                 if old_desktop is None:
                     os.environ.pop("ECOREX_DESKTOP", None)
@@ -6644,6 +13646,7 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertFalse(web_fetch_decision["allowed"])
         self.assertFalse(web_search_decision["allowed"])
         self.assertFalse(vision_decision["allowed"])
+        self.assertFalse(imagegen_decision["allowed"])
 
     def test_permission_broker_marks_cancelled_wait_and_clears_pending(self):
         from common.ecorex_tool_permissions import ToolPermissionBroker
@@ -6775,6 +13778,7 @@ class TestAgentHostBoundary(unittest.TestCase):
         from agent.skills.manager import SkillManager
         from agent.skills.service import SkillService
         from agent.tools.edit.edit import Edit
+        from agent.tools.imagegen.imagegen import ImageGenTool
         from agent.tools.write.write import Write
         from common.ecorex_tool_permissions import get_tool_permission_broker
 
@@ -6797,6 +13801,15 @@ class TestAgentHostBoundary(unittest.TestCase):
                     "newText": "new",
                 })
                 self.assertEqual(edit_result.status, "error")
+
+                imagegen_result = ImageGenTool().execute({
+                    "prompt": "make a small test image",
+                    "output_dir": os.path.join(workspace, "generated"),
+                    "timeout": 30,
+                })
+                self.assertEqual(imagegen_result.status, "error")
+                self.assertIn("output directory blocked", str(imagegen_result.result))
+                self.assertFalse(os.path.exists(os.path.join(workspace, "generated")))
 
                 manager = SkillManager(
                     builtin_dir=os.path.join(workspace, "builtin"),
@@ -6822,6 +13835,7 @@ class TestAgentHostBoundary(unittest.TestCase):
 
     def test_custom_filesystem_profile_limits_file_tools_to_workspace(self):
         from agent.tools.find.find import Find
+        from agent.tools.imagegen.imagegen import ImageGenTool
         from agent.tools.ls.ls import Ls
         from agent.tools.read.read import Read
         from agent.tools.send.send import Send
@@ -6843,6 +13857,9 @@ class TestAgentHostBoundary(unittest.TestCase):
                 handle.write("SECRET=1")
             with open(outside, "w", encoding="utf-8") as handle:
                 handle.write("outside")
+            outside_image = os.path.join(root, "outside.png")
+            with open(outside_image, "wb") as handle:
+                handle.write(b"\x89PNG\r\n\x1a\n" + b"0" * 32)
 
             os.environ["ECOREX_DESKTOP"] = "1"
             os.environ["ECOREX_USER_DATA"] = user_data
@@ -6872,6 +13889,12 @@ class TestAgentHostBoundary(unittest.TestCase):
                 write_outside = Write({"cwd": workspace}).execute({
                     "path": os.path.join(root, "blocked.txt"),
                     "content": "blocked",
+                })
+                imagegen_outside = ImageGenTool().execute({
+                    "prompt": "edit image",
+                    "image_url": outside_image,
+                    "output_dir": os.path.join(workspace, "generated"),
+                    "timeout": 30,
                 })
                 read_env = Read({"cwd": workspace}).execute({"path": os.path.join("config", ".env")})
                 find_env = Find({"cwd": workspace}).execute({"pattern": "*.env", "include_hidden": True})
@@ -6903,6 +13926,8 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertEqual(write_outside.status, "error")
         self.assertIn("Filesystem profile blocks write", str(write_outside.result))
         self.assertFalse(os.path.exists(os.path.join(root, "blocked.txt")))
+        self.assertEqual(imagegen_outside.status, "error")
+        self.assertIn("input read blocked", str(imagegen_outside.result))
         self.assertEqual(read_env.status, "error")
         self.assertIn("Filesystem profile blocks read", str(read_env.result))
         self.assertEqual(find_env.status, "success")
@@ -7240,7 +14265,7 @@ class TestAgentHostBoundary(unittest.TestCase):
             self.assertNotIn("..", path.parts)
             self.assertEqual(path.name, "MEMORY.md")
 
-    def test_openai_image_provider_uses_gpt_image_2_pro_without_model_fallback(self):
+    def test_openai_image_provider_falls_back_from_gpt_image_2_pro_to_standard_model(self):
         import importlib.util
 
         script_path = Path(__file__).resolve().parents[1] / "skills" / "image-generation" / "scripts" / "generate.py"
@@ -7261,18 +14286,19 @@ class TestAgentHostBoundary(unittest.TestCase):
                 return {"data": [{"b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="}]}
 
             provider._post_json = fake_post_json
-            with self.assertRaises(RuntimeError):
-                provider.generate(
-                    "orange x",
-                    quality="low",
-                    size="1024x1024",
-                    output_format="png",
-                    output_dir=output_dir,
-                )
+            provider.generate(
+                "orange x",
+                quality="low",
+                size="1024x1024",
+                output_format="png",
+                output_dir=output_dir,
+            )
 
-        self.assertEqual(provider.model, "gpt-image-2-pro")
-        self.assertEqual(urls, ["https://api.openai.com/v1/images/generations"])
-        self.assertEqual([payload["model"] for payload in payloads], ["gpt-image-2-pro"])
+        self.assertEqual(provider.model, "gpt-image-2")
+        self.assertEqual(urls, ["https://api.openai.com/v1/images/generations"] * 2)
+        self.assertEqual([payload["model"] for payload in payloads], ["gpt-image-2-pro", "gpt-image-2"])
+        self.assertEqual(provider.model_fallback["from_model"], "gpt-image-2-pro")
+        self.assertEqual(provider.model_fallback["to_model"], "gpt-image-2")
         self.assertEqual(payloads[0]["n"], 1)
         self.assertEqual(payloads[0]["quality"], "low")
         self.assertEqual(payloads[0]["output_format"], "png")
@@ -7352,128 +14378,16 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertEqual(linkai_only["fallback_provider"], "linkai")
         self.assertEqual(linkai_only["fallback_model"], "gpt-image-2-pro")
 
-    def test_v019_xhs_skill_generates_final_images_with_pro_only_contract(self):
+    def test_v023_fixed_xhs_skill_removed_in_favor_of_skill_creator(self):
         root = Path(__file__).resolve().parents[1]
-        script = root / "skills" / "create-xiaohongshu-note" / "scripts" / "generate_cover_image.py"
-        with tempfile.TemporaryDirectory() as tmp:
-            output = Path(tmp) / "cover.png"
-            status_path = Path(tmp) / "cover.status.json"
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(script),
-                    "--prompt",
-                    "final cover smoke",
-                    "--output",
-                    str(output),
-                    "--status-path",
-                    str(status_path),
-                    "--dry-run",
-                ],
-                cwd=str(root),
-                text=True,
-                capture_output=True,
-                timeout=20,
-            )
-
-            self.assertEqual(result.returncode, 0, result.stderr)
-            payload = json.loads(result.stdout)
-            status_payload = json.loads(status_path.read_text(encoding="utf-8"))
-            for item in [payload, status_payload]:
-                self.assertEqual(item["provider"], "openai")
-                self.assertEqual(item["model"], "gpt-image-2-pro")
-                self.assertEqual(item["image_kind"], "final")
-                self.assertFalse(item["draft"])
-                self.assertFalse(item["fallback_used"])
-                self.assertNotIn("fallback_model", item)
-            self.assertFalse(output.exists())
-
-            stale_output = Path(tmp) / "stale-cache.png"
-            stale_status = Path(tmp) / "stale-cache.status.json"
-            stale_bytes = (
-                b"\x89PNG\r\n\x1a\n"
-                b"\x00\x00\x00\rIHDR"
-                + (1).to_bytes(4, "big")
-                + (1).to_bytes(4, "big")
-                + b"\x08\x06\x00\x00\x00"
-                + b"placeholder-python-draft"
-            )
-            stale_output.write_bytes(stale_bytes)
-            stale_status.write_text(
-                json.dumps({
-                    "ok": True,
-                    "status": "completed",
-                    "provider": "openai",
-                    "model": "gpt-image-2-pro",
-                    "image_kind": "final",
-                    "draft": False,
-                    "fallback_used": False,
-                    "prompt_hash": hashlib.sha256(b"final cover smoke\n1080x1440").hexdigest()[:16],
-                    "sha256": hashlib.sha256(stale_bytes).hexdigest(),
-                }),
-                encoding="utf-8",
-            )
-            stale_cache = subprocess.run(
-                [
-                    sys.executable,
-                    str(script),
-                    "--prompt",
-                    "final cover smoke",
-                    "--output",
-                    str(stale_output),
-                    "--status-path",
-                    str(stale_status),
-                    "--dry-run",
-                ],
-                cwd=str(root),
-                text=True,
-                capture_output=True,
-                timeout=20,
-            )
-            self.assertEqual(stale_cache.returncode, 0, stale_cache.stderr)
-            stale_payload = json.loads(stale_cache.stdout)
-            self.assertEqual(stale_payload["status"], "dry_run")
-            self.assertFalse(stale_output.exists())
-
-            wrong_model = subprocess.run(
-                [
-                    sys.executable,
-                    str(script),
-                    "--prompt",
-                    "wrong model smoke",
-                    "--output",
-                    str(Path(tmp) / "wrong.png"),
-                    "--model",
-                    "gpt-image-2",
-                    "--dry-run",
-                ],
-                cwd=str(root),
-                text=True,
-                capture_output=True,
-                timeout=20,
-            )
-            self.assertEqual(wrong_model.returncode, 2)
-            self.assertIn("gpt-image-2-pro", wrong_model.stdout)
-
-            fallback_arg = subprocess.run(
-                [
-                    sys.executable,
-                    str(script),
-                    "--prompt",
-                    "fallback arg smoke",
-                    "--output",
-                    str(Path(tmp) / "fallback.png"),
-                    "--fallback-model",
-                    "gpt-image-2",
-                    "--dry-run",
-                ],
-                cwd=str(root),
-                text=True,
-                capture_output=True,
-                timeout=20,
-            )
-            self.assertNotEqual(fallback_arg.returncode, 0)
-            self.assertIn("--fallback-model", fallback_arg.stderr)
+        self.assertFalse((root / "skills" / "create-xiaohongshu-note").exists())
+        skill_creator = (root / "skills" / "skill-creator" / "SKILL.md").read_text(encoding="utf-8")
+        init_skill = root / "skills" / "skill-creator" / "scripts" / "init_skill.py"
+        quick_validate = root / "skills" / "skill-creator" / "scripts" / "quick_validate.py"
+        self.assertIn("name: skill-creator", skill_creator)
+        self.assertIn("Skill Creation Process", skill_creator)
+        self.assertTrue(init_skill.exists())
+        self.assertTrue(quick_validate.exists())
 
     def test_v014_defaults_keep_agent_install_and_image_2_pro(self):
         root = Path(__file__).resolve().parents[1]
@@ -7500,7 +14414,9 @@ class TestAgentHostBoundary(unittest.TestCase):
 
         generate_py = (root / "skills" / "image-generation" / "scripts" / "generate.py").read_text(encoding="utf-8")
         skill_md = (root / "skills" / "image-generation" / "SKILL.md").read_text(encoding="utf-8")
-        xhs_py = (root / "skills" / "create-xiaohongshu-note" / "scripts" / "generate_cover_image.py").read_text(encoding="utf-8")
+        skill_creator_md = (root / "skills" / "skill-creator" / "SKILL.md").read_text(encoding="utf-8")
+        skill_creator_init = root / "skills" / "skill-creator" / "scripts" / "init_skill.py"
+        skill_creator_validate = root / "skills" / "skill-creator" / "scripts" / "quick_validate.py"
         manager_py = (root / "agent" / "skills" / "manager.py").read_text(encoding="utf-8")
         enterprise_policy_ts = (root / "desktop" / "electron" / "enterprisePolicy.ts").read_text(encoding="utf-8")
         telemetry_ts = (root / "desktop" / "electron" / "telemetry.ts").read_text(encoding="utf-8")
@@ -7508,7 +14424,9 @@ class TestAgentHostBoundary(unittest.TestCase):
         web_channel_py = (root / "channel" / "web" / "web_channel.py").read_text(encoding="utf-8")
         self.assertIn('DEFAULT_MODEL = "gpt-image-2-pro"', generate_py)
         self.assertNotIn('FALLBACK_MODEL = "gpt-image-2"', generate_py)
-        self.assertIn("OpenAI default mode uses `gpt-image-2-pro` only", skill_md)
+        self.assertIn("OpenAI default mode starts with `gpt-image-2-pro`", skill_md)
+        self.assertIn("model_fallback", skill_md)
+        self.assertIn('GPT_IMAGE_STANDARD_MODEL = "gpt-image-2"', generate_py)
         self.assertIn("or OpenAIProvider.DEFAULT_MODEL", generate_py)
         self.assertIn("LinkAI default model follows EcoreX's OpenAI image default", generate_py)
         self.assertNotIn('("linkai",    "image-2-pro")', web_channel_py)
@@ -7516,15 +14434,13 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertIn('"linkai": [\n            "gpt-image-2-pro"', web_channel_py)
         self.assertIn('Do not create final images by coding HTML/canvas/SVG/Pillow layouts', skill_md)
         self.assertIn("legacy `image-2-pro` input is normalized", skill_md)
-        self.assertIn('parser.add_argument("--model", default="gpt-image-2-pro")', xhs_py)
-        self.assertIn("def generate_final_image", xhs_py)
-        self.assertIn('raise ValueError("create-xiaohongshu-note final images must use --model gpt-image-2-pro")', xhs_py)
-        self.assertIn('"image_kind": "final"', xhs_py)
-        self.assertIn('"draft": False', xhs_py)
-        self.assertNotIn('parser.add_argument("--fallback-model"', xhs_py)
-        self.assertNotIn("def generate_with_fallback", xhs_py)
+        self.assertFalse((root / "skills" / "create-xiaohongshu-note").exists())
+        self.assertIn("name: skill-creator", skill_creator_md)
+        self.assertIn("Skill Creation Process", skill_creator_md)
+        self.assertTrue(skill_creator_init.exists())
+        self.assertTrue(skill_creator_validate.exists())
         self.assertIn('DEFAULT_MODEL = "gpt-image-2-pro"', manager_py)
-        self.assertIn('default="gpt-image-2-pro"', manager_py)
+        self.assertNotIn("create-xiaohongshu-note", manager_py)
         self.assertIn('"ecorex-desktop-v0.1.14"', enterprise_policy_ts)
         self.assertIn('"ecorex-desktop-v0.1.13"', enterprise_policy_ts)
         self.assertIn("enterpriseClientEventKeys", enterprise_policy_ts)
@@ -7614,6 +14530,9 @@ class TestAgentHostBoundary(unittest.TestCase):
             "const [runCenterOpen, setRunCenterOpen] = useState(false)",
             "function openRunCenterSurface",
             "setRunCenterOpen(true)",
+            'if (!env.DEV && env.VITE_ECOREX_RUN_CENTER !== "1") return false;',
+            'params.get("ecorexRunCenter") === "1"',
+            'window.localStorage.getItem(RUN_CENTER_DEV_GATE_STORAGE_KEY) === "1"',
             "function runCenterRetryPolicy",
             "request.actions && request.actions.retry === false",
             "request.actions?.retry === true",
@@ -7667,6 +14586,8 @@ class TestAgentHostBoundary(unittest.TestCase):
         for marker in required_markers:
             self.assertIn(marker, app_source)
         self.assertNotIn("await selectSession(existing ||", app_source)
+        self.assertNotIn('params.get("runCenter") !== "0"', app_source)
+        self.assertNotIn('window.localStorage.getItem(RUN_CENTER_DEV_GATE_STORAGE_KEY) !== "0"', app_source)
 
         for marker in [
             ".run-center-panel",
@@ -8024,6 +14945,9 @@ class TestAgentHostBoundary(unittest.TestCase):
         for marker in [
             "RUN_CENTER_DEV_GATE_STORAGE_KEY",
             "runCenterDevVisible &&",
+            'if (!env.DEV && env.VITE_ECOREX_RUN_CENTER !== "1") return false;',
+            'params.get("ecorexRunCenter") === "1"',
+            'window.localStorage.getItem(RUN_CENTER_DEV_GATE_STORAGE_KEY) === "1"',
             "SIDEBAR_COLLAPSE_STORAGE_KEY",
             "latestSendAttemptRef",
             "restoreUnacceptedDraft",
@@ -8036,6 +14960,8 @@ class TestAgentHostBoundary(unittest.TestCase):
             "normalizeAttachmentDedupeKey",
         ]:
             self.assertIn(marker, app_source)
+        self.assertNotIn('params.get("runCenter") !== "0"', app_source)
+        self.assertNotIn('window.localStorage.getItem(RUN_CENTER_DEV_GATE_STORAGE_KEY) !== "0"', app_source)
         for marker in [
             "createPortal",
             "artifact-action-menu-portal",
@@ -8166,7 +15092,7 @@ class TestAgentHostBoundary(unittest.TestCase):
             (custom_skill / "scripts").mkdir(parents=True)
             (builtin_skill / "SKILL.md").write_text(
                 "---\nname: image-generation\ndescription: Generate images\n---\n"
-                "OpenAI default mode uses `gpt-image-2-pro` only\n\"output_format\"\n"
+                "OpenAI default mode starts with `gpt-image-2-pro`\nmodel_fallback\n\"output_format\"\n"
                 "/images/edits\nrequests with `image_url` use\n"
                 "LinkAI default model follows EcoreX's OpenAI image default\n",
                 encoding="utf-8",
@@ -8202,7 +15128,7 @@ class TestAgentHostBoundary(unittest.TestCase):
             (custom_skill / "scripts").mkdir(parents=True)
             (builtin_skill / "SKILL.md").write_text(
                 "---\nname: image-generation\ndescription: Generate images\n---\n"
-                "OpenAI default mode uses `gpt-image-2-pro` only\n\"output_format\"\n"
+                "OpenAI default mode starts with `gpt-image-2-pro`\nmodel_fallback\n\"output_format\"\n"
                 "/images/edits\nrequests with `image_url` use\n"
                 "LinkAI default model follows EcoreX's OpenAI image default\n",
                 encoding="utf-8",
@@ -8227,39 +15153,29 @@ class TestAgentHostBoundary(unittest.TestCase):
             self.assertIn('DEFAULT_MODEL = "gpt-image-2"', preserved)
             self.assertFalse((custom / ".ecorex-backups").exists())
 
-    def test_managed_xhs_skill_refresh_uses_images_endpoint_marker(self):
-        from agent.skills.manager import SkillManager
+    def test_v023_xhs_skill_is_not_managed_builtin_refresh_target(self):
+        from agent.skills.manager import MANAGED_BUILTIN_REFRESH_MARKERS, SkillManager
 
         with tempfile.TemporaryDirectory() as root:
             builtin = Path(root) / "builtin"
             custom = Path(root) / "custom"
-            builtin_skill = builtin / "create-xiaohongshu-note"
             custom_skill = custom / "create-xiaohongshu-note"
-            (builtin_skill / "scripts").mkdir(parents=True)
             (custom_skill / "scripts").mkdir(parents=True)
-            (builtin_skill / "SKILL.md").write_text(
-                "---\nname: create-xiaohongshu-note\ndescription: Create XHS note\n---\n",
-                encoding="utf-8",
-            )
-            (builtin_skill / "scripts" / "generate_cover_image.py").write_text(
-                'parser.add_argument("--model", default="gpt-image-2-pro")\n'
-                'url = f"{api_base}/images/generations"\n'
-                'payload["output_format"] = "png"\n',
-                encoding="utf-8",
-            )
             (custom_skill / "SKILL.md").write_text(
                 "---\nname: create-xiaohongshu-note\ndescription: Create XHS note\n---\n",
                 encoding="utf-8",
             )
             (custom_skill / "scripts" / "generate_cover_image.py").write_text(
-                "from openai import OpenAI\n",
+                "legacy user-owned skill\n",
                 encoding="utf-8",
             )
 
-            SkillManager(builtin_dir=str(builtin), custom_dir=str(custom))
+            manager = SkillManager(builtin_dir=str(builtin), custom_dir=str(custom))
 
+            self.assertNotIn("create-xiaohongshu-note", MANAGED_BUILTIN_REFRESH_MARKERS)
+            self.assertIn("create-xiaohongshu-note", manager.skills)
             preserved = (custom_skill / "scripts" / "generate_cover_image.py").read_text(encoding="utf-8")
-            self.assertIn("from openai import OpenAI", preserved)
+            self.assertIn("legacy user-owned skill", preserved)
             self.assertFalse((custom / ".ecorex-backups").exists())
 
     def test_custom_filesystem_profile_blocks_background_memory_writes(self):
@@ -8525,6 +15441,265 @@ class TestAgentHostBoundary(unittest.TestCase):
 
         self.assertEqual(result.status, "error")
         self.assertIn("read-only", str(result.result))
+
+    def test_scheduler_imports_without_external_croniter_and_supports_daily_cron(self):
+        from datetime import datetime
+
+        from agent.tools.scheduler.cron_compat import _FallbackCroniter
+        from agent.tools.scheduler.scheduler_tool import SchedulerTool
+
+        next_run = _FallbackCroniter("30 9 * * *", datetime(2026, 6, 24, 8, 0)).get_next(datetime)
+
+        self.assertEqual(next_run, datetime(2026, 6, 24, 9, 30))
+        self.assertEqual(SchedulerTool({}).name, "scheduler")
+
+    def test_scheduler_projection_reports_uninitialized_tasks_and_masks_secrets(self):
+        from common.ecorex_tool_permissions import get_tool_permission_broker
+
+        fake_croniter = types.ModuleType("croniter")
+        fake_croniter.croniter = lambda *args, **kwargs: None
+        old_croniter = sys.modules.get("croniter")
+        sys.modules["croniter"] = fake_croniter
+        scheduler_projection_module = importlib.import_module("agent.tools.scheduler.projection")
+        scheduler_task_store_module = importlib.import_module("agent.tools.scheduler.task_store")
+        scheduler_integration_module = importlib.import_module("agent.tools.scheduler.integration")
+        scheduler_projection = scheduler_projection_module.scheduler_projection
+        TaskStore = scheduler_task_store_module.TaskStore
+
+        old_desktop = os.environ.get("ECOREX_DESKTOP")
+        old_user_data = os.environ.get("ECOREX_DESKTOP_USER_DATA")
+        with tempfile.TemporaryDirectory() as root:
+            workspace = os.path.join(root, "workspace")
+            user_data = os.path.join(root, "user-data")
+            os.makedirs(workspace, exist_ok=True)
+            os.environ["ECOREX_DESKTOP"] = "1"
+            os.environ["ECOREX_DESKTOP_USER_DATA"] = user_data
+            get_tool_permission_broker().set_mode("full-access")
+            store = TaskStore(os.path.join(workspace, "scheduler", "tasks.json"))
+            store.add_task({
+                "id": "task-visible",
+                "name": "daily report",
+                "enabled": True,
+                "created_at": "2026-06-24T09:00:00",
+                "updated_at": "2026-06-24T09:00:00",
+                "schedule": {"type": "cron", "expression": "30 9 * * *"},
+                "action": {
+                    "type": "tool_call",
+                    "tool_name": "feishu_cli",
+                    "tool_params": {
+                        "api_key": "sk-test-secret-1234567890",
+                        "query": "visible",
+                        "content": "private scheduled prompt body",
+                    },
+                    "result_prefix": "private result prefix body",
+                    "receiver": "private-open-id",
+                },
+                "next_run_at": "2026-06-25T09:30:00",
+                "last_error": "provider failed for receiver private-open-id with token sk-test-secret-1234567890",
+                "last_error_at": "2026-06-24T09:30:01",
+            })
+            try:
+                with patch.object(scheduler_projection_module, "conf", return_value={
+                    "agent_workspace": workspace,
+                    "scheduler_enabled": True,
+                }), \
+                    patch.object(scheduler_integration_module, "get_task_store", return_value=None), \
+                    patch.object(scheduler_integration_module, "get_scheduler_service", return_value=None):
+                    projection = scheduler_projection(workspace)
+            finally:
+                if old_desktop is None:
+                    os.environ.pop("ECOREX_DESKTOP", None)
+                else:
+                    os.environ["ECOREX_DESKTOP"] = old_desktop
+                if old_user_data is None:
+                    os.environ.pop("ECOREX_DESKTOP_USER_DATA", None)
+                else:
+                    os.environ["ECOREX_DESKTOP_USER_DATA"] = old_user_data
+                if old_croniter is None:
+                    sys.modules.pop("croniter", None)
+                else:
+                    sys.modules["croniter"] = old_croniter
+
+        self.assertTrue(projection["enabled"])
+        self.assertFalse(projection["initialized"])
+        self.assertEqual(projection["serviceStatus"], "enabled_not_initialized")
+        self.assertEqual(projection["taskCount"], 1)
+        task = projection["tasks"][0]
+        self.assertEqual(task["scheduleDescription"], "daily at 09:30")
+        self.assertEqual(task["state"], "error")
+        self.assertEqual(task["action"]["toolParams"]["api_key"], "[redacted]")
+        self.assertEqual(task["action"]["toolParams"]["query"], "visible")
+        self.assertEqual(task["action"]["toolParams"]["content"], "[redacted-content]")
+        self.assertEqual(task["action"]["resultPrefixPreview"], "[redacted-content]")
+        self.assertTrue(task["action"]["resultPrefixHash"])
+        self.assertIn("details redacted", task["lastError"])
+        self.assertTrue(task["lastErrorHash"])
+        self.assertNotIn("private-open-id", json.dumps(task, ensure_ascii=False))
+        self.assertNotIn("sk-test-secret", json.dumps(task, ensure_ascii=False))
+        self.assertNotIn("private scheduled prompt body", json.dumps(task, ensure_ascii=False))
+        self.assertNotIn("private result prefix body", json.dumps(task, ensure_ascii=False))
+
+    def test_scheduler_projection_redacts_action_bodies_but_store_keeps_raw(self):
+        scheduler_projection_module = importlib.import_module("agent.tools.scheduler.projection")
+        scheduler_task_store_module = importlib.import_module("agent.tools.scheduler.task_store")
+        TaskStore = scheduler_task_store_module.TaskStore
+
+        with tempfile.TemporaryDirectory() as root:
+            workspace = os.path.join(root, "workspace")
+            store = TaskStore(os.path.join(workspace, "scheduler", "tasks.json"))
+            store.add_task({
+                "id": "task-agent-private",
+                "name": "agent private",
+                "enabled": True,
+                "schedule": {"type": "interval", "seconds": 3600},
+                "action": {
+                    "type": "agent_task",
+                    "task_description": "private agent body with sk-agent-secret-123456",
+                    "receiver": "private-open-id",
+                },
+            })
+            store.add_task({
+                "id": "task-message-private",
+                "name": "message private",
+                "enabled": True,
+                "schedule": {"type": "interval", "seconds": 3600},
+                "action": {
+                    "type": "send_message",
+                    "content": "private fixed body with xoxb-message-secret-123456",
+                    "receiver": "private-chat-id",
+                },
+            })
+            with patch.object(scheduler_projection_module, "conf", return_value={
+                "agent_workspace": workspace,
+                "scheduler_enabled": False,
+            }):
+                projection = scheduler_projection_module.scheduler_projection(workspace)
+
+            saved_agent = store.get_task("task-agent-private")
+            saved_message = store.get_task("task-message-private")
+
+        serialized_projection = json.dumps(projection, ensure_ascii=False)
+        self.assertNotIn("private agent body", serialized_projection)
+        self.assertNotIn("private fixed body", serialized_projection)
+        self.assertNotIn("sk-agent-secret", serialized_projection)
+        self.assertNotIn("xoxb-message-secret", serialized_projection)
+        by_id = {task["id"]: task for task in projection["tasks"]}
+        agent_action = by_id["task-agent-private"]["action"]
+        message_action = by_id["task-message-private"]["action"]
+        self.assertEqual(agent_action["taskDescriptionPreview"], "[redacted-content]")
+        self.assertTrue(agent_action["taskDescriptionHash"])
+        self.assertGreater(agent_action["taskDescriptionLength"], 0)
+        self.assertEqual(message_action["contentPreview"], "[redacted-content]")
+        self.assertTrue(message_action["contentHash"])
+        self.assertGreater(message_action["contentLength"], 0)
+        self.assertEqual(saved_agent["action"]["task_description"], "private agent body with sk-agent-secret-123456")
+        self.assertEqual(saved_message["action"]["content"], "private fixed body with xoxb-message-secret-123456")
+
+    def test_scheduler_web_handler_updates_task_and_returns_projection(self):
+        from common.ecorex_tool_permissions import get_tool_permission_broker
+
+        fake_croniter = types.ModuleType("croniter")
+        fake_croniter.croniter = lambda *args, **kwargs: None
+        old_croniter = sys.modules.get("croniter")
+        sys.modules["croniter"] = fake_croniter
+        scheduler_task_store_module = importlib.import_module("agent.tools.scheduler.task_store")
+        scheduler_projection_module = importlib.import_module("agent.tools.scheduler.projection")
+        TaskStore = scheduler_task_store_module.TaskStore
+        from channel.web import web_channel
+
+        old_desktop = os.environ.get("ECOREX_DESKTOP")
+        old_user_data = os.environ.get("ECOREX_DESKTOP_USER_DATA")
+        with tempfile.TemporaryDirectory() as root:
+            workspace = os.path.join(root, "workspace")
+            user_data = os.path.join(root, "user-data")
+            os.makedirs(workspace, exist_ok=True)
+            os.environ["ECOREX_DESKTOP"] = "1"
+            os.environ["ECOREX_DESKTOP_USER_DATA"] = user_data
+            get_tool_permission_broker().set_mode("full-access")
+            store = TaskStore(os.path.join(workspace, "scheduler", "tasks.json"))
+            store.add_task({
+                "id": "task-edit",
+                "name": "old name",
+                "enabled": True,
+                "created_at": "2026-06-24T09:00:00",
+                "updated_at": "2026-06-24T09:00:00",
+                "schedule": {"type": "interval", "seconds": 3600},
+                "action": {
+                    "type": "agent_task",
+                    "task_description": "old task",
+                    "receiver": "private-open-id",
+                },
+                "next_run_at": "2026-06-24T10:00:00",
+            })
+            body = json.dumps({
+                "action": "update",
+                "task_id": "task-edit",
+                "name": "new name",
+                "taskDescription": "new task",
+            }).encode("utf-8")
+            try:
+                with patch.object(web_channel, "_require_auth", return_value=None), \
+                    patch.object(web_channel, "_get_workspace_root", return_value=workspace), \
+                    patch.object(web_channel.web, "data", return_value=body), \
+                    patch.object(scheduler_projection_module, "conf", return_value={
+                        "agent_workspace": workspace,
+                        "scheduler_enabled": False,
+                    }):
+                    response = web_channel.SchedulerHandler().POST()
+                saved = store.get_task("task-edit")
+            finally:
+                if old_desktop is None:
+                    os.environ.pop("ECOREX_DESKTOP", None)
+                else:
+                    os.environ["ECOREX_DESKTOP"] = old_desktop
+                if old_user_data is None:
+                    os.environ.pop("ECOREX_DESKTOP_USER_DATA", None)
+                else:
+                    os.environ["ECOREX_DESKTOP_USER_DATA"] = old_user_data
+                if old_croniter is None:
+                    sys.modules.pop("croniter", None)
+                else:
+                    sys.modules["croniter"] = old_croniter
+
+        payload = json.loads(response)
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["taskCount"], 1)
+        self.assertEqual(payload["tasks"][0]["name"], "new name")
+        self.assertEqual(payload["tasks"][0]["action"]["taskDescriptionPreview"], "[redacted-content]")
+        self.assertTrue(payload["tasks"][0]["action"]["taskDescriptionHash"])
+        self.assertNotIn("new task", json.dumps(payload, ensure_ascii=False))
+        self.assertEqual(saved["name"], "new name")
+        self.assertEqual(saved["action"]["task_description"], "new task")
+
+    def test_scheduler_tool_lazy_initializes_enabled_runtime_before_listing(self):
+        from common.ecorex_tool_permissions import get_tool_permission_broker
+
+        get_tool_permission_broker()
+        fake_croniter = types.ModuleType("croniter")
+        fake_croniter.croniter = lambda *args, **kwargs: None
+        old_croniter = sys.modules.get("croniter")
+        sys.modules["croniter"] = fake_croniter
+        try:
+            scheduler_tool_module = importlib.import_module("agent.tools.scheduler.scheduler_tool")
+            scheduler_integration_module = importlib.import_module("agent.tools.scheduler.integration")
+            SchedulerTool = scheduler_tool_module.SchedulerTool
+
+            class FakeTaskStore:
+                def list_tasks(self):
+                    return []
+
+            with patch.object(scheduler_integration_module, "ensure_scheduler_runtime", return_value=True) as ensure_runtime, \
+                patch.object(scheduler_integration_module, "get_task_store", return_value=FakeTaskStore()):
+                result = SchedulerTool({}).execute({"action": "list"})
+        finally:
+            if old_croniter is None:
+                sys.modules.pop("croniter", None)
+            else:
+                sys.modules["croniter"] = old_croniter
+
+        self.assertEqual(result.status, "success")
+        self.assertIn("暂无", str(result.result))
+        ensure_runtime.assert_called_once()
 
     def test_read_only_blocks_evolution_undo_and_remote_document_download(self):
         from agent.tools.evolution_undo.evolution_undo import EvolutionUndoTool

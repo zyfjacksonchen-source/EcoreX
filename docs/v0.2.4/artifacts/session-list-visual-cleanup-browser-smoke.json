@@ -1,0 +1,18 @@
+{
+  "status": "PASS",
+  "app_root": "desktop\\dist",
+  "duration_ms": 29642,
+  "screenshot": "",
+  "metrics": {
+    "normalGeneralColumns": 2,
+    "normalProjectColumns": 2,
+    "unreadColumns": 2,
+    "runningColumns": 3,
+    "unreadClearedAfterRead": true,
+    "runningIndicatorCount": 1,
+    "unreadDotCountBeforeRead": 0,
+    "normalDirectSvgCount": 0,
+    "historyCallCount": 2
+  },
+  "console_errors": []
+}

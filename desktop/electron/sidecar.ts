@@ -802,6 +802,24 @@ export class SidecarManager {
   private ensureDesktopRuntimeDefaults() {
     const configPath = path.join(this.repoRoot, "config.json");
     const templatePath = path.join(this.repoRoot, "config-template.json");
+    const cdpEndpoint = "http://127.0.0.1:9222";
+    const chromeDevtoolsMcpArgs = (endpoint = cdpEndpoint) => [
+      "-y",
+      "chrome-devtools-mcp@latest",
+      "--browserUrl",
+      endpoint,
+      "--no-usage-statistics",
+      "--no-performance-crux",
+      "--experimentalPageIdRouting",
+      "--experimentalDevtools",
+      "--experimentalVision",
+      "--experimentalStructuredContent",
+      "--experimentalIncludeAllPages",
+      "--memoryDebugging",
+      "--categoryExperimentalThirdParty",
+      "--categoryExperimentalWebmcp",
+      "--redactNetworkHeaders"
+    ];
     try {
       const sourcePath = fs.existsSync(configPath) ? configPath : templatePath;
       const config = JSON.parse(fs.readFileSync(sourcePath, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
@@ -846,8 +864,8 @@ export class SidecarManager {
         ? tools.browser as Record<string, unknown>
         : {};
       const browserDefaults: Record<string, unknown> = {
-        cdp_endpoint: "http://127.0.0.1:9222",
-        cdp_auto_launch: false,
+        cdp_endpoint: cdpEndpoint,
+        cdp_auto_launch: true,
         cdp_fallback: true,
         persistent: true
       };
@@ -884,8 +902,8 @@ export class SidecarManager {
         name: "chrome-devtools",
         type: "stdio",
         command: process.platform === "win32" ? "npx.cmd" : "npx",
-        args: ["chrome-devtools-mcp@latest", "--browserUrl", "http://127.0.0.1:9222", "--no-usage-statistics"],
-        timeout: 30
+        args: chromeDevtoolsMcpArgs(String(browser.cdp_endpoint || cdpEndpoint)),
+        timeout: 45
       };
       const mcpServers = Array.isArray(config.mcp_servers) ? config.mcp_servers : [];
       const hasChromeDevtoolsMcp = mcpServers.some((server) => (
@@ -919,8 +937,15 @@ export class SidecarManager {
           String(item.command || "").includes("chrome-devtools-mcp") ||
           args.join(" ").includes("chrome-devtools-mcp");
         const usesAutoConnect = args.includes("--autoConnect") || args.includes("--auto-connect");
-        if (isChromeDevtools && (!args.length || usesAutoConnect)) {
-          item.args = ["chrome-devtools-mcp@latest", "--browserUrl", "http://127.0.0.1:9222", "--no-usage-statistics"];
+        const expectedArgs = chromeDevtoolsMcpArgs(String(browser.cdp_endpoint || cdpEndpoint));
+        const needsFullArgs = args.length !== expectedArgs.length || expectedArgs.some((part, index) => args[index] !== part);
+        if (isChromeDevtools && (!args.length || usesAutoConnect || needsFullArgs)) {
+          item.args = expectedArgs;
+          changed = true;
+        }
+        const timeout = Number(item.timeout || 0);
+        if (isChromeDevtools && (!Number.isFinite(timeout) || timeout < 45)) {
+          item.timeout = 45;
           changed = true;
         }
       }

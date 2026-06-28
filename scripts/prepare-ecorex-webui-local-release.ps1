@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.2.0",
+    [string]$Version = "0.2.4",
     [string]$RuntimeRoot = "desktop/runtime/ecorex-runtime",
     [string]$OutputDir = "release-artifacts",
     [switch]$KeepStaging
@@ -22,6 +22,25 @@ function Write-Utf8NoBom {
     )
     $encoding = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($Path, ($Value -replace "`r`n", "`n"), $encoding)
+}
+
+function Get-EcoreXFileSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $resolved = Resolve-RequiredPath $Path
+    if (Get-Command Get-FileHash -ErrorAction SilentlyContinue) {
+        return (Get-FileHash -Algorithm SHA256 -LiteralPath $resolved).Hash.ToUpperInvariant()
+    }
+    $stream = [System.IO.File]::OpenRead($resolved)
+    try {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            return (($sha.ComputeHash($stream) | ForEach-Object { $_.ToString("x2") }) -join "").ToUpperInvariant()
+        } finally {
+            $sha.Dispose()
+        }
+    } finally {
+        $stream.Dispose()
+    }
 }
 
 function Remove-GeneratedNoise {
@@ -78,12 +97,12 @@ function Sync-CurrentRuntimeSources {
         "translate",
         "voice",
         "app.py",
+        "config.py",
+        "config-template.json",
         "pyproject.toml",
         "requirements.txt",
         "requirements-optional.txt",
-        "core-requirements.txt",
         "enterprise-policy.json",
-        "capabilities.json",
         "LICENSE"
     )
 
@@ -97,6 +116,18 @@ function Sync-CurrentRuntimeSources {
             Remove-Item -LiteralPath $destination -Recurse -Force
         }
         Copy-Item -LiteralPath $source -Destination $destination -Recurse -Force
+    }
+
+    $runtimePackFiles = @(
+        @{ Source = "desktop/runtime-packs/capabilities.json"; Target = "capabilities.json" },
+        @{ Source = "desktop/runtime-packs/core-requirements.txt"; Target = "core-requirements.txt" }
+    )
+    foreach ($entry in $runtimePackFiles) {
+        $source = Join-Path $repoRoot $entry.Source
+        if (-not (Test-Path -LiteralPath $source)) {
+            throw "Required runtime-pack file missing: $source"
+        }
+        Copy-Item -LiteralPath $source -Destination (Join-Path $RuntimeDir $entry.Target) -Force
     }
 }
 
@@ -280,10 +311,11 @@ with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED, compres
 function Invoke-PipDownload {
     param(
         [string]$Platform,
-        [string]$Destination
+        [string]$Destination,
+        [string]$RequirementsPath = "desktop/runtime-packs/core-requirements.txt"
     )
-    $requirementsPath = Resolve-RequiredPath "desktop/runtime-packs/core-requirements.txt"
-    $requirementsHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $requirementsPath).Hash.ToUpperInvariant()
+    $requirementsPath = Resolve-RequiredPath $RequirementsPath
+    $requirementsHash = Get-EcoreXFileSha256 -Path $requirementsPath
     $stampPath = Join-Path $Destination ".requirements-$Platform.sha256"
     $expectedStamp = "$Platform $requirementsHash"
     if (
@@ -309,6 +341,51 @@ function Invoke-PipDownload {
         throw "pip download failed for $Platform"
     }
     Write-Utf8NoBom -Path $stampPath -Value ($expectedStamp + "`n")
+}
+
+function Test-PackagedPythonModule {
+    param(
+        [Parameter(Mandatory = $true)][string]$Python,
+        [Parameter(Mandatory = $true)][string]$ModuleName
+    )
+    & $Python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('$ModuleName') else 1)"
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Install-WindowsRuntimeDependency {
+    param(
+        [Parameter(Mandatory = $true)][string]$RuntimeDir,
+        [Parameter(Mandatory = $true)][string]$ModuleName,
+        [Parameter(Mandatory = $true)][string]$PackageSpec,
+        [Parameter(Mandatory = $true)][string]$Reason
+    )
+    $python = Join-Path $RuntimeDir "python\python.exe"
+    if (-not (Test-Path -LiteralPath $python)) {
+        throw "Packaged Windows Python runtime is missing: $python"
+    }
+    if (Test-PackagedPythonModule -Python $python -ModuleName $ModuleName) {
+        return
+    }
+    Write-Host "Preinstalling Windows Python dependency for ${Reason}: $PackageSpec"
+    & $python -m pip install --disable-pip-version-check --no-cache-dir --prefer-binary $PackageSpec
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to preinstall Windows Python dependency '$PackageSpec' for $Reason"
+    }
+    if (-not (Test-PackagedPythonModule -Python $python -ModuleName $ModuleName)) {
+        throw "Windows Python dependency '$PackageSpec' installed but module '$ModuleName' is still unavailable."
+    }
+}
+
+function New-LocalMacCoreRequirements {
+    param([Parameter(Mandatory = $true)][string]$Destination)
+    $source = Resolve-RequiredPath "desktop/runtime-packs/core-requirements.txt"
+    $lines = Get-Content -Encoding UTF8 -LiteralPath $source | Where-Object {
+        $normalized = $_.Trim().ToLowerInvariant()
+        $normalized -and
+            -not $normalized.StartsWith("rapidocr-onnxruntime")
+    }
+    Write-Utf8NoBom -Path $Destination -Value (($lines -join "`n") + "`n")
+    return $Destination
 }
 
 $repoRoot = (Resolve-Path -LiteralPath ".").Path
@@ -341,6 +418,7 @@ Remove-GeneratedNoise -Root $winRuntime
 Sync-DesktopWebBuild -RuntimeDir $winRuntime
 Copy-OptionalLarkCliWindows -RuntimeDir $winRuntime
 Invoke-ReleaseRuntimeSanitizer -RuntimeDir $winRuntime
+Install-WindowsRuntimeDependency -RuntimeDir $winRuntime -ModuleName "lark_oapi" -PackageSpec "lark-oapi>=1.5.5" -Reason "Feishu/Lark websocket external connection"
 
 $windowsCmd = @'
 @echo off
@@ -406,6 +484,26 @@ function Ensure-LarkCli {
         [Parameter(Mandatory = $true)][string]$StateDir
     )
     "lark-cli preinstall skipped. The structured feishu_cli tool remains visible and installs @larksuite/cli@1.0.56 on demand into the writable state directory after the find-skill gate; npmjs.org timeout should fall back to https://registry.npmmirror.com." | Out-File -FilePath (Join-Path $StateDir "lark-cli-install.log") -Encoding utf8 -Append
+}
+
+function Test-PythonModule {
+    param(
+        [Parameter(Mandatory = $true)][string]$Python,
+        [Parameter(Mandatory = $true)][string]$ModuleName
+    )
+    & $Python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('$ModuleName') else 1)"
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Write-OptionalPythonDependencyNotice {
+    param(
+        [Parameter(Mandatory = $true)][string]$StateDir,
+        [Parameter(Mandatory = $true)][string]$ModuleName,
+        [Parameter(Mandatory = $true)][string]$PackageSpec,
+        [Parameter(Mandatory = $true)][string]$Reason
+    )
+    $logPath = Join-Path $StateDir "python-deps-install.log"
+    "Optional Python dependency skipped during first-run install for ${Reason}: ${PackageSpec}. Module ${ModuleName} will be installed or reported by the Feishu External Connection flow when that feature is configured." | Out-File -FilePath $logPath -Encoding utf8 -Append
 }
 
 function Get-WebUiPythonProcesses {
@@ -552,7 +650,7 @@ $config = [ordered]@{
     tools = [ordered]@{
         browser = [ordered]@{
             cdp_endpoint = "http://127.0.0.1:9222"
-            cdp_auto_launch = $false
+            cdp_auto_launch = $true
             cdp_fallback = $true
             persistent = $true
         }
@@ -560,6 +658,10 @@ $config = [ordered]@{
             package = "@larksuite/cli@1.0.56"
             auto_install = $false
             install_root = (Join-Path $stateDir "tools\lark-cli")
+        }
+        tongxin_cli = [ordered]@{
+            script_path = ""
+            read_only = $true
         }
     }
     mcp_servers = @(
@@ -581,6 +683,10 @@ Ensure-LarkCli -RuntimeDir $runtimeDir -StateDir $stateDir
 $python = Join-Path $runtimeDir "python\python.exe"
 if (-not (Test-Path -LiteralPath $python)) {
     throw "Packaged Python runtime is missing: $python"
+}
+if (-not (Test-PythonModule -Python $python -ModuleName "lark_oapi")) {
+    Write-Warning "Bundled lark_oapi is unavailable; Feishu/Lark External Connections will show runtime remediation, but WebUI startup will continue."
+    Write-OptionalPythonDependencyNotice -StateDir $stateDir -ModuleName "lark_oapi" -PackageSpec "lark-oapi>=1.5.5" -Reason "Feishu/Lark websocket external connection"
 }
 
 $url = "http://127.0.0.1:$effectivePort/app/"
@@ -622,6 +728,8 @@ Compress-Archive -Path (Join-Path $windowsStage "*") -DestinationPath $windowsZi
 $macRuntime = Join-Path $macStage "runtime"
 Copy-Item -LiteralPath $runtimeRootResolved -Destination $macRuntime -Recurse -Force
 Sync-CurrentRuntimeSources -RuntimeDir $macRuntime
+$macLocalCoreRequirements = New-LocalMacCoreRequirements -Destination (Join-Path $cacheRoot "core-requirements-local-macos.txt")
+Copy-Item -LiteralPath $macLocalCoreRequirements -Destination (Join-Path $macRuntime "core-requirements.txt") -Force
 Remove-Item -LiteralPath (Join-Path $macRuntime "python") -Recurse -Force -ErrorAction SilentlyContinue
 Remove-GeneratedNoise -Root $macRuntime
 Sync-DesktopWebBuild -RuntimeDir $macRuntime
@@ -637,8 +745,8 @@ Save-Download -Uri $pyX64Url -Destination $pyX64
 
 $wheelArm = Join-Path $cacheRoot "wheelhouse/mac-arm64"
 $wheelX64 = Join-Path $cacheRoot "wheelhouse/mac-x64"
-Invoke-PipDownload -Platform "macosx_11_0_arm64" -Destination $wheelArm
-Invoke-PipDownload -Platform "macosx_11_0_x86_64" -Destination $wheelX64
+Invoke-PipDownload -Platform "macosx_11_0_arm64" -Destination $wheelArm -RequirementsPath $macLocalCoreRequirements
+Invoke-PipDownload -Platform "macosx_11_0_x86_64" -Destination $wheelX64 -RequirementsPath $macLocalCoreRequirements
 
 New-Item -ItemType Directory -Force -Path (Join-Path $macStage "python"), (Join-Path $macStage "wheelhouse") | Out-Null
 Copy-Item -LiteralPath $pyArm -Destination (Join-Path $macStage "python/$(Split-Path -Leaf $pyArm)") -Force
@@ -872,7 +980,7 @@ payload = {
     "tools": {
         "browser": {
             "cdp_endpoint": "http://127.0.0.1:9222",
-            "cdp_auto_launch": False,
+            "cdp_auto_launch": True,
             "cdp_fallback": True,
             "persistent": True,
         },
@@ -880,6 +988,10 @@ payload = {
             "package": "@larksuite/cli@1.0.56",
             "auto_install": False,
             "install_root": str(state / "tools" / "lark-cli"),
+        },
+        "tongxin_cli": {
+            "script_path": "",
+            "read_only": True,
         }
     },
     "mcp_servers": [
@@ -1043,7 +1155,7 @@ foreach ($entry in @(
         fileName = $item.Name
         path = $item.FullName
         size = $item.Length
-        sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $item.FullName).Hash.ToUpperInvariant()
+        sha256 = Get-EcoreXFileSha256 -Path $item.FullName
     }
 }
 

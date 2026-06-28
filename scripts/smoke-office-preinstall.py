@@ -20,7 +20,13 @@ OFFICE_SKILLS = {
     "office-presentations": [".pptx", "PowerPoint"],
     "office-pdf": [".pdf", "PDF"],
 }
-OFFICE_MODULES = ["pypdf", "pdfminer", "docx", "pptx", "openpyxl", "xlsxwriter", "markdownify"]
+OFFICE_OFFICIAL_WORKFLOWS = {
+    "office-documents": "documents",
+    "office-spreadsheets": "Spreadsheets",
+    "office-presentations": "Presentations",
+    "office-pdf": "pdf",
+}
+OFFICE_MODULES = ["pypdf", "pdfminer", "docx", "pptx", "openpyxl", "xlsxwriter", "markdownify", "reportlab", "fitz"]
 
 
 def add_check(checks: list[dict[str, Any]], name: str, ok: bool, evidence: str) -> None:
@@ -36,6 +42,16 @@ def read_json(path: pathlib.Path) -> Any:
     if raw.startswith(b"\xef\xbb\xbf"):
         raise ValueError(f"{path} has a UTF-8 BOM")
     return json.loads(raw.decode("utf-8"))
+
+
+def display_path(root: pathlib.Path, path: pathlib.Path | str | None) -> str:
+    if not path:
+        return "missing"
+    candidate = pathlib.Path(str(path))
+    try:
+        return candidate.resolve().relative_to(root).as_posix()
+    except Exception:
+        return candidate.name
 
 
 def find_runtime_python(runtime_dir: pathlib.Path) -> pathlib.Path | None:
@@ -66,7 +82,7 @@ def check_builtin_skills(root: pathlib.Path, checks: list[dict[str, Any]]) -> No
 
     for name, terms in OFFICE_SKILLS.items():
         row = rows.get(name)
-        add_check(checks, f"{name} builtin loaded", bool(row), str(row.get("path") if row else "missing"))
+        add_check(checks, f"{name} builtin loaded", bool(row), display_path(root, row.get("path") if row else None))
         if not row:
             continue
         add_check(
@@ -88,6 +104,21 @@ def check_builtin_skills(root: pathlib.Path, checks: list[dict[str, Any]]) -> No
         description = str(row.get("description") or "")
         missing_terms = [term for term in terms if term.lower() not in description.lower()]
         add_check(checks, f"{name} office routing terms", not missing_terms, f"missing={missing_terms}")
+        expected_official = OFFICE_OFFICIAL_WORKFLOWS[name]
+        add_check(
+            checks,
+            f"{name} EcoreX-native facade metadata",
+            row.get("compatibility_id") == name
+            and row.get("adopts_official_skill") == expected_official
+            and row.get("ecorex_native_facade") is True
+            and bool(row.get("quality_gates")),
+            json.dumps({
+                "compatibility_id": row.get("compatibility_id"),
+                "adopts_official_skill": row.get("adopts_official_skill"),
+                "ecorex_native_facade": row.get("ecorex_native_facade"),
+                "quality_gates": row.get("quality_gates"),
+            }, ensure_ascii=False, sort_keys=True),
+        )
 
 
 def check_capability_manifest(root: pathlib.Path, checks: list[dict[str, Any]]) -> None:
@@ -95,7 +126,7 @@ def check_capability_manifest(root: pathlib.Path, checks: list[dict[str, Any]]) 
     manifest = read_json(manifest_path)
     packs = {str(pack.get("id")): pack for pack in manifest.get("packs") or [] if isinstance(pack, dict)}
     pack = packs.get("office-pdf")
-    add_check(checks, "office-pdf capability manifest", bool(pack), str(manifest_path))
+    add_check(checks, "office-pdf capability manifest", bool(pack), display_path(root, manifest_path))
     if not pack:
         return
     module_checks = set(str(item) for item in pack.get("moduleChecks") or [])
@@ -118,7 +149,19 @@ def check_stage_defaults(root: pathlib.Path, checks: list[dict[str, Any]]) -> No
 def check_staged_runtime(runtime_dir: pathlib.Path, checks: list[dict[str, Any]], require_modules: bool) -> None:
     for name in OFFICE_SKILLS:
         path = runtime_dir / "skills" / name / "SKILL.md"
-        add_check(checks, f"{name} staged runtime skill", path.is_file(), str(path))
+        add_check(checks, f"{name} staged runtime skill", path.is_file(), display_path(runtime_dir.parent.parent, path))
+        if path.is_file():
+            text = path.read_text(encoding="utf-8", errors="replace")
+            expected_official = OFFICE_OFFICIAL_WORKFLOWS[name]
+            add_check(
+                checks,
+                f"{name} staged runtime facade metadata",
+                f"compatibility-id: {name}" in text
+                and f"adopts-official-skill: {expected_official}" in text
+                and "ecorex-native-facade: true" in text
+                and "quality-gates:" in text,
+                display_path(runtime_dir.parent.parent, path),
+            )
 
     runtime_manifest_path = runtime_dir / "runtime-manifest.json"
     runtime_manifest = read_json(runtime_manifest_path)

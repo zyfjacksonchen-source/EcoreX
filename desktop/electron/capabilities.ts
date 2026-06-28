@@ -22,10 +22,13 @@ export type CapabilityPack = {
   name: string;
   summary: string;
   installMode: "user-or-admin" | "admin-recommended";
+  defaultEnabled?: boolean;
+  readOnly?: boolean;
   discoveryOnly?: boolean;
   sourceUrl?: string;
   mirrorUrls?: string[];
   installHint?: string;
+  allowedCommands?: string[];
   estimatedSizeMb?: number;
   requirements?: string[];
   moduleChecks?: string[];

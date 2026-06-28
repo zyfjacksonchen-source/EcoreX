@@ -1,24 +1,32 @@
 import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import MarkdownIt from "markdown-it";
 import {
+  CircleCheck,
   ExternalLink,
   Eye,
   FileText,
   FolderOpen,
   Image as ImageIcon,
   MoreHorizontal,
-  MonitorUp
+  MonitorUp,
+  TriangleAlert
 } from "lucide-react";
-import type { AgentArtifact, LocalJsonResult, LocalPathStat } from "../services/ecorexApi";
-import { redactInternalPromptText } from "../utils/redaction";
+import type { AgentArtifact, LocalJsonResult, LocalPathStat, QualityEvidence } from "../services/ecorexApi";
+import { redactInternalPromptText, redactToolDisclosureValue } from "../utils/redaction";
 
 export type ToolCallDisclosure = {
   name?: string;
   arguments?: unknown;
   result?: unknown;
+  qualityEvidence?: QualityEvidence;
   is_error?: boolean;
   status?: string;
   execution_time?: number;
+  deadline_seconds?: number;
+  max_seconds?: number;
+  extension_count?: number;
+  lastHeartbeatAt?: number;
   running?: boolean;
 };
 
@@ -41,8 +49,13 @@ export type AgentStepDisclosure =
       name?: string;
       arguments?: unknown;
       result?: unknown;
+      qualityEvidence?: QualityEvidence;
       status?: string;
       execution_time?: number;
+      deadline_seconds?: number;
+      max_seconds?: number;
+      extension_count?: number;
+      lastHeartbeatAt?: number;
       is_error?: boolean;
       running?: boolean;
     }
@@ -71,12 +84,9 @@ export type LocalFilePayload = {
 const REASONING_RENDER_CAP = 4 * 1024;
 const TOOL_DETAIL_RENDER_CAP = 6 * 1024;
 const LONG_REPLY_COLLAPSE_CHARS = 1400;
-const LONG_REPLY_PREVIEW_CHARS = 520;
-const STREAM_RENDER_THROTTLE_CHARS = 8000;
-const STREAM_MARKDOWN_CHUNK_CHARS = 8000;
-const STREAM_LIVE_FULL_RENDER_CHARS = 32000;
-const STREAM_LIVE_HEAD_CHARS = 7000;
-const STREAM_LIVE_TAIL_CHARS = 4200;
+const LONG_REPLY_PREVIEW_CHARS = 1400;
+const STREAM_RENDER_THROTTLE_CHARS = 1200;
+const STREAM_MARKDOWN_CHUNK_CHARS = 5000;
 const STREAM_LIVE_ARIA_CHARS = 12000;
 const ARTIFACT_PENDING_MAX_RETRIES = 6;
 type LocalFileContextHandler = (event: MouseEvent, file: LocalFilePayload) => void;
@@ -251,11 +261,6 @@ type ArtifactItem = {
   fileType: ArtifactFileType;
 };
 
-type OrderedListItem = {
-  value: string;
-  number: number;
-};
-
 type DisplayArtifact = AgentArtifact & {
   legacyPath?: string;
 };
@@ -283,7 +288,7 @@ function useThrottledStreamingContent(content: string, pending?: boolean) {
       return;
     }
     if (timerRef.current !== null) return;
-    const delay = content.length >= 100000 ? 48 : 24;
+    const delay = content.length >= 100000 ? 80 : content.length >= 30000 ? 48 : 32;
     timerRef.current = window.setTimeout(() => {
       timerRef.current = null;
       setVisible(latestRef.current);
@@ -301,7 +306,16 @@ function useThrottledStreamingContent(content: string, pending?: boolean) {
 }
 
 function artifactSourceKey(artifact: AgentArtifact) {
-  return (artifactPath(artifact) || artifact.id || "").replace(/\\/g, "/").toLowerCase();
+  return canonicalArtifactKey({
+    kind: artifact.kind,
+    path: artifact.path,
+    relativePath: artifact.relativePath,
+    url: artifact.url,
+    previewUrl: artifact.previewUrl,
+    thumbnailUrl: artifact.thumbnailUrl,
+    title: artifact.title,
+    id: artifact.id
+  });
 }
 
 function isRemoteArtifactSource(value: string) {
@@ -398,6 +412,43 @@ function artifactPath(artifact: AgentArtifact) {
   return artifact.path || artifact.relativePath || artifact.url || "";
 }
 
+function normalizeArtifactSource(value?: string) {
+  return String(value || "")
+    .trim()
+    .replace(/^file:\/+/i, "")
+    .replace(/\\/g, "/")
+    .replace(/^\/([A-Za-z]:\/)/, "$1")
+    .replace(/[?#].*$/, "")
+    .replace(/\/+/g, "/")
+    .toLowerCase();
+}
+
+function canonicalArtifactKey(input: {
+  kind?: AgentArtifact["kind"] | ArtifactFileType;
+  path?: string;
+  relativePath?: string;
+  url?: string;
+  previewUrl?: string;
+  thumbnailUrl?: string;
+  title?: string;
+  id?: string;
+}) {
+  const candidates = [
+    input.path,
+    input.relativePath,
+    input.url,
+    input.previewUrl,
+    input.thumbnailUrl,
+    input.title,
+    input.id
+  ].map(normalizeArtifactSource).filter(Boolean);
+  const pathLike = candidates.find((value) => /[/.]/.test(value) && !value.startsWith("blob:") && !value.startsWith("data:"));
+  if (pathLike) {
+    return `${input.kind || "artifact"}:${pathLike}`;
+  }
+  return candidates[0] || "";
+}
+
 function displayArtifactTitle(artifact: AgentArtifact) {
   const source = artifact.title || artifactPath(artifact);
   return source ? basenameFromPath(source) : "未命名产物";
@@ -431,8 +482,7 @@ function mergeAgentArtifacts(primary: AgentArtifact[] = [], legacy: ArtifactItem
   const items: DisplayArtifact[] = [];
   const seen = new Set<string>();
   const add = (artifact: DisplayArtifact) => {
-    const source = artifactPath(artifact).replace(/\\/g, "/").toLowerCase();
-    const key = source || artifact.id;
+    const key = artifactSourceKey(artifact);
     if (!key || seen.has(key)) return;
     seen.add(key);
     items.push(artifact);
@@ -457,16 +507,9 @@ function mergeArtifacts(...groups: ArtifactItem[][]) {
 }
 
 function artifactDedupeKey(item: ArtifactItem) {
-  const normalized = item.path
-    .replace(/^file:\/+/i, "")
-    .replace(/\\/g, "/")
-    .replace(/^\/([A-Za-z]:\/)/, "$1")
-    .replace(/[?#].*$/, "")
-    .replace(/\/+/g, "/")
-    .toLowerCase();
-  if (item.fileType === "image") return `image:${basenameFromPath(normalized)}`;
+  const normalized = normalizeArtifactSource(item.path);
   const parts = normalized.split("/").filter(Boolean);
-  return `${item.fileType}:${parts.slice(-4).join("/") || normalized}`;
+  return `${item.fileType}:${parts.join("/") || normalized}`;
 }
 
 function artifactFileTypeFromPath(value: string): ArtifactFileType {
@@ -706,6 +749,7 @@ function ArtifactShelf({
 }) {
   const [expanded, setExpanded] = useState(false);
   const [openMenu, setOpenMenu] = useState<{ id: string; x: number; y: number; width: number; height: number } | null>(null);
+  const openMenuElementRef = useRef<HTMLSpanElement | null>(null);
   const [availability, setAvailability] = useState<Record<string, ArtifactAvailability>>({});
   const statRetryCounts = useRef<Record<string, number>>({});
   const statRetryTimers = useRef<Record<string, number>>({});
@@ -821,13 +865,23 @@ function ArtifactShelf({
   useEffect(() => {
     if (!openMenu) return undefined;
     const close = () => setOpenMenu(null);
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+      if (openMenuElementRef.current && path.includes(openMenuElementRef.current)) return;
+      const trigger = target?.closest("[data-artifact-menu-trigger]") as HTMLElement | null;
+      if (trigger?.dataset.artifactMenuTrigger === openMenu.id) return;
+      close();
+    };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") close();
     };
+    document.addEventListener("pointerdown", onPointerDown, true);
     window.addEventListener("scroll", close, true);
     window.addEventListener("resize", close);
     window.addEventListener("keydown", onKeyDown);
     return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
       window.removeEventListener("scroll", close, true);
       window.removeEventListener("resize", close);
       window.removeEventListener("keydown", onKeyDown);
@@ -938,6 +992,7 @@ function ArtifactShelf({
               <span className="artifact-row-main">
                 <strong>{name}</strong>
                 {availabilityText ? <small className={`artifact-status is-${availabilityStatus}`}>{availabilityText}</small> : null}
+                <QualityEvidenceBadge evidence={artifact.qualityEvidence} compact />
                 {displayPath ? <small className="artifact-card-path">路径：{displayPath}</small> : subtitle && <small>{subtitle}</small>}
               </span>
               {artifact.stats && (
@@ -962,6 +1017,7 @@ function ArtifactShelf({
                     title="打开方式"
                     aria-label={`${name} 的打开方式`}
                     aria-expanded={menuOpen}
+                    data-artifact-menu-trigger={artifact.id}
                     onClick={(event) => {
                       const rect = event.currentTarget.getBoundingClientRect();
                       setOpenMenu((current) => current?.id === artifact.id ? null : {
@@ -976,7 +1032,7 @@ function ArtifactShelf({
                     <MoreHorizontal aria-hidden="true" />
                   </button>
                   {menuOpen && menuStyle && createPortal(
-                    <span className="artifact-action-menu artifact-action-menu-portal" role="menu" style={menuStyle} onMouseDown={(event) => event.stopPropagation()}>
+                    <span ref={openMenuElementRef} className="artifact-action-menu artifact-action-menu-portal" role="menu" style={menuStyle} onMouseDown={(event) => event.stopPropagation()}>
                       <button type="button" role="menuitem" disabled={blocked} onClick={() => void runAction(artifact, "open")}>本地打开</button>
                       <button type="button" role="menuitem" disabled={blocked} onClick={() => void runAction(artifact, "reveal")}>在文件夹中显示</button>
                       <button type="button" role="menuitem" disabled={blocked} onClick={() => void runAction(artifact, "openWith")}>选择应用打开</button>
@@ -1038,277 +1094,141 @@ function renderBareUrl(raw: string, localFilePreviewUrl?: (filePath: string) => 
   return `<a ${linkAttributesForUrl(url, localFilePreviewUrl)}>${escapeHtml(url)}</a>${escapeHtml(trailing)}`;
 }
 
-function linkifyPlainTextSegments(html: string, localFilePreviewUrl?: (filePath: string) => string) {
+function renderPlainTextWithLinks(value: string, localFilePreviewUrl?: (filePath: string) => string) {
   const localPathPrefix = String.raw`(?:[A-Za-z]:[\\/]|\\\\|\/(?:Users|Volumes|home|tmp|var|mnt|opt|srv|Applications)\/)`;
   const pattern = new RegExp(
-    String.raw`(&quot;|&#39;)(${localPathPrefix}[^<>\r\n]*?)\1|((?:https?:\/\/|file:\/\/)[^\s<>"']+|${localPathPrefix}[^\s<>"']+)`,
+    String.raw`(["'])(${localPathPrefix}[^<>\r\n]*?)\1|((?:https?:\/\/|file:\/\/)[^\s<>"']+|${localPathPrefix}[^\s<>"']+)`,
     "g"
   );
-  return html.split(/(<[^>]+>)/g).map((part) => {
-    if (!part || part.startsWith("<")) return part;
-    return part.replace(pattern, (match, quote: string, quotedPath: string, rawPath: string) => {
-      if (quote && quotedPath) {
-        return `${quote}${renderBareUrl(decodeBasicEntities(quotedPath), localFilePreviewUrl)}${quote}`;
-      }
-      return renderBareUrl(rawPath || match, localFilePreviewUrl);
-    });
-  }).join("");
-}
-
-function renderInline(value: string, localFilePreviewUrl?: (filePath: string) => string) {
-  let html = escapeHtml(value);
-  html = html.replace(/`([^`]+)`/g, (_match, rawCode: string) => {
-    const decoded = decodeBasicEntities(rawCode);
-    const localPath = localPathFromSource(decoded) || relativeArtifactPathFromSource(decoded, true);
-    if (!localPath) return `<code>${rawCode}</code>`;
-    return `<a href="#" class="markdown-local-file-link inline-local-file-code" data-ecorex-file-path="${escapeHtml(localPath)}" data-ecorex-file-name="${escapeHtml(basenameFromPath(localPath))}"><code>${rawCode}</code></a>`;
-  });
-  html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-  html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
-  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt: string, href: string) => {
-    const src = safeImageUrl(href, localFilePreviewUrl);
-    if (!src) return escapeHtml(alt);
-    return `<img class="markdown-image" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}" loading="lazy" />`;
-  });
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label: string, href: string) => {
-    return `<a ${linkAttributesForUrl(href, localFilePreviewUrl)}>${escapeHtml(label)}</a>`;
-  });
-  return linkifyPlainTextSegments(html, localFilePreviewUrl);
-}
-
-function flushParagraph(lines: string[], out: string[], localFilePreviewUrl?: (filePath: string) => string) {
-  if (!lines.length) return;
-  out.push(`<p>${renderInline(lines.join(" "), localFilePreviewUrl)}</p>`);
-  lines.length = 0;
-}
-
-function renderList(items: string[] | OrderedListItem[], ordered: boolean, out: string[], localFilePreviewUrl?: (filePath: string) => string) {
-  if (!items.length) return;
-  if (ordered) {
-    const orderedItems = items as OrderedListItem[];
-    const start = orderedItems[0]?.number && orderedItems[0].number !== 1 ? ` start="${orderedItems[0].number}"` : "";
-    out.push(`<ol${start}>${orderedItems.map((item) => `<li>${renderInline(item.value, localFilePreviewUrl)}</li>`).join("")}</ol>`);
-  } else {
-    const bulletItems = items as string[];
-    out.push(`<ul>${bulletItems.map((item) => `<li>${renderInline(item, localFilePreviewUrl)}</li>`).join("")}</ul>`);
+  let html = "";
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(value)) !== null) {
+    html += escapeHtml(value.slice(cursor, match.index));
+    const quote = match[1] || "";
+    const quotedPath = match[2] || "";
+    const rawPath = match[3] || "";
+    if (quote && quotedPath) {
+      html += `${escapeHtml(quote)}${renderBareUrl(quotedPath, localFilePreviewUrl)}${escapeHtml(quote)}`;
+    } else {
+      html += renderBareUrl(rawPath || match[0], localFilePreviewUrl);
+    }
+    cursor = match.index + match[0].length;
   }
-  items.length = 0;
+  if (cursor === 0) return "";
+  html += escapeHtml(value.slice(cursor));
+  return html;
 }
 
-function isTableRow(line: string) {
-  const trimmed = line.trim();
-  return trimmed.includes("|") && /^\|?.+\|.+\|?$/.test(trimmed);
-}
-
-function isTableSeparator(line: string) {
-  const cells = parseTableCells(line);
-  return cells.length > 1 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
-}
-
-function parseTableCells(line: string) {
-  return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
-}
-
-function renderTable(lines: string[], out: string[], localFilePreviewUrl?: (filePath: string) => string) {
-  if (!lines.length) return;
-  if (lines.length < 2 || !isTableSeparator(lines[1])) {
-    out.push(`<p>${renderInline(lines.map((line) => line.trim()).join(" "), localFilePreviewUrl)}</p>`);
-    lines.length = 0;
-    return;
+function linkifyPlainTextSegments(html: string, localFilePreviewUrl?: (filePath: string) => string) {
+  if (typeof document === "undefined") return html;
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const parent = node.parentElement;
+      if (!parent || parent.closest("pre, code, a, script, style")) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    }
+  });
+  const textNodes: Text[] = [];
+  let current = walker.nextNode();
+  while (current) {
+    if (current instanceof Text) textNodes.push(current);
+    current = walker.nextNode();
   }
-
-  const header = parseTableCells(lines[0]);
-  const rows = lines.slice(2).filter(isTableRow).map(parseTableCells);
-  const headHtml = `<thead><tr>${header.map((cell) => `<th>${renderInline(cell, localFilePreviewUrl)}</th>`).join("")}</tr></thead>`;
-  const bodyHtml = rows.length
-    ? `<tbody>${rows.map((row) => `<tr>${header.map((_cell, index) => `<td>${renderInline(row[index] || "", localFilePreviewUrl)}</td>`).join("")}</tr>`).join("")}</tbody>`
-    : "";
-  out.push(`<table>${headHtml}${bodyHtml}</table>`);
-  lines.length = 0;
+  for (const node of textNodes) {
+    const linked = renderPlainTextWithLinks(node.nodeValue || "", localFilePreviewUrl);
+    if (!linked) continue;
+    const fragmentTemplate = document.createElement("template");
+    fragmentTemplate.innerHTML = linked;
+    node.replaceWith(fragmentTemplate.content.cloneNode(true));
+  }
+  return template.innerHTML;
 }
 
 function normalizeMarkdownForRender(markdown: string) {
-  const lines = String(markdown || "").replace(/\r\n/g, "\n").split("\n");
-  let inFence = false;
-  return lines.map((raw) => {
-    if (/^```[\w-]*\s*$/.test(raw.trim())) {
-      inFence = !inFence;
-      return raw;
+  return String(markdown || "")
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/^[\uFEFF\u200B-\u200D]+/, ""))
+    .join("\n");
+}
+
+type MarkdownRenderEnv = {
+  localFilePreviewUrl?: (filePath: string) => string;
+};
+
+const cowMarkdown = new MarkdownIt({
+  html: false,
+  breaks: true,
+  linkify: true,
+  typographer: true,
+  highlight: (source) => escapeHtml(source)
+});
+
+const defaultMarkdownLinkOpen = cowMarkdown.renderer.rules.link_open || ((tokens, index, options, env, self) => (
+  self.renderToken(tokens, index, options)
+));
+
+cowMarkdown.renderer.rules.link_open = (tokens, index, options, env, self) => {
+  const token = tokens[index];
+  const rawHref = token.attrGet("href") || "";
+  const renderEnv = env as MarkdownRenderEnv;
+  const localPath = localPathFromSource(rawHref) || relativeArtifactPathFromSource(rawHref, true);
+  token.attrSet("href", safeUrl(rawHref, renderEnv.localFilePreviewUrl));
+  token.attrSet("target", "_blank");
+  token.attrSet("rel", "noopener noreferrer");
+  if (localPath) {
+    const existingClass = token.attrGet("class");
+    token.attrSet("class", [existingClass, "markdown-local-file-link"].filter(Boolean).join(" "));
+    token.attrSet("data-ecorex-file-path", localPath);
+    token.attrSet("data-ecorex-file-name", basenameFromPath(localPath));
+  }
+  return defaultMarkdownLinkOpen(tokens, index, options, env, self);
+};
+
+cowMarkdown.renderer.rules.image = (tokens, index, _options, env) => {
+  const token = tokens[index];
+  const renderEnv = env as MarkdownRenderEnv;
+  const rawSrc = token.attrGet("src") || "";
+  const alt = token.content || token.attrGet("alt") || basenameFromPath(rawSrc);
+  const src = /^data:/i.test(rawSrc) ? "" : safeImageUrl(rawSrc, renderEnv.localFilePreviewUrl);
+  if (!src) return escapeHtml(alt);
+  return `<img class="markdown-image" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}" loading="lazy" />`;
+};
+
+function plainTextFromHtml(value: string) {
+  return decodeBasicEntities(String(value || "").replace(/<[^>]*>/g, ""));
+}
+
+function injectLinkedMediaPreviews(html: string, localFilePreviewUrl?: (filePath: string) => string) {
+  return html.replace(/<a\b([^>]*?)href="([^"]+)"([^>]*)>([\s\S]*?)<\/a>/gi, (match, before: string, href: string, after: string, labelHtml: string) => {
+    if (/\bdata-ecorex-file-path=/i.test(`${before} ${after}`)) return match;
+    const type = mediaTypeFromUrl(href);
+    if (!type) return match;
+    if (type === "image") {
+      const src = safeImageUrl(href, localFilePreviewUrl);
+      return src ? `<img class="markdown-image" src="${escapeHtml(src)}" alt="${escapeHtml(plainTextFromHtml(labelHtml) || basenameFromPath(href))}" loading="lazy" />` : match;
     }
-    if (inFence) return raw;
-    const wrappedHeading = raw.match(/^\s*-{3,}\s*(#{1,6}.+?)\s*-{3,}\s*$/);
-    if (wrappedHeading) return wrappedHeading[1].replace(/^(#{1,6})(\S)/, "$1 $2");
-    return raw.replace(/^(\s{0,3}#{1,6})(\S)/, "$1 $2");
-  }).join("\n");
+    const src = safeMediaUrl(href, localFilePreviewUrl);
+    if (!src) return match;
+    if (type === "video") return `<video class="markdown-video" src="${escapeHtml(src)}" controls></video>`;
+    if (type === "audio") return `<audio class="markdown-audio" src="${escapeHtml(src)}" controls></audio>`;
+    return `<a${before}href="${escapeHtml(safeUrl(href, localFilePreviewUrl))}"${after}>${labelHtml}</a>`;
+  });
 }
 
 function renderMarkdown(markdown: string, localFilePreviewUrl?: (filePath: string) => string) {
-  const lines = normalizeMarkdownForRender(markdown).split("\n");
-  const out: string[] = [];
-  const paragraph: string[] = [];
-  const bullets: string[] = [];
-  const numbers: OrderedListItem[] = [];
-  const table: string[] = [];
-  let code: string[] | null = null;
-  let lastOrderedNumber = 0;
-
-  const flushAll = () => {
-    flushParagraph(paragraph, out, localFilePreviewUrl);
-    renderList(bullets, false, out, localFilePreviewUrl);
-    renderList(numbers, true, out, localFilePreviewUrl);
-    renderTable(table, out, localFilePreviewUrl);
-  };
-
-  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
-    const raw = lines[lineIndex];
-    const nextRaw = lines[lineIndex + 1] || "";
-    const fence = raw.match(/^```([\w-]*)\s*$/);
-    if (fence) {
-      if (code) {
-        out.push(`<pre><code>${escapeHtml(code.join("\n"))}</code></pre>`);
-        code = null;
-      } else {
-        flushAll();
-        code = [];
-      }
-      continue;
-    }
-
-    if (code) {
-      code.push(raw);
-      continue;
-    }
-
-    if (!raw.trim()) {
-      flushAll();
-      continue;
-    }
-
-    if (/^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/.test(raw)) {
-      flushAll();
-      out.push("<hr />");
-      continue;
-    }
-
-    if (isTableRow(raw) && (table.length > 0 || isTableSeparator(nextRaw))) {
-      flushParagraph(paragraph, out, localFilePreviewUrl);
-      renderList(bullets, false, out, localFilePreviewUrl);
-      renderList(numbers, true, out, localFilePreviewUrl);
-      table.push(raw);
-      continue;
-    }
-
-    renderTable(table, out, localFilePreviewUrl);
-
-    const heading = raw.match(/^(#{1,6})(?:\s+|(?=[\u4e00-\u9fff\d一二三四五六七八九十、]))(.+)$/u);
-    if (heading) {
-      flushAll();
-      lastOrderedNumber = 0;
-      const level = Math.min(heading[1].length + 2, 5);
-      out.push(`<h${level}>${renderInline(heading[2], localFilePreviewUrl)}</h${level}>`);
-      continue;
-    }
-
-    const bullet = raw.match(/^\s*[-*]\s+(.+)$/);
-    if (bullet) {
-      flushParagraph(paragraph, out, localFilePreviewUrl);
-      renderList(numbers, true, out, localFilePreviewUrl);
-      bullets.push(bullet[1]);
-      continue;
-    }
-
-    const numbered = raw.match(/^\s*(\d+)\.\s+(.+)$/);
-    if (numbered) {
-      flushParagraph(paragraph, out, localFilePreviewUrl);
-      renderList(bullets, false, out, localFilePreviewUrl);
-      const parsedNumber = Number.parseInt(numbered[1] || "1", 10);
-      const effectiveNumber = parsedNumber > lastOrderedNumber ? parsedNumber : lastOrderedNumber + 1;
-      lastOrderedNumber = effectiveNumber;
-      numbers.push({ number: effectiveNumber, value: numbered[2] || "" });
-      continue;
-    }
-
-    renderList(bullets, false, out, localFilePreviewUrl);
-    renderList(numbers, true, out, localFilePreviewUrl);
-    paragraph.push(raw.trim());
+  try {
+    const source = normalizeMarkdownForRender(markdown);
+    let html = cowMarkdown.render(source, { localFilePreviewUrl } satisfies MarkdownRenderEnv);
+    html = injectLinkedMediaPreviews(html, localFilePreviewUrl);
+    html = linkifyPlainTextSegments(html, localFilePreviewUrl);
+    return html;
+  } catch {
+    return `<p>${escapeHtml(markdown).replace(/\n/g, "<br />")}</p>`;
   }
-
-  if (code) {
-    out.push(`<pre><code>${escapeHtml(code.join("\n"))}</code></pre>`);
-  }
-  flushAll();
-  return out.join("");
-}
-
-function countMatches(value: string, pattern: RegExp) {
-  return value.match(pattern)?.length || 0;
-}
-
-function splitStreamingMarkdown(markdown: string) {
-  const source = normalizeMarkdownForRender(markdown);
-  const fenceMatches = [...source.matchAll(/^```[\w-]*\s*$/gm)];
-  if (fenceMatches.length % 2 === 1) {
-    const lastFence = fenceMatches[fenceMatches.length - 1];
-    const fenceLineEnd = source.indexOf("\n", lastFence.index || 0);
-    return {
-      stable: source.slice(0, lastFence.index).trimEnd(),
-      tail: source.slice(fenceLineEnd >= 0 ? fenceLineEnd + 1 : source.length),
-      tailKind: "code" as const
-    };
-  }
-
-  const lastLineBreak = source.lastIndexOf("\n");
-  if (lastLineBreak >= 0) {
-    let stable = source.slice(0, lastLineBreak).trimEnd();
-    let tail = source.slice(lastLineBreak + 1);
-    const stableLines = stable.split("\n");
-    let lastContentLine = stableLines.length - 1;
-    while (lastContentLine >= 0 && !stableLines[lastContentLine].trim()) {
-      lastContentLine -= 1;
-    }
-    if (lastContentLine >= 0 && isTableRow(stableLines[lastContentLine])) {
-      let tableStart = lastContentLine;
-      while (tableStart > 0 && isTableRow(stableLines[tableStart - 1])) {
-        tableStart -= 1;
-      }
-      const tableLines = stableLines.slice(tableStart, lastContentLine + 1);
-      if (tableLines.length < 2 || !isTableSeparator(tableLines[1])) {
-        const moved = stableLines.slice(tableStart).join("\n");
-        stable = stableLines.slice(0, tableStart).join("\n").trimEnd();
-        tail = [moved, tail].filter(Boolean).join("\n");
-      }
-    }
-    return {
-      stable,
-      tail,
-      tailKind: "text" as const
-    };
-  }
-
-  return { stable: "", tail: source, tailKind: "text" as const };
-}
-
-function cleanStreamingTail(value: string) {
-  let text = redactInternalPromptText(value || "").replace(/\r\n/g, "\n").trimEnd();
-  text = text.replace(/^(```+[\w-]*\s*)/gm, "");
-  const tailLines = text.split("\n").map((line) => line.trim()).filter(Boolean);
-  if (tailLines.length && tailLines.every((line) => (
-    isTableRow(line)
-    || isTableSeparator(line)
-    || /^\|?(?:\s*:?-{0,3}:?\s*\|?)+\s*$/.test(line)
-  ))) {
-    return "";
-  }
-  if (/^\s{0,3}#{1,6}\s*$/.test(text)) return "";
-  if (/^\s{0,3}(?:[-*]|\d+\.)\s*$/.test(text)) return "";
-  if (/^\s*\|?(?:\s*:?-{0,3}:?\s*\|)+\s*$/.test(text)) return "";
-  if (/^\s*\|.+\|?\s*$/.test(text)) return "";
-  text = text.replace(/!\[([^\]]*)\]\([^)]*$/, "$1");
-  text = text.replace(/\[([^\]]+)\]\([^)]*$/, "$1");
-  text = text.replace(/\[([^\]]*)$/, "$1");
-  if (countMatches(text, /\*\*/g) % 2 === 1) text = text.replace(/\*\*/g, "");
-  if (countMatches(text, /`/g) % 2 === 1) text = text.replace(/`/g, "");
-  return text;
 }
 
 function truncateReasoning(text: string) {
@@ -1323,14 +1243,15 @@ function truncateReasoning(text: string) {
 
 function formatToolValue(value: unknown) {
   if (value === undefined || value === null || value === "") return "(none)";
+  const redactedValue = redactToolDisclosureValue(value);
   let text = "";
-  if (typeof value === "string") {
-    text = value;
+  if (typeof redactedValue === "string") {
+    text = redactedValue;
   } else {
     try {
-      text = JSON.stringify(value, null, 2);
+      text = JSON.stringify(redactedValue, null, 2);
     } catch {
-      text = String(value);
+      text = String(redactedValue);
     }
   }
   text = redactInternalPromptText(text);
@@ -1338,6 +1259,358 @@ function formatToolValue(value: unknown) {
   const head = text.slice(0, Math.floor(TOOL_DETAIL_RENDER_CAP * 0.65));
   const tail = text.slice(-Math.floor(TOOL_DETAIL_RENDER_CAP * 0.2));
   return `${head}\n\n... [tool output truncated for display, ${text.length - head.length - tail.length} chars omitted] ...\n\n${tail}`;
+}
+
+const QUALITY_EVIDENCE_ALLOWED_GATES = new Set([
+  "artifact-tool-authoring",
+  "chart-integrity",
+  "chart-render",
+  "dashboard-structure",
+  "design-preset",
+  "export-verify",
+  "font-size-check",
+  "formula-audit",
+  "generation-verify",
+  "artifact-integrity",
+  "anomaly-check",
+  "decode-valid",
+  "layout-bounds",
+  "layout-inspection",
+  "non-blank",
+  "overlap-check",
+  "overlay-ghosting-check",
+  "page-render",
+  "redline-preserve",
+  "reference-fidelity",
+  "render-docx",
+  "render-preview",
+  "seam-check",
+  "subject-structure-check",
+  "story-flow",
+  "structure-check",
+  "table-geometry",
+  "table-structure",
+  "text-orientation",
+  "text-glyph-check",
+  "typed-values",
+  "visual-diff",
+  "visual-inspection",
+  "watermark-check"
+]);
+
+const QUALITY_EVIDENCE_DETAIL_KEYS = new Set([
+  "anomaly_risk",
+  "blank_pages",
+  "blank_risk",
+  "chart_issues",
+  "charts",
+  "comment_id_mismatches",
+  "comment_refs",
+  "comments",
+  "date_text",
+  "diff",
+  "diff_mismatches",
+  "decode_error",
+  "decode_valid",
+  "empty_sheets",
+  "empty_slides",
+  "empty_text_pages",
+  "error_cells",
+  "expected_min",
+  "export",
+  "extraction_errors",
+  "formula_errors",
+  "formulas",
+  "finalized",
+  "generated",
+  "glyph_fragments",
+  "glyph_issues",
+  "headings",
+  "image_only_pages",
+  "issues",
+  "manual_visual_review",
+  "missing_titles",
+  "non_empty_sheets",
+  "numeric_text",
+  "overlay_risk",
+  "out_of_bounds",
+  "overlaps",
+  "page_count",
+  "page_size_variants",
+  "pages_compared",
+  "paragraphs",
+  "rendered",
+  "reference_count",
+  "reference_mismatch",
+  "reference_similarity",
+  "reference_status",
+  "references_compared",
+  "remote_references",
+  "max_retries",
+  "retry_count",
+  "retry_gate",
+  "retry_recommended",
+  "rotation_issues",
+  "route",
+  "sections",
+  "saliency_pct",
+  "seam_axis",
+  "seam_risk",
+  "sheets",
+  "size_bytes",
+  "slides",
+  "subject_review",
+  "subject_risk",
+  "table_candidates",
+  "table_issues",
+  "table_text_candidates",
+  "tables",
+  "text_density",
+  "text_like_regions",
+  "text_pages",
+  "titles",
+  "tracked_changes",
+  "translucent_pct",
+  "unspecified",
+  "unique_color_buckets",
+  "violations",
+  "watermark_risk"
+]);
+
+const QUALITY_EVIDENCE_DETAIL_ENUMS = new Set([
+  "artifact-tool",
+  "decode-error",
+  "decompressionbomberror",
+  "decompressionbombwarning",
+  "empty",
+  "filenotfounderror",
+  "horizontal",
+  "missing",
+  "not_applicable",
+  "none",
+  "oserror",
+  "pass",
+  "pending",
+  "pillow-missing",
+  "skipped",
+  "template-following",
+  "unspecified",
+  "unidentifiedimageerror",
+  "unknown",
+  "valueerror",
+  "vertical",
+  "verified",
+  "verified-existing-deck",
+  "artifact-integrity",
+  "anomaly-check",
+  "decode-valid",
+  "final",
+  "needs_review",
+  "non-blank",
+  "overlay-ghosting-check",
+  "reference-fidelity",
+  "retry",
+  "seam-check",
+  "subject-structure-check",
+  "text-glyph-check",
+  "watermark-check"
+]);
+
+const QUALITY_EVIDENCE_STATUSES = new Set(["pass", "fail", "warn", "pending", "skipped", "unknown"]);
+const REFERENCE_FIDELITY_SKIPPED_REVIEW_MARKER = "reference-fidelity-skipped-review";
+const QUALITY_EVIDENCE_KINDS = new Set(["presentation", "spreadsheet", "document", "pdf", "image"]);
+
+function qualityEvidenceText(value: unknown, limit: number) {
+  const text = String(value ?? "").trim().replace(/\s+/g, " ");
+  return text ? text.slice(0, limit) : "";
+}
+
+function qualityEvidenceGate(value: unknown) {
+  const gate = qualityEvidenceText(value, 72).toLowerCase();
+  return QUALITY_EVIDENCE_ALLOWED_GATES.has(gate) ? gate : "";
+}
+
+function qualityEvidenceSafeStatus(value: unknown) {
+  const status = qualityEvidenceText(value, 24).toLowerCase();
+  return QUALITY_EVIDENCE_STATUSES.has(status) ? status : "unknown";
+}
+
+function qualityEvidenceSafeKind(value: unknown) {
+  const kind = qualityEvidenceText(value, 32).toLowerCase();
+  return QUALITY_EVIDENCE_KINDS.has(kind) ? kind : "";
+}
+
+function qualityEvidenceDetail(value: unknown) {
+  const parts: string[] = [];
+  for (const rawPart of String(value ?? "").split(";")) {
+    if (parts.length >= 12) break;
+    const separator = rawPart.indexOf("=");
+    if (separator < 0) continue;
+    const key = rawPart.slice(0, separator).trim().toLowerCase();
+    const val = rawPart.slice(separator + 1).trim().toLowerCase();
+    if (!QUALITY_EVIDENCE_DETAIL_KEYS.has(key)) continue;
+    if (/^\d+$/.test(val)) {
+      parts.push(`${key}=${Number.parseInt(val, 10)}`);
+    } else if (QUALITY_EVIDENCE_DETAIL_ENUMS.has(val)) {
+      parts.push(`${key}=${val}`);
+    }
+  }
+  return parts.join("; ").slice(0, 240);
+}
+
+function qualityEvidenceCheck(value: unknown) {
+  if (!value || Array.isArray(value) || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const detail = qualityEvidenceDetail(record.detail || record.summary || "");
+  return {
+    id: qualityEvidenceGate(record.id || record.gate) || "unknown-check",
+    status: qualityEvidenceSafeStatus(record.status),
+    ...(detail ? { detail } : {})
+  };
+}
+
+function qualityEvidenceFromUnknown(value: unknown): QualityEvidence | undefined {
+  if (!value) return undefined;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed.startsWith("{") || trimmed.length > 64 * 1024) return undefined;
+    try {
+      return qualityEvidenceFromUnknown(JSON.parse(trimmed) as unknown);
+    } catch {
+      return undefined;
+    }
+  }
+  if (Array.isArray(value) || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const direct = record.qualityEvidence || record.quality_evidence;
+  if (direct && typeof direct === "object" && !Array.isArray(direct)) {
+    return qualityEvidenceFromUnknown(direct);
+  }
+  if (Array.isArray(record.qualityGates) || Array.isArray(record.checks)) {
+    const checks = Array.isArray(record.checks)
+      ? record.checks.map(qualityEvidenceCheck).filter((item): item is NonNullable<typeof item> => !!item).slice(0, 48)
+      : [];
+    const qualityGates = Array.isArray(record.qualityGates)
+      ? record.qualityGates.map(qualityEvidenceGate).filter(Boolean).slice(0, 40)
+      : [];
+    const missingQualityGates = Array.isArray(record.missingQualityGates)
+      ? record.missingQualityGates.map(qualityEvidenceGate).filter(Boolean).slice(0, 40)
+      : [];
+    return {
+      ...(qualityEvidenceSafeKind(record.kind) ? { kind: qualityEvidenceSafeKind(record.kind) } : {}),
+      ...(qualityGates.length ? { qualityGates } : {}),
+      ...(checks.length ? { checks } : {}),
+      ...(missingQualityGates.length ? { missingQualityGates } : {}),
+      status: qualityEvidenceSafeStatus(record.status),
+      redacted: true,
+      qualityEvidenceSanitized: true
+    };
+  }
+  return undefined;
+}
+
+function qualityEvidenceStatus(evidence?: QualityEvidence) {
+  const raw = String(evidence?.status || "").toLowerCase();
+  if (raw === "pass" || raw === "fail" || raw === "warn" || raw === "pending" || raw === "skipped") return raw;
+  const checks = Array.isArray(evidence?.checks) ? evidence?.checks || [] : [];
+  if (checks.some((check) => String(check.status || "").toLowerCase() === "fail")) return "fail";
+  if ((evidence?.missingQualityGates || []).length) return "fail";
+  if (checks.some((check) => String(check.status || "").toLowerCase() === "warn")) return "warn";
+  if (checks.some((check) => String(check.status || "").toLowerCase() === "pending")) return "pending";
+  return "unknown";
+}
+
+function qualityEvidenceKindLabel(kind?: string) {
+  const normalized = String(kind || "").toLowerCase();
+  if (normalized === "presentation") return "PPT";
+  if (normalized === "spreadsheet") return "Excel";
+  if (normalized === "document") return "Word";
+  if (normalized === "pdf") return "PDF";
+  if (normalized === "image") return "Image";
+  return "QA";
+}
+
+function qualityEvidenceStatusLabel(status: string) {
+  if (status === "pass") return "通过";
+  if (status === "fail") return "未通过";
+  if (status === "warn") return "有警告";
+  if (status === "pending") return "待复核";
+  if (status === "skipped") return "已跳过";
+  return "已记录";
+}
+
+function qualityEvidenceDetailNumber(detail: unknown, key: string) {
+  const parts = String(detail || "").split(";");
+  for (const part of parts) {
+    const [rawKey, rawValue] = part.split("=");
+    if (rawKey?.trim() !== key) continue;
+    const value = Number.parseInt(String(rawValue || "").trim(), 10);
+    return Number.isFinite(value) ? Math.max(0, value) : 0;
+  }
+  return 0;
+}
+
+function shouldSurfaceSkippedQualityCheck(check: NonNullable<QualityEvidence["checks"]>[number]) {
+  const status = String(check.status || "").toLowerCase();
+  if (status !== "skipped" || String(check.id || "") !== "reference-fidelity") return false;
+  const referenceCount = qualityEvidenceDetailNumber(check.detail, "reference_count");
+  const remoteReferences = qualityEvidenceDetailNumber(check.detail, "remote_references");
+  return referenceCount > 0 || remoteReferences > 0;
+}
+
+function qualityEvidenceProblemChecks(evidence?: QualityEvidence) {
+  const checks = Array.isArray(evidence?.checks) ? evidence?.checks || [] : [];
+  return checks.filter((check) => {
+    const status = String(check.status || "").toLowerCase();
+    return status === "fail" || status === "warn" || status === "pending" || shouldSurfaceSkippedQualityCheck(check);
+  }).slice(0, 5);
+}
+
+function QualityEvidenceBadge({ evidence, compact = false }: { evidence?: QualityEvidence; compact?: boolean }) {
+  if (!evidence) return null;
+  const problemChecks = qualityEvidenceProblemChecks(evidence);
+  const baseStatus = qualityEvidenceStatus(evidence);
+  const hasSkippedReference = problemChecks.some((check) => shouldSurfaceSkippedQualityCheck(check));
+  const status = baseStatus === "pass" && hasSkippedReference ? "pending" : baseStatus;
+  const missingCount = evidence.missingQualityGates?.length || 0;
+  const gateCount = evidence.qualityGates?.length || 0;
+  const label = `${qualityEvidenceKindLabel(String(evidence.kind || ""))} QA ${qualityEvidenceStatusLabel(status)}`;
+  const detail = [
+    gateCount ? `${gateCount} gates` : "",
+    problemChecks.length ? `${problemChecks.length} issue checks` : "",
+    missingCount ? `${missingCount} missing` : ""
+  ].filter(Boolean).join(" · ");
+  return (
+    <span
+      className={`quality-evidence-badge is-${status}${compact ? " is-compact" : ""}`}
+      title={detail || label}
+      data-qa-reference-skipped={hasSkippedReference ? REFERENCE_FIDELITY_SKIPPED_REVIEW_MARKER : undefined}
+    >
+      {status === "pass" ? <CircleCheck aria-hidden="true" /> : <TriangleAlert aria-hidden="true" />}
+      <span>{label}</span>
+      {!compact && detail ? <em>{detail}</em> : null}
+    </span>
+  );
+}
+
+function QualityEvidencePanel({ evidence }: { evidence?: QualityEvidence }) {
+  if (!evidence) return null;
+  const problemChecks = qualityEvidenceProblemChecks(evidence);
+  return (
+    <div className="quality-evidence-panel">
+      <QualityEvidenceBadge evidence={evidence} />
+      {problemChecks.length ? (
+        <ul>
+          {problemChecks.map((check, index) => (
+            <li key={`${check.id || "check"}-${index}`}>
+              <strong>{String(check.id || "unknown-check")}</strong>
+              {check.detail ? <span>{redactInternalPromptText(check.detail)}</span> : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
 }
 
 function resultHasExplicitArtifactFields(value: unknown) {
@@ -1493,65 +1766,6 @@ function MarkdownBlock({
 
 const MemoMarkdownBlock = memo(MarkdownBlock);
 
-function splitStableMarkdownChunks(content: string) {
-  const source = String(content || "");
-  if (source.length <= STREAM_MARKDOWN_CHUNK_CHARS) return [source];
-  const chunks: string[] = [];
-  let start = 0;
-  const hasBalancedFences = (value: string) => {
-    return ([...value.matchAll(/^```[\w-]*\s*$/gm)].length % 2) === 0;
-  };
-  while (start < source.length) {
-    const remaining = source.length - start;
-    if (remaining <= STREAM_MARKDOWN_CHUNK_CHARS) {
-      chunks.push(source.slice(start));
-      break;
-    }
-    const target = start + STREAM_MARKDOWN_CHUNK_CHARS;
-    let boundary = source.lastIndexOf("\n\n", target);
-    const minBoundary = start + Math.floor(STREAM_MARKDOWN_CHUNK_CHARS / 3);
-    while (boundary > minBoundary && !hasBalancedFences(source.slice(start, boundary))) {
-      boundary = source.lastIndexOf("\n\n", Math.max(start, boundary - 2));
-    }
-    if (boundary <= minBoundary) {
-      boundary = source.lastIndexOf("\n", target);
-    }
-    if (boundary <= minBoundary) {
-      boundary = Math.max(
-        source.lastIndexOf("。", target),
-        source.lastIndexOf("；", target),
-        source.lastIndexOf("，", target),
-        source.lastIndexOf(".", target)
-      );
-    }
-    if (boundary <= minBoundary) {
-      boundary = target;
-    }
-    chunks.push(source.slice(start, boundary).trimEnd());
-    start = boundary;
-    while (source[start] === "\n") start += 1;
-  }
-  return chunks.filter(Boolean);
-}
-
-function markdownPreviewContent(content: string) {
-  const source = normalizeMarkdownForRender(content);
-  if (source.length <= LONG_REPLY_PREVIEW_CHARS) return source;
-  const minBoundary = Math.floor(LONG_REPLY_PREVIEW_CHARS / 2);
-  const softLimit = Math.min(source.length, LONG_REPLY_PREVIEW_CHARS + 220);
-  let boundary = source.lastIndexOf("\n\n", softLimit);
-  if (boundary < minBoundary) boundary = source.lastIndexOf("\n", softLimit);
-  if (boundary < minBoundary) {
-    boundary = Math.max(
-      source.lastIndexOf("。", softLimit),
-      source.lastIndexOf("；", softLimit),
-      source.lastIndexOf(".", softLimit)
-    );
-  }
-  if (boundary < minBoundary) boundary = LONG_REPLY_PREVIEW_CHARS;
-  return `${source.slice(0, boundary).trimEnd()}\n\n...`;
-}
-
 function splitStableMarkdownChunksV2(content: string) {
   const source = normalizeMarkdownForRender(content);
   if (source.length <= STREAM_MARKDOWN_CHUNK_CHARS) return [source];
@@ -1606,61 +1820,6 @@ function splitStableMarkdownChunksV2(content: string) {
   return chunks.filter(Boolean);
 }
 
-function markdownPreviewContentSafe(content: string) {
-  const raw = String(content || "");
-  const source = normalizeMarkdownForRender(raw.slice(0, Math.min(raw.length, LONG_REPLY_PREVIEW_CHARS + 240)));
-  if (source.length <= LONG_REPLY_PREVIEW_CHARS) return source;
-  const minBoundary = Math.floor(LONG_REPLY_PREVIEW_CHARS / 2);
-  const softLimit = Math.min(source.length, LONG_REPLY_PREVIEW_CHARS + 220);
-  let boundary = source.lastIndexOf("\n\n", softLimit);
-  if (boundary < minBoundary) boundary = source.lastIndexOf("\n", softLimit);
-  if (boundary < minBoundary) {
-    boundary = Math.max(source.lastIndexOf(".", softLimit), source.lastIndexOf("!", softLimit), source.lastIndexOf("?", softLimit));
-  }
-  if (boundary < minBoundary) boundary = LONG_REPLY_PREVIEW_CHARS;
-  let preview = source.slice(0, boundary).trimEnd();
-  const fenceMatches = [...preview.matchAll(/^```[\w-]*\s*$/gm)];
-  if (fenceMatches.length % 2 === 1) {
-    const lastFence = fenceMatches[fenceMatches.length - 1];
-    preview = preview.slice(0, lastFence.index).trimEnd();
-  }
-  return `${preview}\n\n...`;
-}
-
-function streamingWindowHeadEnd(source: string) {
-  const paragraphEnd = source.lastIndexOf("\n\n", STREAM_LIVE_HEAD_CHARS);
-  if (paragraphEnd > STREAM_LIVE_HEAD_CHARS * 0.6) return paragraphEnd;
-  const lineEnd = source.lastIndexOf("\n", STREAM_LIVE_HEAD_CHARS);
-  if (lineEnd > STREAM_LIVE_HEAD_CHARS * 0.6) return lineEnd;
-  return STREAM_LIVE_HEAD_CHARS;
-}
-
-function trimUnbalancedFenceTail(segment: string) {
-  const fenceMatches = [...segment.matchAll(/^```[\w-]*\s*$/gm)];
-  if (fenceMatches.length % 2 === 0) return segment;
-  const lastFence = fenceMatches[fenceMatches.length - 1];
-  return segment.slice(0, lastFence.index).trimEnd();
-}
-
-function streamingWindowMarkdown(content: string) {
-  const source = redactInternalPromptText(content || "").replace(/\r\n/g, "\n");
-  if (source.length <= STREAM_LIVE_FULL_RENDER_CHARS) return source;
-  const rawHead = trimUnbalancedFenceTail(source.slice(0, streamingWindowHeadEnd(source)).trimEnd());
-  const rawTailStart = Math.max(STREAM_LIVE_HEAD_CHARS, source.length - STREAM_LIVE_TAIL_CHARS);
-  const paragraphTailStart = source.indexOf("\n\n", rawTailStart);
-  const lineTailStart = source.indexOf("\n", rawTailStart);
-  const tailStart = paragraphTailStart >= 0 && paragraphTailStart - rawTailStart < 1200
-    ? paragraphTailStart + 2
-    : lineTailStart >= 0 && lineTailStart - rawTailStart < 1200
-      ? lineTailStart + 1
-      : rawTailStart;
-  const rawTail = source.slice(tailStart).trimStart();
-  const head = normalizeMarkdownForRender(rawHead);
-  const tail = normalizeMarkdownForRender(rawTail);
-  const omitted = Math.max(source.length - rawHead.length - rawTail.length, 0);
-  return `${head}\n\n[... ${omitted} chars streaming ...]\n\n${tail}`;
-}
-
 function StreamingStableMarkdown({
   content,
   localFilePreviewUrl,
@@ -1699,70 +1858,16 @@ function StreamingMarkdownBlock({
   onOpenLocalFile?: (file: LocalFilePayload) => void;
   onLocalFileContextMenu?: LocalFileContextHandler;
 }) {
-  const liveContent = useMemo(() => streamingWindowMarkdown(content), [content]);
-  const { stable, tail, tailKind, cleanedTail } = useMemo(() => {
-    const split = splitStreamingMarkdown(redactInternalPromptText(liveContent));
-    return { ...split, cleanedTail: cleanStreamingTail(split.tail) };
-  }, [liveContent]);
+  const liveContent = useMemo(
+    () => normalizeMarkdownForRender(redactInternalPromptText(content || "")),
+    [content]
+  );
+  if (!liveContent) return null;
   return (
     <div className="streaming-markdown">
-      {stable && <StreamingStableMarkdown content={stable} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} onLocalFileContextMenu={onLocalFileContextMenu} />}
-      {tailKind === "code" ? (
-        <pre className="streaming-code"><code>{tail}</code></pre>
-      ) : cleanedTail ? (
-        <div className="streaming-tail">
-          <MarkdownBlock content={cleanedTail} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} onLocalFileContextMenu={onLocalFileContextMenu} />
-        </div>
-      ) : null}
+      <StreamingStableMarkdown content={liveContent} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} onLocalFileContextMenu={onLocalFileContextMenu} />
     </div>
   );
-}
-
-function LiveStreamingText({ content }: { content: string }) {
-  const preRef = useRef<HTMLPreElement | null>(null);
-  const textNodeRef = useRef<Text | null>(null);
-  const renderedRef = useRef("");
-  const targetRef = useRef("");
-  const frameRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (!preRef.current || textNodeRef.current) return;
-    const node = document.createTextNode("");
-    preRef.current.appendChild(node);
-    textNodeRef.current = node;
-  }, []);
-
-  useEffect(() => {
-    const target = redactInternalPromptText(content || "").replace(/\r\n/g, "\n");
-    targetRef.current = target;
-    if (frameRef.current !== null) return;
-    frameRef.current = window.requestAnimationFrame(() => {
-      frameRef.current = null;
-      const node = textNodeRef.current;
-      if (!node) return;
-      const next = targetRef.current;
-      const rendered = renderedRef.current;
-      if (!next.startsWith(rendered)) {
-        node.data = next;
-        renderedRef.current = next;
-        return;
-      }
-      const delta = next.slice(rendered.length);
-      if (delta) {
-        node.appendData(delta);
-        renderedRef.current = next;
-      }
-    });
-  }, [content]);
-
-  useEffect(() => () => {
-    if (frameRef.current !== null) {
-      window.cancelAnimationFrame(frameRef.current);
-      frameRef.current = null;
-    }
-  }, []);
-
-  return <pre className="live-streaming-text" ref={preRef} />;
 }
 
 function ThinkingStep({ content = "", running }: { content?: string; running?: boolean }) {
@@ -1783,21 +1888,25 @@ function ThinkingStep({ content = "", running }: { content?: string; running?: b
 
 function ToolStep({ step }: { step: ToolCallDisclosure }) {
   const isInterrupted = toolStepIsInterrupted(step);
-  const isError = !isInterrupted && (step.is_error === true || step.status === "error" || step.status === "failed");
+  const isError = !isInterrupted && (step.is_error === true || step.status === "error" || step.status === "failed" || step.status === "timeout");
   const running = step.running === true || step.status === "running";
+  const extensionCount = typeof step.extension_count === "number" ? step.extension_count : 0;
   const statusClass = running ? " is-running" : isInterrupted ? " is-cancelled" : isError ? " is-error" : " is-done";
+  const qualityEvidence = step.qualityEvidence || qualityEvidenceFromUnknown(step.result);
   return (
     <details className={`agent-step agent-tool-step${isError ? " tool-failed" : ""}${isInterrupted ? " tool-cancelled" : ""}`}>
       <summary title={running ? "工具正在执行，完成后可查看输入和结果" : isInterrupted ? "工具调用已中止，可展开查看已返回的信息" : "展开查看工具输入和结果"}>
         <span className={`tool-status-dot${statusClass}`} aria-hidden="true" />
         <span className="tool-name">{step.name || "工具调用"}</span>
         {typeof step.execution_time === "number" && <span className="tool-time">{step.execution_time}s</span>}
+        {running && extensionCount > 0 && <span className="tool-time">lease x{extensionCount}</span>}
       </summary>
       <div className="tool-detail">
         <div className="tool-detail-section">
           <div className="tool-detail-label">Input</div>
           <pre className="tool-detail-content">{formatToolValue(step.arguments)}</pre>
         </div>
+        <QualityEvidencePanel evidence={qualityEvidence} />
         {step.result !== undefined && step.result !== "" && (
           <div className="tool-detail-section tool-output-section">
             <div className="tool-detail-label">{isError ? "Error" : "Output"}</div>
@@ -1890,7 +1999,7 @@ function renderStep(
     );
   }
   if (step.type === "phase") {
-    return <div className="agent-step agent-phase-step" key={index}>{redactInternalPromptText(step.content || "")}</div>;
+    return <div className="agent-step agent-phase-step ecorex-activity-status" key={index}>{redactInternalPromptText(step.content || "")}</div>;
   }
   return <MediaStep key={index} step={step} onOpenLocalFile={onOpenLocalFile} onLocalFileContextMenu={onLocalFileContextMenu} localFilePreviewUrl={localFilePreviewUrl} />;
 }
@@ -1925,6 +2034,7 @@ function ProcessDisclosure({
   pending,
   steps,
   legacySteps,
+  runTimingLabel,
   onOpenLocalFile,
   onLocalFileContextMenu,
   localFilePreviewUrl
@@ -1932,10 +2042,12 @@ function ProcessDisclosure({
   pending?: boolean;
   steps: AgentStepDisclosure[];
   legacySteps: ReactNode[];
+  runTimingLabel?: string;
   onOpenLocalFile?: (file: LocalFilePayload) => void;
   onLocalFileContextMenu?: LocalFileContextHandler;
   localFilePreviewUrl?: (filePath: string) => string;
 }) {
+  const [open, setOpen] = useState(false);
   if (!steps.length && !legacySteps.length) return null;
   const runningStep = [...steps].reverse().find(stepIsRunning);
   const errorStep = [...steps].reverse().find(stepIsError);
@@ -1944,16 +2056,23 @@ function ProcessDisclosure({
   const count = steps.length + legacySteps.length;
   const statusClass = pending ? " is-running" : errorStep ? " is-error" : interruptedStep ? " is-cancelled" : " is-done";
   return (
-    <details className={`agent-process-disclosure${pending ? " is-live" : ""}`}>
+    <details
+      className={`agent-process-disclosure${pending ? " is-live" : ""}`}
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
       <summary>
         <span className={`tool-status-dot${statusClass}`} aria-hidden="true" />
         <span>{pending ? `正在处理 · ${count} 步` : `调用过程 · ${count} 步`}</span>
+        {runTimingLabel && <span className="agent-process-timing">{runTimingLabel}</span>}
         {currentStep && <span className="agent-process-current">{stepSummary(currentStep)}</span>}
       </summary>
-      <div className="agent-steps">
-        {steps.map((step, index) => renderStep(step, index, onOpenLocalFile, localFilePreviewUrl, onLocalFileContextMenu))}
-        {legacySteps}
-      </div>
+      {open && (
+        <div className="agent-steps">
+          {steps.map((step, index) => renderStep(step, index, onOpenLocalFile, localFilePreviewUrl, onLocalFileContextMenu))}
+          {legacySteps}
+        </div>
+      )}
     </details>
   );
 }
@@ -1990,7 +2109,7 @@ function MainAnswer({ content, pending, collapsible, artifacts = [], extraArtifa
     return (
       <>
         {pending ? (
-          <LiveStreamingText content={content} />
+          <StreamingMarkdownBlock content={content} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} onLocalFileContextMenu={onLocalFileContextMenu} />
         ) : (
           <MarkdownBlock content={content} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} onLocalFileContextMenu={onLocalFileContextMenu} />
         )}
@@ -2011,10 +2130,13 @@ function MainAnswer({ content, pending, collapsible, artifacts = [], extraArtifa
       </div>
     );
   }
+  const previewContent = content.length > LONG_REPLY_PREVIEW_CHARS
+    ? `${content.slice(0, LONG_REPLY_PREVIEW_CHARS).trimEnd()}\n\n...`
+    : content;
   return (
     <div className="long-answer-disclosure">
       <div className="long-answer-preview">
-        <MarkdownBlock content={markdownPreviewContentSafe(content)} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} onLocalFileContextMenu={onLocalFileContextMenu} />
+        <MarkdownBlock content={previewContent} localFilePreviewUrl={localFilePreviewUrl} onOpenLocalFile={onOpenLocalFile} onLocalFileContextMenu={onLocalFileContextMenu} />
         {artifactShelf}
       </div>
       <button className="long-answer-toggle long-answer-expand-bottom" type="button" onClick={() => setExpanded(true)} title="长回复已默认收起，点击展开完整内容">
@@ -2034,6 +2156,7 @@ export const MessageContent = memo(function MessageContent(props: {
   steps?: AgentStepDisclosure[];
   toolCalls?: ToolCallDisclosure[];
   artifacts?: AgentArtifact[];
+  runTimingLabel?: string;
   onOpenLocalFile?: (file: LocalFilePayload) => void;
   onLocalFileContextMenu?: LocalFileContextHandler;
   localFilePreviewUrl?: (filePath: string) => string;
@@ -2061,6 +2184,7 @@ export const MessageContent = memo(function MessageContent(props: {
         pending={props.pending}
         steps={compactedSteps}
         legacySteps={legacySteps}
+        runTimingLabel={props.runTimingLabel}
         onOpenLocalFile={props.onOpenLocalFile}
         onLocalFileContextMenu={props.onLocalFileContextMenu}
         localFilePreviewUrl={props.localFilePreviewUrl}

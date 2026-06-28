@@ -1,0 +1,92 @@
+{
+  "consoleErrorCount": 0,
+  "contentLength": 18333,
+  "failures": [],
+  "generatedAt": "2026-06-27T15:54:19Z",
+  "performance": {
+    "maxFormattedReadyMs": 773.6,
+    "p50FormattedReadyMs": 568.7,
+    "p95FormattedReadyMs": 773.6,
+    "sampleCount": 5
+  },
+  "redacted": true,
+  "samples": [
+    {
+      "apiCallCount": 21,
+      "codeBlockCount": 60,
+      "contentTextLength": 12280,
+      "formattedReadyMs": 614.6,
+      "hasOmittedStreamingText": false,
+      "headingCount": 61,
+      "linkCount": 60,
+      "markdownBlockCount": 4,
+      "orderedListCount": 60,
+      "rawTailNodeCount": 0,
+      "streamingRootCount": 1,
+      "tableCount": 60,
+      "unorderedListCount": 60
+    },
+    {
+      "apiCallCount": 21,
+      "codeBlockCount": 60,
+      "contentTextLength": 12280,
+      "formattedReadyMs": 568.7,
+      "hasOmittedStreamingText": false,
+      "headingCount": 61,
+      "linkCount": 60,
+      "markdownBlockCount": 4,
+      "orderedListCount": 60,
+      "rawTailNodeCount": 0,
+      "streamingRootCount": 1,
+      "tableCount": 60,
+      "unorderedListCount": 60
+    },
+    {
+      "apiCallCount": 21,
+      "codeBlockCount": 60,
+      "contentTextLength": 12280,
+      "formattedReadyMs": 488.6,
+      "hasOmittedStreamingText": false,
+      "headingCount": 61,
+      "linkCount": 60,
+      "markdownBlockCount": 4,
+      "orderedListCount": 60,
+      "rawTailNodeCount": 0,
+      "streamingRootCount": 1,
+      "tableCount": 60,
+      "unorderedListCount": 60
+    },
+    {
+      "apiCallCount": 21,
+      "codeBlockCount": 60,
+      "contentTextLength": 12280,
+      "formattedReadyMs": 452.6,
+      "hasOmittedStreamingText": false,
+      "headingCount": 61,
+      "linkCount": 60,
+      "markdownBlockCount": 4,
+      "orderedListCount": 60,
+      "rawTailNodeCount": 0,
+      "streamingRootCount": 1,
+      "tableCount": 60,
+      "unorderedListCount": 60
+    },
+    {
+      "apiCallCount": 21,
+      "codeBlockCount": 60,
+      "contentTextLength": 12280,
+      "formattedReadyMs": 773.6,
+      "hasOmittedStreamingText": false,
+      "headingCount": 61,
+      "linkCount": 60,
+      "markdownBlockCount": 4,
+      "orderedListCount": 60,
+      "rawTailNodeCount": 0,
+      "streamingRootCount": 1,
+      "tableCount": 60,
+      "unorderedListCount": 60
+    }
+  ],
+  "scenario": "v024-cowagent-style-live-markdown-streaming",
+  "status": "PASS"
+}

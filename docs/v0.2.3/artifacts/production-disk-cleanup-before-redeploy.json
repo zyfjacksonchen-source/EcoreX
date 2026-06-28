@@ -1,0 +1,47 @@
+{
+  "commands": [
+    {
+      "argvHash": "CD17BFB752851667403EB841A0FCB08E39270B111B6CE25651AC03B551AEED3C",
+      "exitCode": 0,
+      "name": "df_before_cleanup",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "Filesystem      Size  Used Avail Use% Mounted on\n/dev/nvme0n1p2  984G  9.3G  935G   1% /\ntmpfs           3.7G  3.6G  107M  98% /tmp\n/dev/nvme0n1p2  984G  9.3G  935G   1% /\n/dev/nvme0n1p2  984G  9.3G  935G   1% /\n",
+      "stdoutHash": "F0CE164C8B2452552BED6A10F9D8C5994B6542441E163CB681B95825B4FDCAE6"
+    },
+    {
+      "argvHash": "1F2851CC56E10392B12481D0F6D86549527BFE85BEA53712A9830B478575FC6A",
+      "exitCode": 0,
+      "name": "cleanup_old_release_artifacts",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "",
+      "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
+    },
+    {
+      "argvHash": "B1AB0C0468DB0193B132A91414820FDB88249AE09C9053F2C7080F4587C0E804",
+      "exitCode": 0,
+      "name": "df_after_cleanup",
+      "stderrExcerptRedacted": "",
+      "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
+      "stdoutExcerptRedacted": "Filesystem      Size  Used Avail Use% Mounted on\n/dev/nvme0n1p2  984G  5.6G  939G   1% /\ntmpfs           3.7G  2.2G  1.6G  60% /tmp\n/dev/nvme0n1p2  984G  5.6G  939G   1% /\n/dev/nvme0n1p2  984G  5.6G  939G   1% /\n",
+      "stdoutHash": "41A1421401AB1B6F7152ABC763DF20659F892FBB678AE16C098180953870A408"
+    }
+  ],
+  "generatedAt": "2026-06-27T09:28:24.020068+00:00",
+  "redaction": {
+    "rawOutputPersisted": false,
+    "rawPasswordPersisted": false,
+    "rawSecretPersisted": false,
+    "rawTargetPersisted": false,
+    "rawUrlPersisted": false
+  },
+  "scope": "production-temp-clean-before-redeploy",
+  "status": "PASS",
+  "target": {
+    "domainHash": "A753D877497CBE35",
+    "rawTargetPersisted": false,
+    "sshHostHash": "CDF1CF905198CA97",
+    "sshUserHash": "4813494D137E1631"
+  }
+}

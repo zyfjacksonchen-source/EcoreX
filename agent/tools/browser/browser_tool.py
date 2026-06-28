@@ -20,6 +20,7 @@ import os
 from typing import Dict, Any, Optional
 
 from agent.tools.base_tool import BaseTool, ToolResult
+from agent.tools.browser.browser_automation_service import DEFAULT_CDP_ENDPOINT, DEFAULT_CDP_USER_DATA_DIR
 from agent.tools.browser.browser_service import BrowserService
 from common.log import logger
 
@@ -37,6 +38,8 @@ class BrowserTool(BaseTool):
         "Workflow: navigate (auto-includes snapshot with element refs) → click/fill/select by ref → snapshot to verify.\n\n"
         "Use snapshot as the primary way to read pages. Use screenshot + send to show key results to the user. "
         "For login/CAPTCHA/authorization etc., screenshot and ask the user for help. "
+        "After the user says login/authorization is complete, continue with this browser tool directly; "
+        "do not read external Codex/Chrome plugin SKILL.md files and do not probe the CDP port through bash. "
         "Login state is persisted across sessions (cookies / localStorage are kept in a "
         "user profile directory), so once the user logs in to a site, the agent can keep "
         "using it without logging in again."
@@ -105,9 +108,29 @@ class BrowserTool(BaseTool):
     _shared_service: Optional[BrowserService] = None
 
     def __init__(self, config: dict = None):
-        self.config = config or {}
+        self.config = self._browser_config(config or {})
         self.cwd = self.config.get("cwd", os.getcwd())
         self._service: Optional[BrowserService] = None
+
+    @staticmethod
+    def _browser_config(config: dict) -> dict:
+        merged: Dict[str, Any] = {}
+        try:
+            from config import conf
+
+            tools_config = conf().get("tools") or {}
+            browser_config = tools_config.get("browser") if isinstance(tools_config, dict) else None
+            if isinstance(browser_config, dict):
+                merged.update(browser_config)
+        except Exception as exc:
+            logger.debug(f"[Browser] Unable to read global browser config: {exc}")
+        merged.update(config or {})
+        merged.setdefault("cdp_endpoint", DEFAULT_CDP_ENDPOINT)
+        merged.setdefault("cdp_auto_launch", True)
+        merged.setdefault("cdp_fallback", True)
+        merged.setdefault("persistent", True)
+        merged.setdefault("cdp_user_data_dir", DEFAULT_CDP_USER_DATA_DIR)
+        return merged
 
     def _get_service(self) -> BrowserService:
         """Get or create the browser service, sharing across copies."""

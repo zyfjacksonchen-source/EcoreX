@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE_URL="${ECOREX_BASE_URL:-https://www.ecoreai.cn/ecorex-agent}"
+BASE_URL="${ECOREX_BASE_URL:-https://mvdcm.ecoremedia.net/ecorex-agent}"
 REQUESTED_VERSION="${ECOREX_VERSION:-}"
 OPEN_BROWSER="${OPEN_BROWSER:-1}"
 
@@ -56,14 +56,12 @@ download_file() {
       curl_args+=("$retry_all_errors_flag")
     fi
     if [[ -s "$partial" ]]; then
-      local resume_from
-      resume_from="$(wc -c < "$partial" | tr -d '[:space:]')"
-      curl_args+=("-H" "Range: bytes=${resume_from}-")
-      echo "Resuming partial download, attempt $attempt/5..."
+      echo "Retrying download from a clean partial file, attempt $attempt/5..."
+      rm -f "$partial"
     else
       echo "Starting download, attempt $attempt/5..."
     fi
-    if curl "${curl_args[@]}" "$url" >> "$partial"; then
+    if curl "${curl_args[@]}" "$url" -o "$partial"; then
       status=0
     else
       status=$?
@@ -74,10 +72,6 @@ download_file() {
     if [[ -s "$partial" ]] && [[ "$(sha256_file "$partial")" == "$expected_sha" ]]; then
       echo "Partial package was already complete."
       break
-    fi
-    if [[ "$status" == "33" || "$status" == "22" ]]; then
-      echo "Server did not resume the partial download; restarting from byte 0." >&2
-      rm -f "$partial"
     fi
     if [[ "$attempt" == "5" ]]; then
       echo "Download failed after $attempt attempts. You can rerun this installer to retry." >&2
@@ -115,7 +109,7 @@ echo "Fetching EcoreX manifest: $MANIFEST_URL"
 curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 "$MANIFEST_URL" -o "$MANIFEST_JSON"
 
 VERSION="$(manifest_value "version")"
-echo "EcoreX WebUI installer script: 0.2.0"
+echo "EcoreX WebUI installer script: 0.2.4"
 echo "EcoreX WebUI manifest version: $VERSION"
 if [[ -n "$REQUESTED_VERSION" && "$REQUESTED_VERSION" != "$VERSION" ]]; then
   echo "Manifest version '$VERSION' does not match requested '$REQUESTED_VERSION'." >&2

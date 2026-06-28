@@ -1,0 +1,496 @@
+{
+  "schemaVersion": 1,
+  "slice": "R22-07",
+  "status": "REVIEWED-PASS",
+  "commandShell": "PowerShell",
+  "purpose": "Auditable v0.2.2 harness index for backend/frontend replay, refresh, disconnect, restart, permissions, artifacts, channels, image fallback, and Feishu/Lark coverage.",
+  "requiredSurfaces": [
+    "replay",
+    "refresh",
+    "disconnect",
+    "restart",
+    "permissions",
+    "artifacts",
+    "channels",
+    "feishu",
+    "image-jobs",
+    "image-fallback",
+    "scheduler",
+    "project-sessions",
+    "markdown",
+    "ui-polish",
+    "status-motion",
+    "run-center"
+  ],
+  "externalBlockers": [
+    {
+      "id": "feishu-im-real-credential-smoke",
+      "surface": "feishu",
+      "status": "BLOCKER-PENDING-CREDENTIALS",
+      "reason": "Contract harnesses prove transport/auth/callable separation and Feishu/Lark capability gating, but real Feishu/IM authorization and channel calls require credentials that are not present in this workspace."
+    }
+  ],
+  "rows": [
+    {
+      "id": "runtime-ledger-replay-core",
+      "status": "pass",
+      "kind": "backend-pytest",
+      "surfaces": ["replay", "permissions", "artifacts"],
+      "commands": [
+        "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py::TestV022RunEventLedger -q"
+      ],
+      "files": [
+        "agent/protocol/run_event_ledger.py",
+        "agent/protocol/runtime_projection.py",
+        "channel/web/web_channel.py",
+        "tests/test_ecorex_web_parallel_backend.py"
+      ],
+      "assertions": [
+        "Durable run events append and replay by request/session cursor.",
+        "Permission, artifact, cancellation, and terminal events reduce into RuntimeProjection.",
+        "Projection replay is canonical evidence, not frontend-only reconstruction."
+      ]
+    },
+    {
+      "id": "web-runtime-projection-reconnect-browser",
+      "status": "pass",
+      "kind": "browser-smoke",
+        "surfaces": ["replay", "refresh", "disconnect", "artifacts", "image-jobs"],
+      "commands": [
+        "python scripts/smoke-web-runtime-projection-reconnect-browser.py --screenshot docs/v0.2.2/artifacts/web-runtime-projection-reconnect-browser-smoke.png --timeout-ms 30000",
+        "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py -k web_runtime_projection_reconnect_browser_smoke_harness_contract -q"
+      ],
+      "files": [
+        "scripts/smoke-web-runtime-projection-reconnect-browser.py",
+        "scripts/web_smoke_support.py",
+        "channel/web/static/js/console.js",
+        "tests/test_ecorex_web_parallel_backend.py"
+      ],
+      "artifacts": [
+        "docs/v0.2.2/artifacts/web-runtime-projection-reconnect-browser-smoke.png"
+      ],
+      "assertions": [
+        "Stable SSE completes through one stream without recovery prompts.",
+        "Exhausted reconnect applies backend runtime projection after stream loss.",
+        "Poll fallback with a request_id consumes backend RuntimeProjection before rendering legacy text, avoiding duplicate bubbles.",
+        "Poll fallback refreshes an existing same-request stale bot bubble from backend RuntimeProjection instead of skipping projection.",
+        "When EventSource is unavailable, request projection polling renders image-job-only projection and artifacts without recovery prompts.",
+        "Unsafe artifacts are disabled while safe rendered content survives refresh/reconnect."
+      ]
+      },
+    {
+      "id": "web-runtime-real-network-browser",
+      "status": "pass",
+      "kind": "browser-smoke",
+      "surfaces": ["replay", "refresh", "disconnect"],
+      "commands": [
+        "python scripts/smoke-web-runtime-real-network-browser.py --screenshot docs/v0.2.2/artifacts/web-runtime-real-network-browser-smoke.png --artifact docs/v0.2.2/artifacts/web-runtime-real-network-browser-smoke.json --timeout-ms 30000",
+        "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py::TestWebParallelHandlers::test_v022_web_runtime_real_network_browser_smoke_harness_contract -q"
+      ],
+      "files": [
+        "scripts/smoke-web-runtime-real-network-browser.py",
+        "scripts/web_smoke_support.py",
+        "channel/web/static/js/console.js",
+        "tests/test_ecorex_web_parallel_backend.py"
+      ],
+      "artifacts": [
+        "docs/v0.2.2/artifacts/web-runtime-real-network-browser-smoke.png",
+        "docs/v0.2.2/artifacts/web-runtime-real-network-browser-smoke.json"
+      ],
+      "assertions": [
+        "The smoke serves real chat.html plus JSON and text/event-stream endpoints over localhost without browser fetch or EventSource stubs.",
+        "Stable actual EventSource streaming completes through one /stream connection and terminal backend RuntimeProjection refresh.",
+        "A real local stream loss exhausts 11 EventSource HTTP requests, preserves last_event_id=rn-loss-1 on reconnect URLs, and recovers from request RuntimeProjection.",
+        "The primary real-network validation path does not fall back to legacy /api/history and leaves no recovery action UI."
+      ]
+    },
+    {
+      "id": "web-runtime-projection-history-pagination-browser",
+      "status": "pass",
+      "kind": "browser-smoke",
+      "surfaces": ["replay", "refresh", "disconnect"],
+      "commands": [
+        "python scripts/smoke-web-runtime-projection-history-pagination-browser.py --screenshot docs/v0.2.2/artifacts/web-runtime-projection-history-pagination-browser-smoke.png --timeout-ms 30000",
+        "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py::TestV022RunEventLedger::test_v022_session_history_projection_limits_runtime_requests_to_page tests/test_ecorex_web_parallel_backend.py::TestWebParallelHandlers::test_v022_web_history_load_refreshes_session_runtime_projection tests/test_ecorex_web_parallel_backend.py::TestWebParallelHandlers::test_v022_web_runtime_projection_history_pagination_browser_smoke_harness_contract -q"
+      ],
+      "files": [
+        "agent/protocol/runtime_projection.py",
+        "scripts/smoke-web-runtime-projection-history-pagination-browser.py",
+        "scripts/web_smoke_support.py",
+        "channel/web/static/js/console.js",
+        "tests/test_ecorex_web_parallel_backend.py"
+      ],
+      "artifacts": [
+        "docs/v0.2.2/artifacts/web-runtime-projection-history-pagination-browser-smoke.png"
+      ],
+      "assertions": [
+        "History page 1 and page 2 consume backend runtime projection before legacy history fallback.",
+        "Session history projection exposes only page-owned runtime requests, not the whole session delta.",
+        "History projection latest_event_id advances the frontend session cursor before the automatic recheck.",
+        "The automatic recheck uses after_event_id=200 and renders only the post-cursor request.",
+        "A later manual recheck uses after_event_id=210, proving cursor state is retained.",
+        "History messages and runtime request overlays with the same request_id do not duplicate user or assistant bubbles.",
+        "A forced page 3 projection failure falls back to /api/history exactly once, keeping weak-network fallback explicit and auditable."
+      ]
+    },
+    {
+      "id": "sidecar-restart-and-replay-gap",
+      "status": "pass",
+      "kind": "backend-pytest",
+      "surfaces": ["replay", "disconnect", "restart"],
+      "commands": [
+        "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py -k \"terminal_projection_replay_preempts_sidecar_interruption_recovery or sse_reconnect_treats_interrupted_replay_event_as_terminal or sse_replay_gap_is_explicit_when_cursor_is_too_old or stream_response_emits_interrupted_terminal_for_lost_sidecar_run\" -q"
+      ],
+      "files": [
+        "channel/web/web_channel.py",
+        "agent/protocol/runtime_projection.py",
+        "tests/test_ecorex_web_parallel_backend.py"
+      ],
+      "assertions": [
+        "Replay gaps are explicit durable recovery states.",
+        "Terminal runtime projection wins over sidecar interruption heuristics.",
+        "Restart/interrupted stream recovery does not create duplicate assistant turns."
+      ]
+    },
+    {
+      "id": "permission-audit-contract",
+      "status": "pass",
+      "kind": "backend-pytest",
+      "surfaces": ["permissions"],
+      "commands": [
+        "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py -k \"permission_handler_round_trips_mode_and_audit or webchannel_permission_artifact_cancel_are_durable_and_projected or permission_wait_cancel or smart_ask_requires_permission\" -q"
+      ],
+      "files": [
+        "common/ecorex_tool_permissions.py",
+        "common/ecorex_capability_policy.py",
+        "channel/web/web_channel.py",
+        "tests/test_ecorex_web_parallel_backend.py"
+      ],
+      "assertions": [
+        "Permission mode changes and denials are auditable.",
+        "Waiting-permission state is projected and cancellable.",
+        "Capability installation policy uses backend permission/audit boundaries."
+      ]
+    },
+    {
+      "id": "artifact-and-image-job-projection",
+      "status": "pass",
+      "kind": "backend-and-browser-smoke",
+      "surfaces": ["artifacts", "image-jobs", "replay", "refresh", "restart"],
+      "commands": [
+        "python scripts/smoke-web-image-jobs-browser.py --screenshot docs/v0.2.2/artifacts/web-image-jobs-browser-smoke.png --timeout-ms 30000",
+        "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py -k image_job -q"
+      ],
+      "files": [
+        "agent/protocol/image_job_service.py",
+        "agent/protocol/runtime_projection.py",
+        "scripts/smoke-web-image-jobs-browser.py",
+        "tests/test_ecorex_web_parallel_backend.py"
+      ],
+      "artifacts": [
+        "docs/v0.2.2/artifacts/web-image-jobs-browser-smoke.png",
+        "docs/v0.2.2/artifacts/web-image-jobs-parallelism-policy-smoke.png"
+      ],
+      "assertions": [
+        "Image job artifacts are emitted through durable runtime events and public projection.",
+        "Service reset can recover status from the event ledger.",
+        "Unsafe artifact URLs are disabled and safe local files route through backend file APIs."
+      ]
+    },
+    {
+      "id": "image-generation-tool-invocation-fallback",
+      "status": "pass",
+      "kind": "cli-smoke",
+      "surfaces": ["image-fallback"],
+      "commands": [
+        "python scripts/smoke-image-generation-tool-invocation.py --artifact docs/v0.2.2/artifacts/image-generation-tool-invocation-smoke.json --timeout 30",
+        "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_image_generation_skill_retry.py -k tool_invocation_smoke_contract -q"
+      ],
+      "files": [
+        "scripts/smoke-image-generation-tool-invocation.py",
+        "skills/image-generation/scripts/generate.py",
+        "skills/image-generation/SKILL.md",
+        "tests/test_image_generation_skill_retry.py"
+      ],
+      "artifacts": [
+        "docs/v0.2.2/artifacts/image-generation-tool-invocation-smoke.json"
+      ],
+      "assertions": [
+        "The real image-generation skill CLI/stdin entrypoint is exercised, not only imported provider classes.",
+        "Text-to-image and edit routes first call gpt-image-2-pro, then fall back only to gpt-image-2 on the same GPT Image compatible route.",
+        "The smoke asserts model_fallback is surfaced, edit requests use multipart /images/edits with an image file, and fake API keys do not leak."
+      ]
+    },
+      {
+        "id": "image-jobs-provider-fallback-api",
+        "status": "pass",
+      "kind": "api-cli-smoke",
+      "surfaces": ["image-jobs", "image-fallback"],
+      "commands": [
+        "python scripts/smoke-image-jobs-provider-fallback.py --artifact docs/v0.2.2/artifacts/image-jobs-provider-fallback-smoke.json --timeout 30",
+          "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py -k \"image_jobs_api_surfaces_skill_model_fallback_telemetry or image_job_skill_runner_uses_stdin_not_argv or image_jobs_provider_fallback_smoke_harness_contract or token_shaped\" -q"
+      ],
+      "files": [
+        "scripts/smoke-image-jobs-provider-fallback.py",
+        "channel/web/web_channel.py",
+        "agent/protocol/image_job_service.py",
+        "agent/protocol/runtime_projection.py",
+        "skills/image-generation/scripts/generate.py",
+        "tests/test_ecorex_web_parallel_backend.py"
+      ],
+      "artifacts": [
+        "docs/v0.2.2/artifacts/image-jobs-provider-fallback-smoke.json"
+      ],
+      "assertions": [
+        "The Web ImageJobs API invokes the real image-generation skill subprocess through ImageJobService, not a dry-run runner.",
+        "Generation and edit jobs call GPT Image compatible routes with gpt-image-2-pro first and gpt-image-2 fallback.",
+          "Durable image_job.progress events and public RuntimeProjection expose sanitized fallback telemetry without leaking fake API keys, raw provider error messages, or token-shaped hostile telemetry values."
+        ]
+      },
+    {
+      "id": "image-jobs-ocr-reuse-api",
+      "status": "pass",
+      "kind": "backend-api-contract",
+      "surfaces": ["image-jobs"],
+      "commands": [
+        "python -m py_compile agent/protocol/image_job_service.py agent/protocol/runtime_projection.py channel/web/web_channel.py skills/image-generation/scripts/generate.py tests/test_ecorex_web_parallel_backend.py",
+        "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py::TestV022RunEventLedger::test_v022_image_job_service_reuses_ocr_brief_by_input_hash_without_public_leak tests/test_ecorex_web_parallel_backend.py::TestV022RunEventLedger::test_v022_image_jobs_api_projects_ocr_reuse_from_backend_events tests/test_ecorex_web_parallel_backend.py::TestV022RunEventLedger::test_v022_image_jobs_vision_ocr_provider_requires_tool_permission tests/test_ecorex_web_parallel_backend.py::TestV022RunEventLedger::test_v022_image_job_ocr_provider_failure_is_observable_without_raw_error tests/test_ecorex_web_parallel_backend.py::TestV022RunEventLedger::test_v022_image_job_skill_runner_uses_stdin_not_argv_for_sensitive_args -q"
+      ],
+      "files": [
+        "channel/web/web_channel.py",
+        "agent/protocol/image_job_service.py",
+        "agent/protocol/runtime_projection.py",
+        "skills/image-generation/scripts/generate.py",
+        "tests/test_ecorex_web_parallel_backend.py"
+      ],
+      "artifacts": [],
+      "assertions": [
+        "ImageJobService caches OCR/vision briefs by hashed image input and reuses the internal brief across same-image tasks.",
+        "Web ImageJobs dry-run exposes backend-owned ocr progress, cache hit/miss, ocr_ms, and ocr_brief_hash through durable events and RuntimeProjection.",
+        "Production Vision OCR is gated by the existing tool permission broker before any Vision.execute call.",
+        "OCR provider failures still emit safe backend ocr progress taxonomy without raw provider error leakage.",
+        "Raw image URLs, prompts, OCR text, and token-shaped strings do not appear in public image-job events or projection payloads."
+      ]
+    },
+    {
+      "id": "image-jobs-seven-scenario-smoke",
+      "status": "pass",
+      "kind": "api-cli-smoke",
+      "surfaces": ["image-jobs", "image-fallback", "artifacts", "replay", "refresh", "restart"],
+      "commands": [
+        "python scripts/smoke-image-jobs-seven-scenarios.py --artifact docs/v0.2.2/artifacts/image-jobs-seven-scenarios-smoke.json --model gpt-image-2-pro --timeout 180",
+        "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py::TestWebParallelHandlers::test_v022_image_jobs_seven_scenario_smoke_harness_contract -q"
+      ],
+      "files": [
+        "scripts/smoke-image-jobs-seven-scenarios.py",
+        "scripts/smoke-image-jobs-provider-fallback.py",
+        "channel/web/web_channel.py",
+        "agent/protocol/image_job_service.py",
+        "agent/protocol/runtime_projection.py",
+        "skills/image-generation/scripts/generate.py",
+        "tests/test_ecorex_web_parallel_backend.py"
+      ],
+      "artifacts": [
+        "docs/v0.2.2/artifacts/image-jobs-seven-scenarios-smoke.json"
+      ],
+      "assertions": [
+        "A real OpenAI-compatible external provider credential path completes one Web ImageJobs API generation with gpt-image-2-pro and a valid image artifact while writing only redacted provider evidence.",
+        "The seven scenarios cover external generation, fake edit fallback, parallel artifact projection, OCR cache reuse, projection recovery after service reset, running-job cancel, and validation failures that write no runtime events.",
+        "The smoke asserts durable image_job/artifact events and RuntimeProjection evidence without writing raw API keys, raw base URLs, OCR text, prompts, or fake provider keys to the artifact."
+      ],
+      "notes": "Requires OPENAI_API_KEY and OPENAI_API_BASE in the invoking PowerShell environment; the checked-in artifact records only credential source and base URL hash."
+    },
+    {
+      "id": "channels-observability-browser",
+      "status": "pass",
+      "kind": "browser-smoke",
+      "surfaces": ["channels", "feishu"],
+      "commands": [
+        "python scripts/smoke-web-channels-observability-browser.py --screenshot docs/v0.2.2/artifacts/web-channels-observability-browser-smoke.png --timeout-ms 30000",
+        "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py -k \"channel_observability or channels_handler_reports_auth or channels_observability_ui_contract\" -q"
+      ],
+      "files": [
+        "channel/channel_catalog.py",
+        "channel/web/static/js/console.js",
+        "scripts/smoke-web-channels-observability-browser.py",
+        "tests/test_ecorex_web_parallel_backend.py"
+      ],
+      "artifacts": [
+        "docs/v0.2.2/artifacts/web-channels-observability-browser-smoke.png"
+      ],
+      "assertions": [
+        "Channel transport, auth, and agent-callable states are displayed separately.",
+        "Feishu/Lark schema-visible-but-unverified state remains not callable.",
+        "Secret-bearing channel fields are masked in visible DOM, inputs, and attributes."
+      ]
+    },
+    {
+      "id": "feishu-agent-capability-contract",
+      "status": "contract-pass",
+      "kind": "backend-pytest",
+      "surfaces": ["feishu", "permissions"],
+      "commands": [
+        "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py -k \"feishu_pack or feishu_cli or web_agent_install_request_blocks_feishu_alias or feishu_auth_required\" -q"
+      ],
+      "files": [
+        "agent/tools/agent_capability/agent_capability.py",
+        "agent/tools/optional_abilities/optional_abilities.py",
+        "common/ecorex_capability_policy.py",
+        "tests/test_ecorex_web_parallel_backend.py"
+      ],
+      "assertions": [
+        "Feishu/Lark capability install is gated through find-skill and backend policy.",
+        "Alias requests such as lark-cli map to canonical feishu-lark before prompt/tool execution.",
+        "Auth-required Feishu flows force text-only follow-up instead of blind repeated tool calls."
+      ],
+      "notes": "This is contract coverage only. Real external authorization remains blocked by the explicit Feishu/IM credential blocker."
+    },
+    {
+      "id": "scheduler-management-permission-harness",
+      "status": "pass",
+      "kind": "backend-and-browser-smoke",
+      "surfaces": ["scheduler", "refresh", "permissions"],
+      "commands": [
+        "python scripts/smoke-web-scheduler-browser.py --screenshot docs/v0.2.2/artifacts/web-scheduler-browser-smoke.png --timeout-ms 30000",
+        "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py -k scheduler -q"
+      ],
+      "files": [
+        "agent/tools/scheduler/projection.py",
+        "channel/web/static/js/console.js",
+        "scripts/smoke-web-scheduler-browser.py",
+        "tests/test_ecorex_web_parallel_backend.py"
+      ],
+      "artifacts": [
+        "docs/v0.2.2/artifacts/web-scheduler-browser-smoke.png"
+      ],
+      "assertions": [
+        "Scheduler UI consumes backend projection and bounded commands.",
+        "Failed mutations still render the returned projection before alerting.",
+        "Scheduler execution rechecks permission broker state server-side."
+      ]
+    },
+    {
+      "id": "project-session-browser-isolation",
+      "status": "pass",
+      "kind": "browser-smoke",
+      "surfaces": ["project-sessions", "refresh"],
+      "commands": [
+        "python scripts/smoke-web-project-session-browser.py --screenshot docs/v0.2.2/artifacts/web-project-session-browser-smoke.png --timeout-ms 30000",
+        "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py -k web_project_session_browser_smoke_harness_contract -q"
+      ],
+      "files": [
+        "scripts/smoke-web-project-session-browser.py",
+        "scripts/web_smoke_support.py",
+        "desktop/src/App.tsx",
+        "tests/test_ecorex_web_parallel_backend.py"
+      ],
+      "artifacts": [
+        "docs/v0.2.2/artifacts/web-project-session-browser-smoke.png"
+      ],
+      "assertions": [
+        "Project and general sessions remain in separate lists after create/send/reload paths.",
+        "Composer autosize matches the Web project-session path.",
+        "Dragstart is prevented so project/general sessions cannot migrate across ownership domains."
+      ]
+    },
+    {
+      "id": "web-markdown-it-browser",
+      "status": "pass",
+      "kind": "browser-smoke",
+      "surfaces": ["markdown"],
+      "commands": [
+        "python scripts/smoke-web-markdown-browser.py --screenshot docs/v0.2.2/artifacts/web-markdown-browser-smoke.png --timeout-ms 30000",
+        "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py -k web_markdown_browser_smoke_harness_contract -q"
+      ],
+      "files": [
+        "scripts/smoke-web-markdown-browser.py",
+        "scripts/web_smoke_support.py",
+        "channel/web/static/js/console.js",
+        "tests/test_ecorex_web_parallel_backend.py"
+      ],
+      "artifacts": [
+        "docs/v0.2.2/artifacts/web-markdown-browser-smoke.png"
+      ],
+      "assertions": [
+        "Streaming and final answers use the CowAgent-compatible Markdown-it renderer.",
+        "Incomplete raw syntax markers such as lone headings/code fences stay hidden or inert.",
+        "Safe links, code headers, symbols, emoji, and raw Markdown copy metadata survive rendering."
+      ]
+    },
+    {
+      "id": "web-status-motion-browser",
+      "status": "pass",
+      "kind": "browser-smoke",
+      "surfaces": ["status-motion"],
+      "commands": [
+        "python scripts/smoke-web-status-motion-browser.py --screenshot docs/v0.2.2/artifacts/web-status-motion-browser-smoke.png --timeout-ms 30000",
+        "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py -k web_status_motion_browser_smoke_harness_contract -q"
+      ],
+      "files": [
+        "scripts/smoke-web-status-motion-browser.py",
+        "channel/web/static/css/console.css",
+        "channel/web/static/js/console.js",
+        "tests/test_ecorex_web_parallel_backend.py"
+      ],
+      "artifacts": [
+        "docs/v0.2.2/artifacts/web-status-motion-browser-smoke.png"
+      ],
+      "assertions": [
+        "Status/tool text has no sweep or light-band animation.",
+        "Reduced-motion keeps status text stable and disables only the small dot pulse.",
+        "Terminal done/tool-end states remove live animation state."
+      ]
+    },
+    {
+      "id": "web-ui-polish-browser",
+      "status": "pass",
+      "kind": "browser-smoke",
+      "surfaces": ["ui-polish", "markdown", "artifacts"],
+      "commands": [
+        "pwsh -NoLogo -NoProfile -Command \"python scripts/smoke-web-ui-polish-browser.py --screenshot docs/v0.2.2/artifacts/web-ui-polish-browser-smoke.png --timeout-ms 30000\"",
+        "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py -k web_ui_polish_browser_smoke_harness_contract -q"
+      ],
+      "files": [
+        "scripts/smoke-web-ui-polish-browser.py",
+        "scripts/web_smoke_support.py",
+        "channel/web/chat.html",
+        "channel/web/static/js/console.js",
+        "channel/web/static/css/console.css",
+        "tests/test_ecorex_web_parallel_backend.py"
+      ],
+      "artifacts": [
+        "docs/v0.2.2/artifacts/web-ui-polish-browser-smoke.png"
+      ],
+      "assertions": [
+        "Message copy, code copy, artifact image copy, and artifact link copy actions write deterministic clipboard payloads.",
+        "Sidebar, attach, artifact action, long-answer, and thinking disclosure menus toggle and close correctly.",
+        "The aggregate smoke loads the real Web page and asserts no ordinary Run Center text leaks during UI polish interactions."
+      ]
+    },
+    {
+      "id": "web-run-center-hidden-browser",
+      "status": "pass",
+      "kind": "browser-smoke",
+      "surfaces": ["run-center"],
+      "commands": [
+        "python scripts/smoke-web-run-center-hidden-browser.py --screenshot docs/v0.2.2/artifacts/web-run-center-hidden-browser-smoke.png --timeout-ms 30000",
+        "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py -k web_run_center_hidden_browser_smoke_harness_contract -q"
+      ],
+      "files": [
+        "scripts/smoke-web-run-center-hidden-browser.py",
+        "channel/web/chat.html",
+        "channel/web/static/js/console.js",
+        "channel/web/static/css/console.css",
+        "tests/test_ecorex_web_parallel_backend.py"
+      ],
+      "artifacts": [
+        "docs/v0.2.2/artifacts/web-run-center-hidden-browser-smoke.png"
+      ],
+      "assertions": [
+        "Ordinary Web UI contains no Run Center labels, selectors, ARIA labels, titles, or buttons.",
+        "Runtime diagnostics remain backend/internal rather than visible user navigation.",
+        "The smoke checks visible text, DOM HTML, classes, ids, and role/button labels for leaks."
+      ]
+    }
+  ]
+}

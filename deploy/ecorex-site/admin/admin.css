@@ -1,6 +1,7 @@
 :root {
   color-scheme: light;
-  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   --page: #f7f2ed;
   --surface: #fffaf5;
   --surface-strong: #ffffff;
@@ -394,6 +395,107 @@ select {
   color: var(--ink);
 }
 
+.audit-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.audit-summary-grid article,
+.audit-layout section,
+.audit-events {
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--surface-strong);
+}
+
+.audit-summary-grid article {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+}
+
+.audit-summary-grid span,
+.audit-request-row span,
+.audit-event-row span,
+.audit-count-row span {
+  color: var(--subtle);
+  font-size: 13px;
+}
+
+.audit-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.7fr) minmax(0, 1.3fr);
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.audit-layout section,
+.audit-events {
+  min-width: 0;
+  padding: 14px;
+}
+
+.audit-layout h3,
+.audit-events h3 {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+
+.audit-count-list,
+.audit-request-list,
+.audit-event-list {
+  display: grid;
+  gap: 8px;
+}
+
+.audit-count-row,
+.audit-request-row,
+.audit-event-row {
+  display: grid;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.audit-count-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.audit-request-row {
+  grid-template-columns: minmax(0, 1.3fr) auto auto auto 120px;
+}
+
+.audit-event-row {
+  grid-template-columns: 130px minmax(0, 1.2fr) 90px 110px 120px minmax(140px, 0.7fr);
+}
+
+.audit-request-row div,
+.audit-event-row div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.audit-count-row strong,
+.audit-request-row strong,
+.audit-event-row strong,
+.audit-event-row code {
+  overflow-wrap: anywhere;
+}
+
+.audit-event-row code {
+  padding: 6px 8px;
+  border-radius: 8px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  font-size: 12px;
+}
+
 .model-summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -573,7 +675,7 @@ select {
   .sidebar { position: static; height: auto; grid-template-rows: auto; }
   nav { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .form-grid, .form-grid.compact, .filter-bar, .row, .log-item, .model-summary, .capability-policy, .capability-item, .release-item {
+  .form-grid, .form-grid.compact, .filter-bar, .row, .log-item, .model-summary, .capability-policy, .capability-item, .release-item, .audit-summary-grid, .audit-layout, .audit-request-row, .audit-event-row {
     grid-template-columns: 1fr;
   }
 }

@@ -1,0 +1,25 @@
+{
+  "checks": {
+    "boundedLongReplyPreview": true,
+    "processDetailsLazyMounted": true,
+    "renderableFullContentOnExpand": true
+  },
+  "metrics": {
+    "closedProcessDetailMountedStepList": 0,
+    "collapsedMarkdownChars": 1404,
+    "collapsedMarkdownReductionPercent": 99.298,
+    "evidenceBuildMs": 1.162,
+    "expandedProcessDetailMountedStepList": 1,
+    "syntheticLongReplyChars": 200000
+  },
+  "redacted": true,
+  "scenario": "frontend-render-state-isolation",
+  "slice": "R23-16P-03",
+  "sourceHash": "9aba08df4b84f4c6",
+  "status": "pass",
+  "thresholds": {
+    "closedProcessDetailMountedStepListMax": 0,
+    "collapsedMarkdownReductionPercentMin": 95
+  },
+  "version": "0.2.3"
+}

@@ -1,0 +1,187 @@
+{
+  "version": "0.2.3",
+  "slice": "R23-16",
+  "scenario": "safety-permission-review",
+  "status": "pass",
+  "redacted": true,
+  "metrics": {
+    "checkCount": 22,
+    "failedCheckCount": 0,
+    "artifactPairCount": 6,
+    "directScanCount": 2,
+    "scannedArtifactCount": 14,
+    "scanIssueCount": 0,
+    "findingBucketCount": 0,
+    "findingTotalCount": 0
+  },
+  "checks": [
+    {
+      "id": "cdp-first-defaults",
+      "status": "pass",
+      "refs": [
+        "config.py"
+      ]
+    },
+    {
+      "id": "mcp-on-demand-local",
+      "status": "pass",
+      "refs": [
+        "config.py"
+      ]
+    },
+    {
+      "id": "mcp-config-sync",
+      "status": "pass",
+      "refs": [
+        "config-template.json",
+        "config.json"
+      ]
+    },
+    {
+      "id": "mcp-broker-local-only",
+      "status": "pass",
+      "refs": [
+        "common/ecorex_tool_permissions.py"
+      ]
+    },
+    {
+      "id": "mcp-client-local-only",
+      "status": "pass",
+      "refs": [
+        "agent/tools/mcp/mcp_client.py"
+      ]
+    },
+    {
+      "id": "cdp-dedicated-profile",
+      "status": "pass",
+      "refs": [
+        "agent/tools/browser/browser_automation_service.py"
+      ]
+    },
+    {
+      "id": "ocr-public-error-summary",
+      "status": "pass",
+      "refs": [
+        "agent/tools/ocr/ocr.py"
+      ]
+    },
+    {
+      "id": "imagegen-permission-boundary",
+      "status": "pass",
+      "refs": [
+        "agent/protocol/agent_stream.py",
+        "agent/tools/imagegen/imagegen.py",
+        "common/ecorex_tool_permissions.py"
+      ]
+    },
+    {
+      "id": "public-payload-redaction",
+      "status": "pass",
+      "refs": [
+        "common/ecorex_public_payload.py"
+      ]
+    },
+    {
+      "id": "external-delivery-redacted",
+      "status": "pass",
+      "refs": [
+        "agent/tools/scheduler/integration.py",
+        "channel/messaging_adapter_contract.py"
+      ]
+    },
+    {
+      "id": "scheduler-projection-redacted",
+      "status": "pass",
+      "refs": [
+        "agent/tools/scheduler/projection.py"
+      ]
+    },
+    {
+      "id": "learned-skill-draft-gate",
+      "status": "pass",
+      "refs": [
+        "agent/skills/learning_service.py",
+        "agent/tools/agent_capability/agent_capability.py"
+      ]
+    },
+    {
+      "id": "run-center-hidden",
+      "status": "pass",
+      "refs": [
+        "desktop/src/App.tsx",
+        "scripts/smoke-web-external-connections-browser.py"
+      ]
+    },
+    {
+      "id": "artifact-external-connections",
+      "status": "pass",
+      "refs": [
+        "docs/v0.2.3/artifacts/external-connections-browser-smoke.json",
+        "docs/v0.2.3/artifacts/external-connections-privacy-scan.json"
+      ]
+    },
+    {
+      "id": "artifact-performance-evidence",
+      "status": "pass",
+      "refs": [
+        "docs/v0.2.3/artifacts/perf-evidence-audit-privacy-scan.json",
+        "docs/v0.2.3/artifacts/perf-evidence-audit.json"
+      ]
+    },
+    {
+      "id": "artifact-browser-ocr",
+      "status": "pass",
+      "refs": [
+        "docs/v0.2.3/artifacts/perf-browser-ocr-privacy-scan.json",
+        "docs/v0.2.3/artifacts/perf-browser-ocr.json"
+      ]
+    },
+    {
+      "id": "artifact-image-artifact-ocr",
+      "status": "pass",
+      "refs": [
+        "docs/v0.2.3/artifacts/perf-image-artifact-ocr-privacy-scan.json",
+        "docs/v0.2.3/artifacts/perf-image-artifact-ocr.json"
+      ]
+    },
+    {
+      "id": "artifact-scheduler-subagent",
+      "status": "pass",
+      "refs": [
+        "docs/v0.2.3/artifacts/perf-scheduler-subagent-privacy-scan.json",
+        "docs/v0.2.3/artifacts/perf-scheduler-subagent.json"
+      ]
+    },
+    {
+      "id": "artifact-cross-talk",
+      "status": "pass",
+      "refs": [
+        "docs/v0.2.3/artifacts/session-cross-talk-browser-smoke.json",
+        "docs/v0.2.3/artifacts/session-cross-talk-privacy-scan.json"
+      ]
+    },
+    {
+      "id": "direct-scan-chrome-devtools-mcp-live-smoke",
+      "status": "pass",
+      "refs": [
+        "docs/v0.2.3/artifacts/chrome-devtools-mcp-live-smoke.json"
+      ]
+    },
+    {
+      "id": "direct-scan-chat-attachment-bubble-smoke",
+      "status": "pass",
+      "refs": [
+        "docs/v0.2.3/artifacts/chat-attachment-bubble-smoke.json"
+      ]
+    },
+    {
+      "id": "chrome-live-smoke-local",
+      "status": "pass",
+      "refs": [
+        "docs/v0.2.3/artifacts/chrome-devtools-mcp-live-smoke.json"
+      ]
+    }
+  ],
+  "scanIssues": [],
+  "findingBuckets": []
+}

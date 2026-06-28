@@ -1,0 +1,19 @@
+{
+  "status": "PASS",
+  "durationMs": 2626,
+  "fixtureHash": "hmac:398c61621b204872",
+  "screenshot": "session-cross-talk-browser-smoke.png",
+  "metrics": {
+    "sessionQueryIncludePinned": true,
+    "includedPinnedCount": 3,
+    "generalRows": 4,
+    "projectRows": 2,
+    "pinnedGroupBeforeUnpinned": true,
+    "projectPinnedGroupBeforeUnpinned": true,
+    "backendOwnerWonOverLocalStaleBinding": true,
+    "projectOwnerStayedInProjectBucket": true,
+    "renameCalls": 1,
+    "renameDidNotPin": true
+  },
+  "consoleErrorCount": 0
+}

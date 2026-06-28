@@ -7,6 +7,94 @@
 // =====================================================================
 let APP_VERSION = '';
 
+// Runtime path adapter. The same WebUI must work both at root (local
+// http://127.0.0.1:9909/chat) and under a reverse-proxy prefix such as
+// https://mvdcm.ecoremedia.net/ecorex-agent/.
+(function installRuntimePathAdapter() {
+    const RUNTIME_PREFIX_MARKERS = [
+        '/app', '/chat', '/auth', '/message', '/upload', '/uploads',
+        '/api', '/poll', '/stream', '/cancel', '/config', '/assets'
+    ];
+    const RUNTIME_ROOT_PATHS = new Set(['/message', '/upload', '/poll', '/stream', '/cancel', '/chat', '/config']);
+
+    function normalizeBase(value) {
+        const raw = String(value || '').trim();
+        if (!raw || raw === '/') return '';
+        return '/' + raw.replace(/^\/+|\/+$/g, '');
+    }
+
+    function inferBasePath() {
+        const explicit = normalizeBase(window.ECOREX_BASE_PATH || window.__ECOREX_BASE_PATH__);
+        if (explicit) return explicit;
+        const meta = document.querySelector('meta[name="ecorex-base-path"]');
+        const metaBase = meta ? normalizeBase(meta.getAttribute('content')) : '';
+        if (metaBase) return metaBase;
+        const path = window.location.pathname || '';
+        for (const marker of RUNTIME_PREFIX_MARKERS) {
+            const idx = path.indexOf(marker);
+            if (idx > 0) return normalizeBase(path.slice(0, idx));
+        }
+        return '';
+    }
+
+    function isRuntimePath(pathname) {
+        if (!pathname || pathname.charAt(0) !== '/') return false;
+        if (RUNTIME_ROOT_PATHS.has(pathname)) return true;
+        return pathname.startsWith('/app/') ||
+            pathname.startsWith('/auth/') ||
+            pathname.startsWith('/uploads/') ||
+            pathname.startsWith('/api/') ||
+            pathname.startsWith('/assets/') ||
+            pathname.startsWith('/client/');
+    }
+
+    const basePath = inferBasePath();
+    window.__ecorexRuntimeBasePath = basePath;
+    window.__ecorexRuntimePath = function runtimePath(input) {
+        if (!input || typeof input !== 'string' || !basePath) return input;
+        if (/^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(input)) {
+            try {
+                const parsed = new URL(input, window.location.href);
+                if (parsed.origin === window.location.origin &&
+                    isRuntimePath(parsed.pathname) &&
+                    !parsed.pathname.startsWith(basePath + '/')) {
+                    parsed.pathname = basePath + parsed.pathname;
+                    return parsed.toString();
+                }
+            } catch (_) {}
+            return input;
+        }
+        if (input.charAt(0) !== '/' || input.startsWith(basePath + '/')) return input;
+        return isRuntimePath(input.split(/[?#]/, 1)[0]) ? basePath + input : input;
+    };
+
+    const nativeFetch = window.fetch ? window.fetch.bind(window) : null;
+    if (nativeFetch) {
+        window.fetch = function runtimeFetch(input, init) {
+            if (typeof input === 'string') {
+                input = window.__ecorexRuntimePath(input);
+            } else if (input && typeof input.url === 'string') {
+                const rewritten = window.__ecorexRuntimePath(input.url);
+                if (rewritten !== input.url && typeof Request !== 'undefined') {
+                    input = new Request(rewritten, input);
+                }
+            }
+            return nativeFetch(input, init);
+        };
+    }
+
+    const NativeEventSource = window.EventSource;
+    if (NativeEventSource) {
+        window.EventSource = function RuntimeEventSource(url, options) {
+            return new NativeEventSource(window.__ecorexRuntimePath(String(url || '')), options);
+        };
+        window.EventSource.prototype = NativeEventSource.prototype;
+        window.EventSource.CONNECTING = NativeEventSource.CONNECTING;
+        window.EventSource.OPEN = NativeEventSource.OPEN;
+        window.EventSource.CLOSED = NativeEventSource.CLOSED;
+    }
+})();
+
 // =====================================================================
 // i18n
 // =====================================================================
@@ -155,6 +243,13 @@ const I18N = {
         channels_empty: '暂未接入任何通道', channels_empty_desc: '点击右上角「接入通道」按钮开始配置',
         channels_disconnect_confirm: '确认断开该通道？配置将保留但通道会停止运行。',
         channels_connected: '已接入', channels_connecting: '接入中...',
+        channels_running: '运行中', channels_enabled_not_running: '已启用未运行',
+        channels_configured: '已配置', channels_available: '可配置', channels_error: '异常',
+        channels_transport: 'Transport', channels_auth_surface: '授权', channels_agent_surface: 'Agent',
+        channels_callable: '可调用', channels_not_callable: '不可调用',
+        channels_schema_visible: 'Schema 可见', channels_schema_hidden: 'Schema 不可见',
+        channels_agent_unverified: '待授权/探测', channels_tool_missing: '工具未加载',
+        channels_not_applicable: '不适用', channels_permission_gated: '权限门控',
         weixin_scan_title: '微信扫码登录', weixin_scan_desc: '请使用微信扫描下方二维码',
         weixin_scan_loading: '正在获取二维码...', weixin_scan_waiting: '等待扫码...',
         weixin_scan_scanned: '已扫码，请在手机上确认', weixin_scan_expired: '二维码已过期，正在刷新...',
@@ -179,6 +274,7 @@ const I18N = {
         feishu_mode_scan: '扫码创建', feishu_mode_manual: '手动填写',
         tasks_title: '定时任务', tasks_desc: '查看和管理定时任务',
         tasks_coming: '即将推出', tasks_coming_desc: '定时任务管理功能即将在此提供',
+        tasks_refresh: '刷新',
         logs_title: '日志', logs_desc: '实时日志输出 (run.log)',
         logs_live: '实时', logs_coming_msg: '日志流即将在此提供。将连接 run.log 实现类似 tail -f 的实时输出。',
         new_chat: '新对话',
@@ -359,6 +455,13 @@ const I18N = {
         channels_empty: 'No channels connected', channels_empty_desc: 'Click the "Connect" button above to get started',
         channels_disconnect_confirm: 'Disconnect this channel? Config will be preserved but the channel will stop.',
         channels_connected: 'Connected', channels_connecting: 'Connecting...',
+        channels_running: 'Running', channels_enabled_not_running: 'Enabled, not running',
+        channels_configured: 'Configured', channels_available: 'Available', channels_error: 'Error',
+        channels_transport: 'Transport', channels_auth_surface: 'Auth', channels_agent_surface: 'Agent',
+        channels_callable: 'Callable', channels_not_callable: 'Not callable',
+        channels_schema_visible: 'Schema visible', channels_schema_hidden: 'Schema hidden',
+        channels_agent_unverified: 'Auth/probe pending', channels_tool_missing: 'Tool not loaded',
+        channels_not_applicable: 'Not applicable', channels_permission_gated: 'Permission gated',
         weixin_scan_title: 'WeChat QR Login', weixin_scan_desc: 'Scan the QR code below with WeChat',
         weixin_scan_loading: 'Loading QR code...', weixin_scan_waiting: 'Waiting for scan...',
         weixin_scan_scanned: 'Scanned, please confirm on your phone', weixin_scan_expired: 'QR code expired, refreshing...',
@@ -383,6 +486,7 @@ const I18N = {
         feishu_mode_scan: 'Scan QR', feishu_mode_manual: 'Manual',
         tasks_title: 'Scheduled Tasks', tasks_desc: 'View and manage scheduled tasks',
         tasks_coming: 'Coming Soon', tasks_coming_desc: 'Scheduled task management will be available here',
+        tasks_refresh: 'Refresh',
         logs_title: 'Logs', logs_desc: 'Real-time log output (run.log)',
         logs_live: 'Live', logs_coming_msg: 'Log streaming will be available here. Connects to run.log for real-time output similar to tail -f.',
         new_chat: 'New Chat',
@@ -737,25 +841,65 @@ const md = createMd();
 const VIDEO_EXT_RE = /\.(?:mp4|webm|mov|avi|mkv)$/i;  // tested against URL without query string
 const IMAGE_EXT_RE = /\.(?:jpg|jpeg|png|gif|webp|bmp|svg)$/i;  // tested against URL without query string
 
+function _hasUnsafeUrlScheme(url) {
+    const raw = String(url || '').trim();
+    if (!raw) return false;
+    if (/^(?:javascript|data|vbscript|file):/i.test(raw)) return true;
+    try {
+        const parsed = new URL(raw, window.location.href);
+        return ['javascript:', 'data:', 'vbscript:', 'file:'].includes(String(parsed.protocol || '').toLowerCase());
+    } catch (_) {
+        return false;
+    }
+}
+
+function _isRuntimeWebPath(url) {
+    const pathname = String(url || '').split(/[?#]/, 1)[0];
+    if (!pathname || pathname.charAt(0) !== '/') return false;
+    if (['/message', '/upload', '/poll', '/stream', '/cancel', '/chat', '/config'].includes(pathname)) return true;
+    return pathname.startsWith('/app/') ||
+        pathname.startsWith('/auth/') ||
+        pathname.startsWith('/uploads/') ||
+        pathname.startsWith('/api/') ||
+        pathname.startsWith('/assets/') ||
+        pathname.startsWith('/client/');
+}
+
 function _toWebUrl(url) {
-    if (/^\/[A-Za-z]/.test(url) && !url.startsWith('/api/')) {
-        return '/api/file?path=' + encodeURIComponent(url);
+    if (!url) return url;
+    const rawUrl = String(url).trim();
+    if (!rawUrl) return rawUrl;
+    const runtimePath = (typeof window.__ecorexRuntimePath === 'function')
+        ? window.__ecorexRuntimePath
+        : (value) => value;
+    if (_isRuntimeWebPath(rawUrl)) {
+        const webUrl = runtimePath(rawUrl);
+        return _hasUnsafeUrlScheme(webUrl) ? '' : webUrl;
     }
-    if (/^file:\/\/\//i.test(url)) {
-        return '/api/file?path=' + encodeURIComponent(url.replace(/^file:\/\/\//i, '/'));
+    if (/^[A-Za-z]:[\\/]/.test(rawUrl)) {
+        const webUrl = runtimePath('/api/file?path=' + encodeURIComponent(rawUrl));
+        return _hasUnsafeUrlScheme(webUrl) ? '' : webUrl;
     }
-    return url;
+    if (/^\/[A-Za-z]/.test(rawUrl)) {
+        const webUrl = runtimePath('/api/file?path=' + encodeURIComponent(rawUrl));
+        return _hasUnsafeUrlScheme(webUrl) ? '' : webUrl;
+    }
+    if (_hasUnsafeUrlScheme(rawUrl)) return '';
+    const webUrl = runtimePath(rawUrl);
+    return _hasUnsafeUrlScheme(webUrl) ? '' : webUrl;
 }
 
 function _buildVideoHtml(url) {
     const webUrl = _toWebUrl(url);
+    const safeUrl = escapeHtml(webUrl);
     const fileName = url.split('/').pop().split('?')[0];
-    return `<div class="artifact-card" data-artifact-url="${escapeHtml(webUrl)}" data-artifact-kind="video" style="margin:10px 0;">` +
+    const html = `<div class="artifact-card" data-artifact-url="${escapeHtml(webUrl)}" data-artifact-kind="video" style="margin:10px 0;">` +
         `<video controls preload="metadata" ` +
         `style="max-width:100%;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,0.15);display:block;">` +
-        `<source src="${webUrl}"></video>` +
+        `<source src="${safeUrl}"></video>` +
         _buildArtifactActionsHtml(webUrl, fileName, "video") +
         `</div>`;
+    return _ensureSafeBlankTargets(html);
 }
 
 function _openImageLightbox(src) {
@@ -779,31 +923,62 @@ function _openImageLightbox(src) {
 
 function _buildImageHtml(url) {
     const webUrl = _toWebUrl(url);
-    const safeUrl = webUrl.replace(/"/g, '&quot;');
+    const safeUrl = escapeHtml(webUrl);
     const fileName = url.split('/').pop().split('?')[0] || 'image';
-    return `<div class="artifact-card" data-artifact-url="${escapeHtml(webUrl)}" data-artifact-kind="image" style="margin:10px 0;">` +
+    const html = `<div class="artifact-card" data-artifact-url="${escapeHtml(webUrl)}" data-artifact-kind="image" style="margin:10px 0;">` +
         `<img src="${safeUrl}" alt="image" loading="lazy" ` +
         `onclick="_openImageLightbox(this.src)" ` +
         `style="max-width:520px;width:100%;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,0.15);display:block;cursor:zoom-in;">` +
         _buildArtifactActionsHtml(webUrl, fileName, "image") +
         `</div>`;
+    return _ensureSafeBlankTargets(html);
 }
 
 function _buildArtifactActionsHtml(webUrl, fileName, kind) {
+    if (!webUrl) return '';
     const safeUrl = escapeHtml(webUrl || '');
     const safeName = escapeHtml(fileName || 'artifact');
     const canCopyBinary = kind === 'image';
     return `
         <div class="artifact-actions">
             ${canCopyBinary ? `<button type="button" class="artifact-action-btn artifact-copy-image" data-url="${safeUrl}" title="${currentLang === 'zh' ? '复制图片' : 'Copy image'}"><i class="fas fa-copy"></i></button>` : ''}
-            <a class="artifact-action-btn" href="${safeUrl}" download="${safeName}" target="_blank" title="${currentLang === 'zh' ? '下载' : 'Download'}"><i class="fas fa-download"></i></a>
+            <a class="artifact-action-btn" href="${safeUrl}" download="${safeName}" target="_blank" rel="noopener noreferrer" title="${currentLang === 'zh' ? '下载' : 'Download'}"><i class="fas fa-download"></i></a>
             <button type="button" class="artifact-action-btn artifact-menu-btn" aria-expanded="false" title="${currentLang === 'zh' ? '更多' : 'More'}"><i class="fas fa-ellipsis"></i></button>
             <div class="artifact-action-menu">
                 <button type="button" class="artifact-copy-link" data-url="${safeUrl}">${currentLang === 'zh' ? '复制链接' : 'Copy link'}</button>
                 <button type="button" class="artifact-copy-path" data-url="${safeUrl}">${currentLang === 'zh' ? '复制路径' : 'Copy path'}</button>
-                <a href="${safeUrl}" target="_blank">${currentLang === 'zh' ? '本地打开' : 'Open'}</a>
+                <a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${currentLang === 'zh' ? '本地打开' : 'Open'}</a>
             </div>
         </div>`;
+}
+
+function _buildArtifactHtml(artifact) {
+    artifact = artifact || {};
+    const url = artifact.previewUrl || artifact.preview_url || artifact.url || artifact.path ||
+        artifact.relativePath || artifact.relative_path || '';
+    const title = artifact.title || artifact.name || artifact.fileName || artifact.file_name ||
+        (url ? String(url).split('/').pop() : 'artifact');
+    const kind = artifact.kind || artifact.type || artifact.fileType || artifact.file_type || '';
+    const webUrl = _toWebUrl(url);
+    const safeTitle = escapeHtml(title);
+    if (!webUrl) {
+        return `<div class="artifact-card file-artifact-card artifact-card-disabled" data-artifact-kind="file">` +
+            `<span class="file-attachment"><i class="fas fa-file-download"></i> ${safeTitle}</span>` +
+            `</div>`;
+    }
+    if (kind === 'image' || IMAGE_EXT_RE.test(String(webUrl).split('?')[0])) {
+        return _ensureSafeBlankTargets(_buildImageHtml(webUrl));
+    }
+    if (kind === 'video' || VIDEO_EXT_RE.test(String(webUrl).split('?')[0])) {
+        return _ensureSafeBlankTargets(_buildVideoHtml(webUrl));
+    }
+    const safeUrl = escapeHtml(webUrl);
+    const fileHtml = `<div class="artifact-card file-artifact-card" data-artifact-url="${safeUrl}" data-artifact-kind="file">` +
+        `<a href="${safeUrl}" download="${safeTitle}" target="_blank" rel="noopener noreferrer" class="file-attachment">` +
+        `<i class="fas fa-file-download"></i> ${safeTitle}</a>` +
+        _buildArtifactActionsHtml(webUrl, title, 'file') +
+        `</div>`;
+    return _ensureSafeBlankTargets(fileHtml);
 }
 
 function injectVideoPlayers(html) {
@@ -855,17 +1030,100 @@ function _rewriteLocalImgSrc(html) {
     });
 }
 
+function _ensureSafeBlankTargets(html) {
+    return String(html || '').replace(
+        /<a\b([^>]*?)target="_blank"([^>]*?)>/gi,
+        (match, before, after) => {
+            if (/\brel\s*=/i.test(before + after)) return match;
+            return `<a${before}target="_blank" rel="noopener noreferrer"${after}>`;
+        }
+    );
+}
+
 function renderMarkdown(text) {
     try {
         let html = md.render(text);
         html = _rewriteLocalImgSrc(html);
         // Order matters: video first (more specific), then image.
         html = injectImagePreviews(injectVideoPlayers(html));
+        html = _ensureSafeBlankTargets(html);
         // Note: Code block headers are added via DOM manipulation after insertion
         // See addCodeBlockHeadersToElement()
         return html;
     }
-    catch (e) { return text.replace(/\n/g, '<br>'); }
+    catch (e) { return escapeHtml(String(text || '')).replace(/\n/g, '<br>'); }
+}
+
+function _splitStreamingOpenFence(text) {
+    const lines = String(text || '').split('\n');
+    let open = null;
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const match = line.match(/^ {0,3}([`~]{3,})([^`~]*)$/);
+        if (!match) continue;
+        const marker = match[1];
+        if (!open) {
+            open = {
+                index: i,
+                markerChar: marker.charAt(0),
+                markerLen: marker.length,
+                info: String(match[2] || '').trim(),
+            };
+            continue;
+        }
+        if (marker.charAt(0) === open.markerChar && marker.length >= open.markerLen) {
+            open = null;
+        }
+    }
+    if (!open) return null;
+    const stableText = lines.slice(0, open.index).join('\n');
+    const body = lines.slice(open.index + 1).join('\n');
+    const lang = (open.info.split(/\s+/)[0] || '').replace(/[^\w.+#-]/g, '').slice(0, 32);
+    return { stableText, body, lang };
+}
+
+function _isUnstableStreamingMarkdownLine(line) {
+    const trimmed = String(line || '').trim();
+    if (!trimmed) return false;
+    if (/^#{1,6}$/.test(trimmed)) return true;
+    if (/^[-*+]$/.test(trimmed)) return true;
+    if (/^\d+\.$/.test(trimmed)) return true;
+    if (/^>$/.test(trimmed)) return true;
+    if (/^(`{1,2}|~{1,2})$/.test(trimmed)) return true;
+    if (/^!\[[^\]]*$/.test(trimmed)) return true;
+    if (/^!?\[[^\]]*\]\([^)]*$/.test(trimmed)) return true;
+    if (/^(\*\*|__)[^*_\s][^*_]*$/.test(trimmed)) return true;
+    if (/^(\*|_)[^*_\s][^*_]*$/.test(trimmed)) return true;
+    if (/^\|.*[^|]\s*$/.test(trimmed)) return true;
+    if (/^\|[\s:|-]*$/.test(trimmed)) return true;
+    if (/^\|?\s*:?-{1,}:?\s*(\|\s*:?-{0,}:?\s*)+$/.test(trimmed)) return true;
+    return false;
+}
+
+function _trimStreamingUnstableTail(text) {
+    const value = String(text || '');
+    if (!value) return '';
+    const lines = value.split('\n');
+    if (_isUnstableStreamingMarkdownLine(lines[lines.length - 1])) {
+        lines.pop();
+    }
+    return lines.join('\n');
+}
+
+function _renderStreamingOpenFencePreview(openFence) {
+    if (!openFence) return '';
+    const languageClass = openFence.lang ? ` class="language-${escapeHtml(openFence.lang)}"` : '';
+    const code = escapeHtml(openFence.body || '');
+    return `<pre class="streaming-open-code"><code${languageClass}>${code}</code></pre>`;
+}
+
+function renderStreamingMarkdown(text) {
+    const value = String(text || '');
+    const openFence = _splitStreamingOpenFence(value);
+    const markdownSource = _trimStreamingUnstableTail(openFence ? openFence.stableText : value);
+    const markdownHtml = markdownSource ? renderMarkdown(markdownSource) : '';
+    const openFenceHtml = openFence ? _renderStreamingOpenFencePreview(openFence) : '';
+    return `<div class="agent-content-body streaming-markdown-preview">${markdownHtml}${openFenceHtml}</div>`;
 }
 
 function _addCodeBlockHeaders(container) {
@@ -911,6 +1169,8 @@ let activeStreams = {};   // request_id -> EventSource
 let sessionActiveRequest = {};   // session_id -> request_id (in-flight stream per session)
 let streamBuffers = {};   // request_id -> { items: [event...], timestamp } for re-attach replay
 let streamLastEventIds = {};   // request_id -> last SSE id acknowledged by this browser
+let chatViewEpoch = 0;    // bumped whenever the visible conversation owner changes
+let historyRequestEpoch = 0; // invalidates stale history/projection continuations
 let isComposing = false;
 let appConfig = { use_agent: false, title: 'EcoreX', subtitle: '', providers: {}, api_bases: {} };
 
@@ -934,16 +1194,543 @@ function loadOrCreateSessionId() {
 
 let sessionId = loadOrCreateSessionId();
 
+function resetConversationViewState() {
+    chatViewEpoch += 1;
+    historyRequestEpoch += 1;
+    historyPage = 0;
+    historyHasMore = false;
+    historyLoading = false;
+    return chatViewEpoch;
+}
+
+function isCurrentSessionView(ownerSession, viewEpoch) {
+    const sid = String(ownerSession || '').trim();
+    if (!sid || sid !== String(sessionId || '').trim()) return false;
+    if (viewEpoch !== undefined && viewEpoch !== null && Number(viewEpoch) !== chatViewEpoch) return false;
+    return true;
+}
+
+function runtimeProjectionBelongsToSession(projection, ownerSession) {
+    const sid = String(ownerSession || '').trim();
+    if (!projection || !sid) return false;
+    const projectionSession = String(projection.session_id || projection.sessionId || '').trim();
+    return !projectionSession || projectionSession === sid;
+}
+
+const PHASE1_DETAIL_DENY_KEYS = new Set([
+    'body', 'blob', 'bytes', 'content', 'data', 'data_base64', 'database64',
+    'delta', 'file_content', 'file_path', 'filecontent', 'filepath',
+    'final_text', 'finaltext', 'html', 'input', 'markdown', 'message',
+    'messages', 'output', 'path', 'preview_url',
+    'previewurl', 'prompt', 'raw', 'relative_path', 'relativepath',
+    'response', 'result', 'status_path', 'statuspath', 'text',
+    'thumbnail_url', 'thumbnailurl', 'transcript', 'url'
+]);
+
+function phase1SyncEnabled() {
+    if (window.ECOREX_PHASE1_SYNC === false || window.ECOREX_DISABLE_PHASE1_SYNC === true) return false;
+    if (appConfig && appConfig.phase1_sync_enabled === false) return false;
+    return localStorage.getItem('ecorex_phase1_sync') !== 'off';
+}
+
+function phase1Now() {
+    return new Date().toISOString();
+}
+
+function phase1FallbackHash(value) {
+    const text = String(value || '');
+    let hash = 2166136261;
+    for (let i = 0; i < text.length; i += 1) {
+        hash ^= text.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(36);
+}
+
+async function phase1Digest(value) {
+    const text = String(value || '');
+    try {
+        if (window.crypto && window.crypto.subtle && window.TextEncoder) {
+            const bytes = new TextEncoder().encode(text);
+            const digest = await window.crypto.subtle.digest('SHA-256', bytes);
+            return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 40);
+        }
+    } catch (_) {}
+    return 'fnv-' + phase1FallbackHash(text);
+}
+
+async function phase1SyncKey(parts) {
+    return 'phase1:' + await phase1Digest((parts || []).join('|'));
+}
+
+function phase1NormalizeKey(key) {
+    return String(key || '').toLowerCase().replace(/-/g, '_');
+}
+
+function phase1SafeJson(value, depth = 0) {
+    if (depth > 4) return String(Object.prototype.toString.call(value)).slice(0, 80);
+    if (Array.isArray(value)) return value.slice(0, 32).map(item => phase1SafeJson(item, depth + 1));
+    if (value && typeof value === 'object') {
+        const result = {};
+        Object.keys(value).slice(0, 64).forEach(key => {
+            if (PHASE1_DETAIL_DENY_KEYS.has(phase1NormalizeKey(key))) {
+                result[key] = '[omitted]';
+            } else {
+                result[key] = phase1SafeJson(value[key], depth + 1);
+            }
+        });
+        return result;
+    }
+    if (typeof value === 'string') return value.slice(0, 1000);
+    if (typeof value === 'number' || typeof value === 'boolean' || value === null || value === undefined) return value ?? null;
+    return String(value).slice(0, 1000);
+}
+
+function phase1ArtifactSource(artifact) {
+    artifact = artifact || {};
+    return String(
+        artifact.path || artifact.filePath || artifact.file_path ||
+        artifact.relativePath || artifact.relative_path ||
+        artifact.previewUrl || artifact.preview_url ||
+        artifact.statusPath || artifact.status_path ||
+        artifact.thumbnailUrl || artifact.thumbnail_url ||
+        artifact.url || artifact.content || ''
+    );
+}
+
+function phase1ArtifactTitle(artifact, source) {
+    const explicit = artifact.title || artifact.name || artifact.fileName || artifact.file_name;
+    if (explicit) return String(explicit).slice(0, 240);
+    const clean = String(source || '').split(/[?#]/, 1)[0].replace(/\\/g, '/');
+    return (clean.split('/').pop() || 'artifact').slice(0, 240);
+}
+
+function phase1ArtifactExt(source, title) {
+    let candidate = String(source || '');
+    try {
+        const parsed = new URL(candidate, window.location.href);
+        const pathParam = parsed.searchParams.get('path');
+        candidate = pathParam || parsed.pathname || candidate;
+    } catch (_) {}
+    candidate = (candidate || title || '').split(/[?#]/, 1)[0];
+    const match = candidate.match(/(\.[A-Za-z0-9]{1,12})$/);
+    return match ? match[1].toLowerCase() : '';
+}
+
+function normalizeArtifactSourceForDedupe(value) {
+    let source = String(value || '').trim();
+    if (!source) return '';
+    try {
+        const parsed = new URL(source, window.location.href);
+        const pathParam = parsed.searchParams.get('path');
+        source = pathParam || parsed.pathname || source;
+    } catch (_) {}
+    source = source
+        .replace(/^file:\/+/i, '')
+        .replace(/\\/g, '/')
+        .split(/[?#]/, 1)[0]
+        .replace(/\/+/g, '/')
+        .trim();
+    try {
+        source = decodeURIComponent(source);
+    } catch (_) {}
+    return source.toLowerCase();
+}
+
+function canonicalArtifactDedupeKey(artifact) {
+    artifact = artifact || {};
+    const kind = String(artifact.kind || artifact.type || artifact.fileType || artifact.file_type || '').toLowerCase();
+    const sources = [
+        artifact.path,
+        artifact.filePath,
+        artifact.file_path,
+        artifact.relativePath,
+        artifact.relative_path,
+        artifact.url,
+        artifact.previewUrl,
+        artifact.preview_url,
+        artifact.thumbnailUrl,
+        artifact.thumbnail_url,
+        artifact.statusPath,
+        artifact.status_path,
+    ];
+    const normalized = sources.map(normalizeArtifactSourceForDedupe).filter(Boolean);
+    const primary = normalized[0] || '';
+    if (primary) return `${kind || 'artifact'}:${primary}`;
+    const id = String(artifact.safeArtifactId || artifact.safe_artifact_id || artifact.id || artifact.artifactId || artifact.artifact_id || '').trim();
+    if (id) return `${kind || 'artifact'}:${id}`;
+    const title = String(artifact.title || artifact.name || artifact.fileName || artifact.file_name || '').trim().toLowerCase();
+    return title ? `${kind || 'artifact'}:${title}` : '';
+}
+
+function appendArtifactCard(mediaEl, artifact) {
+    if (!mediaEl || !artifact || typeof artifact !== 'object') return false;
+    const key = canonicalArtifactDedupeKey(artifact);
+    const escapedKey = key && window.CSS && typeof window.CSS.escape === 'function'
+        ? window.CSS.escape(key)
+        : String(key || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    if (key && mediaEl.querySelector(`[data-artifact-key="${escapedKey}"]`)) return false;
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = _buildArtifactHtml(artifact);
+    const element = wrapper.firstElementChild || wrapper;
+    if (key && element.setAttribute) element.setAttribute('data-artifact-key', key);
+    mediaEl.appendChild(element);
+    return true;
+}
+
+function phase1ArtifactsFromStreamItem(item) {
+    if (!item || typeof item !== 'object') return [];
+    if (item.type === 'done' && Array.isArray(item.artifacts)) return item.artifacts;
+    if (item.type === 'artifact' && item.artifact) return [item.artifact];
+    if (item.type === 'file' || item.type === 'image' || item.type === 'video' || item.type === 'audio' || item.type === 'voice_attach') {
+        return [{
+            kind: item.type === 'voice_attach' ? 'audio' : item.type,
+            title: item.file_name || item.name || item.type,
+            path: item.path || item.content || '',
+            url: item.url || '',
+            fileType: item.file_type || item.mime_type || '',
+            mimeType: item.mime_type || item.mimeType || '',
+            sizeBytes: item.size_bytes || item.sizeBytes || 0,
+            status: item.status || 'ready'
+        }];
+    }
+    return [];
+}
+
+async function phase1ArtifactMetadata(artifact, ownerSession, requestId) {
+    artifact = artifact || {};
+    const source = phase1ArtifactSource(artifact);
+    const title = phase1ArtifactTitle(artifact, source);
+    const identity = [
+        artifact.safeArtifactId || artifact.safe_artifact_id || artifact.id || artifact.artifactId || artifact.artifact_id,
+        title,
+        source,
+        requestId
+    ].filter(Boolean).join('|');
+    const safeArtifactId = artifact.safeArtifactId || artifact.safe_artifact_id || ('artifact:' + await phase1Digest(identity || title));
+    const sourceInfo = artifact.source || {};
+    return {
+        idempotencyKey: await phase1SyncKey(['artifact', ownerSession, requestId, safeArtifactId]),
+        safeArtifactId,
+        sessionId: ownerSession,
+        requestId: artifact.requestId || artifact.request_id || requestId,
+        kind: artifact.kind || artifact.type || artifact.fileType || artifact.file_type || 'file',
+        intent: artifact.intent || 'deliverable',
+        operation: artifact.operation || artifact.action || 'created',
+        status: artifact.status || 'ready',
+        title,
+        pathHash: source ? await phase1Digest(source) : '',
+        pathExt: artifact.pathExt || artifact.path_ext || phase1ArtifactExt(source, title),
+        mimeType: artifact.mimeType || artifact.mime_type || '',
+        sizeBytes: Number(artifact.sizeBytes || artifact.size_bytes || 0) || 0,
+        stats: phase1SafeJson(artifact.stats || {}),
+        source: {
+            toolName: sourceInfo.toolName || sourceInfo.tool_name || artifact.toolName || artifact.tool || '',
+            toolCallId: sourceInfo.toolCallId || sourceInfo.tool_call_id || artifact.toolCallId || artifact.tool_call_id || '',
+            activityId: sourceInfo.activityId || sourceInfo.activity_id || artifact.activityId || artifact.activity_id || ''
+        },
+        metadataTruncated: Boolean(artifact.metadataTruncated),
+        createdAt: phase1Now()
+    };
+}
+
+async function reportPhase1Telemetry(payload) {
+    if (!phase1SyncEnabled()) return;
+    const bridge = window.ecorexDesktop;
+    if (!bridge || typeof bridge.reportTelemetry !== 'function') return;
+    try {
+        await bridge.reportTelemetry({
+            type: 'phase1_sync',
+            source: 'WebUI',
+            sessionId: payload.sessionId || '',
+            requestId: payload.requestId || '',
+            events: payload.events || [],
+            artifacts: payload.artifacts || []
+        });
+    } catch (_) {}
+}
+
+async function reportPhase1RunEvent(ownerSession, requestId, eventType, status, detail = {}) {
+    if (!ownerSession || !requestId) return;
+    await reportPhase1Telemetry({
+        sessionId: ownerSession,
+        requestId,
+        events: [{
+            idempotencyKey: await phase1SyncKey(['event', ownerSession, requestId, eventType, status]),
+            eventType,
+            status,
+            source: 'WebUI',
+            sessionId: ownerSession,
+            requestId,
+            detail: phase1SafeJson(detail),
+            createdAt: phase1Now()
+        }]
+    });
+}
+
+async function reportPhase1StreamItem(ownerSession, requestId, item) {
+    if (!ownerSession || !requestId || !item || typeof item !== 'object') return;
+    const events = [];
+    const artifacts = [];
+    if (item.type === 'tool_start') {
+        events.push({
+            idempotencyKey: await phase1SyncKey(['event', ownerSession, requestId, 'tool.started', item.tool_call_id || item.tool || '']),
+            eventType: 'tool.started',
+            status: 'running',
+            source: 'WebUI',
+            sessionId: ownerSession,
+            requestId,
+            detail: phase1SafeJson({ tool: item.tool || '', toolCallId: item.tool_call_id || '' }),
+            createdAt: phase1Now()
+        });
+    } else if (item.type === 'tool_end') {
+        const status = item.status === 'success' ? 'completed' : 'failed';
+        events.push({
+            idempotencyKey: await phase1SyncKey(['event', ownerSession, requestId, 'tool.finished', item.tool_call_id || item.tool || '', status]),
+            eventType: 'tool.finished',
+            status,
+            source: 'WebUI',
+            sessionId: ownerSession,
+            requestId,
+            detail: phase1SafeJson({
+                tool: item.tool || '',
+                toolCallId: item.tool_call_id || '',
+                executionTime: item.execution_time || 0,
+                resultTruncated: Boolean(item.result_truncated)
+            }),
+            createdAt: phase1Now()
+        });
+    } else if (item.type === 'artifact_limit') {
+        events.push({
+            idempotencyKey: await phase1SyncKey(['event', ownerSession, requestId, 'artifact.limit', item.tool_call_id || '']),
+            eventType: 'artifact.limit',
+            status: 'limited',
+            source: 'WebUI',
+            sessionId: ownerSession,
+            requestId,
+            detail: phase1SafeJson({
+                tool: item.tool || '',
+                toolCallId: item.tool_call_id || '',
+                omittedArtifactCount: Number(item.omitted_artifact_count || 0) || 0
+            }),
+            createdAt: phase1Now()
+        });
+    } else if (item.type === 'cancelled') {
+        events.push({
+            idempotencyKey: await phase1SyncKey(['event', ownerSession, requestId, 'run.cancelled', 'cancelled']),
+            eventType: 'run.cancelled',
+            status: 'cancelled',
+            source: 'WebUI',
+            sessionId: ownerSession,
+            requestId,
+            detail: phase1SafeJson({ acknowledged: true }),
+            createdAt: phase1Now()
+        });
+    } else if (item.type === 'done') {
+        events.push({
+            idempotencyKey: await phase1SyncKey(['event', ownerSession, requestId, 'run.completed', 'completed']),
+            eventType: 'run.completed',
+            status: 'completed',
+            source: 'WebUI',
+            sessionId: ownerSession,
+            requestId,
+            detail: phase1SafeJson({
+                hasUsage: Boolean(item.usage),
+                artifactCount: Array.isArray(item.artifacts) ? item.artifacts.length : 0,
+                hasTurnIdentity: Boolean(item.turn_id || item.user_seq !== undefined || item.bot_seq !== undefined)
+            }),
+            createdAt: phase1Now()
+        });
+    } else if (item.type === 'error') {
+        events.push({
+            idempotencyKey: await phase1SyncKey(['event', ownerSession, requestId, 'run.failed', 'failed']),
+            eventType: 'run.failed',
+            status: 'failed',
+            source: 'WebUI',
+            sessionId: ownerSession,
+            requestId,
+            detail: phase1SafeJson({
+                errorCode: item.error_code || '',
+                errorType: item.error_type || '',
+                statusCode: item.status_code || ''
+            }),
+            createdAt: phase1Now()
+        });
+    }
+    const rawArtifacts = phase1ArtifactsFromStreamItem(item);
+    if (rawArtifacts.length) {
+        for (const artifact of rawArtifacts.slice(0, 32)) {
+            artifacts.push(await phase1ArtifactMetadata(artifact, ownerSession, requestId));
+        }
+        events.push({
+            idempotencyKey: await phase1SyncKey(['event', ownerSession, requestId, 'artifact.updated', artifacts.map(item => item.safeArtifactId).join(',')]),
+            eventType: 'artifact.updated',
+            status: 'ready',
+            source: 'WebUI',
+            sessionId: ownerSession,
+            requestId,
+            detail: phase1SafeJson({ artifactCount: artifacts.length }),
+            createdAt: phase1Now()
+        });
+    }
+    if (events.length || artifacts.length) {
+        await reportPhase1Telemetry({ sessionId: ownerSession, requestId, events, artifacts });
+    }
+}
+
 // ---- Conversation history state ----
 let historyPage = 0;       // last page fetched (0 = nothing fetched yet)
 let historyHasMore = false;
 let historyLoading = false;
+let sessionRuntimeProjectionCursors = {}; // session_id -> latest runtime event cursor
+
+function updateSessionRuntimeProjectionCursor(ownerSession, latestEventId) {
+    const sid = String(ownerSession || '').trim();
+    const nextEventId = Number(latestEventId || 0);
+    if (!sid || !Number.isFinite(nextEventId) || nextEventId <= 0) {
+        return Number(sessionRuntimeProjectionCursors[sid] || 0);
+    }
+    sessionRuntimeProjectionCursors[sid] = Math.max(
+        Number(sessionRuntimeProjectionCursors[sid] || 0),
+        nextEventId
+    );
+    return sessionRuntimeProjectionCursors[sid];
+}
+
+async function loadRequestRuntimeProjection(requestId, opts) {
+    opts = opts || {};
+    const rid = String(requestId || '').trim();
+    if (!rid) return null;
+    const params = new URLSearchParams();
+    params.set('request_id', rid);
+    params.set('limit', String(opts.limit || 1000));
+    if (opts.includeEvents) params.set('include_events', '1');
+    const response = await fetch(`/api/runtime-projection?${params.toString()}`, {
+        cache: 'no-store'
+    });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    if (!payload || payload.status !== 'success') return null;
+    return payload.projection || null;
+}
+
+async function loadSessionRuntimeProjection(sid, opts) {
+    opts = opts || {};
+    const ownerSession = String(sid || '').trim();
+    if (!ownerSession) return null;
+    const params = new URLSearchParams();
+    params.set('session_id', ownerSession);
+    params.set('limit', String(opts.limit || 1000));
+    const afterEventId = opts.afterEventId !== undefined
+        ? opts.afterEventId
+        : (sessionRuntimeProjectionCursors[ownerSession] || 0);
+    if (afterEventId) params.set('after_event_id', String(afterEventId));
+    const response = await fetch(`/api/runtime-projection?${params.toString()}`, {
+        cache: 'no-store'
+    });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    if (!payload || payload.status !== 'success') return null;
+    return payload.projection || null;
+}
+
+function runtimeProjectionAssistantMessage(projection) {
+    const messages = projection && Array.isArray(projection.messages) ? projection.messages : [];
+    for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i] && messages[i].role === 'assistant') return messages[i];
+    }
+    return null;
+}
+
+function runtimeProjectionImageJobs(projection) {
+    return projection && Array.isArray(projection.image_jobs) ? projection.image_jobs : [];
+}
+
+function runtimeProjectionImageJobSummary(projection) {
+    const jobs = runtimeProjectionImageJobs(projection);
+    if (!jobs.length) return '';
+    const terminalOrder = ['failed', 'cancelled', 'completed'];
+    let status = String((jobs[jobs.length - 1] && jobs[jobs.length - 1].status) || '').toLowerCase();
+    terminalOrder.forEach(item => {
+        if (jobs.some(job => String((job && job.status) || '').toLowerCase() === item)) {
+            status = item;
+        }
+    });
+    const artifacts = [];
+    const tasks = [];
+    jobs.forEach(job => {
+        if (job && Array.isArray(job.artifacts)) artifacts.push(...job.artifacts);
+        if (job && Array.isArray(job.tasks)) tasks.push(...job.tasks);
+    });
+    const count = artifacts.length || tasks.length || jobs.length;
+    if (status === 'failed') return 'Image generation failed.';
+    if (status === 'cancelled') return 'Image generation cancelled.';
+    if (status === 'completed') return count > 1
+        ? `Image generation completed with ${count} artifacts.`
+        : 'Image generation completed.';
+    return 'Image generation is running.';
+}
+
+function runtimeProjectionRenderableText(projection, assistant) {
+    assistant = assistant || runtimeProjectionAssistantMessage(projection) || {};
+    return localizeCancelMarker(String(
+        assistant.content ||
+        assistant.final_text ||
+        assistant.text ||
+        (projection && projection.terminal_message) ||
+        runtimeProjectionImageJobSummary(projection) ||
+        ''
+    ));
+}
+
+function runtimeProjectionHasRenderableContent(projection, assistant) {
+    if (!projection) return false;
+    if (assistant || runtimeProjectionRenderableText(projection, assistant)) return true;
+    return runtimeProjectionArtifacts(assistant, projection).length > 0;
+}
+
+function runtimeProjectionIsTerminal(projection, assistant) {
+    const state = String((projection && projection.state) || '').toLowerCase();
+    if (['completed', 'failed', 'cancelled', 'interrupted'].includes(state)) return true;
+    return !!(assistant && assistant.pending === false);
+}
+
+function runtimeProjectionArtifacts(assistant, projection) {
+    const out = [];
+    const seen = new Set();
+    const add = (artifact) => {
+        if (!artifact || typeof artifact !== 'object') return;
+        const dedupeKey = canonicalArtifactDedupeKey(artifact) || JSON.stringify(artifact).slice(0, 200);
+        if (seen.has(dedupeKey)) return;
+        seen.add(dedupeKey);
+        out.push(artifact);
+    };
+    if (assistant && Array.isArray(assistant.artifacts)) {
+        assistant.artifacts.forEach(add);
+    }
+    runtimeProjectionImageJobs(projection).forEach(job => {
+        if (job && Array.isArray(job.artifacts)) job.artifacts.forEach(add);
+    });
+    return out;
+}
+
+function runtimeProjectionUserMessage(projection) {
+    const messages = projection && Array.isArray(projection.messages) ? projection.messages : [];
+    return messages.find(item => item && item.role === 'user') || null;
+}
+
+function runtimeProjectionActiveState(projection, assistant) {
+    const state = String((projection && projection.state) || '').toLowerCase();
+    if (['running', 'streaming', 'waiting_permission'].includes(state)) return true;
+    return !!(assistant && assistant.pending === true);
+}
 
 fetch('/config').then(r => r.json()).then(data => {
     if (data.status === 'success') {
         appConfig = data;
-        const title = data.title || 'EcoreX';
-        document.getElementById('welcome-title').textContent = title;
+        const title = data.welcome_title || '和EcoreX一起开始工作';
+        const welcomeTitle = document.getElementById('welcome-title');
+        if (welcomeTitle) welcomeTitle.textContent = title;
         initConfigView(data);
     }
     loadHistory(1);
@@ -1969,25 +2756,6 @@ chatInput.addEventListener('blur', () => {
     setTimeout(hideSlashMenu, 150);
 });
 
-document.querySelectorAll('.example-card').forEach(card => {
-    card.addEventListener('click', () => {
-        // data-send overrides the visible text (e.g. show "查看全部命令" but send "/help")
-        const sendText = card.dataset.send;
-        if (sendText) {
-            chatInput.value = sendText;
-            chatInput.dispatchEvent(new Event('input'));
-            chatInput.focus();
-            return;
-        }
-        const textEl = card.querySelector('[data-i18n*="text"]');
-        if (textEl) {
-            chatInput.value = textEl.textContent;
-            chatInput.dispatchEvent(new Event('input'));
-            chatInput.focus();
-        }
-    });
-});
-
 // Voice-message variant of sendMessage(): renders a playable audio bubble
 // with the ASR caption, then dispatches the recognised text to /message
 // through the same SSE/loading flow as a typed message.
@@ -2026,7 +2794,7 @@ function sendVoiceMessage(text, audioUrl) {
             body: JSON.stringify(body)
         })
         .then(r => r.json())
-        .then(data => {
+        .then(async data => {
             if (data.status === 'success') {
                 if (data.inline_reply) {
                     // Synchronous fast-path reply (e.g. /cancel); skip SSE.
@@ -2400,7 +3168,10 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
     let contentEl = null;  // .answer-content (final streaming answer)
     let mediaEl = null;    // .media-content (images & file attachments)
     let accumulatedText = '';
+    let projectionSeedReplayOffset = 0;
+    let projectionSeedReplayActive = false;
     let currentToolEl = null;
+    const toolElsById = {};
     let currentReasoningEl = null;  // live reasoning bubble
     let reasoningText = '';
     let reasoningStartTime = 0;
@@ -2418,6 +3189,16 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
     // Per-request event buffer used to rebuild the bubble on re-attach.
     const buffer = streamBuffers[requestId] || { items: [], timestamp };
     streamBuffers[requestId] = buffer;
+    const projectedSeedContentEl = loadingEl && loadingEl.querySelector
+        ? loadingEl.querySelector('.answer-content')
+        : null;
+    const projectedSeedRawMd = projectedSeedContentEl && projectedSeedContentEl.dataset
+        ? projectedSeedContentEl.dataset.rawMd
+        : '';
+    if (projectedSeedRawMd && !accumulatedText) {
+        accumulatedText = projectedSeedRawMd;
+        projectionSeedReplayActive = true;
+    }
     const clearOwnerRequest = () => {
         if (sessionActiveRequest[ownerSession] === requestId) {
             delete sessionActiveRequest[ownerSession];
@@ -2429,6 +3210,7 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
     const MAX_RECONNECTS = 10;
     const RECONNECT_BASE_MS = 1000;
     let reconnectCount = 0;
+    void reportPhase1RunEvent(ownerSession, requestId, 'run.accepted', 'running', { stream: true });
 
     function ensureBotEl() {
         if (botEl) return;
@@ -2483,26 +3265,123 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
     // Holds the live EventSource so terminal/error events can close it.
     // can close it. During replay there is no live connection (null).
     let currentEs = null;
-    let streamingAnswerPre = null;
-    let streamingAnswerTextNode = null;
     let streamingAnswerPendingText = '';
     let streamingAnswerRafScheduled = false;
-    let streamingAnswerMode = 'pre';
     let currentPhaseEl = null;
-    const STREAMING_MARKDOWN_PREVIEW_CHARS = 12000;
+    let streamingAnswerRenderEpoch = 0;
 
     function resetStreamingAnswerPreview() {
-        streamingAnswerPre = null;
-        streamingAnswerTextNode = null;
         streamingAnswerPendingText = '';
         streamingAnswerRafScheduled = false;
-        streamingAnswerMode = 'pre';
+        streamingAnswerRenderEpoch += 1;
     }
 
-    function shouldRenderStreamingMarkdown(text) {
-        const value = String(text || '');
-        if (!value || value.length > STREAMING_MARKDOWN_PREVIEW_CHARS) return false;
-        return /(^|\n)\s{0,3}(#{1,6}\s|[-*]\s+|\d+\.\s+|>\s+|```|\|.+\|)/.test(value);
+    let runtimeProjectionApplyInFlight = false;
+
+    function applyRuntimeProjectionSnapshot(projection, reason) {
+        const assistant = runtimeProjectionAssistantMessage(projection);
+        if (!runtimeProjectionHasRenderableContent(projection, assistant)) return false;
+        ensureBotEl();
+        botEl.dataset.runtimeProjectionSource = reason || 'runtime_projection';
+        if (projection && projection.latest_event_id !== undefined) {
+            botEl.dataset.runtimeProjectionEventId = String(projection.latest_event_id || '');
+        }
+        botEl?.querySelector('.agent-loading-dots')?.remove();
+        if (currentReasoningEl) {
+            finalizeThinking(currentReasoningEl, reasoningStartTime, reasoningText);
+            currentReasoningEl = null;
+            reasoningText = '';
+        }
+
+        const finalText = runtimeProjectionRenderableText(projection, assistant)
+            || localizeCancelMarker(String(accumulatedText || ''));
+        contentEl.classList.remove('sse-streaming');
+        resetStreamingAnswerPreview();
+        if (finalText) {
+            contentEl.innerHTML = renderAnswerHtml(finalText);
+            contentEl.dataset.rawMd = finalText;
+            const copyBtn = botEl.querySelector('.copy-msg-btn');
+            if (copyBtn) copyBtn.style.display = '';
+            const copyXhsBtn = botEl.querySelector('.copy-xhs-btn');
+            if (copyXhsBtn) copyXhsBtn.style.display = '';
+            renderBotSpeakerButton(botEl, finalText);
+        }
+
+        const toolCalls = assistant && Array.isArray(assistant.tool_calls) ? assistant.tool_calls : [];
+        if (stepsEl && toolCalls.length) {
+            stepsEl.innerHTML = renderToolCallsHtml(toolCalls);
+        }
+
+        const artifacts = runtimeProjectionArtifacts(assistant, projection);
+        if (mediaEl && artifacts.length) {
+            mediaEl.innerHTML = '';
+            artifacts.forEach(artifact => {
+                appendArtifactCard(mediaEl, artifact);
+            });
+        }
+
+        if (runtimeProjectionIsTerminal(projection, assistant)) {
+            done = true;
+            contentEl.classList.remove('sse-streaming');
+            resetSendBtnSendMode();
+        }
+        applyHighlighting(botEl);
+        bindChatKnowledgeLinks(botEl);
+        scrollChatToBottom();
+        return true;
+    }
+
+    async function refreshRuntimeProjectionSnapshot(reason) {
+        if (runtimeProjectionApplyInFlight) return false;
+        runtimeProjectionApplyInFlight = true;
+        try {
+            const projection = await loadRequestRuntimeProjection(requestId, { limit: 1000 });
+            if (!projection || String(projection.request_id || '') !== String(requestId || '')) return false;
+            return applyRuntimeProjectionSnapshot(projection, reason);
+        } catch (err) {
+            console.warn(`[runtime-projection] failed to refresh ${requestId}:`, err);
+            return false;
+        } finally {
+            runtimeProjectionApplyInFlight = false;
+        }
+    }
+
+    let nonSseProjectionPolling = false;
+    function startNonSseProjectionLoop(reason) {
+        if (nonSseProjectionPolling) return;
+        nonSseProjectionPolling = true;
+        ensureBotEl();
+        if (currentPhaseEl) {
+            replaceCurrentPhase(currentLang === 'zh' ? '正在同步后端投影' : 'Syncing backend projection');
+        }
+        const MAX_NON_SSE_POLLS = 180;
+        let projectionPollCount = 0;
+        const pollProjection = () => {
+            if (done) {
+                clearOwnerRequest();
+                return;
+            }
+            if (!isActive()) {
+                setTimeout(pollProjection, 2000);
+                return;
+            }
+            void refreshRuntimeProjectionSnapshot(reason || 'non_sse_projection').then(applied => {
+                if (done) {
+                    clearOwnerRequest();
+                    return;
+                }
+                projectionPollCount += 1;
+                if (projectionPollCount >= MAX_NON_SSE_POLLS) {
+                    renderStreamError(t('error_send'));
+                    clearOwnerRequest();
+                    resetSendBtnSendMode();
+                    return;
+                }
+                const delay = applied ? 1000 : Math.min(1000 + projectionPollCount * 250, 4000);
+                setTimeout(pollProjection, delay);
+            });
+        };
+        pollProjection();
     }
 
     function renderStreamError(message) {
@@ -2527,48 +3406,23 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
         if (!text && !accumulatedText) return;
         ensureBotEl();
         botEl?.querySelector('.agent-loading-dots')?.remove();
-        if (shouldRenderStreamingMarkdown(accumulatedText)) {
-            streamingAnswerPendingText = accumulatedText;
-            if (streamingAnswerRafScheduled) return;
-            streamingAnswerRafScheduled = true;
-            requestAnimationFrame(() => {
-                streamingAnswerRafScheduled = false;
-                const latest = streamingAnswerPendingText;
-                streamingAnswerPendingText = '';
-                if (!contentEl || !contentEl.isConnected) return;
-                streamingAnswerMode = 'markdown';
-                streamingAnswerPre = null;
-                streamingAnswerTextNode = null;
-                contentEl.innerHTML = `<div class="agent-content-body streaming-markdown-preview">${renderMarkdown(latest)}</div>`;
-                scrollChatToBottom();
-            });
-            return;
-        }
-        if (streamingAnswerMode === 'markdown') {
-            contentEl.innerHTML = '';
-            streamingAnswerMode = 'pre';
-            streamingAnswerPre = null;
-            streamingAnswerTextNode = null;
-        }
-        if (!streamingAnswerPre || !streamingAnswerPre.isConnected) {
-            contentEl.innerHTML = '<pre class="answer-stream-pre"></pre>';
-            streamingAnswerPre = contentEl.querySelector('.answer-stream-pre');
-            streamingAnswerPre.appendChild(document.createTextNode(''));
-            streamingAnswerTextNode = streamingAnswerPre.firstChild;
-        }
-        streamingAnswerPendingText += text;
+        streamingAnswerPendingText = accumulatedText;
         if (streamingAnswerRafScheduled) return;
         streamingAnswerRafScheduled = true;
+        const renderEpoch = streamingAnswerRenderEpoch;
         requestAnimationFrame(() => {
             streamingAnswerRafScheduled = false;
-            if (!streamingAnswerTextNode || !streamingAnswerPre || !streamingAnswerPre.isConnected) {
+            if (renderEpoch !== streamingAnswerRenderEpoch) {
                 streamingAnswerPendingText = '';
                 return;
             }
-            const pending = streamingAnswerPendingText;
+            const latest = streamingAnswerPendingText;
             streamingAnswerPendingText = '';
-            if (!pending) return;
-            streamingAnswerTextNode.appendData(pending);
+            if (!latest || !contentEl || !contentEl.isConnected) return;
+            contentEl.innerHTML = renderStreamingMarkdown(latest);
+            contentEl.dataset.rawMd = latest;
+            applyHighlighting(contentEl);
+            bindChatKnowledgeLinks(contentEl);
             scrollChatToBottom();
         });
     }
@@ -2579,11 +3433,70 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
         ensureBotEl();
         if (!currentPhaseEl || !currentPhaseEl.isConnected) {
             currentPhaseEl = document.createElement('div');
-            currentPhaseEl.className = 'agent-current-phase text-xs sm:text-sm text-slate-500 dark:text-slate-400 py-1 my-0.5';
+            currentPhaseEl.className = 'agent-current-phase ecorex-activity-status text-xs sm:text-sm text-slate-500 dark:text-slate-400 py-1 my-0.5';
+            currentPhaseEl.innerHTML = '<span class="ecorex-activity-dot" aria-hidden="true"></span><span class="agent-current-phase-text"></span>';
             stepsEl.appendChild(currentPhaseEl);
         }
-        currentPhaseEl.textContent = content;
+        const textEl = currentPhaseEl.querySelector('.agent-current-phase-text');
+        if (textEl) textEl.textContent = content;
+        else currentPhaseEl.textContent = content;
         scrollChatToBottom();
+    }
+
+    function clearCurrentPhase() {
+        if (currentPhaseEl && currentPhaseEl.isConnected) {
+            currentPhaseEl.remove();
+        }
+        currentPhaseEl = null;
+    }
+
+    function streamToolKey(item) {
+        return String((item && (item.tool_call_id || item.tool || item.name)) || '');
+    }
+
+    function findStreamToolEl(item) {
+        const key = streamToolKey(item);
+        if (key && toolElsById[key] && toolElsById[key].isConnected) return toolElsById[key];
+        if (key && stepsEl) {
+            const found = stepsEl.querySelector(
+                `.agent-tool-step[data-tool-call-id="${cssEscape(key)}"], ` +
+                `.agent-subagent-step[data-tool-call-id="${cssEscape(key)}"]`
+            );
+            if (found) {
+                toolElsById[key] = found;
+                return found;
+            }
+        }
+        return currentToolEl && currentToolEl.isConnected ? currentToolEl : null;
+    }
+
+    function formatProgressSeconds(value) {
+        const seconds = Number(value || 0);
+        if (!Number.isFinite(seconds) || seconds <= 0) return '';
+        if (seconds < 90) return `${Math.round(seconds)}s`;
+        return `${Math.ceil(seconds / 60)}m`;
+    }
+
+    function updateStreamToolMeta(item) {
+        if (!item || item.tool === 'subagent') return;
+        ensureBotEl();
+        const toolEl = findStreamToolEl(item);
+        if (!toolEl) return;
+        const icon = toolEl.querySelector('.tool-icon');
+        if (icon) icon.className = 'ecorex-activity-dot tool-icon';
+        const metaEl = toolEl.querySelector('.tool-live-meta');
+        if (!metaEl) return;
+        metaEl.classList.add('is-live');
+        const parts = [];
+        const elapsed = formatProgressSeconds(item.elapsed_seconds || item.execution_time);
+        const deadline = formatProgressSeconds(item.deadline_seconds || item.timeout_seconds);
+        const max = formatProgressSeconds(item.max_seconds);
+        const extensions = Number(item.extension_count || 0);
+        if (elapsed) parts.push(`running ${elapsed}`);
+        if (deadline) parts.push(`window ${deadline}`);
+        if (max) parts.push(`max ${max}`);
+        if (extensions > 0) parts.push(`lease x${extensions}`);
+        metaEl.textContent = parts.join(' · ') || 'running';
     }
 
     // Render one SSE event into the bubble. Used by the live handler and by
@@ -2663,16 +3576,66 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                 }
                 const chunk = String(item.content || item.text || item.message || '');
                 const replaceMode = item.type === 'message_update' && (item.update_mode || 'replace') !== 'append';
-                accumulatedText = replaceMode ? chunk : accumulatedText + chunk;
-                appendStreamingAnswerPreview(chunk);
+                let shouldRenderStreamingPreview = true;
+                if (projectionSeedReplayActive && accumulatedText) {
+                    if (replaceMode) {
+                        if (chunk && accumulatedText.startsWith(chunk) && chunk.length <= accumulatedText.length) {
+                            projectionSeedReplayOffset = Math.max(projectionSeedReplayOffset, chunk.length);
+                            shouldRenderStreamingPreview = false;
+                        } else {
+                            accumulatedText = chunk;
+                            projectionSeedReplayOffset = 0;
+                            projectionSeedReplayActive = false;
+                        }
+                    } else {
+                        const expectedReplayChunk = accumulatedText.slice(
+                            projectionSeedReplayOffset,
+                            projectionSeedReplayOffset + chunk.length
+                        );
+                        if (chunk && expectedReplayChunk === chunk) {
+                            projectionSeedReplayOffset += chunk.length;
+                            shouldRenderStreamingPreview = false;
+                        } else if (chunk) {
+                            const replayIndex = accumulatedText.indexOf(chunk, projectionSeedReplayOffset);
+                            if (replayIndex >= projectionSeedReplayOffset) {
+                                projectionSeedReplayOffset = replayIndex + chunk.length;
+                                shouldRenderStreamingPreview = false;
+                            } else {
+                                projectionSeedReplayActive = false;
+                                projectionSeedReplayOffset = 0;
+                                accumulatedText += chunk;
+                            }
+                        } else {
+                            projectionSeedReplayActive = false;
+                            projectionSeedReplayOffset = 0;
+                            accumulatedText += chunk;
+                        }
+                    }
+                } else {
+                    accumulatedText = replaceMode ? chunk : accumulatedText + chunk;
+                }
+                if (shouldRenderStreamingPreview) appendStreamingAnswerPreview(chunk);
 
             } else if (item.type === 'message_end') {
+                if (
+                    projectionSeedReplayActive &&
+                    accumulatedText &&
+                    (contentEl || projectedSeedContentEl) &&
+                    (contentEl || projectedSeedContentEl).dataset &&
+                    (contentEl || projectedSeedContentEl).dataset.rawMd === accumulatedText
+                ) {
+                    projectionSeedReplayOffset = accumulatedText.length;
+                    projectionSeedReplayActive = false;
+                    return;
+                }
                 if (item.has_tool_calls && accumulatedText.trim()) {
                     ensureBotEl();
                     const frozenEl = document.createElement('div');
                     frozenEl.className = 'agent-step agent-content-step';
                     frozenEl.innerHTML = `<div class="agent-content-body">${renderMarkdown(accumulatedText.trim())}</div>`;
                     stepsEl.appendChild(frozenEl);
+                    applyHighlighting(frozenEl);
+                    bindChatKnowledgeLinks(frozenEl);
                     accumulatedText = '';
                     contentEl.innerHTML = '';
                     resetStreamingAnswerPreview();
@@ -2687,9 +3650,27 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                     currentReasoningEl = null;
                     reasoningText = '';
                 }
-                accumulatedText = '';
-                contentEl.innerHTML = '';
-                resetStreamingAnswerPreview();
+                const projectedReplayToolEl = projectionSeedReplayActive ? findStreamToolEl(item) : null;
+                if (projectedReplayToolEl) {
+                    currentToolEl = projectedReplayToolEl;
+                    updateStreamToolMeta(item);
+                    projectionSeedReplayOffset = accumulatedText.length;
+                    projectionSeedReplayActive = false;
+                    return;
+                }
+                if (
+                    !projectionSeedReplayActive ||
+                    !accumulatedText ||
+                    !contentEl.dataset ||
+                    contentEl.dataset.rawMd !== accumulatedText
+                ) {
+                    accumulatedText = '';
+                    contentEl.innerHTML = '';
+                    resetStreamingAnswerPreview();
+                } else {
+                    projectionSeedReplayOffset = accumulatedText.length;
+                    projectionSeedReplayActive = false;
+                }
                 if (item.tool === 'subagent') {
                     const wrapper = document.createElement('div');
                     wrapper.innerHTML = renderSubagentCardHtml({
@@ -2707,11 +3688,16 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                 // Add tool execution indicator (collapsible)
                 currentToolEl = document.createElement('div');
                 currentToolEl.className = 'agent-step agent-tool-step';
+                currentToolEl.dataset.toolCallId = item.tool_call_id || item.tool || '';
+                const toolKey = streamToolKey(item);
+                if (toolKey) toolElsById[toolKey] = currentToolEl;
                 const argsStr = formatToolArgs(item.arguments || {});
+                const toolName = escapeHtml(String(item.tool || 'tool'));
                 currentToolEl.innerHTML = `
                     <div class="tool-header" onclick="this.parentElement.classList.toggle('expanded')">
-                        <i class="fas fa-cog fa-spin text-primary-400 flex-shrink-0 tool-icon"></i>
-                        <span class="tool-name">${item.tool}</span>
+                        <span class="ecorex-activity-dot tool-icon" aria-hidden="true"></span>
+                        <span class="tool-name">${toolName}</span>
+                        <span class="tool-live-meta is-live">running</span>
                         <i class="fas fa-chevron-right tool-chevron"></i>
                     </div>
                     <div class="tool-detail">
@@ -2729,40 +3715,60 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                 if (item.tool === 'subagent') {
                     return;
                 }
-                if (currentToolEl) {
+                const endingToolEl = findStreamToolEl(item);
+                if (endingToolEl) {
                     const isError = item.status !== 'success';
-                    const icon = currentToolEl.querySelector('.tool-icon');
-                    icon.className = isError
-                        ? 'fas fa-times text-red-400 flex-shrink-0 tool-icon'
-                        : 'fas fa-check text-primary-400 flex-shrink-0 tool-icon';
+                    const icon = endingToolEl.querySelector('.tool-icon');
+                    if (icon) {
+                        icon.className = isError
+                            ? 'fas fa-times text-red-400 flex-shrink-0 tool-icon'
+                            : 'fas fa-check text-primary-400 flex-shrink-0 tool-icon';
+                    }
 
                     // Show execution time
-                    const nameEl = currentToolEl.querySelector('.tool-name');
-                    if (item.execution_time !== undefined) {
-                        nameEl.innerHTML += ` <span class="tool-time">${item.execution_time}s</span>`;
+                    const nameEl = endingToolEl.querySelector('.tool-name');
+                    if (nameEl && item.execution_time !== undefined) {
+                        const timeEl = document.createElement('span');
+                        timeEl.className = 'tool-time';
+                        timeEl.textContent = `${String(item.execution_time)}s`;
+                        nameEl.appendChild(document.createTextNode(' '));
+                        nameEl.appendChild(timeEl);
+                    }
+                    const metaEl = endingToolEl.querySelector('.tool-live-meta');
+                    if (metaEl) {
+                        metaEl.classList.remove('is-live');
+                        metaEl.textContent = item.status || (isError ? 'failed' : 'done');
                     }
 
                     // Fill output section
-                    const outputSection = currentToolEl.querySelector('.tool-output-section');
+                    const outputSection = endingToolEl.querySelector('.tool-output-section');
                     if (outputSection && item.result) {
                         outputSection.innerHTML = `
                             <div class="tool-detail-label">${isError ? 'Error' : 'Output'}</div>
                             <pre class="tool-detail-content ${isError ? 'tool-error-text' : ''}">${escapeHtml(String(item.result))}</pre>`;
                     }
 
-                    if (isError) currentToolEl.classList.add('tool-failed');
-                    currentToolEl = null;
+                    if (isError) endingToolEl.classList.add('tool-failed');
+                    const toolKey = streamToolKey(item);
+                    if (toolKey) delete toolElsById[toolKey];
+                    if (endingToolEl === currentToolEl) currentToolEl = null;
                 }
+
+            } else if (item.type === 'tool_heartbeat') {
+                updateStreamToolMeta(item);
+
+            } else if (item.type === 'tool_deadline_extended') {
+                updateStreamToolMeta(item);
+                const deadline = formatProgressSeconds(item.deadline_seconds);
+                const max = formatProgressSeconds(item.max_seconds);
+                const toolName = item.tool || item.name || 'tool';
+                replaceCurrentPhase(`Observing long task: ${toolName} lease extended${deadline ? ` to ${deadline}` : ''}${max ? `, max ${max}` : ''}`);
 
             } else if (item.type === 'image') {
                 ensureBotEl();
-                const imgEl = document.createElement('img');
-                imgEl.src = item.content;
-                imgEl.alt = 'screenshot';
-                imgEl.style.cssText = 'max-width:600px;border-radius:8px;margin:8px 0;cursor:zoom-in;box-shadow:0 1px 4px rgba(0,0,0,0.1);';
-                imgEl.onclick = () => _openImageLightbox(imgEl.src);
-                mediaEl.appendChild(imgEl);
-                scrollChatToBottom();
+                if (appendArtifactCard(mediaEl, { kind: 'image', title: item.file_name || item.name || 'image', path: item.path || item.content || '', url: item.url || item.content || '' })) {
+                    scrollChatToBottom();
+                }
 
             } else if (item.type === 'text') {
                 // Intermediate text sent before media items; display it but keep SSE open.
@@ -2776,23 +3782,23 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
 
             } else if (item.type === 'video') {
                 ensureBotEl();
-                const wrapper = document.createElement('div');
-                wrapper.innerHTML = _buildVideoHtml(item.content);
-                mediaEl.appendChild(wrapper.firstElementChild || wrapper);
-                scrollChatToBottom();
+                if (appendArtifactCard(mediaEl, { kind: 'video', title: item.file_name || item.name || 'video', path: item.path || item.content || '', url: item.url || item.content || '' })) {
+                    scrollChatToBottom();
+                }
 
             } else if (item.type === 'file') {
                 ensureBotEl();
                 const fileName = item.file_name || item.content.split('/').pop();
-                const fileEl = document.createElement('a');
-                fileEl.href = item.content;
-                fileEl.download = fileName;
-                fileEl.target = '_blank';
-                fileEl.className = 'file-attachment';
-                fileEl.style.cssText = 'display:inline-flex;align-items:center;gap:6px;padding:8px 14px;margin:8px 0;border-radius:8px;background:var(--bg-secondary,#f3f4f6);color:var(--text-primary,#374151);text-decoration:none;font-size:14px;border:1px solid var(--border-color,#e5e7eb);';
-                fileEl.innerHTML = `<i class="fas fa-file-download" style="color:#6b7280;"></i> ${fileName}`;
-                mediaEl.appendChild(fileEl);
-                scrollChatToBottom();
+                if (appendArtifactCard(mediaEl, { kind: item.file_type || 'file', title: fileName, path: item.path || item.content || '', url: item.url || '' })) {
+                    scrollChatToBottom();
+                }
+
+            } else if (item.type === 'artifact') {
+                ensureBotEl();
+                const artifact = item.artifact || {};
+                if (artifact) {
+                    if (appendArtifactCard(mediaEl, artifact)) scrollChatToBottom();
+                }
 
             } else if (item.type === 'phase') {
                 // Coarse progress (e.g. cow install-browser); must not close SSE (unlike "done")
@@ -2846,6 +3852,7 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                     tag.textContent = (currentLang === 'zh') ? '已中止' : 'Cancelled';
                     stepsEl.appendChild(tag);
                 }
+                clearCurrentPhase();
                 resetSendBtnSendMode();
 
             } else if (item.type === 'done') {
@@ -2855,10 +3862,17 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                 // its own via onerror once the tail expires.
                 done = true;
                 clearOwnerRequest();
+                clearCurrentPhase();
                 resetSendBtnSendMode();
 
                 const finalTextRaw = item.final_text || item.content || accumulatedText;
                 const finalText = localizeCancelMarker(finalTextRaw);
+
+                if (projectionSeedReplayActive && loadingEl && loadingEl.classList && loadingEl.classList.contains('bot-message-group')) {
+                    ensureBotEl();
+                    projectionSeedReplayOffset = accumulatedText.length;
+                    projectionSeedReplayActive = false;
+                }
 
                 if (!botEl && finalText) {
                     if (loadingEl) { loadingEl.remove(); loadingEl = null; }
@@ -2881,8 +3895,12 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                 // user_seq / bot_seq on the done event after persistence.
                 const targetBotEl = botEl || (requestId ? messagesDiv.querySelector(`[data-request-id="${requestId}"]`) : null);
                 if (targetBotEl) {
+                    if (item.turn_id) {
+                        targetBotEl.dataset.turnId = item.turn_id;
+                    }
                     if (item.bot_seq !== undefined && item.bot_seq !== null) {
                         targetBotEl.dataset.seq = item.bot_seq;
+                        targetBotEl.dataset.botSeq = item.bot_seq;
                     }
                     // Reveal regenerate button now that the seq is wired up.
                     const regenBtn = targetBotEl.querySelector('.regenerate-msg-btn');
@@ -2896,9 +3914,11 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                         if (prev && !prev.dataset.seq) {
                             prev.dataset.seq = item.user_seq;
                         }
+                        if (prev) prev.dataset.userSeq = item.user_seq;
                     }
                 }
                 renderBotSpeakerButton(botEl, finalText);
+                void refreshRuntimeProjectionSnapshot('sse_terminal');
                 scrollChatToBottom();
 
                 if (titleInfo) {
@@ -2924,18 +3944,32 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
                 delete activeStreams[requestId];
                 clearOwnerRequest();
                 if (isActive()) {
+                    clearCurrentPhase();
                     renderStreamError(item.message || item.content || t('error_send'));
+                    void refreshRuntimeProjectionSnapshot('sse_error');
                 }
                 resetSendBtnSendMode();
             }
     }
 
     function connect() {
+        if (typeof window.EventSource !== 'function') {
+            console.warn(`[SSE] EventSource unavailable for ${requestId}; falling back to runtime projection polling`);
+            startNonSseProjectionLoop('non_sse_projection');
+            return;
+        }
         const lastEventId = streamLastEventIds[requestId];
         const cursor = lastEventId !== undefined && lastEventId !== null && String(lastEventId) !== ''
             ? `&last_event_id=${encodeURIComponent(String(lastEventId))}`
             : '';
-        const es = new EventSource(`/stream?request_id=${encodeURIComponent(requestId)}${cursor}`);
+        let es;
+        try {
+            es = new EventSource(`/stream?request_id=${encodeURIComponent(requestId)}${cursor}`);
+        } catch (err) {
+            console.warn(`[SSE] EventSource construction failed for ${requestId}; falling back to runtime projection polling`, err);
+            startNonSseProjectionLoop('non_sse_projection');
+            return;
+        }
         currentEs = es;
         activeStreams[requestId] = es;
 
@@ -2945,6 +3979,7 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
             if (e.lastEventId !== undefined && e.lastEventId !== null && String(e.lastEventId) !== '') {
                 streamLastEventIds[requestId] = e.lastEventId;
             }
+            void reportPhase1StreamItem(ownerSession, requestId, item);
 
             // Successful data received, reset reconnect counter
             reconnectCount = 0;
@@ -2995,22 +4030,31 @@ function startSSE(requestId, loadingEl, timestamp, titleInfo, replayItems) {
 
             // Exhausted retries. Only surface the failure in the owning view —
             // a background session must not mutate the currently shown chat.
+            void reportPhase1RunEvent(ownerSession, requestId, 'run.stream_lost', 'failed', {
+                reconnectCount,
+                maxReconnects: MAX_RECONNECTS
+            });
             clearOwnerRequest();
             if (!isActive()) return;
-            if (!botEl) {
-                renderStreamError(t('error_send'));
-            } else if (accumulatedText) {
-                contentEl.classList.remove('sse-streaming');
-                resetStreamingAnswerPreview();
-                const displayText = localizeCancelMarker(accumulatedText);
-                contentEl.innerHTML = renderAnswerHtml(displayText);
-                contentEl.dataset.rawMd = displayText;
-                applyHighlighting(botEl);
-                bindChatKnowledgeLinks(botEl);
-            } else {
-                renderStreamError(t('error_send'));
-            }
-            resetSendBtnSendMode();
+            const renderLegacyStreamLoss = () => {
+                if (!botEl) {
+                    renderStreamError(t('error_send'));
+                } else if (accumulatedText) {
+                    contentEl.classList.remove('sse-streaming');
+                    resetStreamingAnswerPreview();
+                    const displayText = localizeCancelMarker(accumulatedText);
+                    contentEl.innerHTML = renderAnswerHtml(displayText);
+                    contentEl.dataset.rawMd = displayText;
+                    applyHighlighting(botEl);
+                    bindChatKnowledgeLinks(botEl);
+                } else {
+                    renderStreamError(t('error_send'));
+                }
+                resetSendBtnSendMode();
+            };
+            void refreshRuntimeProjectionSnapshot('stream_lost').then(applied => {
+                if (!applied) renderLegacyStreamLoss();
+            });
         };
     }
 
@@ -3055,7 +4099,7 @@ function startPolling() {
             body: JSON.stringify({ session_id: sessionId })
         })
         .then(r => r.json())
-        .then(data => {
+        .then(async data => {
             pollInFlight = false;
             if (gen !== pollGeneration) return;
             if (data.status === 'success' && data.has_content) {
@@ -3064,19 +4108,31 @@ function startPolling() {
                     loadingContainers[rid].remove();
                     delete loadingContainers[rid];
                 }
-                // Skip if this reply is already on screen. Happens when a reply
-                // arrives via both the SSE stream and the poll queue (e.g. the
-                // user switched away mid-run, leaving the queued reply to be
-                // re-fetched on return) — render it only once.
-                const already = rid && messagesDiv.querySelector(
-                    `[data-request-id="${rid}"]`
+                // A reply can arrive via both SSE and the poll queue. Always
+                // give backend RuntimeProjection a chance to refresh an
+                // existing same-request bubble; only suppress legacy text when
+                // projection rendered or a same-request bubble already exists.
+                const existingSameRequestBubble = rid && messagesDiv.querySelector(
+                    runtimeProjectionBotSelector(rid)
                 );
-                if (!already) {
-                    const welcomeScreen = document.getElementById('welcome-screen');
-                    if (welcomeScreen) welcomeScreen.remove();
-                    addBotMessage(data.content, new Date(data.timestamp * 1000), rid);
-                    scrollChatToBottom();
+                const welcomeScreen = document.getElementById('welcome-screen');
+                if (welcomeScreen) welcomeScreen.remove();
+                let renderedProjection = false;
+                if (rid) {
+                    try {
+                        const projection = await loadRequestRuntimeProjection(rid, { limit: 1000 });
+                        if (projection && String(projection.request_id || '') === String(rid || '')) {
+                            renderedProjection = renderRuntimeProjectionRequest(projection, 'poll_projection');
+                        }
+                    } catch (err) {
+                        console.warn(`[runtime-projection] poll projection fetch failed for ${rid}:`, err);
+                    }
                 }
+                const renderedByProjection = rid && messagesDiv.querySelector(runtimeProjectionBotSelector(rid));
+                if (!renderedProjection && !renderedByProjection && !existingSameRequestBubble) {
+                    addBotMessage(data.content, new Date(data.timestamp * 1000), rid);
+                }
+                scrollChatToBottom(true);
             }
             const delay = (data.status === 'success' && data.has_content) ? 5000 : 10000;
             setTimeout(poll, delay);
@@ -3142,8 +4198,9 @@ function renderToolCallsHtml(toolCalls) {
         const argsStr = formatToolArgs(tc.arguments || {});
         const resultStr = tc.result ? escapeHtml(String(tc.result)) : '';
         const hasResult = !!resultStr;
+        const toolCallId = tc.id || tc.tool_call_id || tc.name || '';
         return `
-<div class="agent-step agent-tool-step">
+<div class="agent-step agent-tool-step" data-tool-call-id="${escapeHtml(toolCallId)}">
     <div class="tool-header" onclick="this.parentElement.classList.toggle('expanded')">
         <i class="fas fa-check text-primary-400 flex-shrink-0 tool-icon"></i>
         <span class="tool-name">${escapeHtml(tc.name || '')}</span>
@@ -3348,11 +4405,13 @@ function _renderSentFileFromToolResult(step) {
     if (fileType === 'video') {
         return `<div class="agent-step">${_buildVideoHtml(webUrl)}</div>`;
     }
-    return `<div class="agent-step"><a href="${webUrl}" download="${escapeHtml(fileName)}" target="_blank" ` +
+    const safeUrl = escapeHtml(webUrl);
+    const safeFileName = escapeHtml(fileName);
+    return `<div class="agent-step"><a href="${safeUrl}" download="${safeFileName}" target="_blank" rel="noopener noreferrer" ` +
         `style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;margin:8px 0;border-radius:8px;` +
         `background:var(--bg-secondary,#f3f4f6);color:var(--text-primary,#374151);text-decoration:none;font-size:14px;` +
         `border:1px solid var(--border-color,#e5e7eb);">` +
-        `<i class="fas fa-file-download" style="color:#6b7280;"></i> ${escapeHtml(fileName)}</a></div>`;
+        `<i class="fas fa-file-download" style="color:#6b7280;"></i> ${safeFileName}</a></div>`;
 }
 
 // Cosmetic translator for cancel markers persisted in history.
@@ -3366,7 +4425,6 @@ function localizeCancelMarker(text) {
 }
 
 const LONG_REPLY_COLLAPSE_CHARS = 1800;
-const LONG_REPLY_PREVIEW_CHARS = 900;
 
 function longAnswerLabel(expanded) {
     if (currentLang === 'zh') {
@@ -3385,10 +4443,9 @@ function renderAnswerHtml(content, expanded) {
                 <button type="button" class="long-answer-toggle long-answer-collapse-bottom" data-long-answer-toggle="collapse" aria-expanded="true">${longAnswerLabel(true)}</button>
             </div>`;
     }
-    const preview = text.slice(0, LONG_REPLY_PREVIEW_CHARS).trimEnd() + '...';
     return `
         <div class="long-answer-disclosure">
-            <div class="long-answer-preview">${renderMarkdown(preview)}</div>
+            <div class="long-answer-preview">${renderMarkdown(text)}</div>
             <button type="button" class="long-answer-toggle long-answer-expand-bottom" data-long-answer-toggle="expand" aria-expanded="false">${longAnswerLabel(false)}</button>
         </div>`;
 }
@@ -3433,6 +4490,7 @@ function createBotMessageEl(content, timestamp, requestId, msg) {
                 ${evolutionBadge}
                 ${stepsHtml ? `<div class="agent-steps">${stepsHtml}</div>` : ''}
                 <div class="answer-content">${renderAnswerHtml(displayContent)}</div>
+                <div class="media-content"></div>
                 <div class="bot-audio-slot"></div>
             </div>
             <div class="flex items-center gap-2 mt-1.5">
@@ -3460,6 +4518,13 @@ function createBotMessageEl(content, timestamp, requestId, msg) {
     }
     // Existing TTS attachment (history replay): mount the player up-front.
     const existingAudio = msg && msg.extras && msg.extras.audio && msg.extras.audio.url;
+    const existingArtifacts = msg && msg.extras && Array.isArray(msg.extras.artifacts) ? msg.extras.artifacts : [];
+    if (existingArtifacts.length) {
+        const mediaSlot = el.querySelector('.media-content');
+        existingArtifacts.forEach(artifact => {
+            appendArtifactCard(mediaSlot, artifact);
+        });
+    }
     if (existingAudio) {
         attachAudioToBotBubble(el, existingAudio, { autoplay: false });
     }
@@ -3625,16 +4690,225 @@ function addBotMessage(content, timestamp, requestId) {
     scrollChatToBottom();
 }
 
+function runtimeProjectionBotSelector(requestId) {
+    return `.bot-message-group[data-request-id="${cssEscape(String(requestId || ''))}"]`;
+}
+
+function runtimeProjectionBotMessageData(projection, assistant) {
+    assistant = assistant || runtimeProjectionAssistantMessage(projection) || {};
+    return {
+        role: 'assistant',
+        request_id: projection.request_id || assistant.request_id || '',
+        turn_id: projection.turn_id || assistant.turn_id || '',
+        tool_calls: Array.isArray(assistant.tool_calls) ? assistant.tool_calls : [],
+        extras: {
+            artifacts: runtimeProjectionArtifacts(assistant, projection)
+        }
+    };
+}
+
+function runtimeProjectionUserSelector(requestId) {
+    return `.user-message-group[data-runtime-projection-user-for-request="${cssEscape(String(requestId || ''))}"]`;
+}
+
+function runtimeProjectionMessageText(message) {
+    return String((message && (message.content || message.final_text || message.text)) || '');
+}
+
+function runtimeProjectionMessageTimestamp(message) {
+    const raw = message && (message.created_at || message.timestamp || message.time);
+    if (typeof raw === 'number' && Number.isFinite(raw)) return new Date(raw * 1000);
+    if (typeof raw === 'string' && raw.trim()) {
+        const parsed = Date.parse(raw);
+        if (Number.isFinite(parsed)) return new Date(parsed);
+    }
+    return new Date();
+}
+
+function runtimeProjectionHasAdjacentUserMessage(botEl) {
+    if (!botEl) {
+        const last = messagesDiv.lastElementChild;
+        return !!(last && last.classList && last.classList.contains('user-message-group'));
+    }
+    let prev = botEl.previousElementSibling;
+    while (prev && prev.id === 'history-load-more') prev = prev.previousElementSibling;
+    return !!(prev && prev.classList && prev.classList.contains('user-message-group'));
+}
+
+function ensureRuntimeProjectionUserMessage(projection, requestId, botEl, reason) {
+    const user = runtimeProjectionUserMessage(projection);
+    const content = runtimeProjectionMessageText(user).trim();
+    if (!user || !content) return null;
+    const existing = messagesDiv.querySelector(runtimeProjectionUserSelector(requestId));
+    if (existing) return existing;
+    if (runtimeProjectionHasAdjacentUserMessage(botEl)) return null;
+    const userEl = createUserMessageEl(content, runtimeProjectionMessageTimestamp(user));
+    userEl.dataset.runtimeProjectionUserForRequest = requestId;
+    userEl.dataset.runtimeProjectionSource = reason || 'session_projection';
+    if (botEl && botEl.parentNode === messagesDiv) {
+        messagesDiv.insertBefore(userEl, botEl);
+    } else {
+        messagesDiv.appendChild(userEl);
+    }
+    return userEl;
+}
+
+function updateBotMessageElFromRuntimeProjection(botEl, projection, reason) {
+    if (!botEl || !projection) return false;
+    const assistant = runtimeProjectionAssistantMessage(projection) || {};
+    const finalText = runtimeProjectionRenderableText(projection, assistant);
+    const latestEventId = projection.latest_event_id !== undefined ? String(projection.latest_event_id || '') : '';
+    botEl.dataset.runtimeProjectionSource = reason || 'session_projection';
+    botEl.dataset.runtimeProjectionEventId = latestEventId;
+    botEl.dataset.runtimeProjectionState = projection.state || '';
+    if (projection.request_id) botEl.dataset.requestId = projection.request_id;
+
+    const answer = botEl.querySelector('.answer-content');
+    if (answer && finalText) {
+        answer.classList.toggle('sse-streaming', runtimeProjectionActiveState(projection, assistant));
+        answer.innerHTML = runtimeProjectionActiveState(projection, assistant)
+            ? renderStreamingMarkdown(finalText)
+            : renderAnswerHtml(finalText);
+        answer.dataset.rawMd = finalText;
+    }
+
+    const toolCalls = Array.isArray(assistant.tool_calls) ? assistant.tool_calls : [];
+    let stepsEl = botEl.querySelector('.agent-steps');
+    if (toolCalls.length) {
+        if (!stepsEl) {
+            stepsEl = document.createElement('div');
+            stepsEl.className = 'agent-steps';
+            const contentBox = botEl.querySelector('.msg-content');
+            if (contentBox) contentBox.insertBefore(stepsEl, answer || contentBox.firstChild);
+        }
+        stepsEl.innerHTML = renderToolCallsHtml(toolCalls);
+    }
+
+    const artifacts = runtimeProjectionArtifacts(assistant, projection);
+    const mediaEl = botEl.querySelector('.media-content');
+    if (mediaEl && artifacts.length) {
+        mediaEl.innerHTML = '';
+        artifacts.forEach(artifact => {
+            appendArtifactCard(mediaEl, artifact);
+        });
+    }
+
+    const copyBtn = botEl.querySelector('.copy-msg-btn');
+    if (copyBtn && finalText) copyBtn.style.display = '';
+    const copyXhsBtn = botEl.querySelector('.copy-xhs-btn');
+    if (copyXhsBtn && finalText) copyXhsBtn.style.display = '';
+    if (runtimeProjectionIsTerminal(projection, assistant)) {
+        botEl.querySelector('.agent-loading-dots')?.remove();
+    }
+    renderBotSpeakerButton(botEl, finalText);
+    applyHighlighting(botEl);
+    bindChatKnowledgeLinks(botEl);
+    return true;
+}
+
+function renderRuntimeProjectionRequest(projection, reason) {
+    if (!projection || !projection.request_id) return false;
+    const assistant = runtimeProjectionAssistantMessage(projection);
+    if (!runtimeProjectionHasRenderableContent(projection, assistant)) return false;
+    const requestId = String(projection.request_id || '');
+    let botEl = messagesDiv.querySelector(runtimeProjectionBotSelector(requestId));
+    ensureRuntimeProjectionUserMessage(projection, requestId, botEl, reason);
+    if (!botEl) {
+        const content = runtimeProjectionRenderableText(projection, assistant);
+        const msg = runtimeProjectionBotMessageData(projection, assistant);
+        botEl = createBotMessageEl(content, new Date(), requestId, msg);
+        botEl.dataset.runtimeProjectionInserted = '1';
+        messagesDiv.appendChild(botEl);
+    }
+    updateBotMessageElFromRuntimeProjection(botEl, projection, reason);
+
+    if (runtimeProjectionActiveState(projection, assistant)) {
+        sessionActiveRequest[sessionId] = requestId;
+        if (!activeStreams[requestId]) {
+            setSendBtnCancelMode(requestId);
+            startSSE(requestId, botEl, new Date(), null);
+        }
+    }
+    return true;
+}
+
+async function refreshSessionRuntimeProjection(reason, opts) {
+    opts = opts || {};
+    const ownerSession = String(opts.sessionId || sessionId || '');
+    if (!ownerSession) return false;
+    const projection = await loadSessionRuntimeProjection(ownerSession, {
+        limit: opts.limit || 1000,
+        afterEventId: opts.afterEventId !== undefined ? opts.afterEventId : (opts.full ? 0 : undefined)
+    });
+    if (!projection || ownerSession !== sessionId) return false;
+    if (projection.latest_event_id !== undefined) {
+        updateSessionRuntimeProjectionCursor(ownerSession, projection.latest_event_id);
+    }
+    const requests = Array.isArray(projection.requests) ? projection.requests : [];
+    let applied = false;
+    requests.forEach(requestProjection => {
+        if (renderRuntimeProjectionRequest(requestProjection, reason || 'session_projection')) {
+            applied = true;
+        }
+    });
+    if (applied) {
+        const ws = document.getElementById('welcome-screen');
+        if (ws) ws.remove();
+        scrollChatToBottom(true);
+    }
+    return applied;
+}
+
+function normalizeRuntimeProjectionHistoryPayload(payload) {
+    const projection = payload && payload.projection;
+    const history = projection && projection.history;
+    if (!payload || payload.status !== 'success' || !history) return null;
+    return {
+        status: 'success',
+        ...history,
+        runtime_projection: {
+            latest_event_id: projection.latest_event_id || 0,
+            request_count: Array.isArray(projection.requests) ? projection.requests.length : 0,
+            requests: Array.isArray(projection.requests) ? projection.requests : [],
+            source: projection.history_source || 'runtime_projection',
+        }
+    };
+}
+
+function fetchHistoryPage(ownerSession, page) {
+    const params = new URLSearchParams();
+    params.set('session_id', ownerSession);
+    params.set('history_page', String(page));
+    params.set('page_size', '20');
+    params.set('limit', '1000');
+    return fetch(`/api/runtime-projection?${params.toString()}`, { cache: 'no-store' })
+        .then(r => r.json())
+        .then(payload => {
+            const projected = normalizeRuntimeProjectionHistoryPayload(payload);
+            if (projected) return projected;
+            throw new Error('runtime projection history unavailable');
+        })
+        .catch(() => fetch(`/api/history?session_id=${encodeURIComponent(ownerSession)}&page=${page}&page_size=20`).then(r => r.json()));
+}
+
 // Load conversation history from the server (page 1 = most recent messages).
 // Subsequent pages prepend older messages when the user scrolls to the top.
 function loadHistory(page) {
     if (historyLoading) return;
     historyLoading = true;
+    const ownerSession = sessionId;
 
-    fetch(`/api/history?session_id=${encodeURIComponent(sessionId)}&page=${page}&page_size=20`)
-        .then(r => r.json())
-        .then(data => {
-            if (data.status !== 'success' || data.messages.length === 0) return;
+    fetchHistoryPage(ownerSession, page)
+        .then(async data => {
+            if (ownerSession !== sessionId) return;
+            const messages = Array.isArray(data.messages) ? data.messages : [];
+            const runtimeRequests = data.runtime_projection && Array.isArray(data.runtime_projection.requests)
+                ? data.runtime_projection.requests
+                : [];
+            if (data.runtime_projection && data.runtime_projection.latest_event_id !== undefined) {
+                updateSessionRuntimeProjectionCursor(ownerSession, data.runtime_projection.latest_event_id);
+            }
+            if (data.status !== 'success' || (messages.length === 0 && runtimeRequests.length === 0)) return;
 
             const prevScrollHeight = messagesDiv.scrollHeight;
             const isFirstLoad = page === 1;
@@ -3655,7 +4929,7 @@ function loadHistory(page) {
             const ctxStartSeq = data.context_start_seq || 0;
             let dividerInserted = false;
 
-            data.messages.forEach(msg => {
+            messages.forEach(msg => {
                 const hasContent = msg.content && msg.content.trim();
                 const hasToolCalls = msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0;
                 if (!hasContent && !hasToolCalls) return;
@@ -3672,11 +4946,14 @@ function loadHistory(page) {
                 const ts = new Date(msg.created_at * 1000);
                 const el = msg.role === 'user'
                     ? createUserMessageEl(msg.content, ts)
-                    : createBotMessageEl(msg.content || '', ts, null, msg);
+                    : createBotMessageEl(msg.content || '', ts, msg.request_id || msg.turn_id || null, msg);
                 // Store seq for delete functionality
                 if (msg._seq !== undefined) {
                     el.dataset.seq = msg._seq;
                 }
+                if (msg.turn_id) el.dataset.turnId = msg.turn_id;
+                if (msg.user_seq !== undefined) el.dataset.userSeq = msg.user_seq;
+                if (msg.bot_seq !== undefined) el.dataset.botSeq = msg.bot_seq;
                 fragment.appendChild(el);
             });
 
@@ -3710,6 +4987,10 @@ function loadHistory(page) {
             historyHasMore = data.has_more;
             historyPage = page;
 
+            runtimeRequests.forEach(requestProjection => {
+                renderRuntimeProjectionRequest(requestProjection, 'history_projection');
+            });
+
             if (isFirstLoad) {
                 // Scroll to the very bottom after the DOM settles. A single
                 // rAF isn't enough: markdown/code-highlight/images keep growing
@@ -3723,7 +5004,15 @@ function loadHistory(page) {
             }
         })
         .catch(() => {})
-        .finally(() => { historyLoading = false; });
+        .finally(() => {
+            historyLoading = false;
+            if (page === 1 && ownerSession === sessionId) {
+                void refreshSessionRuntimeProjection('history_load_recheck', {
+                    sessionId: ownerSession,
+                    afterEventId: sessionRuntimeProjectionCursors[ownerSession] || 0
+                }).catch(err => console.warn('[runtime-projection] session refresh failed:', err));
+            }
+        });
 }
 
 function addLoadingIndicator() {
@@ -3769,6 +5058,37 @@ function addLoadingIndicator() {
     return el;
 }
 
+function createCodexLikeWelcomeScreen() {
+    const ws = document.createElement('div');
+    ws.id = 'welcome-screen';
+    ws.className = 'flex flex-col items-center justify-center h-full px-6 pb-16';
+    ws.style.paddingTop = '6vh';
+    ws.innerHTML = `
+        <div class="w-full max-w-4xl flex flex-col items-center gap-8">
+            <h1 class="text-3xl sm:text-4xl font-medium tracking-normal text-slate-900 dark:text-slate-50 text-center">和EcoreX一起开始工作</h1>
+            <div class="w-full rounded-[24px] bg-slate-100 dark:bg-[#262626] border border-slate-200 dark:border-white/10 shadow-sm overflow-hidden">
+                <button type="button" class="w-full min-h-[96px] px-5 py-4 text-left text-lg text-slate-500 dark:text-slate-400 focus:outline-none" data-new-session-focus>
+                    随心输入
+                </button>
+                <div class="flex items-center justify-between gap-3 px-4 py-3 border-t border-slate-200/80 dark:border-white/10 text-sm text-slate-500 dark:text-slate-400">
+                    <button type="button" class="new-session-entry inline-flex items-center gap-2 px-2 py-1.5 hover:text-slate-800 dark:hover:text-slate-100 transition-colors" data-new-session-focus>
+                        <i class="fas fa-folder-open text-xs"></i>
+                        <span>项目文件夹</span>
+                    </button>
+                    <button type="button" class="new-session-entry inline-flex items-center gap-2 px-2 py-1.5 hover:text-slate-800 dark:hover:text-slate-100 transition-colors" data-new-session-focus>
+                        <i class="fas fa-comments text-xs"></i>
+                        <span>通用会话</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+    ws.querySelectorAll('[data-new-session-focus]').forEach(button => {
+        button.addEventListener('click', () => chatInput?.focus());
+    });
+    return ws;
+}
+
 function newChat(optimistic = true) {
     // Do NOT close active streams: other sessions keep streaming in the
     // background (each stream self-guards against the foreign view) and their
@@ -3780,89 +5100,8 @@ function newChat(optimistic = true) {
     resetSendBtnSendMode();  // fresh session has no in-flight reply
     startPolling();  // bump generation so old loop self-cancels, new loop uses fresh sessionId
     messagesDiv.innerHTML = '';
-    const ws = document.createElement('div');
-    ws.id = 'welcome-screen';
-    ws.className = 'flex flex-col items-center justify-center h-full px-6 pb-16';
-    ws.style.paddingTop = '6vh';
-    ws.innerHTML = `
-        <img src="assets/icon.png" alt="EcoreX" class="w-16 h-16 rounded-2xl mb-6 shadow-lg shadow-primary-500/20">
-        <h1 class="text-2xl font-bold text-slate-800 dark:text-slate-100 mb-3">${appConfig.title || 'EcoreX'}</h1>
-        <p class="text-slate-500 dark:text-slate-400 text-center max-w-lg mb-10 leading-relaxed" data-i18n="welcome_subtitle">${t('welcome_subtitle')}</p>
-        <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 w-full max-w-2xl">
-            <div class="example-card group bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-xl p-4 cursor-pointer hover:border-primary-300 dark:hover:border-primary-600 hover:shadow-md transition-all duration-200">
-                <div class="flex items-center gap-2 mb-2">
-                    <div class="w-7 h-7 rounded-lg bg-blue-50 dark:bg-blue-900/30 flex items-center justify-center">
-                        <i class="fas fa-folder-open text-blue-500 text-xs"></i>
-                    </div>
-                    <span class="font-medium text-sm text-slate-700 dark:text-slate-200" data-i18n="example_sys_title">${t('example_sys_title')}</span>
-                </div>
-                <p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed" data-i18n="example_sys_text">${t('example_sys_text')}</p>
-            </div>
-            <div class="example-card group bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-xl p-4 cursor-pointer hover:border-primary-300 dark:hover:border-primary-600 hover:shadow-md transition-all duration-200">
-                <div class="flex items-center gap-2 mb-2">
-                    <div class="w-7 h-7 rounded-lg bg-amber-50 dark:bg-amber-900/30 flex items-center justify-center">
-                        <i class="fas fa-clock text-amber-500 text-xs"></i>
-                    </div>
-                    <span class="font-medium text-sm text-slate-700 dark:text-slate-200" data-i18n="example_task_title">${t('example_task_title')}</span>
-                </div>
-                <p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed" data-i18n="example_task_text">${t('example_task_text')}</p>
-            </div>
-            <div class="example-card group bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-xl p-4 cursor-pointer hover:border-primary-300 dark:hover:border-primary-600 hover:shadow-md transition-all duration-200">
-                <div class="flex items-center gap-2 mb-2">
-                    <div class="w-7 h-7 rounded-lg bg-emerald-50 dark:bg-emerald-900/30 flex items-center justify-center">
-                        <i class="fas fa-code text-emerald-500 text-xs"></i>
-                    </div>
-                    <span class="font-medium text-sm text-slate-700 dark:text-slate-200" data-i18n="example_code_title">${t('example_code_title')}</span>
-                </div>
-                <p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed" data-i18n="example_code_text">${t('example_code_text')}</p>
-            </div>
-            <div class="example-card group bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-xl p-4 cursor-pointer hover:border-primary-300 dark:hover:border-primary-600 hover:shadow-md transition-all duration-200">
-                <div class="flex items-center gap-2 mb-2">
-                    <div class="w-7 h-7 rounded-lg bg-violet-50 dark:bg-violet-900/30 flex items-center justify-center">
-                        <i class="fas fa-book text-violet-500 text-xs"></i>
-                    </div>
-                    <span class="font-medium text-sm text-slate-700 dark:text-slate-200" data-i18n="example_knowledge_title">${t('example_knowledge_title')}</span>
-                </div>
-                <p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed" data-i18n="example_knowledge_text">${t('example_knowledge_text')}</p>
-            </div>
-            <div class="example-card group bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-xl p-4 cursor-pointer hover:border-primary-300 dark:hover:border-primary-600 hover:shadow-md transition-all duration-200">
-                <div class="flex items-center gap-2 mb-2">
-                    <div class="w-7 h-7 rounded-lg bg-rose-50 dark:bg-rose-900/30 flex items-center justify-center">
-                        <i class="fas fa-puzzle-piece text-rose-500 text-xs"></i>
-                    </div>
-                    <span class="font-medium text-sm text-slate-700 dark:text-slate-200" data-i18n="example_skill_title">${t('example_skill_title')}</span>
-                </div>
-                <p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed" data-i18n="example_skill_text">${t('example_skill_text')}</p>
-            </div>
-            <div class="example-card group bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-xl p-4 cursor-pointer hover:border-primary-300 dark:hover:border-primary-600 hover:shadow-md transition-all duration-200" data-send="/help">
-                <div class="flex items-center gap-2 mb-2">
-                    <div class="w-7 h-7 rounded-lg bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
-                        <i class="fas fa-terminal text-slate-500 text-xs"></i>
-                    </div>
-                    <span class="font-medium text-sm text-slate-700 dark:text-slate-200" data-i18n="example_web_title">${t('example_web_title')}</span>
-                </div>
-                <p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed" data-i18n="example_web_text">${t('example_web_text')}</p>
-            </div>
-        </div>
-    `;
+    const ws = createCodexLikeWelcomeScreen();
     messagesDiv.appendChild(ws);
-    ws.querySelectorAll('.example-card').forEach(card => {
-        card.addEventListener('click', () => {
-            const sendText = card.dataset.send;
-            if (sendText) {
-                chatInput.value = sendText;
-                chatInput.dispatchEvent(new Event('input'));
-                chatInput.focus();
-                return;
-            }
-            const textEl = card.querySelector('[data-i18n*="text"]');
-            if (textEl) {
-                chatInput.value = textEl.textContent;
-                chatInput.dispatchEvent(new Event('input'));
-                chatInput.focus();
-            }
-        });
-    });
     if (currentView !== 'chat') navigateTo('chat');
 
     // Show panel and load full session list, then prepend the new session on top
@@ -4343,8 +5582,10 @@ function cssEscape(value) {
 }
 
 function ChannelsHandler_maskSecret(val) {
-    if (!val || val.length <= 8) return val;
-    return val.slice(0, 4) + '*'.repeat(val.length - 8) + val.slice(-4);
+    const value = String(val || '');
+    if (!value) return value;
+    if (value.length <= 8) return '*'.repeat(value.length);
+    return value.slice(0, 4) + '*'.repeat(value.length - 8) + value.slice(-4);
 }
 
 function formatToolArgs(args) {
@@ -4921,12 +6162,30 @@ function loadSkillsSection() {
 }
 
 function renderSkillCard(card, sk) {
-    const enabled = sk.enabled;
+    const enabled = !!sk.enabled;
+    const sourceGroup = sk.source_group || sk.sourceGroup || '';
+    const locked = sk.locked === true || sourceGroup === 'builtin';
+    const toggleable = !locked && sk.toggleable !== false;
+    const lockReason = locked
+        ? (sk.lock_reason || sk.lockReason || (currentLang === 'zh' ? '内置能力默认启用' : 'Built-in skill is always enabled'))
+        : '';
     const iconColor = enabled ? 'text-primary-400' : 'text-slate-300 dark:text-slate-600';
     const trackClass = enabled
         ? 'bg-primary-400'
         : 'bg-slate-200 dark:bg-slate-700';
     const thumbTranslate = enabled ? 'translate-x-3' : 'translate-x-0.5';
+    const switchTitle = locked
+        ? lockReason
+        : enabled
+            ? (currentLang === 'zh' ? '点击禁用' : 'Click to disable')
+            : (currentLang === 'zh' ? '点击启用' : 'Click to enable');
+    const switchClass = toggleable ? 'cursor-pointer' : 'cursor-not-allowed opacity-70';
+    const clickAttr = toggleable ? `onclick="toggleSkill('${escapeHtml(sk.name)}', ${enabled})"` : '';
+    const disabledAttr = toggleable ? '' : 'disabled aria-disabled="true"';
+    const sourceLabel = sk.source_label || sk.sourceLabel || '';
+    const statusLabel = locked ? lockReason : (enabled ? (currentLang === 'zh' ? '已启用' : 'Enabled') : (currentLang === 'zh' ? '已关闭' : 'Disabled'));
+    const meta = [sourceLabel, statusLabel].filter(Boolean).join(' · ');
+    card.__skill = { ...(card.__skill || {}), ...sk, enabled, locked, toggleable };
     card.innerHTML = `
         <div class="w-9 h-9 rounded-lg bg-amber-50 dark:bg-amber-900/20 flex items-center justify-center flex-shrink-0">
             <i class="fas fa-bolt ${iconColor} text-sm"></i>
@@ -4937,20 +6196,27 @@ function renderSkillCard(card, sk) {
                 <button
                     role="switch"
                     aria-checked="${enabled}"
-                    onclick="toggleSkill('${escapeHtml(sk.name)}', ${enabled})"
-                    class="relative inline-flex h-4 w-7 flex-shrink-0 cursor-pointer rounded-full transition-colors duration-200 ease-in-out focus:outline-none ${trackClass}"
-                    title="${enabled ? (currentLang === 'zh' ? '点击禁用' : 'Click to disable') : (currentLang === 'zh' ? '点击启用' : 'Click to enable')}"
+                    ${disabledAttr}
+                    ${clickAttr}
+                    class="relative inline-flex h-4 w-7 flex-shrink-0 ${switchClass} rounded-full transition-colors duration-200 ease-in-out focus:outline-none ${trackClass}"
+                    title="${escapeHtml(switchTitle)}"
                 >
                     <span class="inline-block h-3 w-3 mt-0.5 rounded-full bg-white shadow transform transition-transform duration-200 ease-in-out ${thumbTranslate}"></span>
                 </button>
             </div>
             <p class="text-xs text-slate-400 dark:text-slate-500 line-clamp-2">${escapeHtml(sk.description || '--')}</p>
+            ${meta ? `<p class="text-[11px] text-slate-400 dark:text-slate-500 mt-1">${escapeHtml(meta)}</p>` : ''}
         </div>`;
 }
 
 function toggleSkill(name, currentlyEnabled) {
     const action = currentlyEnabled ? 'close' : 'open';
     const card = document.querySelector(`[data-skill-name="${CSS.escape(name)}"]`);
+    const skill = card && card.__skill ? card.__skill : {};
+    const sourceGroup = skill.source_group || skill.sourceGroup || '';
+    if (skill.locked === true || sourceGroup === 'builtin' || skill.toggleable === false) {
+        return;
+    }
     if (card) card.style.opacity = '0.5';
 
     fetch('/api/skills', {
@@ -4965,7 +6231,7 @@ function toggleSkill(name, currentlyEnabled) {
                 const desc = card.dataset.skillDesc || '';
                 card.dataset.enabled = currentlyEnabled ? '0' : '1';
                 card.style.opacity = '1';
-                renderSkillCard(card, { name, description: desc, enabled: !currentlyEnabled });
+                renderSkillCard(card, { ...(card.__skill || {}), name, description: desc, enabled: !currentlyEnabled });
             }
         } else {
             if (card) card.style.opacity = '1';
@@ -6573,8 +7839,269 @@ function clearVendorModal() {
 // Channels View
 // =====================================================================
 let channelsData = [];
+let channelActionDelegationBound = false;
+
+const CHANNEL_COLOR_TOKENS = new Set([
+    'blue', 'emerald', 'purple', 'sky', 'indigo', 'slate', 'amber', 'orange', 'rose', 'red', 'primary'
+]);
+
+function channelLocalText(zh, en) {
+    return currentLang === 'zh' ? zh : en;
+}
+
+function channelNameValue(value) {
+    return String(value || '').trim();
+}
+
+function channelDomToken(value, fallback) {
+    const raw = channelNameValue(value).toLowerCase();
+    const safe = raw.replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
+    return safe || fallback || 'channel';
+}
+
+function channelSafeColor(value) {
+    const color = channelDomToken(value, 'blue');
+    return CHANNEL_COLOR_TOKENS.has(color) ? color : 'blue';
+}
+
+function channelSafeIcon(value) {
+    const tokens = String(value || '')
+        .split(/\s+/)
+        .map(item => item.trim())
+        .filter(Boolean);
+    const icon = tokens.find(item => /^fa-[a-z0-9-]+$/.test(item));
+    return icon || 'fa-plug';
+}
+
+function getChannelCard(chName) {
+    const name = channelNameValue(chName);
+    return Array.from(document.querySelectorAll('[data-channel-card="1"]'))
+        .find(card => card.dataset.channelName === name) || null;
+}
+
+function channelInputsFor(container, chName) {
+    const name = channelNameValue(chName);
+    if (!container) return [];
+    return Array.from(container.querySelectorAll('input[data-ch]'))
+        .filter(inp => inp.dataset.ch === name);
+}
+
+function ensureChannelActionDelegation() {
+    if (channelActionDelegationBound) return;
+    channelActionDelegationBound = true;
+    document.addEventListener('click', event => {
+        const btn = event.target && event.target.closest
+            ? event.target.closest('[data-channel-action][data-channel-name]')
+            : null;
+        if (!btn || btn.disabled) return;
+        const action = btn.dataset.channelAction || '';
+        const chName = btn.dataset.channelName || '';
+        if (!action || !chName) return;
+        event.preventDefault();
+        if (action === 'disconnect') {
+            disconnectChannel(chName);
+        } else if (action === 'connect') {
+            connectChannelConfig(chName);
+        } else if (action === 'save') {
+            saveChannelConfig(chName);
+        }
+    });
+}
+
+function channelHumanize(value) {
+    return String(value || '')
+        .replace(/[_-]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function channelStateLabel(value) {
+    const key = String(value || '').toLowerCase();
+    const labels = {
+        active: t('channels_running'),
+        running: t('channels_running'),
+        starting: t('channels_connecting'),
+        configured: t('channels_configured'),
+        available: t('channels_available'),
+        missing: channelLocalText('缺少配置', 'Missing config'),
+        partial: channelLocalText('配置不完整', 'Partial config'),
+        not_required: channelLocalText('无需配置', 'No config required'),
+        error: t('channels_error'),
+        stopped: channelLocalText('已停止', 'Stopped'),
+        unknown: channelLocalText('未知', 'Unknown'),
+        schema_visible_unverified: t('channels_agent_unverified'),
+        tool_not_loaded: t('channels_tool_missing'),
+        not_applicable: t('channels_not_applicable'),
+        schema_visible: t('channels_schema_visible'),
+    };
+    return labels[key] || channelHumanize(value) || channelLocalText('未知', 'Unknown');
+}
+
+function channelToneForState(value) {
+    const key = String(value || '').toLowerCase();
+    if (['active', 'running', 'configured', 'not_required', 'schema_visible'].includes(key)) return 'ok';
+    if (['starting', 'partial', 'schema_visible_unverified', 'unknown'].includes(key)) return 'warn';
+    if (['missing', 'tool_not_loaded', 'not_applicable', 'available', 'stopped'].includes(key)) return 'muted';
+    if (['error', 'failed'].includes(key)) return 'danger';
+    return 'info';
+}
+
+function channelBadge(label, tone, title) {
+    if (!label) return '';
+    const safeTitle = title ? ` title="${escapeHtml(title)}"` : '';
+    return `<span class="channel-state-badge is-${escapeHtml(tone || 'muted')}"${safeTitle}>${escapeHtml(label)}</span>`;
+}
+
+function channelActionLabel(action) {
+    if (!action || typeof action !== 'object') return '';
+    const tool = action.tool ? String(action.tool) : '';
+    const act = action.action ? String(action.action) : '';
+    const domain = action.domain ? `:${String(action.domain)}` : '';
+    return [tool, act].filter(Boolean).join('.') + domain;
+}
+
+function channelTransportSummary(ch) {
+    const status = String((ch && ch.status) || '').toLowerCase();
+    const lastError = String((ch && ch.last_error) || '').trim();
+    if (lastError || status === 'error') {
+        return {
+            key: 'error',
+            dot: 'bg-red-400',
+            textClass: 'text-red-500',
+            label: t('channels_error'),
+        };
+    }
+    if (ch && ch.name === 'weixin' && ch.login_status && ch.login_status !== 'logged_in') {
+        return {
+            key: 'starting',
+            dot: 'bg-amber-400 animate-pulse',
+            textClass: ch.login_status === 'scanned' ? 'text-primary-500' : 'text-amber-500',
+            label: ch.login_status === 'scanned' ? t('weixin_scan_scanned') : t('weixin_scan_waiting'),
+        };
+    }
+    if (ch && ch.name === 'wecom_bot' && ch.active && !_wecomBotHasCreds(ch)) {
+        return {
+            key: 'starting',
+            dot: 'bg-amber-400 animate-pulse',
+            textClass: 'text-amber-500',
+            label: t('channels_connecting'),
+        };
+    }
+    if (ch && ch.running === true) {
+        return { key: 'running', dot: 'bg-primary-400', textClass: 'text-primary-500', label: t('channels_running') };
+    }
+    if (ch && ch.active) {
+        if (status === 'starting') {
+            return { key: 'starting', dot: 'bg-amber-400 animate-pulse', textClass: 'text-amber-500', label: t('channels_connecting') };
+        }
+        return { key: 'enabled_not_running', dot: 'bg-amber-400', textClass: 'text-amber-500', label: t('channels_enabled_not_running') };
+    }
+    if (ch && ch.configured) {
+        return { key: 'configured', dot: 'bg-slate-400', textClass: 'text-slate-500', label: t('channels_configured') };
+    }
+    return { key: 'available', dot: 'bg-slate-300', textClass: 'text-slate-400', label: t('channels_available') };
+}
+
+function buildChannelObservabilityHtml(ch) {
+    const auth = (ch && ch.auth) || {};
+    const agent = (ch && ch.agentSurface) || {};
+    const transport = channelTransportSummary(ch || {});
+    const configState = auth.channelConfigState || (ch && ch.configState) || '';
+    const missingFields = Array.isArray(auth.missingFields) ? auth.missingFields : [];
+    const authAction = channelActionLabel(auth.agentAuthorizationAction);
+    const agentStatus = String(agent.status || '');
+    const agentDeclared = !!(agent.declaredDiscoverable || agent.tool);
+    const agentCallable = agent.callable === true;
+    const agentSchemaVisible = agent.schemaVisible === true;
+    const agentSchemaKnownHidden = agent.schemaVisible === false;
+
+    const transportBadges = [
+        channelBadge(transport.label, transport.key === 'error' ? 'danger' : channelToneForState(transport.key)),
+        ch && ch.active ? channelBadge(channelLocalText('已加入 channel_type', 'channel_type enabled'), 'info') : '',
+        ch && ch.running === true ? channelBadge(channelLocalText('runtime alive', 'runtime alive'), 'ok') : '',
+        ch && ch.operation_id ? channelBadge(`op ${ch.operation_id}`, 'muted') : '',
+    ].join('');
+    const transportMeta = [
+        `status=${channelHumanize(ch && ch.status ? ch.status : transport.key) || transport.key}`,
+        `configured=${ch && ch.configured ? 'true' : 'false'}`,
+        `running=${ch && ch.running === true ? 'true' : 'false'}`,
+    ].join(' · ');
+
+    const authBadges = [
+        channelBadge(`${channelLocalText('配置', 'Config')}: ${channelStateLabel(configState)}`, channelToneForState(configState)),
+        auth.channelAuthSupported ? channelBadge(channelLocalText('通道授权', 'Channel auth'), 'info') : channelBadge(channelLocalText('无通道授权', 'No channel auth'), 'muted'),
+        auth.agentAuthSupported ? channelBadge(channelLocalText('Agent 授权入口', 'Agent auth action'), 'warn') : '',
+        auth.authEndpoint ? channelBadge(auth.authEndpoint, 'muted') : '',
+    ].join('');
+    const authMetaParts = [
+        auth.mode ? `${channelLocalText('模式', 'Mode')}: ${channelHumanize(auth.mode)}` : '',
+        auth.channelAuthorization ? `${channelLocalText('通道授权', 'Channel auth')}: ${channelHumanize(auth.channelAuthorization)}` : '',
+        missingFields.length ? `${channelLocalText('缺少字段', 'Missing')}: ${missingFields.map(channelHumanize).join(', ')}` : '',
+        authAction ? `${channelLocalText('Agent 授权动作', 'Agent auth')}: ${authAction}` : '',
+    ].filter(Boolean);
+
+    let agentPrimary = t('channels_not_applicable');
+    let agentTone = 'muted';
+    if (agentDeclared) {
+        if (agentCallable) {
+            agentPrimary = t('channels_callable');
+            agentTone = 'ok';
+        } else if (agentSchemaVisible) {
+            agentPrimary = agent.requiresStatusProbe ? t('channels_agent_unverified') : t('channels_schema_visible');
+            agentTone = agent.requiresStatusProbe ? 'warn' : 'info';
+        } else if (agentStatus === 'tool_not_loaded' || agentSchemaKnownHidden) {
+            agentPrimary = t('channels_tool_missing');
+            agentTone = 'muted';
+        } else {
+            agentPrimary = channelStateLabel(agentStatus || agent.readiness || 'unknown');
+            agentTone = channelToneForState(agentStatus || agent.readiness || 'unknown');
+        }
+    }
+    const agentBadges = [
+        channelBadge(agentPrimary, agentTone),
+        agentDeclared && agent.tool ? channelBadge(agent.tool, 'info') : '',
+        agentDeclared ? channelBadge(agentSchemaVisible ? t('channels_schema_visible') : t('channels_schema_hidden'), agentSchemaVisible ? 'info' : 'muted') : '',
+        agentDeclared ? channelBadge(agentCallable ? t('channels_callable') : t('channels_not_callable'), agentCallable ? 'ok' : 'danger') : '',
+        agent.requiresStatusProbe ? channelBadge(channelLocalText('需要 status probe', 'Status probe required'), 'warn') : '',
+        agent.permissionGated ? channelBadge(t('channels_permission_gated'), 'warn') : '',
+    ].join('');
+    const agentMetaParts = [
+        agent.policy ? `${channelLocalText('策略', 'Policy')}: ${channelHumanize(agent.policy)}` : '',
+        agent.statusAction ? `${channelLocalText('探测动作', 'Probe')}: ${channelActionLabel(agent.statusAction)}` : '',
+        agent.callableReason ? agent.callableReason : '',
+    ].filter(Boolean);
+
+    return `
+        <div class="channel-observability-panel" data-channel-observability="${escapeHtml(ch.name || '')}">
+            <div class="channel-observability-row" data-channel-state-row="transport">
+                <span class="channel-observability-label">${t('channels_transport')}</span>
+                <div class="channel-observability-body">
+                    <div class="channel-observability-badges">${transportBadges}</div>
+                    <div class="channel-observability-meta">${escapeHtml(transportMeta)}</div>
+                    ${ch && ch.last_error ? `<div class="channel-observability-warning">${escapeHtml(ch.last_error)}</div>` : ''}
+                </div>
+            </div>
+            <div class="channel-observability-row" data-channel-state-row="auth">
+                <span class="channel-observability-label">${t('channels_auth_surface')}</span>
+                <div class="channel-observability-body">
+                    <div class="channel-observability-badges">${authBadges}</div>
+                    ${authMetaParts.length ? `<div class="channel-observability-meta">${escapeHtml(authMetaParts.join(' · '))}</div>` : ''}
+                </div>
+            </div>
+            <div class="channel-observability-row" data-channel-state-row="agent"
+                 data-agent-callable="${agentCallable ? 'true' : 'false'}"
+                 data-agent-status="${escapeHtml(agentStatus || '')}">
+                <span class="channel-observability-label">${t('channels_agent_surface')}</span>
+                <div class="channel-observability-body">
+                    <div class="channel-observability-badges">${agentBadges}</div>
+                    ${agentMetaParts.length ? `<div class="channel-observability-meta">${escapeHtml(agentMetaParts.join(' · '))}</div>` : ''}
+                </div>
+            </div>
+        </div>`;
+}
 
 function loadChannelsView() {
+    ensureChannelActionDelegation();
     const container = document.getElementById('channels-content');
     container.innerHTML = `<div class="flex items-center gap-2 py-8 justify-center text-slate-400 dark:text-slate-500 text-sm">
         <i class="fas fa-spinner fa-spin text-xs"></i><span>Loading...</span></div>`;
@@ -6595,7 +8122,7 @@ function renderActiveChannels() {
     container.innerHTML = '';
     closeAddChannelPanel();
 
-    const activeChannels = channelsData.filter(ch => ch.active);
+    const activeChannels = channelsData;
 
     if (activeChannels.length === 0) {
         container.innerHTML = `
@@ -6611,35 +8138,32 @@ function renderActiveChannels() {
 
     activeChannels.forEach(ch => {
         const label = (typeof ch.label === 'object') ? (ch.label[currentLang] || ch.label.en) : ch.label;
+        const chName = channelNameValue(ch.name);
+        const chDom = channelDomToken(chName);
+        const chColor = channelSafeColor(ch.color);
+        const chIcon = channelSafeIcon(ch.icon);
         const card = document.createElement('div');
         card.className = 'bg-white dark:bg-[#1A1A1A] rounded-xl border border-slate-200 dark:border-white/10 p-6';
-        card.id = `channel-card-${ch.name}`;
+        card.id = `channel-card-${chDom}`;
+        card.dataset.channelCard = '1';
+        card.dataset.channelName = chName;
 
-        const fieldsHtml = buildChannelFieldsHtml(ch.name, ch.fields || []);
+        const fieldsHtml = buildChannelFieldsHtml(chName, ch.fields || []);
         const hasFields = (ch.fields || []).length > 0;
 
-        const weixinWaiting = ch.name === 'weixin' && ch.login_status && ch.login_status !== 'logged_in';
-        const wecomNeedsCreds = ch.name === 'wecom_bot' && !_wecomBotHasCreds(ch);
+        const weixinWaiting = chName === 'weixin' && ch.login_status && ch.login_status !== 'logged_in';
+        const wecomNeedsCreds = chName === 'wecom_bot' && !_wecomBotHasCreds(ch);
         // 飞书 active 卡片渲染带 Tab 的 panel：手动填写 + 扫码重建（覆盖现有配置）
-        const isFeishu = ch.name === 'feishu';
-        let statusDot, statusText;
-        if (weixinWaiting) {
-            statusDot = 'bg-amber-400 animate-pulse';
-            statusText = ch.login_status === 'scanned'
-                ? `<span class="text-xs text-primary-500">${t('weixin_scan_scanned')}</span>`
-                : `<span class="text-xs text-amber-500">${t('weixin_scan_waiting')}</span>`;
-        } else if (wecomNeedsCreds) {
-            statusDot = 'bg-amber-400 animate-pulse';
-            statusText = `<span class="text-xs text-amber-500">${t('channels_connecting')}</span>`;
-        } else {
-            statusDot = 'bg-primary-400';
-            statusText = `<span class="text-xs text-primary-500">${t('channels_connected')}</span>`;
-        }
+        const isFeishu = chName === 'feishu';
+        const transportSummary = channelTransportSummary(ch);
+        const statusDot = transportSummary.dot;
+        const statusText = `<span class="text-xs ${transportSummary.textClass}">${escapeHtml(transportSummary.label)}</span>`;
+        const observabilityHtml = buildChannelObservabilityHtml(ch);
 
         card.innerHTML = `
-            <div class="flex items-center gap-4${hasFields || weixinWaiting || wecomNeedsCreds || isFeishu ? ' mb-5' : ''}">
-                <div class="w-10 h-10 rounded-xl bg-${ch.color}-50 dark:bg-${ch.color}-900/20 flex items-center justify-center flex-shrink-0">
-                    <i class="fas ${ch.icon} text-${ch.color}-500 text-base"></i>
+            <div class="flex items-center gap-4 mb-5">
+                <div class="w-10 h-10 rounded-xl bg-${chColor}-50 dark:bg-${chColor}-900/20 flex items-center justify-center flex-shrink-0">
+                    <i class="fas ${chIcon} text-${chColor}-500 text-base"></i>
                 </div>
                 <div class="flex-1 min-w-0">
                     <div class="flex items-center gap-2">
@@ -6647,16 +8171,20 @@ function renderActiveChannels() {
                         <span class="w-2 h-2 rounded-full ${statusDot}"></span>
                         ${statusText}
                     </div>
-                    <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-mono">${escapeHtml(ch.name)}</p>
+                    <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-mono">${escapeHtml(chName)}</p>
                 </div>
-                <button onclick="disconnectChannel('${ch.name}')"
+                ${ch.active ? `<button type="button" data-channel-action="disconnect" data-channel-name="${escapeHtml(chName)}"
                     class="px-3 py-1.5 rounded-lg text-xs font-medium
                            bg-red-50 dark:bg-red-900/20 text-red-500 dark:text-red-400
                            hover:bg-red-100 dark:hover:bg-red-900/40
                            cursor-pointer transition-colors flex-shrink-0">
                     ${t('channels_disconnect')}
-                </button>
+                </button>` : `<button type="button" data-channel-action="connect" data-channel-name="${escapeHtml(chName)}"
+                    class="px-3 py-1.5 rounded-lg text-xs font-medium bg-primary-50 dark:bg-primary-900/20 text-primary-600 dark:text-primary-400 hover:bg-primary-100 dark:hover:bg-primary-900/40 cursor-pointer transition-colors flex-shrink-0">
+                    ${t('channels_connect_btn')}
+                </button>`}
             </div>
+            ${observabilityHtml}
             ${weixinWaiting ? `<div id="weixin-active-qr" class="flex flex-col items-center py-2">
                 <button onclick="showWeixinActiveQr()"
                     class="px-4 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 text-white text-sm font-medium
@@ -6676,11 +8204,12 @@ function renderActiveChannels() {
             ${isFeishu ? buildFeishuPanel(ch, true) : (hasFields ? `<div class="space-y-4">
                 ${fieldsHtml}
                 <div class="flex items-center justify-end gap-3 pt-1">
-                    <span id="ch-status-${ch.name}" class="text-xs text-primary-500 opacity-0 transition-opacity duration-300"></span>
-                    <button onclick="saveChannelConfig('${ch.name}')"
+                    <span data-channel-status="1" class="text-xs text-primary-500 opacity-0 transition-opacity duration-300"></span>
+                    <button type="button" data-channel-action="save" data-channel-name="${escapeHtml(chName)}"
                         class="px-4 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 text-white text-sm font-medium
-                               cursor-pointer transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
-                        id="ch-save-${ch.name}">${t('channels_save')}</button>
+                               cursor-pointer transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed">${t('channels_save')}</button>
+                    ${!ch.active ? `<button type="button" data-channel-action="connect" data-channel-name="${escapeHtml(chName)}"
+                        class="px-4 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 text-white text-sm font-medium cursor-pointer transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed">${t('channels_connect_btn')}</button>` : ''}
                 </div>
             </div>` : '')}`;
 
@@ -6696,19 +8225,23 @@ function renderActiveChannels() {
 function buildChannelFieldsHtml(chName, fields) {
     let html = '';
     fields.forEach(f => {
-        const inputId = `ch-${chName}-${f.key}`;
+        const fieldKey = String(f.key || '');
+        const inputId = `ch-${channelDomToken(chName)}-${channelDomToken(fieldKey, 'field')}`;
+        const safeFieldKey = escapeHtml(fieldKey);
+        const safeChannel = escapeHtml(channelNameValue(chName));
         let inputHtml = '';
         if (f.type === 'bool') {
             const checked = f.value ? 'checked' : '';
             inputHtml = `<label class="relative inline-flex items-center cursor-pointer">
-                <input id="${inputId}" type="checkbox" ${checked} class="sr-only peer" data-field="${f.key}" data-ch="${chName}">
+                <input id="${inputId}" type="checkbox" ${checked} class="sr-only peer" data-field="${safeFieldKey}" data-ch="${safeChannel}">
                 <div class="w-9 h-5 bg-slate-200 dark:bg-slate-700 peer-checked:bg-primary-400 rounded-full
                             after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white
                             after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-full"></div>
             </label>`;
         } else if (f.type === 'secret') {
-            inputHtml = `<input id="${inputId}" type="text" value="${escapeHtml(String(f.value || ''))}"
-                data-field="${f.key}" data-ch="${chName}" data-masked="${f.value ? '1' : ''}"
+            const secretValue = f.value ? ChannelsHandler_maskSecret(String(f.value)) : '';
+            inputHtml = `<input id="${inputId}" type="text" value="${escapeHtml(secretValue)}"
+                data-field="${safeFieldKey}" data-ch="${safeChannel}" data-masked="${f.value ? '1' : ''}"
                 class="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600
                        bg-slate-50 dark:bg-white/5 text-sm text-slate-800 dark:text-slate-100
                        focus:outline-none focus:border-primary-500 font-mono transition-colors
@@ -6717,7 +8250,7 @@ function buildChannelFieldsHtml(chName, fields) {
         } else {
             const inputType = f.type === 'number' ? 'number' : 'text';
             inputHtml = `<input id="${inputId}" type="${inputType}" value="${escapeHtml(String(f.value ?? f.default ?? ''))}"
-                data-field="${f.key}" data-ch="${chName}"
+                data-field="${safeFieldKey}" data-ch="${safeChannel}"
                 class="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600
                        bg-slate-50 dark:bg-white/5 text-sm text-slate-800 dark:text-slate-100
                        focus:outline-none focus:border-primary-500 font-mono transition-colors"
@@ -6743,22 +8276,40 @@ function bindSecretFieldEvents(container) {
     });
 }
 
-function showChannelStatus(chName, msgKey, isError) {
-    const el = document.getElementById(`ch-status-${chName}`);
+function showChannelStatus(chName, msgKey, isError, messageText) {
+    const card = getChannelCard(chName);
+    const el = card ? card.querySelector('[data-channel-status="1"]') : null;
     if (!el) return;
-    el.textContent = t(msgKey);
+    el.textContent = messageText || t(msgKey);
     el.classList.toggle('text-red-500', !!isError);
     el.classList.toggle('text-primary-500', !isError);
     el.classList.remove('opacity-0');
     setTimeout(() => el.classList.add('opacity-0'), 2500);
 }
 
+function showAddChannelStatus(msgKey, isError, messageText) {
+    const el = document.getElementById('add-channel-status');
+    if (!el) return;
+    el.textContent = messageText || t(msgKey);
+    el.classList.toggle('hidden', false);
+    el.classList.toggle('text-red-500', !!isError);
+    el.classList.toggle('text-primary-500', !isError);
+}
+
+function resetAddChannelStatus() {
+    const el = document.getElementById('add-channel-status');
+    if (!el) return;
+    el.textContent = '';
+    el.classList.add('hidden');
+    el.classList.remove('text-red-500', 'text-primary-500');
+}
+
 function saveChannelConfig(chName) {
-    const card = document.getElementById(`channel-card-${chName}`);
+    const card = getChannelCard(chName);
     if (!card) return;
 
     const updates = {};
-    card.querySelectorAll('input[data-ch="' + chName + '"]').forEach(inp => {
+    channelInputsFor(card, chName).forEach(inp => {
         const key = inp.dataset.field;
         if (inp.type === 'checkbox') {
             updates[key] = inp.checked;
@@ -6768,7 +8319,7 @@ function saveChannelConfig(chName) {
         }
     });
 
-    const btn = document.getElementById(`ch-save-${chName}`);
+    const btn = card.querySelector('[data-channel-action="save"]');
     if (btn) btn.disabled = true;
 
     fetch('/api/channels', {
@@ -6781,7 +8332,48 @@ function saveChannelConfig(chName) {
         if (data.status === 'success') {
             showChannelStatus(chName, data.restarted ? 'channels_restarted' : 'channels_saved', false);
         } else {
-            showChannelStatus(chName, 'channels_save_error', true);
+            showChannelStatus(chName, 'channels_save_error', true, data.message);
+        }
+    })
+    .catch(() => showChannelStatus(chName, 'channels_save_error', true))
+    .finally(() => { if (btn) btn.disabled = false; });
+}
+
+function collectChannelCardUpdates(chName) {
+    const card = getChannelCard(chName);
+    const updates = {};
+    if (!card) return updates;
+    channelInputsFor(card, chName).forEach(inp => {
+        const key = inp.dataset.field;
+        if (inp.type === 'checkbox') {
+            updates[key] = inp.checked;
+        } else {
+            if (inp.dataset.masked === '1') return;
+            updates[key] = inp.value;
+        }
+    });
+    return updates;
+}
+
+function connectChannelConfig(chName) {
+    const updates = collectChannelCardUpdates(chName);
+    const card = getChannelCard(chName);
+    const btn = card ? card.querySelector('[data-channel-action="connect"]') : null;
+    if (btn) btn.disabled = true;
+    fetch('/api/channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'connect', channel: chName, config: updates })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            loadChannelsView();
+            if (typeof loadExtensionsView === 'function') {
+                try { loadExtensionsView(); } catch (_) {}
+            }
+        } else {
+            showChannelStatus(chName, 'channels_save_error', true, data.message);
         }
     })
     .catch(() => showChannelStatus(chName, 'channels_save_error', true))
@@ -6859,6 +8451,7 @@ function openAddChannelPanel() {
                 </div>
             </div>
             <div id="add-channel-fields" class="space-y-4"></div>
+            <div id="add-channel-status" class="hidden text-sm" role="status" aria-live="polite"></div>
             <div id="add-channel-actions" class="hidden flex items-center justify-end gap-3 pt-4">
                 <button onclick="closeAddChannelPanel()"
                     class="px-4 py-2 rounded-lg border border-slate-200 dark:border-white/10
@@ -6892,6 +8485,7 @@ function closeAddChannelPanel() {
 function onAddChannelSelect(chName) {
     stopWeixinQrPoll();
     stopFeishuRegisterPoll();
+    resetAddChannelStatus();
     const fieldsContainer = document.getElementById('add-channel-fields');
     const actions = document.getElementById('add-channel-actions');
 
@@ -6940,7 +8534,7 @@ function submitAddChannel() {
 
     const fieldsContainer = document.getElementById('add-channel-fields');
     const updates = {};
-    fieldsContainer.querySelectorAll('input[data-ch="' + chName + '"]').forEach(inp => {
+    channelInputsFor(fieldsContainer, chName).forEach(inp => {
         const key = inp.dataset.field;
         if (inp.type === 'checkbox') {
             updates[key] = inp.checked;
@@ -6952,6 +8546,7 @@ function submitAddChannel() {
 
     const btn = document.getElementById('add-channel-submit');
     if (btn) { btn.disabled = true; btn.textContent = t('channels_connecting'); }
+    resetAddChannelStatus();
 
     fetch('/api/channels', {
         method: 'POST',
@@ -6973,10 +8568,12 @@ function submitAddChannel() {
             renderActiveChannels();
         } else {
             if (btn) { btn.disabled = false; btn.textContent = t('channels_connect_btn'); }
+            showAddChannelStatus('channels_save_error', true, data.message);
         }
     })
     .catch(() => {
         if (btn) { btn.disabled = false; btn.textContent = t('channels_connect_btn'); }
+        showAddChannelStatus('channels_save_error', true);
     });
 }
 
@@ -7423,11 +9020,10 @@ function switchFeishuMode(mode) {
                 <div class="space-y-4">
                     ${fieldsHtml}
                     <div class="flex items-center justify-end gap-3 pt-1">
-                        <span id="ch-status-feishu" class="text-xs text-primary-500 opacity-0 transition-opacity duration-300"></span>
-                        <button onclick="saveChannelConfig('feishu')"
+                        <span data-channel-status="1" class="text-xs text-primary-500 opacity-0 transition-opacity duration-300"></span>
+                        <button type="button" data-channel-action="save" data-channel-name="feishu"
                             class="px-4 py-2 rounded-lg bg-primary-500 hover:bg-primary-600 text-white text-sm font-medium
-                                   cursor-pointer transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
-                            id="ch-save-feishu">${t('channels_save')}</button>
+                                   cursor-pointer transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed">${t('channels_save')}</button>
                     </div>
                 </div>`;
         } else {
@@ -7514,17 +9110,20 @@ function pollFeishuRegisterStatus(statusId) {
             }
             const rs = data.register_status;
             if (rs === 'done') {
+                const configured = data.channel_configured === true;
                 const statusEl = document.getElementById(statusId);
                 if (statusEl) {
                     statusEl.innerHTML = `
                         <div class="flex flex-col items-center py-2">
-                            <div class="w-10 h-10 rounded-full bg-emerald-50 dark:bg-emerald-900/30 flex items-center justify-center mb-2">
-                                <i class="fas fa-check text-emerald-500 text-lg"></i>
+                            <div class="w-10 h-10 rounded-full ${configured ? 'bg-emerald-50 dark:bg-emerald-900/30' : 'bg-amber-50 dark:bg-amber-900/30'} flex items-center justify-center mb-2">
+                                <i class="fas ${configured ? 'fa-check text-emerald-500' : 'fa-triangle-exclamation text-amber-500'} text-lg"></i>
                             </div>
-                            <p class="text-sm font-medium text-emerald-600 dark:text-emerald-400">${t('feishu_scan_success')}</p>
+                            <p class="text-sm font-medium ${configured ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}">${configured ? t('feishu_scan_success') : (data.writeback?.message || t('feishu_scan_fail'))}</p>
                         </div>`;
                 }
-                connectFeishuAfterRegister(data.app_id, data.app_secret);
+                if (configured) {
+                    refreshFeishuAfterRegister();
+                }
             } else if (rs === 'expired') {
                 renderFeishuRegisterError(statusId, t('feishu_scan_expired'));
             } else if (rs === 'denied') {
@@ -7541,28 +9140,13 @@ function pollFeishuRegisterStatus(statusId) {
     }, 2000);
 }
 
-function connectFeishuAfterRegister(appId, appSecret) {
-    fetch('/api/channels', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            action: 'connect',
-            channel: 'feishu',
-            config: { feishu_app_id: appId, feishu_app_secret: appSecret }
-        })
-    })
+function refreshFeishuAfterRegister() {
+    fetch('/api/channels')
     .then(r => r.json())
     .then(data => {
         if (data.status === 'success') {
-            const ch = channelsData.find(c => c.name === 'feishu');
-            if (ch) {
-                ch.active = true;
-                (ch.fields || []).forEach(f => {
-                    if (f.key === 'feishu_app_id') f.value = appId;
-                    if (f.key === 'feishu_app_secret') f.value = ChannelsHandler_maskSecret(appSecret);
-                });
-            }
-            setTimeout(() => renderActiveChannels(), 1500);
+            channelsData = data.channels || channelsData;
+            setTimeout(() => renderActiveChannels(), 500);
         }
     })
     .catch(() => {});
@@ -7572,7 +9156,7 @@ function connectFeishuAfterRegister(appId, appSecret) {
 // Scheduler View
 // =====================================================================
 let tasksLoaded = false;
-function loadTasksView() {
+function loadTasksViewLegacyEnabledOnly() {
     if (tasksLoaded) return;
     fetch('/api/scheduler').then(r => r.json()).then(data => {
         if (data.status !== 'success') return;
@@ -7616,6 +9200,495 @@ function loadTasksView() {
         });
         tasksLoaded = true;
     }).catch(() => {});
+}
+
+let schedulerProjection = null;
+let schedulerBusy = false;
+
+function schedulerText(zh, en) {
+    return currentLang === 'zh' ? zh : en;
+}
+
+function formatSchedulerDate(value) {
+    if (!value) return '--';
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+}
+
+function schedulerActionSummary(task) {
+    const action = (task && task.action) || {};
+    const redactedSummary = (preview, hash, length) => {
+        if (!preview) return '';
+        if (preview !== '[redacted-content]') return preview;
+        const parts = [schedulerText('内容已隐藏', 'Content hidden')];
+        if (length) parts.push(`${length} ${schedulerText('字符', 'chars')}`);
+        if (hash) parts.push(hash);
+        return parts.join(' · ');
+    };
+    if (action.type === 'agent_task') {
+        return redactedSummary(
+            action.taskDescriptionPreview || '',
+            action.taskDescriptionHash || '',
+            action.taskDescriptionLength || 0
+        );
+    }
+    if (action.type === 'send_message') {
+        return redactedSummary(
+            action.contentPreview || '',
+            action.contentHash || '',
+            action.contentLength || 0
+        );
+    }
+    if (action.type === 'tool_call') {
+        const params = action.toolParams ? ` ${JSON.stringify(action.toolParams)}` : '';
+        const prefix = redactedSummary(action.resultPrefixPreview || '', action.resultPrefixHash || '', action.resultPrefixLength || 0);
+        return `${action.toolName || 'tool'}${params}${prefix ? ` · ${prefix}` : ''}`;
+    }
+    if (action.type === 'skill_call') {
+        const args = action.skillArgs ? ` ${JSON.stringify(action.skillArgs)}` : '';
+        const prefix = redactedSummary(action.resultPrefixPreview || '', action.resultPrefixHash || '', action.resultPrefixLength || 0);
+        return `${action.skillName || 'skill'}${args}${prefix ? ` · ${prefix}` : ''}`;
+    }
+    return action.type || '';
+}
+
+function schedulerEditableActionContent(task) {
+    return '';
+}
+
+function schedulerScheduleEditValue(task) {
+    const schedule = (task && task.schedule) || {};
+    if (schedule.type === 'cron') return schedule.expression || '';
+    if (schedule.type === 'interval') return String(schedule.seconds || '');
+    if (schedule.type === 'once') return schedule.run_at || '';
+    return '';
+}
+
+function schedulerCanEditContent(task) {
+    const action = (task && task.action) || {};
+    return action.type === 'agent_task' || action.type === 'send_message';
+}
+
+function setSchedulerBusy(busy) {
+    schedulerBusy = !!busy;
+    document.querySelectorAll('[data-scheduler-action], #tasks-refresh-btn').forEach(btn => {
+        if (btn.dataset && btn.dataset.schedulerAction === 'refresh') return;
+        btn.disabled = schedulerBusy;
+    });
+}
+
+function renderSchedulerRuntime(projection) {
+    const statusEl = document.getElementById('tasks-runtime-status');
+    if (!statusEl) return;
+    const counts = projection.counts || {};
+    const store = projection.taskStore || {};
+    const status = projection.serviceStatus || 'unknown';
+    const canModify = projection.canModify !== false;
+    const modifyReason = projection.modifyBlockingReason || projection.blockingReason || '';
+    const running = projection.running === true;
+    statusEl.classList.remove('hidden');
+    statusEl.innerHTML = `
+        <div class="scheduler-runtime-main">
+            <div>
+                <div class="scheduler-runtime-title">
+                    <span class="scheduler-state-dot ${running ? 'is-running' : projection.enabled ? 'is-enabled' : 'is-disabled'}"></span>
+                    <span>${escapeHtml(status)}</span>
+                </div>
+                <div class="scheduler-runtime-meta">
+                    ${schedulerText('任务', 'Tasks')}: ${Number(counts.total || 0)}
+                    · ${schedulerText('启用', 'Enabled')}: ${Number(counts.enabled || 0)}
+                    · ${schedulerText('禁用', 'Disabled')}: ${Number(counts.disabled || 0)}
+                    · ${schedulerText('错误', 'Errors')}: ${Number(counts.error || 0)}
+                </div>
+                <div class="scheduler-runtime-meta">${schedulerText('任务存储', 'Task store')}: ${escapeHtml(store.exists ? (store.path || '') : schedulerText('未创建', 'not created'))}</div>
+                ${modifyReason ? `<div class="scheduler-runtime-warning">${escapeHtml(modifyReason)}</div>` : ''}
+            </div>
+            <div class="scheduler-runtime-actions">
+                <button type="button" class="scheduler-btn" data-scheduler-action="refresh">
+                    <i class="fas fa-rotate"></i>${schedulerText('刷新', 'Refresh')}
+                </button>
+                <button type="button" class="scheduler-btn scheduler-btn-primary" data-scheduler-action="start" ${canModify ? '' : 'disabled'}>
+                    <i class="fas fa-play"></i>${schedulerText('启动', 'Start')}
+                </button>
+                <button type="button" class="scheduler-btn" data-scheduler-action="stop" ${canModify ? '' : 'disabled'}>
+                    <i class="fas fa-stop"></i>${schedulerText('停止', 'Stop')}
+                </button>
+            </div>
+        </div>`;
+}
+
+function renderSchedulerProjection(projection) {
+    schedulerProjection = projection || {};
+    const emptyEl = document.getElementById('tasks-empty');
+    const listEl = document.getElementById('tasks-list');
+    if (!emptyEl || !listEl) return;
+    renderSchedulerRuntime(schedulerProjection);
+    const tasks = Array.isArray(schedulerProjection.tasks) ? schedulerProjection.tasks : [];
+    listEl.innerHTML = '';
+    if (tasks.length === 0) {
+        listEl.classList.add('hidden');
+        emptyEl.classList.remove('hidden');
+        emptyEl.querySelector('p').textContent = schedulerText('暂无定时任务', 'No scheduled tasks');
+        return;
+    }
+    emptyEl.classList.add('hidden');
+    listEl.classList.remove('hidden');
+    const canModify = schedulerProjection.canModify !== false;
+    tasks.forEach(task => {
+        const card = document.createElement('article');
+        card.className = `scheduler-task-card is-${escapeHtml(task.state || (task.enabled ? 'enabled' : 'disabled'))}`;
+        const id = escapeHtml(task.id || '');
+        const action = task.action || {};
+        const actionSummary = schedulerActionSummary(task);
+        const scheduleType = task.schedule && task.schedule.type ? task.schedule.type : '';
+        const canEditContent = schedulerCanEditContent(task);
+        const disabledAttr = canModify ? '' : 'disabled';
+        card.innerHTML = `
+            <div class="scheduler-task-head">
+                <div class="scheduler-task-title">
+                    <span class="scheduler-state-dot ${task.enabled ? 'is-enabled' : 'is-disabled'}"></span>
+                    <span>${escapeHtml(task.name || task.id || '--')}</span>
+                </div>
+                <span class="scheduler-task-state">${escapeHtml(task.state || '')}</span>
+            </div>
+            <div class="scheduler-task-grid">
+                <div><span>${schedulerText('计划', 'Schedule')}</span><strong>${escapeHtml(task.scheduleDescription || scheduleType || '--')}</strong></div>
+                <div><span>${schedulerText('下次运行', 'Next run')}</span><strong>${escapeHtml(formatSchedulerDate(task.nextRunAt))}</strong></div>
+                <div><span>${schedulerText('上次运行', 'Last run')}</span><strong>${escapeHtml(formatSchedulerDate(task.lastRunAt))}</strong></div>
+                <div><span>${schedulerText('动作', 'Action')}</span><strong>${escapeHtml(action.type || '--')}</strong></div>
+            </div>
+            ${actionSummary ? `<p class="scheduler-task-content">${escapeHtml(actionSummary)}</p>` : ''}
+            ${task.lastError ? `<div class="scheduler-task-error">${escapeHtml(task.lastError)}</div>` : ''}
+            <div class="scheduler-task-actions">
+                <button type="button" class="scheduler-btn" data-scheduler-action="${task.enabled ? 'disable' : 'enable'}" data-task-id="${id}" ${disabledAttr}>
+                    <i class="fas ${task.enabled ? 'fa-pause' : 'fa-play'}"></i>${task.enabled ? schedulerText('禁用', 'Disable') : schedulerText('启用', 'Enable')}
+                </button>
+                <button type="button" class="scheduler-btn" data-scheduler-action="rename" data-task-id="${id}" ${disabledAttr}>
+                    <i class="fas fa-pen"></i>${schedulerText('重命名', 'Rename')}
+                </button>
+                <button type="button" class="scheduler-btn" data-scheduler-action="schedule" data-task-id="${id}" ${disabledAttr}>
+                    <i class="fas fa-clock"></i>${schedulerText('计划', 'Schedule')}
+                </button>
+                <button type="button" class="scheduler-btn" data-scheduler-action="content" data-task-id="${id}" ${disabledAttr} ${canEditContent ? '' : 'disabled'}>
+                    <i class="fas fa-align-left"></i>${schedulerText('内容', 'Content')}
+                </button>
+                <button type="button" class="scheduler-btn scheduler-btn-danger" data-scheduler-action="delete" data-task-id="${id}" ${disabledAttr}>
+                    <i class="fas fa-trash"></i>${schedulerText('删除', 'Delete')}
+                </button>
+            </div>`;
+        listEl.appendChild(card);
+    });
+}
+
+function findSchedulerTask(taskId) {
+    const tasks = schedulerProjection && Array.isArray(schedulerProjection.tasks) ? schedulerProjection.tasks : [];
+    return tasks.find(task => task.id === taskId) || null;
+}
+
+function schedulerPayloadHasProjection(data) {
+    return !!(data && (
+        Array.isArray(data.tasks) ||
+        data.taskStore ||
+        data.counts ||
+        data.serviceStatus !== undefined ||
+        data.taskCount !== undefined
+    ));
+}
+
+function schedulerRequest(body) {
+    setSchedulerBusy(true);
+    return fetch('/api/scheduler', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {}),
+    })
+        .then(r => r.json())
+        .then(async data => {
+            if (schedulerPayloadHasProjection(data)) {
+                renderSchedulerProjection(data);
+                tasksLoaded = true;
+            }
+            if (data.status !== 'success') {
+                throw new Error(data.message || schedulerText('定时任务操作失败', 'Scheduler action failed'));
+            }
+            return data;
+        })
+        .catch(err => {
+            alert(err instanceof Error ? err.message : String(err));
+        })
+        .finally(() => setSchedulerBusy(false));
+}
+
+function loadTasksView(force) {
+    if (tasksLoaded && !force) return;
+    const emptyEl = document.getElementById('tasks-empty');
+    const listEl = document.getElementById('tasks-list');
+    if (emptyEl) {
+        emptyEl.classList.remove('hidden');
+        emptyEl.querySelector('p').textContent = schedulerText('加载中...', 'Loading...');
+    }
+    if (listEl) listEl.classList.add('hidden');
+    fetch('/api/scheduler').then(r => r.json()).then(data => {
+        if (data.status !== 'success') throw new Error(data.message || 'scheduler unavailable');
+        renderSchedulerProjection(data);
+        tasksLoaded = true;
+    }).catch(err => {
+        if (emptyEl) emptyEl.querySelector('p').textContent = err instanceof Error ? err.message : String(err);
+    });
+}
+
+document.addEventListener('click', function(e) {
+    const btn = e.target.closest('[data-scheduler-action]');
+    if (!btn || schedulerBusy) return;
+    const action = btn.dataset.schedulerAction || '';
+    const taskId = btn.dataset.taskId || '';
+    const task = taskId ? findSchedulerTask(taskId) : null;
+    if (action === 'refresh') {
+        tasksLoaded = false;
+        loadTasksView(true);
+        return;
+    }
+    if (action === 'start' || action === 'stop') {
+        schedulerRequest({ action });
+        return;
+    }
+    if (!taskId || !task) return;
+    if (action === 'enable' || action === 'disable') {
+        schedulerRequest({ action, task_id: taskId });
+    } else if (action === 'save') {
+        const payload = readSchedulerTaskForm(taskId, task);
+        if (payload) schedulerRequest(payload);
+    } else if (action === 'rename') {
+        const name = window.prompt(schedulerText('任务名称', 'Task name'), task.name || '');
+        if (name && name.trim()) schedulerRequest({ action: 'update', task_id: taskId, name: name.trim() });
+    } else if (action === 'schedule') {
+        const schedule = task.schedule || {};
+        const type = window.prompt(schedulerText('计划类型: cron / interval / once', 'Schedule type: cron / interval / once'), schedule.type || 'cron');
+        if (!type) return;
+        const value = window.prompt(schedulerText('计划值', 'Schedule value'), schedulerScheduleEditValue(task));
+        if (!value) return;
+        schedulerRequest({ action: 'update', task_id: taskId, schedule_type: type.trim(), schedule_value: value.trim() });
+    } else if (action === 'content') {
+        const content = window.prompt(schedulerText('任务内容（重新输入完整内容）', 'Task content (re-enter full content)'), '');
+        if (content === null) return;
+        if (!content.trim()) return;
+        const payload = { action: 'update', task_id: taskId };
+        if ((task.action || {}).type === 'send_message') payload.content = content.trim();
+        else payload.taskDescription = content.trim();
+        schedulerRequest(payload);
+    } else if (action === 'delete') {
+        showConfirmDialog({
+            title: schedulerText('删除定时任务', 'Delete scheduled task'),
+            message: schedulerText(`确认删除「${task.name || task.id}」？`, `Delete "${task.name || task.id}"?`),
+            okText: schedulerText('删除', 'Delete'),
+            cancelText: schedulerText('取消', 'Cancel'),
+            onConfirm: () => schedulerRequest({ action: 'delete', task_id: taskId }),
+        });
+    }
+});
+
+function schedulerString(value) {
+    return value === null || value === undefined ? '' : String(value);
+}
+
+function schedulerHtml(value) {
+    return escapeHtml(schedulerString(value));
+}
+
+function schedulerAttr(value) {
+    return schedulerHtml(value).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function schedulerStateClass(value) {
+    return schedulerString(value || 'unknown').toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+}
+
+function schedulerScheduleTypeOptions(selected) {
+    const value = selected || 'cron';
+    return ['cron', 'interval', 'once'].map(type =>
+        `<option value="${type}" ${type === value ? 'selected' : ''}>${type}</option>`
+    ).join('');
+}
+
+function findSchedulerTaskForm(taskId) {
+    return document.querySelector(`.scheduler-task-editor[data-task-id="${cssEscape(taskId)}"]`);
+}
+
+function readSchedulerTaskForm(taskId, task) {
+    const form = findSchedulerTaskForm(taskId);
+    if (!form) return null;
+    const payload = { action: 'update', task_id: taskId };
+    const name = form.elements.name ? form.elements.name.value.trim() : '';
+    const scheduleType = form.elements.schedule_type ? form.elements.schedule_type.value.trim() : '';
+    const scheduleValue = form.elements.schedule_value ? form.elements.schedule_value.value.trim() : '';
+    if (name) payload.name = name;
+    if (scheduleType && scheduleValue) {
+        payload.schedule_type = scheduleType;
+        payload.schedule_value = scheduleValue;
+    }
+    if (form.elements.action_content && schedulerCanEditContent(task)) {
+        const content = form.elements.action_content.value;
+        const existingContent = schedulerEditableActionContent(task);
+        if (!content && !existingContent) return payload;
+        if (((task || {}).action || {}).type === 'send_message') {
+            payload.content = content;
+        } else {
+            payload.taskDescription = content;
+        }
+    }
+    return payload;
+}
+
+function setSchedulerBusy(busy) {
+    schedulerBusy = !!busy;
+    document.querySelectorAll('[data-scheduler-action], #tasks-refresh-btn').forEach(btn => {
+        btn.disabled = schedulerBusy;
+    });
+}
+
+function renderSchedulerRuntime(projection) {
+    const statusEl = document.getElementById('tasks-runtime-status');
+    if (!statusEl) return;
+    const counts = projection.counts || {};
+    const store = projection.taskStore || {};
+    const status = projection.serviceStatus || 'unknown';
+    const canModify = projection.canModify !== false;
+    const modifyReason = projection.modifyBlockingReason || projection.blockingReason || '';
+    const running = projection.running === true;
+    statusEl.classList.remove('hidden');
+    statusEl.innerHTML = `
+        <div class="scheduler-runtime-main">
+            <div>
+                <div class="scheduler-runtime-title">
+                    <span class="scheduler-state-dot ${running ? 'is-running' : projection.enabled ? 'is-enabled' : 'is-disabled'}"></span>
+                    <span>${schedulerHtml(status)}</span>
+                </div>
+                <div class="scheduler-runtime-meta">
+                    ${schedulerText('\u4efb\u52a1', 'Tasks')}: ${Number(counts.total || 0)}
+                    &middot; ${schedulerText('\u542f\u7528', 'Enabled')}: ${Number(counts.enabled || 0)}
+                    &middot; ${schedulerText('\u7981\u7528', 'Disabled')}: ${Number(counts.disabled || 0)}
+                    &middot; ${schedulerText('\u9519\u8bef', 'Errors')}: ${Number(counts.error || 0)}
+                </div>
+                <div class="scheduler-runtime-meta">
+                    ${schedulerText('\u4efb\u52a1\u5b58\u50a8', 'Task store')}: ${schedulerHtml(store.exists ? (store.path || '') : schedulerText('\u672a\u521b\u5efa', 'not created'))}
+                </div>
+                ${modifyReason ? `<div class="scheduler-runtime-warning">${schedulerHtml(modifyReason)}</div>` : ''}
+            </div>
+            <div class="scheduler-runtime-actions">
+                <button type="button" class="scheduler-btn" data-scheduler-action="refresh">
+                    <i class="fas fa-rotate"></i>${schedulerText('\u5237\u65b0', 'Refresh')}
+                </button>
+                <button type="button" class="scheduler-btn scheduler-btn-primary" data-scheduler-action="start" ${canModify ? '' : 'disabled'}>
+                    <i class="fas fa-play"></i>${schedulerText('\u542f\u52a8', 'Start')}
+                </button>
+                <button type="button" class="scheduler-btn" data-scheduler-action="stop" ${canModify ? '' : 'disabled'}>
+                    <i class="fas fa-stop"></i>${schedulerText('\u505c\u6b62', 'Stop')}
+                </button>
+            </div>
+        </div>`;
+}
+
+function renderSchedulerProjection(projection) {
+    schedulerProjection = projection || {};
+    const emptyEl = document.getElementById('tasks-empty');
+    const listEl = document.getElementById('tasks-list');
+    if (!emptyEl || !listEl) return;
+    renderSchedulerRuntime(schedulerProjection);
+    const tasks = Array.isArray(schedulerProjection.tasks) ? schedulerProjection.tasks : [];
+    listEl.innerHTML = '';
+    if (tasks.length === 0) {
+        listEl.classList.add('hidden');
+        emptyEl.classList.remove('hidden');
+        emptyEl.querySelector('p').textContent = schedulerText('\u6682\u65e0\u5b9a\u65f6\u4efb\u52a1', 'No scheduled tasks');
+        return;
+    }
+    emptyEl.classList.add('hidden');
+    listEl.classList.remove('hidden');
+    const canModify = schedulerProjection.canModify !== false;
+    tasks.forEach(task => {
+        const card = document.createElement('article');
+        const state = task.state || (task.enabled ? 'enabled' : 'disabled');
+        const action = task.action || {};
+        const actionSummary = schedulerActionSummary(task);
+        const editableActionContent = schedulerEditableActionContent(task);
+        const schedule = task.schedule || {};
+        const scheduleType = schedule.type || 'cron';
+        const scheduleValue = schedulerScheduleEditValue(task);
+        const canEditContent = schedulerCanEditContent(task);
+        const disabledAttr = canModify ? '' : 'disabled';
+        const taskIdAttr = schedulerAttr(task.id || '');
+        card.className = `scheduler-task-card is-${schedulerStateClass(state)}`;
+        card.dataset.taskId = task.id || '';
+        card.innerHTML = `
+            <div class="scheduler-task-head">
+                <div class="scheduler-task-title">
+                    <span class="scheduler-state-dot ${task.enabled ? 'is-enabled' : 'is-disabled'}"></span>
+                    <span>${schedulerHtml(task.name || task.id || '--')}</span>
+                </div>
+                <span class="scheduler-task-state">${schedulerHtml(state)}</span>
+            </div>
+            <div class="scheduler-task-grid">
+                <div><span>${schedulerText('\u8ba1\u5212', 'Schedule')}</span><strong>${schedulerHtml(task.scheduleDescription || scheduleType || '--')}</strong></div>
+                <div><span>${schedulerText('\u4e0b\u6b21\u8fd0\u884c', 'Next run')}</span><strong>${schedulerHtml(formatSchedulerDate(task.nextRunAt))}</strong></div>
+                <div><span>${schedulerText('\u4e0a\u6b21\u8fd0\u884c', 'Last run')}</span><strong>${schedulerHtml(formatSchedulerDate(task.lastRunAt))}</strong></div>
+                <div><span>${schedulerText('\u52a8\u4f5c', 'Action')}</span><strong>${schedulerHtml(action.type || '--')}</strong></div>
+            </div>
+            ${actionSummary ? `<p class="scheduler-task-content">${schedulerHtml(actionSummary)}</p>` : ''}
+            ${task.lastError ? `<div class="scheduler-task-error">${schedulerHtml(task.lastError)}</div>` : ''}
+            <form class="scheduler-task-editor" data-task-id="${taskIdAttr}">
+                <label>
+                    <span>${schedulerText('\u540d\u79f0', 'Name')}</span>
+                    <input name="name" value="${schedulerAttr(task.name || '')}" ${disabledAttr}>
+                </label>
+                <label>
+                    <span>${schedulerText('\u8ba1\u5212\u7c7b\u578b', 'Schedule type')}</span>
+                    <select name="schedule_type" ${disabledAttr}>${schedulerScheduleTypeOptions(scheduleType)}</select>
+                </label>
+                <label>
+                    <span>${schedulerText('\u8ba1\u5212\u503c', 'Schedule value')}</span>
+                    <input name="schedule_value" value="${schedulerAttr(scheduleValue)}" ${disabledAttr}>
+                </label>
+                ${canEditContent ? `
+                    <label class="scheduler-editor-content">
+                        <span>${schedulerText('\u4efb\u52a1\u5185\u5bb9', 'Task content')}</span>
+                        <textarea name="action_content" rows="3" placeholder="${schedulerAttr(schedulerText('\u91cd\u65b0\u8f93\u5165\u5b8c\u6574\u5185\u5bb9\u540e\u4fdd\u5b58', 'Re-enter full content to save'))}" ${disabledAttr}>${schedulerHtml(editableActionContent)}</textarea>
+                    </label>` : `
+                    <div class="scheduler-editor-readonly">
+                        <span>${schedulerText('\u4efb\u52a1\u5185\u5bb9', 'Task content')}</span>
+                        <strong>${schedulerText('\u6b64\u52a8\u4f5c\u7c7b\u578b\u6682\u4e0d\u652f\u6301\u5728 Web \u4fee\u6539', 'This action type is read-only in Web')}</strong>
+                    </div>`}
+            </form>
+            <div class="scheduler-task-actions">
+                <button type="button" class="scheduler-btn" data-scheduler-action="${task.enabled ? 'disable' : 'enable'}" data-task-id="${taskIdAttr}" ${disabledAttr}>
+                    <i class="fas ${task.enabled ? 'fa-pause' : 'fa-play'}"></i>${task.enabled ? schedulerText('\u7981\u7528', 'Disable') : schedulerText('\u542f\u7528', 'Enable')}
+                </button>
+                <button type="button" class="scheduler-btn scheduler-btn-primary" data-scheduler-action="save" data-task-id="${taskIdAttr}" ${disabledAttr}>
+                    <i class="fas fa-save"></i>${schedulerText('\u4fdd\u5b58', 'Save')}
+                </button>
+                <button type="button" class="scheduler-btn scheduler-btn-danger" data-scheduler-action="delete" data-task-id="${taskIdAttr}" ${disabledAttr}>
+                    <i class="fas fa-trash"></i>${schedulerText('\u5220\u9664', 'Delete')}
+                </button>
+            </div>`;
+        listEl.appendChild(card);
+    });
+}
+
+function loadTasksView(force) {
+    if (tasksLoaded && !force) return;
+    const emptyEl = document.getElementById('tasks-empty');
+    const listEl = document.getElementById('tasks-list');
+    if (emptyEl) {
+        emptyEl.classList.remove('hidden');
+        emptyEl.querySelector('p').textContent = schedulerText('\u52a0\u8f7d\u4e2d...', 'Loading...');
+    }
+    if (listEl) listEl.classList.add('hidden');
+    fetch('/api/scheduler').then(r => r.json()).then(data => {
+        if (data.status !== 'success') throw new Error(data.message || 'scheduler unavailable');
+        renderSchedulerProjection(data);
+        tasksLoaded = true;
+    }).catch(err => {
+        if (emptyEl) emptyEl.querySelector('p').textContent = err instanceof Error ? err.message : String(err);
+    });
 }
 
 // =====================================================================
@@ -7981,7 +10054,7 @@ function openKnowledgeFile(path, title) {
     // Immediately hide placeholder
     document.getElementById('knowledge-content-placeholder').classList.add('hidden');
 
-    fetch(`/api/knowledge/read?path=${encodeURIComponent(path)}`).then(r => r.json()).then(data => {
+    fetch(window.__ecorexRuntimePath ? window.__ecorexRuntimePath(`/api/knowledge/read?path=${encodeURIComponent(path)}`) : `/api/knowledge/read?path=${encodeURIComponent(path)}`).then(r => r.json()).then(data => {
         if (data.status !== 'success') return;
         const viewer = document.getElementById('knowledge-content-viewer');
         document.getElementById('knowledge-viewer-title').textContent = title;
@@ -8048,8 +10121,14 @@ function loadKnowledgeGraph() {
         ensureD3Loaded(),
         fetch('/api/knowledge/graph').then(r => r.json()),
     ]).then(([, data]) => {
-        const nodes = data.nodes || [];
-        const links = data.links || [];
+        let nodes = data.nodes || [];
+        let links = data.links || [];
+        const GRAPH_NODE_RENDER_LIMIT = 320;
+        if (nodes.length > GRAPH_NODE_RENDER_LIMIT) {
+            nodes = nodes.slice(0, GRAPH_NODE_RENDER_LIMIT);
+            const keep = new Set(nodes.map(n => n.id));
+            links = links.filter(l => keep.has(l.source) && keep.has(l.target));
+        }
         if (nodes.length === 0) {
             container.innerHTML = `<div class="flex flex-col items-center justify-center h-full text-slate-400"><i class="fas fa-diagram-project text-3xl mb-3 opacity-40"></i><p class="text-sm">${t('knowledge_empty_hint')}</p></div>`;
             return;
@@ -8296,7 +10375,13 @@ window.fetch = function(...args) {
     return _originalFetch.apply(this, args).then(response => {
         if (response.status === 401) {
             const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
-            if (!url.startsWith('/auth/')) {
+            let path = url;
+            try { path = new URL(url, window.location.href).pathname; } catch (_) {}
+            const runtimeBase = window.__ecorexRuntimeBasePath || '';
+            if (runtimeBase && path.startsWith(runtimeBase + '/')) {
+                path = path.slice(runtimeBase.length);
+            }
+            if (!path.startsWith('/auth/')) {
                 showLoginScreen();
             }
         }

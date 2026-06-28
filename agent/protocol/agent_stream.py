@@ -4,8 +4,11 @@ Agent Stream Execution Module - Multi-turn reasoning based on tool-call
 Provides streaming output, event system, and complete tool-call loop
 """
 import json
+import hashlib
+import os
 import re
 import shlex
+import threading
 import time
 from typing import List, Dict, Any, Optional, Callable, Tuple
 
@@ -37,8 +40,92 @@ MAX_STORED_REASONING_CHARS = 4 * 1024  # 4 KB
 # Marker inserted between head and tail when reasoning is truncated.
 _REASONING_TRUNCATE_MARKER = "\n\n... [reasoning truncated, {omitted} chars omitted] ...\n\n"
 
+
+def _public_agent_exception_summary(value: Any) -> Dict[str, Any]:
+    text = str(value or "")
+    text_bytes = text.encode("utf-8", errors="replace")
+    text_hash = hashlib.sha256(text_bytes).hexdigest()[:16] if text else ""
+    error_type = value.__class__.__name__ if value is not None else ""
+    return {
+        "errorHash": text_hash,
+        "error_hash": text_hash,
+        "errorType": error_type,
+        "error_exception_type": error_type,
+        "errorLength": len(text),
+        "error_chars": len(text),
+        "errorBytes": len(text_bytes),
+        "error_bytes": len(text_bytes),
+        "redacted": True,
+        "errorRedacted": True,
+    }
+
+
+def _public_agent_exception_message(prefix: str, value: Any) -> str:
+    summary = _public_agent_exception_summary(value)
+    if not summary["errorHash"]:
+        return prefix
+    return (
+        f"{prefix} Details redacted "
+        f"(type={summary['errorType']}, hash={summary['errorHash']}, "
+        f"chars={summary['errorLength']}, bytes={summary['errorBytes']})."
+    )
+
+
+def _private_agent_exception_text_for_classification(value: Any) -> str:
+    """Use exception text only for local retry/overflow classification."""
+    if value is None:
+        return ""
+    return "{}".format(value)
+
+
+def _public_agent_tool_error_result(prefix: str, value: Any, *, execution_time: float = 0) -> Dict[str, Any]:
+    message = _public_agent_exception_message(prefix, value)
+    return {
+        "status": "error",
+        "result": message,
+        "error": message,
+        "execution_time": execution_time,
+        **_public_agent_exception_summary(value),
+    }
+
 TOOL_SCHEMA_BUDGET_ENABLED_DEFAULT = True
 CONTEXT_BUDGET_WARN_RATIO_DEFAULT = 0.85
+TOOL_EXECUTION_HEARTBEAT_SECONDS = 12
+TOOL_EXECUTION_DEFAULT_LEASE_SECONDS = 15 * 60
+TOOL_EXECUTION_DEFAULT_MAX_SECONDS = 90 * 60
+TOOL_EXECUTION_LONG_TASK_MAX_SECONDS = 3 * 60 * 60
+TOOL_EXECUTION_EXTENSION_SECONDS = 15 * 60
+TOOL_EXECUTION_LONG_TASK_KEYWORDS = (
+    "image",
+    "images",
+    "png",
+    "jpg",
+    "jpeg",
+    "webp",
+    "generate",
+    "render",
+    "comfy",
+    "diffusion",
+    "stable-diffusion",
+    "gpt-image",
+    "dall",
+    "midjourney",
+    "remotion",
+    "video",
+    "ffmpeg",
+    "playwright install",
+    "browser-automation",
+    "npm install",
+    "pip install",
+    "docker build",
+    "pytest",
+    "npm run build",
+    "生图",
+    "生成图片",
+    "图片",
+    "渲染",
+    "视频",
+)
 CONTEXT_OVERFLOW_KEYWORDS = (
     "context length exceeded",
     "maximum context length",
@@ -53,6 +140,97 @@ CONTEXT_OVERFLOW_KEYWORDS = (
     "request exceeds the maximum size",
     "tokens exceed",
 )
+
+
+def _env_int(name: str, default: int, *, minimum: int = 1, maximum: int = 24 * 60 * 60) -> int:
+    raw_value = os.environ.get(name, "")
+    if raw_value:
+        try:
+            parsed = int(float(raw_value))
+            return max(minimum, min(parsed, maximum))
+        except Exception:
+            logger.warning(
+                "[Agent] invalid %s=%r; using default %ss",
+                name,
+                raw_value,
+                default,
+            )
+    return max(minimum, min(default, maximum))
+
+
+def _coerce_timeout_hint_seconds(value: Any) -> Optional[int]:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0:
+        return None
+    if parsed > 24 * 60 * 60 * 100:
+        parsed = parsed / 1000.0
+    return int(parsed)
+
+
+def _tool_timeout_policy(tool_name: str, arguments: Any) -> Dict[str, Any]:
+    args = arguments if isinstance(arguments, dict) else {}
+    args_text = ""
+    try:
+        args_text = json.dumps(args, ensure_ascii=False).lower()
+    except Exception:
+        args_text = str(args).lower()
+
+    explicit_hint = None
+    for key in ("timeout_seconds", "timeout_secs", "timeout"):
+        explicit_hint = _coerce_timeout_hint_seconds(args.get(key))
+        if explicit_hint:
+            break
+    if explicit_hint is None:
+        explicit_hint = _coerce_timeout_hint_seconds(args.get("timeout_ms"))
+
+    base_seconds = _env_int(
+        "ECOREX_TOOL_EXECUTION_LEASE_SECONDS",
+        TOOL_EXECUTION_DEFAULT_LEASE_SECONDS,
+        minimum=60,
+        maximum=24 * 60 * 60,
+    )
+    max_seconds = _env_int(
+        "ECOREX_TOOL_EXECUTION_MAX_SECONDS",
+        TOOL_EXECUTION_DEFAULT_MAX_SECONDS,
+        minimum=base_seconds,
+        maximum=24 * 60 * 60,
+    )
+    extension_seconds = _env_int(
+        "ECOREX_TOOL_EXECUTION_EXTENSION_SECONDS",
+        TOOL_EXECUTION_EXTENSION_SECONDS,
+        minimum=60,
+        maximum=24 * 60 * 60,
+    )
+
+    name = str(tool_name or "").lower()
+    is_long_task = name in {"subagent", "agent_capability", "optional_abilities"} or any(
+        keyword in args_text or keyword in name for keyword in TOOL_EXECUTION_LONG_TASK_KEYWORDS
+    )
+    reason = "default"
+
+    if is_long_task:
+        base_seconds = max(base_seconds, 30 * 60)
+        max_seconds = max(max_seconds, TOOL_EXECUTION_LONG_TASK_MAX_SECONDS)
+        reason = "long_running_tool"
+
+    if explicit_hint:
+        base_seconds = max(base_seconds, min(explicit_hint + 60, 24 * 60 * 60))
+        max_seconds = max(max_seconds, min(explicit_hint + 30 * 60, 24 * 60 * 60))
+        reason = "tool_requested_timeout"
+
+    max_seconds = max(base_seconds, max_seconds)
+    adaptive = is_long_task or explicit_hint is not None
+    return {
+        "lease_seconds": base_seconds,
+        "max_seconds": max_seconds,
+        "extension_seconds": extension_seconds,
+        "adaptive": adaptive,
+        "reason": reason,
+    }
+
 TOOL_SCHEMA_CORE_NAMES = {
     "read",
     "ls",
@@ -65,18 +243,37 @@ TOOL_SCHEMA_CORE_NAMES = {
     "optional_abilities",
     "agent_capability",
     "feishu_cli",
+    "tongxin_cli",
     "ecorex_cli",
+}
+
+TOOL_NAME_ALIASES = {
+    "shell": "bash",
+    "terminal": "bash",
+    "cmd": "bash",
+    "powershell": "bash",
+    "image_generation": "imagegen",
+    "image-generation": "imagegen",
+    "tongxin": "tongxin_cli",
+    "tongxin-cli": "tongxin_cli",
+    "xin_agent_cli": "tongxin_cli",
+    "xin-agent-cli": "tongxin_cli",
 }
 
 TOOL_SCHEMA_INTENT_KEYWORDS = {
     "browser": (
-        "browser", "chrome", "cdp", "devtools", "playwright", "网页", "浏览器", "打开网页", "点击", "截图",
+        "browser", "chrome", "cdp", "devtools", "playwright", "http://", "https://",
+        "xhslink", "xiaohongshu", "小红书", "网页", "浏览器", "打开网页", "读取链接", "链接", "点击", "截图",
     ),
     "web": (
         "web", "search", "fetch", "http://", "https://", "latest", "today", "新闻", "搜索", "联网", "查一下",
     ),
     "feishu": (
         "feishu", "lark", "飞书", "多维表格", "妙搭", "妙记", "日历", "审批", "通讯录", "bitable",
+    ),
+    "tongxin": (
+        "tongxin", "xin_agent", "xin agent", "芯助手", "通芯", "实时消耗", "账号数据", "三端口",
+        "本土小红书", "医美小红书", "乘风小红书", "mpi", "广告主", "消耗", "展现", "点击",
     ),
     "scheduler": (
         "schedule", "scheduler", "remind", "cron", "定时", "提醒", "自动化", "每天", "每周",
@@ -86,6 +283,15 @@ TOOL_SCHEMA_INTENT_KEYWORDS = {
     ),
     "vision": (
         "image", "vision", "screenshot", "图片", "图像", "截图", "识别",
+    ),
+    "imagegen": (
+        "imagegen", "image gen", "image generation", "text to image", "image to image",
+        "generate image", "edit image", "生图", "图像生成", "图片生成", "文生图", "图生图",
+        "生成图片", "生成图像", "改图", "修图",
+    ),
+    "ocr": (
+        "ocr", "extract text", "extract url", "screenshot link", "image link",
+        "图片链接", "截图链接", "识别链接", "读取链接", "读链接", "识别文字", "识别文本",
     ),
     "memory": (
         "memory", "remember", "recall", "记忆", "回忆",
@@ -100,6 +306,8 @@ TOOL_SCHEMA_INTENT_KEYWORDS = {
 TOOL_SCHEMA_FOLLOWUP_CONFIRMATIONS = {
     "ok", "okay", "yes", "y", "go", "continue", "proceed", "do it", "run it", "execute",
     "好的", "好", "可以", "继续", "执行", "开始", "确认", "嗯", "行",
+    "已登录", "已经登录", "登录完成", "我已登录", "我已经登录",
+    "已扫码", "扫码完成", "已授权", "授权完成",
 }
 
 
@@ -399,7 +607,7 @@ class AgentStreamExecutor:
                 "content": [{"type": "text", "text": "_(Cancelled by user)_"}],
             })
         except Exception as e:
-            logger.warning(f"[Agent] _handle_cancelled cleanup failed: {e}")
+            logger.warning(f"[Agent] _handle_cancelled cleanup failed: {_public_agent_exception_message('Cleanup failed.', e)}")
 
     def _emit_event(self, event_type: str, data: dict = None):
         """Emit event"""
@@ -411,7 +619,7 @@ class AgentStreamExecutor:
                     "data": data or {}
                 })
             except Exception as e:
-                logger.error(f"Event callback error: {e}")
+                logger.error(f"Event callback error: {_public_agent_exception_message('Event callback failed.', e)}")
 
     def _authorize_tool_execution(self, tool_name: str, tool_id: str, arguments: dict) -> dict:
         """Ask the desktop permission broker before high-risk local tools run."""
@@ -428,12 +636,12 @@ class AgentStreamExecutor:
         except AgentCancelledError:
             raise
         except Exception as e:
-            logger.warning(f"[Agent] desktop tool permission check skipped: {e}")
+            logger.warning(f"[Agent] desktop tool permission check skipped: {_public_agent_exception_message('Permission check failed.', e)}")
             risky = (tool_name or "").strip().lower() in {
                 "bash", "shell", "terminal", "browser", "feishu_cli", "optional_abilities",
-                "agent_capability", "mcp", "mcp_server", "write", "edit", "fs_write", "skill_write",
+                "tongxin_cli", "agent_capability", "mcp", "mcp_server", "write", "edit", "fs_write", "skill_write",
                 "env_config", "send", "scheduler", "evolution_undo",
-                "web_fetch", "web_search", "vision",
+                "web_fetch", "web_search", "vision", "ocr", "imagegen",
             }
             if (tool_name or "").strip().lower() == "optional_abilities" and str((arguments or {}).get("action") or "").strip().lower() in {"list", "status"}:
                 risky = False
@@ -459,6 +667,11 @@ class AgentStreamExecutor:
             if action == "install_pack":
                 ability = args.get("pack_id") or args.get("ability") or ""
                 normalized_ability = str(ability or "").strip().lower().replace("_", "-")
+                if normalized_ability in {"tongxin", "tongxin-cli", "xin-agent", "xin-agent-cli", "tx-assistant"}:
+                    return "tongxin_cli", {
+                        "action": "status",
+                        "scope": "agent_capability_install_pack_preflight",
+                    }
                 if normalized_ability in {"feishu", "lark", "feishu-lark", "lark-feishu"}:
                     ability = "feishu-cli"
                 elif normalized_ability in {"feishu-cli", "lark-cli"}:
@@ -670,10 +883,17 @@ class AgentStreamExecutor:
         args = args if isinstance(args, dict) else {}
         if name == "feishu_cli":
             return self._feishu_cli_chain_key(args)
+        if name == "tongxin_cli":
+            action = str(args.get("action") or "").strip().lower() or "status"
+            cli_args = args.get("args") if isinstance(args.get("args"), list) else []
+            command = ":".join(str(item).strip().lower() for item in cli_args[:2] if str(item).strip())
+            return f"tongxin_cli:{action}:{command or 'status'}"
         if name in {"bash", "shell", "terminal"}:
             command = str(args.get("command") or args.get("cmd") or "").strip().lower()
             if self._looks_like_feishu_cli_command(command):
                 return "feishu_cli:bash"
+            if self._looks_like_tongxin_cli_command(command):
+                return "tongxin_cli:bash"
             if "chrome-devtools" in command or "remote-debugging-port" in command or "cdp" in command:
                 return "browser:cdp"
             for prefix in ("python", "powershell", "pwsh", "node", "npm", "npx", "git", "curl"):
@@ -682,6 +902,8 @@ class AgentStreamExecutor:
             return "bash:generic"
         if name == "browser":
             return f"browser:{str(args.get('action') or '').strip().lower()}"
+        if name == "ocr":
+            return f"ocr:{str(args.get('action') or '').strip().lower()}"
         if name.startswith("mcp__chrome-devtools__") or name.startswith("mcp__chrome_devtools__"):
             return "browser:cdp"
         if name.startswith("mcp__"):
@@ -713,6 +935,12 @@ class AgentStreamExecutor:
                 "Stop calling Feishu commands now: summarize what is known, state the exact blocker "
                 "(auth, empty attachment output, slow page, missing field, or unsupported command), "
                 "and ask the user for the next authorization or input if needed."
+            )
+        if chain_key.startswith("tongxin_cli") and recent_count >= 6:
+            return True, (
+                "Tongxin CLI read-only query chain has been used repeatedly without converging. "
+                "Stop calling Tongxin commands now: summarize the latest account-data result or exact blocker "
+                "(missing script, empty result, permission scope, unsupported command, or timeout), then ask the user for the next input."
             )
         if chain_key.startswith("browser:") and recent_count >= 8:
             return True, (
@@ -879,6 +1107,7 @@ class AgentStreamExecutor:
 
     def _tool_schema_group(self, tool_name: str) -> str:
         name = (tool_name or "").strip().lower()
+        name = TOOL_NAME_ALIASES.get(name, name)
         if name.startswith("mcp__chrome-devtools__") or name.startswith("mcp__chrome_devtools__"):
             return "browser"
         if name.startswith("mcp__"):
@@ -889,17 +1118,28 @@ class AgentStreamExecutor:
             return "web"
         if name == "feishu_cli":
             return "feishu"
+        if name == "tongxin_cli":
+            return "tongxin"
         if name == "scheduler":
             return "scheduler"
         if name == "subagent":
             return "subagent"
         if name == "vision":
             return "vision"
+        if name == "ocr":
+            return "ocr"
+        if name == "imagegen":
+            return "imagegen"
         if name in {"memory_search", "memory_get"}:
             return "memory"
         if name in {"host_diagnostics", "optional_abilities", "agent_capability", "ecorex_cli", "env_config"}:
             return "diagnostics"
         return "core" if name in TOOL_SCHEMA_CORE_NAMES else "other"
+
+    @staticmethod
+    def _canonical_tool_name(tool_name: str) -> str:
+        name = str(tool_name or "").strip()
+        return TOOL_NAME_ALIASES.get(name.lower(), name)
 
     def _tool_schema_intent_groups(self, user_text: str) -> set:
         lowered = (user_text or "").lower()
@@ -1400,6 +1640,19 @@ class AgentStreamExecutor:
                     "Do not keep probing Feishu/Lark CLI through raw bash. Call `host_diagnostics` with "
                     "action `status` first to inspect whether Feishu CLI is packaged and authorized."
                 )
+        if self._looks_like_tongxin_cli_command(command):
+            if "tongxin_cli" in self.tools:
+                return (
+                    "Do not call Tongxin Assistant CLI through raw bash. Use the `tongxin_cli` tool first "
+                    "so EcoreX can enforce the all-user read-only command allowlist, bounded timeouts, "
+                    "and sanitized output. Write, sync, auth, submit, approve, delete, and permission-changing "
+                    "Tongxin commands are not allowed."
+                )
+            if "host_diagnostics" in self.tools:
+                return (
+                    "Do not keep probing Tongxin Assistant CLI through raw bash. Call `host_diagnostics` "
+                    "with action `status` first to inspect whether the Tongxin read-only CLI is configured."
+                )
         if (
             "chrome-devtools-mcp" in command
             or "remote-debugging-port" in command
@@ -1407,6 +1660,14 @@ class AgentStreamExecutor:
             or "localhost:9222" in command
         ):
             if "host_diagnostics" in self.tools:
+                if "browser" in self.tools:
+                    return (
+                        "CDP is a browser automation path, not a raw shell task. "
+                        "Use the `browser` tool directly with action `snapshot`, `navigate`, "
+                        "`click`, `fill`, or `get_text`; EcoreX will attach to the configured "
+                        "CDP endpoint and reuse the logged-in browser profile. Do not read "
+                        "Codex/Chrome plugin SKILL.md files and do not probe 9222 through bash."
+                    )
                 return (
                     "Do not probe or launch CDP through raw bash as the first browser path. "
                     "Call `host_diagnostics` first to inspect CDP/MCP readiness, then use "
@@ -1458,6 +1719,32 @@ class AgentStreamExecutor:
             or "/@larksuite/cli/" in text
             or "/lark-cli/" in text
         ):
+            return True
+        return False
+
+    @staticmethod
+    def _is_tongxin_cli_runner(token: str) -> bool:
+        text = str(token or "").strip().strip("\"'").replace("\\", "/").lower()
+        name = text.rsplit("/", 1)[-1]
+        return name in {
+            "xin_agent_cli.py",
+            "tongxin_cli.py",
+            "tongxin-cli",
+            "tongxin-cli.cmd",
+            "tongxin-cli.exe",
+            "xin-agent-cli",
+            "xin-agent-cli.cmd",
+            "xin-agent-cli.exe",
+        }
+
+    @classmethod
+    def _looks_like_tongxin_cli_command(cls, command: str) -> bool:
+        text = str(command or "").strip().lower().replace("\\", "/")
+        if "xin_agent_cli.py" in text or "tongxin_cli.py" in text:
+            return True
+        if "tongxin-cli" in text or "xin-agent-cli" in text:
+            return True
+        if "/自动报表工具/" in text and "xin_agent" in text:
             return True
         return False
 
@@ -1515,6 +1802,33 @@ class AgentStreamExecutor:
                 return None
         return None
 
+    @classmethod
+    def _extract_simple_tongxin_cli_args(cls, command: str) -> Optional[List[str]]:
+        """Extract args from simple raw Tongxin CLI shell invocations."""
+        raw = str(command or "").strip()
+        if not raw or cls._has_shell_control_operator(raw):
+            return None
+        try:
+            tokens = shlex.split(raw, posix=False)
+        except ValueError:
+            return None
+        tokens = [str(token).strip().strip("\"'") for token in tokens if str(token).strip()]
+        if not tokens:
+            return None
+
+        for index, token in enumerate(tokens):
+            if cls._is_tongxin_cli_runner(token):
+                if index == 0:
+                    return tokens[1:]
+                launcher = cls._shell_token_basename(tokens[index - 1]) if index > 0 else ""
+                if launcher in {"python", "python.exe", "python3", "py", "py.exe", "node", "node.exe"}:
+                    return tokens[index + 1:]
+                # Windows py -3 xin_agent_cli.py ...
+                if index >= 2 and cls._shell_token_basename(tokens[index - 2]) in {"py", "py.exe"} and tokens[index - 1].startswith("-"):
+                    return tokens[index + 1:]
+                return None
+        return None
+
     @staticmethod
     def _feishu_autoroute_args(lark_args: List[str], original_args: dict) -> dict:
         lowered = [str(item).strip().lower() for item in lark_args]
@@ -1535,20 +1849,40 @@ class AgentStreamExecutor:
             routed["timeout"] = original_args.get("timeout")
         return routed
 
+    @staticmethod
+    def _tongxin_autoroute_args(cli_args: List[str], original_args: dict) -> dict:
+        lowered = [str(item).strip().lower() for item in cli_args]
+        if lowered[:1] == ["schema"]:
+            routed: Dict[str, Any] = {"action": "schema"}
+        else:
+            routed = {"action": "run", "args": cli_args}
+        if isinstance(original_args, dict) and original_args.get("timeout") is not None:
+            routed["timeout"] = original_args.get("timeout")
+        return routed
+
     def _external_capability_autoroute(self, tool_name: str, args: dict) -> Tuple[str, dict, str]:
         """Map a simple wrong host path to the safer first-party host tool."""
         name = (tool_name or "").strip().lower()
-        if name not in {"bash", "shell", "terminal"} or "feishu_cli" not in self.tools:
+        if name not in {"bash", "shell", "terminal"}:
             return "", {}, ""
         command = str((args or {}).get("command") or (args or {}).get("cmd") or "").strip()
-        lark_args = self._extract_simple_lark_cli_args(command)
-        if lark_args is None:
-            return "", {}, ""
-        return (
-            "feishu_cli",
-            self._feishu_autoroute_args(lark_args, args or {}),
-            "raw bash lark-cli",
-        )
+        if "tongxin_cli" in self.tools:
+            tongxin_args = self._extract_simple_tongxin_cli_args(command)
+            if tongxin_args is not None:
+                return (
+                    "tongxin_cli",
+                    self._tongxin_autoroute_args(tongxin_args, args or {}),
+                    "raw bash tongxin-cli",
+                )
+        if "feishu_cli" in self.tools:
+            lark_args = self._extract_simple_lark_cli_args(command)
+            if lark_args is not None:
+                return (
+                    "feishu_cli",
+                    self._feishu_autoroute_args(lark_args, args or {}),
+                    "raw bash lark-cli",
+                )
+        return "", {}, ""
 
     def run_stream(self, user_message: str) -> str:
         """
@@ -1881,7 +2215,7 @@ class AgentStreamExecutor:
                             f"I've taken {turn} decision steps and reached the per-run limit. The task may not be fully complete — try breaking it into smaller steps, or describe your request differently.",
                         )
                 except Exception as e:
-                    logger.warning(f"Failed to get summary from LLM: {e}")
+                    logger.warning(f"Failed to get summary from LLM: {_public_agent_exception_message('Summary generation failed.', e)}")
                     final_response = _t(
                         f"我已经执行了{turn}个决策步骤，达到了单次运行的步数上限。任务可能还未完全完成，建议你将任务拆分成更小的步骤，或者换一种方式描述需求。",
                         f"I've taken {turn} decision steps and reached the per-run limit. The task may not be fully complete — try breaking it into smaller steps, or describe your request differently.",
@@ -1905,8 +2239,10 @@ class AgentStreamExecutor:
                 final_response = "_(Cancelled)_"
 
         except Exception as e:
-            logger.error(f"❌ Agent execution error: {e}")
-            error_payload = {"error": str(e)}
+            public_error = _public_agent_exception_message("Agent execution failed.", e)
+            logger.error(f"❌ Agent execution error: {public_error}")
+            error_payload = {"error": public_error, "message": public_error}
+            error_payload.update(_public_agent_exception_summary(e))
             retry_evidence = getattr(self, "_last_model_retry_evidence", {}) or {}
             if isinstance(retry_evidence, dict):
                 error_payload.update(retry_evidence)
@@ -1965,7 +2301,7 @@ class AgentStreamExecutor:
             from agent.tools import ToolManager
             ToolManager().sync_mcp_into_agent(self)
         except Exception as e:
-            logger.debug(f"[Agent] MCP sync skipped: {e}")
+            logger.debug(f"[Agent] MCP sync skipped: {_public_agent_exception_message('MCP sync failed.', e)}")
 
         if _force_text_turn is None:
             force_text_response = self._force_text_response_next_turn
@@ -2158,11 +2494,11 @@ class AgentStreamExecutor:
 
                     # Log error with all available information
                     logger.error(f"🔴 Stream API Error:")
-                    logger.error(f"   Message: {error_msg}")
+                    logger.error(f"   Message: {_public_agent_exception_message('Stream API message redacted.', error_msg)}")
                     logger.error(f"   Status Code: {status_code}")
                     logger.error(f"   Error Code: {error_code}")
                     logger.error(f"   Error Type: {error_type}")
-                    logger.error(f"   Full chunk: {chunk}")
+                    logger.error(f"   Full chunk: {_public_agent_exception_summary(chunk)}")
                     
                     # Check if this is a context overflow error. Prefer the
                     # shared model taxonomy when present; keep keyword fallback
@@ -2250,6 +2586,20 @@ class AgentStreamExecutor:
                                 if func.get("arguments"):
                                     tool_calls_buffer[index]["arguments"] += func["arguments"]
 
+                    if "function_call" in delta and delta["function_call"]:
+                        func = delta["function_call"] or {}
+                        index = 0
+                        if index not in tool_calls_buffer:
+                            tool_calls_buffer[index] = {
+                                "id": "",
+                                "name": "",
+                                "arguments": ""
+                            }
+                        if func.get("name"):
+                            tool_calls_buffer[index]["name"] = func["name"]
+                        if func.get("arguments"):
+                            tool_calls_buffer[index]["arguments"] += func["arguments"]
+
                     # Preserve _gemini_raw_parts for Gemini thoughtSignature round-trip
                     # (direct Gemini: list of parts; LinkAI proxy: base64 string of JSON parts)
                     if "_gemini_raw_parts" in delta:
@@ -2262,7 +2612,7 @@ class AgentStreamExecutor:
             raise
 
         except Exception as e:
-            error_str = str(e)
+            error_str = _private_agent_exception_text_for_classification(e)
             error_str_lower = error_str.lower()
             model_retry_exhausted = '[model_retry_exhausted]' in error_str_lower
             if model_retry_exhausted:
@@ -2297,7 +2647,7 @@ class AgentStreamExecutor:
             
             if is_context_overflow or is_message_format_error:
                 error_type = "context overflow" if is_context_overflow else "message format error"
-                logger.error(f"💥 {error_type} detected: {e}")
+                logger.error(f"💥 {error_type} detected: {_public_agent_exception_message('LLM error redacted.', e)}")
 
                 stream_output_started = bool(full_content or full_reasoning or tool_calls_buffer)
                 if is_context_overflow and stream_output_started:
@@ -2424,7 +2774,7 @@ class AgentStreamExecutor:
                 else:
                     wait_time = (retry_count + 1) * 2  # 2s, 4s, 6s for other errors
                 
-                logger.warning(f"⚠️ LLM API error (attempt {retry_count + 1}/{max_retries}): {e}")
+                logger.warning(f"⚠️ LLM API error (attempt {retry_count + 1}/{max_retries}): {_public_agent_exception_message('LLM retryable error redacted.', e)}")
                 logger.info(f"Retrying in {wait_time}s...")
                 self._sleep_cancelable(wait_time)
                 return self._call_llm_stream(
@@ -2437,9 +2787,9 @@ class AgentStreamExecutor:
                 )
             else:
                 if retry_count >= max_retries:
-                    logger.error(f"❌ LLM API error after {max_retries} retries: {e}", exc_info=True)
+                    logger.error(f"❌ LLM API error after {max_retries} retries: {_public_agent_exception_message('LLM error redacted.', e)}")
                 else:
-                    logger.error(f"❌ LLM call error (non-retryable): {e}", exc_info=True)
+                    logger.error(f"❌ LLM call error (non-retryable): {_public_agent_exception_message('LLM error redacted.', e)}")
                 if model_retry_exhausted:
                     raise Exception(error_str)
                 raise
@@ -2463,7 +2813,7 @@ class AgentStreamExecutor:
                 )
                 tool_calls.append({
                     "id": tool_id,
-                    "name": tc["name"],
+                    "name": self._canonical_tool_name(tc["name"]),
                     "arguments": {},
                     "_parse_error": parse_err,
                 })
@@ -2471,7 +2821,7 @@ class AgentStreamExecutor:
 
             tool_calls.append({
                 "id": tool_id,
-                "name": tc["name"],
+                "name": self._canonical_tool_name(tc["name"]),
                 "arguments": arguments
             })
 
@@ -2554,11 +2904,13 @@ class AgentStreamExecutor:
         Returns:
             Tool execution result
         """
-        tool_name = tool_call["name"]
+        tool_name = self._canonical_tool_name(tool_call["name"])
         tool_id = tool_call["id"]
         arguments = tool_call["arguments"]
         rerouted_from = ""
         tool_start_emitted = False
+        tool_heartbeat_stop: Optional[threading.Event] = None
+        tool_heartbeat_thread: Optional[threading.Thread] = None
 
         def emit_tool_start() -> None:
             nonlocal tool_start_emitted
@@ -2578,6 +2930,98 @@ class AgentStreamExecutor:
                 "tool_name": tool_name,
                 **result_payload
             })
+
+        def start_tool_heartbeat() -> None:
+            nonlocal tool_heartbeat_stop, tool_heartbeat_thread
+            emit_tool_start()
+            if tool_heartbeat_thread is not None:
+                return
+            started_at = time.time()
+            policy = _tool_timeout_policy(tool_name, arguments)
+            deadline_seconds = float(policy["lease_seconds"])
+            max_seconds = float(policy["max_seconds"])
+            extension_seconds = float(policy["extension_seconds"])
+            extension_count = 0
+            stop_event = threading.Event()
+            tool_heartbeat_stop = stop_event
+
+            def heartbeat_loop() -> None:
+                nonlocal deadline_seconds, extension_count
+                while not stop_event.wait(TOOL_EXECUTION_HEARTBEAT_SECONDS):
+                    elapsed_seconds = round(time.time() - started_at, 2)
+                    if elapsed_seconds >= deadline_seconds:
+                        if policy["adaptive"] and deadline_seconds < max_seconds:
+                            previous_deadline = deadline_seconds
+                            deadline_seconds = min(max_seconds, deadline_seconds + extension_seconds)
+                            extension_count += 1
+                            self._emit_event("tool_execution_deadline_extended", {
+                                "tool_call_id": tool_id,
+                                "tool_name": tool_name,
+                                "elapsed_seconds": elapsed_seconds,
+                                "previous_deadline_seconds": int(previous_deadline),
+                                "deadline_seconds": int(deadline_seconds),
+                                "max_seconds": int(max_seconds),
+                                "extension_count": extension_count,
+                                "reason": policy["reason"],
+                                "status": "running",
+                            })
+                            self._emit_event("tool_execution_heartbeat", {
+                                "tool_call_id": tool_id,
+                                "tool_name": tool_name,
+                                "elapsed_seconds": elapsed_seconds,
+                                "deadline_seconds": int(deadline_seconds),
+                                "max_seconds": int(max_seconds),
+                                "extension_count": extension_count,
+                                "status": "running",
+                            })
+                            continue
+                        logger.warning(
+                            "[Agent] tool execution timeout: tool=%s id=%s elapsed=%ss deadline=%ss max=%ss adaptive=%s",
+                            tool_name,
+                            tool_id,
+                            elapsed_seconds,
+                            deadline_seconds,
+                            max_seconds,
+                            policy["adaptive"],
+                        )
+                        self._emit_event("tool_execution_timeout", {
+                            "tool_call_id": tool_id,
+                            "tool_name": tool_name,
+                            "elapsed_seconds": elapsed_seconds,
+                            "timeout_seconds": int(deadline_seconds),
+                            "max_seconds": int(max_seconds),
+                            "extension_count": extension_count,
+                            "status": "timeout",
+                            "error_code": "TOOL_TIMEOUT",
+                            "message": (
+                                f"Tool '{tool_name}' exceeded the {int(deadline_seconds)}s execution deadline. "
+                                "The run was marked timed out to avoid an indefinitely active session. "
+                                "For legitimately longer work, retry with a larger tool timeout or split the task."
+                            ),
+                        })
+                        if self.cancel_event is not None:
+                            self.cancel_event.set()
+                        break
+                    self._emit_event("tool_execution_heartbeat", {
+                        "tool_call_id": tool_id,
+                        "tool_name": tool_name,
+                        "elapsed_seconds": elapsed_seconds,
+                        "deadline_seconds": int(deadline_seconds),
+                        "max_seconds": int(max_seconds),
+                        "extension_count": extension_count,
+                        "status": "running",
+                    })
+
+            tool_heartbeat_thread = threading.Thread(
+                target=heartbeat_loop,
+                name=f"ecorex-tool-heartbeat-{str(tool_id)[:8]}",
+                daemon=True,
+            )
+            tool_heartbeat_thread.start()
+
+        def stop_tool_heartbeat() -> None:
+            if tool_heartbeat_stop is not None:
+                tool_heartbeat_stop.set()
 
         if "_parse_error" in tool_call:
             result = {
@@ -2653,12 +3097,8 @@ class AgentStreamExecutor:
             if not tool:
                 raise ValueError(self._build_tool_not_found_message(tool_name))
         except Exception as e:
-            logger.error(f"Tool lookup error: {e}")
-            error_result = {
-                "status": "error",
-                "result": str(e),
-                "execution_time": 0
-            }
+            logger.error(f"Tool lookup error: {_public_agent_exception_message('Tool lookup failed.', e)}")
+            error_result = _public_agent_tool_error_result("Tool lookup failed.", e)
             self._record_tool_result(tool_name, arguments, False)
             emit_tool_end(error_result)
             return error_result
@@ -2686,7 +3126,7 @@ class AgentStreamExecutor:
             emit_tool_end(result)
             return result
 
-        emit_tool_start()
+        start_tool_heartbeat()
 
         try:
             # Set tool context
@@ -2747,12 +3187,8 @@ class AgentStreamExecutor:
             return result_dict
 
         except Exception as e:
-            logger.error(f"Tool execution error: {e}")
-            error_result = {
-                "status": "error",
-                "result": str(e),
-                "execution_time": 0
-            }
+            logger.error(f"Tool execution error: {_public_agent_exception_message('Tool execution failed.', e)}")
+            error_result = _public_agent_tool_error_result("Tool execution failed.", e)
             # Record failure
             self._record_tool_result(tool_name, arguments, False)
             
@@ -2762,6 +3198,8 @@ class AgentStreamExecutor:
                 **error_result
             })
             return error_result
+        finally:
+            stop_tool_heartbeat()
 
     def _build_tool_not_found_message(self, tool_name: str) -> str:
         """Build a helpful error message when a tool is not found.
@@ -3348,10 +3786,10 @@ class AgentStreamExecutor:
                 if removed:
                     logger.info(f"Cleared Responses state for dirty session: {session_id}, removed={removed}")
             except Exception as e:
-                logger.warning(f"Failed to clear Responses state for dirty session {session_id}: {e}")
+                logger.warning(f"Failed to clear Responses state for dirty session {session_id}: {_public_agent_exception_message('Responses state cleanup failed.', e)}")
             logger.info(f"🗑️ Cleared dirty session data from DB: {session_id}")
         except Exception as e:
-            logger.warning(f"Failed to clear session DB: {e}")
+            logger.warning(f"Failed to clear session DB: {_public_agent_exception_message('Session DB cleanup failed.', e)}")
 
     def _prepare_messages(self) -> List[Dict[str, Any]]:
         """

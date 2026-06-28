@@ -3,6 +3,28 @@
   "product": "EcoreX",
   "packs": [
     {
+      "id": "tongxin-cli",
+      "name": "通芯助手 CLI 只读数据",
+      "summary": "默认启用的只读账户数据能力。通过结构化 tongxin_cli 工具访问既有 xin_agent_cli.py，仅允许账号、项目、报表、笔记和今日实时汇总查询。",
+      "installMode": "user-or-admin",
+      "defaultEnabled": true,
+      "readOnly": true,
+      "configureOnly": true,
+      "discoveryOnly": false,
+      "installHint": "默认只读能力。请使用结构化 tongxin_cli 工具；仅在无法自动发现时配置 tools.tongxin_cli.script_path 或 ECOREX_TONGXIN_CLI_PATH 指向既有 xin_agent_cli.py，不要作为通用能力包安装。",
+      "requirements": [],
+      "moduleChecks": [],
+      "allowedCommands": [
+        "schema",
+        "account list",
+        "project list",
+        "report summary",
+        "note detail",
+        "realtime summary --xhs-channel all"
+      ],
+      "failureHint": "请配置 tools.tongxin_cli.script_path 或 ECOREX_TONGXIN_CLI_PATH 指向只读 xin_agent_cli.py；不要通过 bash 直接调用或安装。"
+    },
+    {
       "id": "feishu-lark",
       "name": "飞书 / Lark 连接器",
       "summary": "仅发现飞书/Lark 需求；由当前 agent 会话先走内置 find skill / find-skill 能力，再按需从 GitHub 或国内镜像安装连接器。",
@@ -22,8 +44,8 @@
       "summary": "用于 PDF、Word、Excel、PPT 等文件的文本抽取与预览增强。",
       "installMode": "user-or-admin",
       "estimatedSizeMb": 92,
-      "requirements": ["pypdf", "pdfminer.six", "python-docx", "python-pptx", "openpyxl", "xlsxwriter", "markdownify"],
-      "moduleChecks": ["pypdf", "pdfminer", "docx", "pptx", "openpyxl", "xlsxwriter", "markdownify"],
+      "requirements": ["pypdf", "pdfminer.six", "python-docx", "python-pptx", "openpyxl", "xlsxwriter", "markdownify", "reportlab", "PyMuPDF"],
+      "moduleChecks": ["pypdf", "pdfminer", "docx", "pptx", "openpyxl", "xlsxwriter", "markdownify", "reportlab", "fitz"],
       "failureHint": "文件仍可用系统应用打开；解析增强安装失败时请保存日志给管理员。"
     },
     {
@@ -36,6 +58,16 @@
       "postInstallCommands": ["python -m playwright install chromium"],
       "moduleChecks": ["playwright"],
       "failureHint": "浏览器自动化包较大，企业网络建议由管理员预置或配置内网镜像。"
+    },
+    {
+      "id": "fast-ocr",
+      "name": "快速 OCR",
+      "summary": "用于截图中文字和 URL 的本地快速识别；复杂图片理解仍交给 vision。",
+      "installMode": "user-or-admin",
+      "estimatedSizeMb": 80,
+      "requirements": ["rapidocr-onnxruntime"],
+      "moduleChecks": ["rapidocr_onnxruntime", "onnxruntime", "PIL"],
+      "failureHint": "OCR 包安装失败时仍可从直接粘贴的文本 URL 读取；截图 URL 将回退到较慢的 vision 路径。"
     },
     {
       "id": "voice",

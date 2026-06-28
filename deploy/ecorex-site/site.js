@@ -4,9 +4,9 @@ const themeIcon = document.querySelector("[data-theme-icon]");
 
 const INSTALL_COMMANDS = {
   win32:
-    'powershell -ExecutionPolicy Bypass -NoProfile -Command "iwr https://www.ecoreai.cn/ecorex-agent/install-webui.ps1 -UseB | iex"',
+    'powershell -ExecutionPolicy Bypass -NoProfile -Command "iwr https://mvdcm.ecoremedia.net/ecorex-agent/install-webui.ps1 -UseB | iex"',
   darwin:
-    "curl -fsSL https://www.ecoreai.cn/ecorex-agent/install-webui.sh | bash",
+    "curl -fsSL https://mvdcm.ecoremedia.net/ecorex-agent/install-webui.sh | bash",
 };
 
 function setTheme(theme) {

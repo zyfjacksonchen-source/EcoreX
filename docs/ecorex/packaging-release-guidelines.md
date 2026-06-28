@@ -657,8 +657,11 @@ Invoke-WebRequest -UseBasicParsing `
 
 - Packaged built-in skills can be masked by old workspace copies under
   `~/EcoreX/skills`. Release validation must check that official managed
-  built-ins such as `image-generation` and `create-xiaohongshu-note` refresh
-  stale workspace copies unless the copy contains `.ecorex-custom-override`.
+  built-ins such as `image-generation` refresh stale workspace copies unless
+  the copy contains `.ecorex-custom-override`.
+- Vertical workflow skills, including the former `create-xiaohongshu-note`,
+  must not be bundled as managed built-ins in v0.2.3+. They should be learned
+  as user/project skills through the draft, review, and registration path.
 - A same-name built-in skill override is only considered intentional when it was
   installed through the explicit override path and contains
   `.ecorex-custom-override`. Plain old copied built-ins are release-managed and

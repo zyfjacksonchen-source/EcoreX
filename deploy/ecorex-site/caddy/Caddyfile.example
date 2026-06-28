@@ -1,9 +1,9 @@
-# Example Caddy routes for EcoreX v0.2.0.
+# Example Caddy routes for EcoreX v0.2.2.
 # Use this when you need a complete site block example.
-# If www.ecoreai.cn already exists in your Caddyfile, copy/import
+# If mvdcm.ecoremedia.net already exists in your Caddyfile, copy/import
 # ecorex-agent.routes.caddy inside that existing site block instead.
 
-www.ecoreai.cn {
+mvdcm.ecoremedia.net {
     encode zstd gzip
 
     import /srv/ecorex-agent-admin/server/caddy/ecorex-agent.routes.caddy

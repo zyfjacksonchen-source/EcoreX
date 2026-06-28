@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from agent.tools.base_tool import BaseTool, ToolResult
+from common.ecorex_public_payload import mask_sensitive_text
 from common.log import logger
 
 
@@ -30,7 +31,7 @@ def _mask(text: str) -> str:
     value = _SENSITIVE_PATTERNS[0].sub("sk-***", value)
     value = _SENSITIVE_PATTERNS[1].sub("ghp_***", value)
     value = _SENSITIVE_PATTERNS[2].sub(lambda m: f"{m.group(1)}{m.group(2)}***", value)
-    return value
+    return mask_sensitive_text(value, max_chars=2000)
 
 
 def _which(name: str) -> Optional[str]:
@@ -143,17 +144,10 @@ def _active_log_paths() -> List[Path]:
 def _check_cdp(endpoint: str) -> Dict[str, Any]:
     if not endpoint:
         return {"configured": False, "ready": False}
-    url = endpoint.rstrip("/") + "/json/version"
     try:
-        with urllib.request.urlopen(url, timeout=1.5) as response:
-            payload = json.loads(response.read().decode("utf-8", errors="replace") or "{}")
-        return {
-            "configured": True,
-            "ready": True,
-            "endpoint": endpoint,
-            "browser": payload.get("Browser", ""),
-            "webSocketDebuggerUrl": bool(payload.get("webSocketDebuggerUrl")),
-        }
+        from agent.tools.browser.browser_automation_service import cdp_status
+
+        return cdp_status(endpoint)
     except Exception as exc:
         return {
             "configured": True,
@@ -214,6 +208,31 @@ def _feishu_status(cwd: str) -> Dict[str, Any]:
         return {"status": "error", "available": False, "message": str(exc)}
 
 
+def _tongxin_status(cwd: str) -> Dict[str, Any]:
+    try:
+        from common.ecorex_tool_permissions import get_tool_permission_broker
+
+        decision = get_tool_permission_broker().authorize_noninteractive(
+            "tongxin_cli",
+            {"action": "status", "scope": "host_diagnostics"},
+        )
+        if not decision.get("allowed"):
+            return {
+                "status": "blocked",
+                "available": False,
+                "message": decision.get("reason") or "Tongxin CLI status check blocked by permission boundary.",
+            }
+
+        from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
+
+        result = TongxinCli({"cwd": cwd}).execute({"action": "status"})
+        payload = result.result if isinstance(result.result, dict) else {"raw": str(result.result)}
+        payload["status"] = result.status
+        return payload
+    except Exception as exc:
+        return {"status": "error", "available": False, "message": str(exc)}
+
+
 def _skill_status(cwd: str) -> Dict[str, Any]:
     try:
         from agent.skills.loader import SkillLoader
@@ -243,9 +262,9 @@ class HostDiagnostics(BaseTool):
     name: str = "host_diagnostics"
     description: str = (
         "Read-only EcoreX host capability diagnostics. Use before raw bash when a task "
-        "appears stuck, when Feishu/Lark/Chrome/CDP/MCP availability is unclear, or when "
+        "appears stuck, when Feishu/Lark/Tongxin/Chrome/CDP/MCP availability is unclear, or when "
         "you need to decide whether to ask the user for authorization. Returns sanitized "
-        "runtime status, capability boundaries, MCP state, permission mode, Feishu CLI, "
+        "runtime status, capability boundaries, MCP state, permission mode, Feishu CLI, Tongxin CLI, "
         "EcoreX CLI, subagent/goal boundary status, skill load diagnostics, and recent log tails."
     )
     params: dict = {
@@ -293,6 +312,16 @@ class HostDiagnostics(BaseTool):
         tools = conf().get("tools", {}) if isinstance(conf().get("tools", {}), dict) else {}
         browser_cfg = tools.get("browser", {}) if isinstance(tools.get("browser"), dict) else {}
         endpoint = str(browser_cfg.get("cdp_endpoint") or "")
+        try:
+            from agent.tools.browser.browser_automation_service import browser_automation_diagnostics
+
+            browser_diagnostics = browser_automation_diagnostics(browser_cfg)
+        except Exception as exc:
+            browser_diagnostics = {
+                "mode": "cdp-first",
+                "cdp": _check_cdp(endpoint),
+                "error": str(exc),
+            }
 
         return {
             "runtime": {
@@ -318,7 +347,7 @@ class HostDiagnostics(BaseTool):
                 "hasGoalTool": False,
                 "goalPlanRequired": True,
                 "goalNote": "Goal Ledger documentation exists, but no runtime goal tool/API is currently exposed to agents.",
-                "availableStructuredCliTools": ["feishu_cli", "ecorex_cli", "optional_abilities"],
+                "availableStructuredCliTools": ["feishu_cli", "tongxin_cli", "ecorex_cli", "optional_abilities"],
             },
             "executables": {
                 "node": _which("node"),
@@ -328,15 +357,11 @@ class HostDiagnostics(BaseTool):
                 "legacyCli": _which("cow"),
                 "chrome": _which("chrome") or _which("google-chrome") or _which("msedge"),
             },
-            "browser": {
-                "cdp": _check_cdp(endpoint),
-                "cdpAutoLaunch": browser_cfg.get("cdp_auto_launch", False),
-                "cdpFallback": browser_cfg.get("cdp_fallback", True),
-                "persistent": browser_cfg.get("persistent", True),
-            },
+            "browser": browser_diagnostics,
             "mcp": _mcp_status(),
             "permissions": _permission_state(),
             "feishu": _feishu_status(self.cwd),
+            "tongxin": _tongxin_status(self.cwd),
             "skills": _skill_status(self.cwd),
         }
 

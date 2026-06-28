@@ -16,6 +16,36 @@ from common.log import logger
 from common.utils import expand_path
 
 
+DEFAULT_BASH_MAX_TIMEOUT_SECONDS = 2 * 60 * 60
+LONG_RUNNING_DEFAULT_TIMEOUT_SECONDS = 30 * 60
+
+_LONG_RUNNING_COMMAND_RE = re.compile(
+    r"("
+    r"openai-image-vision|vision\.sh|image\s*generation|generate[-_\s]?image|"
+    r"生图|图片生成|图片重生|图像生成|"
+    r"remotion|ffmpeg|imagemagick|magick|playwright\s+install|"
+    r"browser[-_\s]?automation|browser[-_\s]?cdp|npm\s+(install|ci|run\s+build)|"
+    r"pnpm\s+(install|run\s+build)|yarn\s+(install|build)|pip\s+install|"
+    r"docker\s+build|pytest|vitest|cargo\s+(build|test)|go\s+test"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _bash_max_timeout_seconds() -> int:
+    raw_value = os.environ.get("ECOREX_BASH_MAX_TIMEOUT_SECONDS", "")
+    if raw_value:
+        try:
+            return max(60, min(int(float(raw_value)), 24 * 60 * 60))
+        except (TypeError, ValueError):
+            logger.warning("[Bash] invalid ECOREX_BASH_MAX_TIMEOUT_SECONDS=%r; using default", raw_value)
+    return DEFAULT_BASH_MAX_TIMEOUT_SECONDS
+
+
+def _looks_long_running_command(command: str) -> bool:
+    return bool(command and _LONG_RUNNING_COMMAND_RE.search(command))
+
+
 class _CommandCancelled(Exception):
     def __init__(self, stdout: str = "", stderr: str = ""):
         super().__init__("command cancelled by user")
@@ -48,7 +78,7 @@ SAFETY:
             },
             "timeout": {
                 "type": "integer",
-                "description": "Timeout in seconds (optional, default: 30)"
+                "description": "Timeout in seconds (optional, default: 30). Use a larger value for long builds, deployments, image generation, or installs."
             }
         },
         "required": ["command"]
@@ -70,7 +100,7 @@ SAFETY:
             timeout = int(value)
         except (TypeError, ValueError):
             timeout = default
-        return max(1, min(timeout, 600))
+        return max(1, min(timeout, _bash_max_timeout_seconds()))
 
     def _kill_process_tree(self, process: subprocess.Popen):
         if process.poll() is not None:
@@ -168,7 +198,11 @@ SAFETY:
         :return: Command output or error
         """
         command = args.get("command", "").strip()
-        timeout = self._normalize_timeout(args.get("timeout", self.default_timeout), self.default_timeout)
+        raw_timeout = args.get("timeout")
+        default_timeout = self.default_timeout
+        if raw_timeout is None and _looks_long_running_command(command):
+            default_timeout = min(LONG_RUNNING_DEFAULT_TIMEOUT_SECONDS, _bash_max_timeout_seconds())
+        timeout = self._normalize_timeout(raw_timeout if raw_timeout is not None else default_timeout, default_timeout)
 
         if not command:
             return ToolResult.fail("Error: command parameter is required")
@@ -177,6 +211,12 @@ SAFETY:
         if re.search(r'\.cow[/\\]\.env', command):
             return ToolResult.fail(
                 "Error: Access denied. API keys and credentials must be accessed through the env_config tool only."
+            )
+
+        if self._looks_like_tongxin_cli_command(command):
+            return ToolResult.fail(
+                "Error: Do not call Tongxin Assistant CLI through raw bash. "
+                "Use the tongxin_cli tool so EcoreX can enforce the all-user read-only command allowlist."
             )
 
         # Optional safety check - only warn about extremely dangerous commands
@@ -377,6 +417,17 @@ SAFETY:
             return "This command will shut down or restart the system"
 
         return ""
+
+    @staticmethod
+    def _looks_like_tongxin_cli_command(command: str) -> bool:
+        text = str(command or "").strip().lower().replace("\\", "/")
+        if "xin_agent_cli.py" in text or "tongxin_cli.py" in text:
+            return True
+        if re.search(r"\b(tongxin-cli|xin-agent-cli|tx-assistant)\b", text):
+            return True
+        if "/自动报表工具/" in text and "xin_agent" in text:
+            return True
+        return False
 
     @staticmethod
     def _convert_env_vars_for_windows(command: str, dotenv_vars: dict) -> str:

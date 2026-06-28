@@ -1,0 +1,82 @@
+{
+  "version": "0.2.3",
+  "slice": "R23-16P",
+  "scenario": "browser-ocr",
+  "generatedAt": "2026-06-27T07:33:19.226040+00:00",
+  "status": "pass",
+  "metrics": {
+    "durationMs": 15546,
+    "browserFirstActionMs": 6961.644,
+    "browserFirstActionMode": "cdp",
+    "browserFallbackMs": 4831.242,
+    "browserFallbackMode": "persistent",
+    "ocrTextUrlP95Ms": 0.085,
+    "ocrImageUrlP95Ms": 648.883,
+    "ocrImageUrlMeasured": true,
+    "liveBrowserProcessDeltaAfterIdle": 0,
+    "liveBrowserProcessDeltaMeasured": true
+  },
+  "browser": {
+    "diagnostics": {
+      "mode": "cdp-first",
+      "autoLaunch": true,
+      "fallbackEnabled": true,
+      "fallbackAvailable": true,
+      "chromeExecutableFound": true,
+      "cdpReadyBeforeSmoke": false,
+      "endpointHash": "hmac:eba907dc6c17f61c"
+    },
+    "cdpFirst": {
+      "status": "pass",
+      "latencyMs": 6961.644,
+      "ok": true,
+      "mode": "cdp",
+      "statusCodeObserved": false,
+      "autoLaunchedCdpProcessObserved": true,
+      "autoLaunchedCdpProcessAliveAfterClose": false,
+      "autoLaunchedCdpProcessHash": "hmac:3142f87d2a9b01d7"
+    },
+    "fallback": {
+      "status": "pass",
+      "latencyMs": 4831.242,
+      "ok": true,
+      "mode": "persistent",
+      "statusCodeObserved": false,
+      "autoLaunchedCdpProcessObserved": false,
+      "autoLaunchedCdpProcessAliveAfterClose": null,
+      "autoLaunchedCdpProcessHash": ""
+    }
+  },
+  "ocr": {
+    "textUrl": {
+      "status": "pass",
+      "latencyMs": 0.363,
+      "latencyP95Ms": 0.085,
+      "urlCountMin": 1,
+      "nextActionBrowserNavigate": true,
+      "targetUrlHash": "hmac:1a09074009df7ace"
+    },
+    "imageUrl": {
+      "status": "pass",
+      "latencyMs": 2127.75,
+      "measured": true,
+      "provider": "rapidocr_onnxruntime",
+      "latencyP95Ms": 648.883,
+      "urlCountMin": 1,
+      "nextActionBrowserNavigate": true,
+      "targetUrlHash": "hmac:1a09074009df7ace"
+    }
+  },
+  "failureCodes": [],
+  "redaction": {
+    "containsRawUrls": false,
+    "containsRawOcrText": false,
+    "containsFullPaths": false,
+    "containsSecretShapedValues": false
+  },
+  "environment": {
+    "playwrightAvailable": true,
+    "rapidocrAvailable": true,
+    "tesseractCliAvailable": false
+  }
+}

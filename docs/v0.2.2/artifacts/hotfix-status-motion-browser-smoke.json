@@ -1,0 +1,118 @@
+{
+  "status": "PASS",
+  "url": "http://127.0.0.1:49741/chat.html",
+  "duration_ms": 3079,
+  "screenshot": "C:\\CowAgent\\docs\\v0.2.2\\artifacts\\web-status-motion-browser-smoke.png",
+  "metrics": {
+    "normal": {
+      "statusText": {
+        "animationName": "none",
+        "backgroundImage": "none",
+        "backgroundSize": "auto",
+        "backgroundClip": "border-box",
+        "webkitBackgroundClip": "border-box",
+        "color": "rgb(163, 163, 163)",
+        "webkitTextFillColor": "rgb(163, 163, 163)",
+        "width": 173.453125,
+        "height": 20,
+        "className": "agent-current-phase-text"
+      },
+      "liveMeta": {
+        "animationName": "none",
+        "backgroundImage": "none",
+        "backgroundSize": "auto",
+        "backgroundClip": "border-box",
+        "webkitBackgroundClip": "border-box",
+        "color": "rgb(251, 146, 60)",
+        "webkitTextFillColor": "rgb(251, 146, 60)",
+        "width": 205.03125,
+        "height": 14.5625,
+        "className": "tool-live-meta is-live"
+      },
+      "terminalMeta": {
+        "animationName": "none",
+        "backgroundImage": "none",
+        "backgroundSize": "auto",
+        "backgroundClip": "border-box",
+        "webkitBackgroundClip": "border-box",
+        "color": "rgb(251, 146, 60)",
+        "webkitTextFillColor": "rgb(251, 146, 60)",
+        "width": 34.171875,
+        "height": 14.5625,
+        "className": "tool-live-meta",
+        "isLive": false,
+        "text": "success"
+      },
+      "container": {
+        "animationName": "none",
+        "backgroundImage": "none",
+        "width": 208.640625,
+        "height": 30,
+        "pseudoAfterContent": "none",
+        "pseudoAfterAnimationName": "none",
+        "pseudoAfterBackgroundImage": "none"
+      },
+      "dot": {
+        "animationName": "ecorexActivityPulse",
+        "width": "10px",
+        "height": "10px"
+      }
+    },
+    "reducedMotion": {
+      "statusText": {
+        "animationName": "none",
+        "backgroundImage": "none",
+        "backgroundSize": "auto",
+        "backgroundClip": "border-box",
+        "webkitBackgroundClip": "border-box",
+        "color": "rgb(163, 163, 163)",
+        "webkitTextFillColor": "rgb(163, 163, 163)",
+        "width": 173.453125,
+        "height": 20,
+        "className": "agent-current-phase-text"
+      },
+      "liveMeta": {
+        "animationName": "none",
+        "backgroundImage": "none",
+        "backgroundSize": "auto",
+        "backgroundClip": "border-box",
+        "webkitBackgroundClip": "border-box",
+        "color": "rgb(251, 146, 60)",
+        "webkitTextFillColor": "rgb(251, 146, 60)",
+        "width": 205.03125,
+        "height": 14.5625,
+        "className": "tool-live-meta is-live"
+      },
+      "terminalMeta": {
+        "animationName": "none",
+        "backgroundImage": "none",
+        "backgroundSize": "auto",
+        "backgroundClip": "border-box",
+        "webkitBackgroundClip": "border-box",
+        "color": "rgb(251, 146, 60)",
+        "webkitTextFillColor": "rgb(251, 146, 60)",
+        "width": 34.171875,
+        "height": 14.5625,
+        "className": "tool-live-meta",
+        "isLive": false,
+        "text": "success"
+      },
+      "container": {
+        "animationName": "none",
+        "backgroundImage": "none",
+        "width": 208.640625,
+        "height": 30,
+        "pseudoAfterContent": "none",
+        "pseudoAfterAnimationName": "none",
+        "pseudoAfterBackgroundImage": "none"
+      },
+      "dot": {
+        "animationName": "none",
+        "width": "10px",
+        "height": "10px"
+      },
+      "donePhaseRemaining": false
+    }
+  },
+  "console_errors": []
+}

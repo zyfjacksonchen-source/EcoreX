@@ -11,9 +11,10 @@
 @Date 2023/11/19
 """
 
-import importlib.util
 import json
 import logging
+import hashlib
+import hmac
 import os
 import ssl
 import threading
@@ -30,6 +31,12 @@ from channel.chat_channel import ChatChannel, check_prefix
 from channel.feishu.feishu_message import FeishuMessage
 from common import utils
 from common.expired_dict import ExpiredDict
+from common.feishu_register_credentials import (
+    extract_feishu_register_credentials,
+    summarize_feishu_register_result_shape,
+)
+from common.feishu_runtime_readiness import lark_oapi_available, probe_lark_oapi
+from common.ecorex_public_payload import mask_sensitive_text
 from common.log import logger
 from common.singleton import singleton
 from config import conf
@@ -39,16 +46,76 @@ logging.getLogger("Lark").setLevel(logging.WARNING)
 
 URL_VERIFICATION = "url_verification"
 
-# Lazy-check for lark_oapi SDK availability without importing it at module level.
-# The full `import lark_oapi` pulls in 10k+ files and takes 4-10s, so we defer
-# the actual import to _startup_websocket() where it is needed.
-LARK_SDK_AVAILABLE = importlib.util.find_spec("lark_oapi") is not None
+# Lazy-check lark_oapi without importing it at module level. The full import can
+# be slow, so actual SDK import remains deferred to the path that needs it.
 lark = None  # will be populated on first use via _ensure_lark_imported()
 LARK_OAPI_DISCOVERY_GUIDANCE = (
     "legacy 飞书消息通道需要 lark-oapi SDK，当前运行时不会自动安装该旧依赖。"
     "飞书/Lark CLI、skill 和 connector 安装请统一先走内置 find skill / find-skill；"
     "真实 CLI 操作按需安装官方 @larksuite/cli，npmjs.org 超时后降级到 https://registry.npmmirror.com。"
 )
+
+FEISHU_LOG_HMAC_KEY = b"ecorex-feishu-log-v1"
+
+
+def _feishu_log_text(value, max_chars: int = 500) -> str:
+    return mask_sensitive_text(value, max_chars=max_chars)
+
+
+def _feishu_log_presence(value) -> str:
+    return "present" if str(value or "").strip() else "missing"
+
+
+def _feishu_log_ref(value) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    digest = hmac.new(FEISHU_LOG_HMAC_KEY, raw.encode("utf-8", errors="replace"), hashlib.sha256).hexdigest()[:16]
+    return f"hmac:{digest}"
+
+
+def _feishu_event_log_summary(event: dict) -> dict:
+    if not isinstance(event, dict):
+        return {"shape": type(event).__name__}
+    msg = event.get("message") if isinstance(event.get("message"), dict) else {}
+    sender = event.get("sender") if isinstance(event.get("sender"), dict) else {}
+    sender_id = sender.get("sender_id") if isinstance(sender.get("sender_id"), dict) else {}
+    mentions = msg.get("mentions") if isinstance(msg.get("mentions"), list) else []
+    return {
+        "eventKeys": sorted(str(key) for key in event.keys())[:12],
+        "messageType": str(msg.get("message_type") or ""),
+        "chatType": str(msg.get("chat_type") or ""),
+        "messageRef": _feishu_log_ref(msg.get("message_id")),
+        "chatRef": _feishu_log_ref(msg.get("chat_id")),
+        "senderRef": _feishu_log_ref(sender_id.get("open_id") or sender_id.get("user_id") or sender_id.get("union_id")),
+        "mentionCount": len(mentions),
+        "hasContent": bool(msg.get("content")),
+    }
+
+
+def _feishu_register_status_summary(info: dict) -> dict:
+    if not isinstance(info, dict):
+        return {"shape": type(info).__name__}
+    return {
+        "status": _feishu_log_text(info.get("status") or info.get("state") or ""),
+        "code": _feishu_log_text(info.get("code") or ""),
+        "message": _feishu_log_text(info.get("message") or info.get("msg") or info.get("error") or ""),
+        "qrReady": bool(info.get("url") or info.get("qr_url") or info.get("qrcode") or info.get("qrCode")),
+    }
+
+
+def _feishu_api_response_log_summary(payload) -> dict:
+    if not isinstance(payload, dict):
+        return {"shape": type(payload).__name__}
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    return {
+        "code": payload.get("code"),
+        "msg": _feishu_log_text(payload.get("msg") or payload.get("message") or ""),
+        "requestRef": _feishu_log_ref(payload.get("request_id") or payload.get("requestId")),
+        "imageRef": _feishu_log_ref(data.get("image_key") or data.get("imageKey")),
+        "fileRef": _feishu_log_ref(data.get("file_key") or data.get("fileKey")),
+        "messageRef": _feishu_log_ref(data.get("message_id") or data.get("messageId")),
+    }
 
 
 def _ensure_lark_imported():
@@ -61,42 +128,12 @@ def _ensure_lark_imported():
 
 
 def _print_qr_to_terminal(qr_url: str):
-    """Render a QR code as ASCII art and emit it via logger.
-
-    走 logger 而非 print 是为了避免 nohup/cow 后台启动场景下 stdout 块缓冲导致
-    二维码滞后输出（看起来像出现了两次）。logger 的 StreamHandler 是行缓冲，
-    既能在前台终端看到，也能进 run.log。
-    """
-    qr_lines = []
-    try:
-        import qrcode as qr_lib
-        import io
-        qr = qr_lib.QRCode(error_correction=qr_lib.constants.ERROR_CORRECT_L, box_size=1, border=1)
-        qr.add_data(qr_url)
-        qr.make(fit=True)
-        buf = io.StringIO()
-        qr.print_ascii(out=buf, invert=True)
-        qr_lines = buf.getvalue().splitlines()
-    except ImportError:
-        qr_lines = ["(未安装 qrcode 包，无法渲染 ASCII 二维码：pip install qrcode)"]
-    except Exception as e:
-        qr_lines = [f"(渲染二维码失败：{e})"]
-
-    header = "=" * 60
-    banner = [
-        "",
-        header,
-        "  飞书一键创建应用：请使用 飞书 App 扫描下方二维码",
-        "  （二维码 10 分钟内有效，仅供一次扫描）",
-        header,
-    ]
-    footer = [
-        f"  或点击链接创建: {qr_url}",
-        "  等待扫码...",
-        "",
-    ]
-    full = banner + qr_lines + footer
-    logger.info("[FeiShu] One-click 飞书应用创建二维码（请用飞书 App 扫码）：\n" + "\n".join(full))
+    """Record QR readiness without leaking the one-time QR payload."""
+    logger.info(
+        "[FeiShu] One-click 飞书应用创建二维码已生成：qr_ready=%s, expires_in_seconds=%s",
+        bool(qr_url),
+        600,
+    )
 
 
 def _persist_feishu_credentials(app_id: str, app_secret: str) -> bool:
@@ -140,7 +177,11 @@ def _persist_feishu_credentials(app_id: str, app_secret: str) -> bool:
             pass
         return True
     except Exception as e:
-        logger.error(f"[FeiShu] Failed to persist credentials to config.json: {e}")
+        logger.error(
+            "[FeiShu] Failed to persist credentials to config.json, config_ref=%s, error_type=%s",
+            _feishu_log_ref(config_path),
+            type(e).__name__,
+        )
         return False
 
 
@@ -153,7 +194,8 @@ def _register_via_qr_in_terminal() -> bool:
     Returns True if credentials were obtained AND persisted; False otherwise.
     The caller should fall back to the original "missing credentials" error in that case.
     """
-    if not LARK_SDK_AVAILABLE:
+    sdk_probe = probe_lark_oapi()
+    if not sdk_probe.get("sdkPresent"):
         logger.error(
             "[FeiShu] 缺少 feishu_app_id / feishu_app_secret。"
             "未安装 lark-oapi SDK，无法在终端发起扫码创建。"
@@ -164,7 +206,7 @@ def _register_via_qr_in_terminal() -> bool:
     try:
         lark_mod = _ensure_lark_imported()
     except Exception as e:
-        logger.error(f"[FeiShu] Import lark_oapi failed: {e}")
+        logger.error("[FeiShu] Import lark_oapi failed, error_type=%s", type(e).__name__)
         return False
 
     # register_app 是 lark-oapi 1.5.5 才引入的能力，旧版本调用会得到难以理解的
@@ -194,7 +236,7 @@ def _register_via_qr_in_terminal() -> bool:
         status = info.get("status")
         if status == "polling":
             return
-        logger.info(f"[FeiShu] register_app status: {info}")
+        logger.info("[FeiShu] register_app status: %s", _feishu_register_status_summary(info))
 
     try:
         result = lark_mod.register_app(
@@ -209,24 +251,28 @@ def _register_via_qr_in_terminal() -> bool:
         elif "Denied" in err_cls:
             logger.error("[FeiShu] 已取消授权。")
         else:
-            logger.error(f"[FeiShu] 一键创建失败：{e}")
+            logger.error("[FeiShu] 一键创建失败, error_type=%s", type(e).__name__)
         return False
 
-    app_id = result.get("client_id", "")
-    app_secret = result.get("client_secret", "")
+    app_id, app_secret = extract_feishu_register_credentials(result)
     if not app_id or not app_secret:
-        logger.error("[FeiShu] 创建结果缺少 app_id/app_secret，无法继续。")
+        logger.error(
+            "[FeiShu] 创建结果缺少 app_id/app_secret，无法继续。返回字段形态: %s",
+            summarize_feishu_register_result_shape(result),
+        )
         return False
 
     if not _persist_feishu_credentials(app_id, app_secret):
         logger.error(
-            "[FeiShu] 应用创建成功但写入 config.json 失败，请手动复制以下值到配置文件：\n"
-            f"        feishu_app_id     = {app_id}\n"
-            f"        feishu_app_secret = {app_secret}"
+            "[FeiShu] 应用创建成功但写入 config.json 失败；"
+            "请在飞书开发者后台重新查看并手动写入凭据。"
+            "app_id=%s, app_secret=%s",
+            _feishu_log_text(app_id),
+            _feishu_log_presence(app_secret),
         )
         return False
 
-    logger.info(f"[FeiShu] 应用创建成功，凭据已写入 config.json (app_id={app_id})。")
+    logger.info("[FeiShu] 应用创建成功，凭据已写入 config.json (app_id=%s)。", _feishu_log_text(app_id))
     return True
 
 
@@ -249,14 +295,19 @@ class FeiShuChanel(ChatChannel):
         self._ws_client = None
         self._ws_thread = None
         self._bot_open_id = None  # cached bot open_id for @-mention matching
-        logger.debug("[FeiShu] app_id={}, app_secret={}, verification_token={}, event_mode={}".format(
-            self.feishu_app_id, self.feishu_app_secret, self.feishu_token, self.feishu_event_mode))
+        logger.debug(
+            "[FeiShu] config status app_id=%s, app_secret=%s, verification_token=%s, event_mode=%s",
+            _feishu_log_text(self.feishu_app_id),
+            _feishu_log_presence(self.feishu_app_secret),
+            _feishu_log_presence(self.feishu_token),
+            _feishu_log_text(self.feishu_event_mode),
+        )
         # 无需群校验和前缀
         conf()["group_name_white_list"] = ["ALL_GROUP"]
         conf()["single_chat_prefix"] = [""]
 
         # 验证配置
-        if self.feishu_event_mode == 'websocket' and not LARK_SDK_AVAILABLE:
+        if self.feishu_event_mode == 'websocket' and not lark_oapi_available():
             logger.error(f"[FeiShu] websocket mode requires lark_oapi. {LARK_OAPI_DISCOVERY_GUIDANCE}")
             raise Exception("lark_oapi not installed")
 
@@ -298,11 +349,15 @@ class FeiShuChanel(ChatChannel):
                 data = resp.json()
                 if data.get("code") == 0:
                     self._bot_open_id = data.get("bot", {}).get("open_id")
-                    logger.info(f"[FeiShu] Bot open_id fetched: {self._bot_open_id}")
+                    logger.info("[FeiShu] Bot open_id fetched: open_ref=%s", _feishu_log_ref(self._bot_open_id))
                 else:
-                    logger.warning(f"[FeiShu] Fetch bot info failed: code={data.get('code')}, msg={data.get('msg')}")
+                    logger.warning(
+                        "[FeiShu] Fetch bot info failed: code=%s, msg=%s",
+                        data.get("code"),
+                        _feishu_log_text(data.get("msg")),
+                    )
         except Exception as e:
-            logger.warning(f"[FeiShu] Fetch bot open_id error: {e}")
+            logger.warning("[FeiShu] Fetch bot open_id error, error_type=%s", type(e).__name__)
 
     def stop(self):
         import ctypes
@@ -324,14 +379,14 @@ class FeiShuChanel(ChatChannel):
                     elif res > 1:
                         ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(tid), None)
             except Exception as e:
-                logger.warning(f"[FeiShu] Error interrupting ws thread: {e}")
+                logger.warning("[FeiShu] Error interrupting ws thread, error_type=%s", type(e).__name__)
         # lark.ws.Client has no stop() method; thread interruption above is sufficient
         if self._http_server:
             try:
                 self._http_server.stop()
                 logger.info("[FeiShu] HTTP server stopped")
             except Exception as e:
-                logger.warning(f"[FeiShu] Error stopping HTTP server: {e}")
+                logger.warning("[FeiShu] Error stopping HTTP server, error_type=%s", type(e).__name__)
             self._http_server = None
         logger.info("[FeiShu] stop() completed")
 
@@ -369,13 +424,13 @@ class FeiShuChanel(ChatChannel):
                 if msg.get("chat_type") == "group" and not msg.get("mentions") and msg.get("message_type") == "text":
                     return
 
-                logger.debug(f"[FeiShu] websocket receive event: {lark.JSON.marshal(data, indent=2)}")
+                logger.debug("[FeiShu] websocket receive event summary: %s", _feishu_event_log_summary(event))
 
                 # 处理消息
                 self._handle_message_event(event)
 
             except Exception as e:
-                logger.error(f"[FeiShu] websocket handle message error: {e}", exc_info=True)
+                logger.error("[FeiShu] websocket handle message error, error_type=%s", type(e).__name__)
 
         # 构建事件分发器
         event_handler = lark.EventDispatcherHandler.builder("", "") \
@@ -434,9 +489,9 @@ class FeiShuChanel(ChatChannel):
                     is_ssl_error = ("CERTIFICATE_VERIFY_FAILED" in error_msg
                                     or "certificate verify failed" in error_msg.lower())
                     if is_ssl_error and attempt == 0:
-                        logger.warning(f"[FeiShu] SSL error: {error_msg}, retrying...")
+                        logger.warning("[FeiShu] SSL error during websocket startup, error_type=%s, retrying...", type(e).__name__)
                         continue
-                    logger.error(f"[FeiShu] Websocket client error: {e}", exc_info=True)
+                    logger.error("[FeiShu] Websocket client error, error_type=%s", type(e).__name__)
                     startup_error = error_msg
                     ssl_module.create_default_context = original_create_default_context
                     break
@@ -481,7 +536,7 @@ class FeiShuChanel(ChatChannel):
         webhook和websocket模式共用此方法
         """
         if not event.get("message") or not event.get("sender"):
-            logger.warning(f"[FeiShu] invalid message, event={event}")
+            logger.warning("[FeiShu] invalid message, event_summary=%s", _feishu_event_log_summary(event))
             return
 
         msg = event.get("message")
@@ -489,7 +544,7 @@ class FeiShuChanel(ChatChannel):
         # 幂等判断
         msg_id = msg.get("message_id")
         if self.receivedMsgs.get(msg_id):
-            logger.warning(f"[FeiShu] repeat msg filtered, msg_id={msg_id}")
+            logger.warning("[FeiShu] repeat msg filtered, message_ref=%s", _feishu_log_ref(msg_id))
             return
         self.receivedMsgs[msg_id] = True
 
@@ -499,7 +554,7 @@ class FeiShuChanel(ChatChannel):
         if create_time_ms:
             msg_age_s = _time.time() - int(create_time_ms) / 1000
             if msg_age_s > 60:
-                logger.warning(f"[FeiShu] stale msg filtered (age={msg_age_s:.0f}s), msg_id={msg_id}")
+                logger.warning("[FeiShu] stale msg filtered (age=%.0fs), message_ref=%s", msg_age_s, _feishu_log_ref(msg_id))
                 return
 
         is_group = False
@@ -543,7 +598,11 @@ class FeiShuChanel(ChatChannel):
         if feishu_msg.ctype == ContextType.IMAGE:
             if hasattr(feishu_msg, 'image_path') and feishu_msg.image_path:
                 file_cache.add(session_id, feishu_msg.image_path, file_type='image')
-                logger.info(f"[FeiShu] Image cached for session {session_id}, waiting for user query...")
+                logger.info(
+                    "[FeiShu] Image cached for session_ref=%s, file_ref=%s, waiting for user query...",
+                    _feishu_log_ref(session_id),
+                    _feishu_log_ref(feishu_msg.image_path),
+                )
             # 单张图片不直接处理，等待用户提问
             return
 
@@ -557,10 +616,14 @@ class FeiShuChanel(ChatChannel):
                 if not os.path.exists(feishu_msg.content):
                     raise FileNotFoundError(feishu_msg.content)
             except Exception as e:
-                logger.warning(f"[FeiShu] prepare file failed: {e}")
+                logger.warning(
+                    "[FeiShu] prepare file failed: file_ref=%s, error_type=%s",
+                    _feishu_log_ref(getattr(feishu_msg, "content", "")),
+                    e.__class__.__name__,
+                )
                 # 文件下载失败时主动通知用户，避免静默丢失
                 try:
-                    err_reply = Reply(ReplyType.TEXT, f"⚠️ 文件下载失败，请重新发送：{e}")
+                    err_reply = Reply(ReplyType.TEXT, "文件下载失败，请重新发送。")
                     self._send(err_reply, self._compose_context(
                         ContextType.TEXT, "",
                         isgroup=is_group, msg=feishu_msg,
@@ -570,7 +633,11 @@ class FeiShuChanel(ChatChannel):
                     pass
                 return
             file_cache.add(session_id, feishu_msg.content, file_type='file')
-            logger.info(f"[FeiShu] File cached for session {session_id}: {feishu_msg.content}")
+            logger.info(
+                "[FeiShu] File cached for session_ref=%s, file_ref=%s",
+                _feishu_log_ref(session_id),
+                _feishu_log_ref(feishu_msg.content),
+            )
             return
 
         # 如果是文本消息，检查是否有缓存的文件
@@ -612,7 +679,11 @@ class FeiShuChanel(ChatChannel):
             if conf().get("feishu_stream_reply", True):
                 context["on_event"] = self._make_feishu_stream_callback(context, feishu_msg.access_token)
             self.produce(context)
-        logger.debug(f"[FeiShu] query={feishu_msg.content}, type={feishu_msg.ctype}")
+        logger.debug(
+            "[FeiShu] query received: type=%s, content_chars=%s",
+            feishu_msg.ctype,
+            len(str(feishu_msg.content or "")),
+        )
 
     def send(self, reply: Reply, context: Context):
         # 如果文本回复已通过流式传输发送，则跳过重复发送
@@ -630,7 +701,11 @@ class FeiShuChanel(ChatChannel):
             "Content-Type": "application/json",
         }
         msg_type = "text"
-        logger.debug(f"[FeiShu] sending reply, type={context.type}, content={reply.content[:100]}...")
+        logger.debug(
+            "[FeiShu] sending reply, type=%s, content_chars=%s",
+            context.type,
+            len(str(reply.content or "")),
+        )
         reply_content = reply.content
         content_key = "text"
         if reply.type == ReplyType.IMAGE_URL:
@@ -644,7 +719,7 @@ class FeiShuChanel(ChatChannel):
         elif reply.type == ReplyType.FILE:
             # 如果有附加的文本内容，先发送文本
             if hasattr(reply, 'text_content') and reply.text_content:
-                logger.info(f"[FeiShu] Sending text before file: {reply.text_content[:50]}...")
+                logger.info("[FeiShu] Sending text before file: text_chars=%s", len(str(reply.text_content or "")))
                 text_reply = Reply(ReplyType.TEXT, reply.text_content)
                 self._send(text_reply, context)
                 import time
@@ -669,7 +744,10 @@ class FeiShuChanel(ChatChannel):
                 msg_type = "media"
                 reply_content = upload_data  # 完整的上传响应数据（包含file_key和duration）
                 logger.info(
-                    f"[FeiShu] Sending video: file_key={upload_data.get('file_key')}, duration={upload_data.get('duration')}ms")
+                    "[FeiShu] Sending video: file_ref=%s, duration=%sms",
+                    _feishu_log_ref(upload_data.get("file_key")),
+                    upload_data.get("duration"),
+                )
                 content_key = None  # 直接序列化整个对象
             else:
                 # 其他文件使用 file 类型
@@ -696,7 +774,7 @@ class FeiShuChanel(ChatChannel):
 
         # Build content JSON
         content_json = json.dumps(reply_content, ensure_ascii=False) if content_key is None else json.dumps({content_key: reply_content}, ensure_ascii=False)
-        logger.debug(f"[FeiShu] Sending message: msg_type={msg_type}, content={content_json[:200]}")
+        logger.debug("[FeiShu] Sending message: msg_type=%s, content_chars=%s", msg_type, len(content_json))
 
         if can_reply:
             # 群聊中回复已有消息
@@ -720,7 +798,11 @@ class FeiShuChanel(ChatChannel):
         if res.get("code") == 0:
             logger.info(f"[FeiShu] send message success")
         else:
-            logger.error(f"[FeiShu] send message failed, code={res.get('code')}, msg={res.get('msg')}")
+            logger.error(
+                "[FeiShu] send message failed, code=%s, msg=%s",
+                res.get("code"),
+                _feishu_log_text(res.get("msg")),
+            )
 
     def _make_feishu_stream_callback(self, context, access_token):
         """
@@ -871,12 +953,12 @@ class FeiShuChanel(ChatChannel):
                 res_json = res.json()
                 if res_json.get("code") != 0:
                     logger.warning(
-                        f"[FeiShu] Stream: create card failed "
-                        f"(code={res_json.get('code')}, msg={res_json.get('msg')}). "
-                        f"本次回复已自动降级为普通文本回复（一次性返回完整内容）。"
-                        f"如需开启流式打字机效果与完整 Markdown 渲染，请到飞书开放平台 "
-                        f"https://open.feishu.cn/app 给机器人开通 cardkit:card:write 权限"
-                        f"（创建与更新卡片）并重新发布版本，同时确保飞书客户端 >= 7.20。"
+                        "[FeiShu] Stream: create card failed, summary=%s. "
+                        "本次回复已自动降级为普通文本回复（一次性返回完整内容）。"
+                        "如需开启流式打字机效果与完整 Markdown 渲染，请到飞书开放平台 "
+                        "https://open.feishu.cn/app 给机器人开通 cardkit:card:write 权限"
+                        "（创建与更新卡片）并重新发布版本，同时确保飞书客户端 >= 7.20。",
+                        _feishu_api_response_log_summary(res_json),
                     )
                     with lock:
                         disabled[0] = True
@@ -914,7 +996,8 @@ class FeiShuChanel(ChatChannel):
                 send_json = send_res.json()
                 if send_json.get("code") != 0:
                     logger.warning(
-                        f"[FeiShu] Stream: send card failed: {send_json}. 降级为普通文本。"
+                        "[FeiShu] Stream: send card failed, summary=%s. 降级为普通文本。",
+                        _feishu_api_response_log_summary(send_json),
                     )
                     with lock:
                         disabled[0] = True
@@ -923,12 +1006,15 @@ class FeiShuChanel(ChatChannel):
                 with lock:
                     message_id[0] = mid
                 logger.info(
-                    f"[FeiShu] Stream: card created and sent, "
-                    f"card_id={cid}, message_id={mid}"
+                    "[FeiShu] Stream: card created and sent, "
+                    "card_ref=%s, message_ref=%s",
+                    _feishu_log_ref(cid),
+                    _feishu_log_ref(mid),
                 )
             except Exception as e:
                 logger.warning(
-                    f"[FeiShu] Stream: create/send card exception: {e}. 降级为普通文本。"
+                    "[FeiShu] Stream: create/send card exception, error_type=%s. 降级为普通文本。",
+                    type(e).__name__,
                 )
                 with lock:
                     disabled[0] = True
@@ -955,10 +1041,11 @@ class FeiShuChanel(ChatChannel):
                 res_json = res.json()
                 if res_json.get("code") != 0:
                     logger.warning(
-                        f"[FeiShu] Stream: update text failed: {res_json}"
+                        "[FeiShu] Stream: update text failed, summary=%s",
+                        _feishu_api_response_log_summary(res_json),
                     )
             except Exception as e:
-                logger.warning(f"[FeiShu] Stream: update text exception: {e}")
+                logger.warning("[FeiShu] Stream: update text exception, error_type=%s", type(e).__name__)
 
         def _close_streaming_mode(final_text: str = ""):
             """关闭流式模式（卡片转入"普通"状态，可被转发）。
@@ -1001,12 +1088,11 @@ class FeiShuChanel(ChatChannel):
                 res_json = res.json()
                 if res_json.get("code") != 0:
                     logger.warning(
-                        f"[FeiShu] Stream: finalize card (close+summary) failed: {res_json}"
+                        "[FeiShu] Stream: finalize card (close+summary) failed, summary=%s",
+                        _feishu_api_response_log_summary(res_json),
                     )
             except Exception as e:
-                logger.warning(
-                    f"[FeiShu] Stream: finalize card exception: {e}"
-                )
+                logger.warning("[FeiShu] Stream: finalize card exception, error_type=%s", type(e).__name__)
 
         def on_event(event: dict):
             event_type = event.get("type")
@@ -1153,23 +1239,27 @@ class FeiShuChanel(ChatChannel):
         if response.status_code == 200:
             res = response.json()
             if res.get("code") != 0:
-                logger.error(f"[FeiShu] get tenant_access_token error, code={res.get('code')}, msg={res.get('msg')}")
+                logger.error(
+                    "[FeiShu] get tenant_access_token error, code=%s, msg=%s",
+                    res.get("code"),
+                    _feishu_log_text(res.get("msg")),
+                )
                 return ""
             else:
                 return res.get("tenant_access_token")
         else:
-            logger.error(f"[FeiShu] fetch token error, res={response}")
+            logger.error("[FeiShu] fetch token error, status=%s", response.status_code)
 
     def _upload_image_url(self, img_url, access_token):
-        logger.debug(f"[FeiShu] start process image, img_url={img_url}")
+        logger.debug("[FeiShu] start process image, image_source_ref=%s", _feishu_log_ref(img_url))
 
         # Check if it's a local file path (file:// protocol)
         if img_url.startswith("file://"):
             local_path = img_url[7:]  # Remove "file://" prefix
-            logger.info(f"[FeiShu] uploading local file: {local_path}")
+            logger.info("[FeiShu] uploading local image: path_ref=%s", _feishu_log_ref(local_path))
 
             if not os.path.exists(local_path):
-                logger.error(f"[FeiShu] local file not found: {local_path}")
+                logger.error("[FeiShu] local image not found: path_ref=%s", _feishu_log_ref(local_path))
                 return None
 
             # Upload directly from local file
@@ -1179,13 +1269,19 @@ class FeiShuChanel(ChatChannel):
 
             with open(local_path, "rb") as file:
                 upload_response = requests.post(upload_url, files={"image": file}, data=data, headers=headers)
-                logger.info(f"[FeiShu] upload file, res={upload_response.content}")
-
                 response_data = upload_response.json()
+                logger.info(
+                    "[FeiShu] upload image response, status=%s, summary=%s",
+                    upload_response.status_code,
+                    _feishu_api_response_log_summary(response_data),
+                )
                 if response_data.get("code") == 0:
                     return response_data.get("data").get("image_key")
                 else:
-                    logger.error(f"[FeiShu] upload failed: {response_data}")
+                    logger.error(
+                        "[FeiShu] upload image failed, summary=%s",
+                        _feishu_api_response_log_summary(response_data),
+                    )
                     return None
 
         # Original logic for HTTP URLs
@@ -1207,9 +1303,14 @@ class FeiShuChanel(ChatChannel):
         }
         with open(temp_name, "rb") as file:
             upload_response = requests.post(upload_url, files={"image": file}, data=data, headers=headers)
-            logger.info(f"[FeiShu] upload file, res={upload_response.content}")
             os.remove(temp_name)
-            return upload_response.json().get("data").get("image_key")
+            response_data = upload_response.json()
+            logger.info(
+                "[FeiShu] upload image response, status=%s, summary=%s",
+                upload_response.status_code,
+                _feishu_api_response_log_summary(response_data),
+            )
+            return response_data.get("data").get("image_key")
 
     def _get_video_duration(self, file_path: str) -> int:
         """
@@ -1240,13 +1341,23 @@ class FeiShuChanel(ChatChannel):
                 logger.info(f"[FeiShu] Video duration: {duration_seconds:.2f}s ({duration_ms}ms)")
                 return duration_ms
             else:
-                logger.warning(f"[FeiShu] Failed to get video duration via ffprobe: {result.stderr}")
+                stderr_bytes = len((getattr(result, "stderr", "") or "").encode("utf-8", errors="ignore"))
+                logger.warning(
+                    "[FeiShu] Failed to get video duration via ffprobe, path_ref=%s, returncode=%s, stderr_bytes=%s",
+                    _feishu_log_ref(file_path),
+                    result.returncode,
+                    stderr_bytes,
+                )
                 return 0
         except FileNotFoundError:
             logger.warning("[FeiShu] ffprobe not found, video duration will be 0. Install ffmpeg to fix this.")
             return 0
         except Exception as e:
-            logger.warning(f"[FeiShu] Failed to get video duration: {e}")
+            logger.warning(
+                "[FeiShu] Failed to get video duration, path_ref=%s, error_type=%s",
+                _feishu_log_ref(file_path),
+                type(e).__name__,
+            )
             return 0
 
     def _upload_video_url(self, video_url, access_token):
@@ -1267,11 +1378,11 @@ class FeiShuChanel(ChatChannel):
             if video_url.startswith("file://"):
                 local_path = video_url[7:]  # Remove file:// prefix
                 if not os.path.exists(local_path):
-                    logger.error(f"[FeiShu] local video file not found: {local_path}")
+                    logger.error("[FeiShu] local video file not found: path_ref=%s", _feishu_log_ref(local_path))
                     return None
             else:
                 # For HTTP URLs, download first
-                logger.info(f"[FeiShu] Downloading video from URL: {video_url}")
+                logger.info("[FeiShu] Downloading video from URL: url_ref=%s", _feishu_log_ref(video_url))
                 response = requests.get(video_url, timeout=(5, 60))
                 if response.status_code != 200:
                     logger.error(f"[FeiShu] download video failed, status={response.status_code}")
@@ -1308,7 +1419,11 @@ class FeiShuChanel(ChatChannel):
 
             headers = {'Authorization': f'Bearer {access_token}'}
 
-            logger.info(f"[FeiShu] Uploading video: file_name={file_name}, duration={duration}ms")
+            logger.info(
+                "[FeiShu] Uploading video: file_name_ref=%s, duration=%sms",
+                _feishu_log_ref(file_name),
+                duration,
+            )
 
             with open(local_path, "rb") as file:
                 upload_response = requests.post(
@@ -1318,23 +1433,31 @@ class FeiShuChanel(ChatChannel):
                     headers=headers,
                     timeout=(5, 60)
                 )
-                logger.info(
-                    f"[FeiShu] upload video response, status={upload_response.status_code}, res={upload_response.content}")
-
                 response_data = upload_response.json()
+                logger.info(
+                    "[FeiShu] upload video response, status=%s, summary=%s",
+                    upload_response.status_code,
+                    _feishu_api_response_log_summary(response_data),
+                )
                 if response_data.get("code") == 0:
                     # Add duration to the response data (API doesn't return it)
                     upload_data = response_data.get("data")
                     upload_data['duration'] = duration  # Add our calculated duration
                     logger.info(
-                        f"[FeiShu] Upload complete: file_key={upload_data.get('file_key')}, duration={duration}ms")
+                        "[FeiShu] Upload complete: file_ref=%s, duration=%sms",
+                        _feishu_log_ref(upload_data.get("file_key")),
+                        duration,
+                    )
                     return upload_data
                 else:
-                    logger.error(f"[FeiShu] upload video failed: {response_data}")
+                    logger.error(
+                        "[FeiShu] upload video failed, summary=%s",
+                        _feishu_api_response_log_summary(response_data),
+                    )
                     return None
 
         except Exception as e:
-            logger.error(f"[FeiShu] upload video exception: {e}")
+            logger.error("[FeiShu] upload video exception, error_type=%s", type(e).__name__)
             return None
 
         finally:
@@ -1343,7 +1466,11 @@ class FeiShuChanel(ChatChannel):
                 try:
                     os.remove(temp_file)
                 except Exception as e:
-                    logger.warning(f"[FeiShu] Failed to remove temp file {temp_file}: {e}")
+                    logger.warning(
+                        "[FeiShu] Failed to remove temp file, path_ref=%s, error_type=%s",
+                        _feishu_log_ref(temp_file),
+                        type(e).__name__,
+                    )
 
     def _upload_audio(self, audio_path, access_token):
         """
@@ -1351,10 +1478,10 @@ class FeiShuChanel(ChatChannel):
         audio_path is a plain local file path (no file:// prefix).
         Feishu audio messages only support opus format; non-opus files are converted first.
         """
-        logger.debug(f"[FeiShu] start upload audio, path={audio_path}")
+        logger.debug("[FeiShu] start upload audio, path_ref=%s", _feishu_log_ref(audio_path))
 
         if not os.path.exists(audio_path):
-            logger.error(f"[FeiShu] audio file not found: {audio_path}")
+            logger.error("[FeiShu] audio file not found: path_ref=%s", _feishu_log_ref(audio_path))
             return None
 
         # Feishu only plays audio messages in opus format.
@@ -1367,9 +1494,13 @@ class FeiShuChanel(ChatChannel):
                 audio = AudioSegment.from_file(audio_path)
                 audio.export(opus_path, format='opus')
                 upload_path = opus_path
-                logger.info(f"[FeiShu] Converted audio to opus: {opus_path}")
+                logger.info("[FeiShu] Converted audio to opus: path_ref=%s", _feishu_log_ref(opus_path))
             except Exception as e:
-                logger.warning(f"[FeiShu] Failed to convert audio to opus, uploading original: {e}")
+                logger.warning(
+                    "[FeiShu] Failed to convert audio to opus, uploading original, path_ref=%s, error_type=%s",
+                    _feishu_log_ref(audio_path),
+                    type(e).__name__,
+                )
                 upload_path = audio_path
 
         file_name = os.path.splitext(os.path.basename(upload_path))[0] + '.opus'
@@ -1386,16 +1517,22 @@ class FeiShuChanel(ChatChannel):
                     headers=headers,
                     timeout=(5, 30)
                 )
-                logger.info(
-                    f"[FeiShu] upload audio response, status={upload_response.status_code}, res={upload_response.content}")
                 response_data = upload_response.json()
+                logger.info(
+                    "[FeiShu] upload audio response, status=%s, summary=%s",
+                    upload_response.status_code,
+                    _feishu_api_response_log_summary(response_data),
+                )
                 if response_data.get("code") == 0:
                     return response_data.get("data").get("file_key")
                 else:
-                    logger.error(f"[FeiShu] upload audio failed: {response_data}")
+                    logger.error(
+                        "[FeiShu] upload audio failed, summary=%s",
+                        _feishu_api_response_log_summary(response_data),
+                    )
                     return None
         except Exception as e:
-            logger.error(f"[FeiShu] upload audio exception: {e}")
+            logger.error("[FeiShu] upload audio exception, path_ref=%s, error_type=%s", _feishu_log_ref(upload_path), type(e).__name__)
             return None
         finally:
             # 无论上传成功与否都清理转换产生的临时 opus 文件，避免失败路径下磁盘堆积。
@@ -1403,22 +1540,26 @@ class FeiShuChanel(ChatChannel):
                 try:
                     os.remove(upload_path)
                 except Exception as e:
-                    logger.warning(f"[FeiShu] Failed to remove temp opus file {upload_path}: {e}")
+                    logger.warning(
+                        "[FeiShu] Failed to remove temp opus file, path_ref=%s, error_type=%s",
+                        _feishu_log_ref(upload_path),
+                        type(e).__name__,
+                    )
 
     def _upload_file_url(self, file_url, access_token):
         """
         Upload file to Feishu
         Supports both local files (file://) and HTTP URLs
         """
-        logger.debug(f"[FeiShu] start process file, file_url={file_url}")
+        logger.debug("[FeiShu] start process file, file_source_ref=%s", _feishu_log_ref(file_url))
 
         # Check if it's a local file path (file:// protocol)
         if file_url.startswith("file://"):
             local_path = file_url[7:]  # Remove "file://" prefix
-            logger.info(f"[FeiShu] uploading local file: {local_path}")
+            logger.info("[FeiShu] uploading local file: path_ref=%s", _feishu_log_ref(local_path))
 
             if not os.path.exists(local_path):
-                logger.error(f"[FeiShu] local file not found: {local_path}")
+                logger.error("[FeiShu] local file not found: path_ref=%s", _feishu_log_ref(local_path))
                 return None
 
             # Get file info
@@ -1451,17 +1592,22 @@ class FeiShuChanel(ChatChannel):
                         headers=headers,
                         timeout=(5, 30)  # 5s connect, 30s read timeout
                     )
-                    logger.info(
-                        f"[FeiShu] upload file response, status={upload_response.status_code}, res={upload_response.content}")
-
                     response_data = upload_response.json()
+                    logger.info(
+                        "[FeiShu] upload file response, status=%s, summary=%s",
+                        upload_response.status_code,
+                        _feishu_api_response_log_summary(response_data),
+                    )
                     if response_data.get("code") == 0:
                         return response_data.get("data").get("file_key")
                     else:
-                        logger.error(f"[FeiShu] upload file failed: {response_data}")
+                        logger.error(
+                            "[FeiShu] upload file failed, summary=%s",
+                            _feishu_api_response_log_summary(response_data),
+                        )
                         return None
             except Exception as e:
-                logger.error(f"[FeiShu] upload file exception: {e}")
+                logger.error("[FeiShu] upload file exception, file_ref=%s, error_type=%s", _feishu_log_ref(file_path), type(e).__name__)
                 return None
 
         # For HTTP URLs, download first then upload
@@ -1495,18 +1641,24 @@ class FeiShuChanel(ChatChannel):
 
             with open(temp_name, "rb") as file:
                 upload_response = requests.post(upload_url, files={"file": file}, data=data, headers=headers)
-                logger.info(f"[FeiShu] upload file, res={upload_response.content}")
-
                 response_data = upload_response.json()
+                logger.info(
+                    "[FeiShu] upload file response, status=%s, summary=%s",
+                    upload_response.status_code,
+                    _feishu_api_response_log_summary(response_data),
+                )
                 os.remove(temp_name)  # Clean up temp file
 
                 if response_data.get("code") == 0:
                     return response_data.get("data").get("file_key")
                 else:
-                    logger.error(f"[FeiShu] upload file failed: {response_data}")
+                    logger.error(
+                        "[FeiShu] upload file failed, summary=%s",
+                        _feishu_api_response_log_summary(response_data),
+                    )
                     return None
         except Exception as e:
-            logger.error(f"[FeiShu] upload file from URL exception: {e}")
+            logger.error("[FeiShu] upload file from URL exception, file_source_ref=%s, error_type=%s", _feishu_log_ref(file_url), type(e).__name__)
             return None
 
     def _compose_context(self, ctype: ContextType, content, **kwargs):
@@ -1579,7 +1731,16 @@ class FeishuController:
             channel = FeiShuChanel()
 
             request = json.loads(web.data().decode("utf-8"))
-            logger.debug(f"[FeiShu] receive request: {request}")
+            header = request.get("header") if isinstance(request.get("header"), dict) else {}
+            logger.debug(
+                "[FeiShu] receive webhook request summary: %s",
+                {
+                    "type": _feishu_log_text(request.get("type") or ""),
+                    "eventType": _feishu_log_text(header.get("event_type") or ""),
+                    "token": _feishu_log_presence(header.get("token")),
+                    "event": _feishu_event_log_summary(request.get("event") if isinstance(request.get("event"), dict) else {}),
+                },
+            )
 
             # 1.事件订阅回调验证
             if request.get("type") == URL_VERIFICATION:
@@ -1588,7 +1749,6 @@ class FeishuController:
 
             # 2.消息接收处理
             # token 校验
-            header = request.get("header")
             if not header or header.get("token") != channel.feishu_token:
                 return self.FAILED_MSG
 
@@ -1600,5 +1760,5 @@ class FeishuController:
             return self.SUCCESS_MSG
 
         except Exception as e:
-            logger.error(e)
+            logger.error("[FeiShu] webhook request error, error_type=%s", type(e).__name__)
             return self.FAILED_MSG

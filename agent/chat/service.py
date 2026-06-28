@@ -292,6 +292,11 @@ class ChatService:
                 session_id, new_messages, channel_type=channel_type
             )
         except Exception as e:
+            if getattr(e, "code", "") == "SESSION_OWNER_CONFLICT":
+                logger.warning(
+                    f"[ChatService] Refused to persist messages due to session owner conflict: reason={getattr(e, 'reason', 'unknown')}"
+                )
+                return
             logger.warning(
                 f"[ChatService] Failed to persist messages for session={session_id}: {e}"
             )

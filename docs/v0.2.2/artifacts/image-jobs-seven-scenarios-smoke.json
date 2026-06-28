@@ -1,0 +1,87 @@
+{
+  "status": "PASS",
+  "version": "v0.2.2",
+  "model": "gpt-image-2-pro",
+  "external_provider": {
+    "provider": "OpenAI-compatible",
+    "base_url_hash": "f51a48c756fa",
+    "credential_source": "env:OPENAI_API_KEY"
+  },
+  "duration_ms": 25759,
+  "scenario_count": 7,
+  "scenarios": {
+    "external_generation": {
+      "status": "pass",
+      "external_base_hash": "f51a48c756fa",
+      "model": "gpt-image-2-pro",
+      "artifact_count": 1,
+      "artifact_signatures": [
+        {
+          "kind": "png",
+          "size_bytes": 858851,
+          "sha256_12": "272bb520d1cd"
+        }
+      ],
+      "event_types": [
+        "artifact.created",
+        "image_job.artifact",
+        "image_job.completed",
+        "image_job.progress",
+        "image_job.started"
+      ]
+    },
+    "fake_edit_fallback": {
+      "status": "pass",
+      "route": "edits",
+      "attempted_models": [
+        "gpt-image-2-pro",
+        "gpt-image-2"
+      ],
+      "fallback_used": true,
+      "artifact_count": 1,
+      "event_types": [
+        "artifact.created",
+        "image_job.artifact",
+        "image_job.completed",
+        "image_job.progress",
+        "image_job.started"
+      ]
+    },
+    "parallel_artifacts": {
+      "status": "pass",
+      "artifact_count": 3,
+      "effective_max_parallel": 3,
+      "artifact_events": 3
+    },
+    "ocr_reuse": {
+      "status": "pass",
+      "ocr_events": 2,
+      "ocr_cache_hit_count": 1,
+      "ocr_cache_miss_count": 1,
+      "ocr_total_ms": 0
+    },
+    "projection_recovery": {
+      "status": "pass",
+      "job_id": "image-job-seven-parallel-artifacts",
+      "recovered_from_projection": true,
+      "projected_jobs": 1
+    },
+    "cancel_running": {
+      "status": "pass",
+      "cancel_status": "cancelled",
+      "collect_status": "cancelled",
+      "event_types": [
+        "image_job.cancelled",
+        "image_job.progress",
+        "image_job.started"
+      ]
+    },
+    "validation_no_events": {
+      "status": "pass",
+      "missing_prompt_message": "prompt or tasks is required",
+      "invalid_task_message": "each image task requires prompt",
+      "events_written": 0
+    }
+  },
+  "total_runtime_events": 57
+}

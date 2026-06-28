@@ -1,0 +1,313 @@
+{
+  "version": "0.2.3",
+  "slice": "R23-17",
+  "scenario": "final-release-gate",
+  "status": "pass",
+  "complete": true,
+  "redacted": true,
+  "metrics": {
+    "sliceCount": 20,
+    "artifactCount": 25,
+    "blockerCount": 0
+  },
+  "sliceStates": [
+    {
+      "id": "R23-00",
+      "status": "PASS",
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R23-02",
+      "status": "PASS",
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R23-02C",
+      "status": "PASS",
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R23-05",
+      "status": "PASS",
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R23-07",
+      "status": "PASS",
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R23-08",
+      "status": "PASS",
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R23-09",
+      "status": "PASS",
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R23-10",
+      "status": "PASS",
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R23-11",
+      "status": "PASS",
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R23-13",
+      "status": "PASS",
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R23-14",
+      "status": "PASS",
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R23-15",
+      "status": "PASS",
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R23-16",
+      "status": "PASS",
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R23-16P",
+      "status": "PASS",
+      "finalRequired": true,
+      "ok": true
+    },
+    {
+      "id": "R23-17",
+      "status": "PASS",
+      "finalRequired": true,
+      "ok": true
+    },
+    {
+      "id": "R23-18",
+      "status": "PASS",
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R23-19",
+      "status": "PASS",
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R23-20",
+      "status": "PASS",
+      "finalRequired": true,
+      "ok": true
+    },
+    {
+      "id": "R23-21",
+      "status": "PASS",
+      "finalRequired": true,
+      "ok": true
+    },
+    {
+      "id": "R23-DEPLOY",
+      "status": "PASS",
+      "finalRequired": false,
+      "ok": true
+    }
+  ],
+  "artifactStates": [
+    {
+      "id": "security",
+      "status": "pass",
+      "expected": "pass",
+      "clean": true,
+      "refHash": "hmac:aaca7ddb6a747068"
+    },
+    {
+      "id": "security-scan",
+      "status": "success",
+      "expected": "success",
+      "clean": true,
+      "refHash": "hmac:85fbf5c7a05a7080"
+    },
+    {
+      "id": "performance",
+      "status": "pass",
+      "expected": "pass",
+      "clean": true,
+      "refHash": "hmac:b568ea02359d25f1"
+    },
+    {
+      "id": "performance-scan",
+      "status": "success",
+      "expected": "success",
+      "clean": true,
+      "refHash": "hmac:b9e8b6c9918906d4"
+    },
+    {
+      "id": "external-scan",
+      "status": "success",
+      "expected": "success",
+      "clean": true,
+      "refHash": "hmac:090cfb4e86e2f8e8"
+    },
+    {
+      "id": "session-browser-smoke",
+      "status": "PASS",
+      "expected": "PASS",
+      "clean": true,
+      "refHash": "hmac:497f7e702402f253"
+    },
+    {
+      "id": "session-refresh-smoke",
+      "status": "PASS",
+      "expected": "PASS",
+      "clean": true,
+      "refHash": "hmac:71e1f2102f324b6d"
+    },
+    {
+      "id": "cross-talk-scan",
+      "status": "success",
+      "expected": "success",
+      "clean": true,
+      "refHash": "hmac:82960a2a660e24a7"
+    },
+    {
+      "id": "cross-talk-screenshot-scan",
+      "status": "success",
+      "expected": "success",
+      "clean": true,
+      "refHash": "hmac:3b6d7bb251207266"
+    },
+    {
+      "id": "chrome-scan",
+      "status": "success",
+      "expected": "success",
+      "clean": true,
+      "refHash": "hmac:32dbbb33682cdfaf"
+    },
+    {
+      "id": "chat-scan",
+      "status": "success",
+      "expected": "success",
+      "clean": true,
+      "refHash": "hmac:555599aa1f084101"
+    },
+    {
+      "id": "chat-browser-smoke",
+      "status": "PASS",
+      "expected": "PASS",
+      "clean": true,
+      "refHash": "hmac:6c58bc7ca80c5fa3"
+    },
+    {
+      "id": "chat-browser-scan",
+      "status": "success",
+      "expected": "success",
+      "clean": true,
+      "refHash": "hmac:007f94bc291fa8cd"
+    },
+    {
+      "id": "capability-recovery-smoke",
+      "status": "PASS",
+      "expected": "PASS",
+      "clean": true,
+      "refHash": "hmac:3f305ea8ea61d66a"
+    },
+    {
+      "id": "capability-recovery-scan",
+      "status": "success",
+      "expected": "success",
+      "clean": true,
+      "refHash": "hmac:6e2aba29744056a6"
+    },
+    {
+      "id": "capability-recovery-package",
+      "status": "PASS",
+      "expected": "PASS",
+      "clean": true,
+      "refHash": "hmac:11cb6e8dfbced25f"
+    },
+    {
+      "id": "production-deploy",
+      "status": "PASS",
+      "expected": "PASS",
+      "clean": true,
+      "refHash": "hmac:ebd0b7773846759d"
+    },
+    {
+      "id": "production-public-smoke",
+      "status": "PASS",
+      "expected": "PASS",
+      "clean": true,
+      "refHash": "hmac:e4f9b143a616b900"
+    },
+    {
+      "id": "production-capability-smoke",
+      "status": "PASS",
+      "expected": "PASS",
+      "clean": true,
+      "refHash": "hmac:4abe1343d839aa05"
+    },
+    {
+      "id": "production-real-tool-invocation-smoke",
+      "status": "PASS",
+      "expected": "PASS",
+      "clean": true,
+      "refHash": "hmac:3ef1e9918bd0466c"
+    },
+    {
+      "id": "production-deploy-scan",
+      "status": "success",
+      "expected": "success",
+      "clean": true,
+      "refHash": "hmac:3d5202b6fea5772c"
+    },
+    {
+      "id": "real-tool-invocation-smoke",
+      "status": "PASS",
+      "expected": "PASS",
+      "clean": true,
+      "refHash": "hmac:1c798254dcdf3401"
+    },
+    {
+      "id": "image-generation-tool-invocation-smoke",
+      "status": "PASS",
+      "expected": "PASS",
+      "clean": true,
+      "refHash": "hmac:85723798721ed1e0"
+    },
+    {
+      "id": "ability-extension-fallback-browser-smoke",
+      "status": "PASS",
+      "expected": "PASS",
+      "clean": true,
+      "refHash": "hmac:1649652f9dadeaa4"
+    },
+    {
+      "id": "tool-invocation-observability-scan",
+      "status": "success",
+      "expected": "success",
+      "clean": true,
+      "refHash": "hmac:16e7bcd568bbc0eb"
+    }
+  ],
+  "blockers": []
+}

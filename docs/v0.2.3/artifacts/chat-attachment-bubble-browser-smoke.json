@@ -1,0 +1,60 @@
+{
+  "status": "PASS",
+  "durationMs": 3002,
+  "screenshot": "docs/v0.2.3/artifacts/chat-attachment-bubble-browser.png",
+  "metrics": {
+    "historyCalls": 1,
+    "runtimeProjectionCalls": 0,
+    "userMessageCount": 1,
+    "attachmentButtonCount": 2,
+    "imageAttachmentCount": 1,
+    "textIncludesCodex": true,
+    "body": {
+      "x": 543.453125,
+      "y": 102,
+      "width": 664.546875,
+      "height": 127.796875
+    },
+    "files": {
+      "x": 688,
+      "y": 102,
+      "width": 520,
+      "height": 74
+    },
+    "bubble": {
+      "x": 543.453125,
+      "y": 184,
+      "width": 664.546875,
+      "height": 45.796875
+    },
+    "bodyStyle": {
+      "background": "rgba(0, 0, 0, 0)",
+      "borderColor": "rgb(24, 24, 27)",
+      "borderRadius": "14px",
+      "display": "grid"
+    },
+    "bubbleStyle": {
+      "background": "color(srgb 0.994282 0.944313 0.909781)",
+      "borderColor": "color(srgb 0.888858 0.810728 0.742419)",
+      "borderRadius": "20px",
+      "display": "block"
+    },
+    "fileButtons": [
+      {
+        "width": 227.96875,
+        "height": 38,
+        "background": "color(srgb 0.995046 0.948634 0.911424)",
+        "borderColor": "color(srgb 0.891364 0.793997 0.71309)"
+      },
+      {
+        "width": 96,
+        "height": 74,
+        "background": "oklch(0.995 0.004 78)",
+        "borderColor": "color(srgb 0.891364 0.793997 0.71309)"
+      }
+    ],
+    "runCenterHidden": true
+  },
+  "consoleErrorCount": 0,
+  "redacted": true
+}

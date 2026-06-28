@@ -30,6 +30,7 @@ _DANGEROUS_TOOLS = {
     "terminal",
     "browser",
     "feishu_cli",
+    "tongxin_cli",
     "optional_abilities",
     "agent_capability",
     "mcp",
@@ -45,6 +46,8 @@ _DANGEROUS_TOOLS = {
     "web_fetch",
     "web_search",
     "vision",
+    "ocr",
+    "imagegen",
 }
 _ALLOWED_MODES = {"full-access", "smart-ask", "always-ask", "read-only", "custom"}
 _DEFAULT_TIMEOUT_SECONDS = 300
@@ -101,6 +104,14 @@ def _summarize_args(tool_name: str, arguments: Dict[str, Any]) -> str:
         else:
             detail = str(cli_args or arguments.get("scope") or arguments.get("domain") or "")
         return _mask_sensitive(f"{action} {detail}".strip())[:500] or "Feishu CLI action"
+    if normalized == "tongxin_cli":
+        action = str(arguments.get("action") or "")
+        cli_args = arguments.get("args")
+        if isinstance(cli_args, list):
+            detail = " ".join(str(item) for item in cli_args[:12])
+        else:
+            detail = str(cli_args or "")
+        return _mask_sensitive(f"{action} {detail}".strip())[:500] or "Tongxin CLI read-only query"
     if normalized == "optional_abilities":
         action = str(arguments.get("action") or "")
         ability = str(arguments.get("ability") or arguments.get("pack_id") or "")
@@ -153,6 +164,29 @@ def _summarize_args(tool_name: str, arguments: Dict[str, Any]) -> str:
         question = str(arguments.get("question") or "")
         detail = " ".join(part for part in [image, question[:120]] if part)
         return _mask_sensitive(detail).strip()[:500] or "vision image analysis"
+    if normalized == "ocr":
+        action = str(arguments.get("action") or "extract_text")
+        image = str(arguments.get("image") or "")
+        detail = " ".join(part for part in [action, image] if part)
+        return _mask_sensitive(detail).strip()[:500] or "local OCR"
+    if normalized == "imagegen":
+        provider = str(arguments.get("provider") or "")
+        model = str(arguments.get("model") or "")
+        output_dir = str(arguments.get("output_dir") or "")
+        image_refs = arguments.get("image_urls")
+        image_count = len(image_refs) if isinstance(image_refs, list) else (1 if arguments.get("image_url") else 0)
+        detail = " ".join(
+            part
+            for part in [
+                "image generation",
+                f"provider={provider}" if provider else "",
+                f"model={model}" if model else "",
+                f"refs={image_count}",
+                f"output={output_dir}" if output_dir else "",
+            ]
+            if part
+        )
+        return _mask_sensitive(detail).strip()[:500] or "image generation"
     return _mask_sensitive(json.dumps(arguments, ensure_ascii=False, default=str))[:500]
 
 
@@ -167,15 +201,48 @@ def _is_trusted_default_chrome_devtools_start(args: Dict[str, Any]) -> bool:
     if not isinstance(cli_args, list):
         return False
     parts = [str(item).strip() for item in cli_args]
-    if len(parts) != 4:
+    if parts and parts[0] == "-y":
+        parts = parts[1:]
+    if len(parts) < 4:
         return False
+    if parts[0] != "chrome-devtools-mcp@latest":
+        return False
+    if parts[1] not in {"--browserUrl", "--browser-url"} or parts[2] != _DEFAULT_CDP_ENDPOINT:
+        return False
+    flags = set(parts[3:])
+    trusted_flags = {
+        "--no-usage-statistics",
+        "--no-performance-crux",
+        "--experimentalPageIdRouting",
+        "--experimentalDevtools",
+        "--experimentalVision",
+        "--experimentalStructuredContent",
+        "--experimentalIncludeAllPages",
+        "--memoryDebugging",
+        "--categoryExperimentalThirdParty",
+        "--categoryExperimentalWebmcp",
+        "--redactNetworkHeaders",
+    }
+    required_privacy_flags = {
+        "--no-usage-statistics",
+        "--no-performance-crux",
+        "--redactNetworkHeaders",
+    }
     return (
-        parts[0] == "chrome-devtools-mcp@latest"
-        and parts[1] == "--browserUrl"
-        and parts[2] == _DEFAULT_CDP_ENDPOINT
-        and parts[3] == "--no-usage-statistics"
+        required_privacy_flags.issubset(flags)
+        and flags.issubset(trusted_flags)
         and bool(args.get("trusted_default_chrome_devtools"))
     )
+
+
+def _is_read_only_tongxin_cli_request(args: Dict[str, Any]) -> bool:
+    try:
+        from agent.tools.tongxin_cli.tongxin_cli import is_read_only_tongxin_request
+
+        return is_read_only_tongxin_request(args)
+    except Exception:
+        action = str((args or {}).get("action") or "").strip().lower()
+        return action in {"status", "schema", "diagnose"}
 
 
 def _normalize_access(value: Any, default: str = "deny") -> str:
@@ -346,6 +413,9 @@ class ToolPermissionBroker:
             return {"allowed": True, "reason": "read-only-optional-ability-status"}
         if normalized_tool == "agent_capability" and str(args.get("action") or "").strip().lower() in {"list_packs", "diagnose"}:
             return {"allowed": True, "reason": "read-only-agent-capability-status"}
+        if normalized_tool == "tongxin_cli" and _is_read_only_tongxin_cli_request(args):
+            self._audit("tool-execution", "allow", {"tool": normalized_tool, "reason": "default-read-only-tongxin-cli"})
+            return {"allowed": True, "reason": "default-read-only-tongxin-cli"}
         if not self._requires_permission(normalized_tool):
             return {"allowed": True, "reason": "not-required"}
 
@@ -468,6 +538,9 @@ class ToolPermissionBroker:
             return {"allowed": True, "reason": "read-only-optional-ability-status"}
         if normalized_tool == "agent_capability" and str(args.get("action") or "").strip().lower() in {"list_packs", "diagnose"}:
             return {"allowed": True, "reason": "read-only-agent-capability-status"}
+        if normalized_tool == "tongxin_cli" and _is_read_only_tongxin_cli_request(args):
+            self._audit("tool-execution", "allow", {"tool": normalized_tool, "reason": "default-read-only-tongxin-cli"})
+            return {"allowed": True, "reason": "default-read-only-tongxin-cli"}
         if not self._requires_permission(normalized_tool):
             return {"allowed": True, "reason": "not-required"}
 
@@ -794,6 +867,8 @@ class ToolPermissionBroker:
             return "Browser automation confirmation"
         if tool_name == "feishu_cli":
             return "Feishu CLI access confirmation"
+        if tool_name == "tongxin_cli":
+            return "Tongxin CLI access confirmation"
         if tool_name == "optional_abilities":
             return "Optional ability enablement confirmation"
         if tool_name == "agent_capability":
@@ -816,6 +891,8 @@ class ToolPermissionBroker:
             return "Internet access confirmation"
         if tool_name == "vision":
             return "Image analysis confirmation"
+        if tool_name == "imagegen":
+            return "Image generation confirmation"
         return "Local command confirmation"
 
     @staticmethod
@@ -824,6 +901,8 @@ class ToolPermissionBroker:
             return f"EcoreX wants to control the browser: {summary}"
         if tool_name == "feishu_cli":
             return f"EcoreX wants to access Feishu through lark-cli: {summary}"
+        if tool_name == "tongxin_cli":
+            return f"EcoreX wants to query Tongxin Assistant read-only account data: {summary}"
         if tool_name == "optional_abilities":
             return f"EcoreX wants to enable or install an optional ability: {summary}"
         if tool_name == "agent_capability":
@@ -848,6 +927,8 @@ class ToolPermissionBroker:
             return f"EcoreX wants to search the internet: {summary}"
         if tool_name == "vision":
             return f"EcoreX wants to analyze an image using a model API: {summary}"
+        if tool_name == "imagegen":
+            return f"EcoreX wants to generate or edit images and write local image files: {summary}"
         return f"EcoreX wants to run a local shell command: {summary}"
 
 

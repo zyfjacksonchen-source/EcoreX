@@ -11,6 +11,44 @@ import sqlite3
 from common.log import logger
 from common import i18n
 
+DEFAULT_CDP_ENDPOINT = "http://127.0.0.1:9222"
+CHROME_DEVTOOLS_MCP_FULL_FLAGS = [
+    "--no-usage-statistics",
+    "--no-performance-crux",
+    "--experimentalPageIdRouting",
+    "--experimentalDevtools",
+    "--experimentalVision",
+    "--experimentalStructuredContent",
+    "--experimentalIncludeAllPages",
+    "--memoryDebugging",
+    "--categoryExperimentalThirdParty",
+    "--categoryExperimentalWebmcp",
+    "--redactNetworkHeaders",
+]
+
+
+def chrome_devtools_mcp_args(endpoint: str = DEFAULT_CDP_ENDPOINT) -> list:
+    browser_url = str(endpoint or DEFAULT_CDP_ENDPOINT)
+    return [
+        "-y",
+        "chrome-devtools-mcp@latest",
+        "--browserUrl",
+        browser_url,
+        *CHROME_DEVTOOLS_MCP_FULL_FLAGS,
+    ]
+
+
+def _chrome_devtools_mcp_args_need_upgrade(args, endpoint: str = DEFAULT_CDP_ENDPOINT) -> bool:
+    if not isinstance(args, list):
+        return True
+    parts = [str(item).strip() for item in args]
+    joined = " ".join(parts)
+    if not parts or "--autoConnect" in joined or "--auto-connect" in joined:
+        return True
+    expected = chrome_devtools_mcp_args(endpoint)
+    return parts != expected
+
+
 # All available config keys are listed in this dict (use lowercase keys).
 # The values here are placeholders only; the program does NOT read them.
 # They merely document the expected format — put real values in config.json.
@@ -273,10 +311,14 @@ available_setting = {
     "skill": {},  # Per-skill runtime config; nested keys flatten to SKILL_<NAME>_<KEY> env vars at startup
     "tools": {
         "browser": {
-            "cdp_endpoint": "http://127.0.0.1:9222",
-            "cdp_auto_launch": False,
+            "cdp_endpoint": DEFAULT_CDP_ENDPOINT,
+            "cdp_auto_launch": True,
             "cdp_fallback": True,
             "persistent": True
+        },
+        "tongxin_cli": {
+            "script_path": "",
+            "read_only": True
         }
     },
     "mcp_servers": [
@@ -284,8 +326,8 @@ available_setting = {
             "name": "chrome-devtools",
             "type": "stdio",
             "command": "npx",
-            "args": ["chrome-devtools-mcp@latest", "--browserUrl", "http://127.0.0.1:9222", "--no-usage-statistics"],
-            "timeout": 30
+            "args": chrome_devtools_mcp_args(DEFAULT_CDP_ENDPOINT),
+            "timeout": 45
         }
     ],  # MCP server list; each entry supports type "stdio" (local process) or "sse" (remote URL); loaded only when mcp_auto_start or optional_abilities enables it
 }
@@ -405,8 +447,8 @@ def _ensure_ecorex_runtime_defaults(cfg: dict):
         cfg["self_evolution_enabled"] = True
 
     browser_defaults = {
-        "cdp_endpoint": "http://127.0.0.1:9222",
-        "cdp_auto_launch": False,
+        "cdp_endpoint": DEFAULT_CDP_ENDPOINT,
+        "cdp_auto_launch": True,
         "cdp_fallback": True,
         "persistent": True,
     }
@@ -421,6 +463,13 @@ def _ensure_ecorex_runtime_defaults(cfg: dict):
     if feishu_cli.get("package") in (None, "", "@larksuite/cli@1.0.40"):
         feishu_cli["package"] = "@larksuite/cli@1.0.56"
     feishu_cli.setdefault("auto_install", False)
+
+    tongxin_cli = tools.get("tongxin_cli")
+    if not isinstance(tongxin_cli, dict):
+        tongxin_cli = {}
+        tools["tongxin_cli"] = tongxin_cli
+    tongxin_cli.setdefault("script_path", "")
+    tongxin_cli["read_only"] = True
 
     mcp_servers = cfg.get("mcp_servers")
     if not isinstance(mcp_servers, list):
@@ -440,13 +489,8 @@ def _ensure_ecorex_runtime_defaults(cfg: dict):
             "name": "chrome-devtools",
             "type": "stdio",
             "command": command,
-            "args": [
-                "chrome-devtools-mcp@latest",
-                "--browserUrl",
-                str(browser.get("cdp_endpoint") or "http://127.0.0.1:9222"),
-                "--no-usage-statistics",
-            ],
-            "timeout": 30,
+            "args": chrome_devtools_mcp_args(str(browser.get("cdp_endpoint") or DEFAULT_CDP_ENDPOINT)),
+            "timeout": 45,
         })
     else:
         for server in mcp_servers:
@@ -463,13 +507,17 @@ def _ensure_ecorex_runtime_defaults(cfg: dict):
                 server["command"] = "npx.cmd"
             args = server.get("args")
             args_text = " ".join(str(item) for item in args) if isinstance(args, list) else ""
-            if not isinstance(args, list) or "--autoConnect" in args_text or "--auto-connect" in args_text:
-                server["args"] = [
-                    "chrome-devtools-mcp@latest",
-                    "--browserUrl",
-                    str(browser.get("cdp_endpoint") or "http://127.0.0.1:9222"),
-                    "--no-usage-statistics",
-                ]
+            if _chrome_devtools_mcp_args_need_upgrade(
+                args,
+                str(browser.get("cdp_endpoint") or DEFAULT_CDP_ENDPOINT),
+            ):
+                server["args"] = chrome_devtools_mcp_args(str(browser.get("cdp_endpoint") or DEFAULT_CDP_ENDPOINT))
+            try:
+                timeout = int(server.get("timeout") or 0)
+            except (TypeError, ValueError):
+                timeout = 0
+            if timeout < 45:
+                server["timeout"] = 45
 
 
 def _prepend_to_path(path: str):

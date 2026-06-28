@@ -1,0 +1,70 @@
+{
+  "status": "PASS",
+  "generatedAt": "2026-06-26T05:43:48.1541373Z",
+  "scope": "local-windows-webui-runtime",
+  "issue": "Feishu backend authorization succeeded, but EcoreX channel stayed not_configured because app credentials were not persisted.",
+  "rootCauses": [
+    {
+      "id": "sdk-result-shape-drift",
+      "status": "fixed",
+      "summary": "Register flow now accepts client_id/client_secret, app_id/app_secret, camelCase variants, and common nested result containers."
+    },
+    {
+      "id": "windows-webui-runtime-missing-lark-oapi",
+      "status": "fixed",
+      "summary": "Bundled local runtime now has lark-oapi installed, and future Windows installers self-heal the dependency before service startup."
+    },
+    {
+      "id": "old-secret-not-recoverable",
+      "status": "expected-operator-rescan-needed",
+      "summary": "The previous Feishu app secret was never written to config.json, so the current runtime remains missing credentials until the operator scans again or manually enters App ID/App Secret."
+    }
+  ],
+  "localRuntimeProbe": {
+    "webuiVersion": "0.2.2",
+    "larkOapiVersion": "1.6.9",
+    "larkRegisterAppAvailable": true,
+    "installedHelperExtraction": "PASS",
+    "installedErrorLogEmpty": true,
+    "feishuConfigured": false,
+    "feishuConfigState": "missing",
+    "feishuMissingFields": [
+      "feishu_app_id",
+      "feishu_app_secret"
+    ],
+    "feishuAuthEndpoint": "/api/feishu/register"
+  },
+  "sourceChanges": [
+    "common/feishu_register_credentials.py",
+    "channel/web/web_channel.py",
+    "channel/feishu/feishu_channel.py",
+    "desktop/runtime-packs/core-requirements.txt",
+    "desktop/runtime/ecorex-runtime/core-requirements.txt",
+    "scripts/prepare-ecorex-webui-local-release.ps1",
+    "scripts/smoke-web-hotfix-contracts.py",
+    "tests/test_ecorex_web_parallel_backend.py"
+  ],
+  "verification": [
+    {
+      "command": "python -m py_compile common/feishu_register_credentials.py channel/web/web_channel.py channel/feishu/feishu_channel.py tests/test_ecorex_web_parallel_backend.py scripts/smoke-web-hotfix-contracts.py",
+      "status": "PASS"
+    },
+    {
+      "command": "PowerShell parser check for scripts/prepare-ecorex-webui-local-release.ps1",
+      "status": "PASS"
+    },
+    {
+      "command": "python scripts/smoke-web-hotfix-contracts.py",
+      "status": "PASS"
+    },
+    {
+      "command": "pytest focused Feishu/auth/artifact contracts",
+      "status": "PASS",
+      "summary": "3 passed, 4 subtests passed"
+    }
+  ],
+  "secretHandling": {
+    "rawCredentialValuesPersistedInEvidence": false,
+    "registerResultShapeDiagnosticsAreSecretFree": true
+  }
+}

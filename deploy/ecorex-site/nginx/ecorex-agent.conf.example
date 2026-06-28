@@ -1,5 +1,5 @@
-# Example Nginx locations for EcoreX v0.2.0.
-# Place these inside the existing https server block for www.ecoreai.cn.
+# Example Nginx locations for EcoreX v0.2.2.
+# Place these inside the existing https server block for mvdcm.ecoremedia.net.
 
 set $ecorex_admin_api http://127.0.0.1:18084;
 set $ecorex_web_runtime http://127.0.0.1:9909;
@@ -40,7 +40,7 @@ location ^~ /ecorex-agent/client/ {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 }
 
-location ~ ^/ecorex-agent/(stream|api/logs)$ {
+location = /ecorex-agent/stream {
     rewrite ^/ecorex-agent(/.*)$ $1 break;
     proxy_pass $ecorex_web_runtime;
     proxy_http_version 1.1;
@@ -55,7 +55,154 @@ location ~ ^/ecorex-agent/(stream|api/logs)$ {
     add_header X-Accel-Buffering no always;
 }
 
-location ~ ^/ecorex-agent/(app/|auth/|message$|upload$|uploads/|api/|poll$|cancel$|chat$|config$|assets/) {
+location = /ecorex-agent/api/logs {
+    rewrite ^/ecorex-agent(/.*)$ $1 break;
+    proxy_pass $ecorex_web_runtime;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header Connection "";
+    proxy_buffering off;
+    proxy_read_timeout 1h;
+    proxy_send_timeout 1h;
+    add_header X-Accel-Buffering no always;
+}
+
+location ^~ /ecorex-agent/app/ {
+    rewrite ^/ecorex-agent(/.*)$ $1 break;
+    proxy_pass $ecorex_web_runtime;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header Connection "";
+    proxy_buffering off;
+    proxy_read_timeout 1h;
+    proxy_send_timeout 1h;
+}
+
+location ^~ /ecorex-agent/auth/ {
+    rewrite ^/ecorex-agent(/.*)$ $1 break;
+    proxy_pass $ecorex_web_runtime;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header Connection "";
+    proxy_buffering off;
+    proxy_read_timeout 1h;
+    proxy_send_timeout 1h;
+}
+
+location ^~ /ecorex-agent/uploads/ {
+    rewrite ^/ecorex-agent(/.*)$ $1 break;
+    proxy_pass $ecorex_web_runtime;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header Connection "";
+    proxy_buffering off;
+    proxy_read_timeout 1h;
+    proxy_send_timeout 1h;
+}
+
+location ^~ /ecorex-agent/api/ {
+    rewrite ^/ecorex-agent(/.*)$ $1 break;
+    proxy_pass $ecorex_web_runtime;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header Connection "";
+    proxy_buffering off;
+    proxy_read_timeout 1h;
+    proxy_send_timeout 1h;
+}
+
+location ^~ /ecorex-agent/assets/ {
+    rewrite ^/ecorex-agent(/.*)$ $1 break;
+    proxy_pass $ecorex_web_runtime;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header Connection "";
+    proxy_buffering off;
+    proxy_read_timeout 1h;
+    proxy_send_timeout 1h;
+}
+
+location = /ecorex-agent/message {
+    rewrite ^/ecorex-agent(/.*)$ $1 break;
+    proxy_pass $ecorex_web_runtime;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header Connection "";
+    proxy_buffering off;
+    proxy_request_buffering off;
+    proxy_read_timeout 1h;
+    proxy_send_timeout 1h;
+}
+
+location = /ecorex-agent/upload {
+    rewrite ^/ecorex-agent(/.*)$ $1 break;
+    proxy_pass $ecorex_web_runtime;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header Connection "";
+    proxy_buffering off;
+    proxy_request_buffering off;
+    client_max_body_size 256m;
+    proxy_read_timeout 1h;
+    proxy_send_timeout 1h;
+}
+
+location = /ecorex-agent/poll {
+    rewrite ^/ecorex-agent(/.*)$ $1 break;
+    proxy_pass $ecorex_web_runtime;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header Connection "";
+    proxy_buffering off;
+    proxy_read_timeout 1h;
+    proxy_send_timeout 1h;
+}
+
+location = /ecorex-agent/cancel {
+    rewrite ^/ecorex-agent(/.*)$ $1 break;
+    proxy_pass $ecorex_web_runtime;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header Connection "";
+    proxy_buffering off;
+    proxy_read_timeout 1h;
+    proxy_send_timeout 1h;
+}
+
+location = /ecorex-agent/chat {
+    rewrite ^/ecorex-agent(/.*)$ $1 break;
+    proxy_pass $ecorex_web_runtime;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header Connection "";
+    proxy_buffering off;
+    proxy_read_timeout 1h;
+    proxy_send_timeout 1h;
+}
+
+location = /ecorex-agent/config {
     rewrite ^/ecorex-agent(/.*)$ $1 break;
     proxy_pass $ecorex_web_runtime;
     proxy_http_version 1.1;

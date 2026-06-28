@@ -23,18 +23,37 @@ from common.log import logger
 # Aliases accepted for the Streamable HTTP transport type
 _STREAMABLE_HTTP_ALIASES = {"streamable-http", "streamable_http", "streamablehttp", "http"}
 _DEFAULT_CDP_ENDPOINT = "http://127.0.0.1:9222"
+_TRUSTED_CHROME_DEVTOOLS_FLAGS = {
+    "--no-usage-statistics",
+    "--no-performance-crux",
+    "--experimentalPageIdRouting",
+    "--experimentalDevtools",
+    "--experimentalVision",
+    "--experimentalStructuredContent",
+    "--experimentalIncludeAllPages",
+    "--memoryDebugging",
+    "--categoryExperimentalThirdParty",
+    "--categoryExperimentalWebmcp",
+    "--redactNetworkHeaders",
+}
+_REQUIRED_CHROME_DEVTOOLS_PRIVACY_FLAGS = {
+    "--no-usage-statistics",
+    "--no-performance-crux",
+    "--redactNetworkHeaders",
+}
 
 
 _SENSITIVE_RE = re.compile(
-    r"(?i)(api[_-]?key|token|password|secret|authorization)(\"?\s*[:=]\s*\"?)[^\",\s&}]+"
+    r"(?i)(['\"]?(?:api[_-]?key|token|password|secret|authorization|cookie|session)['\"]?\s*[:=]\s*['\"]?)[^'\",\s&}]+"
 )
 
 
 def _mask_sensitive(text: str) -> str:
     value = text or ""
+    value = re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._\-]+", r"\1***", value)
     value = re.sub(r"sk-[A-Za-z0-9_\-]{12,}", "sk-***", value)
     value = re.sub(r"gh[pousr]_[A-Za-z0-9_]{12,}", "ghp_***", value)
-    return _SENSITIVE_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}***", value)
+    return _SENSITIVE_RE.sub(lambda m: f"{m.group(1)}***", value)
 
 
 def _mcp_permission_tool_name(server_name: str) -> str:
@@ -58,12 +77,16 @@ def _is_default_chrome_devtools_config(server_name: str, command, args) -> bool:
     if not isinstance(args, list):
         return False
     parts = [str(item).strip() for item in args]
-    return parts == [
-        "chrome-devtools-mcp@latest",
-        "--browserUrl",
-        _DEFAULT_CDP_ENDPOINT,
-        "--no-usage-statistics",
-    ]
+    if parts and parts[0] == "-y":
+        parts = parts[1:]
+    if len(parts) < 4 or parts[0] != "chrome-devtools-mcp@latest":
+        return False
+    if parts[1] not in {"--browserUrl", "--browser-url"} or parts[2] != _DEFAULT_CDP_ENDPOINT:
+        return False
+    flags = set(parts[3:])
+    if not _REQUIRED_CHROME_DEVTOOLS_PRIVACY_FLAGS.issubset(flags):
+        return False
+    return flags.issubset(_TRUSTED_CHROME_DEVTOOLS_FLAGS)
 
 
 class McpClient:
@@ -279,7 +302,7 @@ class McpClient:
                 {
                     "server": self.name,
                     "command": str(command),
-                    "args": [str(item) for item in list(args or [])[:12]],
+                    "args": [str(item) for item in list(args or [])[:32]],
                     "trusted_default_chrome_devtools": _is_default_chrome_devtools_config(
                         self.name,
                         command,
@@ -512,7 +535,7 @@ class McpClient:
             except Exception:
                 pass
             raise IOError(
-                f"[MCP:{self.name}] streamable-http HTTP {e.code}: {detail[:200]}"
+                f"[MCP:{self.name}] streamable-http HTTP {e.code}: {_mask_sensitive(detail)[:200]}"
             )
 
         with resp:
@@ -610,10 +633,11 @@ class McpClient:
             code = error.get("code")
             message = error.get("message", "Unknown MCP error")
             data = error.get("data")
+            message = _mask_sensitive(str(message))
             if data is not None:
                 return f"MCP error {code}: {message}; data={_mask_sensitive(str(data))[:300]}"
             return f"MCP error {code}: {message}"
-        return f"MCP error: {error}"
+        return f"MCP error: {_mask_sensitive(str(error))}"
 
     def _raise_for_rpc_error(self, resp: dict) -> None:
         if isinstance(resp, dict) and "error" in resp:
@@ -695,7 +719,7 @@ class McpClient:
 
         if "error" in resp:
             self._initialized = False
-            logger.warning(f"[MCP:{self.name}] Handshake error: {resp['error']}")
+            logger.warning(f"[MCP:{self.name}] Handshake error: {self._format_rpc_error(resp['error'])}")
             return False
 
         self._send_notification("notifications/initialized", {})

@@ -67,7 +67,10 @@ import {
   getEnterpriseSession,
   hasMessageStreamCursor,
   listCapabilityPacks,
+  loadExternalConnections,
+  loadSchedulerProjection,
   loadPermissionState,
+  loadRuntimeProjection,
   loadMemoryFiles,
   loadRuntimeUiState,
   loadRuntimeSnapshot,
@@ -87,12 +90,18 @@ import {
   sendChatMessage,
   setSkillEnabled,
   statLocalPath,
+  updateScheduler,
+  updateExternalConnection,
   updatePermissionMode,
   type CapabilityPack,
   type ChatSendResult,
   type AgentArtifact,
   type EnterpriseQuotaCheckResult,
   type EnterpriseSession,
+  type ExternalConnection,
+  type ExternalConnectionAction,
+  type ExternalConnectionActionResponse,
+  type ExternalConnectionField,
   type FileAttachment,
   type LocalJsonResult,
   type LocalPathStat,
@@ -100,22 +109,29 @@ import {
   type PermissionMode,
   type PermissionState,
   type ProjectFolder,
+  type ProjectSessionBinding,
   type RuntimeActiveRequest,
+  type RuntimeSession,
   type RuntimeSessionLock,
   type RuntimeExtension,
   type RuntimeMessage,
+  type RuntimeRequestProjection,
   type RuntimeSkill,
   type RuntimeStep,
   type RuntimeToolCall,
   type RuntimeTool,
   type RuntimeSnapshot,
+  type RuntimeSchedulerProjection,
+  type RuntimeSchedulerTask,
   type StreamItem,
   type TokenUsage,
   type UsageQuota,
+  type QualityEvidence,
   type OpenPathAction
 } from "./services/ecorexApi";
 import { CHAT_SCROLL_THRESHOLD_PX, getChatScrollState, scrollElementToBottom } from "./utils/chatUx";
-import { redactInternalPromptText } from "./utils/redaction";
+import { redactInternalPromptText, redactToolDisclosureValue } from "./utils/redaction";
+import { projectionRecoveryDecision, type ProjectionTerminalPhase } from "./utils/runtimeProjectionRecovery";
 
 type ThemeMode = "light" | "dark";
 type SidecarStatus = {
@@ -144,6 +160,7 @@ type StreamRequestPhase =
   | "failed"
   | "cancelled"
   | "interrupted";
+type TerminalStreamRequestPhase = ProjectionTerminalPhase;
 type StreamRequestState = {
   sessionId: string;
   requestId: string;
@@ -158,6 +175,7 @@ type SessionRow = {
   detail: string;
   activityAt?: string | number;
   createdAt?: string | number;
+  sortKeyMs?: number;
   updatedAt: string | number;
   status: "active" | "waiting" | "cancelling" | "ready" | "failed";
   requestId?: string;
@@ -182,6 +200,7 @@ type ChatItem = {
   artifacts?: AgentArtifact[];
   cancelled?: boolean;
   requestId?: string;
+  runTiming?: ChatRunTiming;
   phaseStartedAt?: number;
   userSeq?: number;
   botSeq?: number;
@@ -192,7 +211,7 @@ type ChatItem = {
     interruptsRequestId?: string;
   };
   recovery?: {
-    kind: "stalled" | "failed" | "interrupted" | "replay_gap" | "retryable_conflict";
+    kind: "stalled" | "failed" | "interrupted" | "replay_gap" | "retryable_conflict" | "reconnecting";
     requestId?: string;
     message: string;
     retryable?: boolean;
@@ -202,6 +221,13 @@ type ChatItem = {
     retryMode?: string;
     stopAllowed?: boolean;
   };
+};
+type ChatRunTiming = {
+  requestId?: string;
+  state?: "sending" | "running" | "completed" | "failed" | "cancelled" | "interrupted" | string;
+  startedAtMs?: number;
+  updatedAtMs?: number;
+  terminalAtMs?: number;
 };
 type ApprovalState =
   | {
@@ -223,13 +249,15 @@ type ApprovalState =
       message: string;
       actions?: Array<{ label: string; primary?: boolean; onClick: () => void }>;
     };
-type SettingsSection = "account" | "projects" | "abilities" | "permissions" | "memory" | "diagnostics";
+type SettingsSection = "account" | "projects" | "abilities" | "external-connections" | "scheduler" | "permissions" | "memory" | "diagnostics";
 type SessionProjectMap = Record<string, string>;
+type SessionProjectBindingMap = Record<string, ProjectSessionBinding>;
 type StringBoolMap = Record<string, boolean>;
 type StringMap = Record<string, string>;
 type SessionUiState = {
   title: string;
   projectId: string | null;
+  projectBinding?: ProjectSessionBinding | null;
   messages: ChatItem[];
   composerText: string;
   attachments: FileAttachment[];
@@ -368,10 +396,12 @@ const initialSidecar: SidecarStatus = {
 };
 const PROJECTS_STORAGE_KEY = "ecorex-projects";
 const SESSION_PROJECTS_STORAGE_KEY = "ecorex-session-projects";
+const SESSION_PROJECT_BINDINGS_STORAGE_KEY = "ecorex-session-project-bindings";
 const SESSION_TITLES_STORAGE_KEY = "ecorex-session-titles";
 const LOCKED_SESSION_TITLES_STORAGE_KEY = "ecorex-locked-session-titles";
 const PINNED_SESSIONS_STORAGE_KEY = "ecorex-pinned-sessions";
 const PINNED_PROJECTS_STORAGE_KEY = "ecorex-pinned-projects";
+const UNREAD_SESSIONS_STORAGE_KEY = "ecorex-unread-sessions";
 const SESSION_UI_STORAGE_KEY = "ecorex-session-ui-state";
 const LAST_ACTIVE_SESSION_STORAGE_KEY = "ecorex-last-active-session-id";
 const CAPABILITY_ENABLED_STORAGE_KEY = "ecorex-capability-enabled";
@@ -379,6 +409,7 @@ const SKILL_DEFAULTS_STORAGE_KEY = "ecorex-skill-defaults-v1";
 const RELEASE_NOTES_SEEN_STORAGE_KEY = "ecorex-release-notes-seen-version";
 const SIDEBAR_COLLAPSE_STORAGE_KEY = "ecorex-sidebar-collapse-state-v1";
 const RUN_CENTER_DEV_GATE_STORAGE_KEY = "ecorex-dev-run-center";
+const NEW_SESSION_START_TITLE = "和EcoreX一起开始工作";
 const SESSION_UI_RETAINED_SESSIONS = 10;
 const SESSION_UI_MESSAGE_LIMIT = 10;
 const SESSION_UI_FALLBACK_MESSAGE_LIMIT = 4;
@@ -434,12 +465,292 @@ function truncatePersistedText(value: unknown, limit: number) {
 
 function compactPersistedUnknown(value: unknown, limit: number) {
   if (value === undefined || value === null || value === "") return undefined;
-  if (typeof value === "string") return truncatePersistedText(value, limit);
+  const redacted = redactToolDisclosureValue(value);
+  if (typeof redacted === "string") return truncatePersistedText(redacted, limit);
   try {
-    return truncatePersistedText(JSON.stringify(value), limit);
+    return truncatePersistedText(JSON.stringify(redacted), limit);
   } catch {
-    return truncatePersistedText(String(value), limit);
+    return truncatePersistedText(String(redacted), limit);
   }
+}
+
+const QUALITY_EVIDENCE_ALLOWED_GATES = new Set([
+  "artifact-tool-authoring",
+  "chart-integrity",
+  "chart-render",
+  "dashboard-structure",
+  "design-preset",
+  "export-verify",
+  "font-size-check",
+  "formula-audit",
+  "generation-verify",
+  "artifact-integrity",
+  "anomaly-check",
+  "decode-valid",
+  "layout-bounds",
+  "layout-inspection",
+  "non-blank",
+  "overlap-check",
+  "overlay-ghosting-check",
+  "page-render",
+  "redline-preserve",
+  "reference-fidelity",
+  "render-docx",
+  "render-preview",
+  "seam-check",
+  "subject-structure-check",
+  "story-flow",
+  "structure-check",
+  "table-geometry",
+  "table-structure",
+  "text-orientation",
+  "text-glyph-check",
+  "typed-values",
+  "visual-diff",
+  "visual-inspection",
+  "watermark-check"
+]);
+
+const QUALITY_EVIDENCE_DETAIL_KEYS = new Set([
+  "anomaly_risk",
+  "blank_pages",
+  "blank_risk",
+  "chart_issues",
+  "charts",
+  "comment_id_mismatches",
+  "comment_refs",
+  "comments",
+  "date_text",
+  "diff",
+  "diff_mismatches",
+  "decode_error",
+  "decode_valid",
+  "empty_sheets",
+  "empty_slides",
+  "empty_text_pages",
+  "error_cells",
+  "expected_min",
+  "export",
+  "extraction_errors",
+  "formula_errors",
+  "formulas",
+  "finalized",
+  "generated",
+  "glyph_fragments",
+  "glyph_issues",
+  "headings",
+  "image_only_pages",
+  "issues",
+  "manual_visual_review",
+  "missing_titles",
+  "non_empty_sheets",
+  "numeric_text",
+  "overlay_risk",
+  "out_of_bounds",
+  "overlaps",
+  "page_count",
+  "page_size_variants",
+  "pages_compared",
+  "paragraphs",
+  "rendered",
+  "reference_count",
+  "reference_mismatch",
+  "reference_similarity",
+  "reference_status",
+  "references_compared",
+  "remote_references",
+  "max_retries",
+  "retry_count",
+  "retry_gate",
+  "retry_recommended",
+  "rotation_issues",
+  "route",
+  "sections",
+  "saliency_pct",
+  "seam_axis",
+  "seam_risk",
+  "sheets",
+  "size_bytes",
+  "slides",
+  "subject_review",
+  "subject_risk",
+  "table_candidates",
+  "table_issues",
+  "table_text_candidates",
+  "tables",
+  "text_density",
+  "text_like_regions",
+  "text_pages",
+  "titles",
+  "tracked_changes",
+  "translucent_pct",
+  "unspecified",
+  "unique_color_buckets",
+  "violations",
+  "watermark_risk"
+]);
+
+const QUALITY_EVIDENCE_DETAIL_ENUMS = new Set([
+  "artifact-tool",
+  "decode-error",
+  "decompressionbomberror",
+  "decompressionbombwarning",
+  "empty",
+  "filenotfounderror",
+  "horizontal",
+  "missing",
+  "not_applicable",
+  "none",
+  "oserror",
+  "pass",
+  "pending",
+  "pillow-missing",
+  "skipped",
+  "template-following",
+  "unspecified",
+  "unidentifiedimageerror",
+  "unknown",
+  "valueerror",
+  "vertical",
+  "verified",
+  "verified-existing-deck",
+  "artifact-integrity",
+  "anomaly-check",
+  "decode-valid",
+  "final",
+  "needs_review",
+  "non-blank",
+  "overlay-ghosting-check",
+  "reference-fidelity",
+  "retry",
+  "seam-check",
+  "subject-structure-check",
+  "text-glyph-check",
+  "watermark-check"
+]);
+
+const QUALITY_EVIDENCE_STATUSES = new Set(["pass", "fail", "warn", "pending", "skipped", "unknown"]);
+const QUALITY_EVIDENCE_KINDS = new Set(["presentation", "spreadsheet", "document", "pdf", "image"]);
+const QUALITY_EVIDENCE_AUTHORING_ROUTES = new Set(["artifact-tool", "template-following", "verified-existing-deck", "unspecified"]);
+
+function normalizeQualityText(value: unknown, limit: number) {
+  const text = String(value ?? "").trim().replace(/\s+/g, " ");
+  if (!text) return "";
+  return text.slice(0, limit);
+}
+
+function qualityEvidenceHash(value: string) {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function normalizeQualityRef(value: unknown) {
+  const text = String(value ?? "").trim().replace(/\s+/g, " ");
+  if (!text) return "";
+  const digest = text.toLowerCase().startsWith("hmac:") ? text.slice(5) : "";
+  if (digest.length >= 8 && digest.length <= 128 && /^[0-9a-fA-F]+$/.test(digest)) return text;
+  return `quality-ref-${qualityEvidenceHash(text)}`;
+}
+
+function normalizeQualityGate(value: unknown) {
+  const gate = normalizeQualityText(value, 72).toLowerCase();
+  return QUALITY_EVIDENCE_ALLOWED_GATES.has(gate) ? gate : "";
+}
+
+function normalizeQualityStatus(value: unknown) {
+  const status = normalizeQualityText(value, 24).toLowerCase();
+  return QUALITY_EVIDENCE_STATUSES.has(status) ? status : "unknown";
+}
+
+function normalizeQualityKind(value: unknown) {
+  const kind = normalizeQualityText(value, 32).toLowerCase();
+  return QUALITY_EVIDENCE_KINDS.has(kind) ? kind : "";
+}
+
+function sanitizeQualityDetail(value: unknown) {
+  const parts: string[] = [];
+  for (const rawPart of String(value ?? "").split(";")) {
+    if (parts.length >= 12) break;
+    const separator = rawPart.indexOf("=");
+    if (separator < 0) continue;
+    const key = rawPart.slice(0, separator).trim().toLowerCase();
+    const val = rawPart.slice(separator + 1).trim().toLowerCase();
+    if (!QUALITY_EVIDENCE_DETAIL_KEYS.has(key)) continue;
+    if (/^\d+$/.test(val)) {
+      parts.push(`${key}=${Number.parseInt(val, 10)}`);
+    } else if (QUALITY_EVIDENCE_DETAIL_ENUMS.has(val)) {
+      parts.push(`${key}=${val}`);
+    }
+  }
+  return parts.join("; ").slice(0, 240);
+}
+
+function sanitizeQualityCheck(value: unknown) {
+  if (!value || Array.isArray(value) || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const id = normalizeQualityGate(record.id || record.gate) || "unknown-check";
+  const detail = sanitizeQualityDetail(record.detail || record.summary || "");
+  return {
+    id,
+    status: normalizeQualityStatus(record.status),
+    ...(detail ? { detail } : {})
+  };
+}
+
+function normalizeQualityEvidence(value: unknown): QualityEvidence | undefined {
+  if (!value) return undefined;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed.startsWith("{") || trimmed.length > 64 * 1024) return undefined;
+    try {
+      return normalizeQualityEvidence(JSON.parse(trimmed) as unknown);
+    } catch {
+      return undefined;
+    }
+  }
+  if (Array.isArray(value) || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const direct = record.qualityEvidence || record.quality_evidence;
+  if (direct && typeof direct === "object" && !Array.isArray(direct)) {
+    return normalizeQualityEvidence(direct);
+  }
+  if (!Array.isArray(record.qualityGates) && !Array.isArray(record.checks)) return undefined;
+  const checks = Array.isArray(record.checks)
+    ? record.checks.map(sanitizeQualityCheck).filter((item): item is NonNullable<typeof item> => !!item).slice(0, 48)
+    : [];
+  const qualityGates = Array.isArray(record.qualityGates)
+    ? record.qualityGates.map(normalizeQualityGate).filter(Boolean).slice(0, 40)
+    : [];
+  const missingQualityGates = Array.isArray(record.missingQualityGates)
+    ? record.missingQualityGates.map(normalizeQualityGate).filter(Boolean).slice(0, 40)
+    : [];
+  const kind = normalizeQualityKind(record.kind);
+  const status = normalizeQualityStatus(record.status);
+  const sourceRef = normalizeQualityRef(record.sourceRef);
+  const authoringRoute = normalizeQualityText(record.authoringRoute, 64).toLowerCase();
+  const evidence: QualityEvidence = {
+    ...(record.schemaVersion ? { schemaVersion: normalizeQualityText(record.schemaVersion, 24) } : {}),
+    ...(kind ? { kind } : {}),
+    ...(sourceRef ? { sourceRef } : {}),
+    ...(qualityGates.length ? { qualityGates } : {}),
+    ...(checks.length ? { checks } : {}),
+    ...(missingQualityGates.length ? { missingQualityGates } : {}),
+    status,
+    redacted: true,
+    qualityEvidenceSanitized: true
+  };
+  if (QUALITY_EVIDENCE_AUTHORING_ROUTES.has(authoringRoute)) {
+    evidence.authoringRoute = authoringRoute;
+  }
+  return evidence;
+}
+
+function compactPersistedQualityEvidence(value: unknown): QualityEvidence | undefined {
+  return normalizeQualityEvidence(value);
 }
 
 function slimPersistedAttachment(file: FileAttachment): FileAttachment {
@@ -474,6 +785,7 @@ function slimPersistedArtifact(artifact: AgentArtifact): AgentArtifact {
     statusPath: artifact.statusPath,
     previewUrl,
     thumbnailUrl,
+    qualityEvidence: compactPersistedQualityEvidence(artifact.qualityEvidence),
     stats: artifact.stats,
     source: artifact.source ? {
       toolCallId: artifact.source.toolCallId,
@@ -511,10 +823,15 @@ function slimPersistedStep(step: AgentStepDisclosure): AgentStepDisclosure {
       name: step.name,
       status: step.status,
       execution_time: step.execution_time,
+      deadline_seconds: step.deadline_seconds,
+      max_seconds: step.max_seconds,
+      extension_count: step.extension_count,
+      lastHeartbeatAt: step.lastHeartbeatAt,
       is_error: step.is_error,
       running: step.running,
       arguments: compactPersistedUnknown(step.arguments, SESSION_UI_TOOL_CHARS),
-      result: compactPersistedUnknown(step.result, SESSION_UI_TOOL_CHARS)
+      result: compactPersistedUnknown(step.result, SESSION_UI_TOOL_CHARS),
+      qualityEvidence: compactPersistedQualityEvidence(step.qualityEvidence || normalizeQualityEvidence(step.result))
     };
   }
   return {
@@ -533,9 +850,14 @@ function slimPersistedToolCall(tool: ToolCallDisclosure): ToolCallDisclosure {
     status: tool.status,
     is_error: tool.is_error,
     execution_time: tool.execution_time,
+    deadline_seconds: tool.deadline_seconds,
+    max_seconds: tool.max_seconds,
+    extension_count: tool.extension_count,
+    lastHeartbeatAt: tool.lastHeartbeatAt,
     running: tool.running,
     arguments: compactPersistedUnknown(tool.arguments, SESSION_UI_TOOL_CHARS),
-    result: compactPersistedUnknown(tool.result, SESSION_UI_TOOL_CHARS)
+    result: compactPersistedUnknown(tool.result, SESSION_UI_TOOL_CHARS),
+    qualityEvidence: compactPersistedQualityEvidence(tool.qualityEvidence || normalizeQualityEvidence(tool.result))
   };
 }
 
@@ -555,6 +877,7 @@ function slimPersistedMessage(message: ChatItem): ChatItem {
     artifacts: message.artifacts?.slice(-12).map(slimPersistedArtifact),
     cancelled: message.cancelled,
     requestId: message.requestId,
+    runTiming: message.runTiming,
     phaseStartedAt: message.phaseStartedAt,
     userSeq: message.userSeq,
     botSeq: message.botSeq,
@@ -602,6 +925,7 @@ function minimalPersistedSessionState(value: SessionUiState): SessionUiState {
   return {
     title: truncatePersistedText(value.title, 120),
     projectId: value.projectId,
+    projectBinding: value.projectBinding || null,
     composerText: truncatePersistedText(value.composerText, 1000),
     attachments: (value.attachments || []).slice(0, 4).map(slimPersistedAttachment),
     contextStartSeq: value.contextStartSeq,
@@ -873,7 +1197,41 @@ function formatRunAge(seconds?: number | null) {
   const rest = Math.round(seconds % 60);
   if (minutes < 60) return `${minutes}m ${rest}s`;
   const hours = Math.floor(minutes / 60);
-  return `${hours}h ${minutes % 60}m`;
+  return `${hours}h ${minutes % 60}m ${rest}s`;
+}
+
+function epochMs(value?: string | number | null) {
+  if (value === null || value === undefined || value === "") return 0;
+  if (typeof value === "number") {
+    return value < 10_000_000_000 ? value * 1000 : value;
+  }
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function runtimeRequestElapsedSeconds(request?: RuntimeActiveRequest | null, nowMs = Date.now()) {
+  if (!request) return null;
+  const startedAtMs = epochMs(request.created_at);
+  const terminalAtMs = epochMs(request.terminal_at);
+  if (startedAtMs && terminalAtMs) return Math.max(0, (terminalAtMs - startedAtMs) / 1000);
+  if (startedAtMs) return Math.max(0, (nowMs - startedAtMs) / 1000);
+  if (typeof request.age_seconds === "number" && Number.isFinite(request.age_seconds)) return request.age_seconds;
+  return null;
+}
+
+function runtimeRequestElapsedLabel(request?: RuntimeActiveRequest | null, nowMs = Date.now()) {
+  return formatRunAge(runtimeRequestElapsedSeconds(request, nowMs));
+}
+
+function chatRunTimingElapsedSeconds(timing?: ChatRunTiming, nowMs = Date.now()) {
+  if (!timing?.startedAtMs) return null;
+  const endMs = timing.terminalAtMs || nowMs;
+  return Math.max(0, (endMs - timing.startedAtMs) / 1000);
+}
+
+function createDraftSessionId(project?: ProjectFolder | null) {
+  const suffix = `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+  return project ? `ecorex-pending-project-${project.id}-${suffix}` : `ecorex-draft-${suffix}`;
 }
 
 function isRetryableConcurrencyResult(result?: ChatSendResult | null) {
@@ -1021,6 +1379,122 @@ function normalizeSessionProjectsForProjects(sessionProjects: unknown, projects:
   return normalized;
 }
 
+function projectBindingFromProject(project: ProjectFolder, source: ProjectSessionBinding["source"] = "project-new-session"): ProjectSessionBinding {
+  const now = new Date().toISOString();
+  return {
+    projectId: project.id,
+    projectName: project.name,
+    projectPath: project.path,
+    memoryPath: project.memoryPath || `${project.path}/.ecorex/project-memory.md`,
+    dreamsPath: project.dreamsPath || `${project.path}/.ecorex/dreams`,
+    createdAt: now,
+    lastUsedAt: now,
+    source
+  };
+}
+
+function projectFolderFromBinding(binding: ProjectSessionBinding): ProjectFolder {
+  return {
+    id: binding.projectId,
+    name: binding.projectName || binding.projectId,
+    path: binding.projectPath,
+    memoryPath: binding.memoryPath || (binding.projectPath ? `${binding.projectPath}/.ecorex/project-memory.md` : ""),
+    dreamsPath: binding.dreamsPath || (binding.projectPath ? `${binding.projectPath}/.ecorex/dreams` : ""),
+    updatedAt: binding.lastUsedAt || binding.createdAt || new Date().toISOString()
+  };
+}
+
+function normalizeProjectSessionBindingsForProjects(
+  bindings: unknown,
+  projects: ProjectFolder[],
+  sessionProjects?: SessionProjectMap
+) {
+  if (!bindings || typeof bindings !== "object") return {};
+  const projectById = new Map(projects.map((project) => [project.id, project]));
+  const projectIdsKnown = projectById.size > 0;
+  const normalized: SessionProjectBindingMap = {};
+  Object.entries(bindings as Record<string, unknown>).forEach(([sessionId, value]) => {
+    if (!value || typeof value !== "object") return;
+    const raw = value as Record<string, unknown>;
+    const sessionKey = String(sessionId || "").trim();
+    const rawProjectId = String(raw.projectId || raw.project_id || sessionProjects?.[sessionKey] || "").trim();
+    if (!sessionKey || !rawProjectId) return;
+    const project = projectById.get(rawProjectId);
+    if (projectIdsKnown && !project && !raw.projectPath && !raw.project_path) return;
+    normalized[sessionKey] = {
+      projectId: rawProjectId,
+      projectName: String(raw.projectName || raw.project_name || project?.name || rawProjectId),
+      projectPath: String(raw.projectPath || raw.project_path || project?.path || ""),
+      memoryPath: String(raw.memoryPath || raw.memory_path || project?.memoryPath || ""),
+      dreamsPath: String(raw.dreamsPath || raw.dreams_path || project?.dreamsPath || ""),
+      createdAt: String(raw.createdAt || raw.created_at || ""),
+      lastUsedAt: String(raw.lastUsedAt || raw.last_used_at || ""),
+      source: String(raw.source || "runtime")
+    };
+  });
+  return normalized;
+}
+
+type ProjectBindingLookupOptions = {
+  allowFallbackProject?: boolean;
+};
+
+function projectBindingForSession(
+  sessionId: string,
+  sessionProjectBindings: SessionProjectBindingMap,
+  sessionProjects: SessionProjectMap,
+  sessionUiState: Record<string, SessionUiState>,
+  projects: ProjectFolder[],
+  fallbackProject?: ProjectFolder | null,
+  options: ProjectBindingLookupOptions = {}
+) {
+  const existing = sessionProjectBindings[sessionId] || sessionUiState[sessionId]?.projectBinding || null;
+  if (existing?.projectId && existing.projectPath) return existing;
+  const projectId = sessionProjectIdFromState(sessionId, sessionProjects, sessionUiState);
+  const project = projectId ? projects.find((item) => item.id === projectId) : null;
+  if (!project && options.allowFallbackProject && fallbackProject?.id) {
+    return projectBindingFromProject(fallbackProject, "runtime");
+  }
+  return project ? projectBindingFromProject(project, "runtime") : null;
+}
+
+function projectForSessionDisplay(
+  sessionId: string,
+  projectId: string | null,
+  projectById: Map<string, ProjectFolder>,
+  sessionProjectBindings: SessionProjectBindingMap,
+  sessionUiState: Record<string, SessionUiState>
+) {
+  if (projectId && projectById.has(projectId)) return projectById.get(projectId);
+  const binding = sessionProjectBindings[sessionId] || sessionUiState[sessionId]?.projectBinding || null;
+  if (binding?.projectId) return projectFolderFromBinding(binding);
+  return undefined;
+}
+
+function projectBindingFromRuntimeSession(session: RuntimeSession): ProjectSessionBinding | null {
+  const projectId = String(session.projectId || "").trim();
+  const projectPath = String(session.projectPath || "").trim();
+  if (!projectId && !projectPath) return null;
+  return {
+    projectId: projectId || projectPath,
+    projectName: String(session.projectName || projectId || projectPath),
+    projectPath,
+    memoryPath: session.memoryPath,
+    dreamsPath: session.dreamsPath,
+    source: "runtime"
+  };
+}
+
+function runtimeSessionDeclaresGeneralOwner(session: RuntimeSession) {
+  const scope = String(session.scope || "").trim().toLowerCase();
+  return scope === "general" || (
+    Object.prototype.hasOwnProperty.call(session, "project")
+    && session.project === null
+    && !session.projectId
+    && !session.projectPath
+  );
+}
+
 function normalizePinnedProjectsForProjects(pinnedProjects: unknown, projects: ProjectFolder[]) {
   if (!pinnedProjects || typeof pinnedProjects !== "object") return {};
   const validProjectIds = new Set(projects.map((project) => project.id).filter(Boolean));
@@ -1036,16 +1510,32 @@ function normalizePinnedProjectsForProjects(pinnedProjects: unknown, projects: P
 }
 
 function sessionActivityMs(row: SessionRow) {
+  if (typeof row.sortKeyMs === "number" && Number.isFinite(row.sortKeyMs)) return row.sortKeyMs;
   const activity = timeMs(row.activityAt);
   if (activity) return activity;
-  const updated = timeMs(row.updatedAt);
-  if (updated) return updated;
   return timeMs(row.createdAt);
+}
+
+function sessionProjectIdFromState(
+  sessionId: string,
+  sessionProjects: SessionProjectMap,
+  sessionUiState?: Record<string, SessionUiState>,
+  fallbackProjectId?: string | null
+) {
+  return sessionProjects[sessionId]
+    || sessionUiState?.[sessionId]?.projectBinding?.projectId
+    || sessionUiState?.[sessionId]?.projectId
+    || fallbackProjectId
+    || null;
 }
 
 function shortTitle(text: string) {
   const clean = text.replace(/\s+/g, " ").trim();
-  return clean ? clean.slice(0, 22) : "新对话";
+  return clean ? clean.slice(0, 22) : NEW_SESSION_START_TITLE;
+}
+
+function isPendingProjectSessionId(sessionId: string) {
+  return String(sessionId || "").startsWith("ecorex-pending-project-");
 }
 
 function mapSessions(
@@ -1053,11 +1543,13 @@ function mapSessions(
   activeSessionId: string,
   localTitle: string,
   sessionProjects: SessionProjectMap,
+  sessionProjectBindings: SessionProjectBindingMap,
   sessionTitles: StringMap,
   pinnedSessions: StringBoolMap,
   projects: ProjectFolder[],
   sessionUiState: Record<string, SessionUiState>,
-  locallyCompletedRequestIds: StringBoolMap = {}
+  locallyCompletedRequestIds: StringBoolMap = {},
+  nowMs = Date.now()
 ): SessionRow[] {
   const projectById = new Map(projects.map((project) => [project.id, project]));
   const activeRequestBySession = new Map<string, RuntimeActiveRequest>(
@@ -1069,21 +1561,29 @@ function mapSessions(
   );
   const rows: SessionRow[] = snapshot.sessions.map((session, index) => {
     const id = session.session_id || session.id || `runtime-${index}`;
-    const projectId = sessionProjects[id] || null;
-    const project = projectId ? projectById.get(projectId) : undefined;
+    const runtimeBinding = projectBindingFromRuntimeSession(session);
+    const runtimeGeneralOwner = runtimeSessionDeclaresGeneralOwner(session);
+    const runtimeBindings = runtimeBinding ? { ...sessionProjectBindings, [id]: runtimeBinding } : sessionProjectBindings;
+    const projectId = runtimeBinding?.projectId || (runtimeGeneralOwner ? null : sessionProjectIdFromState(id, sessionProjects, sessionUiState));
+    const project = runtimeGeneralOwner && !runtimeBinding ? undefined : projectForSessionDisplay(id, projectId, projectById, runtimeBindings, sessionUiState);
     const cached = sessionUiState[id];
     const cachedActivity = latestTimeValue(cached?.lastActivityAt, latestMessageMs(cached?.messages));
     const activeRequest = activeRequestBySession.get(id);
     const activeRequestId = activeRequest?.request_id ? String(activeRequest.request_id) : undefined;
     const isCancelling = Boolean(activeRequest?.cancelled);
+    const activeElapsed = runtimeRequestElapsedLabel(activeRequest, nowMs);
     const activityAt = latestTimeValue(cachedActivity, session.last_active, session.updatedAt, session.created_at);
+    const sortKeyMs = timeMs(activityAt) || timeMs(session.created_at) || 0;
     return {
       id,
       title: sessionTitles[id] || session.title || session.session_id || "未命名会话",
       detail: project ? project.name : "",
       activityAt,
       createdAt: session.created_at || cachedActivity || activityAt,
-      updatedAt: activeRequestId && !activityAt ? (isCancelling ? "正在停止" : "运行中") : activityAt || "",
+      sortKeyMs,
+      updatedAt: activeRequestId
+        ? (isCancelling ? `正在停止${activeElapsed ? ` · 已处理 ${activeElapsed}` : ""}` : activeElapsed ? `已处理 ${activeElapsed}` : "运行中")
+        : activityAt || "",
       status: activeRequestId ? (isCancelling ? "cancelling" : "waiting") : id === activeSessionId ? "active" : "ready",
       requestId: activeRequestId,
       streamAvailable: activeRequest?.stream_available !== false,
@@ -1097,23 +1597,30 @@ function mapSessions(
     if (rowIds.has(sessionId)) continue;
     const hasContent = Boolean(cached.composerText || cached.attachments.length || cached.messages.length);
     if (!hasContent) continue;
-    const projectId = sessionProjects[sessionId] || null;
-    const project = projectId ? projectById.get(projectId) : undefined;
-    const live = (cached.messages || []).some((message) => (
+    const projectId = sessionProjectIdFromState(sessionId, sessionProjects, sessionUiState);
+    const project = projectForSessionDisplay(sessionId, projectId, projectById, sessionProjectBindings, sessionUiState);
+    const cachedMessages = cached.messages || [];
+    const hasRecoveryOrLive = cachedMessages.some((message) => Boolean(message.recovery) || isLiveAssistantMessage(message));
+    const live = hasRecoveryOrLive || cachedMessages.some((message) => (
       isLiveAssistantMessage(message)
       && !(message.requestId && locallyCompletedRequestIds[message.requestId])
     ));
     const activeRequest = activeRequestBySession.get(sessionId);
     const activeRequestId = activeRequest?.request_id ? String(activeRequest.request_id) : undefined;
     const isCancelling = Boolean(activeRequest?.cancelled);
+    const activeElapsed = runtimeRequestElapsedLabel(activeRequest, nowMs);
     const activityAt = cached.lastActivityAt || latestMessageMs(cached.messages);
+    const sortKeyMs = timeMs(activityAt) || 0;
     rows.push({
       id: sessionId,
       activityAt,
       createdAt: activityAt,
+      sortKeyMs,
       title: sessionTitles[sessionId] || cached.title || "未命名会话",
       detail: project ? project.name : "",
-      updatedAt: activeRequestId ? (isCancelling ? "正在停止" : "运行中") : live ? "运行中" : "本地",
+      updatedAt: activeRequestId
+        ? (isCancelling ? `正在停止${activeElapsed ? ` · 已处理 ${activeElapsed}` : ""}` : activeElapsed ? `已处理 ${activeElapsed}` : "运行中")
+        : live ? "运行中" : "本地",
       status: activeRequestId ? (isCancelling ? "cancelling" : "waiting") : live ? "waiting" : sessionId === activeSessionId ? "active" : "ready",
       requestId: activeRequestId,
       streamAvailable: activeRequest?.stream_available !== false,
@@ -1125,18 +1632,21 @@ function mapSessions(
   }
   for (const [sessionId, activeRequest] of activeRequestBySession.entries()) {
     if (rowIds.has(sessionId)) continue;
-    const projectId = sessionProjects[sessionId] || null;
-    const project = projectId ? projectById.get(projectId) : undefined;
+    const projectId = sessionProjectIdFromState(sessionId, sessionProjects, sessionUiState);
+    const project = projectForSessionDisplay(sessionId, projectId, projectById, sessionProjectBindings, sessionUiState);
     const requestId = activeRequest.request_id ? String(activeRequest.request_id) : undefined;
     const isCancelling = Boolean(activeRequest.cancelled);
+    const activeElapsed = runtimeRequestElapsedLabel(activeRequest, nowMs);
     const activityAt = activeRequest.created_at || Date.now();
+    const sortKeyMs = timeMs(activityAt) || Date.now();
     rows.push({
       id: sessionId,
       activityAt,
       createdAt: activityAt,
+      sortKeyMs,
       title: sessionTitles[sessionId] || sessionUiState[sessionId]?.title || sessionId,
       detail: project ? project.name : "",
-      updatedAt: isCancelling ? "正在停止" : "运行中",
+      updatedAt: isCancelling ? `正在停止${activeElapsed ? ` · 已处理 ${activeElapsed}` : ""}` : activeElapsed ? `已处理 ${activeElapsed}` : "运行中",
       status: isCancelling ? "cancelling" : "waiting",
       requestId,
       streamAvailable: activeRequest.stream_available !== false,
@@ -1147,19 +1657,24 @@ function mapSessions(
     rowIds.add(sessionId);
   }
   if (!rows.some((row) => row.id === activeSessionId)) {
-    const projectId = sessionProjects[activeSessionId] || null;
-    const project = projectId ? projectById.get(projectId) : undefined;
+    const projectId = sessionProjectIdFromState(activeSessionId, sessionProjects, sessionUiState);
+    const project = projectForSessionDisplay(activeSessionId, projectId, projectById, sessionProjectBindings, sessionUiState);
     const activeRequest = activeRequestBySession.get(activeSessionId);
     const activeRequestId = activeRequest?.request_id ? String(activeRequest.request_id) : undefined;
     const isCancelling = Boolean(activeRequest?.cancelled);
+    const activeElapsed = runtimeRequestElapsedLabel(activeRequest, nowMs);
     const activityAt = sessionUiState[activeSessionId]?.lastActivityAt || latestMessageMs(sessionUiState[activeSessionId]?.messages) || Date.now();
+    const sortKeyMs = timeMs(activityAt) || Date.now();
     rows.unshift({
       id: activeSessionId,
       activityAt,
       createdAt: activityAt,
-      title: sessionTitles[activeSessionId] || localTitle || "新对话",
+      sortKeyMs,
+      title: sessionTitles[activeSessionId] || localTitle || NEW_SESSION_START_TITLE,
       detail: project ? project.name : "",
-      updatedAt: activeRequestId ? (isCancelling ? "正在停止" : "运行中") : "刚刚",
+      updatedAt: activeRequestId
+        ? (isCancelling ? `正在停止${activeElapsed ? ` · 已处理 ${activeElapsed}` : ""}` : activeElapsed ? `已处理 ${activeElapsed}` : "运行中")
+        : "刚刚",
       status: activeRequestId ? (isCancelling ? "cancelling" : "waiting") : "active",
       requestId: activeRequestId,
       streamAvailable: activeRequest?.stream_available !== false,
@@ -1175,7 +1690,7 @@ function mapSessions(
     if (activityDiff) return activityDiff;
     const createdDiff = timeMs(b.createdAt) - timeMs(a.createdAt);
     if (createdDiff) return createdDiff;
-    return b.id.localeCompare(a.id);
+    return a.id.localeCompare(b.id);
   });
 }
 
@@ -1492,10 +2007,58 @@ function messageContentKey(message: ChatItem) {
   return `${message.role}:${content}`;
 }
 
-function artifactMergeKey(artifact: AgentArtifact) {
-  return String(artifact.path || artifact.relativePath || artifact.url || artifact.title || artifact.id || "")
+function normalizeArtifactKeySource(value?: string) {
+  let source = String(value || "").trim();
+  if (!source) return "";
+  try {
+    const base = typeof window !== "undefined" ? window.location.href : "http://localhost/";
+    const parsed = new URL(source, base);
+    const embeddedPath = parsed.searchParams.get("path")
+      || parsed.searchParams.get("file")
+      || parsed.searchParams.get("url");
+    if (embeddedPath) {
+      source = embeddedPath;
+    } else if (parsed.protocol === "file:") {
+      source = parsed.pathname;
+    } else if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      source = `${parsed.origin}${parsed.pathname}`;
+    }
+  } catch {
+    // Keep the raw value and normalize below.
+  }
+  try {
+    source = decodeURIComponent(source);
+  } catch {
+    // Keep undecodable paths stable instead of dropping the key.
+  }
+  return source
+    .replace(/^file:\/+/i, "")
     .replace(/\\/g, "/")
+    .replace(/^\/([A-Za-z]:\/)/, "$1")
+    .replace(/[?#].*$/, "")
+    .replace(/\/+/g, "/")
     .toLowerCase();
+}
+
+function artifactMergeKey(artifact: AgentArtifact) {
+  const kind = artifact.kind || "artifact";
+  const sourceKey = [
+    artifact.path,
+    artifact.relativePath,
+    artifact.url,
+    artifact.previewUrl,
+    artifact.thumbnailUrl,
+    artifact.statusPath
+  ]
+    .map(normalizeArtifactKeySource)
+    .find((value) => value && !value.startsWith("blob:") && !value.startsWith("data:"));
+  if (sourceKey) return `${kind}:${sourceKey}`;
+
+  const idKey = normalizeArtifactKeySource(artifact.id);
+  if (idKey) return `${kind}:id:${idKey}`;
+
+  const titleKey = normalizeArtifactKeySource(artifact.title);
+  return titleKey ? `${kind}:title:${titleKey}` : "";
 }
 
 function artifactStatusPriority(status?: AgentArtifact["status"]) {
@@ -1517,12 +2080,37 @@ function mergeAgentArtifactRecord(existing: AgentArtifact, incoming: AgentArtifa
   merged.path = incoming.path || existing.path;
   merged.relativePath = incoming.relativePath || existing.relativePath;
   merged.url = incoming.url || existing.url;
+  merged.qualityEvidence = incoming.qualityEvidence || existing.qualityEvidence;
   merged.sizeBytes = typeof incoming.sizeBytes === "number" ? incoming.sizeBytes : existing.sizeBytes;
   return merged;
 }
 
 function mergeLocalTailArtifacts(historyMessage: ChatItem, localMessage?: ChatItem) {
   return mergeHistoryAndLocalRequestMessage(historyMessage, localMessage);
+}
+
+function mergeLocalAssistantRunTiming(historyMessage: ChatItem, localMessage?: ChatItem) {
+  if (!localMessage?.runTiming) return historyMessage;
+  if (historyMessage.role !== "assistant" || localMessage.role !== "assistant") return historyMessage;
+  if (!isSameAssistantTurn(historyMessage, localMessage)) return historyMessage;
+  const historyTiming = historyMessage.runTiming || {};
+  const localTiming = localMessage.runTiming;
+  const updatedAtMs = Math.max(
+    typeof historyTiming.updatedAtMs === "number" ? historyTiming.updatedAtMs : 0,
+    typeof localTiming.updatedAtMs === "number" ? localTiming.updatedAtMs : 0
+  ) || undefined;
+  return {
+    ...historyMessage,
+    runTiming: {
+      ...localTiming,
+      ...historyTiming,
+      requestId: historyTiming.requestId || localTiming.requestId || historyMessage.requestId || localMessage.requestId,
+      state: historyTiming.state || localTiming.state,
+      startedAtMs: historyTiming.startedAtMs || localTiming.startedAtMs,
+      updatedAtMs,
+      terminalAtMs: historyTiming.terminalAtMs || localTiming.terminalAtMs
+    }
+  };
 }
 
 function mergeArtifactsIntoMessage(message: ChatItem, artifacts: AgentArtifact[]) {
@@ -1573,6 +2161,10 @@ function isSameAssistantTurn(left: ChatItem, right: ChatItem) {
   return false;
 }
 
+function isRecoveryAssistantMessage(message: ChatItem) {
+  return message.role === "assistant" && Boolean(message.recovery);
+}
+
 function historyHasTerminalAssistantForPending(history: ChatItem[], pendingAssistant: ChatItem) {
   if (pendingAssistant.role !== "assistant") return false;
   const requestKey = messageRequestKey(pendingAssistant);
@@ -1599,7 +2191,10 @@ function historyHasFinalAssistantAfterUserTurn(history: ChatItem[], userIndex: n
 
 function mergeHistoryAndLocalRequestMessage(historyMessage: ChatItem, localMessage?: ChatItem) {
   if (!localMessage) return historyMessage;
-  const historyWithLocalArtifacts = mergeArtifactsIntoMessage(historyMessage, localMessage.artifacts || []);
+  const historyWithLocalArtifacts = mergeLocalAssistantRunTiming(
+    mergeArtifactsIntoMessage(historyMessage, localMessage.artifacts || []),
+    localMessage
+  );
   if (historyMessage.role !== "assistant" || localMessage.role !== "assistant") {
     return historyWithLocalArtifacts;
   }
@@ -1664,7 +2259,9 @@ function mergeHistoryWithLocalMessages(history: ChatItem[], local: ChatItem[]) {
     localByRequestKey.get(messageRequestKey(message)) || localBySequenceKey.get(messageSequenceKey(message))
   ));
 
-  for (const message of local) {
+  for (let localIndex = 0; localIndex < local.length; localIndex += 1) {
+    const message = local[localIndex];
+    const nextLocalMessage = local[localIndex + 1];
     let matchedHistoryUserIndex = -1;
     if (message.role === "user") {
       const userSequenceKey = messageSequenceKey(message);
@@ -1680,6 +2277,27 @@ function mergeHistoryWithLocalMessages(history: ChatItem[], local: ChatItem[]) {
         const localSeen = localUserSeenByContentKey.get(userContentKey) || 1;
         const firstComparableHistoryIndex = Math.max(0, historyIndices.length - localTotal);
         matchedHistoryUserIndex = historyIndices[Math.min(historyIndices.length - 1, firstComparableHistoryIndex + localSeen - 1)] ?? -1;
+      }
+    }
+    if (message.role === "user" && nextLocalMessage && isRecoveryAssistantMessage(nextLocalMessage)) {
+      const localAssistant = nextLocalMessage;
+      const historyHasSameAssistantTurn = history.some((message) => (
+        message.role === "assistant"
+        && Boolean(localAssistant && isSameAssistantTurn(message, localAssistant))
+      ));
+      if (historyHasSameAssistantTurn) {
+        skipPendingAssistantAfterMatchedUser = true;
+      }
+    }
+    if (isRecoveryAssistantMessage(message)) {
+      const localAssistant = message;
+      const historyHasSameAssistantTurn = history.some((message) => (
+        message.role === "assistant"
+        && Boolean(localAssistant && isSameAssistantTurn(message, localAssistant))
+      ));
+      const hasAnchor = Boolean(messageRequestKey(message) || messageSequenceKey(message));
+      if (!hasAnchor || historyHasSameAssistantTurn || historyHasTerminalAssistantForPending(history, message)) {
+        continue;
       }
     }
     if (message.role === "assistant" && message.pending && message.id.startsWith("a-resume-") && historyHasTerminalAssistantForPending(history, message)) {
@@ -1762,28 +2380,21 @@ function isSilentPausedAssistantMessage(message: ChatItem) {
     && !(message.toolCalls || []).length;
 }
 
-function projectContextPrompt(project: ProjectFolder) {
-  return [
-    "【EcoreX 项目上下文】",
-    "默认沟通风格：专业、严谨、克制，称呼用户为“同学”。",
-    "对外身份始终是 EcoreX。",
-    `项目名称：${project.name}`,
-    `项目文件夹：${project.path}`,
-    `项目记忆：${project.memoryPath || `${project.path}/.ecorex/project-memory.md`}`,
-    `项目梦境蒸馏：${project.dreamsPath || `${project.path}/.ecorex/dreams`}`,
-    "请优先围绕该项目文件夹读取、分析、写入文件。需要总结或沉淀时，只写入项目记忆，不写入全局 MEMORY.md。"
-  ].join("\n");
-}
-
 function normalizeToolCall(tool: RuntimeToolCall | ToolCallDisclosure): ToolCallDisclosure {
   const fn = "function" in tool ? tool.function : undefined;
+  const result = typeof tool.result === "string" ? redactInternalPromptText(tool.result) : tool.result;
   return {
     name: tool.name || ("tool" in tool ? tool.tool : undefined) || fn?.name,
     arguments: tool.arguments ?? ("input" in tool ? tool.input : undefined) ?? fn?.arguments,
-    result: typeof tool.result === "string" ? redactInternalPromptText(tool.result) : tool.result,
+    result,
+    qualityEvidence: normalizeQualityEvidence(tool.qualityEvidence || normalizeQualityEvidence(result)),
     status: tool.status,
     is_error: tool.is_error,
-    execution_time: tool.execution_time
+    execution_time: tool.execution_time,
+    deadline_seconds: tool.deadline_seconds,
+    max_seconds: tool.max_seconds,
+    extension_count: tool.extension_count,
+    lastHeartbeatAt: tool.lastHeartbeatAt
   };
 }
 
@@ -1799,9 +2410,14 @@ function normalizeStep(step: RuntimeStep): AgentStepDisclosure {
       name: step.name || step.tool,
       arguments: step.arguments ?? step.input,
       result: typeof step.result === "string" ? redactInternalPromptText(step.result) : step.result,
+      qualityEvidence: normalizeQualityEvidence(step.qualityEvidence || normalizeQualityEvidence(step.result)),
       status: step.status,
       is_error: step.is_error,
       execution_time: step.execution_time,
+      deadline_seconds: step.deadline_seconds,
+      max_seconds: step.max_seconds,
+      extension_count: step.extension_count,
+      lastHeartbeatAt: step.lastHeartbeatAt,
       running: type === "tool_start" || step.status === "running"
     };
   }
@@ -1900,6 +2516,7 @@ function normalizeArtifactEntry(entry: unknown, index: number, requestId?: strin
   const id = String(raw.id || `${requestId || "artifact"}-${index}-${path || relativePath || url || titleSource}`).trim();
   const source = raw.source && typeof raw.source === "object" ? raw.source as Record<string, unknown> : {};
   const stats = raw.stats && typeof raw.stats === "object" ? raw.stats as Record<string, unknown> : {};
+  const qualityEvidence = normalizeQualityEvidence(raw.qualityEvidence || raw.quality_evidence);
   return {
     id,
     requestId: String(raw.requestId || raw.request_id || requestId || "").trim() || undefined,
@@ -1916,6 +2533,7 @@ function normalizeArtifactEntry(entry: unknown, index: number, requestId?: strin
     previewUrl: String(raw.previewUrl || raw.preview_url || "").trim() || undefined,
     thumbnailUrl: String(raw.thumbnailUrl || raw.thumbnail_url || "").trim() || undefined,
     statusPath: String(raw.statusPath || raw.status_path || "").trim() || undefined,
+    qualityEvidence,
     stats: Object.keys(stats).length ? {
       addedLines: typeof stats.addedLines === "number" ? stats.addedLines : typeof stats.added_lines === "number" ? stats.added_lines : undefined,
       removedLines: typeof stats.removedLines === "number" ? stats.removedLines : typeof stats.removed_lines === "number" ? stats.removed_lines : undefined,
@@ -1931,7 +2549,7 @@ function normalizeArtifactEntry(entry: unknown, index: number, requestId?: strin
 }
 
 function runtimeExtrasArtifacts(item: RuntimeMessage): AgentArtifact[] | undefined {
-  const raw = item.extras?.artifacts;
+  const raw = Array.isArray(item.artifacts) ? item.artifacts : item.extras?.artifacts;
   if (!Array.isArray(raw)) return undefined;
   const artifacts = raw
     .map((entry, index) => normalizeArtifactEntry(entry, index, item.request_id))
@@ -1976,12 +2594,31 @@ function toolEnabled(tools: RuntimeTool[] | undefined, name: string) {
   return Boolean((tools || []).some((tool) => tool.name === name));
 }
 
+function extensionToolEnabled(snapshot: RuntimeSnapshot, name: string) {
+  const expectedId = `tool:${name}`;
+  return Boolean((snapshot.extensions || []).some((extension) => {
+    const id = String(extension.id || "").trim();
+    const status = String(extension.status || "").trim().toLowerCase();
+    if (id !== expectedId && !(extension.type === "builtin_tool" && String(extension.displayName || "").trim() === name)) {
+      return false;
+    }
+    if (extension.enabled === false || extension.installed === false) return false;
+    return !["disabled", "error", "missing", "not_loaded"].includes(status);
+  }));
+}
+
+function runtimeToolReady(snapshot: RuntimeSnapshot, name: string) {
+  return toolEnabled(snapshot.tools, name) || extensionToolEnabled(snapshot, name);
+}
+
 function skillEnabled(skills: RuntimeSkill[] | undefined, name: string) {
   const skill = (skills || []).find((item) => item.name === name);
   return Boolean(skill && skill.enabled !== false);
 }
 
 type SkillMentionCategory = "creative" | "document" | "automation" | "developer" | "general" | "background";
+type SkillSourceGroup = "builtin" | "custom" | "external";
+type SkillPurposeGroup = "system" | "office" | "image_media" | "collaboration" | "data" | "development" | "automation" | "general";
 
 type SkillDisplayRow = {
   key: string;
@@ -1992,11 +2629,17 @@ type SkillDisplayRow = {
   source?: string;
   path?: string;
   enabled: boolean;
+  sourceGroup: SkillSourceGroup;
+  sourceLabel: string;
+  purposeGroup: SkillPurposeGroup;
+  purposeLabel: string;
   installed: boolean;
   status?: string;
   origin?: string;
   policy?: string;
   toggleable: boolean;
+  locked: boolean;
+  lockReason?: string;
   mentionable: boolean;
   category: SkillMentionCategory;
   categoryLabel: string;
@@ -2012,7 +2655,10 @@ const SKILL_CATEGORY_LABELS: Record<SkillMentionCategory, string> = {
   background: "后台 / CLI"
 };
 
-type RawSkillDisplayRow = Omit<SkillDisplayRow, "mentionable" | "category" | "categoryLabel" | "mentionHiddenReason"> & {
+type RawSkillDisplayRow = Omit<
+  SkillDisplayRow,
+  "mentionable" | "category" | "categoryLabel" | "mentionHiddenReason" | "sourceGroup" | "sourceLabel" | "purposeGroup" | "purposeLabel" | "locked" | "lockReason"
+> & {
   rawCategory?: string;
   rawMentionCategory?: string;
   primaryEnv?: string;
@@ -2020,9 +2666,35 @@ type RawSkillDisplayRow = Omit<SkillDisplayRow, "mentionable" | "category" | "ca
   disableModelInvocation?: boolean;
   explicitMentionable?: boolean;
   explicitMentionHiddenReason?: string;
+  rawSourceGroup?: string;
+  rawSourceLabel?: string;
+  rawPurposeGroup?: string;
+  rawPurposeLabel?: string;
+  rawToggleable?: boolean;
+  rawLocked?: boolean;
+  rawLockReason?: string;
 };
 
 const SKILL_CATEGORY_ORDER: SkillMentionCategory[] = ["creative", "document", "automation", "developer", "general", "background"];
+const SKILL_SOURCE_ORDER: SkillSourceGroup[] = ["builtin", "custom", "external"];
+const SKILL_PURPOSE_ORDER: SkillPurposeGroup[] = ["system", "office", "image_media", "collaboration", "data", "development", "automation", "general"];
+
+const SKILL_SOURCE_LABELS: Record<SkillSourceGroup, string> = {
+  builtin: "内置",
+  custom: "自建",
+  external: "外部"
+};
+
+const SKILL_PURPOSE_LABELS: Record<SkillPurposeGroup, string> = {
+  system: "系统能力",
+  office: "办公能力",
+  image_media: "图像 / 媒体",
+  collaboration: "协作连接",
+  data: "数据能力",
+  development: "开发能力",
+  automation: "自动化",
+  general: "通用能力"
+};
 
 function normalizeSkillText(value: unknown) {
   return String(value || "").trim().toLowerCase();
@@ -2038,6 +2710,75 @@ function mapExplicitSkillCategory(value?: string): SkillMentionCategory | "" {
   if (["background", "cli", "system", "internal", "tooling", "connector"].includes(category)) return "background";
   if (category === "skill" || category === "general") return "general";
   return "";
+}
+
+function normalizeSkillSourceGroup(row: Pick<RawSkillDisplayRow, "source" | "origin" | "rawSourceGroup">): SkillSourceGroup {
+  const explicit = normalizeSkillText(row.rawSourceGroup);
+  if (explicit === "builtin" || explicit === "custom" || explicit === "external") return explicit;
+  const source = normalizeSkillText(row.source);
+  const origin = normalizeSkillText(row.origin);
+  if (source === "builtin" || origin === "builtin" || origin === "first-party" || origin === "factory") return "builtin";
+  if (source === "custom" || source === "workspace" || origin === "workspace" || origin === "user") return "custom";
+  return "external";
+}
+
+function normalizeSkillPurposeGroup(row: RawSkillDisplayRow): SkillPurposeGroup {
+  const explicit = normalizeSkillText(row.rawPurposeGroup).replace(/[-\s]+/g, "_");
+  const aliases: Record<string, SkillPurposeGroup> = {
+    system: "system",
+    internal: "system",
+    tooling: "system",
+    background: "system",
+    office: "office",
+    document: "office",
+    documents: "office",
+    doc: "office",
+    pdf: "office",
+    spreadsheet: "office",
+    slides: "office",
+    presentation: "office",
+    creative: "image_media",
+    creation: "image_media",
+    media: "image_media",
+    image: "image_media",
+    image_media: "image_media",
+    design: "image_media",
+    collaboration: "collaboration",
+    connector: "collaboration",
+    lark: "collaboration",
+    feishu: "collaboration",
+    data: "data",
+    database: "data",
+    analytics: "data",
+    developer: "development",
+    development: "development",
+    dev: "development",
+    coding: "development",
+    github: "development",
+    automation: "automation",
+    browser: "automation",
+    workflow: "automation",
+    computer_use: "automation",
+    general: "general"
+  };
+  if (aliases[explicit]) return aliases[explicit];
+  const text = [
+    row.name,
+    row.displayName,
+    row.description,
+    row.source,
+    row.origin,
+    row.path,
+    row.primaryEnv
+  ].map(normalizeSkillText).join(" ");
+  if (/(office|document|documents|pdf|spreadsheet|slides|presentation|docx|pptx|xlsx|xlsm|文档|表格|幻灯片|办公)/.test(text)) return "office";
+  if (/(image|vision|media|video|audio|figma|hallmark|remotion|design|creative|生成|图像|图片|视觉|媒体|设计)/.test(text)) return "image_media";
+  if (/(lark|feishu|飞书|calendar|mail|approval|attendance|contact|wiki|base|minutes|okr|task|协作|日历|邮箱|审批)/.test(text)) return "collaboration";
+  if (/(data|database|sql|csv|analytics|chart|dashboard|base|数据|分析|仪表盘)/.test(text)) return "data";
+  if (/(github|openai|plugin|skill|codex|cli|developer|swift|xcode|debug|test|开发|调试|测试)/.test(text)) return "development";
+  if (/(browser|chrome|automation|workflow|computer-use|自动化|浏览器)/.test(text)) return "automation";
+  if (/(find|knowledge|memory|troubleshooting|a11y|system|系统|记忆|知识|检索|排障)/.test(text)) return "system";
+  return "general";
 }
 
 function isBackgroundCliSkill(row: RawSkillDisplayRow) {
@@ -2069,6 +2810,13 @@ function skillMentionHiddenReason(value?: string) {
   return value || "";
 }
 
+function skillLockReasonLabel(value?: string) {
+  const reason = normalizeSkillText(value);
+  if (!reason) return "";
+  if (reason.includes("builtin") || reason.includes("built-in") || reason.includes("default")) return "内置能力默认启用";
+  return value || "";
+}
+
 function inferSkillCategory(row: RawSkillDisplayRow): SkillMentionCategory {
   const mentionCategory = mapExplicitSkillCategory(row.rawMentionCategory);
   if (mentionCategory) return mentionCategory;
@@ -2091,6 +2839,9 @@ function inferSkillCategory(row: RawSkillDisplayRow): SkillMentionCategory {
 
 function finalizeSkillDisplayRow(row: RawSkillDisplayRow): SkillDisplayRow {
   const category = inferSkillCategory(row);
+  const sourceGroup = normalizeSkillSourceGroup(row);
+  const purposeGroup = normalizeSkillPurposeGroup(row);
+  const locked = row.rawLocked === true || sourceGroup === "builtin";
   let mentionable = category !== "background";
   let mentionHiddenReason = "";
   const explicitHiddenReason = skillMentionHiddenReason(row.explicitMentionHiddenReason);
@@ -2109,8 +2860,16 @@ function finalizeSkillDisplayRow(row: RawSkillDisplayRow): SkillDisplayRow {
   }
 
   const finalCategory: SkillMentionCategory = mentionable ? category : "background";
+  const toggleable = locked ? false : row.rawToggleable !== undefined ? Boolean(row.rawToggleable) : Boolean(row.name);
   return {
     ...row,
+    sourceGroup,
+    sourceLabel: row.rawSourceLabel || SKILL_SOURCE_LABELS[sourceGroup],
+    purposeGroup,
+    purposeLabel: row.rawPurposeLabel || SKILL_PURPOSE_LABELS[purposeGroup],
+    toggleable,
+    locked,
+    lockReason: skillLockReasonLabel(row.rawLockReason) || (locked ? "内置能力默认启用" : undefined),
     mentionable,
     category: finalCategory,
     categoryLabel: SKILL_CATEGORY_LABELS[finalCategory],
@@ -2152,7 +2911,14 @@ function buildSkillDisplayRows(snapshot: RuntimeSnapshot): SkillDisplayRow[] {
       status: extension.status,
       origin: extension.origin,
       policy: extension.policy,
-      toggleable: Boolean(legacy?.name),
+      toggleable: true,
+      rawToggleable: extension.toggleable ?? legacy?.toggleable,
+      rawLocked: extension.locked ?? legacy?.locked,
+      rawLockReason: extension.lockReason || extension.lock_reason || legacy?.lockReason || legacy?.lock_reason,
+      rawSourceGroup: extension.sourceGroup || extension.source_group || legacy?.sourceGroup || legacy?.source_group,
+      rawSourceLabel: extension.sourceLabel || extension.source_label || legacy?.sourceLabel || legacy?.source_label,
+      rawPurposeGroup: extension.purposeGroup || extension.purpose_group || legacy?.purposeGroup || legacy?.purpose_group,
+      rawPurposeLabel: extension.purposeLabel || extension.purpose_label || legacy?.purposeLabel || legacy?.purpose_label,
       rawCategory: legacy?.category || extension.category,
       rawMentionCategory: legacy?.mention_category || extension.mention_category,
       primaryEnv: legacy?.primary_env || extension.primary_env,
@@ -2176,7 +2942,14 @@ function buildSkillDisplayRows(snapshot: RuntimeSnapshot): SkillDisplayRow[] {
       enabled: skill.enabled !== false,
       installed: true,
       status: skill.enabled === false ? "disabled" : "ready",
-      toggleable: Boolean(skill.name),
+      toggleable: true,
+      rawToggleable: skill.toggleable,
+      rawLocked: skill.locked,
+      rawLockReason: skill.lockReason || skill.lock_reason,
+      rawSourceGroup: skill.sourceGroup || skill.source_group,
+      rawSourceLabel: skill.sourceLabel || skill.source_label,
+      rawPurposeGroup: skill.purposeGroup || skill.purpose_group,
+      rawPurposeLabel: skill.purposeLabel || skill.purpose_label,
       rawCategory: skill.category,
       rawMentionCategory: skill.mention_category,
       primaryEnv: skill.primary_env,
@@ -2187,10 +2960,10 @@ function buildSkillDisplayRows(snapshot: RuntimeSnapshot): SkillDisplayRow[] {
     }));
   }
   return rows.sort((a, b) => {
-    const categoryDiff = SKILL_CATEGORY_ORDER.indexOf(a.category) - SKILL_CATEGORY_ORDER.indexOf(b.category);
-    if (categoryDiff) return categoryDiff;
-    const originDiff = String(a.origin || a.source || "").localeCompare(String(b.origin || b.source || ""));
-    if (originDiff) return originDiff;
+    const sourceDiff = SKILL_SOURCE_ORDER.indexOf(a.sourceGroup) - SKILL_SOURCE_ORDER.indexOf(b.sourceGroup);
+    if (sourceDiff) return sourceDiff;
+    const purposeDiff = SKILL_PURPOSE_ORDER.indexOf(a.purposeGroup) - SKILL_PURPOSE_ORDER.indexOf(b.purposeGroup);
+    if (purposeDiff) return purposeDiff;
     return a.displayName.localeCompare(b.displayName);
   });
 }
@@ -2248,15 +3021,28 @@ function AuthGate(props: { onLogin: (session: EnterpriseSession) => void; versio
 
 export function App() {
   const bootSession = useMemo(() => pickBootSession(readStorage<Record<string, SessionUiState>>(SESSION_UI_STORAGE_KEY, {})), []);
+  const bootProjects = useMemo(() => readStorage<ProjectFolder[]>(PROJECTS_STORAGE_KEY, []), []);
   const bootSessionProjects = useMemo(() => readStorage<SessionProjectMap>(SESSION_PROJECTS_STORAGE_KEY, {}), []);
+  const bootSessionProjectBindings = useMemo(
+    () => normalizeProjectSessionBindingsForProjects(
+      readStorage<SessionProjectBindingMap>(SESSION_PROJECT_BINDINGS_STORAGE_KEY, {}),
+      bootProjects,
+      bootSessionProjects
+    ),
+    [bootProjects, bootSessionProjects]
+  );
+  const bootActiveProjectId = bootSession?.id
+    ? bootSessionProjectBindings[bootSession.id]?.projectId || bootSessionProjects[bootSession.id] || null
+    : null;
   const [theme, setTheme] = useState<ThemeMode>(initialTheme);
   const [session, setSession] = useState<EnterpriseSession | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [runtimeSnapshot, setRuntimeSnapshot] = useState(initialRuntime);
   const [sidecarStatus, setSidecarStatus] = useState(initialSidecar);
+  const [runClockTick, setRunClockTick] = useState(() => Date.now());
   const [quotaSnapshot, setQuotaSnapshot] = useState<UsageQuota | null>(null);
   const [activeSessionId, setActiveSessionId] = useState(bootSession?.id || `ecorex-${Date.now()}`);
-  const [activeSessionTitle, setActiveSessionTitle] = useState(bootSession?.state.title || "新对话");
+  const [activeSessionTitle, setActiveSessionTitle] = useState(bootSession?.state.title || NEW_SESSION_START_TITLE);
   const [searchQuery, setSearchQuery] = useState("");
   const [messages, setMessages] = useState<ChatItem[]>(() => normalizePausedMessages(bootSession?.state.messages || []));
   const [historyContextUsed, setHistoryContextUsed] = useState(() => estimateContextTokens(bootSession?.state.messages || [], "", []));
@@ -2275,20 +3061,27 @@ export function App() {
   const [previewFile, setPreviewFile] = useState<FileAttachment | null>(null);
   const [previewZoom, setPreviewZoom] = useState(1);
   const [packs, setPacks] = useState<CapabilityPack[]>([]);
+  const [externalConnections, setExternalConnections] = useState<ExternalConnection[]>([]);
+  const [externalConnectionDrafts, setExternalConnectionDrafts] = useState<Record<string, Record<string, unknown>>>({});
+  const [externalConnectionsBusy, setExternalConnectionsBusy] = useState(false);
   const [permissionState, setPermissionState] = useState<PermissionState | null>(null);
-  const [projects, setProjects] = useState<ProjectFolder[]>(() => readStorage<ProjectFolder[]>(PROJECTS_STORAGE_KEY, []));
+  const [projects, setProjects] = useState<ProjectFolder[]>(() => bootProjects);
   const [sessionProjects, setSessionProjects] = useState<SessionProjectMap>(() => bootSessionProjects);
+  const [sessionProjectBindings, setSessionProjectBindings] = useState<SessionProjectBindingMap>(() => bootSessionProjectBindings);
   const [projectPickerBusy, setProjectPickerBusy] = useState(false);
+  const [projectStartMenuOpen, setProjectStartMenuOpen] = useState(false);
+  const [projectStartSearch, setProjectStartSearch] = useState("");
   const [sessionTitles, setSessionTitles] = useState<StringMap>(() => readStorage<StringMap>(SESSION_TITLES_STORAGE_KEY, {}));
   const [lockedSessionTitles, setLockedSessionTitles] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(LOCKED_SESSION_TITLES_STORAGE_KEY, {}));
   const [pinnedSessions, setPinnedSessions] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(PINNED_SESSIONS_STORAGE_KEY, {}));
   const [pinnedProjects, setPinnedProjects] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(PINNED_PROJECTS_STORAGE_KEY, {}));
-  const [unreadSessionIds, setUnreadSessionIds] = useState<StringBoolMap>({});
+  const [unreadSessionIds, setUnreadSessionIds] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(UNREAD_SESSIONS_STORAGE_KEY, {}));
   const [sessionUiState, setSessionUiState] = useState<Record<string, SessionUiState>>(() => pruneSessionUiState(readStorage<Record<string, SessionUiState>>(SESSION_UI_STORAGE_KEY, {})));
   const [enabledCapabilityPacks, setEnabledCapabilityPacks] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(CAPABILITY_ENABLED_STORAGE_KEY, {}));
   const [sessionRequestIds, setSessionRequestIds] = useState<StringMap>({});
   const [locallyCompletedRequestIds, setLocallyCompletedRequestIds] = useState<StringBoolMap>({});
-  const [activeProjectId, setActiveProjectId] = useState<string | null>(bootSession?.id ? bootSessionProjects[bootSession.id] || null : null);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(bootActiveProjectId);
+  const [pendingProjectStart, setPendingProjectStart] = useState<ProjectFolder | null>(null);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("account");
   const [projectMenu, setProjectMenu] = useState<ProjectContextMenu>(null);
   const [chatFileMenu, setChatFileMenu] = useState<ChatFileContextMenu>(null);
@@ -2297,11 +3090,15 @@ export function App() {
   const [installNotice, setInstallNotice] = useState<InstallNotice>(null);
   const [memoryFiles, setMemoryFiles] = useState<MemoryFile[]>([]);
   const [dreamFiles, setDreamFiles] = useState<MemoryFile[]>([]);
+  const [schedulerBusy, setSchedulerBusy] = useState(false);
   const [toast, setToast] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState("");
   const [passwordDraft, setPasswordDraft] = useState({ oldPassword: "", newPassword: "", confirmPassword: "" });
   const [passwordBusy, setPasswordBusy] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const projectMenuRef = useRef<HTMLDivElement | null>(null);
+  const chatFileMenuRef = useRef<HTMLDivElement | null>(null);
+  const projectStartMenuRef = useRef<HTMLDivElement | null>(null);
   const composerDragDepth = useRef(0);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const streamCleanup = useRef<null | (() => void)>(null);
@@ -2318,6 +3115,10 @@ export function App() {
   const queuedInstallRef = useRef<Array<{ pack: CapabilityPack; onInstalled?: () => void; sessionId: string }>>([]);
   const activeSessionIdRef = useRef(activeSessionId);
   const messagesRef = useRef(messages);
+  const pendingProjectStartRef = useRef<ProjectFolder | null>(pendingProjectStart);
+  const sessionProjectsRef = useRef<SessionProjectMap>(sessionProjects);
+  const sessionProjectBindingsRef = useRef<SessionProjectBindingMap>(sessionProjectBindings);
+  const activeProjectIdRef = useRef(activeProjectId);
   const sessionSwitchSeq = useRef(0);
   const autoScrollRef = useRef(true);
   const appBootMs = useRef(Date.now());
@@ -2331,10 +3132,13 @@ export function App() {
   const streamRetryCounts = useRef<Record<string, number>>({});
   const streamRequestStates = useRef<Record<string, StreamRequestState>>({});
   const streamStallTimers = useRef<Record<string, number>>({});
+  const streamReconnectTimers = useRef<Record<string, number>>({});
+  const streamReconnectChecks = useRef<StringBoolMap>({});
   const sendGenerationRef = useRef<Record<string, number>>({});
   const preflightAbortRef = useRef<Record<string, AbortController>>({});
   const phaseTimersRef = useRef<Record<string, number[]>>({});
   const historyRecoveryTimersRef = useRef<Record<string, number[]>>({});
+  const blankDraftSessionEpochsRef = useRef<Record<string, number>>({});
   const preloadDone = useRef(false);
   const bootHistoryRefreshDone = useRef(false);
   const runtimeUiStateHydrationStarted = useRef(false);
@@ -2431,6 +3235,40 @@ export function App() {
     }, delay);
   }
 
+  function bindSessionToProject(sessionId: string, projectOrBinding: ProjectFolder | ProjectSessionBinding | null, source: ProjectSessionBinding["source"] = "project-session-send") {
+    if (!sessionId || !projectOrBinding) return null;
+    const binding = "projectPath" in projectOrBinding
+      ? { ...projectOrBinding, source, lastUsedAt: new Date().toISOString() }
+      : projectBindingFromProject(projectOrBinding, source);
+    const projectId = binding.projectId;
+    sessionProjectsRef.current = { ...sessionProjectsRef.current, [sessionId]: projectId };
+    sessionProjectBindingsRef.current = { ...sessionProjectBindingsRef.current, [sessionId]: binding };
+    setSessionProjects((current) => current[sessionId] === projectId ? current : { ...current, [sessionId]: projectId });
+    setSessionProjectBindings((current) => ({ ...current, [sessionId]: binding }));
+    setSessionUiState((current) => {
+      const existing = current[sessionId];
+      return {
+        ...current,
+        [sessionId]: {
+          ...(existing || {
+            title: sessionTitles[sessionId] || activeSessionTitle,
+            messages: sessionId === activeSessionIdRef.current ? messagesRef.current : [],
+            composerText: sessionId === activeSessionIdRef.current ? composerTextRef.current : "",
+            attachments: sessionId === activeSessionIdRef.current ? attachmentsRef.current : []
+          }),
+          projectId,
+          projectBinding: binding
+        }
+      };
+    });
+    return binding;
+  }
+
+  function rememberHistoryProjectBinding(sessionId: string, binding?: ProjectSessionBinding | null) {
+    if (!sessionId || !binding?.projectId) return;
+    bindSessionToProject(sessionId, binding, binding.source || "runtime");
+  }
+
   useEffect(() => {
     applyTheme(theme);
     window.localStorage.setItem("ecorex-theme", theme);
@@ -2442,7 +3280,13 @@ export function App() {
 
   useEffect(() => {
     writeStorage(SESSION_PROJECTS_STORAGE_KEY, sessionProjects);
+    sessionProjectsRef.current = sessionProjects;
   }, [sessionProjects]);
+
+  useEffect(() => {
+    writeStorage(SESSION_PROJECT_BINDINGS_STORAGE_KEY, sessionProjectBindings);
+    sessionProjectBindingsRef.current = sessionProjectBindings;
+  }, [sessionProjectBindings]);
 
   useEffect(() => {
     writeStorage(SESSION_TITLES_STORAGE_KEY, sessionTitles);
@@ -2460,6 +3304,10 @@ export function App() {
   useEffect(() => {
     writeStorage(PINNED_PROJECTS_STORAGE_KEY, pinnedProjects);
   }, [pinnedProjects]);
+
+  useEffect(() => {
+    writeStorage(UNREAD_SESSIONS_STORAGE_KEY, unreadSessionIds);
+  }, [unreadSessionIds]);
 
   useEffect(() => {
     writeStorage(CAPABILITY_ENABLED_STORAGE_KEY, enabledCapabilityPacks);
@@ -2481,6 +3329,13 @@ export function App() {
           setSessionProjects((current) => normalizeSessionProjectsForProjects(
             { ...current, ...(state.sessionProjects as Record<string, unknown>) },
             mergedProjects
+          ));
+        }
+        if (state.sessionProjectBindings && typeof state.sessionProjectBindings === "object") {
+          setSessionProjectBindings((current) => normalizeProjectSessionBindingsForProjects(
+            { ...current, ...(state.sessionProjectBindings as Record<string, unknown>) },
+            mergedProjects,
+            { ...sessionProjectsRef.current, ...(state.sessionProjects as Record<string, string> || {}) }
           ));
         }
         if (state.sessionTitles && typeof state.sessionTitles === "object") {
@@ -2521,7 +3376,11 @@ export function App() {
     const projectSyncedState = Object.fromEntries(
       Object.entries(sessionUiState).map(([sessionId, state]) => [
         sessionId,
-        { ...state, projectId: sessionProjects[sessionId] || null }
+        {
+          ...state,
+          projectId: sessionProjectIdFromState(sessionId, sessionProjects, sessionUiState),
+          projectBinding: sessionProjectBindings[sessionId] || state.projectBinding || null
+        }
       ])
     );
     const pruned = pruneSessionUiState(projectSyncedState);
@@ -2542,7 +3401,7 @@ export function App() {
     if (uiStateSyncTimer.current) {
       window.clearTimeout(uiStateSyncTimer.current);
     }
-    const runtimeActiveProjectId = sessionProjects[activeSessionIdRef.current] || null;
+    const runtimeActiveProjectId = sessionProjectIdFromState(activeSessionIdRef.current, sessionProjects, sessionUiState);
     uiStateSyncTimer.current = window.setTimeout(() => {
       void saveRuntimeUiState({
         version: 1,
@@ -2552,6 +3411,7 @@ export function App() {
         activeProjectId: runtimeActiveProjectId,
         projects,
         sessionProjects,
+        sessionProjectBindings,
         sessionTitles,
         pinnedSessions,
         pinnedProjects,
@@ -2560,7 +3420,7 @@ export function App() {
       }).catch(() => undefined);
       uiStateSyncTimer.current = null;
     }, hasLiveState ? 2500 : 350);
-  }, [sessionUiState, sessionProjects, sessionTitles, pinnedSessions, pinnedProjects, projects, sidecarStatus.state]);
+  }, [sessionUiState, sessionProjects, sessionProjectBindings, sessionTitles, pinnedSessions, pinnedProjects, projects, sidecarStatus.state]);
 
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
@@ -2572,9 +3432,30 @@ export function App() {
   }, [locallyCompletedRequestIds]);
 
   useEffect(() => {
-    const projectId = sessionProjects[activeSessionId] || null;
+    const hasRunningRequests = (runtimeSnapshot.activeRequests || []).some(isPrimaryChatActiveRequest)
+      || messagesRef.current.some((message) => Boolean(message.pending && message.runTiming?.startedAtMs));
+    if (!hasRunningRequests) return undefined;
+    const timer = window.setInterval(() => setRunClockTick(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [runtimeSnapshot.activeRequests, sessionRequestIds]);
+
+  useEffect(() => {
+    activeProjectIdRef.current = activeProjectId;
+  }, [activeProjectId]);
+
+  useEffect(() => {
+    if (isPendingProjectSessionId(activeSessionId) && pendingProjectStartRef.current) {
+      const projectId = pendingProjectStartRef.current.id;
+      setActiveProjectId((current) => current === projectId ? current : projectId);
+      return;
+    }
+    const projectId = sessionProjectIdFromState(activeSessionId, sessionProjects, sessionUiState);
     setActiveProjectId((current) => current === projectId ? current : projectId);
-  }, [activeSessionId, sessionProjects]);
+  }, [activeSessionId, sessionProjects, sessionUiState, pendingProjectStart]);
+
+  useEffect(() => {
+    pendingProjectStartRef.current = pendingProjectStart;
+  }, [pendingProjectStart]);
 
   useEffect(() => {
     sessionRequestIdsRef.current = sessionRequestIds;
@@ -2738,6 +3619,9 @@ export function App() {
       streamDeltaBuffers.current = {};
       Object.values(postDoneStreamCloseTimers.current).forEach((timer) => window.clearTimeout(timer));
       postDoneStreamCloseTimers.current = {};
+      Object.values(streamReconnectTimers.current).forEach((timer) => window.clearTimeout(timer));
+      streamReconnectTimers.current = {};
+      streamReconnectChecks.current = {};
       Object.values(completedRequestCleanupTimers.current).forEach((timer) => window.clearTimeout(timer));
       completedRequestCleanupTimers.current = {};
       Object.values(historyRecoveryTimersRef.current).forEach((timers) => {
@@ -2773,6 +3657,10 @@ export function App() {
     void (async () => {
       const nextPacks = await listCapabilityPacks().catch(() => []);
       setPacks(nextPacks);
+      const nextConnections = await loadExternalConnections().catch(() => null);
+      if (nextConnections?.connections) {
+        setExternalConnections(nextConnections.connections);
+      }
       const snapshot = await loadRuntimeSnapshot().catch(() => null);
       if (snapshot) {
         let nextSnapshot = snapshot;
@@ -2792,9 +3680,10 @@ export function App() {
     if (!session) return;
     let cancelled = false;
     async function refresh() {
-      const [snapshot, nextPacks, nextPermissions, nextMemoryFiles, nextDreamFiles, quota] = await Promise.all([
+      const [snapshot, nextPacks, nextConnections, nextPermissions, nextMemoryFiles, nextDreamFiles, quota] = await Promise.all([
         loadRuntimeSnapshot(),
         listCapabilityPacks(),
+        loadExternalConnections().catch(() => ({ connections: [] })),
         loadPermissionState(),
         loadMemoryFiles("memory"),
         loadMemoryFiles("dream"),
@@ -2803,6 +3692,7 @@ export function App() {
       if (!cancelled) {
         setRuntimeSnapshot(snapshot);
         setPacks(nextPacks);
+        setExternalConnections(nextConnections.connections || []);
         setPermissionState(nextPermissions);
         setMemoryFiles(nextMemoryFiles);
         setDreamFiles(nextDreamFiles);
@@ -2843,8 +3733,11 @@ export function App() {
   }, [packs]);
 
   useEffect(() => {
-    if (!chatFileMenu) return undefined;
-    const close = () => setChatFileMenu(null);
+    if (!chatFileMenu && !projectMenu) return undefined;
+    const close = () => {
+      setChatFileMenu(null);
+      setProjectMenu(null);
+    };
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") close();
     };
@@ -2856,7 +3749,38 @@ export function App() {
       window.removeEventListener("resize", close);
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [chatFileMenu]);
+  }, [chatFileMenu, projectMenu]);
+
+  useEffect(() => {
+    if (!projectMenu && !chatFileMenu) return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target instanceof Node ? event.target : null;
+      if (target && projectMenuRef.current?.contains(target)) return;
+      if (target && chatFileMenuRef.current?.contains(target)) return;
+      setProjectMenu(null);
+      setChatFileMenu(null);
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => document.removeEventListener("pointerdown", onPointerDown, true);
+  }, [projectMenu, chatFileMenu]);
+
+  useEffect(() => {
+    if (!projectStartMenuOpen) return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target instanceof Node ? event.target : null;
+      if (target && projectStartMenuRef.current?.contains(target)) return;
+      setProjectStartMenuOpen(false);
+    };
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setProjectStartMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [projectStartMenuOpen]);
 
   useEffect(() => {
     if (runtimeSnapshot.status !== "ready") return;
@@ -2868,9 +3792,9 @@ export function App() {
         .filter((requestId) => !locallyCompletedRequestIds[requestId])
         .filter(Boolean)
     );
-    const staleSessionIds = new Set(
+    const legacyStaleSessionIds = new Set(
       (runtimeSnapshot.staleLocks || [])
-        .filter((lock) => lock.removed || lock.dead_owner || lock.stale)
+        .filter((lock) => lock.removed || lock.dead_owner || lock.deadOwner || lock.stale)
         .map((lock) => lock.session_id ? String(lock.session_id) : "")
         .filter(Boolean)
     );
@@ -2883,7 +3807,7 @@ export function App() {
       const normalized = normalizePausedMessages(state.messages || [], {
         sessionId,
         activeRequestIds,
-        staleSessionIds,
+        staleSessionIds: legacyStaleSessionIds,
         nowMs,
         inactiveRequestGraceMs: (state.messages || []).some((message) => (
           message.pending
@@ -2935,9 +3859,20 @@ export function App() {
     });
   }, [runtimeSnapshot.status, runtimeSnapshot.sessions]);
 
+  const projectCatalog = useMemo(() => {
+    const merged = new Map(projects.map((project) => [project.id, project]));
+    Object.values(sessionProjectBindings)
+      .map((binding) => binding?.projectId && binding.projectPath ? projectFolderFromBinding(binding) : null)
+      .filter(Boolean)
+      .forEach((project) => {
+        if (project && !merged.has(project.id)) merged.set(project.id, project);
+      });
+    return Array.from(merged.values());
+  }, [projects, sessionProjectBindings]);
+
   const allSessions = useMemo(() => (
-    mapSessions(runtimeSnapshot, activeSessionId, activeSessionTitle, sessionProjects, sessionTitles, pinnedSessions, projects, sessionUiState, locallyCompletedRequestIds)
-  ), [runtimeSnapshot, activeSessionId, activeSessionTitle, sessionProjects, sessionTitles, pinnedSessions, projects, sessionUiState, locallyCompletedRequestIds]);
+    mapSessions(runtimeSnapshot, activeSessionId, activeSessionTitle, sessionProjects, sessionProjectBindings, sessionTitles, pinnedSessions, projectCatalog, sessionUiState, locallyCompletedRequestIds, runClockTick)
+  ), [runtimeSnapshot, activeSessionId, activeSessionTitle, sessionProjects, sessionProjectBindings, sessionTitles, pinnedSessions, projectCatalog, sessionUiState, locallyCompletedRequestIds, runClockTick]);
   const visibleSessions = useMemo(() => {
     const needle = searchQuery.trim().toLowerCase();
     return needle ? allSessions.filter((row) => `${row.title} ${row.detail}`.toLowerCase().includes(needle)) : allSessions;
@@ -2957,7 +3892,7 @@ export function App() {
   }, [runtimeSnapshot.activeRequests, runtimeSnapshot.recentTerminalRequests]);
   const runCenterStaleLocks = useMemo(() => (
     (runtimeSnapshot.staleLocks || [])
-      .filter((lock) => lock.removed || lock.dead_owner || lock.stale)
+      .filter((lock) => lock.removed || lock.dead_owner || lock.deadOwner || lock.stale)
   ), [runtimeSnapshot.staleLocks]);
   const runCenterStats = useMemo(() => {
     const cancelling = runCenterRequests.filter((request) => ["cancelling", "cancelled"].includes(runCenterState(request))).length;
@@ -2972,22 +3907,26 @@ export function App() {
   const runCenterNavCount = runCenterRequests.length + runCenterStaleLocks.length;
   const runCenterDevVisible = useMemo(() => {
     try {
+      const env = import.meta.env as { DEV?: boolean; VITE_ECOREX_RUN_CENTER?: string };
+      if (!env.DEV && env.VITE_ECOREX_RUN_CENTER !== "1") return false;
       const params = new URLSearchParams(window.location.search || "");
-      return window.localStorage.getItem(RUN_CENTER_DEV_GATE_STORAGE_KEY) === "1" || params.get("runCenter") === "1";
+      return params.get("ecorexRunCenter") === "1" && window.localStorage.getItem(RUN_CENTER_DEV_GATE_STORAGE_KEY) === "1";
     } catch {
       return false;
     }
   }, []);
 
   const activeProject = useMemo(
-    () => projects.find((project) => project.id === activeProjectId) || null,
-    [projects, activeProjectId]
+    () => pendingProjectStart || projectCatalog.find((project) => project.id === activeProjectId) || null,
+    [pendingProjectStart, projectCatalog, activeProjectId]
   );
 
   const projectPathForSession = (sessionId: string) => {
-    const projectId = sessionProjects[sessionId] || null;
+    const binding = projectBindingForSession(sessionId, sessionProjectBindings, sessionProjects, sessionUiState, projectCatalog);
+    if (binding?.projectPath) return binding.projectPath;
+    const projectId = sessionProjectIdFromState(sessionId, sessionProjects, sessionUiState);
     if (!projectId) return "";
-    return projects.find((project) => project.id === projectId)?.path || "";
+    return projectCatalog.find((project) => project.id === projectId)?.path || "";
   };
 
   const resolveArtifactPathForSession = (sessionId: string, filePath: string) => {
@@ -3022,10 +3961,21 @@ export function App() {
     if (!isImageAttachment(file)) return "";
     return filePreviewUrl(file.file_path, sidecarStatus.webPort);
   };
-  const sortedProjects = useMemo(
-    () => [...projects].sort((a, b) => Number(Boolean(pinnedProjects[b.id] || b.pinned)) - Number(Boolean(pinnedProjects[a.id] || a.pinned))),
-    [projects, pinnedProjects]
-  );
+  const sortedProjects = useMemo(() => {
+    const priority = (project: ProjectFolder) => (
+      Number(Boolean(pinnedProjects[project.id] || project.pinned)) * 100
+      + Number(project.id === activeProjectIdRef.current) * 10
+      + Number(project.id === activeProjectId)
+    );
+    return [...projectCatalog].sort((a, b) => priority(b) - priority(a) || a.name.localeCompare(b.name));
+  }, [projectCatalog, pinnedProjects, activeProjectId]);
+  const projectStartMatches = useMemo(() => {
+    const needle = projectStartSearch.trim().toLowerCase();
+    const matches = needle
+      ? sortedProjects.filter((project) => `${project.name} ${project.path}`.toLowerCase().includes(needle))
+      : sortedProjects;
+    return matches.slice(0, 8);
+  }, [projectStartSearch, sortedProjects]);
   const { projectSessions, generalSessions, projectSessionGroups } = useMemo(() => {
     const grouped = new Map<string, SessionRow[]>();
     const general: SessionRow[] = [];
@@ -3050,19 +4000,37 @@ export function App() {
     };
   }, [visibleSessions, sortedProjects]);
   const selectOrCreateProjectSession = (project: ProjectFolder) => {
-    const existing = allSessions.find((row) => row.projectId === project.id);
-    if (existing) {
-      void selectSession(existing);
-      return;
-    }
     startNewSession(project);
   };
   const currentModelName = displayModelName(runtimeSnapshot.currentModel);
-  const appVersion = runtimeSnapshot.version || runtimeSnapshot.releaseNotes?.version || "0.2.0";
+  const activeRuntimeRequest = useMemo(() => (
+    (runtimeSnapshot.activeRequests || []).find((request) => (
+      isPrimaryChatActiveRequest(request)
+      && String(request.session_id || "") === activeSessionId
+      && !locallyCompletedRequestIds[String(request.request_id || "")]
+    )) || null
+  ), [runtimeSnapshot.activeRequests, activeSessionId, locallyCompletedRequestIds]);
+  const activeRuntimeElapsed = runtimeRequestElapsedLabel(activeRuntimeRequest, runClockTick);
+  const appVersion = runtimeSnapshot.version || runtimeSnapshot.releaseNotes?.version || "0.2.2";
   const deferredComposerText = useDeferredValue(composerText);
   const skillDisplayRows = useMemo(() => buildSkillDisplayRows(runtimeSnapshot), [runtimeSnapshot]);
   const mentionableSkillRows = useMemo(() => skillDisplayRows.filter((skill) => skill.mentionable), [skillDisplayRows]);
   const backgroundSkillRows = useMemo(() => skillDisplayRows.filter((skill) => !skill.mentionable), [skillDisplayRows]);
+  const skillSourceSections = useMemo(() => (
+    SKILL_SOURCE_ORDER.map((sourceGroup) => {
+      const sourceRows = skillDisplayRows.filter((skill) => skill.sourceGroup === sourceGroup);
+      return {
+        sourceGroup,
+        label: SKILL_SOURCE_LABELS[sourceGroup],
+        count: sourceRows.length,
+        purposeGroups: SKILL_PURPOSE_ORDER.map((purposeGroup) => ({
+          purposeGroup,
+          label: SKILL_PURPOSE_LABELS[purposeGroup],
+          items: sourceRows.filter((skill) => skill.purposeGroup === purposeGroup)
+        })).filter((group) => group.items.length > 0)
+      };
+    }).filter((section) => section.count > 0)
+  ), [skillDisplayRows]);
   const skillMentionCandidates = useMemo(
     () => mentionableSkillRows.filter((skill) => skill.enabled && skill.installed),
     [mentionableSkillRows]
@@ -3171,10 +4139,16 @@ export function App() {
   }, []);
 
   function capabilityPackEnabled(packId: string) {
+    const pack = packs.find((item) => item.id === packId);
+    if (pack && isDefaultReadOnlyCapability(pack)) return true;
     return enabledCapabilityPacks[packId] !== false;
   }
 
   function toggleCapabilityPack(pack: CapabilityPack, enabled: boolean) {
+    if (isDefaultReadOnlyCapability(pack) && !enabled) {
+      setToast(`${pack.name} 是默认只读能力，不能关闭`);
+      return;
+    }
     setEnabledCapabilityPacks((current) => ({ ...current, [pack.id]: enabled }));
     setToast(enabled ? `${pack.name} 已启用` : `${pack.name} 已关闭`);
   }
@@ -3323,22 +4297,25 @@ export function App() {
   function restoreCachedSession(sessionId: string, activeRequestId?: string, streamAvailable = true) {
     const cached = sessionUiState[sessionId];
     if (!cached) return false;
-    const projectId = sessionProjects[sessionId] || null;
+    const binding = projectBindingForSession(sessionId, sessionProjectBindings, sessionProjects, sessionUiState, projectCatalog);
+    const projectId = binding?.projectId || null;
     const nextMessages = normalizePausedMessages(cached.messages, {
       sessionId,
       activeRequestIds: activeRequestId ? new Set([activeRequestId]) : new Set(),
       inactiveRequestGraceMs: 45_000
     });
+    messagesRef.current = nextMessages;
     setMessages(nextMessages);
     setComposerDraft(cached.composerText || "", { immediate: true });
     setAttachments(cached.attachments);
-    setActiveSessionTitle(sessionTitles[sessionId] || cached.title || "新对话");
+    setActiveSessionTitle(sessionTitles[sessionId] || cached.title || NEW_SESSION_START_TITLE);
     setActiveProjectId(projectId);
     setSessionUiState((current) => ({
       ...current,
       [sessionId]: {
         ...cached,
         projectId,
+        projectBinding: binding,
         messages: nextMessages
       }
     }));
@@ -3358,7 +4335,8 @@ export function App() {
     const sessionId = activeSessionIdRef.current;
     if (!sessionId) return;
     flushPendingSessionMessagesSnapshot(sessionId);
-    const projectId = sessionProjects[sessionId] || null;
+    const binding = projectBindingForSession(sessionId, sessionProjectBindingsRef.current, sessionProjectsRef.current, sessionUiState, projectCatalog);
+    const projectId = binding?.projectId || null;
     const draftText = composerTextRef.current;
     const draftAttachments = attachmentsRef.current;
     const currentMessages = messagesRef.current;
@@ -3368,6 +4346,7 @@ export function App() {
       if (
         existing.title === activeSessionTitle
         && existing.projectId === projectId
+        && existing.projectBinding === binding
         && existing.messages === currentMessages
         && existing.composerText === draftText
         && sameAttachments(existing.attachments || [], draftAttachments)
@@ -3381,6 +4360,7 @@ export function App() {
           ...existing,
           title: activeSessionTitle,
           projectId,
+          projectBinding: binding,
           messages: currentMessages,
           composerText: draftText,
           attachments: draftAttachments,
@@ -3398,7 +4378,10 @@ export function App() {
     }
     flushActiveSessionDraft();
     const switchSeq = ++sessionSwitchSeq.current;
-    const nextProjectId = sessionProjects[row.id] || null;
+    pendingProjectStartRef.current = null;
+    setPendingProjectStart(null);
+    const nextBinding = projectBindingForSession(row.id, sessionProjectBindings, sessionProjects, sessionUiState, projectCatalog);
+    const nextProjectId = nextBinding?.projectId || null;
     autoScrollRef.current = true;
     setShowJumpLatest(false);
     activeSessionIdRef.current = row.id;
@@ -3418,6 +4401,7 @@ export function App() {
       [row.id]: {
         title: row.title,
         projectId: nextProjectId,
+        projectBinding: nextBinding,
         messages: [],
         composerText: "",
         attachments: []
@@ -3429,9 +4413,11 @@ export function App() {
     focusComposerSoon();
     try {
       const history = await loadSessionHistoryWithMeta(row.id);
+      rememberHistoryProjectBinding(row.id, history.projectContext);
       if (sessionSwitchSeq.current !== switchSeq || activeSessionIdRef.current !== row.id) {
         return;
       }
+      const historyBinding = history.projectContext || nextBinding;
       const mapped = normalizePausedMessages(mapRuntimeHistory(history.messages, row.id, history.contextStartSeq));
       setSessionUiState((current) => ({
         ...current,
@@ -3441,7 +4427,8 @@ export function App() {
             composerText: "",
             attachments: []
           }),
-          projectId: nextProjectId,
+          projectId: historyBinding?.projectId || nextProjectId,
+          projectBinding: historyBinding,
           messages: mapped,
           contextStartSeq: history.contextStartSeq,
           lastActivityAt: latestMessageMs(mapped) || current[row.id]?.lastActivityAt || row.activityAt || Date.now()
@@ -3463,26 +4450,53 @@ export function App() {
     if (!options?.skipFlush) {
       flushActiveSessionDraft();
     }
+    setProjectStartMenuOpen(false);
     sessionSwitchSeq.current += 1;
-    const id = project ? `ecorex-project-${project.id}-${Date.now()}` : `ecorex-${Date.now()}`;
-    const title = project ? `${project.name} · 新会话` : "新对话";
+    const id = createDraftSessionId(project);
+    const title = project ? `${project.name} · ${NEW_SESSION_START_TITLE}` : NEW_SESSION_START_TITLE;
+    const projectBinding = project ? projectBindingFromProject(project, "project-new-session") : null;
+    const emptyMessages: ChatItem[] = [];
+    protectBlankDraftSession(id);
     activeSessionIdRef.current = id;
+    messagesRef.current = emptyMessages;
+    committedSessionMessageSnapshots.current[id] = emptyMessages;
+    pendingSessionMessageSnapshots.current[id] = emptyMessages;
     setActiveSessionId(id);
     setActiveProjectId(project?.id || null);
+    pendingProjectStartRef.current = project || null;
+    setPendingProjectStart(project || null);
     setActiveSessionTitle(title);
-    setSessionTitles((current) => ({ ...current, [id]: title }));
-    if (project) {
-      setSessionProjects((current) => ({ ...current, [id]: project.id }));
-    }
-    setMessages([]);
+    if (!project) setSessionTitles((current) => ({ ...current, [id]: title }));
+    setMessages(emptyMessages);
     setAttachments([]);
+    attachmentsRef.current = [];
     setComposerDraft("", { immediate: true });
     setApproval(null);
+    setPreviewFile(null);
+    setShowJumpLatest(false);
+    setActiveRequestId("");
+    const nextSessionRequestIds = { ...sessionRequestIdsRef.current };
+    delete nextSessionRequestIds[id];
+    sessionRequestIdsRef.current = nextSessionRequestIds;
+    setSessionRequestIds((current) => {
+      if (!(id in current)) return current;
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+    setSessionTitles((current) => ({ ...current, [id]: title }));
+    if (project && projectBinding) {
+      sessionProjectsRef.current = { ...sessionProjectsRef.current, [id]: projectBinding.projectId };
+      sessionProjectBindingsRef.current = { ...sessionProjectBindingsRef.current, [id]: projectBinding };
+      setSessionProjects((current) => ({ ...current, [id]: projectBinding.projectId }));
+      setSessionProjectBindings((current) => ({ ...current, [id]: projectBinding }));
+    }
     setSessionUiState((current) => ({
       ...current,
       [id]: {
         title,
-        projectId: project?.id || null,
+        projectId: projectBinding?.projectId || null,
+        projectBinding,
         messages: [],
         composerText: "",
         attachments: []
@@ -3491,13 +4505,17 @@ export function App() {
     focusComposerSoon();
   }
 
+  function startProjectFromWelcome(project: ProjectFolder) {
+    setProjectStartMenuOpen(false);
+    startNewSession(project);
+  }
+
   async function renameSession(row: SessionRow) {
     const nextTitle = window.prompt("重命名会话", row.title)?.trim();
     if (!nextTitle) return;
     if (nextTitle === row.title) {
       lockedSessionTitlesRef.current = { ...lockedSessionTitlesRef.current, [row.id]: true };
       setLockedSessionTitles((current) => ({ ...current, [row.id]: true }));
-      setPinnedSessions((current) => ({ ...current, [row.id]: true }));
       setToast("会话标题已锁定");
       return;
     }
@@ -3505,7 +4523,6 @@ export function App() {
       setSessionTitles((current) => ({ ...current, [row.id]: nextTitle }));
       lockedSessionTitlesRef.current = { ...lockedSessionTitlesRef.current, [row.id]: true };
       setLockedSessionTitles((current) => ({ ...current, [row.id]: true }));
-      setPinnedSessions((current) => ({ ...current, [row.id]: true }));
       const result = await renameRuntimeSession({ sessionId: row.id, title: nextTitle });
       if (result.status === "error") {
         throw new Error(result.message || "重命名失败");
@@ -3531,6 +4548,7 @@ export function App() {
     const previousSnapshot = runtimeSnapshot;
     const previousSessionState = sessionUiState[row.id];
     const previousProjectId = sessionProjects[row.id];
+    const previousProjectBinding = sessionProjectBindings[row.id];
     const previousLocked = lockedSessionTitles[row.id];
     const previousPinned = pinnedSessions[row.id];
     setRuntimeSnapshot((current) => ({
@@ -3547,6 +4565,13 @@ export function App() {
     setSessionProjects((current) => {
       const next = { ...current };
       delete next[row.id];
+      sessionProjectsRef.current = next;
+      return next;
+    });
+    setSessionProjectBindings((current) => {
+      const next = { ...current };
+      delete next[row.id];
+      sessionProjectBindingsRef.current = next;
       return next;
     });
     setLockedSessionTitles((current) => {
@@ -3582,7 +4607,14 @@ export function App() {
         setSessionUiState((current) => ({ ...current, [row.id]: previousSessionState }));
       }
       if (previousProjectId) {
-        setSessionProjects((current) => ({ ...current, [row.id]: previousProjectId }));
+        const next = { ...sessionProjectsRef.current, [row.id]: previousProjectId };
+        sessionProjectsRef.current = next;
+        setSessionProjects(next);
+      }
+      if (previousProjectBinding) {
+        const next = { ...sessionProjectBindingsRef.current, [row.id]: previousProjectBinding };
+        sessionProjectBindingsRef.current = next;
+        setSessionProjectBindings(next);
       }
       if (previousLocked) {
         setLockedSessionTitles((current) => {
@@ -3666,9 +4698,23 @@ export function App() {
     Object.entries(nextSessionProjects).forEach(([sessionId, projectId]) => {
       if (projectId === project.id) delete nextSessionProjects[sessionId];
     });
+    const nextSessionProjectBindings = { ...sessionProjectBindings };
+    Object.entries(nextSessionProjectBindings).forEach(([sessionId, binding]) => {
+      if (binding?.projectId === project.id) delete nextSessionProjectBindings[sessionId];
+    });
+    const nextSessionUiState = Object.fromEntries(
+      Object.entries(sessionUiState).map(([sessionId, state]) => {
+        if (state.projectId !== project.id && state.projectBinding?.projectId !== project.id) return [sessionId, state];
+        return [sessionId, { ...state, projectId: null, projectBinding: null }];
+      })
+    ) as Record<string, SessionUiState>;
     setProjects(nextProjects);
     setPinnedProjects(nextPinnedProjects);
     setSessionProjects(nextSessionProjects);
+    setSessionProjectBindings(nextSessionProjectBindings);
+    setSessionUiState(nextSessionUiState);
+    sessionProjectsRef.current = nextSessionProjects;
+    sessionProjectBindingsRef.current = nextSessionProjectBindings;
     if (activeProjectId === project.id) {
       setActiveProjectId(null);
     }
@@ -3682,10 +4728,11 @@ export function App() {
         activeProjectId: activeProjectId === project.id ? null : activeProjectId,
         projects: nextProjects,
         sessionProjects: nextSessionProjects,
+        sessionProjectBindings: nextSessionProjectBindings,
         sessionTitles,
         pinnedSessions,
         pinnedProjects: nextPinnedProjects,
-        sessionUiState,
+        sessionUiState: nextSessionUiState,
         savedAt: new Date().toISOString()
       }).catch(() => undefined);
     }
@@ -3876,9 +4923,32 @@ export function App() {
     setComposerDragActive(false);
   }
 
+  function protectBlankDraftSession(sessionId: string) {
+    blankDraftSessionEpochsRef.current = {
+      ...blankDraftSessionEpochsRef.current,
+      [sessionId]: sessionSwitchSeq.current
+    };
+  }
+
+  function clearBlankDraftProtection(sessionId: string) {
+    if (!blankDraftSessionEpochsRef.current[sessionId]) return;
+    const next = { ...blankDraftSessionEpochsRef.current };
+    delete next[sessionId];
+    blankDraftSessionEpochsRef.current = next;
+  }
+
+  function isProtectedActiveBlankDraft(sessionId: string) {
+    return Boolean(
+      blankDraftSessionEpochsRef.current[sessionId]
+      && activeSessionIdRef.current === sessionId
+      && messagesRef.current.length === 0
+    );
+  }
+
   function updateSessionMessages(sessionId: string, updater: (messages: ChatItem[]) => ChatItem[]) {
     if (activeSessionIdRef.current === sessionId) {
       const nextMessages = updater(messagesRef.current);
+      if (nextMessages.length) clearBlankDraftProtection(sessionId);
       messagesRef.current = nextMessages;
       committedSessionMessageSnapshots.current[sessionId] = nextMessages;
       setMessages(nextMessages);
@@ -3896,9 +4966,11 @@ export function App() {
   function commitSessionMessagesSnapshot(sessionId: string, nextMessages: ChatItem[]) {
     committedSessionMessageSnapshots.current[sessionId] = nextMessages;
     setSessionUiState((current) => {
+      const binding = projectBindingForSession(sessionId, sessionProjectBindingsRef.current, sessionProjectsRef.current, current, projectCatalog);
       const existing = current[sessionId] || {
         title: sessionTitles[sessionId] || activeSessionTitle,
-        projectId: sessionProjects[sessionId] || null,
+        projectId: binding?.projectId || sessionProjectIdFromState(sessionId, sessionProjectsRef.current, current),
+        projectBinding: binding,
         messages: sessionId === activeSessionIdRef.current ? messagesRef.current : [],
         composerText: sessionId === activeSessionIdRef.current ? composerTextRef.current : "",
         attachments: sessionId === activeSessionIdRef.current ? attachmentsRef.current : []
@@ -3908,7 +4980,8 @@ export function App() {
         ...current,
         [sessionId]: {
           ...existing,
-          projectId: sessionProjects[sessionId] || null,
+          projectId: binding?.projectId || sessionProjectIdFromState(sessionId, sessionProjectsRef.current, current),
+          projectBinding: binding,
           messages: nextMessages,
           composerText: sessionId === activeSessionIdRef.current ? composerTextRef.current : existing.composerText,
           attachments: sessionId === activeSessionIdRef.current ? attachmentsRef.current : existing.attachments,
@@ -3993,9 +5066,32 @@ export function App() {
     });
   }
 
+  function rememberStreamTurnSequence(sessionId: string, assistantId: string, requestId: string, item: StreamItem) {
+    if (typeof item.user_seq !== "number" && typeof item.bot_seq !== "number") return;
+    updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => ({
+      ...message,
+      userSeq: typeof item.user_seq === "number" ? item.user_seq : message.userSeq,
+      botSeq: typeof item.bot_seq === "number" ? item.bot_seq : message.botSeq
+    }));
+  }
+
   async function refreshSessionFromHistory(sessionId: string) {
     try {
       const history = await loadSessionHistoryWithMeta(sessionId);
+      if (isProtectedActiveBlankDraft(sessionId)) {
+        void reportDesktopEvent({
+          type: "info",
+          source: "Desktop",
+          category: "session",
+          label: "stale_history_suppressed",
+          sessionId,
+          detail: { reason: "active_blank_draft" }
+        }).catch(() => undefined);
+        return false;
+      }
+      rememberHistoryProjectBinding(sessionId, history.projectContext);
+      const historyBinding = history.projectContext
+        || projectBindingForSession(sessionId, sessionProjectBindingsRef.current, sessionProjectsRef.current, sessionUiState, projectCatalog);
       const mapped = normalizePausedMessages(mapRuntimeHistory(history.messages, sessionId, history.contextStartSeq))
         .map(mergeBufferedPostDoneArtifacts);
       const hasFinalAssistant = mapped.some((message) => (
@@ -4014,10 +5110,13 @@ export function App() {
         [sessionId]: {
           ...(current[sessionId] || {
             title: sessionTitles[sessionId] || activeSessionTitle,
-            projectId: sessionProjects[sessionId] || null,
+            projectId: historyBinding?.projectId || sessionProjectIdFromState(sessionId, sessionProjectsRef.current, current),
+            projectBinding: historyBinding,
             composerText: "",
             attachments: []
           }),
+          projectId: historyBinding?.projectId || sessionProjectIdFromState(sessionId, sessionProjectsRef.current, current),
+          projectBinding: historyBinding,
           messages: merged,
           contextStartSeq: history.contextStartSeq,
           lastActivityAt: latestMessageMs(merged) || current[sessionId]?.lastActivityAt || Date.now()
@@ -4038,6 +5137,20 @@ export function App() {
     if (!requestId) return false;
     try {
       const history = await loadSessionHistoryWithMeta(sessionId);
+      if (isProtectedActiveBlankDraft(sessionId)) {
+        void reportDesktopEvent({
+          type: "info",
+          source: "Desktop",
+          category: "session",
+          label: "stale_request_history_suppressed",
+          sessionId,
+          detail: { reason: "active_blank_draft", requestId }
+        }).catch(() => undefined);
+        return false;
+      }
+      rememberHistoryProjectBinding(sessionId, history.projectContext);
+      const historyBinding = history.projectContext
+        || projectBindingForSession(sessionId, sessionProjectBindingsRef.current, sessionProjectsRef.current, sessionUiState, projectCatalog);
       const mapped = normalizePausedMessages(mapRuntimeHistory(history.messages, sessionId, history.contextStartSeq))
         .map(mergeBufferedPostDoneArtifacts);
       const scopedFinal = mapped.some((message) => (
@@ -4056,10 +5169,13 @@ export function App() {
         [sessionId]: {
           ...(current[sessionId] || {
             title: sessionTitles[sessionId] || activeSessionTitle,
-            projectId: sessionProjects[sessionId] || null,
+            projectId: historyBinding?.projectId || sessionProjectIdFromState(sessionId, sessionProjectsRef.current, current),
+            projectBinding: historyBinding,
             composerText: "",
             attachments: []
           }),
+          projectId: historyBinding?.projectId || sessionProjectIdFromState(sessionId, sessionProjectsRef.current, current),
+          projectBinding: historyBinding,
           messages: merged,
           contextStartSeq: history.contextStartSeq,
           lastActivityAt: latestMessageMs(merged) || current[sessionId]?.lastActivityAt || Date.now()
@@ -4421,8 +5537,13 @@ export function App() {
       type: "tool",
       id: toolId,
       name: toolName,
-      arguments: item.arguments ?? item.input,
+      arguments: redactToolDisclosureValue(item.arguments ?? item.input),
+      qualityEvidence: normalizeQualityEvidence(item.qualityEvidence || normalizeQualityEvidence(item.result)),
       status: "running",
+      deadline_seconds: item.deadline_seconds,
+      max_seconds: item.max_seconds,
+      extension_count: item.extension_count,
+      lastHeartbeatAt: Date.now(),
       running: true
     };
     if (toolIndex >= 0) {
@@ -4466,8 +5587,13 @@ export function App() {
       result: typeof (item.result ?? item.content ?? item.message) === "string"
         ? redactInternalPromptText(item.result ?? item.content ?? item.message)
         : item.result ?? item.content ?? item.message,
+      qualityEvidence: normalizeQualityEvidence(item.qualityEvidence || normalizeQualityEvidence(item.result ?? item.content ?? item.message)),
       status: item.status || "done",
       execution_time: item.execution_time,
+      deadline_seconds: item.deadline_seconds,
+      max_seconds: item.max_seconds,
+      extension_count: item.extension_count,
+      lastHeartbeatAt: Date.now(),
       is_error: item.status === "error" || item.status === "failed",
       running: false
     };
@@ -4477,13 +5603,57 @@ export function App() {
         steps[targetIndex] = {
           ...previous,
           ...completedTool,
-          arguments: completedTool.arguments ?? previous.arguments
+          arguments: completedTool.arguments ?? previous.arguments,
+          qualityEvidence: completedTool.qualityEvidence || previous.qualityEvidence
         };
       }
     } else {
       steps.push(completedTool);
     }
     return { ...message, pending: true, steps };
+  }
+
+  function appendToolHeartbeat(message: ChatItem, item: StreamItem): ChatItem {
+    const steps = [...(message.steps || [])];
+    const toolName = item.tool || item.name || "tool";
+    const toolId = item.tool_call_id || "";
+    let targetIndex = -1;
+    for (let index = steps.length - 1; index >= 0; index -= 1) {
+      const step = steps[index];
+      if (step.type === "tool" && ((toolId && step.id === toolId) || (!toolId && step.name === toolName))) {
+        targetIndex = index;
+        break;
+      }
+    }
+    const heartbeatPatch: Partial<Extract<AgentStepDisclosure, { type: "tool" }>> = {
+      type: "tool",
+      id: toolId || undefined,
+      name: toolName,
+      status: item.status || "running",
+      deadline_seconds: item.deadline_seconds,
+      max_seconds: item.max_seconds,
+      extension_count: item.extension_count,
+      execution_time: item.elapsed_seconds ?? item.execution_time,
+      lastHeartbeatAt: Date.now(),
+      running: true
+    };
+    if (targetIndex >= 0) {
+      const previous = steps[targetIndex];
+      if (previous.type === "tool") {
+        steps[targetIndex] = { ...previous, ...heartbeatPatch, arguments: previous.arguments ?? item.arguments ?? item.input };
+      }
+    } else {
+      steps.push({ ...heartbeatPatch, arguments: item.arguments ?? item.input } as Extract<AgentStepDisclosure, { type: "tool" }>);
+    }
+    return { ...message, pending: true, steps };
+  }
+
+  function appendToolDeadlineExtended(message: ChatItem, item: StreamItem): ChatItem {
+    return appendToolHeartbeat(message, {
+      ...item,
+      type: "tool_heartbeat",
+      status: item.status || "running"
+    });
   }
 
   function appendMediaStep(message: ChatItem, item: StreamItem, pending = true): ChatItem {
@@ -4512,7 +5682,7 @@ export function App() {
   }
 
   function artifactDedupeKey(artifact: AgentArtifact) {
-    return (artifact.path || artifact.relativePath || artifact.url || artifact.id).replace(/\\/g, "/").toLowerCase();
+    return artifactMergeKey(artifact);
   }
 
   function streamItemArtifacts(item: StreamItem, requestId?: string) {
@@ -4610,6 +5780,11 @@ export function App() {
     return `${sessionId}::${requestId}`;
   }
 
+  function hasScheduledStreamReconnect(sessionId: string, requestId: string) {
+    const key = streamRequestKey(sessionId, requestId);
+    return Boolean(streamReconnectTimers.current[key] || streamReconnectChecks.current[key]);
+  }
+
   function isTerminalStreamPhase(phase?: StreamRequestPhase) {
     return phase === "completed" || phase === "failed" || phase === "cancelled" || phase === "interrupted";
   }
@@ -4682,9 +5857,108 @@ export function App() {
     };
   }
 
+  function streamReconnectingRecovery(requestId: string, reason: string): NonNullable<ChatItem["recovery"]> {
+    return {
+      kind: "reconnecting",
+      requestId,
+      message: "连接中断，正在尝试接回同一次任务；如果没有恢复，可以先恢复记录。",
+      recoverable: true,
+      retryable: false,
+      reason,
+      retryMode: "stream_reconnect"
+    };
+  }
+
+  function hasTransientStreamRecovery(sessionId: string, assistantId: string, requestId: string) {
+    const source = activeSessionIdRef.current === sessionId
+      ? messagesRef.current
+      : sessionUiState[sessionId]?.messages || [];
+    return source.some((message) => (
+      (message.id === assistantId || (requestId && message.requestId === requestId))
+      && message.recovery?.kind === "reconnecting"
+    ));
+  }
+
+  function clearTransientStreamRecovery(sessionId: string, assistantId: string, requestId: string) {
+    updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => (
+      message.recovery?.kind === "reconnecting"
+        ? { ...message, recovery: undefined }
+        : message
+    ));
+  }
+
+  function clearStreamReconnectState(sessionId: string, requestId?: string) {
+    const prefix = requestId ? streamRequestKey(sessionId, requestId) : `${sessionId}::`;
+    Object.keys(streamReconnectTimers.current).forEach((key) => {
+      if (!key.startsWith(prefix)) return;
+      window.clearTimeout(streamReconnectTimers.current[key]);
+      delete streamReconnectTimers.current[key];
+    });
+    Object.keys(streamReconnectChecks.current).forEach((key) => {
+      if (key.startsWith(prefix)) delete streamReconnectChecks.current[key];
+    });
+  }
+
+  async function recoverRequestFromProjection(sessionId: string, assistantId: string, requestId: string) {
+    if (!requestId) return false;
+    let projection: RuntimeRequestProjection | null = null;
+    try {
+      const result = await loadRuntimeProjection({ mode: "request", requestId, sessionId });
+      projection = result.mode === "request" ? result.projection : null;
+    } catch {
+      return false;
+    }
+    const decision = projectionRecoveryDecision(projection);
+    if (!decision.handled) return false;
+    const projectedMessages = normalizePausedMessages(mapRuntimeHistory(decision.messages, sessionId));
+    const projectedAssistant = projectedMessages.find((message) => (
+      message.role === "assistant" && (!message.requestId || message.requestId === requestId)
+    ));
+    if (!projectedAssistant) return false;
+    clearStreamDeltaBuffers(sessionId, requestId);
+    const projectedContent = redactInternalPromptText(decision.content || projectedAssistant.content || "");
+    updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => ({
+      ...message,
+      ...projectedAssistant,
+      id: message.id || assistantId,
+      requestId,
+      content: projectedContent || message.content,
+      pending: false,
+      paused: false,
+      cancelled: decision.cancelled,
+      recovery: undefined
+    }));
+    if (decision.markCompleted) {
+      markRequestLocallyCompleted(requestId);
+    }
+    markStreamTerminal(sessionId, requestId, decision.terminalPhase);
+    markSessionOutputReady(sessionId);
+    finishSessionRequest(sessionId, requestId);
+    return true;
+  }
+
+  async function handleStreamError(sessionId: string, assistantId: string, requestId: string) {
+    if (completedRequestIds.current[requestId]) {
+      markStreamTerminal(sessionId, requestId, "completed");
+      closeSessionStream(sessionId, requestId);
+      return;
+    }
+    if (await recoverRequestFromProjection(sessionId, assistantId, requestId)) return;
+    if (!isCurrentSessionRequest(sessionId, requestId)) return;
+    setStreamRequestPhase(sessionId, requestId, "stalled");
+    markStreamConnectionInterrupted(sessionId, assistantId, requestId);
+    closeSessionStream(sessionId, requestId);
+    scheduleHistoryRecovery(sessionId, requestId, [800, 2400, 5000]);
+    scheduleStreamReconnect(sessionId, assistantId, requestId);
+  }
+
   function markStreamConnectionInterrupted(sessionId: string, assistantId: string, requestId: string) {
     updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => {
       if (!message.pending && !message.visibleOutputSettled) return message;
+      return {
+        ...(message.pending ? replaceCurrentPhase(message, "正在重新连接") : message),
+        recovery: streamReconnectingRecovery(requestId, "eventsource_error")
+      };
       return {
         ...(message.pending ? replaceCurrentPhase(message, "正在重新连接") : message),
         recovery: {
@@ -4731,6 +6005,15 @@ export function App() {
       const state = getStreamRequestState(sessionId, requestId);
       if (isTerminalStreamPhase(state?.phase) || completedRequestIds.current[requestId]) return;
       setStreamRequestPhase(sessionId, requestId, "stalled");
+      updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => {
+        if (!message.pending && !message.visibleOutputSettled) return message;
+        return {
+          ...(message.pending ? replaceCurrentPhase(message, "正在重新连接") : message),
+          recovery: streamReconnectingRecovery(requestId, "stream_idle_timeout")
+        };
+      });
+      scheduleStreamReconnect(sessionId, assistantId, requestId);
+      return;
       updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => {
         if (!message.pending && !message.visibleOutputSettled) return message;
         return {
@@ -4981,6 +6264,7 @@ export function App() {
     flushStreamDeltaBuffers(sessionId, requestId);
     clearHistoryRecovery(sessionId, requestId);
     if (requestId) clearStreamStallTimer(sessionId, requestId);
+    if (requestId) clearStreamReconnectState(sessionId, requestId);
     clearSessionRequestState(sessionId, requestId);
     closeSessionStream(sessionId, requestId);
     clearStreamDeltaBuffers(sessionId, requestId);
@@ -4989,65 +6273,79 @@ export function App() {
   function scheduleStreamReconnect(sessionId: string, assistantId: string, requestId: string) {
     if (completedRequestIds.current[requestId]) return;
     if (!isCurrentSessionRequest(sessionId, requestId)) return;
+    const reconnectKey = streamRequestKey(sessionId, requestId);
+    if (streamReconnectTimers.current[reconnectKey] || streamReconnectChecks.current[reconnectKey]) return;
     const attempts = streamRetryCounts.current[sessionId] || 0;
     updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => (
       message.pending ? replaceCurrentPhase(message, attempts ? `正在恢复响应通道 · 第 ${attempts + 1} 次` : "正在恢复响应通道") : message
     ));
     if (attempts >= 5) {
+      streamReconnectChecks.current[reconnectKey] = true;
       void (async () => {
-        const snapshot = await loadRuntimeSnapshot().catch(() => null);
-        const active = (snapshot?.activeRequests || []).find((request) => (
-          String(request.session_id || "") === sessionId
-          && String(request.request_id || "") === requestId
-          && isPrimaryChatActiveRequest(request)
-        ));
-        if (snapshot) setRuntimeSnapshot(snapshot);
-        if (active?.cancelled) {
-          updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => ({
-            ...message,
-            requestId,
-            pending: true,
-            paused: false,
-            cancelled: false
-          }));
-          window.setTimeout(() => scheduleStreamReconnect(sessionId, assistantId, requestId), 5000);
-          return;
-        }
-        if (active && !active.cancelled) {
-          const restored = active.stream_available === false
-            ? await refreshSessionFromHistory(sessionId)
-            : false;
-          if (restored) return;
-          if (active.stream_available === false) {
-            markStreamReconnectExhausted(sessionId, assistantId, requestId, { activeStillRunning: true });
-            markSessionOutputReady(sessionId);
-            finishSessionRequest(sessionId, requestId);
+        try {
+          const snapshot = await loadRuntimeSnapshot().catch(() => null);
+          const active = (snapshot?.activeRequests || []).find((request) => (
+            String(request.session_id || "") === sessionId
+            && String(request.request_id || "") === requestId
+            && isPrimaryChatActiveRequest(request)
+          ));
+          if (snapshot) setRuntimeSnapshot(snapshot);
+          if (active?.cancelled) {
+            updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => ({
+              ...message,
+              requestId,
+              pending: true,
+              paused: false,
+              cancelled: false
+            }));
+            streamReconnectTimers.current[reconnectKey] = window.setTimeout(() => {
+              delete streamReconnectTimers.current[reconnectKey];
+              scheduleStreamReconnect(sessionId, assistantId, requestId);
+            }, 5000);
             return;
           }
-          updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => ({
-            ...message,
-            requestId,
-            pending: true,
-            paused: false,
-            cancelled: false
-          }));
-          streamRetryCounts.current[sessionId] = 0;
-          window.setTimeout(() => attachMessageStream(sessionId, assistantId, requestId), 3000);
-          return;
+          if (active && !active.cancelled) {
+            const restored = active.stream_available === false
+              ? await refreshSessionFromHistory(sessionId)
+              : false;
+            if (restored) return;
+            if (active.stream_available === false) {
+              markStreamReconnectExhausted(sessionId, assistantId, requestId, { activeStillRunning: true });
+              markSessionOutputReady(sessionId);
+              finishSessionRequest(sessionId, requestId);
+              return;
+            }
+            updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => ({
+              ...message,
+              requestId,
+              pending: true,
+              paused: false,
+              cancelled: false
+            }));
+            streamRetryCounts.current[sessionId] = 0;
+            streamReconnectTimers.current[reconnectKey] = window.setTimeout(() => {
+              delete streamReconnectTimers.current[reconnectKey];
+              attachMessageStream(sessionId, assistantId, requestId);
+            }, 3000);
+            return;
+          }
+          const restored = await refreshSessionFromHistory(sessionId);
+          if (restored) {
+            clearSessionRequestState(sessionId, requestId);
+            return;
+          }
+          markStreamReconnectExhausted(sessionId, assistantId, requestId);
+          markSessionOutputReady(sessionId);
+          finishSessionRequest(sessionId, requestId);
+        } finally {
+          delete streamReconnectChecks.current[reconnectKey];
         }
-        const restored = await refreshSessionFromHistory(sessionId);
-        if (restored) {
-          clearSessionRequestState(sessionId, requestId);
-          return;
-        }
-        markStreamReconnectExhausted(sessionId, assistantId, requestId);
-        markSessionOutputReady(sessionId);
-        finishSessionRequest(sessionId, requestId);
       })();
       return;
     }
     streamRetryCounts.current[sessionId] = attempts + 1;
-    window.setTimeout(() => {
+    streamReconnectTimers.current[reconnectKey] = window.setTimeout(() => {
+      delete streamReconnectTimers.current[reconnectKey];
       if (!isCurrentSessionRequest(sessionId, requestId)) return;
       attachMessageStream(sessionId, assistantId, requestId);
     }, Math.min(1500 * (attempts + 1), 8000));
@@ -5055,6 +6353,7 @@ export function App() {
 
   function attachMessageStream(sessionId: string, assistantId: string, requestId: string) {
     if (!requestId) return;
+    if (hasScheduledStreamReconnect(sessionId, requestId)) return;
     const cachedMessages = sessionId === activeSessionIdRef.current
       ? messagesRef.current
       : sessionUiState[sessionId]?.messages || [];
@@ -5085,13 +6384,27 @@ export function App() {
     setSessionRequestIds((current) => ({ ...current, [sessionId]: requestId }));
     scheduleHistoryRecovery(sessionId, requestId);
     beginStreamRequest(sessionId, assistantId, requestId);
+    updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => ({
+      ...message,
+      runTiming: {
+        ...(message.runTiming || { startedAtMs: Date.now() }),
+        requestId,
+        state: "running",
+        updatedAtMs: Date.now()
+      }
+    }));
     const cleanup = openMessageStream({
       requestId,
+      sessionId,
       webPort: sidecarStatus.webPort,
       onItem: (item) => {
         if (item.request_id && item.request_id !== requestId) return;
         if (!shouldAcceptStreamItem(sessionId, requestId, item)) return;
         flushStreamBoundary(sessionId, assistantId, requestId, item);
+        rememberStreamTurnSequence(sessionId, assistantId, requestId, item);
+        if (hasTransientStreamRecovery(sessionId, assistantId, requestId)) {
+          clearTransientStreamRecovery(sessionId, assistantId, requestId);
+        }
         if (isReplayGapStreamItem(item)) {
           handleReplayGapStreamItem(sessionId, assistantId, requestId, item);
           return;
@@ -5101,11 +6414,19 @@ export function App() {
           return;
         }
         if (item.type === "cancelled") {
+          const terminalAtMs = Date.now();
           updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => ({
             ...finishRunningSteps(message, "cancelled"),
             content: redactInternalPromptText(item.content || item.message || message.content || "已停止"),
             pending: false,
-            cancelled: true
+            cancelled: true,
+            runTiming: {
+              ...(message.runTiming || { startedAtMs: terminalAtMs }),
+              requestId,
+              state: "cancelled",
+              updatedAtMs: terminalAtMs,
+              terminalAtMs
+            }
           }));
           markStreamTerminal(sessionId, requestId, "cancelled");
           markSessionOutputReady(sessionId);
@@ -5113,6 +6434,7 @@ export function App() {
           return;
         }
         if (item.type === "done") {
+          const terminalAtMs = Date.now();
           updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => {
             const nextMessage = item.artifact || item.artifacts
               ? appendArtifact(finishRunningSteps(message), item)
@@ -5123,6 +6445,13 @@ export function App() {
                 pending: false,
                 visibleOutputSettled: undefined,
                 requestId,
+                runTiming: {
+                  ...(nextMessage.runTiming || { startedAtMs: terminalAtMs }),
+                  requestId,
+                  state: "completed",
+                  updatedAtMs: terminalAtMs,
+                  terminalAtMs
+                },
                 userSeq: typeof item.user_seq === "number" ? item.user_seq : message.userSeq,
                 botSeq: typeof item.bot_seq === "number" ? item.bot_seq : message.botSeq
               };
@@ -5139,6 +6468,7 @@ export function App() {
           return;
         }
         if (item.type === "error") {
+          const terminalAtMs = Date.now();
           const message = redactInternalPromptText(item.content || item.message || "运行时返回错误");
           const staleRequest = /invalid request_id/i.test(message);
           markStreamTerminal(sessionId, requestId, "failed");
@@ -5151,7 +6481,14 @@ export function App() {
               content: message,
               pending: false,
               paused: false,
-              recovery: streamFailureRecovery(requestId, item, message)
+              recovery: streamFailureRecovery(requestId, item, message),
+              runTiming: {
+                ...(entry.runTiming || { startedAtMs: terminalAtMs }),
+                requestId,
+                state: "failed",
+                updatedAtMs: terminalAtMs,
+                terminalAtMs
+              }
             }));
             markSessionOutputReady(sessionId);
           }
@@ -5203,6 +6540,14 @@ export function App() {
         }
         if (item.type === "tool_start") {
           updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => appendToolStart(message, item));
+          return;
+        }
+        if (item.type === "tool_heartbeat") {
+          updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => appendToolHeartbeat(message, item));
+          return;
+        }
+        if (item.type === "tool_deadline_extended") {
+          updateAssistantMessageForRequest(sessionId, assistantId, requestId, (message) => appendToolDeadlineExtended(message, item));
           return;
         }
         if (item.type === "tool_end") {
@@ -5261,18 +6606,8 @@ export function App() {
             }
       },
       onError: () => {
-        if (completedRequestIds.current[requestId]) {
-          markStreamTerminal(sessionId, requestId, "completed");
-          closeSessionStream(sessionId, requestId);
-          return;
-          }
-          if (!isCurrentSessionRequest(sessionId, requestId)) return;
-          setStreamRequestPhase(sessionId, requestId, "stalled");
-          markStreamConnectionInterrupted(sessionId, assistantId, requestId);
-          closeSessionStream(sessionId, requestId);
-          scheduleHistoryRecovery(sessionId, requestId, [800, 2400, 5000]);
-          scheduleStreamReconnect(sessionId, assistantId, requestId);
-        }
+        void handleStreamError(sessionId, assistantId, requestId);
+      }
       });
     streamCleanup.current = cleanup;
     streamCleanups.current[sessionId] = cleanup;
@@ -5361,10 +6696,56 @@ export function App() {
     const enabledPacks = packs.filter((pack) => capabilityPackEnabled(pack.id));
     const neededPack = skipCapabilityCheck ? null : detectNeededPack(text, attachments, enabledPacks);
 
-    const projectAttachment: FileAttachment | null = activeProject
+    let requestSessionId = activeSessionId;
+    const pendingProject = pendingProjectStartRef.current || (isPendingProjectSessionId(activeSessionId) ? activeProject : null);
+    const pendingProjectSessionId = isPendingProjectSessionId(requestSessionId) ? requestSessionId : "";
+    let projectBindingForRequest = projectBindingForSession(requestSessionId, sessionProjectBindingsRef.current, sessionProjectsRef.current, sessionUiState, projectCatalog);
+    let projectForRequest: ProjectFolder | null = pendingProject || (projectBindingForRequest ? projectFolderFromBinding(projectBindingForRequest) : null);
+    if (pendingProject && isPendingProjectSessionId(requestSessionId)) {
+      requestSessionId = `ecorex-project-${pendingProject.id}-${Date.now()}`;
+      projectForRequest = pendingProject;
+      projectBindingForRequest = projectBindingFromProject(pendingProject, "project-new-session");
+      activeSessionIdRef.current = requestSessionId;
+      pendingProjectStartRef.current = null;
+      setPendingProjectStart(null);
+      setActiveSessionId(requestSessionId);
+      setActiveProjectId(pendingProject.id);
+      const projectTitle = `${pendingProject.name} · 项目会话`;
+      setActiveSessionTitle(projectTitle);
+      setSessionTitles((current) => ({ ...current, [requestSessionId]: projectTitle }));
+      bindSessionToProject(requestSessionId, projectBindingForRequest, "project-new-session");
+      if (pendingProjectSessionId && pendingProjectSessionId !== requestSessionId) {
+        clearBlankDraftProtection(pendingProjectSessionId);
+        const nextSessionProjects = { ...sessionProjectsRef.current };
+        delete nextSessionProjects[pendingProjectSessionId];
+        sessionProjectsRef.current = nextSessionProjects;
+        setSessionProjects(nextSessionProjects);
+        const nextSessionProjectBindings = { ...sessionProjectBindingsRef.current };
+        delete nextSessionProjectBindings[pendingProjectSessionId];
+        sessionProjectBindingsRef.current = nextSessionProjectBindings;
+        setSessionProjectBindings(nextSessionProjectBindings);
+        setSessionTitles((current) => {
+          const next = { ...current };
+          delete next[pendingProjectSessionId];
+          return next;
+        });
+        setSessionUiState((current) => {
+          if (!current[pendingProjectSessionId]) return current;
+          const next = { ...current };
+          delete next[pendingProjectSessionId];
+          return next;
+        });
+      }
+    } else if (projectBindingForRequest) {
+      projectForRequest = projectFolderFromBinding(projectBindingForRequest);
+      projectBindingForRequest = bindSessionToProject(requestSessionId, projectBindingForRequest, "project-session-send")
+        || projectBindingForRequest;
+    }
+
+    const projectAttachment: FileAttachment | null = projectForRequest
       ? {
-          file_path: activeProject.path,
-          file_name: activeProject.name,
+          file_path: projectForRequest.path,
+          file_name: projectForRequest.name,
           file_type: "directory"
         }
       : null;
@@ -5372,7 +6753,7 @@ export function App() {
       ? [projectAttachment, ...attachments.filter((file) => file.file_path !== projectAttachment.file_path)]
       : attachments;
     const displayText = text || "请处理这些附件";
-    let hiddenContext = activeProject ? projectContextPrompt(activeProject) : "";
+    let hiddenContext = "";
 
     let estimatedTokens = estimateTokens(`${hiddenContext}\n\n${displayText}`.trim(), outboundAttachments);
     let streamTextChars = 0;
@@ -5389,7 +6770,7 @@ export function App() {
       if (item.type === "done" && !streamSawDelta) {
         streamTextChars += textPart.length;
       }
-      if (item.type === "tool_start" || item.type === "tool_end") {
+      if (item.type === "tool_start" || item.type === "tool_heartbeat" || item.type === "tool_end") {
         streamToolChars += 80;
         try {
           streamToolChars += JSON.stringify(item.arguments ?? item.input ?? item.result ?? item.content ?? "").length;
@@ -5410,7 +6791,7 @@ export function App() {
       createdAt: new Date().toISOString()
     };
     const assistantId = `a-${Date.now()}`;
-    const requestSessionId = activeSessionId;
+    const runStartedAtMs = Date.now();
     const clientAttemptId = `attempt-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     latestSendAttemptRef.current[requestSessionId] = clientAttemptId;
     const { generation: sendGeneration, controller: preflightController } = beginSessionPreflight(requestSessionId);
@@ -5468,6 +6849,11 @@ export function App() {
         content: "",
         pending: true,
         createdAt: new Date().toISOString(),
+        runTiming: {
+          state: "sending",
+          startedAtMs: runStartedAtMs,
+          updatedAtMs: runStartedAtMs
+        },
         sendAttempt: {
           id: clientAttemptId,
           state: previousRequestId ? "stopping-previous" : "sending",
@@ -5482,13 +6868,12 @@ export function App() {
     queuePreflightPhase(requestSessionId, assistantId, sendGeneration, 6500, "正在组织上下文");
     if (!lockedSessionTitlesRef.current[requestSessionId]) {
       setActiveSessionTitle((current) => {
-        const nextTitle = current === "新对话" ? shortTitle(text) : current;
+        const nextTitle = current === NEW_SESSION_START_TITLE || current === "新对话" || current.endsWith(`· ${NEW_SESSION_START_TITLE}`) || current.endsWith("· 新会话") || current.endsWith("· 项目会话")
+          ? shortTitle(text || projectForRequest?.name || "项目会话")
+          : current;
         setSessionTitles((titles) => ({ ...titles, [requestSessionId]: nextTitle }));
         return nextTitle;
       });
-    }
-    if (activeProject) {
-      setSessionProjects((current) => ({ ...current, [requestSessionId]: activeProject.id }));
     }
     setComposerDraft("", { immediate: true });
     setAttachments([]);
@@ -5502,7 +6887,9 @@ export function App() {
     if (neededPack) {
       updateAssistantMessage(requestSessionId, assistantId, (message) => replaceCurrentPhase(
         message,
-        neededPack.discoveryOnly
+        isConfigureOnlyCapability(neededPack)
+          ? `Preparing configuration check for ${neededPack.name}`
+          : neededPack.discoveryOnly
           ? `Preparing find-skill discovery for ${neededPack.name}`
           : `Preparing capability setup for ${neededPack.name}`
       ));
@@ -5527,7 +6914,9 @@ export function App() {
         setInstallNotice({
           packId: neededPack.id,
           packName: neededPack.name,
-          message: neededPack.discoveryOnly
+          message: isConfigureOnlyCapability(neededPack)
+            ? `${neededPack.name} will be checked/configured through the structured agent path in this response.`
+            : neededPack.discoveryOnly
             ? `${neededPack.name} will be handled through find skill in this response.`
             : `${neededPack.name} setup will run inside this response.`
         });
@@ -5625,6 +7014,7 @@ export function App() {
         sessionId: requestSessionId,
         message: displayText,
         hiddenContext,
+        projectContext: projectBindingForRequest || null,
         attachments: outboundAttachments,
         clientAttemptId,
         interruptsRequestId: previousRequestId || undefined
@@ -5693,10 +7083,17 @@ export function App() {
       if (result.inline_reply) {
         const inlineReply = redactInternalPromptText(result.inline_reply || "");
         streamTextChars += inlineReply.length;
+        const terminalAtMs = Date.now();
         updateSessionMessages(requestSessionId, (current) => current.map((item) => item.id === assistantId ? {
           ...clearTransientSendSteps(finishRunningSteps(item)),
           content: inlineReply,
-          pending: false
+          pending: false,
+          runTiming: {
+            ...(item.runTiming || { startedAtMs: terminalAtMs }),
+            state: "completed",
+            updatedAtMs: terminalAtMs,
+            terminalAtMs
+          }
         } : item));
         markSessionOutputReady(requestSessionId);
         reportChatUsage(result.usage, usageTotal(result.usage) ? "provider" : "estimated");
@@ -5715,16 +7112,28 @@ export function App() {
         beginStreamRequest(requestSessionId, assistantId, requestId);
         updateAssistantMessageForRequest(requestSessionId, assistantId, requestId, (message) => ({
           ...replaceCurrentPhase(message, "正在连接响应"),
-          requestId
+          requestId,
+          runTiming: {
+            ...(message.runTiming || { startedAtMs: Date.now() }),
+            requestId,
+            state: "running",
+            updatedAtMs: Date.now()
+          }
         }));
         const cleanup = openMessageStream({
           requestId,
+          sessionId: requestSessionId,
           webPort: sidecarStatus.webPort,
           onItem: (item) => {
             if (item.request_id && item.request_id !== requestId) return;
             if (!shouldAcceptStreamItem(requestSessionId, requestId, item)) return;
             observeStreamUsage(item);
             flushStreamBoundary(requestSessionId, assistantId, requestId, item);
+            const sessionId = requestSessionId;
+            rememberStreamTurnSequence(sessionId, assistantId, requestId, item);
+            if (hasTransientStreamRecovery(sessionId, assistantId, requestId)) {
+              clearTransientStreamRecovery(sessionId, assistantId, requestId);
+            }
             if (isReplayGapStreamItem(item)) {
               handleReplayGapStreamItem(requestSessionId, assistantId, requestId, item);
               return;
@@ -5734,11 +7143,19 @@ export function App() {
               return;
             }
             if (item.type === "cancelled") {
+              const terminalAtMs = Date.now();
               updateAssistantMessageForRequest(requestSessionId, assistantId, requestId, (message) => ({
                 ...finishRunningSteps(message, "cancelled"),
                 content: redactInternalPromptText(item.content || item.message || message.content || "已停止"),
                 pending: false,
-                cancelled: true
+                cancelled: true,
+                runTiming: {
+                  ...(message.runTiming || { startedAtMs: terminalAtMs }),
+                  requestId,
+                  state: "cancelled",
+                  updatedAtMs: terminalAtMs,
+                  terminalAtMs
+                }
               }));
               markStreamTerminal(requestSessionId, requestId, "cancelled");
               markSessionOutputReady(requestSessionId);
@@ -5746,6 +7163,7 @@ export function App() {
               return;
             }
             if (item.type === "done") {
+              const terminalAtMs = Date.now();
               if (typeof item.user_seq === "number") {
                 updateSessionMessages(requestSessionId, (current) => current.map((message) => (
                   message.id === userMessage.id ? { ...message, userSeq: item.user_seq } : message
@@ -5762,6 +7180,13 @@ export function App() {
                   visibleOutputSettled: undefined,
                   requestId,
                   recovery: undefined,
+                  runTiming: {
+                    ...(nextMessage.runTiming || { startedAtMs: terminalAtMs }),
+                    requestId,
+                    state: "completed",
+                    updatedAtMs: terminalAtMs,
+                    terminalAtMs
+                  },
                   userSeq: typeof item.user_seq === "number" ? item.user_seq : message.userSeq,
                   botSeq: typeof item.bot_seq === "number" ? item.bot_seq : message.botSeq
                 };
@@ -5779,6 +7204,7 @@ export function App() {
               return;
             }
             if (item.type === "error") {
+              const terminalAtMs = Date.now();
               const message = redactInternalPromptText(item.content || item.message || "运行时返回错误");
               const staleRequest = /invalid request_id/i.test(message);
               markStreamTerminal(requestSessionId, requestId, "failed");
@@ -5791,7 +7217,14 @@ export function App() {
                   content: message,
                   pending: false,
                   paused: false,
-                  recovery: streamFailureRecovery(requestId, item, message)
+                  recovery: streamFailureRecovery(requestId, item, message),
+                  runTiming: {
+                    ...(entry.runTiming || { startedAtMs: terminalAtMs }),
+                    requestId,
+                    state: "failed",
+                    updatedAtMs: terminalAtMs,
+                    terminalAtMs
+                  }
                 }));
                 markSessionOutputReady(requestSessionId);
               }
@@ -5843,6 +7276,14 @@ export function App() {
             }
             if (item.type === "tool_start") {
               updateAssistantMessageForRequest(requestSessionId, assistantId, requestId, (message) => appendToolStart(message, item));
+              return;
+            }
+            if (item.type === "tool_heartbeat") {
+              updateAssistantMessageForRequest(requestSessionId, assistantId, requestId, (message) => appendToolHeartbeat(message, item));
+              return;
+            }
+            if (item.type === "tool_deadline_extended") {
+              updateAssistantMessageForRequest(requestSessionId, assistantId, requestId, (message) => appendToolDeadlineExtended(message, item));
               return;
             }
             if (item.type === "tool_end") {
@@ -5901,17 +7342,7 @@ export function App() {
             }
           },
           onError: () => {
-            if (completedRequestIds.current[requestId]) {
-              markStreamTerminal(requestSessionId, requestId, "completed");
-              closeSessionStream(requestSessionId, requestId);
-              return;
-            }
-            if (!isCurrentSessionRequest(requestSessionId, requestId)) return;
-            setStreamRequestPhase(requestSessionId, requestId, "stalled");
-            markStreamConnectionInterrupted(requestSessionId, assistantId, requestId);
-            closeSessionStream(requestSessionId, requestId);
-            scheduleHistoryRecovery(requestSessionId, requestId, [800, 2400, 5000]);
-            scheduleStreamReconnect(requestSessionId, assistantId, requestId);
+            void handleStreamError(requestSessionId, assistantId, requestId);
           }
         });
         streamCleanup.current = cleanup;
@@ -5923,7 +7354,7 @@ export function App() {
         clearSessionPreflight(requestSessionId, preflightController);
       }
       if (!lockedSessionTitlesRef.current[requestSessionId]) {
-        generateSessionTitle({ sessionId: requestSessionId, userMessage: text || activeProject?.name || "项目会话" }).then((title) => {
+        generateSessionTitle({ sessionId: requestSessionId, userMessage: text || projectForRequest?.name || "项目会话" }).then((title) => {
           if (!title || lockedSessionTitlesRef.current[requestSessionId]) return;
           setSessionTitles((current) => ({ ...current, [requestSessionId]: title }));
           setSessionUiState((current) => ({
@@ -5934,7 +7365,8 @@ export function App() {
                 composerText: "",
                 attachments: []
               }),
-              projectId: sessionProjects[requestSessionId] || null,
+              projectId: projectBindingForRequest?.projectId || sessionProjectIdFromState(requestSessionId, sessionProjectsRef.current, current),
+              projectBinding: projectBindingForRequest,
               title
             }
           }));
@@ -5996,13 +7428,17 @@ export function App() {
   }
 
   async function syncRuntimeUiStateNow() {
-    const projectId = sessionProjects[activeSessionId] || null;
+    const binding = isPendingProjectSessionId(activeSessionId)
+      ? null
+      : projectBindingForSession(activeSessionId, sessionProjectBindings, sessionProjects, sessionUiState, projectCatalog);
+    const projectId = binding?.projectId || sessionProjectIdFromState(activeSessionId, sessionProjects, sessionUiState);
     const mergedState = pruneSessionUiState({
       ...sessionUiState,
       [activeSessionId]: {
         ...(sessionUiState[activeSessionId] || {}),
         title: activeSessionTitle,
         projectId,
+        projectBinding: binding,
         messages,
         composerText: composerTextRef.current,
         attachments,
@@ -6020,6 +7456,7 @@ export function App() {
       activeProjectId: projectId,
       projects,
       sessionProjects,
+      sessionProjectBindings,
       sessionTitles,
       pinnedSessions,
       pinnedProjects,
@@ -6029,6 +7466,9 @@ export function App() {
   }
 
   function packActionLabel(pack: CapabilityPack, installing = false) {
+    if (isConfigureOnlyCapability(pack)) {
+      return installing ? "正在检查" : "配置检查";
+    }
     if (pack.discoveryOnly) {
       return installing ? "正在用 find skill" : "用 find skill";
     }
@@ -6040,7 +7480,20 @@ export function App() {
   }
 
   function packTaskNoun(pack: CapabilityPack) {
+    if (isConfigureOnlyCapability(pack)) return "配置检查任务";
     return pack.discoveryOnly ? "find skill 任务" : "安装任务";
+  }
+
+  function isDefaultReadOnlyCapability(pack: CapabilityPack) {
+    return pack.defaultEnabled === true && pack.readOnly === true;
+  }
+
+  function isConfigureOnlyCapability(pack: CapabilityPack) {
+    return pack.configureOnly === true || isDefaultReadOnlyCapability(pack);
+  }
+
+  function packReadyLabel(pack: CapabilityPack) {
+    return isDefaultReadOnlyCapability(pack) ? "默认只读" : "已安装";
   }
 
   function watchAgentPackInstall(pack: CapabilityPack, onInstalled?: () => void) {
@@ -6094,7 +7547,9 @@ export function App() {
 
   async function startAgentInstallChatTask(pack: CapabilityPack, prompt: string, sessionId: string) {
     const requestSessionId = sessionId;
-    const taskLabel = pack.discoveryOnly ? `用 find skill 发现能力：${pack.name}` : `安装能力包：${pack.name}`;
+    const taskLabel = isConfigureOnlyCapability(pack)
+      ? `配置检查能力：${pack.name}`
+      : pack.discoveryOnly ? `用 find skill 发现能力：${pack.name}` : `安装能力包：${pack.name}`;
     const assistantId = `a-install-${Date.now()}`;
     updateSessionMessages(requestSessionId, (current) => [
       ...current,
@@ -6109,8 +7564,10 @@ export function App() {
     ]);
     const currentTitle = sessionTitles[requestSessionId]
       || sessionUiState[requestSessionId]?.title
-      || (activeSessionIdRef.current === requestSessionId ? activeSessionTitle : "新对话");
-    const nextTitle = currentTitle === "新对话" ? (pack.discoveryOnly ? `find skill ${pack.name}` : `安装 ${pack.name}`) : currentTitle;
+      || (activeSessionIdRef.current === requestSessionId ? activeSessionTitle : NEW_SESSION_START_TITLE);
+    const nextTitle = currentTitle === NEW_SESSION_START_TITLE || currentTitle === "新对话"
+      ? (isConfigureOnlyCapability(pack) ? `配置 ${pack.name}` : pack.discoveryOnly ? `find skill ${pack.name}` : `安装 ${pack.name}`)
+      : currentTitle;
     if (!lockedSessionTitlesRef.current[requestSessionId]) {
       setSessionTitles((titles) => ({ ...titles, [requestSessionId]: nextTitle }));
       if (activeSessionIdRef.current === requestSessionId) {
@@ -6173,9 +7630,9 @@ export function App() {
       setInstallNotice({
         packId: pack.id,
         packName: pack.name,
-        message: `${pack.name} 已排队，当前任务结束后自动${pack.discoveryOnly ? "走 find skill" : "安装"}`
+        message: `${pack.name} 已排队，当前任务结束后自动${isConfigureOnlyCapability(pack) ? "配置检查" : pack.discoveryOnly ? "走 find skill" : "安装"}`
       });
-      setToast(`${pack.name} 已排队${pack.discoveryOnly ? "走 find skill" : "安装"}`);
+      setToast(`${pack.name} 已排队${isConfigureOnlyCapability(pack) ? "配置检查" : pack.discoveryOnly ? "走 find skill" : "安装"}`);
       return;
     }
     if (shouldOpenCapabilitySettings(pack)) {
@@ -6186,7 +7643,9 @@ export function App() {
     setInstallNotice({
       packId: pack.id,
       packName: pack.name,
-      message: pack.discoveryOnly ? `${pack.name} 正在通过 find skill 发现安装源，请稍后` : `${pack.name} 正在安装，请稍后`
+      message: isConfigureOnlyCapability(pack)
+        ? `${pack.name} 正在检查只读配置，请稍后`
+        : pack.discoveryOnly ? `${pack.name} 正在通过 find skill 发现安装源，请稍后` : `${pack.name} 正在安装，请稍后`
     });
     try {
       const request = await requestAgentInstallRequest({
@@ -6198,7 +7657,7 @@ export function App() {
         throw new Error(request.message || "生成安装任务失败");
       }
       await startAgentInstallChatTask(pack, request.prompt, requestSessionId);
-      if (pack.discoveryOnly) {
+      if (pack.discoveryOnly || isConfigureOnlyCapability(pack)) {
         setInstallingPackIds((current) => {
           const next = { ...current };
           delete next[pack.id];
@@ -6207,7 +7666,7 @@ export function App() {
         setInstallNotice({
           packId: pack.id,
           packName: pack.name,
-          message: `${pack.name} find skill 任务已创建`
+          message: isConfigureOnlyCapability(pack) ? `${pack.name} 配置检查任务已创建` : `${pack.name} find skill 任务已创建`
         });
       } else {
         watchAgentPackInstall(pack, onInstalled);
@@ -6371,8 +7830,42 @@ export function App() {
     }
   }
 
+  function staleLockIsDeadOwner(lock: RuntimeSessionLock) {
+    return Boolean(lock.dead_owner || lock.deadOwner);
+  }
+
+  function staleLockKey(lock: RuntimeSessionLock, index: number) {
+    const lockPathHash = typeof lock.lockPath?.pathHash === "string" ? lock.lockPath.pathHash : "";
+    return `${lock.sessionHash || lockPathHash || "lock"}-${index}`;
+  }
+
+  function staleLockDisplayName(lock: RuntimeSessionLock) {
+    if (lock.sessionHash) {
+      return `session ${String(lock.sessionHash).slice(0, 8)}`;
+    }
+    const lockPathHash = typeof lock.lockPath?.pathHash === "string" ? lock.lockPath.pathHash : "";
+    if (lockPathHash) {
+      return `lock ${String(lockPathHash).slice(0, 8)}`;
+    }
+    return "session lock";
+  }
+
+  function staleLockStatusLabel(lock: RuntimeSessionLock) {
+    const state = lock.removed ? "removed" : staleLockIsDeadOwner(lock) ? "dead owner" : "stale";
+    const age = formatRunAge(lock.age_seconds);
+    const removeError = lock.removeError ? " · remove error" : "";
+    return `${state}${age ? ` · ${age}` : ""}${removeError}`;
+  }
+
+  function canOpenStaleLockSession(lock: RuntimeSessionLock) {
+    return Boolean(lock.session_id);
+  }
+
   async function openRunCenterStaleLockSession(lock: RuntimeSessionLock, options: { closeSurface?: boolean } = {}) {
-    if (!lock.session_id) return;
+    if (!canOpenStaleLockSession(lock)) {
+      setToast("Stale lock details are redacted; export diagnostics for the session hash.");
+      return;
+    }
     await selectSession({
       id: String(lock.session_id),
       title: String(lock.session_id),
@@ -6689,37 +8182,464 @@ export function App() {
     setReleaseNotesOpen(false);
   }
 
+  function externalConnectionConfigState(connection: ExternalConnection) {
+    const raw = connection.configState;
+    if (typeof raw === "string") return raw.toLowerCase();
+    if (raw && typeof raw === "object" && "state" in raw) {
+      return String((raw as { state?: unknown }).state || "").toLowerCase();
+    }
+    return "";
+  }
+
+  function externalConnectionReadinessState(connection: ExternalConnection) {
+    const readiness = connection.adapterContract?.readiness;
+    if (!readiness || typeof readiness !== "object") return "";
+    return String(readiness.readiness || readiness.status || "").toLowerCase();
+  }
+
+  function externalConnectionDependencyMissing(connection: ExternalConnection) {
+    const status = String(connection.status || "").toLowerCase();
+    const dependencyStatus = connection.dependencyStatus && typeof connection.dependencyStatus === "object" ? connection.dependencyStatus : {};
+    const readiness = connection.adapterContract?.readiness;
+    const adapterDependencyStatus = readiness && typeof readiness === "object" && typeof readiness.dependencyStatus === "object"
+      ? (readiness.dependencyStatus as Record<string, unknown>)
+      : {};
+    return Boolean(connection.dependencyMissing)
+      || status === "dependency_missing"
+      || String(dependencyStatus.status || "").toLowerCase() === "missing"
+      || String(adapterDependencyStatus.status || "").toLowerCase() === "missing";
+  }
+
+  function externalConnectionNeedsConfiguration(connection: ExternalConnection) {
+    const status = String(connection.status || "").toLowerCase();
+    const configState = externalConnectionConfigState(connection);
+    const readiness = externalConnectionReadinessState(connection);
+    if (externalConnectionDependencyMissing(connection)) return false;
+    if (status === "available") return false;
+    return status === "blocked"
+      || status === "not_configured"
+      || readiness === "not_configured"
+      || (Boolean(connection.enabled || connection.running || connection.connected)
+        && (configState === "missing" || configState === "partial" || configState === "not_configured"));
+  }
+
+  function externalConnectionNeedsAuthorization(connection: ExternalConnection) {
+    const status = String(connection.status || "").toLowerCase();
+    const configState = externalConnectionConfigState(connection);
+    const readiness = externalConnectionReadinessState(connection);
+    if (externalConnectionDependencyMissing(connection)) return false;
+    if (status === "available") return false;
+    return status === "auth_required"
+      || readiness === "auth_required"
+      || (Boolean(connection.enabled || connection.running || connection.connected) && configState === "auth_required");
+  }
+
+  function externalConnectionCardState(connection: ExternalConnection) {
+    if (externalConnectionNeedsConfiguration(connection) || externalConnectionNeedsAuthorization(connection)) return "blocked";
+    if (externalConnectionDependencyMissing(connection)) return "blocked";
+    if (String(connection.status || "").toLowerCase() === "error" || connection.lastError) return "error";
+    if (connection.connected || connection.running) return "connected";
+    if (connection.configured) return "configured";
+    return "available";
+  }
+
+  function externalConnectionStatusLabel(connection: ExternalConnection) {
+    if (externalConnectionDependencyMissing(connection)) return "运行依赖缺失";
+    if (externalConnectionNeedsAuthorization(connection)) return "需授权";
+    if (externalConnectionNeedsConfiguration(connection)) return "需配置";
+    if (String(connection.status || "").toLowerCase() === "error" || connection.lastError) return "异常";
+    if (connection.connected || connection.running) return "已连接";
+    if (connection.enabled) return "已启用";
+    if (connection.configured) return "已配置";
+    return "待配置";
+  }
+
+  function externalConnectionHumanLabel(value: unknown, fallback = "状态未知") {
+    const raw = String(value || "").trim();
+    if (!raw) return fallback;
+    const normalized = raw.toLowerCase().replace(/\s+/g, " ");
+    const labels: Record<string, string> = {
+      active: "已启用",
+      auth_required: "需授权",
+      available: "可配置",
+      blocked: "已阻塞",
+      callable: "可调用",
+      configured: "已配置",
+      connected: "已连接",
+      disabled: "未启用",
+      dependency_missing: "运行依赖缺失",
+      disconnected: "未连接",
+      enabled: "已启用",
+      error: "异常",
+      missing: "缺少配置",
+      not_configured: "未配置",
+      partial: "配置不完整",
+      present: "已填写",
+      ready: "就绪",
+      running: "运行中",
+      sdk_missing: "运行依赖缺失",
+      schema_visible_unverified: "工具可见，待状态检查",
+      stopped: "已停止",
+      tool_not_loaded: "工具未加载",
+      unknown: "状态未知",
+      "auth unknown": "授权状态未知",
+      "no agent tool is declared for this channel": "该平台暂无可调用的智能体工具",
+      "declared tool schema is not loaded in the current agent snapshot": "已声明工具，但当前运行时尚未加载",
+      "tool schema is visible, but cli/auth readiness requires an explicit status probe": "工具已可见，需先做状态检查"
+    };
+    return labels[normalized] || labels[raw] || raw;
+  }
+
+  function externalConnectionDescription(connection: ExternalConnection, label: string) {
+    const descriptions: Record<string, string> = {
+      weixin: "微信个人助手通道",
+      feishu: "飞书 / Lark 机器人通道，使用应用凭据和事件订阅",
+      dingtalk: "钉钉机器人通道",
+      wecom_bot: "企微智能机器人通道",
+      wechatcom_app: "企业微信自建应用通道",
+      wechat_kf: "微信客服通道",
+      wechatmp: "微信公众号被动回复通道",
+      wechatmp_service: "微信公众号客服通道",
+      qq: "QQ 机器人通道",
+      telegram: "Telegram 机器人通道",
+      slack: "Slack 机器人通道",
+      discord: "Discord 机器人通道"
+    };
+    const key = String(connection.id || connection.platform || "").trim();
+    if (descriptions[key]) return descriptions[key];
+    return externalConnectionHumanLabel(connection.description, label);
+  }
+
+  function externalConnectionNotice(connection: ExternalConnection) {
+    if (!externalConnectionDependencyMissing(connection)) return connection.lastError || "";
+    const dependencyStatus = connection.dependencyStatus && typeof connection.dependencyStatus === "object" ? connection.dependencyStatus : {};
+    const dependency = String(dependencyStatus.dependency || "lark_oapi");
+    if (String(connection.id || connection.platform || "") === "feishu") {
+      return `已保存 App ID / Secret，但当前 WebUI 运行时缺少 ${dependency}，无法启动飞书消息接收；这不是凭据校验失败。`;
+    }
+    return `当前 WebUI 运行时缺少 ${dependency}。`;
+  }
+
+  function externalConnectionConfigLabel(connection: ExternalConnection) {
+    const state = connection.auth?.channelConfigState || externalConnectionConfigState(connection);
+    return externalConnectionHumanLabel(state, connection.configured ? "已配置" : "未配置");
+  }
+
+  function externalConnectionCallableLabel(connection: ExternalConnection) {
+    if (connection.callable) return "智能体可调用";
+    const surface = connection.agentSurface || {};
+    return externalConnectionHumanLabel(
+      surface.callableReason || surface.readiness || surface.status,
+      "智能体待就绪"
+    );
+  }
+
+  function externalConnectionFieldLabel(field: ExternalConnectionField) {
+    const raw = String(field.label || field.key || "").trim();
+    const normalized = raw.toLowerCase().replace(/\s+/g, " ");
+    const labels: Record<string, string> = {
+      app_id: "应用 ID",
+      app_secret: "应用密钥",
+      "app id": "应用 ID",
+      "app secret": "应用密钥",
+      allow_all_users: "允许所有用户",
+      "allow all users": "允许所有用户",
+      allowed_users: "允许用户",
+      "allowed users": "允许用户",
+      bot_token: "机器人 Token",
+      bot_secret: "机器人密钥",
+      home_channel: "主页频道",
+      home_channel_name: "主页频道名称",
+      signing_secret: "签名密钥",
+      slack_bot_token: "Slack 机器人 Token",
+      telegram_token: "Telegram Bot Token",
+      wecom_bot_id: "企微机器人 BotID",
+      wecom_bot_secret: "企微机器人密钥",
+      webhook_url: "Webhook 地址"
+    };
+    return labels[normalized] || labels[raw] || raw;
+  }
+
+  function externalConnectionActionLabel(action: ExternalConnectionAction) {
+    if (action.id === "save_config") return "保存配置";
+    if (action.id === "test") return "状态检查";
+    if (action.id === "start") return "连接";
+    if (action.id === "enable") return "启用";
+    if (action.id === "stop") return "断开";
+    if (action.id === "disable") return "停用";
+    if (action.id === "set_home_channel") return "设为投递目标";
+    return externalConnectionHumanLabel(action.label, action.id);
+  }
+
+  function externalConnectionActionIcon(actionId: string) {
+    if (actionId === "save_config") return <KeyRound aria-hidden="true" />;
+    if (actionId === "test") return <Activity aria-hidden="true" />;
+    if (actionId === "stop" || actionId === "disable") return <Square aria-hidden="true" />;
+    if (actionId === "set_home_channel") return <AtSign aria-hidden="true" />;
+    return <CheckCircle2 aria-hidden="true" />;
+  }
+
+  function externalConnectionActionTone(actionId: string) {
+    if (actionId === "start" || actionId === "enable" || actionId === "save_config") return "primary";
+    if (actionId === "stop" || actionId === "disable") return "danger";
+    if (actionId === "test") return "check";
+    return "neutral";
+  }
+
+  function externalConnectionActions(connection: ExternalConnection, connected: boolean): ExternalConnectionAction[] {
+    if (connection.actions?.length) return connection.actions;
+    return [
+      { id: "save_config", label: "保存" },
+      { id: "test", label: "状态检查" },
+      { id: connected ? "stop" : "start", label: connected ? "断开" : "连接" }
+    ];
+  }
+
+  function externalConnectionFieldValue(connection: ExternalConnection, key: string) {
+    const draft = externalConnectionDrafts[connection.id]?.[key];
+    if (draft !== undefined) return draft;
+    const field = (connection.fields || []).find((item) => item.key === key);
+    return field?.value ?? field?.default ?? "";
+  }
+
+  function updateExternalConnectionDraft(connection: ExternalConnection, key: string, value: unknown) {
+    setExternalConnectionDrafts((current) => ({
+      ...current,
+      [connection.id]: {
+        ...(current[connection.id] || {}),
+        [key]: value
+      }
+    }));
+  }
+
+  function externalConnectionConfig(connection: ExternalConnection) {
+    const config: Record<string, unknown> = {};
+    for (const field of connection.fields || []) {
+      if (!field.key) continue;
+      const value = externalConnectionFieldValue(connection, field.key);
+      if ((field.type === "secret" || field.sensitive || field.masked) && typeof value === "string" && value.includes("****")) continue;
+      config[field.key] = value;
+    }
+    return config;
+  }
+
+  function externalConnectionHomeChannel(connection: ExternalConnection) {
+    const config = externalConnectionConfig(connection);
+    const projected = connection.homeChannel && typeof connection.homeChannel === "object" ? connection.homeChannel : {};
+    const homeId = String(
+      projected.id
+      || projected.channelId
+      || projected.channel_id
+      || projected.value
+      || config.home_channel
+      || config.homeChannel
+      || config[`${connection.id}_home_channel`]
+      || ""
+    ).trim();
+    const homeName = String(
+      projected.name
+      || projected.label
+      || config.home_channel_name
+      || config.homeChannelName
+      || config[`${connection.id}_home_channel_name`]
+      || ""
+    ).trim();
+    return { id: homeId, name: homeName };
+  }
+
+  function externalConnectionActionToast(label: string, action: string, result: ExternalConnectionActionResponse) {
+    if (action === "test") {
+      const dryRun = result.test?.remoteConnectivityProbed === false || result.adapter?.remoteConnectivityProbed === false || result.test?.mode === "projection_dry_run" || result.adapter?.testMode === "projection_dry_run";
+      return dryRun ? `${label} 状态已检查，未探测远端连通` : `${label} 状态检查完成`;
+    }
+    if (action === "set_home_channel") return `${label} 主页频道已更新`;
+    if (action === "stop" || action === "disable") return `${label} 已断开`;
+    return `${label} 已更新`;
+  }
+
+  async function refreshExternalConnections(showToast = true) {
+    setExternalConnectionsBusy(true);
+    try {
+      const payload = await loadExternalConnections();
+      setExternalConnections(payload.connections || []);
+      if (showToast) setToast("外部连接已刷新");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "外部连接刷新失败");
+    } finally {
+      setExternalConnectionsBusy(false);
+    }
+  }
+
+  async function applyExternalConnectionAction(connection: ExternalConnection, action: string) {
+    setExternalConnectionsBusy(true);
+    try {
+      const payload: Record<string, unknown> = {
+        action,
+        config: externalConnectionConfig(connection)
+      };
+      if (action === "set_home_channel") {
+        const homeChannel = externalConnectionHomeChannel(connection);
+        if (!homeChannel.id) {
+          throw new Error("请先填写主页频道");
+        }
+        payload.homeChannel = homeChannel.id;
+        if (homeChannel.name) payload.homeChannelName = homeChannel.name;
+      }
+      const result = await updateExternalConnection(connection.id, payload);
+      await refreshExternalConnections(false);
+      setRuntimeSnapshot(await loadRuntimeSnapshot());
+      const label = connection.displayName || connection.label?.zh || connection.id;
+      setToast(externalConnectionActionToast(label, action, result));
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "外部连接操作失败");
+    } finally {
+      setExternalConnectionsBusy(false);
+    }
+  }
+
+  const schedulerProjection: RuntimeSchedulerProjection = runtimeSnapshot.scheduler || {
+    enabled: false,
+    initialized: false,
+    running: false,
+    serviceStatus: "unavailable",
+    tasks: [],
+    taskCount: 0,
+    counts: { total: 0, enabled: 0, disabled: 0, error: 0 }
+  };
+  const schedulerTasks = Array.isArray(schedulerProjection.tasks) ? schedulerProjection.tasks : [];
+  const schedulerCanModify = schedulerProjection.canModify !== false;
+
+  function schedulerStatusLabel(projection = schedulerProjection) {
+    if (projection.running) return "运行中";
+    if (projection.serviceStatus === "enabled_not_initialized") return "已启用，待初始化";
+    if (projection.enabled) return "已启用，未运行";
+    if (projection.serviceStatus === "unavailable") return "不可用";
+    return "未启用";
+  }
+
+  function schedulerTaskActionLabel(task: RuntimeSchedulerTask) {
+    const action = task.action || {};
+    if (action.type === "agent_task") return "AI 任务";
+    if (action.type === "send_message") return "固定消息";
+    if (action.type === "tool_call") return action.toolName ? `工具 ${action.toolName}` : "工具调用";
+    if (action.type === "skill_call") return action.skillName ? `Skill ${action.skillName}` : "Skill 调用";
+    return action.type || "任务";
+  }
+
+  function schedulerTaskDetail(task: RuntimeSchedulerTask) {
+    const action = task.action || {};
+    const preview =
+      action.taskDescriptionPreview ||
+      action.contentPreview ||
+      action.resultPrefixPreview ||
+      "";
+    if (preview === "[redacted-content]") {
+      const hash = action.taskDescriptionHash || action.contentHash || action.resultPrefixHash || "";
+      const length = action.taskDescriptionLength || action.contentLength || action.resultPrefixLength || 0;
+      return `内容已隐藏${length ? ` · ${length} 字符` : ""}${hash ? ` · ${hash}` : ""}`;
+    }
+    return preview || schedulerTaskActionLabel(task);
+  }
+
+  async function refreshSchedulerPanel() {
+    setSchedulerBusy(true);
+    try {
+      const scheduler = await loadSchedulerProjection();
+      setRuntimeSnapshot((current) => ({ ...current, scheduler }));
+      setToast("定时任务已刷新");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "定时任务刷新失败");
+    } finally {
+      setSchedulerBusy(false);
+    }
+  }
+
+  async function applySchedulerAction(input: Record<string, unknown>, successText: string) {
+    setSchedulerBusy(true);
+    try {
+      const scheduler = await updateScheduler(input);
+      setRuntimeSnapshot((current) => ({ ...current, scheduler }));
+      if (scheduler.status === "error") {
+        throw new Error(scheduler.message || "定时任务操作失败");
+      }
+      setToast(successText);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "定时任务操作失败");
+    } finally {
+      setSchedulerBusy(false);
+    }
+  }
+
+  async function renameSchedulerTask(task: RuntimeSchedulerTask) {
+    const nextName = window.prompt("重命名定时任务", task.name || "")?.trim();
+    if (!nextName || nextName === task.name) return;
+    await applySchedulerAction({ action: "update", task_id: task.id, name: nextName }, "定时任务已重命名");
+  }
+
+  async function editSchedulerTaskCron(task: RuntimeSchedulerTask) {
+    const current = typeof task.schedule?.expression === "string" ? task.schedule.expression : "";
+    const nextCron = window.prompt("Cron 表达式", current || "30 9 * * *")?.trim();
+    if (!nextCron || nextCron === current) return;
+    await applySchedulerAction({ action: "update", task_id: task.id, schedule_type: "cron", schedule_value: nextCron }, "定时计划已更新");
+  }
+
+  async function editSchedulerTaskContent(task: RuntimeSchedulerTask) {
+    const action = task.action || {};
+    const nextText = window.prompt("任务内容（重新输入完整内容）", "")?.trim();
+    if (!nextText) return;
+    const key = action.type === "send_message" ? "content" : "taskDescription";
+    await applySchedulerAction({ action: "update", task_id: task.id, [key]: nextText }, "定时任务内容已更新");
+  }
+
   const browserPack = packs.find((pack) => pack.id === "browser-automation");
   const feishuPack = packs.find((pack) => pack.id === "feishu-lark");
+  const shellReady = runtimeToolReady(runtimeSnapshot, "bash");
+  const webSearchReady = runtimeToolReady(runtimeSnapshot, "web_search");
+  const fileToolsReady = ["read", "write", "edit", "ls"].every((name) => runtimeToolReady(runtimeSnapshot, name));
+  const ocrReady = runtimeToolReady(runtimeSnapshot, "ocr");
+  const visionReady = runtimeToolReady(runtimeSnapshot, "vision");
+  const schedulerToolReady = runtimeToolReady(runtimeSnapshot, "scheduler");
+  const feishuToolReady = runtimeToolReady(runtimeSnapshot, "feishu_cli");
+  const browserToolReady = runtimeToolReady(runtimeSnapshot, "browser");
   const abilityRows = [
     {
       id: "web_search",
       name: "联网搜索",
-      detail: toolEnabled(runtimeSnapshot.tools, "web_search") ? "搜索工具已加载" : "已启用入口，等待搜索服务凭据",
-      enabled: toolEnabled(runtimeSnapshot.tools, "web_search"),
+      detail: webSearchReady ? "搜索工具已加载" : "已启用入口，等待搜索服务凭据",
+      enabled: webSearchReady,
+      statusLabel: webSearchReady ? "已加载" : "需凭据",
       icon: <Globe2 aria-hidden="true" />
     },
     {
       id: "bash",
       name: "Bash / Shell",
-      detail: toolEnabled(runtimeSnapshot.tools, "bash") ? "可在项目上下文中执行命令" : "运行时尚未返回 shell 工具",
-      enabled: toolEnabled(runtimeSnapshot.tools, "bash"),
+      detail: shellReady ? "可在项目上下文中执行命令" : "运行时尚未返回 shell 工具",
+      enabled: shellReady,
+      statusLabel: shellReady ? "已加载" : "未加载",
       icon: <SquareTerminal aria-hidden="true" />
     },
     {
       id: "files",
       name: "本地文件读写",
-      detail: ["read", "write", "edit", "ls"].every((name) => toolEnabled(runtimeSnapshot.tools, name))
+      detail: fileToolsReady
         ? "读取、写入、编辑、目录浏览已就绪"
         : "基础文件工具未全部加载",
-      enabled: ["read", "write", "edit", "ls"].every((name) => toolEnabled(runtimeSnapshot.tools, name)),
+      enabled: fileToolsReady,
+      statusLabel: fileToolsReady ? "已加载" : "未加载",
       icon: <HardDrive aria-hidden="true" />
     },
     {
       id: "vision",
       name: "OCR / 图像理解",
-      detail: toolEnabled(runtimeSnapshot.tools, "vision") ? "图像理解工具已开启，模型凭据由企业策略决定" : "等待视觉模型或工具加载",
-      enabled: toolEnabled(runtimeSnapshot.tools, "vision"),
+      detail: ocrReady && visionReady
+        ? "快速 OCR 与图像理解工具已加载"
+        : ocrReady
+          ? "快速 OCR 已加载；复杂图像理解等待模型能力"
+          : visionReady
+            ? "图像理解工具已加载；快速 OCR 等待运行时刷新"
+            : "等待 OCR 或视觉工具加载",
+      enabled: ocrReady || visionReady,
+      statusLabel: ocrReady || visionReady ? "已加载" : "未加载",
       icon: <ImageIcon aria-hidden="true" />
     },
     {
@@ -6727,29 +8647,42 @@ export function App() {
       name: "Image Gen",
       detail: extensionSkillEnabled(runtimeSnapshot, "image-generation") ? "图像生成 Skill 已开启" : "等待开启图像生成 Skill",
       enabled: extensionSkillEnabled(runtimeSnapshot, "image-generation"),
+      statusLabel: extensionSkillEnabled(runtimeSnapshot, "image-generation") ? "已启用" : "未启用",
       icon: <WandSparkles aria-hidden="true" />
+    },
+    {
+      id: "scheduler",
+      name: "定时任务",
+      detail: schedulerToolReady
+        ? `${schedulerStatusLabel()}，${schedulerProjection.taskCount || 0} 个任务`
+        : "定时任务工具未加载",
+      enabled: schedulerToolReady,
+      statusLabel: schedulerProjection.running ? "运行中" : schedulerToolReady ? "工具已加载" : "未加载",
+      icon: <Bell aria-hidden="true" />
     },
     {
       id: "feishu_cli",
       name: "飞书 / Lark CLI",
-      detail: toolEnabled(runtimeSnapshot.tools, "feishu_cli")
+      detail: feishuToolReady
         ? "结构化 feishu_cli 已加载；授权缺失时会引导登录，不走 raw lark-cli"
         : feishuPack?.installed
           ? "能力包已安装，等待结构化工具刷新"
           : "飞书任务会先走结构化 feishu_cli，再按需安装官方 CLI",
-      enabled: toolEnabled(runtimeSnapshot.tools, "feishu_cli"),
+      enabled: feishuToolReady,
+      statusLabel: feishuToolReady ? "已加载" : feishuPack?.installed ? "等待刷新" : "按需安装",
       icon: <Database aria-hidden="true" />,
       pack: feishuPack
     },
     {
       id: "browser",
       name: "Playwright 浏览器",
-      detail: toolEnabled(runtimeSnapshot.tools, "browser")
-        ? "浏览器工具已加载"
+      detail: browserToolReady
+        ? "浏览器工具已加载，CDP 优先并按需 fallback"
         : browserPack?.installed
           ? "能力包已安装，等待运行时刷新"
-          : "首次使用会安装 Playwright 与 Chromium",
-      enabled: toolEnabled(runtimeSnapshot.tools, "browser") || Boolean(browserPack?.installed),
+          : "CDP 优先；Playwright fallback 按需安装",
+      enabled: browserToolReady || Boolean(browserPack?.installed),
+      statusLabel: browserToolReady ? "已加载" : browserPack?.installed ? "等待刷新" : "CDP 优先",
       icon: <Globe2 aria-hidden="true" />,
       pack: browserPack
     },
@@ -6758,23 +8691,28 @@ export function App() {
       name: "项目记忆",
       detail: activeProject ? `写入 ${activeProject.name} 的 .ecorex/project-memory.md` : "通用会话保留原项目内置记忆入口",
       enabled: true,
+      statusLabel: "已开启",
       icon: <Brain aria-hidden="true" />
     }
   ];
   const activeProjectMemoryPath = activeProject?.memoryPath || (activeProject ? `${activeProject.path}\\.ecorex\\project-memory.md` : "");
   const hasPendingAssistantMessage = messages.some(isUiLiveAssistantMessage);
   const visibleMessages = messages.filter((message) => !isSilentPausedAssistantMessage(message));
+  const isNewSessionView = visibleMessages.length === 0 && !hasPendingAssistantMessage;
   const composerHasPayload = Boolean(composerHasText || attachments.length);
-  const sessionRowNeedsReveal = (row: SessionRow) => {
+  const sessionRowNeedsReveal = (row: SessionRow, options?: { includeActive?: boolean }) => {
     const cachedMessages = sessionUiState[row.id]?.messages || [];
-    const isRunning = row.status === "waiting" || row.status === "cancelling" || Boolean(row.requestId) || Boolean(sessionRequestIds[row.id]) || cachedMessages.some(isUiLiveAssistantMessage);
-    return row.id === activeSessionId || isRunning || Boolean(unreadSessionIds[row.id]) || Boolean(searchQuery.trim());
+    const isRunning = row.status === "waiting" || row.status === "cancelling" || Boolean(row.requestId) || Boolean(sessionRequestIds[row.id]) || cachedMessages.some((message) => Boolean(message.recovery) || isUiLiveAssistantMessage(message));
+    return (options?.includeActive !== false && row.id === activeSessionId)
+      || isRunning
+      || Boolean(unreadSessionIds[row.id])
+      || Boolean(searchQuery.trim());
   };
   const projectsForceRevealed = projectSessionGroups.some(({ project, sessions }) => (
-    project.id === activeProjectId || sessions.some(sessionRowNeedsReveal)
+    project.id === activeProjectId || sessions.some((row) => sessionRowNeedsReveal(row))
   ));
   const projectsSectionCollapsed = sidebarCollapse.projectsSection && !projectsForceRevealed && !searchQuery.trim();
-  const generalForceRevealed = generalSessions.some(sessionRowNeedsReveal);
+  const generalForceRevealed = generalSessions.some((row) => sessionRowNeedsReveal(row, { includeActive: false }));
   const generalSessionsCollapsed = sidebarCollapse.generalSessions && !generalForceRevealed && !searchQuery.trim();
   const currentComposerPermissionMode: PermissionMode = permissionState?.mode || "smart-ask";
   const releaseNotes = runtimeSnapshot.releaseNotes;
@@ -6782,6 +8720,8 @@ export function App() {
     { id: "account", label: "账号", icon: <UserRound aria-hidden="true" /> },
     { id: "projects", label: "项目", icon: <FolderOpen aria-hidden="true" /> },
     { id: "abilities", label: "能力", icon: <Sparkles aria-hidden="true" /> },
+    { id: "external-connections", label: "外部连接", icon: <Globe2 aria-hidden="true" /> },
+    { id: "scheduler", label: "定时", icon: <Bell aria-hidden="true" /> },
     { id: "permissions", label: "权限", icon: <ShieldCheck aria-hidden="true" /> },
     { id: "memory", label: "记忆", icon: <Brain aria-hidden="true" /> },
     { id: "diagnostics", label: "诊断", icon: <Database aria-hidden="true" /> }
@@ -6853,20 +8793,23 @@ export function App() {
             );
           })}
           {runCenterStaleLocks.map((lock, index) => (
-            <article className="run-center-row is-stale" key={`${lock.path || lock.session_id || "lock"}-${index}`}>
+            <article className="run-center-row is-stale" key={staleLockKey(lock, index)}>
               <div className="run-center-row-main">
                 <span className="run-center-state">Stale</span>
-                <strong>{lock.session_id || "session lock"}</strong>
-                <small>{lock.removed ? "removed" : lock.dead_owner ? "dead owner" : "stale"}{formatRunAge(lock.age_seconds) ? ` · ${formatRunAge(lock.age_seconds)}` : ""}</small>
+                <strong>{staleLockDisplayName(lock)}</strong>
+                <small>{staleLockStatusLabel(lock)}</small>
               </div>
-              {lock.session_id && (
-                <div className="run-center-actions">
-                  <button type="button" onClick={() => void openRunCenterStaleLockSession(lock, { closeSurface: surface === "primary" })} title="Open session">
-                    <FolderOpen aria-hidden="true" />
-                    Open
-                  </button>
-                </div>
-              )}
+              <div className="run-center-actions">
+                <button
+                  type="button"
+                  onClick={() => void openRunCenterStaleLockSession(lock, { closeSurface: surface === "primary" })}
+                  disabled={!canOpenStaleLockSession(lock)}
+                  title={canOpenStaleLockSession(lock) ? "Open session" : "Stale lock session id is redacted"}
+                >
+                  <FolderOpen aria-hidden="true" />
+                  Open
+                </button>
+              </div>
             </article>
           ))}
           {!runCenterRequests.length && !runCenterStaleLocks.length && (
@@ -6879,22 +8822,30 @@ export function App() {
 
   const renderSessionRow = (row: SessionRow) => {
     const cachedMessages = sessionUiState[row.id]?.messages || [];
-    const isRunning = row.status === "waiting" || row.status === "cancelling" || Boolean(row.requestId) || Boolean(sessionRequestIds[row.id]) || cachedMessages.some(isUiLiveAssistantMessage) || (row.id === activeSessionId && hasPendingAssistantMessage);
+    const rowProjectId = row.projectId || null;
+    const isRunning = row.status === "waiting" || row.status === "cancelling" || Boolean(row.requestId) || Boolean(sessionRequestIds[row.id]) || cachedMessages.some((message) => Boolean(message.recovery) || isUiLiveAssistantMessage(message)) || (row.id === activeSessionId && hasPendingAssistantMessage);
     const isActive = row.id === activeSessionId;
     const hasUnread = Boolean(unreadSessionIds[row.id]) && !isActive && !isRunning;
+    const hasLeadingSessionStatus = isRunning || hasUnread;
     const waitingReply = isActive && Boolean(approval);
     const rowTitle = [row.title, row.detail, formatTime(row.updatedAt)].filter(Boolean).join("\n");
     return (
-      <article className={`session-row is-${isRunning ? "waiting" : row.status}${isActive ? " is-active" : ""}${waitingReply ? " is-awaiting-reply" : ""}${hasUnread ? " is-unread" : ""}`} key={row.id}>
+      <article
+        className={`session-row is-${isRunning ? "waiting" : row.status}${isActive ? " is-active" : ""}${waitingReply ? " is-awaiting-reply" : ""}${hasUnread ? " is-unread" : ""}`}
+        key={row.id}
+        draggable={false}
+        data-session-ownership={rowProjectId ? "project" : "general"}
+        onDragStart={(event) => event.preventDefault()}
+      >
         <button
-          className="session-main"
+          className={`session-main${hasLeadingSessionStatus ? " has-leading-status" : ""}`}
           type="button"
           onClick={() => void selectSession(row)}
           title={rowTitle}
           data-tooltip={rowTitle}
           aria-current={isActive ? "page" : undefined}
         >
-          {isRunning ? <ThinkingIndicator compact /> : hasUnread ? <span className="session-unread-dot" aria-hidden="true" /> : row.projectId ? <FolderOpen aria-hidden="true" /> : <Bot aria-hidden="true" />}
+          {isRunning ? <ThinkingIndicator compact /> : hasUnread ? <span className="session-unread-dot" aria-hidden="true" /> : null}
           <span className="session-line"><strong>{row.title}</strong>{row.detail ? <small>{row.detail}</small> : null}</span>
           <em>{waitingReply ? <span className="session-waiting-reply">等待回复</span> : formatTime(row.updatedAt)}</em>
         </button>
@@ -6909,6 +8860,26 @@ export function App() {
     );
   };
 
+  function renderMessageRunTiming(message: ChatItem) {
+    const label = messageRunTimingLabel(message);
+    if (!label) return null;
+    const hasProcessDisclosure = Boolean((message.steps || []).length || (message.toolCalls || []).length || message.reasoning?.trim());
+    if (hasProcessDisclosure) return null;
+    return <div className="message-run-timing"><CheckCircle2 aria-hidden="true" />{label}</div>;
+  }
+
+  function messageRunTimingLabel(message: ChatItem) {
+    if (message.role !== "assistant" || !message.runTiming?.startedAtMs) return null;
+    const elapsed = formatRunAge(chatRunTimingElapsedSeconds(message.runTiming, runClockTick));
+    if (!elapsed) return null;
+    const state = String(message.runTiming.state || "").toLowerCase();
+    if (message.pending) return `已处理 ${elapsed}`;
+    if (message.cancelled || state === "cancelled") return `已处理 ${elapsed} 后已中止`;
+    if (state === "failed" || state === "error") return `已处理 ${elapsed} 后失败`;
+    if (state === "interrupted") return `已处理 ${elapsed} 后中断`;
+    return `已在 ${elapsed} 内达成目标`;
+  }
+
   function renderRecoveryActions(message: ChatItem, sessionId: string) {
     const recovery = message.recovery;
     const requestId = recovery?.requestId || message.requestId || "";
@@ -6922,6 +8893,9 @@ export function App() {
       return <div className="message-recovery-actions"><span>{label}</span></div>;
     }
     if (!recovery) return null;
+    if (recovery.kind === "reconnecting") {
+      return <div className="message-recovery-actions is-reconnecting ecorex-activity-status"><span>{recovery.message}</span></div>;
+    }
     const canReconnect = Boolean(requestId && (message.pending || message.visibleOutputSettled));
     const showStop = Boolean(requestId && (message.pending || message.visibleOutputSettled || recovery.stopAllowed));
     return (
@@ -6999,7 +8973,7 @@ export function App() {
           ) : (
             <div className="project-list">
               {projectSessionGroups.slice(0, 8).map(({ project, sessions }) => {
-                const forceRevealGroup = project.id === activeProjectId || sessions.some(sessionRowNeedsReveal);
+                const forceRevealGroup = project.id === activeProjectId || sessions.some((row) => sessionRowNeedsReveal(row));
                 const groupCollapsed = Boolean(sidebarCollapse.projectGroups[project.id]) && !forceRevealGroup && !searchQuery.trim();
                 return (
                 <article className={`project-group ${project.id === activeProjectId ? "is-active" : ""}${groupCollapsed ? " is-collapsed" : ""}`} key={project.id}>
@@ -7070,7 +9044,7 @@ export function App() {
         if (!project) return null;
         const isPinned = Boolean(pinnedProjects[project.id] || project.pinned);
         return (
-          <div className="context-menu" style={fixedMenuStyle(projectMenu.x, projectMenu.y, 230, 152)} onMouseLeave={() => setProjectMenu(null)}>
+          <div className="context-menu" ref={projectMenuRef} style={fixedMenuStyle(projectMenu.x, projectMenu.y, 230, 152)}>
             <button type="button" onClick={() => openProjectInExplorer(project)}><FolderInput aria-hidden="true" />在资源管理器打开</button>
             <button type="button" onClick={() => { togglePinProject(project); setProjectMenu(null); }}>
               {isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}{isPinned ? "取消置顶项目" : "置顶项目"}
@@ -7082,7 +9056,7 @@ export function App() {
       })()}
 
       {chatFileMenu && (
-        <div className="context-menu chat-file-context-menu" style={fixedMenuStyle(chatFileMenu.x, chatFileMenu.y, 230, 84)} onMouseLeave={() => setChatFileMenu(null)}>
+        <div className="context-menu chat-file-context-menu" ref={chatFileMenuRef} style={fixedMenuStyle(chatFileMenu.x, chatFileMenu.y, 230, 84)}>
           <button type="button" disabled={!chatFileMenu.canAdd} title={chatFileMenu.disabledReason || "添加到当前聊天"} onClick={() => void addFileToCurrentChat(chatFileMenu.file)}>
             <Paperclip aria-hidden="true" />添加到当前聊天
           </button>
@@ -7092,7 +9066,7 @@ export function App() {
         </div>
       )}
 
-      <section className="chat-pane">
+      <section className={`chat-pane${isNewSessionView ? " is-new-session" : ""}`}>
         <header className="chat-header">
           <div>
             <h1>{activeSessionTitle}</h1>
@@ -7100,6 +9074,9 @@ export function App() {
           </div>
           <div className="chat-status">
             <span title={runtimeSnapshot.message}><Bot aria-hidden="true" />{runtimeSnapshot.status === "ready" ? "运行时已连接" : "等待运行时"}</span>
+            {activeRuntimeElapsed && (
+              <span className="chat-run-timing" title={`当前任务已处理 ${activeRuntimeElapsed}`}><Activity aria-hidden="true" />已处理 {activeRuntimeElapsed}</span>
+            )}
             <span title="当前企业账号"><CheckCircle2 aria-hidden="true" />{session.user.email}</span>
             <button
               className="icon-button"
@@ -7126,52 +9103,121 @@ export function App() {
 
         <div className="message-list" ref={messageListRef} onScroll={updateJumpLatestState}>
           {visibleMessages.length === 0 ? (
-            <div className="empty-chat">
-              <BrandMark />
-              <strong>{activeProject ? activeProject.name : "可以直接开始"}</strong>
-              <span>{activeProject ? "你可以把任何文件/图片/视频 参考扔到项目文件夹内 我会基于项目文件夹上下文回答你。" : "粘贴图片或文件，输入需求，EcoreX 会在需要能力包或权限时先确认。"}</span>
+            <div className="empty-chat new-session-start">
+              <h2>{NEW_SESSION_START_TITLE}</h2>
+              <span>{activeProject ? `${activeProject.name} 项目会话` : "选择一个开始方式"}</span>
+              <div className="new-session-actions" aria-label="新会话入口">
+                <button className={`new-session-option${!activeProject ? " is-selected" : ""}`} type="button" onClick={() => startNewSession(null)} title="从通用会话开始" aria-pressed={!activeProject}>
+                  <Bot aria-hidden="true" />
+                  <strong>通用会话</strong>
+                  <small>不绑定项目，适合临时问答、资料整理和轻量任务。</small>
+                </button>
+                <div className="new-session-project-picker" ref={projectStartMenuRef}>
+                  <button
+                    className={`new-session-option${activeProject ? " is-selected" : ""}`}
+                    type="button"
+                    onClick={() => setProjectStartMenuOpen((open) => !open)}
+                    disabled={projectPickerBusy}
+                    aria-busy={projectPickerBusy}
+                    aria-expanded={projectStartMenuOpen}
+                    aria-haspopup="menu"
+                    title={projectPickerBusy ? "正在选择项目文件夹" : "选择已有项目或导入新文件夹"}
+                    aria-pressed={Boolean(activeProject)}
+                  >
+                    <FolderOpen aria-hidden="true" />
+                    <strong>{projectPickerBusy ? "选择中" : activeProject ? activeProject.name : "项目文件夹"}</strong>
+                    <small>选择已有项目，或导入新文件夹作为本次项目会话上下文。</small>
+                  </button>
+                  {projectStartMenuOpen && (
+                    <div className="new-session-project-menu" role="menu" aria-label="选择项目开始">
+                      <label className="project-start-search" title="搜索项目">
+                        <Search aria-hidden="true" />
+                        <input value={projectStartSearch} onChange={(event) => setProjectStartSearch(event.target.value)} placeholder="搜索项目" autoFocus />
+                      </label>
+                      <div className="project-start-list">
+                        {projectStartMatches.length ? projectStartMatches.map((project) => (
+                          <button key={project.id} type="button" role="menuitem" onClick={() => startProjectFromWelcome(project)} title={`${project.name}\n${project.path}`}>
+                            <FolderOpen aria-hidden="true" />
+                            <span><strong>{project.name}</strong><small>{project.path}</small></span>
+                            {project.id === activeProjectId && <CheckCircle2 aria-hidden="true" />}
+                          </button>
+                        )) : (
+                          <div className="project-start-empty">没有匹配的项目</div>
+                        )}
+                      </div>
+                      <div className="project-start-actions">
+                        <button type="button" role="menuitem" onClick={() => void addProject()} disabled={projectPickerBusy} aria-busy={projectPickerBusy}>
+                          <FolderPlus aria-hidden="true" />
+                          <span>导入新文件夹</span>
+                        </button>
+                        <button type="button" role="menuitem" onClick={() => startNewSession(null)}>
+                          <FolderX aria-hidden="true" />
+                          <span>不使用项目</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+              <p className="new-session-helper">
+                {activeProject
+                  ? `将从 ${activeProject.name} 的项目文件夹开始，旧项目会话不会被自动复用。`
+                  : "将从不绑定项目的通用会话开始，不会串入项目文件夹上下文。"}
+              </p>
             </div>
           ) : (
             visibleMessages.map((message) => {
               const messageSessionId = activeSessionId;
+              const messageFiles = message.attachments || [];
+              const hasMessageFiles = messageFiles.length > 0;
+              const messageFileList = hasMessageFiles ? (
+                <div className="message-files">
+                  {messageFiles.map((file) => {
+                    const previewUrl = attachmentPreviewUrl(file);
+                    const openLabel = `点击在本地打开 ${file.file_name}`;
+                    return (
+                      <button key={file.file_path} onClick={() => void openArtifactFile(file, messageSessionId)} onContextMenu={(event) => showChatFileMenu(event, file)} title={openLabel} aria-label={openLabel}>
+                        {previewUrl ? <img src={previewUrl} alt={file.file_name} loading="lazy" /> : fileIcon(file)}<span>{file.file_name}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null;
               return (
-              <article className={`message ${message.role}`} key={message.id}>
+              <article className={`message ${message.role}${hasMessageFiles ? " has-files" : ""}`} key={message.id}>
                 <div className="message-body">
-                  <button
-                    type="button"
-                    className="message-copy-button"
-                    onClick={() => void copyMessageText(message)}
-                    title={copiedMessageId === message.id ? "已复制" : "复制文本"}
-                    aria-label={copiedMessageId === message.id ? "已复制" : "复制文本"}
-                  >
-                    <Copy aria-hidden="true" />
-                  </button>
-                  <MessageContent
-                    role={message.role}
-                    content={message.content}
-                    pending={message.pending}
-                    paused={message.paused}
-                    cancelled={message.cancelled}
-                    reasoning={message.reasoning}
-                    steps={message.steps}
-                    toolCalls={message.toolCalls}
-                    artifacts={message.artifacts}
-                    onOpenLocalFile={handleOpenMessageLocalFile}
-                    localFilePreviewUrl={messageLocalFilePreviewUrl}
-                    localFileJson={messageLocalJson}
-                    localFileStat={messageLocalFileStat}
-                    onLocalFileContextMenu={showChatFileMenu}
-                  />
-                  {message.attachments?.length ? (
-                    <div className="message-files">
-                      {message.attachments.map((file) => (
-                        <button key={file.file_path} onClick={() => void openArtifactFile(file, messageSessionId)} onContextMenu={(event) => showChatFileMenu(event, file)} title="点击在本地打开">
-                          {attachmentPreviewUrl(file) ? <img src={attachmentPreviewUrl(file)} alt={file.file_name} loading="lazy" /> : fileIcon(file)}<span>{file.file_name}</span>
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                  {renderRecoveryActions(message, messageSessionId)}
+                  {message.role === "user" ? messageFileList : null}
+                  <div className={message.role === "user" ? "message-text-bubble" : "message-content-shell"}>
+                    <button
+                      type="button"
+                      className="message-copy-button"
+                      onClick={() => void copyMessageText(message)}
+                      title={copiedMessageId === message.id ? "已复制" : "复制文本"}
+                      aria-label={copiedMessageId === message.id ? "已复制" : "复制文本"}
+                    >
+                      <Copy aria-hidden="true" />
+                    </button>
+                    <MessageContent
+                      role={message.role}
+                      content={message.content}
+                      pending={message.pending}
+                      paused={message.paused}
+                      cancelled={message.cancelled}
+                      reasoning={message.reasoning}
+                      steps={message.steps}
+                      toolCalls={message.toolCalls}
+                      artifacts={message.artifacts}
+                      runTimingLabel={messageRunTimingLabel(message) || undefined}
+                      onOpenLocalFile={handleOpenMessageLocalFile}
+                      localFilePreviewUrl={messageLocalFilePreviewUrl}
+                      localFileJson={messageLocalJson}
+                      localFileStat={messageLocalFileStat}
+                      onLocalFileContextMenu={showChatFileMenu}
+                    />
+                    {message.role !== "user" ? messageFileList : null}
+                    {renderRecoveryActions(message, messageSessionId)}
+                    {renderMessageRunTiming(message)}
+                  </div>
                 </div>
               </article>
               );
@@ -7204,7 +9250,7 @@ export function App() {
                     ) : (
                       <>
                         <button className="primary-action" onClick={() => void handleInstallPack(approval.pack)}>
-                          {approval.pack.discoveryOnly ? "用 find skill" : "安装并继续"}
+                          {isConfigureOnlyCapability(approval.pack) ? "配置检查" : approval.pack.discoveryOnly ? "用 find skill" : "安装并继续"}
                         </button>
                         <button onClick={() => { setApproval(null); approval.resume(); }}>跳过继续</button>
                       </>
@@ -7381,7 +9427,7 @@ export function App() {
             <header>
               <div>
                 <h2>设置</h2>
-                <span>账号、项目、能力、权限、记忆和诊断</span>
+                <span>账号、项目、能力、外部连接、权限、记忆和诊断</span>
               </div>
               <button className="icon-button" title="关闭设置" aria-label="关闭设置" onClick={() => setSettingsOpen(false)}><X aria-hidden="true" /></button>
             </header>
@@ -7467,68 +9513,265 @@ export function App() {
                         <article key={ability.id} className={ability.enabled ? "is-ready" : "is-waiting"}>
                           {ability.icon}
                           <div><strong>{ability.name}</strong><span>{ability.detail}</span></div>
-                          {"pack" in ability && ability.pack && !ability.enabled ? (
+                          {"pack" in ability && ability.pack && !ability.enabled && !ability.pack.installed ? (
                             <button disabled={Boolean(installingPackIds[ability.pack.id])} onClick={() => void handleInstallPack(ability.pack!)}>
                               {packActionLabel(ability.pack, Boolean(installingPackIds[ability.pack.id]))}
                             </button>
-                          ) : <em>{ability.enabled ? "已开启" : "待配置"}</em>}
+                          ) : <em>{ability.statusLabel}</em>}
                         </article>
                       ))}
                     </div>
                     <div className="skill-toggle-list">
-                      <div className="toggle-list-head"><strong>Skill 生效开关</strong><span>可在聊天框用 @ 提及，关闭后不参与调用</span></div>
-                      <div className="skill-category-heading"><strong>可 @ 提及</strong><span>{mentionableSkillRows.length}</span></div>
-                      {mentionableSkillRows.map((skill) => {
-                        const name = skill.name || "";
-                        const enabled = skill.enabled;
-                        return (
-                          <label key={skill.key} className={`toggle-row${skill.toggleable ? "" : " is-readonly"}`} title={skill.path || skill.source || name}>
-                            <input type="checkbox" checked={enabled} disabled={!skill.toggleable} onChange={(event) => void toggleRuntimeSkill(skill, event.currentTarget.checked)} />
-                            <span><strong>{skill.displayName || name || "未命名 Skill"}</strong><small>{[skill.origin || skill.source || "skill", skill.status || (enabled ? "ready" : "disabled"), skill.policy].filter(Boolean).join(" · ")}</small></span>
-                            <em>{enabled ? "已启用" : "已关闭"}</em>
-                          </label>
-                        );
-                      })}
-                      {backgroundSkillRows.length > 0 && (
-                        <details className="skill-background-details">
-                          <summary><strong>后台 / CLI 辅助</strong><span>{backgroundSkillRows.length}</span></summary>
-                          {backgroundSkillRows.map((skill) => {
-                            const name = skill.name || "";
-                            const enabled = skill.enabled;
-                            return (
-                              <label key={skill.key} className={`toggle-row${skill.toggleable ? "" : " is-readonly"}`} title={skill.path || skill.source || name}>
-                                <input type="checkbox" checked={enabled} disabled={!skill.toggleable} onChange={(event) => void toggleRuntimeSkill(skill, event.currentTarget.checked)} />
-                                <span><strong>{skill.displayName || name || "未命名 Skill"}</strong><small>{[skill.mentionHiddenReason, skill.origin || skill.source || "skill", skill.status || (enabled ? "ready" : "disabled"), skill.policy].filter(Boolean).join(" · ")}</small></span>
-                                <em>{enabled ? "已启用" : "已关闭"}</em>
-                              </label>
-                            );
-                          })}
-                        </details>
-                      )}
+                      <div className="toggle-list-head"><strong>Skill</strong><span>{skillDisplayRows.length}</span></div>
+                      {skillSourceSections.map((section) => (
+                        <section key={section.sourceGroup} className="skill-source-section">
+                          <div className="skill-source-heading"><strong>{section.label}</strong><span>{section.count}</span></div>
+                          {section.purposeGroups.map((group) => (
+                            <div key={`${section.sourceGroup}-${group.purposeGroup}`} className="skill-purpose-group">
+                              <div className="skill-category-heading"><strong>{group.label}</strong><span>{group.items.length}</span></div>
+                              {group.items.map((skill) => {
+                                const name = skill.name || "";
+                                const enabled = skill.enabled;
+                                const statusText = skill.locked
+                                  ? skill.lockReason || "内置能力默认启用"
+                                  : enabled
+                                    ? "已启用"
+                                    : "已关闭";
+                                const meta = [
+                                  skill.sourceLabel,
+                                  skill.mentionable ? "@可提及" : skill.mentionHiddenReason || "后台触发",
+                                  skill.status || (enabled ? "ready" : "disabled"),
+                                  skill.policy
+                                ].filter(Boolean).join(" · ");
+                                return (
+                                  <label key={skill.key} className={`toggle-row${skill.toggleable ? "" : " is-readonly"}`} title={skill.path || skill.source || name}>
+                                    <input type="checkbox" checked={enabled} disabled={!skill.toggleable} onChange={(event) => void toggleRuntimeSkill(skill, event.currentTarget.checked)} />
+                                    <span><strong>{skill.displayName || name || "未命名 Skill"}</strong><small>{meta}</small></span>
+                                    <em>{statusText}</em>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          ))}
+                        </section>
+                      ))}
                       {!skillDisplayRows.length && <div className="session-empty">运行时暂未返回 Skill 列表</div>}
                     </div>
                     <div className="pack-list">
                       {packs.map((pack) => (
                         <article key={pack.id}>
                           <label className="pack-toggle" title="控制该能力包是否参与自动触发；安装状态不会被删除">
-                            <input type="checkbox" checked={capabilityPackEnabled(pack.id)} onChange={(event) => toggleCapabilityPack(pack, event.currentTarget.checked)} />
+                            <input
+                              type="checkbox"
+                              checked={capabilityPackEnabled(pack.id)}
+                              disabled={isDefaultReadOnlyCapability(pack)}
+                              onChange={(event) => toggleCapabilityPack(pack, event.currentTarget.checked)}
+                            />
                             <span>生效</span>
                           </label>
                           <div>
                             <strong>{pack.name}</strong>
-                            <span>{installingPackIds[pack.id] ? `${packActionLabel(pack, true)}，请稍候` : pack.message}</span>
+                            <span>{installingPackIds[pack.id] ? `${packActionLabel(pack, true)}，请稍候` : isDefaultReadOnlyCapability(pack) ? `默认只读 · ${pack.message}` : pack.message}</span>
                           </div>
                           <button disabled={pack.installed || pack.policyMode === "disabled" || Boolean(installingPackIds[pack.id])} onClick={() => void handleInstallPack(pack)}>
                             {installingPackIds[pack.id]
                               ? packActionLabel(pack, true)
                               : pack.installed
-                                ? "已安装"
+                                ? packReadyLabel(pack)
                                 : pack.policyMode === "disabled"
                                   ? "管理员禁用"
                                   : packActionLabel(pack)}
                           </button>
                         </article>
                       ))}
+                    </div>
+                  </section>
+                )}
+
+                {settingsSection === "external-connections" && (
+                  <section className="settings-section">
+                    <div className="settings-section-head">
+                      <strong>外部连接</strong>
+                      <span>{externalConnections.length} 个消息平台；状态来自后端连接投影</span>
+                    </div>
+                    <div className="external-connections-toolbar">
+                      <button
+                        type="button"
+                        className="external-connections-refresh"
+                        onClick={() => void refreshExternalConnections()}
+                        disabled={externalConnectionsBusy}
+                        title="刷新外部连接"
+                      >
+                        <RefreshCw aria-hidden="true" />
+                        刷新
+                      </button>
+                    </div>
+                    <div className="external-connections-grid">
+                      {externalConnections.map((connection) => {
+                        const label = connection.displayName || connection.label?.zh || connection.label?.en || connection.id;
+                        const fields = connection.fields || [];
+                        const cardState = externalConnectionCardState(connection);
+                        const connected = cardState === "connected";
+                        const connectionNotice = externalConnectionNotice(connection);
+                        return (
+                          <article className={`external-connection-card is-${cardState}`} key={connection.id}>
+                            <div className="external-connection-head">
+                              <span className={`connection-logo is-${connection.logo?.key || connection.id}`} aria-hidden="true">
+                                {connection.logo?.fallbackText || label.slice(0, 2)}
+                              </span>
+                              <div>
+                                <strong>{label}</strong>
+                                <small>{externalConnectionDescription(connection, label)}</small>
+                              </div>
+                              <em>{externalConnectionStatusLabel(connection)}</em>
+                            </div>
+                            {connectionNotice ? <div className="external-connection-error">{connectionNotice}</div> : null}
+                            <div className="external-connection-meta">
+                              <span>{connection.configured ? "已配置" : "未配置"}</span>
+                              <span>{externalConnectionConfigLabel(connection)}</span>
+                              <span>{externalConnectionCallableLabel(connection)}</span>
+                            </div>
+                            <div className="external-connection-fields">
+                              {fields.length ? fields.map((field) => (
+                                <label key={field.key}>
+                                  <span>{externalConnectionFieldLabel(field)}</span>
+                                  {field.type === "bool" ? (
+                                    <input
+                                      type="checkbox"
+                                      checked={Boolean(externalConnectionFieldValue(connection, field.key))}
+                                      onChange={(event) => updateExternalConnectionDraft(connection, field.key, event.currentTarget.checked)}
+                                    />
+                                  ) : (
+                                    <input
+                                      type={field.type === "secret" ? "password" : field.type === "number" ? "number" : "text"}
+                                      value={String(externalConnectionFieldValue(connection, field.key) || "")}
+                                      onChange={(event) => updateExternalConnectionDraft(connection, field.key, field.type === "number" ? Number(event.currentTarget.value || 0) : event.currentTarget.value)}
+                                      autoComplete="off"
+                                    />
+                                  )}
+                                </label>
+                              )) : (
+                                <div className="external-connection-empty">该平台使用扫码、授权或运行时状态完成连接</div>
+                              )}
+                            </div>
+                            <div className="external-connection-actions">
+                              {externalConnectionActions(connection, connected).map((action) => {
+                                const disabled = externalConnectionsBusy
+                                  || action.enabled === false
+                                  || (action.id === "save_config" && !fields.length)
+                                  || (action.id === "set_home_channel" && !externalConnectionHomeChannel(connection).id);
+                                return (
+                                  <button
+                                    type="button"
+                                    key={action.id}
+                                    className={`external-connection-action-button is-${externalConnectionActionTone(action.id)}`}
+                                    onClick={() => void applyExternalConnectionAction(connection, action.id)}
+                                    disabled={disabled}
+                                    title={externalConnectionActionLabel(action)}
+                                  >
+                                    {externalConnectionActionIcon(action.id)}
+                                    {externalConnectionActionLabel(action)}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </article>
+                        );
+                      })}
+                      {!externalConnections.length && (
+                        <div className="session-empty">运行时暂未返回外部连接列表</div>
+                      )}
+                    </div>
+                  </section>
+                )}
+
+                {settingsSection === "scheduler" && (
+                  <section className="settings-section">
+                    <div className="settings-section-head">
+                      <strong>定时</strong>
+                      <span>{schedulerStatusLabel()}，{schedulerProjection.taskCount || 0} 个任务；状态来自后端调度投影</span>
+                    </div>
+                    <div className="scheduler-panel" aria-label="定时任务管理">
+                      <div className="scheduler-toolbar">
+                        <div className="scheduler-status">
+                          <Bell aria-hidden="true" />
+                          <span>{schedulerProjection.serviceStatus || "unknown"}</span>
+                          {schedulerProjection.modifyBlockingReason ? <small>{schedulerProjection.modifyBlockingReason}</small> : schedulerProjection.blockingReason ? <small>{schedulerProjection.blockingReason}</small> : null}
+                        </div>
+                        <div className="scheduler-toolbar-actions">
+                          <button type="button" onClick={() => void refreshSchedulerPanel()} disabled={schedulerBusy} title="刷新定时任务投影">
+                            <RefreshCw aria-hidden="true" />
+                            刷新
+                          </button>
+                          {schedulerProjection.running ? (
+                            <button type="button" onClick={() => void applySchedulerAction({ action: "stop" }, "定时服务已停止")} disabled={schedulerBusy || !schedulerCanModify} title={schedulerCanModify ? "停止调度服务" : schedulerProjection.modifyBlockingReason || "当前不可修改定时任务"}>
+                              <Square aria-hidden="true" />
+                              停止
+                            </button>
+                          ) : (
+                            <button type="button" onClick={() => void applySchedulerAction({ action: "start" }, "定时服务已启动")} disabled={schedulerBusy || !schedulerCanModify} title={schedulerCanModify ? "启动调度服务" : schedulerProjection.modifyBlockingReason || "当前不可修改定时任务"}>
+                              <CheckCircle2 aria-hidden="true" />
+                              启动
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <div className="scheduler-stats" aria-label="定时任务统计">
+                        <span>全部 {schedulerProjection.counts?.total || schedulerProjection.taskCount || 0}</span>
+                        <span>启用 {schedulerProjection.counts?.enabled || 0}</span>
+                        <span>暂停 {schedulerProjection.counts?.disabled || 0}</span>
+                        <span>异常 {schedulerProjection.counts?.error || 0}</span>
+                      </div>
+                      <div className="scheduler-task-list">
+                        {schedulerTasks.map((task) => (
+                          <article className={`scheduler-task-row is-${task.state || (task.enabled ? "enabled" : "disabled")}`} key={task.id}>
+                            <div className="scheduler-task-main">
+                              <span className="scheduler-task-state">{task.state || (task.enabled ? "enabled" : "disabled")}</span>
+                              <strong>{task.name || task.id}</strong>
+                              <small>{task.scheduleDescription || "schedule unknown"} · {schedulerTaskActionLabel(task)}</small>
+                              <p>{schedulerTaskDetail(task)}</p>
+                            </div>
+                            <div className="scheduler-task-meta">
+                              <span>下次 {task.nextRunAt ? formatTime(task.nextRunAt) : "未计算"}</span>
+                              <span>上次 {task.lastRunAt ? formatTime(task.lastRunAt) : "暂无"}</span>
+                              {task.lastError ? <span className="is-error" title={task.lastError}>错误 {task.lastError}</span> : null}
+                            </div>
+                            <div className="scheduler-task-actions">
+                              <button type="button" onClick={() => void renameSchedulerTask(task)} disabled={schedulerBusy || !schedulerCanModify} title={schedulerCanModify ? "重命名任务" : schedulerProjection.modifyBlockingReason || "当前不可修改定时任务"}>
+                                <Pencil aria-hidden="true" />
+                                命名
+                              </button>
+                              <button type="button" onClick={() => void editSchedulerTaskCron(task)} disabled={schedulerBusy || !schedulerCanModify} title={schedulerCanModify ? "修改 Cron 表达式" : schedulerProjection.modifyBlockingReason || "当前不可修改定时任务"}>
+                                <RefreshCw aria-hidden="true" />
+                                Cron
+                              </button>
+                              <button type="button" onClick={() => void editSchedulerTaskContent(task)} disabled={schedulerBusy || !schedulerCanModify} title={schedulerCanModify ? "修改任务内容" : schedulerProjection.modifyBlockingReason || "当前不可修改定时任务"}>
+                                <FileText aria-hidden="true" />
+                                内容
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void applySchedulerAction({ action: task.enabled ? "disable" : "enable", task_id: task.id }, task.enabled ? "定时任务已暂停" : "定时任务已启用")}
+                                disabled={schedulerBusy || !schedulerCanModify}
+                                title={schedulerCanModify ? (task.enabled ? "暂停任务" : "启用任务") : schedulerProjection.modifyBlockingReason || "当前不可修改定时任务"}
+                              >
+                                {task.enabled ? <Square aria-hidden="true" /> : <CheckCircle2 aria-hidden="true" />}
+                                {task.enabled ? "暂停" : "启用"}
+                              </button>
+                              <button type="button" onClick={() => window.confirm(`删除定时任务「${task.name || task.id}」？`) && void applySchedulerAction({ action: "delete", task_id: task.id }, "定时任务已删除")} disabled={schedulerBusy || !schedulerCanModify} title={schedulerCanModify ? "删除任务" : schedulerProjection.modifyBlockingReason || "当前不可修改定时任务"}>
+                                <Trash2 aria-hidden="true" />
+                                删除
+                              </button>
+                            </div>
+                          </article>
+                        ))}
+                        {!schedulerTasks.length && (
+                          <div className="scheduler-empty">
+                            <Bell aria-hidden="true" />
+                            <span>暂无定时任务；通过聊天让 agent 创建任务后，这里会显示可管理列表。</span>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </section>
                 )}

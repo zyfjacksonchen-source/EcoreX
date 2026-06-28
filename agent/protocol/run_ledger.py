@@ -73,40 +73,63 @@ class RunLedger:
         now = time.time()
         payload = self._json(metadata or {})
         with self._lock, self._connection() as conn:
-            conn.execute(
-                """
-                INSERT INTO agent_runs (
-                    request_id, session_id, parent_id, run_type, status, phase,
-                    created_at, started_at, updated_at, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(request_id) DO UPDATE SET
-                    session_id=excluded.session_id,
-                    parent_id=excluded.parent_id,
-                    run_type=excluded.run_type,
-                    status=excluded.status,
-                    phase=excluded.phase,
-                    updated_at=excluded.updated_at,
-                    metadata_json=excluded.metadata_json
-                """,
-                (
-                    request_id,
-                    session_id,
-                    parent_id or None,
-                    run_type or "message",
-                    status,
-                    phase or "",
-                    now,
-                    now,
-                    now,
-                    payload,
-                ),
-            )
-            persisted = conn.execute(
-                "SELECT 1 FROM agent_runs WHERE request_id=?",
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT session_id, terminal_at FROM agent_runs WHERE request_id=?",
                 (request_id,),
             ).fetchone()
+            if existing:
+                if str(existing["session_id"] or "") != str(session_id or ""):
+                    conn.rollback()
+                    logger.warning("[RunLedger] rejected request owner rewrite")
+                    return False
+                if existing["terminal_at"] is not None:
+                    conn.commit()
+                    return True
+                conn.execute(
+                    """
+                    UPDATE agent_runs
+                       SET parent_id=?,
+                           run_type=?,
+                           status=?,
+                           phase=?,
+                           updated_at=?,
+                           metadata_json=?
+                     WHERE request_id=?
+                    """,
+                    (
+                        parent_id or None,
+                        run_type or "message",
+                        status,
+                        phase or "",
+                        now,
+                        payload,
+                        request_id,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO agent_runs (
+                        request_id, session_id, parent_id, run_type, status, phase,
+                        created_at, started_at, updated_at, metadata_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        request_id,
+                        session_id,
+                        parent_id or None,
+                        run_type or "message",
+                        status,
+                        phase or "",
+                        now,
+                        now,
+                        now,
+                        payload,
+                    ),
+                )
             conn.commit()
-            return bool(persisted)
+            return True
 
     def mark_phase(
         self,

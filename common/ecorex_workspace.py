@@ -207,6 +207,7 @@ def load_ui_state(workspace: str) -> Dict[str, Any]:
     state.setdefault("schemaVersion", UI_STATE_SCHEMA_VERSION)
     state.setdefault("projects", [])
     state.setdefault("sessionProjects", {})
+    state.setdefault("sessionProjectBindings", {})
     state.setdefault("sessionTitles", {})
     state.setdefault("pinnedSessions", {})
     state.setdefault("pinnedProjects", {})
@@ -334,6 +335,45 @@ def _normalize_session_project_mapping(
     return normalized
 
 
+def _normalize_session_project_bindings(
+    bindings: Any,
+    aliases: Dict[str, str],
+    valid_project_ids: set[str],
+    project_ids_known: bool = False,
+) -> Dict[str, Dict[str, Any]]:
+    if not isinstance(bindings, dict):
+        return {}
+    normalized: Dict[str, Dict[str, Any]] = {}
+    for session_id, raw_binding in bindings.items():
+        session_key = str(session_id or "").strip()
+        if not session_key or not isinstance(raw_binding, dict):
+            continue
+        project_key = str(
+            raw_binding.get("projectId")
+            or raw_binding.get("project_id")
+            or ""
+        ).strip()
+        if not project_key:
+            continue
+        canonical_id = aliases.get(project_key, project_key)
+        if project_ids_known and canonical_id not in valid_project_ids:
+            continue
+        project_path = str(raw_binding.get("projectPath") or raw_binding.get("project_path") or "").strip()
+        memory_path = str(raw_binding.get("memoryPath") or raw_binding.get("memory_path") or "").strip()
+        dreams_path = str(raw_binding.get("dreamsPath") or raw_binding.get("dreams_path") or "").strip()
+        normalized[session_key] = {
+            "projectId": canonical_id,
+            "projectName": str(raw_binding.get("projectName") or raw_binding.get("project_name") or canonical_id).strip(),
+            "projectPath": project_path,
+            "memoryPath": memory_path,
+            "dreamsPath": dreams_path,
+            "createdAt": str(raw_binding.get("createdAt") or raw_binding.get("created_at") or "").strip(),
+            "lastUsedAt": str(raw_binding.get("lastUsedAt") or raw_binding.get("last_used_at") or "").strip(),
+            "source": str(raw_binding.get("source") or "runtime").strip(),
+        }
+    return normalized
+
+
 def _normalize_project_keyed_mapping(
     mapping: Any,
     aliases: Dict[str, str],
@@ -371,6 +411,7 @@ def save_ui_state(workspace: str, incoming: Dict[str, Any]) -> Dict[str, Any]:
         "lastActiveSessionId",
         "projects",
         "sessionProjects",
+        "sessionProjectBindings",
         "sessionTitles",
         "sessionUiState",
         "pinnedSessions",
@@ -430,6 +471,17 @@ def save_ui_state(workspace: str, incoming: Dict[str, Any]) -> Dict[str, Any]:
         normalized_current = _normalize_session_project_mapping(current.get("sessionProjects"), id_aliases, valid_project_ids, project_ids_known)
         if normalized_current != current.get("sessionProjects"):
             incoming["sessionProjects"] = normalized_current
+    if "sessionProjectBindings" in incoming:
+        normalized_current_bindings = _normalize_session_project_bindings(current.get("sessionProjectBindings"), id_aliases, valid_project_ids, project_ids_known)
+        normalized_incoming_bindings = _normalize_session_project_bindings(incoming.get("sessionProjectBindings"), id_aliases, valid_project_ids, project_ids_known)
+        if replace_project_state:
+            incoming["sessionProjectBindings"] = normalized_incoming_bindings
+        else:
+            incoming["sessionProjectBindings"] = _merge_mapping(normalized_current_bindings, normalized_incoming_bindings, prefer_incoming=True)
+    elif id_aliases and current.get("sessionProjectBindings"):
+        normalized_current_bindings = _normalize_session_project_bindings(current.get("sessionProjectBindings"), id_aliases, valid_project_ids, project_ids_known)
+        if normalized_current_bindings != current.get("sessionProjectBindings"):
+            incoming["sessionProjectBindings"] = normalized_current_bindings
     if "pinnedProjects" in incoming:
         normalized_current_pins = _normalize_project_keyed_mapping(current.get("pinnedProjects"), id_aliases, valid_project_ids, project_ids_known)
         normalized_incoming_pins = _normalize_project_keyed_mapping(incoming.get("pinnedProjects"), id_aliases, valid_project_ids, project_ids_known)

@@ -1,0 +1,331 @@
+{
+  "version": "0.2.4",
+  "scenario": "v024-final-release-gate-preflight",
+  "generatedAt": "2026-06-28T14:20:29.454561Z",
+  "status": "PENDING",
+  "complete": false,
+  "redacted": true,
+  "scope": "webui-dual-end",
+  "remainingSlices": [
+    "R24-14B",
+    "R24-15"
+  ],
+  "metrics": {
+    "sliceCount": 20,
+    "artifactCount": 9,
+    "blockerCount": 8,
+    "completedPassSliceCount": 18
+  },
+  "sliceStates": [
+    {
+      "id": "R24-00",
+      "acceptanceStatus": "PASS",
+      "reviewStatus": "PASS",
+      "requiredNow": true,
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R24-01",
+      "acceptanceStatus": "PASS",
+      "reviewStatus": "PASS",
+      "requiredNow": true,
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R24-01B",
+      "acceptanceStatus": "PASS",
+      "reviewStatus": "PASS",
+      "requiredNow": true,
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R24-02",
+      "acceptanceStatus": "PASS",
+      "reviewStatus": "PASS",
+      "requiredNow": true,
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R24-02A",
+      "acceptanceStatus": "PASS",
+      "reviewStatus": "PASS",
+      "requiredNow": true,
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R24-03",
+      "acceptanceStatus": "PASS",
+      "reviewStatus": "PASS",
+      "requiredNow": true,
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R24-04",
+      "acceptanceStatus": "PASS",
+      "reviewStatus": "PASS",
+      "requiredNow": true,
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R24-05",
+      "acceptanceStatus": "PASS",
+      "reviewStatus": "PASS",
+      "requiredNow": true,
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R24-06",
+      "acceptanceStatus": "PASS",
+      "reviewStatus": "PASS",
+      "requiredNow": true,
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R24-07",
+      "acceptanceStatus": "PASS",
+      "reviewStatus": "PASS",
+      "requiredNow": true,
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R24-08",
+      "acceptanceStatus": "PASS",
+      "reviewStatus": "PASS",
+      "requiredNow": true,
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R24-09",
+      "acceptanceStatus": "PASS",
+      "reviewStatus": "PASS",
+      "requiredNow": true,
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R24-10",
+      "acceptanceStatus": "PASS",
+      "reviewStatus": "PASS",
+      "requiredNow": true,
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R24-11",
+      "acceptanceStatus": "PASS",
+      "reviewStatus": "PASS",
+      "requiredNow": true,
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R24-12",
+      "acceptanceStatus": "PASS",
+      "reviewStatus": "PASS",
+      "requiredNow": true,
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R24-13",
+      "acceptanceStatus": "PASS",
+      "reviewStatus": "PASS",
+      "requiredNow": true,
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R24-14",
+      "acceptanceStatus": "PASS",
+      "reviewStatus": "PASS",
+      "requiredNow": true,
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R24-14A",
+      "acceptanceStatus": "PASS",
+      "reviewStatus": "PASS",
+      "requiredNow": true,
+      "finalRequired": false,
+      "ok": true
+    },
+    {
+      "id": "R24-14B",
+      "acceptanceStatus": "IN PROGRESS",
+      "reviewStatus": "IN PROGRESS",
+      "requiredNow": false,
+      "finalRequired": true,
+      "ok": false
+    },
+    {
+      "id": "R24-15",
+      "acceptanceStatus": "PENDING",
+      "reviewStatus": "PENDING",
+      "requiredNow": false,
+      "finalRequired": true,
+      "ok": false
+    }
+  ],
+  "artifactStates": [
+    {
+      "id": "release-contract",
+      "slice": "R24-14B",
+      "source": "docs/v0.2.4/artifacts/r24-14b-release-contract-check.json",
+      "status": "PASS",
+      "expectedStatus": "PASS",
+      "allowedStatuses": [
+        "PASS"
+      ],
+      "clean": true
+    },
+    {
+      "id": "imagegen-fake-overhead",
+      "slice": "R24-14B",
+      "source": "docs/v0.2.4/artifacts/imagegen-efficiency-benchmark-fake.json",
+      "status": "PASS",
+      "expectedStatus": "PASS",
+      "allowedStatuses": [
+        "PASS"
+      ],
+      "clean": true
+    },
+    {
+      "id": "imagegen-real-preflight",
+      "slice": "R24-14B",
+      "source": "docs/v0.2.4/artifacts/imagegen-efficiency-real-preflight.json",
+      "status": "BLOCKED",
+      "expectedStatus": "BLOCKED",
+      "allowedStatuses": [
+        "BLOCKED",
+        "PASS"
+      ],
+      "clean": true
+    },
+    {
+      "id": "imagegen-real-benchmark",
+      "slice": "R24-14B",
+      "source": "docs/v0.2.4/artifacts/imagegen-efficiency-real-blocked.json",
+      "status": "BLOCKED",
+      "expectedStatus": "PASS",
+      "allowedStatuses": [
+        "PASS"
+      ],
+      "clean": false
+    },
+    {
+      "id": "imagegen-codex-result",
+      "slice": "R24-14B",
+      "source": "docs/v0.2.4/artifacts/imagegen-efficiency-codex-result.json",
+      "status": "missing",
+      "expectedStatus": "PASS",
+      "allowedStatuses": [
+        "PASS"
+      ],
+      "clean": false
+    },
+    {
+      "id": "imagegen-benchmark-privacy",
+      "slice": "R24-14B",
+      "source": "docs/v0.2.4/artifacts/imagegen-efficiency-benchmark-privacy.json",
+      "status": "success",
+      "expectedStatus": "success",
+      "allowedStatuses": [
+        "success"
+      ],
+      "clean": true
+    },
+    {
+      "id": "visual-analysis-speed",
+      "slice": "R24-14",
+      "source": "docs/v0.2.4/artifacts/image-visual-analysis-speed-optimized.json",
+      "status": "PASS",
+      "expectedStatus": "PASS",
+      "allowedStatuses": [
+        "PASS"
+      ],
+      "clean": true
+    },
+    {
+      "id": "streaming-markdown",
+      "slice": "R24-14A",
+      "source": "docs/v0.2.4/artifacts/streaming-markdown-browser-smoke.json",
+      "status": "PASS",
+      "expectedStatus": "PASS",
+      "allowedStatuses": [
+        "PASS"
+      ],
+      "clean": true
+    },
+    {
+      "id": "streaming-markdown-privacy",
+      "slice": "R24-14A",
+      "source": "docs/v0.2.4/artifacts/streaming-markdown-privacy.json",
+      "status": "success",
+      "expectedStatus": "success",
+      "allowedStatuses": [
+        "success"
+      ],
+      "clean": true
+    }
+  ],
+  "blockers": [
+    {
+      "id": "r24-14b-final-pass-not-earned",
+      "slice": "R24-14B",
+      "status": "IN PROGRESS"
+    },
+    {
+      "id": "r24-14b-final-review-not-pass",
+      "slice": "R24-14B",
+      "status": "IN PROGRESS"
+    },
+    {
+      "id": "r24-15-final-consensus-not-pass",
+      "slice": "R24-15",
+      "status": "PENDING/PENDING"
+    },
+    {
+      "id": "artifact-not-clean-imagegen-real-benchmark",
+      "slice": "R24-14B",
+      "status": "BLOCKED"
+    },
+    {
+      "id": "artifact-not-clean-imagegen-codex-result",
+      "slice": "R24-14B",
+      "status": "missing"
+    },
+    {
+      "id": "r24-14b-real-ecorex-provider-timing-missing",
+      "slice": "R24-14B",
+      "status": "pending"
+    },
+    {
+      "id": "r24-14b-codex-same-prompt-comparison-missing",
+      "slice": "R24-14B",
+      "status": "pending"
+    },
+    {
+      "id": "r24-14b-real-case-results-missing",
+      "slice": "R24-14B",
+      "status": "pending"
+    }
+  ],
+  "nextRequiredEvidence": [
+    "Run the real EcoreX image provider benchmark with configured provider credentials.",
+    "Produce docs/v0.2.4/artifacts/imagegen-efficiency-codex-result.json from the same-prompt Codex imagegen timing run and merge it by caseId.",
+    "Apply any data-driven EcoreX controllable-overhead optimization that the real comparison exposes.",
+    "Run final R24-15 multi-agent release consensus after R24-14B is PASS."
+  ]
+}

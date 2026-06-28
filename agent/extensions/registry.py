@@ -18,7 +18,7 @@ from channel.channel_catalog import (
     CHANNEL_CATALOG,
     active_channel_set,
     channel_config_refs,
-    channel_has_config,
+    channel_observability,
 )
 
 
@@ -33,6 +33,7 @@ class ExtensionRegistry:
 
     def list_extensions(self) -> Dict[str, Any]:
         entries: List[ExtensionEntry] = []
+        entries.extend(self._first_party_tools())
         entries.extend(self._skills())
         entries.extend(self._channels())
         entries.extend(self._optional_abilities())
@@ -69,10 +70,72 @@ class ExtensionRegistry:
         except Exception:
             return str(value or "")
 
+    @staticmethod
+    def _agent_tool_names() -> set:
+        try:
+            from agent.tools.tool_manager import ToolManager
+
+            manager = ToolManager()
+            if not getattr(manager, "tool_classes", None):
+                manager.load_tools()
+            names = {str(name) for name in getattr(manager, "tool_classes", {}).keys()}
+            names.update(str(name) for name in getattr(manager, "_mcp_tool_instances", {}).keys())
+            return names
+        except Exception as exc:
+            logger.debug(f"[ExtensionRegistry] agent tool snapshot unavailable: {exc}")
+            return set()
+
+    def _first_party_tools(self) -> List[ExtensionEntry]:
+        try:
+            from agent.tools.tool_manager import ToolManager
+
+            manager = ToolManager()
+            if not getattr(manager, "tool_classes", None):
+                manager.load_tools()
+            first_party = {str(name) for name in getattr(manager, "tool_classes", {}).keys()}
+            tool_infos = manager.list_tools()
+            entries: List[ExtensionEntry] = []
+            for name in sorted(first_party):
+                info = tool_infos.get(name) if isinstance(tool_infos, dict) else {}
+                if not isinstance(info, dict):
+                    info = {}
+                entries.append({
+                    "id": f"tool:{name}",
+                    "type": "builtin_tool",
+                    "displayName": name,
+                    "description": info.get("description") or "",
+                    "origin": "first-party",
+                    "enabled": True,
+                    "installed": True,
+                    "policy": "built-in",
+                    "permissions": ["agent-tool-schema"],
+                    "requires": [],
+                    "provides": ["tool", name],
+                    "configRefs": [{"path": "config.tools", "key": name}],
+                    "status": "ready",
+                    "toolName": name,
+                    "schemaVisible": True,
+                    "toolSchemaCallable": True,
+                })
+            return entries
+        except Exception as exc:
+            logger.warning(f"[ExtensionRegistry] first-party tool aggregation failed: {exc}")
+            return [{
+                "id": "tools",
+                "type": "builtin_tool",
+                "displayName": "Built-in tools",
+                "description": "Built-in tool registry unavailable",
+                "origin": "first-party",
+                "enabled": False,
+                "installed": False,
+                "status": "error",
+                "lastError": str(exc),
+            }]
+
     def _skills(self) -> List[ExtensionEntry]:
         try:
             from agent.skills.manager import SkillManager
-            from agent.skills.service import _decorate_mention_metadata
+            from agent.skills.service import _decorate_mention_metadata, _decorate_skill_governance
 
             custom_dir = Path(self.workspace_root) / "skills"
             manager = SkillManager(custom_dir=str(custom_dir))
@@ -84,36 +147,59 @@ class ExtensionRegistry:
                 previous = saved.get(name, {})
                 metadata = getattr(skill_entry, "metadata", None)
                 default_enabled = getattr(metadata, "default_enabled", True)
-                source = str(previous.get("source") or getattr(skill, "source", "") or "custom")
-                kind = "builtin_skill" if source == "builtin" else "user_skill"
+                source = str(getattr(skill, "source", "") or previous.get("source") or "custom")
+                is_builtin_catalog = bool(getattr(manager, "is_builtin_catalog_skill", lambda _: False)(name))
                 origin = "builtin" if source == "builtin" else "workspace" if source == "custom" else "global"
-                policy = "catalog" if source == "builtin" else "user-overlay" if source == "custom" else "global-skill"
                 row = {
                     **previous,
                     "name": name,
                     "display_name": previous.get("display_name") or name,
                     "description": previous.get("description") or getattr(skill, "description", ""),
                     "source": source,
+                    "origin": origin,
                     "path": getattr(skill, "file_path", "") if skill else "",
+                    "default_enabled": default_enabled,
+                    "builtin_catalog": is_builtin_catalog,
                     "primary_env": getattr(metadata, "primary_env", None) if metadata else None,
                     "user_invocable": bool(getattr(skill_entry, "user_invocable", True)),
                     "disable_model_invocation": bool(getattr(skill, "disable_model_invocation", False)),
                 }
+                _decorate_skill_governance(row)
                 _decorate_mention_metadata(row)
+                kind = "builtin_skill" if row.get("source_group") == "builtin" else "user_skill"
+                enabled = bool(row.get("enabled", previous.get("enabled", default_enabled)))
+                policy = "built-in-locked" if row.get("source_group") == "builtin" else "user-overlay" if source == "custom" else "global-skill"
                 entries.append({
                     "id": f"skill:{name}",
                     "type": kind,
                     "displayName": previous.get("display_name") or name,
                     "description": previous.get("description") or getattr(skill, "description", ""),
                     "origin": origin,
+                    "source": source,
+                    "sourceGroup": row.get("sourceGroup"),
+                    "source_group": row.get("source_group"),
+                    "sourceLabel": row.get("sourceLabel"),
+                    "source_label": row.get("source_label"),
+                    "builtinCatalog": bool(row.get("builtinCatalog")),
+                    "builtin_catalog": bool(row.get("builtin_catalog")),
+                    "purposeGroup": row.get("purposeGroup"),
+                    "purpose_group": row.get("purpose_group"),
+                    "purposeLabel": row.get("purposeLabel"),
+                    "purpose_label": row.get("purpose_label"),
                     "sourcePath": self._normalize_path(getattr(skill, "base_dir", "")) if skill else "",
-                    "enabled": bool(previous.get("enabled", default_enabled)),
+                    "enabled": enabled,
+                    "defaultEnabled": bool(row.get("default_enabled", default_enabled)),
+                    "default_enabled": bool(row.get("default_enabled", default_enabled)),
                     "installed": True,
                     "policy": policy,
+                    "toggleable": bool(row.get("toggleable", True)),
+                    "locked": bool(row.get("locked", False)),
+                    "lockReason": row.get("lockReason"),
+                    "lock_reason": row.get("lock_reason"),
                     "requires": getattr(metadata, "requires", {}) if metadata else {},
                     "provides": ["skill"],
                     "configRefs": [{"path": "skills_config.json", "key": name}],
-                    "status": "ready" if previous.get("enabled", default_enabled) else "disabled",
+                    "status": "ready" if enabled else "disabled",
                     "category": row.get("category"),
                     "primary_env": row.get("primary_env"),
                     "user_invocable": row.get("user_invocable"),
@@ -143,10 +229,15 @@ class ExtensionRegistry:
 
             local_config = conf()
             active = active_channel_set(local_config)
+            agent_tool_names = self._agent_tool_names()
             entries: List[ExtensionEntry] = []
             for name, definition in CHANNEL_CATALOG.items():
                 enabled = name in active
-                configured = enabled or channel_has_config(local_config, name)
+                observed = channel_observability(
+                    local_config,
+                    name,
+                    tool_names=agent_tool_names,
+                )
                 label = definition.get("label") if isinstance(definition.get("label"), dict) else {}
                 display_name = str(label.get("zh") or label.get("en") or name)
                 entries.append({
@@ -166,10 +257,16 @@ class ExtensionRegistry:
                     ],
                     "provides": definition.get("provides") or ["channel"],
                     "configRefs": channel_config_refs(name),
-                    "status": "active" if enabled else ("configured" if configured else "available"),
+                    "status": observed["status"],
                     "aliases": definition.get("aliases") or [],
                     "channelName": name,
                     "userConfigurable": True,
+                    "active": observed["active"],
+                    "configured": observed["configured"],
+                    "running": observed["running"],
+                    "configState": observed["configState"],
+                    "auth": observed["auth"],
+                    "agentSurface": observed["agentSurface"],
                 })
             return entries
         except Exception as exc:
@@ -219,6 +316,13 @@ class ExtensionRegistry:
                     entry_type = "mcp_server"
                 state = item.get("capabilityState") if isinstance(item.get("capabilityState"), dict) else {}
                 installed = bool(state.get("installed")) if state else bool(item.get("enabled"))
+                policy_mode = str(item.get("policyMode") or item.get("defaultPolicy") or "discoverable")
+                install_allowed = item.get("installAllowed")
+                if install_allowed is None:
+                    install_allowed = policy_mode != "disabled"
+                status = state.get("state") or ("enabled" if item.get("enabled") else "available")
+                if policy_mode == "disabled" and not installed:
+                    status = "disabled"
                 entries.append({
                     "id": f"ability:{ability_id}",
                     "type": entry_type,
@@ -228,12 +332,17 @@ class ExtensionRegistry:
                     "sourceUrl": item.get("sourceUrl"),
                     "enabled": bool(item.get("enabled")),
                     "installed": installed,
-                    "policy": item.get("defaultPolicy") or "discoverable",
-                    "permissions": ["user-confirm-before-install"],
+                    "policy": policy_mode,
+                    "policyMode": policy_mode,
+                    "installAllowed": bool(install_allowed),
+                    "disabledReason": item.get("disabledReason") or "",
+                    "policyUpdatedAt": item.get("policyUpdatedAt") or "",
+                    "policySource": item.get("policySource") or "",
+                    "permissions": ["user-confirm-before-install"] if install_allowed else [],
                     "requires": item.get("missingModules") or [],
                     "provides": [kind or entry_type],
                     "configRefs": item.get("configPath") or item.get("configKey") or [],
-                    "status": state.get("state") or ("enabled" if item.get("enabled") else "available"),
+                    "status": status,
                     "lastError": state.get("message") if state.get("state") == "failed" else None,
                     "installHint": item.get("installHint"),
                     "mirrorUrls": item.get("mirrorUrls"),

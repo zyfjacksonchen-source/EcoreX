@@ -1,6 +1,15 @@
 ---
 name: image-generation
 description: Generate or edit images from text prompts. Use when the user asks to create, draw, design, or edit an image, illustration, photo, icon, poster, or any visual content.
+compatibility-id: image-generation
+adopts-official-skill: imagegen
+ecorex-native-facade: true
+quality-gates:
+  - project-safe-output
+  - structural-image-qa
+  - vision-anomaly-qa
+  - reference-fidelity-qa
+  - retry-ledger
 metadata:
   cowagent:
     requires:
@@ -15,7 +24,20 @@ metadata:
 
 # Image Generation
 
-Generate and edit images using AI models. The default route uses `gpt-image-2-pro` final image generation, preferring OpenAI and using LinkAI only as a GPT Image compatible route when OpenAI is not configured. **Do not create final images by coding HTML/canvas/SVG/Pillow layouts; use the image model API script for real image generation.**
+This is the EcoreX-native compatibility facade for the official Codex
+`imagegen` workflow. Keep the public EcoreX skill ID `image-generation` stable
+and keep EcoreX multi-provider routing as the runtime default. Use the official
+`imagegen` skill as the authoritative workflow reference for prompt shaping,
+input-image role labeling, project-safe output handling, transparent-background
+fallback policy, and validation discipline when it is available in
+`<available_skills>`.
+
+If both skills are visible, read this skill first for EcoreX provider/runtime
+rules, then read `imagegen` for workflow and QA details. Do not replace
+EcoreX's OpenAI/Gemini/Ark/DashScope/MiniMax/LinkAI routing with a single
+Codex built-in image path unless the user explicitly asks for that host tool.
+
+Generate and edit images using AI models. The default route uses `gpt-image-2-pro` final image generation, preferring OpenAI and using LinkAI only as a GPT Image compatible route when OpenAI is not configured. If `gpt-image-2-pro` is unavailable, the script may visibly retry the same GPT Image compatible route with `gpt-image-2`. **Do not create final images by coding HTML/canvas/SVG/Pillow layouts; use the image model API script for real image generation.**
 
 Supported models (passed via `model` only when the user asks for a specific one):
 
@@ -63,6 +85,18 @@ python <base_dir>/scripts/generate.py '{"prompt": "Isometric miniature city of S
 
 When the user asks to **edit, modify, or improve an existing image**, pass the original image via `image_url`. Prefer **local file paths** directly — the script handles file reading internally. Without `image_url`, the script generates a brand-new image instead of editing.
 
+For every input image, label its role before generation:
+
+- edit target: an image whose identity/layout should be preserved while modifying it
+- reference image: style, composition, mood, subject, or fidelity guide
+- supporting insert/compositing input: asset to merge into the final image
+
+If the user gives a reference image and asks the final image to match it,
+perform a post-generation fidelity check before delivery. Compare subject,
+composition, style, color/lighting, text/layout, and requested edit
+preservation. Record the result in the image job metadata when the runtime
+supports it.
+
 ### Example — edit (image-to-image)
 
 ```bash
@@ -90,6 +124,22 @@ Prints JSON to stdout:
 
 After success, display the image to the user. You can either embed it in markdown (`![description](/path/to/output.png)`) or use the `send` tool.
 
+For project-bound assets, save or move the selected final image into the
+workspace and reference that workspace path. Do not leave a project asset only
+in a provider temp directory.
+
+Before final delivery, inspect generated images for structural defects:
+
+- decode/open failure, zero-byte or truncated files
+- blank/near-blank output
+- obvious seams, discontinuities, repeated ghost layers, multi-layer overlays, or pasted-looking regions
+- garbled text where text was requested, visible watermark/signature artifacts, and broken subject anatomy/object geometry
+- mismatch against reference images when references were supplied
+
+If a defect is found and the request is still satisfiable, retry with a targeted
+prompt or provider adjustment and keep a retry ledger. Do not silently ship a
+known broken image.
+
 On error:
 
 ```json
@@ -104,7 +154,7 @@ The script needs **at least one** of these API keys (set via `env_config` or `co
 
 `OPENAI_API_KEY` / `GEMINI_API_KEY` / `ARK_API_KEY` / `DASHSCOPE_API_KEY` / `MINIMAX_API_KEY` / `LINKAI_API_KEY`
 
-Each also has an optional `*_API_BASE` for custom endpoints. By default, the script sends final image generation to `gpt-image-2-pro`. OpenAI is preferred; LinkAI may be used only as a GPT Image compatible route when OpenAI is not configured. Do not rely on automatic downgrade to another model family for default image generation.
+Each also has an optional `*_API_BASE` for custom endpoints. By default, the script sends final image generation to `gpt-image-2-pro`. OpenAI is preferred; LinkAI may be used only as a GPT Image compatible route when OpenAI is not configured. If pro is unavailable or exhausted after retry, the script may downgrade only to `gpt-image-2` on the same GPT Image compatible provider and reports that in `model_fallback`. Do not rely on automatic downgrade to another model family for default image generation.
 
 ### Error Handling
 
@@ -112,8 +162,8 @@ If the script returns an error after trying all configured backends, **do NOT re
 
 ### Notes
 
-- OpenAI default mode uses `gpt-image-2-pro` only. If the API reports model/access unavailability, surface the error and ask for configuration access; do not automatically fall back to `gpt-image-2`.
-- LinkAI uses the same `gpt-image-2-pro` default when OpenAI is unavailable or when the user explicitly chooses LinkAI; legacy `image-2-pro` input is normalized as a compatibility alias and must not be recommended as the default.
+- OpenAI default mode starts with `gpt-image-2-pro`. If the API reports model/access unavailability or retryable pro failure after retry exhaustion, automatically retry once with `gpt-image-2`; surface `model_fallback` in the result. Do not fall back to Python/PIL/HTML/SVG or to a different model family.
+- LinkAI uses the same `gpt-image-2-pro` default when OpenAI is unavailable or when the user explicitly chooses LinkAI; it may use the same visible `gpt-image-2` fallback. legacy `image-2-pro` input is normalized as a compatibility alias and must not be recommended as the default.
 - For GPT Image models, use the official Images API parameters (`model`, `prompt`, `n`, `size`, `quality`, `output_format`, `background`, `moderation`). Do not send `response_format`.
 - OpenAI requests without `image_url` use `/images/generations`; requests with `image_url` use `/images/edits` with multipart `image` / `image[]`.
 

@@ -1,0 +1,18 @@
+{
+  "status": "skipped",
+  "version": "0.2.0",
+  "generatedAt": "2026-06-27T15:24:29.524999+00:00",
+  "changeIds": [
+    "XHS-001",
+    "PERF-002",
+    "IMG-001",
+    "ART-002"
+  ],
+  "checks": [
+    {
+      "name": "fixed XHS skill smoke migrated",
+      "status": "skipped",
+      "evidence": "create-xiaohongshu-note is no longer a managed built-in skill; v0.2.3 routes vertical workflows through self-learning skill drafts."
+    }
+  ]
+}

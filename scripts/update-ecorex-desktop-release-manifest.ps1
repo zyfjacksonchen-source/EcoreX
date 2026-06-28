@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.2.0",
+    [string]$Version = "0.2.4",
     [string]$ManifestPath = "deploy/ecorex-site/manifest.json",
     [string]$WindowsInstallerPath = "",
     [string]$WindowsInstalledSmokePath = "",
@@ -60,6 +60,25 @@ function Write-Utf8NoBom {
     [System.IO.File]::WriteAllText($Path, $Value, [System.Text.UTF8Encoding]::new($false))
 }
 
+function Get-EcoreXFileSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $resolved = Resolve-RequiredPath $Path
+    if (Get-Command Get-FileHash -ErrorAction SilentlyContinue) {
+        return (Get-FileHash -Algorithm SHA256 -LiteralPath $resolved).Hash.ToUpperInvariant()
+    }
+    $stream = [System.IO.File]::OpenRead($resolved)
+    try {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            return (($sha.ComputeHash($stream) | ForEach-Object { $_.ToString("x2") }) -join "").ToUpperInvariant()
+        } finally {
+            $sha.Dispose()
+        }
+    } finally {
+        $stream.Dispose()
+    }
+}
+
 function Get-Artifact {
     param(
         [Parameter(Mandatory = $true)]$Manifest,
@@ -80,7 +99,7 @@ function Get-FileMetadata {
         Path = $resolved
         FileName = $item.Name
         Size = [int64]$item.Length
-        Sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $resolved).Hash.ToUpperInvariant()
+        Sha256 = Get-EcoreXFileSha256 -Path $resolved
     }
 }
 

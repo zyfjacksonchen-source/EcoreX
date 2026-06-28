@@ -50,6 +50,25 @@ function Write-Utf8NoBom {
     [System.IO.File]::WriteAllText($Path, $Value, $encoding)
 }
 
+function Get-EcoreXFileSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $resolved = Resolve-RequiredPath $Path
+    if (Get-Command Get-FileHash -ErrorAction SilentlyContinue) {
+        return (Get-FileHash -Algorithm SHA256 -LiteralPath $resolved).Hash.ToUpperInvariant()
+    }
+    $stream = [System.IO.File]::OpenRead($resolved)
+    try {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            return (($sha.ComputeHash($stream) | ForEach-Object { $_.ToString("x2") }) -join "").ToUpperInvariant()
+        } finally {
+            $sha.Dispose()
+        }
+    } finally {
+        $stream.Dispose()
+    }
+}
+
 function Get-ReleaseMigrationReadmeNote {
     $readmePath = Join-Path $repoRoot "desktop\build\README-migration.txt"
     if (-not (Test-Path -LiteralPath $readmePath)) {
@@ -372,7 +391,7 @@ foreach ($artifact in $manifest.artifacts) {
     }
 
     $sourceItem = Get-Item -LiteralPath $sourceResolved
-    $sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $sourceResolved).Hash.ToUpperInvariant()
+    $sourceHash = Get-EcoreXFileSha256 -Path $sourceResolved
     $manifestHash = [string]$artifact.sha256
     if ($sourceHash -ne $manifestHash.ToUpperInvariant()) {
         throw "Artifact '$($artifact.id)' SHA256 $sourceHash does not match manifest $manifestHash."
@@ -487,7 +506,7 @@ foreach ($ready in $readyArtifacts) {
                 FileName = $feedName
                 RelativePath = "site/downloads/$feedName"
                 Size = (Get-Item -LiteralPath $feedTarget).Length
-                Sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $feedTarget).Hash.ToUpperInvariant()
+                Sha256 = Get-EcoreXFileSha256 -Path $feedTarget
             }
         }
     }
@@ -513,7 +532,7 @@ foreach ($ready in $readyArtifacts) {
                 FileName = "ia32/$feedName"
                 RelativePath = "site/downloads/ia32/$feedName"
                 Size = (Get-Item -LiteralPath $feedTarget).Length
-                Sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $feedTarget).Hash.ToUpperInvariant()
+                Sha256 = Get-EcoreXFileSha256 -Path $feedTarget
             }
         }
         $ia32InstallerTarget = Join-Path $ia32Out $ready.Artifact.fileName
@@ -521,7 +540,7 @@ foreach ($ready in $readyArtifacts) {
             FileName = "ia32/$($ready.Artifact.fileName)"
             RelativePath = "site/downloads/ia32/$($ready.Artifact.fileName)"
             Size = (Get-Item -LiteralPath $ia32InstallerTarget).Length
-            Sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $ia32InstallerTarget).Hash.ToUpperInvariant()
+            Sha256 = Get-EcoreXFileSha256 -Path $ia32InstallerTarget
         }
     }
 }
@@ -536,6 +555,7 @@ foreach ($fileName in $adminFiles) {
 
 $serverFiles = @(
     @{ Source = "scripts/install-ecorex-public-release.sh"; Target = "install-ecorex-public-release.sh" },
+    @{ Source = "scripts/install-ecorex-web.sh"; Target = "install-ecorex-web.sh" },
     @{ Source = "scripts/check-ecorex-server-release.sh"; Target = "check-ecorex-server-release.sh" },
     @{ Source = "deploy/ecorex-site/caddy/Caddyfile.example"; Target = "caddy/Caddyfile.example" },
     @{ Source = "deploy/ecorex-site/caddy/ecorex-agent.routes.caddy"; Target = "caddy/ecorex-agent.routes.caddy" },
@@ -568,7 +588,7 @@ foreach ($ready in $readyArtifacts) {
     }
 
     $stagedPath = Join-Path $downloadOut $ready.Artifact.fileName
-    $stagedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $stagedPath).Hash.ToUpperInvariant()
+    $stagedHash = Get-EcoreXFileSha256 -Path $stagedPath
     $stagedSize = (Get-Item -LiteralPath $stagedPath).Length
     if ($stagedHash -ne $ready.Sha256 -or $stagedSize -ne $ready.Size) {
         throw "Staged artifact verification failed for $($ready.Artifact.id)."
@@ -660,7 +680,7 @@ try {
     $archive.Dispose()
 }
 
-$zipHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zipPath).Hash.ToUpperInvariant()
+$zipHash = Get-EcoreXFileSha256 -Path $zipPath
 $zipItem = Get-Item -LiteralPath $zipPath
 
 if (-not $KeepStaging) {

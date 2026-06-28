@@ -3,6 +3,7 @@ Agent Bridge - Integrates Agent system with existing COW bridge
 """
 
 import os
+import hashlib
 from typing import Any, Dict, Optional, List
 
 from agent.protocol import Agent, LLMModel, LLMRequest, get_cancel_registry
@@ -28,6 +29,28 @@ from models.model_telemetry import chunk_has_model_output, is_model_error_respon
 from models.openai_compatible_bot import OpenAICompatibleBot
 
 
+def _exception_log_summary(value: Any) -> Dict[str, Any]:
+    text = "" if value is None else str(value)
+    return {
+        "redacted": bool(text),
+        "hash": hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:16] if text else "",
+        "chars": len(text),
+        "bytes": len(text.encode("utf-8", errors="replace")),
+        "type": type(value).__name__ if value is not None else "",
+    }
+
+
+def _public_exception_message(prefix: str, value: Any) -> str:
+    summary = _exception_log_summary(value)
+    if not summary["hash"]:
+        return prefix
+    return (
+        f"{prefix} Details redacted "
+        f"(type={summary['type']}, hash={summary['hash']}, "
+        f"chars={summary['chars']}, bytes={summary['bytes']})."
+    )
+
+
 def _clear_responses_state_for_session(session_id: str) -> None:
     if not session_id:
         return
@@ -38,7 +61,7 @@ def _clear_responses_state_for_session(session_id: str) -> None:
         if removed:
             logger.info(f"[AgentBridge] Cleared Responses state: session={session_id}, removed={removed}")
     except Exception as e:
-        logger.warning(f"[AgentBridge] Failed to clear Responses state for {session_id}: {e}")
+        logger.warning(f"[AgentBridge] Failed to clear Responses state for {session_id}: {_exception_log_summary(e)}")
 
 
 def _assistant_message_text(message: Dict[str, Any]) -> str:
@@ -88,7 +111,7 @@ def _ensure_final_response_in_messages(agent: Agent, new_messages: List[Dict[str
             if latest_assistant_text != text:
                 agent.messages.append(dict(synthetic_message))
     except Exception as exc:
-        logger.warning(f"[AgentBridge] Failed to mirror synthetic final response into memory: {exc}")
+        logger.warning(f"[AgentBridge] Failed to mirror synthetic final response into memory: {_exception_log_summary(exc)}")
 
     return new_messages
 
@@ -410,7 +433,7 @@ class AgentLLMModel(LLMModel):
             return self._format_response(last_response)
                 
         except Exception as e:
-            logger.error(f"AgentLLMModel call error: {e}")
+            logger.error(f"AgentLLMModel call error: {_exception_log_summary(e)}")
             raise
     
     def call_stream(self, request: LLMRequest):
@@ -481,7 +504,8 @@ class AgentLLMModel(LLMModel):
                 except Exception as e:
                     error_chunk = {
                         "error": True,
-                        "message": str(e),
+                        "message": _public_exception_message("Model stream failed.", e),
+                        **_exception_log_summary(e),
                         "status_code": 500,
                     }
                     if (
@@ -509,7 +533,7 @@ class AgentLLMModel(LLMModel):
                 return
                 
         except Exception as e:
-            logger.error(f"AgentLLMModel call_stream error: {e}", exc_info=True)
+            logger.error(f"AgentLLMModel call_stream error: {_exception_log_summary(e)}")
             raise
     
     def _format_response(self, response):
@@ -545,7 +569,7 @@ class AgentBridge:
                 if init_scheduler(self):
                     self.scheduler_initialized = True
             except Exception as e:
-                logger.warning(f"[AgentBridge] Eager scheduler init failed: {e}")
+                logger.warning(f"[AgentBridge] Eager scheduler init failed: {_exception_log_summary(e)}")
         else:
             logger.info("[AgentBridge] Scheduler startup skipped; scheduler_enabled is disabled")
 
@@ -554,7 +578,7 @@ class AgentBridge:
                 from agent.evolution.trigger import start_evolution_trigger
                 start_evolution_trigger(self)
             except Exception as e:
-                logger.warning(f"[AgentBridge] Evolution trigger init failed: {e}")
+                logger.warning(f"[AgentBridge] Evolution trigger init failed: {_exception_log_summary(e)}")
         else:
             logger.info("[AgentBridge] Self-evolution startup skipped; self_evolution_enabled is disabled")
 
@@ -590,7 +614,7 @@ class AgentBridge:
                             tool.cwd = workspace_dir
                         tools.append(tool)
                 except Exception as e:
-                    logger.warning(f"[AgentBridge] Failed to load tool {tool_name}: {e}")
+                    logger.warning(f"[AgentBridge] Failed to load tool {tool_name}: {_exception_log_summary(e)}")
         
         # Create agent instance
         agent = Agent(
@@ -673,7 +697,7 @@ class AgentBridge:
             remaining = store.load_messages(session_id, max_turns=10**6)
         except Exception as e:
             logger.warning(
-                f"[AgentBridge] Failed to load messages for sync (session={session_id}): {e}"
+                f"[AgentBridge] Failed to load messages for sync (session={session_id}): {_exception_log_summary(e)}"
             )
             return -1
         with agent.messages_lock:
@@ -760,7 +784,7 @@ class AgentBridge:
                                 from agent.tools.scheduler.integration import attach_scheduler_to_tool
                                 attach_scheduler_to_tool(tool, context)
                             except Exception as e:
-                                logger.warning(f"[AgentBridge] Failed to attach context to scheduler: {e}")
+                                logger.warning(f"[AgentBridge] Failed to attach context to scheduler: {_exception_log_summary(e)}")
                             break
             
             # Pass context metadata to model for downstream API requests
@@ -835,7 +859,12 @@ class AgentBridge:
                     }
                 new_messages = _ensure_final_response_in_messages(agent, new_messages, response)
                 if new_messages:
-                    self._persist_messages(session_id, list(new_messages), channel_type)
+                    self._persist_messages(
+                        session_id,
+                        list(new_messages),
+                        channel_type,
+                        context.get("project_context_meta") if context else None,
+                    )
                 else:
                     with agent.messages_lock:
                         msg_count = len(agent.messages)
@@ -846,7 +875,7 @@ class AgentBridge:
                             _clear_responses_state_for_session(session_id)
                             logger.info(f"[AgentBridge] Cleared DB for recovered session: {session_id}")
                         except Exception as e:
-                            logger.warning(f"[AgentBridge] Failed to clear DB after recovery: {e}")
+                            logger.warning(f"[AgentBridge] Failed to clear DB after recovery: {_exception_log_summary(e)}")
             
             # Record this user turn for the self-evolution idle trigger. Skip
             # scheduler-injected / scheduled-task sessions so internal runs do
@@ -890,7 +919,8 @@ class AgentBridge:
             return Reply(ReplyType.TEXT, response)
             
         except Exception as e:
-            logger.error(f"Agent reply error: {e}")
+            public_error = _public_exception_message("Agent error.", e)
+            logger.error(f"Agent reply error: {_exception_log_summary(e)}")
             # If the agent cleared its messages due to format error / overflow,
             # also purge the DB so the next request starts clean.
             if session_id and agent:
@@ -903,14 +933,14 @@ class AgentBridge:
                         _clear_responses_state_for_session(session_id)
                         logger.info(f"[AgentBridge] Cleared DB for session after error: {session_id}")
                 except Exception as db_err:
-                    logger.warning(f"[AgentBridge] Failed to clear DB after error: {db_err}")
+                    logger.warning(f"[AgentBridge] Failed to clear DB after error: {_exception_log_summary(db_err)}")
             # Release cancel token on error path too (idempotent).
             if cancel_event is not None and (request_id or session_id) and agentbridge_owns_cancel_token:
                 try:
                     get_cancel_registry().unregister(request_id or session_id)
                 except Exception:
                     pass
-            return Reply(ReplyType.ERROR, f"Agent error: {str(e)}")
+            return Reply(ReplyType.ERROR, public_error)
     
     def _schedule_mcp_hot_reload(self, agent):
         """
@@ -935,7 +965,7 @@ class AgentBridge:
                         f"added={added}, removed={removed}"
                     )
             except Exception as e:
-                logger.warning(f"[AgentBridge] MCP hot-reload failed (non-fatal): {e}")
+                logger.warning(f"[AgentBridge] MCP hot-reload failed (non-fatal): {_exception_log_summary(e)}")
 
         threading.Thread(target=_run, daemon=True, name="mcp-hot-reload").start()
 
@@ -1017,7 +1047,7 @@ class AgentBridge:
                             key, val = line.split('=', 1)
                             existing_env_vars[key.strip()] = val.strip()
             except Exception as e:
-                logger.warning(f"[AgentBridge] Failed to read .env file: {e}")
+                logger.warning(f"[AgentBridge] Failed to read .env file: {_exception_log_summary(e)}")
         
         # Sync config.json values into .env (add/update/remove)
         updated = False
@@ -1053,7 +1083,7 @@ class AgentBridge:
 
                 logger.info(f"[AgentBridge] Synced API keys from config.json to .env")
             except Exception as e:
-                logger.warning(f"[AgentBridge] Failed to sync API keys: {e}")
+                logger.warning(f"[AgentBridge] Failed to sync API keys: {_exception_log_summary(e)}")
     
     def _pre_persist_user_message(
         self, session_id: str, query: str, context: Context, clear_history: bool
@@ -1113,16 +1143,26 @@ class AgentBridge:
                         cleaned.append(item)
                 if cleaned:
                     user_msg["extras"] = {"attachments": cleaned}
-            store.append_messages(session_id, [user_msg], channel_type=channel_type)
+            store.append_messages(
+                session_id,
+                [user_msg],
+                channel_type=channel_type,
+                project_context=context.get("project_context_meta") if context else None,
+            )
             return True
         except Exception as e:
+            if getattr(e, "code", "") == "SESSION_OWNER_CONFLICT":
+                logger.warning(
+                    f"[AgentBridge] Refused to pre-persist user message due to session owner conflict: reason={getattr(e, 'reason', 'unknown')}"
+                )
+                return False
             logger.warning(
-                f"[AgentBridge] Failed to pre-persist user message for session={session_id}: {e}"
+                f"[AgentBridge] Failed to pre-persist user message for session={session_id}: {_exception_log_summary(e)}"
             )
             return False
 
     def _persist_messages(
-        self, session_id: str, new_messages: list, channel_type: str = ""
+        self, session_id: str, new_messages: list, channel_type: str = "", project_context: dict = None
     ) -> None:
         """
         Persist new messages to the conversation store after each agent run.
@@ -1150,11 +1190,19 @@ class AgentBridge:
         try:
             from agent.memory import get_conversation_store
             get_conversation_store().append_messages(
-                session_id, messages_to_store, channel_type=channel_type
+                session_id,
+                messages_to_store,
+                channel_type=channel_type,
+                project_context=project_context,
             )
         except Exception as e:
+            if getattr(e, "code", "") == "SESSION_OWNER_CONFLICT":
+                logger.warning(
+                    f"[AgentBridge] Refused to persist messages due to session owner conflict: reason={getattr(e, 'reason', 'unknown')}"
+                )
+                return
             logger.warning(
-                f"[AgentBridge] Failed to persist messages for session={session_id}: {e}"
+                f"[AgentBridge] Failed to persist messages for session={session_id}: {_exception_log_summary(e)}"
             )
 
     # Marker used to identify scheduler-injected user messages so we can apply
@@ -1225,7 +1273,7 @@ class AgentBridge:
         except Exception as e:
             logger.warning(
                 f"[AgentBridge] Failed to prune scheduled messages "
-                f"for session={session_id}: {e}"
+                f"for session={session_id}: {_exception_log_summary(e)}"
             )
 
         agent = self.agents.get(session_id)
@@ -1237,7 +1285,7 @@ class AgentBridge:
             except Exception as e:
                 logger.warning(
                     f"[AgentBridge] Failed to update in-memory scheduled output "
-                    f"for session={session_id}: {e}"
+                    f"for session={session_id}: {_exception_log_summary(e)}"
                 )
 
     @staticmethod
@@ -1460,4 +1508,4 @@ class AgentBridge:
                 agent.tools = [t for t in agent.tools if t.name != "web_search"]
                 logger.info("[AgentBridge] web_search tool removed (API key no longer available)")
         except Exception as e:
-            logger.debug(f"[AgentBridge] Failed to refresh conditional tools: {e}")
+            logger.debug(f"[AgentBridge] Failed to refresh conditional tools: {_exception_log_summary(e)}")

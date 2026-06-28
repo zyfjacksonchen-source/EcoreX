@@ -1,3 +1,4 @@
+import base64
 import datetime
 import hashlib
 import hmac
@@ -28,18 +29,32 @@ from bridge.reply import Reply, ReplyType
 from channel.channel_catalog import (
     CHANNEL_CATALOG,
     active_channel_set,
-    channel_has_config,
+    channel_config_status,
+    channel_observability,
     normalize_channel_name,
     parse_channel_list,
 )
 from channel.chat_channel import ChatChannel, check_prefix
 from channel.chat_message import ChatMessage
+from channel.messaging_adapter_contract import (
+    build_adapter_contract,
+    EXTERNAL_CONNECTION_EVENT_SESSION_ID,
+    record_external_connection_runtime_event,
+    test_messaging_adapter,
+)
 from collections import OrderedDict
 from common import const
 from common import i18n
+from common.feishu_register_credentials import (
+    extract_feishu_register_credentials,
+    summarize_feishu_register_result_shape,
+)
+from common.feishu_runtime_readiness import feishu_dependency_status
 from common.log import logger
+from common.ecorex_public_payload import mask_sensitive_text, redact_public_tool_value
 from common.singleton import singleton
 from config import conf, _ensure_ecorex_runtime_defaults
+from agent.tools.imagegen.provider_runner import image_generation_env_with_config, run_image_generation_payload
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
 VIDEO_EXTENSIONS = {".mp4", ".webm", ".avi", ".mov", ".mkv"}
@@ -84,8 +99,10 @@ def _web_app_bridge_script() -> str:
 (function () {
   if (window.ecorexDesktop) return;
 
-  var DEFAULT_WEB_CLIENT_KEY = "ecorex-web-v0.2.0-web.1";
+  var DEFAULT_WEB_CLIENT_KEY = "ecorex-web-v0.2.2-web.1";
   var DEFAULT_WEB_COMPAT_CLIENT_KEYS = [
+    "ecorex-web-v0.2.2-web.1",
+    "ecorex-web-v0.2.1-web.1",
     "ecorex-web-v0.2.0-web.1",
     "ecorex-web-v0.1.19-web.1",
     "ecorex-web-v0.1.18-web.1",
@@ -180,20 +197,28 @@ def _web_app_bridge_script() -> str:
     } catch (error) {}
   }
 
+  function isGenericLocalSession(session) {
+    var email = String(session && session.user && session.user.email || "").trim().toLowerCase();
+    return !email || email === "ecorex@ecorex.local" || email === "local@ecorex.local";
+  }
+
   function makeLocalSession(authRequired, identity) {
     identity = identity || {};
     var email = String(identity.email || "").trim().toLowerCase();
+    var hasProvidedIdentity = Boolean(email);
     if (!email) email = authRequired ? "ecorex@ecorex.local" : "local@ecorex.local";
     var name = String(identity.name || "").trim();
     if (!name) name = email.indexOf("@") > 0 ? email.split("@")[0] : "EcoreX";
     if (email === "ecorex@ecorex.local" || email === "local@ecorex.local") name = "EcoreX";
     return {
       authenticated: true,
-      localFallback: true,
+      localFallback: !hasProvidedIdentity,
+      authProvider: hasProvidedIdentity ? "web-password" : "local-fallback",
+      identitySource: hasProvidedIdentity ? "login-email" : "local-fallback",
       deviceId: deviceId(),
       expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
       user: {
-        id: authRequired ? "ecorex-password" : "ecorex-local",
+        id: hasProvidedIdentity ? "ecorex-password:" + email : (authRequired ? "ecorex-password" : "ecorex-local"),
         name: name,
         email: email,
         role: "user",
@@ -213,7 +238,8 @@ def _web_app_bridge_script() -> str:
       return next;
     }
     var local = readLocalSession();
-    if (local) return local;
+    if (local && (!authRequired || !isGenericLocalSession(local))) return local;
+    if (authRequired && !(identity && identity.email)) return null;
     var fallback = makeLocalSession(authRequired, {});
     if (persistLocal) writeLocalSession(fallback);
     return fallback;
@@ -313,6 +339,9 @@ def _web_app_bridge_script() -> str:
       err.code = payload.code;
       err.payload = payload;
       throw err;
+    }
+    if (String(request.path || "") === "/message" && payload && payload.request_id) {
+      phase2EmitUserMessage(request, payload).catch(function () {});
     }
     return payload;
   }
@@ -452,6 +481,571 @@ def _web_app_bridge_script() -> str:
     return /not found|404|failed to fetch|networkerror|load failed|invalid client key|client key/i.test(String((error && error.message) || error || ""));
   }
 
+  var PHASE1_DENY_KEYS = {
+    body: true, blob: true, bytes: true, content: true, data: true, data_base64: true,
+    database64: true, delta: true, file_content: true, file_path: true, filecontent: true,
+    filepath: true, final_text: true, finaltext: true, html: true, input: true,
+    markdown: true, message: true, messages: true, output: true, path: true,
+    preview_url: true, previewurl: true, prompt: true, raw: true, relative_path: true,
+    relativepath: true, response: true, result: true, status_path: true, statuspath: true,
+    text: true, thumbnail_url: true, thumbnailurl: true, transcript: true, url: true
+  };
+
+  function phase1SyncEnabled() {
+    if (window.ECOREX_PHASE1_SYNC === false || window.ECOREX_DISABLE_PHASE1_SYNC === true) return false;
+    try { return localStorage.getItem("ecorex_phase1_sync") !== "off"; } catch (error) { return true; }
+  }
+
+  function phase1Now() {
+    return new Date().toISOString();
+  }
+
+  function phase1NormalizeKey(key) {
+    return String(key || "").toLowerCase().replace(/-/g, "_");
+  }
+
+  function phase1SafeJson(value, depth) {
+    depth = depth || 0;
+    if (depth > 4) return Object.prototype.toString.call(value).slice(0, 80);
+    if (Array.isArray(value)) {
+      return value.slice(0, 32).map(function (item) { return phase1SafeJson(item, depth + 1); });
+    }
+    if (value && typeof value === "object") {
+      var result = {};
+      Object.keys(value).slice(0, 64).forEach(function (key) {
+        result[key] = PHASE1_DENY_KEYS[phase1NormalizeKey(key)] ? "[omitted]" : phase1SafeJson(value[key], depth + 1);
+      });
+      return result;
+    }
+    if (typeof value === "string") return value.slice(0, 1000);
+    if (typeof value === "number" || typeof value === "boolean" || value === null || value === undefined) return value == null ? null : value;
+    return String(value).slice(0, 1000);
+  }
+
+  function phase1FallbackHash(value) {
+    var text = String(value || "");
+    var hash = 2166136261;
+    for (var i = 0; i < text.length; i += 1) {
+      hash ^= text.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return "fnv-" + (hash >>> 0).toString(36);
+  }
+
+  async function phase1Digest(value) {
+    var text = String(value || "");
+    try {
+      if (window.crypto && window.crypto.subtle && window.TextEncoder) {
+        var bytes = new TextEncoder().encode(text);
+        var digest = await window.crypto.subtle.digest("SHA-256", bytes);
+        return Array.from(new Uint8Array(digest)).map(function (b) { return b.toString(16).padStart(2, "0"); }).join("").slice(0, 40);
+      }
+    } catch (error) {}
+    return phase1FallbackHash(text);
+  }
+
+  async function phase1SyncKey(parts) {
+    return "phase1:" + await phase1Digest((parts || []).join("|"));
+  }
+
+  function phase1ArtifactSource(artifact) {
+    artifact = artifact || {};
+    return String(
+      artifact.path || artifact.filePath || artifact.file_path ||
+      artifact.relativePath || artifact.relative_path ||
+      artifact.previewUrl || artifact.preview_url ||
+      artifact.statusPath || artifact.status_path ||
+      artifact.thumbnailUrl || artifact.thumbnail_url ||
+      artifact.url || artifact.content || ""
+    );
+  }
+
+  function phase1ArtifactTitle(artifact, source) {
+    var explicit = artifact.title || artifact.name || artifact.fileName || artifact.file_name;
+    if (explicit) return String(explicit).slice(0, 240);
+    var clean = String(source || "").split(/[?#]/, 1)[0].replace(/\\/g, "/");
+    return (clean.split("/").pop() || "artifact").slice(0, 240);
+  }
+
+  function phase1ArtifactExt(source, title) {
+    var candidate = String(source || "");
+    try {
+      var parsed = new URL(candidate, window.location.href);
+      candidate = parsed.searchParams.get("path") || parsed.pathname || candidate;
+    } catch (error) {}
+    candidate = String(candidate || title || "").split(/[?#]/, 1)[0];
+    var match = candidate.match(/(\.[A-Za-z0-9]{1,12})$/);
+    return match ? match[1].toLowerCase() : "";
+  }
+
+  function phase1ArtifactsFromItem(item) {
+    if (!item || typeof item !== "object") return [];
+    if (item.type === "done" && Array.isArray(item.artifacts)) return item.artifacts;
+    if (item.type === "artifact" && item.artifact) return [item.artifact];
+    if (item.type === "file" || item.type === "image" || item.type === "video" || item.type === "audio" || item.type === "voice_attach") {
+      return [{
+        kind: item.type === "voice_attach" ? "audio" : item.type,
+        title: item.file_name || item.name || item.type,
+        path: item.path || item.content || "",
+        url: item.url || "",
+        fileType: item.file_type || item.mime_type || "",
+        mimeType: item.mime_type || item.mimeType || "",
+        sizeBytes: item.size_bytes || item.sizeBytes || 0,
+        status: item.status || "ready"
+      }];
+    }
+    return [];
+  }
+
+  async function phase1ArtifactMetadata(artifact, sessionId, requestId) {
+    artifact = artifact || {};
+    var source = phase1ArtifactSource(artifact);
+    var title = phase1ArtifactTitle(artifact, source);
+    var rawIdentity = [
+      artifact.safeArtifactId || artifact.safe_artifact_id || artifact.id || artifact.artifactId || artifact.artifact_id,
+      title,
+      source,
+      requestId
+    ].filter(Boolean).join("|");
+    var safeArtifactId = artifact.safeArtifactId || artifact.safe_artifact_id || ("artifact:" + await phase1Digest(rawIdentity || title));
+    var sourceInfo = artifact.source || {};
+    return {
+      idempotencyKey: await phase1SyncKey(["artifact", sessionId, requestId, safeArtifactId]),
+      safeArtifactId: safeArtifactId,
+      sessionId: sessionId || "",
+      requestId: artifact.requestId || artifact.request_id || requestId || "",
+      kind: artifact.kind || artifact.type || artifact.fileType || artifact.file_type || "file",
+      intent: artifact.intent || "deliverable",
+      operation: artifact.operation || artifact.action || "created",
+      status: artifact.status || "ready",
+      title: title,
+      pathHash: source ? await phase1Digest(source) : "",
+      pathExt: artifact.pathExt || artifact.path_ext || phase1ArtifactExt(source, title),
+      mimeType: artifact.mimeType || artifact.mime_type || "",
+      sizeBytes: Number(artifact.sizeBytes || artifact.size_bytes || 0) || 0,
+      stats: phase1SafeJson(artifact.stats || {}),
+      source: {
+        toolName: sourceInfo.toolName || sourceInfo.tool_name || artifact.toolName || artifact.tool || "",
+        toolCallId: sourceInfo.toolCallId || sourceInfo.tool_call_id || artifact.toolCallId || artifact.tool_call_id || "",
+        activityId: sourceInfo.activityId || sourceInfo.activity_id || artifact.activityId || artifact.activity_id || ""
+      },
+      metadataTruncated: !!artifact.metadataTruncated,
+      createdAt: phase1Now()
+    };
+  }
+
+  async function phase1Emit(payload) {
+    if (!phase1SyncEnabled()) return;
+    if ((!payload.events || !payload.events.length) && (!payload.artifacts || !payload.artifacts.length)) return;
+    try {
+      await clientJson("/sync/events", "POST", {
+        type: "phase1_sync",
+        source: "WebUI",
+        sessionId: payload.sessionId || "",
+        requestId: payload.requestId || "",
+        events: payload.events || [],
+        artifacts: payload.artifacts || []
+      }, true);
+    } catch (error) {}
+  }
+
+  async function phase1RunEvent(sessionId, requestId, eventType, statusText, detail) {
+    if (!requestId) return;
+    await phase1Emit({
+      sessionId: sessionId || "",
+      requestId: requestId,
+      events: [{
+        idempotencyKey: await phase1SyncKey(["event", sessionId || "", requestId, eventType, statusText]),
+        eventType: eventType,
+        status: statusText,
+        source: "WebUI",
+        sessionId: sessionId || "",
+        requestId: requestId,
+        detail: phase1SafeJson(detail || {}),
+        createdAt: phase1Now()
+      }]
+    });
+  }
+
+  var phase2PolicyCache = { checkedAt: 0, enabled: false };
+
+  function phase2LocalSwitchEnabled() {
+    if (window.ECOREX_PHASE2_SYNC === false || window.ECOREX_DISABLE_PHASE2_SYNC === true) return false;
+    try { return localStorage.getItem("ecorex_phase2_sync") !== "off"; } catch (error) { return true; }
+  }
+
+  async function phase2SyncEnabled() {
+    if (!phase2LocalSwitchEnabled()) return false;
+    var now = Date.now();
+    if (now - phase2PolicyCache.checkedAt < 30000) return !!phase2PolicyCache.enabled;
+    phase2PolicyCache.checkedAt = now;
+    phase2PolicyCache.enabled = false;
+    try {
+      var payload = await clientJson("/sync/policy", "GET", undefined, true);
+      var phase2 = payload && payload.syncPolicy && payload.syncPolicy.phase2;
+      phase2PolicyCache.enabled = !!(phase2 && phase2.chatBodiesEnabled);
+    } catch (error) {
+      phase2PolicyCache.enabled = false;
+    }
+    return !!phase2PolicyCache.enabled;
+  }
+
+  async function phase2SyncKey(parts) {
+    return "phase2:" + await phase1Digest((parts || []).join("|"));
+  }
+
+  function phase2VisibleContent(value) {
+    if (value === undefined || value === null) return "";
+    if (typeof value === "string") return value;
+    return value;
+  }
+
+  async function phase2EmitMessages(sessionId, requestId, messages) {
+    if (!requestId || !messages || !messages.length) return;
+    if (!await phase2SyncEnabled()) return;
+    try {
+      await clientJson("/sync/messages", "POST", {
+        source: "WebUI",
+        sessionId: sessionId || "",
+        requestId: requestId || "",
+        messages: messages
+      }, true);
+    } catch (error) {}
+  }
+
+  async function phase2EmitUserMessage(request, payload) {
+    var body = request && request.body ? request.body : {};
+    var requestId = payload && payload.request_id ? String(payload.request_id) : "";
+    var sessionId = String(body.session_id || body.sessionId || payload.session_id || payload.sessionId || "");
+    var content = phase2VisibleContent(body.visible_message !== undefined ? body.visible_message : body.message);
+    if (!requestId || content === "" || content === null || content === undefined) return;
+    await phase2EmitMessages(sessionId, requestId, [{
+      idempotencyKey: await phase2SyncKey(["message", sessionId, requestId, "user", body.client_attempt_id || ""]),
+      messageId: body.client_attempt_id || "",
+      seq: Number(body.user_seq || 0) || 0,
+      role: "user",
+      content: content,
+      extras: phase1SafeJson({
+        clientAttemptId: body.client_attempt_id || "",
+        retryOfRequestId: body.retry_of_request_id || "",
+        interruptsRequestId: body.interrupts_request_id || "",
+        attachmentCount: Array.isArray(body.attachments) ? body.attachments.length : 0,
+        isVoice: !!body.is_voice
+      }),
+      createdAt: phase1Now()
+    }]);
+  }
+
+  var phase3PolicyCache = { checkedAt: 0, enabled: false, policy: null };
+  var phase3UploadMemo = {};
+
+  function phase3LocalSwitchEnabled() {
+    if (window.ECOREX_PHASE3_SYNC === false || window.ECOREX_DISABLE_PHASE3_SYNC === true) return false;
+    try { return localStorage.getItem("ecorex_phase3_sync") !== "off"; } catch (error) { return true; }
+  }
+
+  async function phase3Policy() {
+    if (!phase3LocalSwitchEnabled()) return null;
+    var now = Date.now();
+    if (now - phase3PolicyCache.checkedAt < 30000) return phase3PolicyCache.enabled ? phase3PolicyCache.policy : null;
+    phase3PolicyCache.checkedAt = now;
+    phase3PolicyCache.enabled = false;
+    phase3PolicyCache.policy = null;
+    try {
+      var payload = await clientJson("/sync/policy", "GET", undefined, true);
+      var phase3 = payload && payload.syncPolicy && payload.syncPolicy.phase3;
+      phase3PolicyCache.enabled = !!(phase3 && phase3.artifactFilesEnabled && phase3.killSwitch !== true);
+      phase3PolicyCache.policy = phase3 || null;
+    } catch (error) {
+      phase3PolicyCache.enabled = false;
+      phase3PolicyCache.policy = null;
+    }
+    return phase3PolicyCache.enabled ? phase3PolicyCache.policy : null;
+  }
+
+  async function phase3SyncKey(parts) {
+    return "phase3:" + await phase1Digest((parts || []).join("|"));
+  }
+
+  function phase3ArtifactFetchUrl(artifact) {
+    artifact = artifact || {};
+    var candidates = [
+      artifact.previewUrl || artifact.preview_url,
+      artifact.url,
+      artifact.statusPath || artifact.status_path,
+      artifact.path || artifact.filePath || artifact.file_path || artifact.relativePath || artifact.relative_path
+    ];
+    for (var i = 0; i < candidates.length; i += 1) {
+      var value = String(candidates[i] || "").trim();
+      if (!value) continue;
+      if (/^https?:\/\//i.test(value)) {
+        try {
+          var absolute = new URL(value, window.location.href);
+          if (absolute.origin === window.location.origin && isRuntimePath(absolute.pathname)) {
+            return runtimePath(absolute.pathname) + absolute.search + absolute.hash;
+          }
+        } catch (error) {}
+        continue;
+      }
+      if (value.indexOf("/api/file") === 0 || value.indexOf("/uploads/") === 0) return runtimePath(value);
+      return runtimePath("/api/file?path=" + encodeURIComponent(value));
+    }
+    return "";
+  }
+
+  function phase3ArtifactPayload(metadata) {
+    metadata = metadata || {};
+    return {
+      safeArtifactId: metadata.safeArtifactId || metadata.safe_artifact_id || "",
+      title: metadata.title || "",
+      kind: metadata.kind || "file",
+      status: metadata.status || "",
+      mimeType: metadata.mimeType || metadata.mime_type || "",
+      sizeBytes: Number(metadata.sizeBytes || metadata.size_bytes || 0) || 0,
+      pathHash: metadata.pathHash || metadata.path_hash || "",
+      pathExt: metadata.pathExt || metadata.path_ext || "",
+      createdAt: metadata.createdAt || metadata.created_at || phase1Now()
+    };
+  }
+
+  function phase3ArrayBufferToBase64(buffer) {
+    var bytes = new Uint8Array(buffer || []);
+    var binary = "";
+    for (var i = 0; i < bytes.length; i += 0x8000) {
+      var slice = bytes.subarray(i, Math.min(i + 0x8000, bytes.length));
+      binary += String.fromCharCode.apply(null, Array.prototype.slice.call(slice));
+    }
+    return btoa(binary);
+  }
+
+  async function phase3BytesSha256(bytes) {
+    if (!(window.crypto && window.crypto.subtle)) return "";
+    var digest = await window.crypto.subtle.digest("SHA-256", bytes);
+    var view = new Uint8Array(digest);
+    var hex = "";
+    for (var i = 0; i < view.length; i += 1) hex += view[i].toString(16).padStart(2, "0");
+    return hex;
+  }
+
+  function phase3Sleep(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, Math.max(0, ms || 0)); });
+  }
+
+  async function phase3EmitArtifactFile(rawArtifact, metadata, sessionId, requestId) {
+    var policy = await phase3Policy();
+    if (!policy || !requestId) return;
+    var safe = phase3ArtifactPayload(metadata);
+    var artifactId = String(safe.safeArtifactId || safe.pathHash || safe.title || "");
+    if (!artifactId) return;
+    var memoKey = [sessionId || "", requestId || "", artifactId, safe.pathHash || "", safe.sizeBytes || 0].join("|");
+    if (phase3UploadMemo[memoKey]) return;
+    phase3UploadMemo[memoKey] = true;
+    try {
+      var url = phase3ArtifactFetchUrl(rawArtifact || {});
+      if (!url) return;
+      var response = await fetch(url, { credentials: "same-origin" });
+      if (!response.ok) return;
+      var blob = await response.blob();
+      var maxAutoBytes = Number(policy.maxAutoBytes || 0) || 0;
+      if (maxAutoBytes && blob.size > maxAutoBytes) return;
+      var chunkBytes = Math.max(1, Number(policy.chunkBytes || 0) || (2 * 1024 * 1024));
+      var bytesPerSecond = Number(policy.bytesPerSecond || 0) || 0;
+      var buffer = await blob.arrayBuffer();
+      var contentSha256 = await phase3BytesSha256(buffer);
+      if (!contentSha256) return;
+      var bytes = new Uint8Array(buffer);
+      var chunkCount = Math.max(1, Math.ceil(bytes.length / chunkBytes));
+      var fileSyncKey = await phase3SyncKey(["artifact-file", sessionId || "", requestId || "", artifactId, contentSha256]);
+      for (var i = 0; i < chunkCount; i += 1) {
+        var start = i * chunkBytes;
+        var end = Math.min(start + chunkBytes, bytes.length);
+        var chunk = bytes.subarray(start, end);
+        var chunkHash = await phase3BytesSha256(chunk);
+        await clientJson("/sync/artifact-blobs/" + encodeURIComponent(artifactId), "PUT", {
+          source: "WebUI",
+          sessionId: sessionId || "",
+          requestId: requestId || "",
+          artifactId: artifactId,
+          fileSyncKey: fileSyncKey,
+          artifact: safe,
+          title: safe.title || "artifact",
+          mimeType: blob.type || safe.mimeType || "application/octet-stream",
+          totalSizeBytes: bytes.length,
+          contentSha256: contentSha256,
+          chunkIndex: i,
+          chunkCount: chunkCount,
+          chunkSha256: chunkHash,
+          contentBase64: phase3ArrayBufferToBase64(chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength)),
+          createdAt: phase1Now()
+        }, true);
+        if (bytesPerSecond > 0 && i + 1 < chunkCount) {
+          await phase3Sleep(Math.ceil((chunk.byteLength / bytesPerSecond) * 1000));
+        }
+      }
+    } catch (error) {
+      delete phase3UploadMemo[memoKey];
+    }
+  }
+
+  async function phase1StreamItem(sessionId, requestId, item) {
+    if (!requestId || !item || typeof item !== "object") return;
+    var sid = item.session_id || item.sessionId || sessionId || "";
+    var rid = item.request_id || item.requestId || requestId || "";
+    var events = [];
+    var artifacts = [];
+    var phase2Messages = [];
+    var phase3Artifacts = [];
+    if (item.type === "tool_start") {
+      events.push({
+        idempotencyKey: await phase1SyncKey(["event", sid, rid, "tool.started", item.tool_call_id || item.tool || ""]),
+        eventType: "tool.started",
+        status: "running",
+        source: "WebUI",
+        sessionId: sid,
+        requestId: rid,
+        detail: phase1SafeJson({ tool: item.tool || "", toolCallId: item.tool_call_id || "" }),
+        createdAt: phase1Now()
+      });
+    } else if (item.type === "tool_end") {
+      var toolStatus = item.status === "success" ? "completed" : "failed";
+      events.push({
+        idempotencyKey: await phase1SyncKey(["event", sid, rid, "tool.finished", item.tool_call_id || item.tool || "", toolStatus]),
+        eventType: "tool.finished",
+        status: toolStatus,
+        source: "WebUI",
+        sessionId: sid,
+        requestId: rid,
+        detail: phase1SafeJson({ tool: item.tool || "", toolCallId: item.tool_call_id || "", executionTime: item.execution_time || 0 }),
+        createdAt: phase1Now()
+      });
+    } else if (item.type === "artifact_limit") {
+      events.push({
+        idempotencyKey: await phase1SyncKey(["event", sid, rid, "artifact.limit", item.tool_call_id || ""]),
+        eventType: "artifact.limit",
+        status: "limited",
+        source: "WebUI",
+        sessionId: sid,
+        requestId: rid,
+        detail: phase1SafeJson({ omittedArtifactCount: Number(item.omitted_artifact_count || 0) || 0 }),
+        createdAt: phase1Now()
+      });
+    } else if (item.type === "cancelled") {
+      events.push({
+        idempotencyKey: await phase1SyncKey(["event", sid, rid, "run.cancelled", "cancelled"]),
+        eventType: "run.cancelled",
+        status: "cancelled",
+        source: "WebUI",
+        sessionId: sid,
+        requestId: rid,
+        detail: phase1SafeJson({ acknowledged: true }),
+        createdAt: phase1Now()
+      });
+    } else if (item.type === "done") {
+      events.push({
+        idempotencyKey: await phase1SyncKey(["event", sid, rid, "run.completed", "completed"]),
+        eventType: "run.completed",
+        status: "completed",
+        source: "WebUI",
+        sessionId: sid,
+        requestId: rid,
+        detail: phase1SafeJson({
+          hasUsage: !!item.usage,
+          artifactCount: Array.isArray(item.artifacts) ? item.artifacts.length : 0,
+          hasTurnIdentity: !!(item.turn_id || item.user_seq !== undefined || item.bot_seq !== undefined)
+        }),
+        createdAt: phase1Now()
+      });
+      var assistantContent = item.final_text !== undefined ? item.final_text : item.content;
+      if (assistantContent !== undefined && assistantContent !== null && assistantContent !== "") {
+        phase2Messages.push({
+          idempotencyKey: await phase2SyncKey(["message", sid, rid, "assistant", item.bot_seq || item.turn_id || "done"]),
+          messageId: item.turn_id || "",
+          seq: Number(item.bot_seq || 0) || 0,
+          role: "assistant",
+          content: assistantContent,
+          extras: phase1SafeJson({
+            hasUsage: !!item.usage,
+            artifactCount: Array.isArray(item.artifacts) ? item.artifacts.length : 0,
+            userSeq: item.user_seq,
+            botSeq: item.bot_seq
+          }),
+          createdAt: phase1Now()
+        });
+      }
+    } else if (item.type === "error") {
+      events.push({
+        idempotencyKey: await phase1SyncKey(["event", sid, rid, "run.failed", "failed"]),
+        eventType: "run.failed",
+        status: "failed",
+        source: "WebUI",
+        sessionId: sid,
+        requestId: rid,
+        detail: phase1SafeJson({ errorCode: item.error_code || "", errorType: item.error_type || "", statusCode: item.status_code || "" }),
+        createdAt: phase1Now()
+      });
+    }
+    var rawArtifacts = phase1ArtifactsFromItem(item);
+    for (var i = 0; i < Math.min(rawArtifacts.length, 32); i += 1) {
+      var artifactMetadata = await phase1ArtifactMetadata(rawArtifacts[i], sid, rid);
+      artifacts.push(artifactMetadata);
+      phase3Artifacts.push({ raw: rawArtifacts[i], metadata: artifactMetadata });
+    }
+    if (artifacts.length) {
+      events.push({
+        idempotencyKey: await phase1SyncKey(["event", sid, rid, "artifact.updated", artifacts.map(function (artifact) { return artifact.safeArtifactId; }).join(",")]),
+        eventType: "artifact.updated",
+        status: "ready",
+        source: "WebUI",
+        sessionId: sid,
+        requestId: rid,
+        detail: phase1SafeJson({ artifactCount: artifacts.length }),
+        createdAt: phase1Now()
+      });
+    }
+    await phase1Emit({ sessionId: sid, requestId: rid, events: events, artifacts: artifacts });
+    if (phase2Messages.length) {
+      await phase2EmitMessages(sid, rid, phase2Messages);
+    }
+    for (var j = 0; j < phase3Artifacts.length; j += 1) {
+      phase3EmitArtifactFile(phase3Artifacts[j].raw, phase3Artifacts[j].metadata, sid, rid).catch(function () {});
+    }
+  }
+
+  function phase1RequestIdFromUrl(url) {
+    try {
+      var parsed = new URL(String(url || ""), window.location.href);
+      if (parsed.pathname.replace(/^.*\/stream$/, "/stream") !== "/stream") return "";
+      return parsed.searchParams.get("request_id") || "";
+    } catch (error) {
+      return "";
+    }
+  }
+
+  function installPhase1EventSourceSync() {
+    if (window.__ecorexPhase1SseSyncInstalled || !window.EventSource) return;
+    var NativeEventSource = window.EventSource;
+    window.__ecorexPhase1SseSyncInstalled = true;
+    function EcoreXPhase1EventSource(url, options) {
+      var requestId = phase1RequestIdFromUrl(url);
+      var source = new NativeEventSource(url, options);
+      if (requestId) {
+        phase1RunEvent("", requestId, "run.accepted", "running", { stream: true }).catch(function () {});
+        source.addEventListener("message", function (event) {
+          try {
+            var item = JSON.parse(event.data || "{}");
+            phase1StreamItem("", requestId, item).catch(function () {});
+          } catch (error) {}
+        });
+      }
+      return source;
+    }
+    EcoreXPhase1EventSource.prototype = NativeEventSource.prototype;
+    EcoreXPhase1EventSource.CONNECTING = NativeEventSource.CONNECTING;
+    EcoreXPhase1EventSource.OPEN = NativeEventSource.OPEN;
+    EcoreXPhase1EventSource.CLOSED = NativeEventSource.CLOSED;
+    window.EventSource = EcoreXPhase1EventSource;
+  }
+
   async function applyModelPolicy(payload) {
     if (!payload || !payload.configured || !payload.settings) {
       return {
@@ -542,7 +1136,7 @@ def _web_app_bridge_script() -> str:
   var updateStatus = {
     state: "idle",
     platform: desktopPlatform,
-    currentVersion: "0.2.0-web.1",
+    currentVersion: "0.2.2-web.1",
     message: "尚未检查更新"
   };
 
@@ -552,7 +1146,7 @@ def _web_app_bridge_script() -> str:
       updateStatus = {
         state: payload.hasUpdate ? "available" : "not-available",
         platform: desktopPlatform,
-        currentVersion: payload.currentVersion || "0.2.0-web.1",
+        currentVersion: payload.currentVersion || "0.2.2-web.1",
         version: payload.latestVersion || payload.version,
         downloadUrl: payload.downloadUrl,
         message: payload.message || (payload.hasUpdate ? "发现新版本，请前往下载页安装" : "当前已经是最新版本"),
@@ -563,7 +1157,7 @@ def _web_app_bridge_script() -> str:
       updateStatus = {
         state: "error",
         platform: desktopPlatform,
-        currentVersion: "0.2.0-web.1",
+        currentVersion: "0.2.2-web.1",
         message: error && error.message ? error.message : String(error),
         checkedAt: new Date().toISOString()
       };
@@ -585,8 +1179,8 @@ def _web_app_bridge_script() -> str:
     getUpdateStatus: async function () { return updateStatus; },
     installDownloadedUpdate: checkForUpdates,
     openDownloadPage: async function () {
-      window.open("https://www.ecoreai.cn/ecorex-agent/", "_blank", "noopener,noreferrer");
-      return { ok: true, url: "https://www.ecoreai.cn/ecorex-agent/" };
+      window.open("https://mvdcm.ecoremedia.net/ecorex-agent/", "_blank", "noopener,noreferrer");
+      return { ok: true, url: "https://mvdcm.ecoremedia.net/ecorex-agent/" };
     },
     onUpdateStatus: function (callback) {
       try { callback(updateStatus); } catch (error) {}
@@ -676,7 +1270,11 @@ def _web_app_bridge_script() -> str:
     },
     listCapabilityPacks: async function () {
       var payload = await apiJson({ path: "/api/capabilities", method: "GET" });
-      var abilities = Array.isArray(payload.abilities) ? payload.abilities : [];
+      var abilityPayload = payload.abilities;
+      if (!Array.isArray(abilityPayload) && abilityPayload && Array.isArray(abilityPayload.abilities)) {
+        abilityPayload = abilityPayload.abilities;
+      }
+      var abilities = Array.isArray(abilityPayload) ? abilityPayload : [];
       return abilities
         .filter(function (item) { return item && (item.agentCanInstall || item.packId || item.kind === "capability-pack"); })
         .map(function (item) {
@@ -692,18 +1290,29 @@ def _web_app_bridge_script() -> str:
             sourceUrl: typeof item.sourceUrl === "string" ? item.sourceUrl : state.sourceUrl,
             mirrorUrls: Array.isArray(item.mirrorUrls) ? item.mirrorUrls : state.mirrorUrls,
             installHint: typeof item.installHint === "string" ? item.installHint : state.installHint,
+            defaultEnabled: item.defaultEnabled === true || state.defaultEnabled === true,
+            readOnly: item.readOnly === true || state.readOnly === true,
+            configureOnly: item.configureOnly === true || state.configureOnly === true,
+            allowedCommands: Array.isArray(item.allowedCommands) ? item.allowedCommands : state.allowedCommands,
             state: String(state.state || (installed ? "installed" : "not-installed")),
             message: String(state.message || (installed ? "能力包已安装" : "点击安装后由当前会话 agent 处理")),
             installed: installed,
             logPath: state.logPath,
             updatedAt: state.updatedAt,
-            policyMode: "ask"
+            policyMode: item.policyMode || state.policyMode || "ask",
+            installAllowed: item.installAllowed !== false,
+            disabledReason: item.disabledReason || state.disabledReason || "",
+            policyUpdatedAt: item.policyUpdatedAt || state.policyUpdatedAt || "",
+            policySource: item.policySource || state.policySource || ""
           };
         })
         .filter(function (item) { return !!item.id; });
     },
     reportTelemetry: async function (event) {
-      try { await clientJson("/events", "POST", event || {}, true); } catch (error) {}
+      try {
+        var targetPath = event && event.type === "phase1_sync" ? "/sync/events" : "/events";
+        await clientJson(targetPath, "POST", event || {}, true);
+      } catch (error) {}
     },
     getEnterpriseSession: async function () {
       var admin = readAdminSession();
@@ -711,12 +1320,17 @@ def _web_app_bridge_script() -> str:
       var auth = await apiJson({ path: "/auth/check", method: "GET" });
       if (auth.auth_required && !auth.authenticated) return null;
       if (!auth.auth_required) return webSession(false, true, null, true);
+      var authIdentity = auth && auth.session && auth.session.user ? auth.session.user : null;
+      if (auth && auth.session && auth.session.user && auth.session.user.email) {
+        writeLocalSession(auth.session);
+      }
       try {
         await clientJson("/model-config", "GET", undefined, false);
       } catch (error) {
-        if (isMissingClientBridge(error)) return webSession(Boolean(auth.auth_required), true);
+        if (isMissingClientBridge(error)) return webSession(Boolean(auth.auth_required), true, authIdentity, true);
       }
-      return null;
+      if (auth && auth.session && auth.session.user && auth.session.user.email) return auth.session;
+      return webSession(Boolean(auth.auth_required), true, authIdentity, true);
     },
     enterpriseLogin: async function (input) {
       input = input || {};
@@ -728,7 +1342,7 @@ def _web_app_bridge_script() -> str:
           email: input.email,
           password: input.password,
           deviceId: currentDeviceId,
-          appVersion: "0.2.0-web.1"
+          appVersion: "0.2.2-web.1"
         }, false);
       } catch (error) {
         adminError = error;
@@ -743,14 +1357,22 @@ def _web_app_bridge_script() -> str:
           quota: adminPayload.quota || { allowed: true }
         };
         writeAdminSession(adminSession);
-        try { await apiJson({ path: "/auth/login", method: "POST", body: { password: input.password } }); } catch (error) {}
+        try { await apiJson({ path: "/auth/login", method: "POST", body: { email: input.email, password: input.password } }); } catch (error) {}
         try { await refreshModelPolicy(); } catch (error) {}
         return adminSession;
       }
       if (adminError && !isMissingClientBridge(adminError)) {
         throw adminError;
       }
-      await apiJson({ path: "/auth/login", method: "POST", body: { password: input.password } });
+      var localAuth = await apiJson({
+        path: "/auth/login",
+        method: "POST",
+        body: { email: input.email, password: input.password }
+      });
+      if (localAuth && localAuth.session && localAuth.session.user && localAuth.session.user.email) {
+        writeLocalSession(localAuth.session);
+        return localAuth.session;
+      }
       return webSession(true, true, { email: input.email }, true);
     },
     enterpriseLogout: async function () {
@@ -770,6 +1392,7 @@ def _web_app_bridge_script() -> str:
     },
     refreshEnterprisePolicy: refreshModelPolicy
   };
+  installPhase1EventSourceSync();
 })();
 </script>
 """
@@ -876,15 +1499,38 @@ def _session_expire_seconds():
     return int(conf().get("web_session_expire_days", 30)) * 86400
 
 
-def _create_auth_token():
-    """Create a stateless signed token: ``<timestamp_hex>.<hmac_hex>``."""
+def _web_device_id() -> str:
+    web_ctx = getattr(web, "ctx", None)
+    env = getattr(web_ctx, "env", {}) if web_ctx else {}
+    return str(env.get("HTTP_X_ECOREX_DEVICE_ID") or env.get("HTTP_X_DEVICE_ID") or "web-password").strip()
+
+
+def _encode_auth_identity(email: str) -> str:
+    raw = str(email or "").strip().lower().encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_auth_identity(encoded: str) -> str:
+    if not encoded:
+        return ""
+    try:
+        padded = encoded + ("=" * ((4 - len(encoded) % 4) % 4))
+        return base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8").strip().lower()
+    except Exception:
+        return ""
+
+
+def _create_auth_token(email: str = ""):
+    """Create a stateless signed token: ``<timestamp_hex>.<identity_b64>.<hmac_hex>``."""
     ts = format(int(time.time()), "x")
+    identity = _encode_auth_identity(email)
+    body = f"{ts}.{identity}"
     sig = hmac.new(
         _get_web_password().encode(),
-        ts.encode(),
+        body.encode(),
         hashlib.sha256,
     ).hexdigest()
-    return f"{ts}.{sig}"
+    return f"{body}.{sig}"
 
 
 def _verify_auth_token(token):
@@ -895,7 +1541,15 @@ def _verify_auth_token(token):
     """
     if not token or "." not in token:
         return False
-    ts_hex, sig = token.split(".", 1)
+    parts = token.split(".")
+    if len(parts) == 2:
+        ts_hex, sig = parts
+        body = ts_hex
+    elif len(parts) == 3:
+        ts_hex, _identity, sig = parts
+        body = f"{ts_hex}.{_identity}"
+    else:
+        return False
     try:
         ts = int(ts_hex, 16)
     except ValueError:
@@ -904,10 +1558,19 @@ def _verify_auth_token(token):
         return False
     expected = hmac.new(
         _get_web_password().encode(),
-        ts_hex.encode(),
+        body.encode(),
         hashlib.sha256,
     ).hexdigest()
     return hmac.compare_digest(sig, expected)
+
+
+def _auth_token_email(token: str) -> str:
+    if not _verify_auth_token(token):
+        return ""
+    parts = token.split(".")
+    if len(parts) != 3:
+        return ""
+    return _decode_auth_identity(parts[1])
 
 
 def _desktop_runtime_token_matches() -> bool:
@@ -1055,6 +1718,129 @@ def _generate_session_title(user_message: str, assistant_reply: str = "") -> str
     return generate_session_title(user_message, assistant_reply)
 
 
+def _project_context_text_value(value: Any, limit: int = 4096) -> str:
+    text = str(value or "").strip()
+    if len(text) > limit:
+        return text[:limit]
+    return text
+
+
+def _web_body_log_summary(value: Any) -> Dict[str, Any]:
+    text = "" if value is None else str(value)
+    return {
+        "redacted": bool(text),
+        "hash": hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:16] if text else "",
+        "chars": len(text),
+        "bytes": len(text.encode("utf-8", errors="replace")),
+    }
+
+
+def _public_exception_summary(value: Any) -> Dict[str, Any]:
+    text = "" if value is None else str(value)
+    return {
+        "errorType": type(value).__name__ if value is not None else "",
+        "errorHash": hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:16] if text else "",
+        "errorLength": len(text),
+        "errorBytes": len(text.encode("utf-8", errors="replace")),
+    }
+
+
+def _public_exception_message(prefix: str, value: Any) -> str:
+    summary = _public_exception_summary(value)
+    if not summary["errorHash"]:
+        return prefix
+    return (
+        f"{prefix} Details redacted "
+        f"(type={summary['errorType']}, hash={summary['errorHash']}, "
+        f"chars={summary['errorLength']}, bytes={summary['errorBytes']})."
+    )
+
+
+def _public_error_payload(prefix: str, value: Any, **extra: Any) -> Dict[str, Any]:
+    return {
+        "status": "error",
+        "message": _public_exception_message(prefix, value),
+        **_public_exception_summary(value),
+        **extra,
+    }
+
+
+def _public_validation_error_payload(value: Any) -> Dict[str, Any]:
+    message = mask_sensitive_text(str(value or ""), max_chars=240).strip()
+    return {
+        "status": "error",
+        "message": message or "Invalid request.",
+    }
+
+
+def _normalize_project_context_meta(value: Any) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    project_id = _project_context_text_value(value.get("projectId") or value.get("project_id"), 256)
+    project_path = _project_context_text_value(value.get("projectPath") or value.get("project_path"), 4096)
+    if not project_id or not project_path:
+        return {}
+    project_name = _project_context_text_value(value.get("projectName") or value.get("project_name") or project_id, 512)
+    memory_path = _project_context_text_value(value.get("memoryPath") or value.get("memory_path"), 4096)
+    dreams_path = _project_context_text_value(value.get("dreamsPath") or value.get("dreams_path"), 4096)
+    if not memory_path:
+        memory_path = os.path.join(project_path, ".ecorex", "project-memory.md")
+    if not dreams_path:
+        dreams_path = os.path.join(project_path, ".ecorex", "dreams")
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    return {
+        "projectId": project_id,
+        "projectName": project_name,
+        "projectPath": project_path,
+        "memoryPath": memory_path,
+        "dreamsPath": dreams_path,
+        "createdAt": _project_context_text_value(value.get("createdAt") or value.get("created_at"), 128),
+        "lastUsedAt": now,
+        "source": _project_context_text_value(value.get("source") or "web-message", 128),
+    }
+
+
+def _project_context_event_summary(value: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(value, dict) or not value:
+        return {"present": False}
+    refs = [
+        str(value.get("projectId") or ""),
+        str(value.get("projectPath") or ""),
+        str(value.get("memoryPath") or ""),
+        str(value.get("dreamsPath") or ""),
+    ]
+    digest = hashlib.sha256("\n".join(refs).encode("utf-8", errors="replace")).hexdigest()[:16]
+    return {
+        "present": True,
+        "scope": "project",
+        "source": _project_context_text_value(value.get("source") or "web-message", 128),
+        "bindingHash": digest,
+    }
+
+
+def _persist_project_session_binding(session_id: str, binding: Dict[str, Any]) -> None:
+    if not session_id or not binding:
+        return
+    try:
+        from common.ecorex_workspace import save_ui_state
+        project = {
+            "id": binding.get("projectId"),
+            "name": binding.get("projectName") or binding.get("projectId"),
+            "path": binding.get("projectPath"),
+            "memoryPath": binding.get("memoryPath"),
+            "dreamsPath": binding.get("dreamsPath"),
+            "updatedAt": binding.get("lastUsedAt") or datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        }
+        save_ui_state(_get_workspace_root(), {
+            "projectStateMode": "merge",
+            "projects": [project] if project.get("id") and project.get("path") else [],
+            "sessionProjects": {session_id: binding.get("projectId")},
+            "sessionProjectBindings": {session_id: binding},
+        })
+    except Exception as exc:
+        logger.warning(f"[WebChannel] failed to persist project session binding: {_web_body_log_summary(exc)}")
+
+
 class WebMessage(ChatMessage):
     def __init__(
             self,
@@ -1114,6 +1900,8 @@ class WebChannel(ChatChannel):
         self.request_artifacts = {}  # request_id -> list of structured artifact dicts
         self.sse_stream_tokens = {}  # legacy field; no longer used to supersede streams
         self._http_server = None
+        self.runtime_event_append_failures = 0
+        self.runtime_event_append_failure_tail: List[Dict[str, Any]] = []
 
     def _generate_msg_id(self):
         """生成唯一的消息ID"""
@@ -1136,7 +1924,7 @@ class WebChannel(ChatChannel):
                 if mapped_session_id == session_id and registry.get_event(request_id) is not None
             ]
         except Exception as e:
-            logger.debug(f"[WebChannel] active request lookup failed for session {session_id}: {e}")
+            logger.debug(f"[WebChannel] active request lookup failed for session {session_id}: {_web_body_log_summary(e)}")
             return []
 
     def _recover_interrupted_runs_for_removed_session_locks(self, session_id: str = "") -> List[str]:
@@ -1160,12 +1948,12 @@ class WebChannel(ChatChannel):
                 except FileNotFoundError:
                     item["removed"] = True
                 except Exception as e:
-                    logger.debug(f"[WebChannel] dead session lock removal skipped for {item_session_id}: {e}")
+                    logger.debug(f"[WebChannel] dead session lock removal skipped for {item_session_id}: {_web_body_log_summary(e)}")
                     continue
                 if item.get("removed"):
                     removed_session_ids.add(item_session_id)
         except Exception as e:
-            logger.debug(f"[WebChannel] dead session lock recovery skipped for {session_id}: {e}")
+            logger.debug(f"[WebChannel] dead session lock recovery skipped for {session_id}: {_web_body_log_summary(e)}")
             return []
 
         if not removed_session_ids:
@@ -1191,7 +1979,7 @@ class WebChannel(ChatChannel):
                 )
                 interrupted_request_ids.append(request_id)
         except Exception as e:
-            logger.warning(f"[WebChannel] failed to mark dead-owner lock runs interrupted: {e}", exc_info=True)
+            logger.warning(f"[WebChannel] failed to mark dead-owner lock runs interrupted: {_web_body_log_summary(e)}")
             return interrupted_request_ids
 
         if interrupted_request_ids:
@@ -1284,7 +2072,7 @@ class WebChannel(ChatChannel):
                         merged["session_id"] = existing.get("session_id")
                     active_by_request[request_id] = merged
         except Exception as e:
-            logger.debug(f"[WebChannel] backpressure snapshot fallback failed: {e}")
+            logger.debug(f"[WebChannel] backpressure snapshot fallback failed: {_web_body_log_summary(e)}")
 
         active_requests = list(active_by_request.values())
         session_active = [
@@ -1359,7 +2147,7 @@ class WebChannel(ChatChannel):
 
             get_run_ledger().mark_phase(request_id, phase, status=status)
         except Exception as e:
-            logger.debug(f"[WebChannel] run ledger phase update skipped for {request_id}: {e}")
+            logger.debug(f"[WebChannel] run ledger phase update skipped for {request_id}: {_web_body_log_summary(e)}")
 
     def _mark_run_terminal(
         self,
@@ -1382,7 +2170,7 @@ class WebChannel(ChatChannel):
                 error_message=error_message,
             )
         except Exception as e:
-            logger.debug(f"[WebChannel] run ledger terminal update skipped for {request_id}: {e}")
+            logger.debug(f"[WebChannel] run ledger terminal update skipped for {request_id}: {_web_body_log_summary(e)}")
 
     def _record_run_event_phase(self, request_id: str, event: Dict[str, Any]) -> None:
         etype = str((event or {}).get("type") or "")
@@ -1401,16 +2189,27 @@ class WebChannel(ChatChannel):
                 error_message=str(event.get("message") or event.get("content") or ""),
             )
         elif etype == "interrupted":
+            interrupted_reason = str(event.get("terminal_reason") or "interrupted")
+            interrupted_code = str(event.get("error_code") or "RUN_INTERRUPTED")
+            terminal_status = "timeout" if interrupted_reason == "tool_timeout" or interrupted_code == "TOOL_TIMEOUT" else "interrupted"
             self._mark_run_terminal(
                 request_id,
-                "interrupted",
-                reason=str(event.get("terminal_reason") or "interrupted"),
-                error_code=str(event.get("error_code") or "RUN_INTERRUPTED"),
+                terminal_status,
+                reason=interrupted_reason,
+                error_code=interrupted_code,
+                error_message=str(event.get("message") or event.get("content") or ""),
+            )
+        elif etype == "tool_timeout":
+            self._mark_run_terminal(
+                request_id,
+                "timeout",
+                reason=str(event.get("terminal_reason") or "tool_timeout"),
+                error_code=str(event.get("error_code") or "TOOL_TIMEOUT"),
                 error_message=str(event.get("message") or event.get("content") or ""),
             )
         elif etype == "tool_permission_request":
             self._mark_run_phase(request_id, "waiting_permission", status="running")
-        elif etype == "tool_execution_start":
+        elif etype in ("tool_execution_start", "tool_execution_heartbeat", "tool_execution_deadline_extended"):
             self._mark_run_phase(request_id, "tool_running", status="running")
         elif etype == "tool_execution_end":
             self._mark_run_phase(request_id, "tool_completed", status="running")
@@ -1418,6 +2217,390 @@ class WebChannel(ChatChannel):
             self._mark_run_phase(request_id, etype, status="running")
         elif etype == "message_end":
             self._mark_run_phase(request_id, "finalizing", status="finalizing")
+
+    def _append_runtime_event(
+        self,
+        request_id: str,
+        event_type: str,
+        *,
+        session_id: str = "",
+        turn_id: str = "",
+        payload: Optional[Dict[str, Any]] = None,
+        idempotency_key: str = "",
+        source: str = "web_channel",
+    ) -> Optional[Dict[str, Any]]:
+        if not request_id or not event_type:
+            return None
+        if not self._runtime_event_ledger_enabled():
+            return {
+                "event_id": None,
+                "event_type": event_type,
+                "append_skipped": True,
+                "error_code": "RUN_EVENT_LEDGER_DISABLED",
+            }
+        try:
+            from agent.protocol import get_run_event_ledger
+
+            return get_run_event_ledger().append_event(
+                request_id=request_id,
+                session_id=session_id or self.request_to_session.get(request_id, ""),
+                turn_id=turn_id or request_id,
+                event_type=event_type,
+                payload=payload or {},
+                idempotency_key=idempotency_key,
+                source=source,
+            )
+        except Exception as e:
+            error_summary = _web_body_log_summary(e)
+            detail = {
+                "request_id": request_id,
+                "event_type": event_type,
+                "error_type": type(e).__name__,
+                "error_hash": error_summary.get("hash", ""),
+                "error_chars": error_summary.get("chars", 0),
+                "error_bytes": error_summary.get("bytes", 0),
+                "redacted": True,
+                "timestamp": time.time(),
+            }
+            self.runtime_event_append_failures += 1
+            self.runtime_event_append_failure_tail.append(detail)
+            if len(self.runtime_event_append_failure_tail) > 50:
+                del self.runtime_event_append_failure_tail[:-50]
+            logger.warning(
+                f"[WebChannel] runtime event append failed for {request_id}/{event_type}: "
+                f"{detail['error_type']}: {error_summary}"
+            )
+            return {
+                "event_id": None,
+                "event_type": event_type,
+                "append_failed": True,
+                "error_code": "RUN_EVENT_APPEND_FAILED",
+                "error_type": detail["error_type"],
+            }
+
+    def _runtime_event_ledger_enabled(self) -> bool:
+        raw_env = os.environ.get("ECOREX_RUNTIME_EVENT_LEDGER", "")
+        if str(raw_env).strip().lower() in {"0", "false", "off", "no", "disabled"}:
+            return False
+        try:
+            raw_conf = conf().get("web_runtime_event_ledger_enabled", True)
+            if str(raw_conf).strip().lower() in {"0", "false", "off", "no", "disabled"}:
+                return False
+        except Exception:
+            pass
+        return True
+
+    def _record_request_accepted_events(
+        self,
+        request_id: str,
+        session_id: str,
+        *,
+        visible_message: str = "",
+        client_attempt_id: str = "",
+        retry_of_request_id: str = "",
+        interrupts_request_id: str = "",
+        project_context_meta: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        turn_id = request_id
+        base_payload = {
+            "request_id": request_id,
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "client_attempt_id": client_attempt_id,
+            "retry_of_request_id": retry_of_request_id,
+            "interrupts_request_id": interrupts_request_id,
+        }
+        self._append_runtime_event(
+            request_id,
+            "run.accepted",
+            session_id=session_id,
+            turn_id=turn_id,
+            payload={**base_payload, "project_context": _project_context_event_summary(project_context_meta)},
+            idempotency_key=f"request:{request_id}:run.accepted",
+        )
+        self._append_runtime_event(
+            request_id,
+            "message.user.accepted",
+            session_id=session_id,
+            turn_id=turn_id,
+            payload={**base_payload, "content": visible_message or ""},
+            idempotency_key=f"request:{request_id}:message.user.accepted",
+        )
+        self._append_runtime_event(
+            request_id,
+            "message.assistant.created",
+            session_id=session_id,
+            turn_id=turn_id,
+            payload=base_payload,
+            idempotency_key=f"request:{request_id}:message.assistant.created",
+        )
+
+    def _safe_runtime_artifact_payload(self, event: Dict[str, Any], base_payload: Dict[str, Any]) -> Dict[str, Any]:
+        safe: Dict[str, Any] = {}
+        for key in ("type", "request_id", "session_id", "turn_id", "action", "source"):
+            if key in base_payload:
+                value = base_payload.get(key)
+                if isinstance(value, (str, int, float, bool)) or value is None:
+                    safe[key] = value
+
+        artifact = event.get("artifact") if isinstance(event.get("artifact"), dict) else None
+        if artifact is not None:
+            safe["artifact"] = self._safe_runtime_artifact(artifact)
+        artifacts = event.get("artifacts")
+        if isinstance(artifacts, list):
+            safe["artifacts"] = [
+                self._safe_runtime_artifact(item)
+                for item in artifacts
+                if isinstance(item, dict)
+            ][:32]
+        if artifact is None and not isinstance(artifacts, list):
+            top_level = self._safe_runtime_artifact(event)
+            if top_level:
+                safe.update(top_level)
+        return safe
+
+    def _safe_runtime_artifact(self, artifact: Dict[str, Any]) -> Dict[str, Any]:
+        allowed_fields = {
+            "id", "kind", "title", "name", "path", "relativePath", "relative_path",
+            "url", "previewUrl", "preview_url", "fileName", "file_name",
+            "fileType", "file_type", "mimeType", "mime_type", "sizeBytes",
+            "size_bytes", "width", "height", "sha256", "safeArtifactId",
+        }
+        path_fields = {"path", "relativePath", "relative_path", "url", "previewUrl", "preview_url"}
+        safe: Dict[str, Any] = {}
+        omitted = 0
+        truncated = False
+        for key, value in dict(artifact or {}).items():
+            if key not in allowed_fields:
+                omitted += 1
+                continue
+            if key in {"sizeBytes", "size_bytes", "width", "height"}:
+                try:
+                    safe[key] = max(0, int(value))
+                except (TypeError, ValueError):
+                    omitted += 1
+                continue
+            if isinstance(value, bool):
+                safe[key] = value
+                continue
+            if not isinstance(value, str):
+                omitted += 1
+                continue
+            stripped = value.strip()
+            if key in path_fields and stripped.lower().startswith("data:"):
+                omitted += 1
+                continue
+            limit = 4096 if key in path_fields else 512
+            if len(stripped) > limit:
+                safe[key] = f"{stripped[:limit]}...[truncated {len(stripped) - limit} chars]"
+                truncated = True
+            else:
+                safe[key] = stripped
+        if "kind" not in safe:
+            safe["kind"] = "file"
+        if omitted:
+            safe["artifact_sanitized"] = True
+            safe["omitted_field_count"] = omitted
+        if truncated:
+                safe["metadata_truncated"] = True
+        return safe
+
+    def _safe_runtime_payload_with_artifacts(self, event: Dict[str, Any], base_payload: Dict[str, Any]) -> Dict[str, Any]:
+        payload = dict(base_payload or {})
+        payload.pop("artifact", None)
+        payload.pop("artifacts", None)
+        artifact_payload = self._safe_runtime_artifact_payload(event, base_payload)
+        if "artifact" in artifact_payload:
+            payload["artifact"] = artifact_payload["artifact"]
+        if "artifacts" in artifact_payload:
+            payload["artifacts"] = artifact_payload["artifacts"]
+        return payload
+
+    def _runtime_events_for_sse_item(
+        self,
+        request_id: str,
+        event: Dict[str, Any],
+        legacy_event_id: int,
+    ) -> List[Dict[str, Any]]:
+        legacy_type = str((event or {}).get("type") or "")
+        session_id = str(event.get("session_id") or self.request_to_session.get(request_id, "") or "")
+        turn_id = str(event.get("turn_id") or request_id)
+        base_payload = dict(event or {})
+        base_payload.setdefault("request_id", request_id)
+        base_payload.setdefault("session_id", session_id)
+        base_payload.setdefault("turn_id", turn_id)
+        base_key = f"stream:{request_id}:{legacy_event_id}"
+        if legacy_type == "done":
+            finalized_payload = self._safe_runtime_payload_with_artifacts(event, base_payload)
+            return [
+                {
+                    "event_type": "message.assistant.finalized",
+                    "payload": {
+                        **finalized_payload,
+                        "content": event.get("final_text") or event.get("content") or event.get("text") or event.get("message") or "",
+                    },
+                    "idempotency_key": f"{base_key}:message.assistant.finalized",
+                },
+                {
+                    "event_type": "run.completed",
+                    "payload": finalized_payload,
+                    "idempotency_key": f"{base_key}:run.completed",
+                },
+            ]
+        if legacy_type == "error":
+            return [{
+                "event_type": "run.failed",
+                "payload": base_payload,
+                "idempotency_key": f"{base_key}:run.failed",
+            }]
+        if legacy_type == "cancelled":
+            return [{
+                "event_type": "run.cancelled",
+                "payload": base_payload,
+                "idempotency_key": f"{base_key}:run.cancelled",
+            }]
+        if legacy_type == "interrupted":
+            return [{
+                "event_type": "run.interrupted",
+                "payload": base_payload,
+                "idempotency_key": f"{base_key}:run.interrupted",
+            }]
+        if legacy_type == "delta":
+            return [{
+                "event_type": "assistant.delta",
+                "payload": {**base_payload, "content": event.get("content") or event.get("delta") or event.get("text") or ""},
+                "idempotency_key": f"{base_key}:assistant.delta",
+            }]
+        if legacy_type == "message_update":
+            update_mode = str(event.get("update_mode") or "").lower()
+            event_type = "assistant.snapshot" if update_mode == "replace" else "assistant.delta"
+            return [{
+                "event_type": event_type,
+                "payload": {**base_payload, "content": event.get("content") or event.get("delta") or event.get("text") or ""},
+                "idempotency_key": f"{base_key}:{event_type}",
+            }]
+        if legacy_type == "tool_permission_request":
+            return [{
+                "event_type": "permission.requested",
+                "payload": base_payload,
+                "idempotency_key": f"{base_key}:permission.requested",
+            }]
+        if legacy_type == "tool_start":
+            return [{
+                "event_type": "tool.started",
+                "payload": base_payload,
+                "idempotency_key": f"{base_key}:tool.started",
+            }]
+        if legacy_type == "tool_heartbeat":
+            return [{
+                "event_type": "tool.heartbeat",
+                "payload": base_payload,
+                "idempotency_key": f"{base_key}:tool.heartbeat",
+            }]
+        if legacy_type == "tool_deadline_extended":
+            return [{
+                "event_type": "tool.deadline_extended",
+                "payload": base_payload,
+                "idempotency_key": f"{base_key}:tool.deadline_extended",
+            }]
+        if legacy_type == "tool_end":
+            status = str(event.get("status") or "").lower()
+            event_type = "tool.failed" if status in ("failed", "error", "timeout") else "tool.completed"
+            return [{
+                "event_type": event_type,
+                "payload": base_payload,
+                "idempotency_key": f"{base_key}:{event_type}",
+            }]
+        if legacy_type.startswith("subagent_"):
+            subagent_event_type = {
+                "subagent_start": "subagent.started",
+                "subagent_update": "subagent.updated",
+                "subagent_complete": "subagent.completed",
+                "subagent_failed": "subagent.failed",
+                "subagent_timeout": "subagent.timeout",
+                "subagent_cancelled": "subagent.cancelled",
+            }.get(legacy_type)
+            if not subagent_event_type:
+                return []
+            task = event.get("task") if isinstance(event.get("task"), dict) else {}
+            child_request_id = str(
+                event.get("child_request_id")
+                or task.get("requestId")
+                or task.get("childSessionId")
+                or ""
+            )
+            task_id = str(event.get("task_id") or task.get("id") or task.get("task_id") or "")
+            parent_request_id = str(request_id)
+            parent_session_id = str(session_id or "")
+            payload = {
+                **base_payload,
+                "parent_request_id": parent_request_id,
+                "parent_session_id": parent_session_id,
+                "child_request_id": child_request_id,
+                "task_id": task_id,
+                "name": event.get("name") or task.get("name") or task.get("summary") or task_id or "Subagent",
+                "role": event.get("role") or task.get("role") or "subagent",
+                "summary": event.get("summary") or task.get("summary") or "",
+                "status": event.get("status") or task.get("status") or "",
+                "result_preview": event.get("result_preview") or "",
+                "deadline_at": task.get("deadlineAt"),
+                "timeout_seconds": task.get("timeoutSeconds"),
+                "last_heartbeat_at": task.get("lastHeartbeatAt"),
+            }
+            return [{
+                "event_type": subagent_event_type,
+                "payload": payload,
+                "idempotency_key": f"{base_key}:{subagent_event_type}:{child_request_id or task_id}",
+            }]
+        if legacy_type in ("artifact", "file", "image", "video", "audio", "voice_attach"):
+            return [{
+                "event_type": "artifact.created",
+                "payload": self._safe_runtime_artifact_payload(event, base_payload),
+                "idempotency_key": f"{base_key}:artifact.created",
+            }]
+        if legacy_type == "phase":
+            return [{
+                "event_type": "run.phase",
+                "payload": base_payload,
+                "idempotency_key": f"{base_key}:run.phase",
+            }]
+        return []
+
+    def _record_runtime_events_for_sse_item(
+        self,
+        request_id: str,
+        event: Dict[str, Any],
+        legacy_event_id: int,
+    ) -> None:
+        rows = []
+        attempted = []
+        failures = []
+        for item in self._runtime_events_for_sse_item(request_id, event, legacy_event_id):
+            attempted.append(item["event_type"])
+            row = self._append_runtime_event(
+                request_id,
+                item["event_type"],
+                session_id=str(event.get("session_id") or self.request_to_session.get(request_id, "") or ""),
+                turn_id=str(event.get("turn_id") or request_id),
+                payload=item.get("payload") or {},
+                idempotency_key=item.get("idempotency_key") or "",
+            )
+            if row and not row.get("append_failed") and not row.get("append_skipped"):
+                rows.append(row)
+            elif row:
+                failures.append({
+                    "event_type": item["event_type"],
+                    "error_code": row.get("error_code") or "RUN_EVENT_APPEND_FAILED",
+                    "error_type": row.get("error_type") or "",
+                })
+        if rows:
+            event["runtime_event_ids"] = [row.get("event_id") for row in rows]
+            event["runtime_event_types"] = [row.get("event_type") for row in rows]
+        if attempted:
+            event["runtime_event_attempted_types"] = attempted
+            event["runtime_event_persisted"] = len(rows) == len(attempted) and not failures
+        if failures:
+            event["runtime_event_append_errors"] = failures
 
     def _active_run_stale_seconds(self) -> int:
         configured = conf().get("web_active_run_stale_seconds", ACTIVE_RUN_STALE_SECONDS)
@@ -1441,7 +2624,7 @@ class WebChannel(ChatChannel):
 
                 stale_locks = list_session_locks(_get_workspace_root(), cleanup=False)
             except Exception as exc:
-                logger.debug(f"[WebChannel] stale active run lock scan skipped: {exc}")
+                logger.debug(f"[WebChannel] stale active run lock scan skipped: {_web_body_log_summary(exc)}")
                 stale_locks = []
 
         def has_live_session_lock(session_id: str) -> bool:
@@ -1649,12 +2832,12 @@ class WebChannel(ChatChannel):
                             item["removed"] = True
                             logger.warning(
                                 f"[WebChannel] Removed dead session lock before active snapshot: "
-                                f"{path} pid={item.get('pid')} session={item.get('session_id')}"
+                                f"{_diagnostic_stale_lock_summary(item)}"
                             )
                         except FileNotFoundError:
                             item["removed"] = True
                         except Exception as exc:
-                            item["remove_error"] = str(exc)
+                            item["remove_error"] = _public_exception_summary(exc)
                 stale_locks.append(item)
             interrupted_session_ids = {
                 session_id
@@ -1812,6 +2995,7 @@ class WebChannel(ChatChannel):
                     "deadline_at": metadata.get("deadline_at") or item.get("deadline_at"),
                     "actions": item.get("actions") or {},
                 })
+            public_stale_locks = [_diagnostic_stale_lock_summary(item) for item in stale_locks]
             return {
                 "status": "success",
                 "requests": requests,
@@ -1822,12 +3006,20 @@ class WebChannel(ChatChannel):
                 "run_status_counts": run_status_counts,
                 "runStatusCounts": run_status_counts,
                 "sessions": sessions,
-                "stale_locks": stale_locks,
-                "staleLocks": stale_locks,
+                "stale_locks": public_stale_locks,
+                "staleLocks": public_stale_locks,
             }
         except Exception as e:
-            logger.error(f"[WebChannel] active_requests_snapshot error: {e}")
-            return {"status": "error", "message": str(e), "requests": [], "sessions": {}, "stale_locks": [], "staleLocks": []}
+            logger.error(f"[WebChannel] active_requests_snapshot error: {_web_body_log_summary(e)}")
+            return {
+                "status": "error",
+                "message": _public_exception_message("Active requests snapshot unavailable.", e),
+                **_public_exception_summary(e),
+                "requests": [],
+                "sessions": {},
+                "stale_locks": [],
+                "staleLocks": [],
+            }
 
     def _ensure_sse_state(self, request_id: str) -> None:
         if not request_id:
@@ -1897,9 +3089,15 @@ class WebChannel(ChatChannel):
         elif legacy_type == "tool_start":
             event.setdefault("event_type", "tool.started")
             event.setdefault("state", "running")
+        elif legacy_type == "tool_heartbeat":
+            event.setdefault("event_type", "tool.heartbeat")
+            event.setdefault("state", "running")
+        elif legacy_type == "tool_deadline_extended":
+            event.setdefault("event_type", "tool.deadline_extended")
+            event.setdefault("state", "running")
         elif legacy_type == "tool_end":
             status = str(event.get("status") or "").lower()
-            event.setdefault("event_type", "tool.failed" if status in ("failed", "error") else "tool.completed")
+            event.setdefault("event_type", "tool.failed" if status in ("failed", "error", "timeout") else "tool.completed")
             event.setdefault("state", "running")
         elif legacy_type in ("artifact", "file", "image", "video", "audio", "voice_attach"):
             event.setdefault("event_type", "artifact.updated")
@@ -1997,7 +3195,7 @@ class WebChannel(ChatChannel):
                 except FileNotFoundError:
                     pass
                 except Exception as exc:
-                    logger.debug(f"[WebChannel] sidecar interruption lock cleanup skipped: {exc}")
+                    logger.debug(f"[WebChannel] sidecar interruption lock cleanup skipped: {_web_body_log_summary(exc)}")
             message = "Runtime session lock owner disappeared before the run reached a terminal state."
             ledger.mark_terminal(
                 request_id,
@@ -2014,8 +3212,138 @@ class WebChannel(ChatChannel):
                 return None
             return self._build_interrupted_event(request_id, session_id=session_id, message=message)
         except Exception as exc:
-            logger.debug(f"[WebChannel] sidecar interrupted stream recovery skipped for {request_id}: {exc}")
+            logger.debug(f"[WebChannel] sidecar interrupted stream recovery skipped for {request_id}: {_web_body_log_summary(exc)}")
             return None
+
+    def _request_session_mismatch_event(
+        self,
+        request_id: str,
+        expected_session_id: str = "",
+        *,
+        actual_session_id: str = "",
+    ) -> Dict[str, Any]:
+        expected = str(expected_session_id or "").strip()
+        if not request_id or not expected:
+            return {}
+        actual = str(actual_session_id or self.request_to_session.get(request_id, "") or "").strip()
+        if not actual:
+            try:
+                from agent.protocol import RuntimeProjectionService
+
+                actual = str(RuntimeProjectionService().owner_session_id_for_request(request_id) or "").strip()
+            except Exception as exc:
+                logger.debug(f"[WebChannel] request owner lookup skipped for {request_id}: {_web_body_log_summary(exc)}")
+                actual = ""
+        if not actual or actual == expected:
+            return {}
+        return self._normalize_sse_event(request_id, {
+            "type": "error",
+            "error_type": "session_mismatch",
+            "error_code": "SESSION_MISMATCH",
+            "code": "SESSION_MISMATCH",
+            "message": "Request does not belong to the active session. Refresh the conversation list and retry.",
+            "content": "Request does not belong to the active session. Refresh the conversation list and retry.",
+            "recoverable": True,
+            "retryable": False,
+        })
+
+    def _runtime_projection_replay_events(self, request_id: str, expected_session_id: str = "") -> List[Dict[str, Any]]:
+        """Build legacy-compatible SSE recovery events from durable runtime events."""
+        if not request_id:
+            return []
+        mismatch_event = self._request_session_mismatch_event(request_id, expected_session_id)
+        if mismatch_event:
+            return [mismatch_event]
+        try:
+            from agent.protocol import RuntimeProjectionService
+
+            projection = RuntimeProjectionService().request_projection(
+                request_id,
+                expected_session_id=str(expected_session_id or ""),
+            )
+        except Exception as exc:
+            logger.warning(f"[WebChannel] runtime projection replay failed for {request_id}: {_web_body_log_summary(exc)}")
+            return []
+        if not projection or int(projection.get("event_count") or 0) <= 0:
+            return []
+
+        session_id = str(projection.get("session_id") or self.request_to_session.get(request_id, "") or "")
+        state = str(projection.get("state") or "unknown")
+        latest_event_id = int(projection.get("latest_event_id") or 0)
+        terminal_reason = str(projection.get("terminal_reason") or state or "")
+        terminal_message = str(projection.get("terminal_message") or "")
+        assistant = next(
+            (
+                message for message in projection.get("messages", [])
+                if isinstance(message, dict) and message.get("role") == "assistant"
+            ),
+            {},
+        )
+        content = str((assistant or {}).get("content") or "")
+        base = {
+            "request_id": request_id,
+            "session_id": session_id,
+            "runtime_projection_replay": True,
+            "runtime_event_latest_id": latest_event_id,
+            "projection_state": state,
+        }
+        events: List[Dict[str, Any]] = []
+        if content:
+            events.append(self._normalize_sse_event(request_id, {
+                **base,
+                "type": "message_update",
+                "content": content,
+                "update_mode": "replace",
+            }))
+
+        if state == "completed":
+            events.append(self._normalize_sse_event(request_id, {
+                **base,
+                "type": "done",
+                "content": content,
+                "final_text": content,
+                "terminal_reason": terminal_reason or "completed",
+            }))
+        elif state == "failed":
+            error_text = terminal_message or terminal_reason or content or "Runtime failed."
+            events.append(self._normalize_sse_event(request_id, {
+                **base,
+                "type": "error",
+                "content": error_text,
+                "message": error_text,
+                "terminal_reason": terminal_reason or "failed",
+                "error_code": "RUNTIME_PROJECTION_FAILED",
+            }))
+        elif state == "cancelled":
+            cancel_text = terminal_message or content
+            events.append(self._normalize_sse_event(request_id, {
+                **base,
+                "type": "cancelled",
+                "content": cancel_text,
+                "terminal_reason": terminal_reason or "cancelled",
+            }))
+        elif state == "interrupted":
+            interrupted_text = terminal_message or terminal_reason or content or "Runtime stream was interrupted."
+            events.append(self._normalize_sse_event(request_id, {
+                **base,
+                "type": "interrupted",
+                "content": interrupted_text,
+                "message": interrupted_text,
+                "terminal_reason": terminal_reason or "interrupted",
+                "error_code": "RUNTIME_PROJECTION_INTERRUPTED",
+                "recoverable": True,
+            }))
+        elif state not in {"unknown"}:
+            events.append(self._normalize_sse_event(request_id, {
+                **base,
+                "type": "interrupted",
+                "content": content or "Runtime stream state was restored, but the live stream is no longer attached.",
+                "message": "Runtime stream state was restored, but the live stream is no longer attached.",
+                "terminal_reason": "runtime_projection_detached",
+                "error_code": "RUNTIME_PROJECTION_DETACHED",
+                "recoverable": True,
+            }))
+        return events
 
     def _push_sse_event(self, request_id: str, item: Dict[str, Any]) -> bool:
         """Append one SSE event for every subscriber and keep legacy queue parity."""
@@ -2023,24 +3351,27 @@ class WebChannel(ChatChannel):
             return False
         self._ensure_sse_state(request_id)
         event = self._normalize_sse_event(request_id, item)
+        legacy_event_id = 0
         with self.sse_lock:
             if not self._sse_request_exists(request_id):
                 return False
-            try:
-                self.sse_queues[request_id].put(event)
-            except Exception as e:
-                logger.debug(f"[WebChannel] legacy SSE queue mirror skipped for {request_id}: {e}")
             cond = self.sse_conditions[request_id]
         with cond:
             events = self.sse_events.get(request_id)
             if events is None:
                 return False
+            legacy_event_id = self.sse_event_offsets.get(request_id, 0) + len(events)
+            self._record_runtime_events_for_sse_item(request_id, event, legacy_event_id)
             events.append(event)
             excess = len(events) - self.SSE_MAX_REPLAY_EVENTS
             if excess > 0:
                 del events[:excess]
                 self.sse_event_offsets[request_id] = self.sse_event_offsets.get(request_id, 0) + excess
             cond.notify_all()
+        try:
+            self.sse_queues[request_id].put(event)
+        except Exception as e:
+            logger.debug(f"[WebChannel] legacy SSE queue mirror skipped for {request_id}: {_web_body_log_summary(e)}")
         self._record_run_event_phase(request_id, event)
         return True
 
@@ -2080,7 +3411,7 @@ class WebChannel(ChatChannel):
                 self._schedule_sse_cleanup(request_id, delay=self.SSE_ORPHAN_TTL_SECONDS, reason="active-request")
                 return
         except Exception as exc:
-            logger.debug(f"[WebChannel] SSE cleanup active check skipped for {request_id}: {exc}")
+            logger.debug(f"[WebChannel] SSE cleanup active check skipped for {request_id}: {_web_body_log_summary(exc)}")
             return
         logger.info(f"[WebChannel] Cleaning idle SSE replay state for {request_id}: {reason}")
         self._cleanup_sse_request(request_id)
@@ -2181,8 +3512,16 @@ class WebChannel(ChatChannel):
 
             return cancel_children_for_default_workspace(session_id, workspace=_get_workspace_root())
         except Exception as e:
-            logger.warning(f"[WebChannel] subagent cascade cancel skipped for {session_id}: {e}")
-            return {"cancelledTasks": 0, "cancelledRequests": 0, "tasks": [], "error": str(e)}
+            logger.warning(f"[WebChannel] subagent cascade cancel skipped for {session_id}: {_web_body_log_summary(e)}")
+            public = _public_error_payload("Subagent cascade cancel failed.", e)
+            return {
+                "cancelledTasks": 0,
+                "cancelledRequests": 0,
+                "tasks": [],
+                "error": public["message"],
+                "errorType": public.get("errorType", ""),
+                "errorHash": public.get("errorHash", ""),
+            }
 
     def _interrupt_orphan_subagent_state(
         self,
@@ -2205,8 +3544,15 @@ class WebChannel(ChatChannel):
                 error_message=error_message,
             )
         except Exception as e:
-            logger.warning(f"[WebChannel] subagent orphan state interruption skipped: {e}")
-            return {"updated": False, "task": {}, "error": str(e)}
+            logger.warning(f"[WebChannel] subagent orphan state interruption skipped: {_web_body_log_summary(e)}")
+            public = _public_error_payload("Subagent orphan state interruption failed.", e)
+            return {
+                "updated": False,
+                "task": {},
+                "error": public["message"],
+                "errorType": public.get("errorType", ""),
+                "errorHash": public.get("errorHash", ""),
+            }
 
     def _begin_same_session_replacement(self, session_id: str) -> int:
         with self.same_session_replacement_lock:
@@ -2347,7 +3693,7 @@ class WebChannel(ChatChannel):
 
             row = get_run_ledger().get_run(request_id)
         except Exception as e:
-            logger.error(f"[WebChannel] retry prepare ledger lookup failed: {e}", exc_info=True)
+            logger.error(f"[WebChannel] retry prepare ledger lookup failed: {_web_body_log_summary(e)}")
             return {
                 "status": "error",
                 "message": "Runtime run ledger is unavailable; please recover history first.",
@@ -2394,7 +3740,7 @@ class WebChannel(ChatChannel):
                 visible_message = str(latest.get("text") or "").strip()
                 source_user_seq = latest.get("seq")
             except Exception as e:
-                logger.warning(f"[WebChannel] retry prepare history fallback failed: {e}")
+                logger.warning(f"[WebChannel] retry prepare history fallback failed: {_web_body_log_summary(e)}")
 
         if reason:
             return {
@@ -2569,7 +3915,7 @@ class WebChannel(ChatChannel):
             from agent.memory import get_conversation_store
             return get_conversation_store().get_latest_pair_seqs(session_id)
         except Exception as e:
-            logger.debug(f"[WebChannel] _fetch_latest_pair_seqs failed: {e}")
+            logger.debug(f"[WebChannel] _fetch_latest_pair_seqs failed: {_web_body_log_summary(e)}")
             return {"user_seq": None, "bot_seq": None}
 
     def _fetch_agent_usage(self, session_id: str):
@@ -2582,7 +3928,7 @@ class WebChannel(ChatChannel):
             usage = getattr(agent, "last_usage", None) if agent else None
             return usage if isinstance(usage, dict) and usage.get("totalTokens") else None
         except Exception as e:
-            logger.debug(f"[WebChannel] _fetch_agent_usage failed: {e}")
+            logger.debug(f"[WebChannel] _fetch_agent_usage failed: {_web_body_log_summary(e)}")
             return None
 
     @staticmethod
@@ -2705,7 +4051,8 @@ class WebChannel(ChatChannel):
     def _bounded_tool_result_for_sse(self, result: Any) -> Tuple[str, Dict[str, Any]]:
         limits = self._tool_output_limits()
         truncated_fields: List[Dict[str, Any]] = []
-        bounded_result = self._bounded_tool_value(result, limits, truncated_fields)
+        public_result = redact_public_tool_value(result)
+        bounded_result = self._bounded_tool_value(public_result, limits, truncated_fields)
         if isinstance(bounded_result, (dict, list)):
             result_str = json.dumps(
                 bounded_result,
@@ -2824,7 +4171,7 @@ class WebChannel(ChatChannel):
             )
             return bool(decision.get("allowed", True))
         except Exception as exc:
-            logger.warning(f"[WebChannel] artifact availability check failed: {exc}")
+            logger.warning(f"[WebChannel] artifact availability check failed: {_web_body_log_summary(exc)}")
             return False
 
     def _artifact_from_file_event(self, request_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -3078,7 +4425,7 @@ class WebChannel(ChatChannel):
             from agent.memory import get_conversation_store
             get_conversation_store().attach_extras_to_last_assistant(session_id, {"artifacts": artifacts})
         except Exception as e:
-            logger.debug(f"[WebChannel] artifact persist skipped for {request_id}: {e}")
+            logger.debug(f"[WebChannel] artifact persist skipped for {request_id}: {_web_body_log_summary(e)}")
 
     def _build_done_event(self, request_id: str, session_id: str, content: str):
         self._persist_request_artifacts(request_id, session_id)
@@ -3101,7 +4448,7 @@ class WebChannel(ChatChannel):
             else:
                 store.attach_extras_to_last_assistant(session_id, identity_extras)
         except Exception as e:
-            logger.debug(f"[WebChannel] request identity persist skipped for {request_id}: {e}")
+            logger.debug(f"[WebChannel] request identity persist skipped for {request_id}: {_web_body_log_summary(e)}")
         payload = {
             "type": "done",
             "content": content,
@@ -3137,7 +4484,7 @@ class WebChannel(ChatChannel):
             except Exception:
                 pass
         except Exception as e:
-            logger.debug(f"[WebChannel] session lock release skipped: {e}")
+            logger.debug(f"[WebChannel] session lock release skipped: {_web_body_log_summary(e)}")
 
     def _abort_pre_worker_request(
         self,
@@ -3148,6 +4495,7 @@ class WebChannel(ChatChannel):
         reason: str,
         error_code: str,
         session_lock=None,
+        error_extra: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Release request state when `/message` fails before worker ownership.
 
@@ -3171,9 +4519,10 @@ class WebChannel(ChatChannel):
                         message,
                         error_code=error_code,
                         terminal_reason=reason,
+                        extra=error_extra,
                     )
                 except Exception as e:
-                    logger.debug(f"[WebChannel] pre-worker abort SSE error skipped for {request_id}: {e}")
+                    logger.debug(f"[WebChannel] pre-worker abort SSE error skipped for {request_id}: {_web_body_log_summary(e)}")
                 self._cleanup_sse_request(request_id)
             else:
                 self.request_to_session.pop(request_id, None)
@@ -3182,12 +4531,12 @@ class WebChannel(ChatChannel):
 
                 get_cancel_registry().unregister(request_id)
             except Exception as e:
-                logger.debug(f"[WebChannel] pre-worker abort token unregister skipped for {request_id}: {e}")
+                logger.debug(f"[WebChannel] pre-worker abort token unregister skipped for {request_id}: {_web_body_log_summary(e)}")
         if session_lock:
             try:
                 session_lock.release()
             except Exception as e:
-                logger.debug(f"[WebChannel] pre-worker abort session lock release skipped: {e}")
+                logger.debug(f"[WebChannel] pre-worker abort session lock release skipped: {_web_body_log_summary(e)}")
 
     def _thread_pool_callback(self, session_id, **kwargs):
         parent_callback = super()._thread_pool_callback(session_id, **kwargs)
@@ -3231,18 +4580,23 @@ class WebChannel(ChatChannel):
             was_cancelled = bool(event and event.is_set())
             registry.unregister(request_id)
         except Exception as e:
-            logger.debug(f"[WebChannel] cancel token unregister skipped for {request_id}: {e}")
+            logger.debug(f"[WebChannel] cancel token unregister skipped for {request_id}: {_web_body_log_summary(e)}")
 
         session_id = context.get("session_id") or self.request_to_session.get(request_id, "")
         self._persist_request_artifacts(request_id, session_id)
 
         if worker_exception is not None:
+            public_message = "" if was_cancelled else _public_exception_message(
+                "Worker failed before producing a response.",
+                worker_exception,
+            )
+            public_extra = {} if was_cancelled else _public_exception_summary(worker_exception)
             self._mark_run_terminal(
                 request_id,
                 "cancelled" if was_cancelled else "failed",
                 reason="worker_cancelled" if was_cancelled else "worker_exception",
                 error_code="" if was_cancelled else "WORKER_EXCEPTION",
-                error_message="" if was_cancelled else str(worker_exception),
+                error_message=public_message,
             )
         elif was_cancelled:
             self._mark_run_terminal(request_id, "cancelled", reason="cancelled")
@@ -3251,12 +4605,13 @@ class WebChannel(ChatChannel):
 
         if worker_exception is not None and self._sse_request_exists(request_id):
             try:
-                message = str(worker_exception) or "Worker failed before producing a response."
+                message = public_message or "Worker failed before producing a response."
                 self._push_error_event_once(
                     request_id,
                     message,
                     error_code="WORKER_EXCEPTION",
                     usage=self._fetch_agent_usage(session_id),
+                    extra=public_extra,
                 )
                 self._push_done_event_once(request_id, {
                     "type": "done",
@@ -3266,7 +4621,7 @@ class WebChannel(ChatChannel):
                     "usage": self._fetch_agent_usage(session_id),
                 })
             except Exception as e:
-                logger.debug(f"[WebChannel] worker exception SSE fallback skipped for {request_id}: {e}")
+                logger.debug(f"[WebChannel] worker exception SSE fallback skipped for {request_id}: {_web_body_log_summary(e)}")
 
         if self._sse_request_exists(request_id):
             if self.sse_subscribers.get(request_id, 0) <= 0:
@@ -3375,7 +4730,7 @@ class WebChannel(ChatChannel):
                 logger.warning(f"No response queue found for session {session_id}, response dropped")
 
         except Exception as e:
-            logger.error(f"Error in send method: {e}")
+            logger.error(f"Error in send method: {_web_body_log_summary(e)}")
 
     def _make_sse_callback(self, request_id: str):
         """Build an on_event callback that pushes agent stream events into the SSE queue."""
@@ -3468,6 +4823,62 @@ class WebChannel(ChatChannel):
                 return payload["data"].get("task") or {}
             return {}
 
+        def _subagent_text_hash(value: Any) -> str:
+            text = str(value or "")
+            if not text:
+                return ""
+            return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:16]
+
+        def _subagent_public_text(value: Any) -> Dict[str, Any]:
+            text = str(value or "")
+            return {
+                "preview": "[redacted-content]" if text else "",
+                "hash": _subagent_text_hash(text),
+                "length": len(text),
+            }
+
+        def _subagent_public_role(value: Any) -> str:
+            role = str(value or "subagent").strip() or "subagent"
+            role = re.sub(r"[^A-Za-z0-9_.:-]+", "-", role)[:32]
+            return role or "subagent"
+
+        def _public_subagent_task(raw_task: Any, *, fallback_task_id: str = "", fallback_child_request_id: str = "") -> Dict[str, Any]:
+            task = raw_task if isinstance(raw_task, dict) else {}
+            task_id = str(task.get("id") or task.get("task_id") or fallback_task_id or "")
+            child_request_id = str(task.get("requestId") or task.get("childSessionId") or fallback_child_request_id or "")
+            summary_meta = _subagent_public_text(
+                task.get("summary") or task.get("task") or task.get("prompt") or task.get("name") or ""
+            )
+            result_meta = _subagent_public_text(task.get("result_preview") or task.get("result") or "")
+            public = {
+                "id": task_id,
+                "task_id": task_id,
+                "requestId": child_request_id,
+                "childSessionId": child_request_id,
+                "role": _subagent_public_role(task.get("role")),
+                "status": str(task.get("status") or ""),
+                "summary": summary_meta["preview"],
+                "summaryHash": summary_meta["hash"],
+                "summaryLength": summary_meta["length"],
+                "result_preview": result_meta["preview"],
+                "resultHash": result_meta["hash"],
+                "resultLength": result_meta["length"],
+                "deadlineAt": task.get("deadlineAt"),
+                "timeoutSeconds": task.get("timeoutSeconds"),
+                "lastHeartbeatAt": task.get("lastHeartbeatAt"),
+            }
+            return {key: value for key, value in public.items() if value not in ("", None)}
+
+        def _subagent_public_name(public_task: Dict[str, Any], *, fallback_seed: Any = "") -> str:
+            suffix = str(
+                public_task.get("task_id")
+                or public_task.get("requestId")
+                or fallback_seed
+                or ""
+            )[-6:]
+            role = _subagent_public_role(public_task.get("role"))
+            return f"{role} {suffix}" if suffix else "Subagent"
+
         def on_event(event: dict):
             if not self._sse_request_exists(request_id):
                 return
@@ -3529,23 +4940,132 @@ class WebChannel(ChatChannel):
                 arguments = data.get("arguments", {})
                 if not isinstance(arguments, dict):
                     arguments = {}
+                public_arguments = redact_public_tool_value(arguments)
                 if str(tool_name) == "subagent":
+                    public_task = _public_subagent_task(
+                        {
+                            "role": arguments.get("role"),
+                            "summary": arguments.get("summary") or arguments.get("task"),
+                            "name": arguments.get("name"),
+                        },
+                        fallback_task_id=str(data.get("tool_call_id") or ""),
+                    )
                     self._push_sse_event(request_id, {
                         "type": "subagent_start",
                         "tool_call_id": data.get("tool_call_id", ""),
-                        "name": str(arguments.get("name") or arguments.get("summary") or arguments.get("task") or "Subagent")[:48],
-                        "role": arguments.get("role") or "explorer",
-                        "summary": arguments.get("summary") or arguments.get("task") or "",
+                        "name": _subagent_public_name(public_task, fallback_seed=data.get("tool_call_id")),
+                        "role": public_task.get("role") or "explorer",
+                        "summary": public_task.get("summary") or "",
+                        "summaryHash": public_task.get("summaryHash") or "",
+                        "summaryLength": public_task.get("summaryLength") or 0,
                         "status": "starting",
                         "request_id": request_id,
                         "timestamp": time.time(),
                     })
+                    return
                 self._push_sse_event(request_id, {
                     "type": "tool_start",
                     "tool": tool_name,
                     "tool_call_id": data.get("tool_call_id", ""),
-                    "arguments": arguments,
+                    "arguments": public_arguments,
                 })
+
+            elif event_type == "tool_execution_heartbeat":
+                self._push_sse_event(request_id, {
+                    "type": "tool_heartbeat",
+                    "tool": data.get("tool_name", "tool"),
+                    "tool_call_id": data.get("tool_call_id", ""),
+                    "elapsed_seconds": data.get("elapsed_seconds", 0),
+                    "deadline_seconds": data.get("deadline_seconds"),
+                    "max_seconds": data.get("max_seconds"),
+                    "extension_count": data.get("extension_count"),
+                    "status": data.get("status", "running"),
+                    "request_id": request_id,
+                    "timestamp": time.time(),
+                })
+
+            elif event_type == "tool_execution_deadline_extended":
+                self._push_sse_event(request_id, {
+                    "type": "tool_deadline_extended",
+                    "tool": data.get("tool_name", "tool"),
+                    "tool_call_id": data.get("tool_call_id", ""),
+                    "elapsed_seconds": data.get("elapsed_seconds", 0),
+                    "previous_deadline_seconds": data.get("previous_deadline_seconds"),
+                    "deadline_seconds": data.get("deadline_seconds"),
+                    "max_seconds": data.get("max_seconds"),
+                    "extension_count": data.get("extension_count"),
+                    "reason": data.get("reason", "adaptive"),
+                    "status": data.get("status", "running"),
+                    "request_id": request_id,
+                    "timestamp": time.time(),
+                })
+
+            elif event_type == "tool_execution_timeout":
+                flush_stream_pending()
+                tool_name = str(data.get("tool_name") or "tool")
+                tool_call_id = str(data.get("tool_call_id") or "")
+                elapsed_seconds = data.get("elapsed_seconds", 0)
+                timeout_seconds = data.get("timeout_seconds", 0)
+                message = str(
+                    data.get("message")
+                    or f"Tool '{tool_name}' timed out after {elapsed_seconds}s."
+                )
+                if tool_name == "subagent":
+                    raw_task = data.get("task") if isinstance(data.get("task"), dict) else _extract_subagent_task(data.get("result"))
+                    task = _public_subagent_task(
+                        raw_task,
+                        fallback_task_id=str(data.get("task_id") or ""),
+                        fallback_child_request_id=str(data.get("child_request_id") or ""),
+                    )
+                    message = f"Subagent timed out after {elapsed_seconds}s."
+                    self._push_sse_event(request_id, {
+                        "type": "subagent_timeout",
+                        "tool_call_id": tool_call_id,
+                        "task": task,
+                        "task_id": task.get("id") or task.get("task_id") or "",
+                        "child_request_id": task.get("requestId") or task.get("childSessionId") or "",
+                        "name": _subagent_public_name(task, fallback_seed=tool_call_id),
+                        "role": task.get("role") or "subagent",
+                        "summary": task.get("summary") or "",
+                        "summaryHash": task.get("summaryHash") or "",
+                        "summaryLength": task.get("summaryLength") or 0,
+                        "status": "timeout",
+                        "result_preview": task.get("result_preview") or "",
+                        "resultHash": task.get("resultHash") or "",
+                        "resultLength": task.get("resultLength") or 0,
+                        "request_id": request_id,
+                        "timestamp": time.time(),
+                    })
+                else:
+                    self._push_sse_event(request_id, {
+                        "type": "tool_end",
+                        "tool": tool_name,
+                        "tool_call_id": tool_call_id,
+                        "status": "timeout",
+                        "result": message,
+                        "execution_time": elapsed_seconds,
+                        "timeout_seconds": timeout_seconds,
+                        "error_code": str(data.get("error_code") or "TOOL_TIMEOUT"),
+                        "request_id": request_id,
+                        "timestamp": time.time(),
+                    })
+                self._mark_run_terminal(
+                    request_id,
+                    "timeout",
+                    reason="tool_timeout",
+                    error_code=str(data.get("error_code") or "TOOL_TIMEOUT"),
+                    error_message=message,
+                )
+                self._push_terminal_event_once(
+                    request_id,
+                    self._build_interrupted_event(
+                        request_id,
+                        session_id=self.request_to_session.get(request_id, ""),
+                        terminal_reason="tool_timeout",
+                        error_code=str(data.get("error_code") or "TOOL_TIMEOUT"),
+                        message=message,
+                    ),
+                )
 
             elif event_type == "tool_permission_request":
                 flush_stream_pending()
@@ -3568,7 +5088,9 @@ class WebChannel(ChatChannel):
                 exec_time = data.get("execution_time", 0)
                 tool_call_id = data.get("tool_call_id", "")
                 if str(tool_name) == "subagent":
-                    task = _extract_subagent_task(result)
+                    raw_task = _extract_subagent_task(result)
+                    task = _public_subagent_task(raw_task)
+                    status_value = str(status or "success")
                     if task:
                         status_value = str(task.get("status") or status or "running")
                         event_type_name = {
@@ -3584,14 +5106,23 @@ class WebChannel(ChatChannel):
                             "task": task,
                             "task_id": task.get("id") or task.get("task_id") or "",
                             "child_request_id": task.get("requestId") or task.get("childSessionId") or "",
-                            "name": task.get("name") or task.get("summary") or task.get("id") or "Subagent",
+                            "name": _subagent_public_name(task, fallback_seed=tool_call_id),
                             "role": task.get("role") or "subagent",
                             "summary": task.get("summary") or "",
+                            "summaryHash": task.get("summaryHash") or "",
+                            "summaryLength": task.get("summaryLength") or 0,
                             "status": status_value,
-                            "result_preview": str(task.get("result") or task.get("error") or "")[:400],
+                            "result_preview": task.get("result_preview") or "",
+                            "resultHash": task.get("resultHash") or "",
+                            "resultLength": task.get("resultLength") or 0,
                             "request_id": request_id,
                             "timestamp": time.time(),
                         })
+                    result = {
+                        "status": status_value,
+                        "message": "subagent result is available through runtime projection",
+                    }
+                    return
                 for artifact in self._artifacts_from_tool_result(request_id, tool_name, tool_call_id, status, result):
                     omitted_artifact_count = int(artifact.pop("_omitted_artifact_count", 0) or 0)
                     if artifact.pop("_artifact_limit_only", False):
@@ -3659,6 +5190,16 @@ class WebChannel(ChatChannel):
                     "max_retries",
                     "status_code",
                     "retry_mode",
+                    "errorHash",
+                    "error_hash",
+                    "errorType",
+                    "error_exception_type",
+                    "errorLength",
+                    "error_chars",
+                    "errorBytes",
+                    "error_bytes",
+                    "redacted",
+                    "errorRedacted",
                 )
                 retry_meta = {
                     key: data.get(key)
@@ -3816,7 +5357,7 @@ class WebChannel(ChatChannel):
                 daemon=True,
             ).start()
         except Exception as e:
-            logger.debug(f"[WebChannel] auto-tts dispatch skipped: {e}")
+            logger.debug(f"[WebChannel] auto-tts dispatch skipped: {_web_body_log_summary(e)}")
 
     def _synthesize_tts_async(
         self,
@@ -3849,7 +5390,7 @@ class WebChannel(ChatChannel):
                 else:
                     store.attach_extras_to_last_assistant(session_id, payload)
             except Exception as e:
-                logger.debug(f"[WebChannel] tts persist skipped: {e}")
+                logger.debug(f"[WebChannel] tts persist skipped: {_web_body_log_summary(e)}")
             if not self._sse_request_exists(request_id):
                 logger.warning(
                     f"[WebChannel] TTS ready but SSE queue already closed "
@@ -3865,7 +5406,7 @@ class WebChannel(ChatChannel):
             logger.info(f"[WebChannel] TTS voice_attach pushed for request {request_id}: {url}")
         except Exception as e:
             # TTS failures are intentionally silent (no user-facing error).
-            logger.warning(f"[WebChannel] TTS synthesis failed: {e}")
+            logger.warning(f"[WebChannel] TTS synthesis failed: {_web_body_log_summary(e)}")
 
     @staticmethod
     def _publish_tts_audio(src_path: str) -> str:
@@ -3884,7 +5425,7 @@ class WebChannel(ChatChannel):
             logger.debug(f"[WebChannel] publish_tts_audio moved {src_path} -> {dst_path}")
             return f"/uploads/{dst_name}"
         except Exception as e:
-            logger.warning(f"[WebChannel] publish_tts_audio failed: {e}")
+            logger.warning(f"[WebChannel] publish_tts_audio failed: {_web_body_log_summary(e)}")
             return ""
 
     @staticmethod
@@ -3911,7 +5452,7 @@ class WebChannel(ChatChannel):
             if removed:
                 logger.info(f"[WebChannel] cleaned up {removed} stale voice recording(s) from {upload_dir}")
         except Exception as e:
-            logger.warning(f"[WebChannel] voice cleanup failed: {e}")
+            logger.warning(f"[WebChannel] voice cleanup failed: {_web_body_log_summary(e)}")
 
     def upload_file(self):
         """Handle file or directory upload via multipart/form-data."""
@@ -4022,8 +5563,8 @@ class WebChannel(ChatChannel):
             }, ensure_ascii=False)
 
         except Exception as e:
-            logger.error(f"[WebChannel] File upload error: {e}", exc_info=True)
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[WebChannel] File upload error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
     def post_message(self):
         """
@@ -4042,7 +5583,37 @@ class WebChannel(ChatChannel):
             visible_message_raw = json_data.get('visible_message') if 'visible_message' in json_data else None
             visible_message = str(visible_message_raw) if visible_message_raw is not None else visible_prompt
             prompt = visible_prompt
-            hidden_context = json_data.get('hidden_context') or json_data.get('project_context') or ''
+            hidden_context = json_data.get('hidden_context') or ''
+            legacy_project_context = json_data.get('project_context')
+            project_context_meta = _normalize_project_context_meta(
+                json_data.get('project_context_meta')
+                or json_data.get('project_binding')
+                or json_data.get('projectContext')
+                or (legacy_project_context if isinstance(legacy_project_context, dict) else None)
+            )
+            if project_context_meta:
+                try:
+                    from agent.memory import ConversationSessionOwnerConflict, get_conversation_store
+
+                    get_conversation_store().validate_session_owner(
+                        session_id,
+                        channel_type="web",
+                        project_context=project_context_meta,
+                    )
+                except ConversationSessionOwnerConflict as exc:
+                    web.ctx.status = "409 Conflict"
+                    logger.warning(
+                        f"[WebChannel] session owner conflict rejected before project binding persist: reason={exc.reason}"
+                    )
+                    return json.dumps({
+                        "status": "error",
+                        "code": exc.code,
+                        "error_type": "session_owner_conflict",
+                        "message": "该会话已绑定到其他范围，请新建会话后重试。",
+                        "retryable": False,
+                        "recoverable": True,
+                    }, ensure_ascii=False)
+                _persist_project_session_binding(session_id, project_context_meta)
             internal_action = bool(json_data.get('internal_action', False))
             use_sse = json_data.get('stream', True)
             attachments = json_data.get('attachments', [])
@@ -4148,7 +5719,7 @@ class WebChannel(ChatChannel):
                     try:
                         session_lock.release()
                     except Exception as e:
-                        logger.debug(f"[WebChannel] conflict session lock release skipped: {e}")
+                        logger.debug(f"[WebChannel] conflict session lock release skipped: {_web_body_log_summary(e)}")
                     session_lock = None
                 session_limit = int(same_session_snapshot.get("session_active_limit") or 0)
                 session_active = int(same_session_snapshot.get("session_active") or 0)
@@ -4205,7 +5776,7 @@ class WebChannel(ChatChannel):
                         try:
                             session_lock.release()
                         except Exception as e:
-                            logger.debug(f"[WebChannel] backpressure session lock release skipped: {e}")
+                            logger.debug(f"[WebChannel] backpressure session lock release skipped: {_web_body_log_summary(e)}")
                         session_lock = None
                     return json.dumps(backpressure_payload, ensure_ascii=False)
 
@@ -4215,7 +5786,7 @@ class WebChannel(ChatChannel):
                     from agent.protocol import get_cancel_registry
                     get_cancel_registry().register(request_id, session_id=session_id)
                 except Exception as e:
-                    logger.debug(f"[WebChannel] pre-register cancel token skipped: {e}")
+                    logger.debug(f"[WebChannel] pre-register cancel token skipped: {_web_body_log_summary(e)}")
                 try:
                     from agent.protocol import get_run_ledger
 
@@ -4239,12 +5810,13 @@ class WebChannel(ChatChannel):
                             "client_attempt_id": client_attempt_id,
                             "interrupts_request_id": interrupts_request_id,
                             "retry_of_request_id": retry_of_request_id,
+                            "project_context": project_context_meta,
                         },
                     )
                     if not persisted:
                         raise RuntimeError("run ledger did not persist request")
                 except Exception as e:
-                    logger.error(f"[WebChannel] run ledger unavailable for {request_id}: {e}", exc_info=True)
+                    logger.error(f"[WebChannel] run ledger unavailable for {request_id}: {_web_body_log_summary(e)}")
                     self._abort_pre_worker_request(
                         request_id,
                         session_id,
@@ -4264,6 +5836,16 @@ class WebChannel(ChatChannel):
                         "request_id": "",
                     }, ensure_ascii=False)
 
+                self._record_request_accepted_events(
+                    request_id,
+                    session_id,
+                    visible_message=visible_message or visible_prompt or "",
+                    client_attempt_id=client_attempt_id,
+                    retry_of_request_id=retry_of_request_id,
+                    interrupts_request_id=interrupts_request_id,
+                    project_context_meta=project_context_meta,
+                )
+
             if session_id not in self.session_queues:
                 self.session_queues[session_id] = Queue()
 
@@ -4280,7 +5862,7 @@ class WebChannel(ChatChannel):
             if check_prefix(prompt, trigger_prefixs) is None:
                 if trigger_prefixs:
                     prompt = trigger_prefixs[0] + prompt
-                    logger.debug(f"[WebChannel] Added prefix to message: {prompt}")
+                    logger.debug(f"[WebChannel] Added prefix to message summary: {_web_body_log_summary(prompt)}")
 
             msg = WebMessage(self._generate_msg_id(), prompt)
             msg.from_user_id = session_id
@@ -4302,10 +5884,13 @@ class WebChannel(ChatChannel):
 
             context["session_id"] = session_id
             context["receiver"] = session_id
+            context["channel_type"] = "web"
             context["request_id"] = request_id
             context["session_lock"] = session_lock
             context["cancel_token_owner"] = "web_channel"
             context["visible_message"] = (visible_message or "Please handle these attachments.").strip()
+            if project_context_meta:
+                context["project_context_meta"] = project_context_meta
             if internal_action:
                 context["internal_action"] = True
             if isinstance(attachments, list):
@@ -4329,14 +5914,17 @@ class WebChannel(ChatChannel):
             })
 
         except Exception as e:
+            public_message = _public_exception_message("Message request failed before worker start.", e)
+            public_extra = _public_exception_summary(e)
             if request_id:
                 self._abort_pre_worker_request(
                     request_id,
                     session_id,
-                    message=str(e),
+                    message=public_message,
                     reason="post_message_exception",
                     error_code="POST_MESSAGE_EXCEPTION",
                     session_lock=session_lock,
+                    error_extra=public_extra,
                 )
                 session_lock = None
             else:
@@ -4345,22 +5933,22 @@ class WebChannel(ChatChannel):
                         session_lock.release()
                 except Exception:
                     pass
-            logger.error(f"Error processing message: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"Error processing message: {_web_body_log_summary(e)}")
+            return json.dumps({"status": "error", "message": public_message, **public_extra})
 
     def _produce_with_session_lock(self, context: Context, session_lock):
         try:
             self.produce(context)
         except Exception as e:
-            logger.error(f"[WebChannel] produce failed before worker start: {e}", exc_info=True)
+            logger.error(f"[WebChannel] produce failed before worker start: {_web_body_log_summary(e)}")
             self._finalize_request_after_worker(context, e)
             try:
                 if session_lock:
                     session_lock.release()
             except Exception as e:
-                logger.debug(f"[WebChannel] session lock release skipped: {e}")
+                logger.debug(f"[WebChannel] session lock release skipped: {_web_body_log_summary(e)}")
 
-    def stream_response(self, request_id: str):
+    def stream_response(self, request_id: str, session_id: str = ""):
         """
         SSE generator for a given request_id.
         Yields UTF-8 encoded bytes to avoid WSGI Latin-1 mangling.
@@ -4368,11 +5956,33 @@ class WebChannel(ChatChannel):
         appended to a per-request replay log, and every EventSource connection
         reads with its own cursor instead of consuming a shared Queue.
         """
+        expected_session_id = str(session_id or "").strip()
+        mismatch_event = self._request_session_mismatch_event(request_id, expected_session_id)
+        if mismatch_event:
+            payload = json.dumps(mismatch_event, ensure_ascii=False)
+            yield f"id: 0\ndata: {payload}\n\n".encode("utf-8")
+            return
+
         if not self._sse_request_exists(request_id):
+            replay_events = self._runtime_projection_replay_events(request_id, expected_session_id)
+            if replay_events and any(event.get("type") in SSE_STREAM_TERMINAL_TYPES for event in replay_events):
+                for offset, replay_event in enumerate(replay_events):
+                    replay_event["runtime_projection_replay_index"] = offset
+                    replay_event_id = int(replay_event.get("runtime_event_latest_id") or 0) + offset
+                    payload = json.dumps(replay_event, ensure_ascii=False)
+                    yield f"id: {replay_event_id}\ndata: {payload}\n\n".encode("utf-8")
+                return
             interrupted_event = self._recover_sidecar_interrupted_stream_event(request_id)
             if interrupted_event is not None:
                 payload = json.dumps(interrupted_event, ensure_ascii=False)
                 yield f"id: 0\ndata: {payload}\n\n".encode("utf-8")
+                return
+            if replay_events:
+                for offset, replay_event in enumerate(replay_events):
+                    replay_event["runtime_projection_replay_index"] = offset
+                    replay_event_id = int(replay_event.get("runtime_event_latest_id") or 0) + offset
+                    payload = json.dumps(replay_event, ensure_ascii=False)
+                    yield f"id: {replay_event_id}\ndata: {payload}\n\n".encode("utf-8")
                 return
             yield b"data: {\"type\": \"error\", \"message\": \"invalid request_id\"}\n\n"
             return
@@ -4578,8 +6188,8 @@ class WebChannel(ChatChannel):
             })
 
         except Exception as e:
-            logger.error(f"[WebChannel] cancel_request error: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[WebChannel] cancel_request error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
     def poll_response(self):
         """
@@ -4612,8 +6222,8 @@ class WebChannel(ChatChannel):
                 return json.dumps({"status": "success", "has_content": False})
 
         except Exception as e:
-            logger.error(f"Error polling response: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"Error polling response: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
     def chat_page(self):
         """Serve the chat HTML page."""
@@ -4683,7 +6293,7 @@ class WebChannel(ChatChannel):
                 webbrowser.open(f"http://localhost:{port}")
             logger.debug(f"[WebChannel] Opened browser at http://localhost:{port}")
         except Exception as e:
-            logger.debug(f"[WebChannel] Could not open browser: {e}")
+            logger.debug(f"[WebChannel] Could not open browser: {_web_body_log_summary(e)}")
 
         # 确保静态文件目录存在
         static_dir = os.path.join(os.path.dirname(__file__), 'static')
@@ -4702,7 +6312,7 @@ class WebChannel(ChatChannel):
                 "url": f"http://localhost:{port}/app/",
             })
         except Exception as e:
-            logger.debug(f"[WebChannel] installation manifest registration skipped: {e}")
+            logger.debug(f"[WebChannel] installation manifest registration skipped: {_web_body_log_summary(e)}")
 
         urls = (
             '/', 'RootHandler',
@@ -4722,6 +6332,9 @@ class WebChannel(ChatChannel):
             '/cancel', 'CancelHandler',
             '/api/active-requests', 'ActiveRequestsHandler',
             '/api/requests/([^/]+)/retry-prepare', 'RequestRetryPrepareHandler',
+            '/api/runtime-projection', 'RuntimeProjectionHandler',
+            '/api/image-jobs', 'ImageJobsHandler',
+            '/api/image-jobs/([^/]+)', 'ImageJobActionHandler',
             '/api/tool-permissions', 'ToolPermissionHandler',
             '/api/update-check', 'UpdateCheckHandler',
             '/api/file-stat', 'FileStatHandler',
@@ -4740,6 +6353,8 @@ class WebChannel(ChatChannel):
             '/config', 'ConfigHandler',
             '/api/models', 'ModelsHandler',
             '/api/channels', 'ChannelsHandler',
+            '/api/external-connections', 'ExternalConnectionsHandler',
+            '/api/external-connections/([^/]+)/actions', 'ExternalConnectionActionHandler',
             '/api/weixin/qrlogin', 'WeixinQrHandler',
             '/api/feishu/register', 'FeishuRegisterHandler',
             '/api/tools', 'ToolsHandler',
@@ -4773,29 +6388,38 @@ class WebChannel(ChatChannel):
         logging.getLogger("web").setLevel(logging.ERROR)
         logging.getLogger("web.httpserver").setLevel(logging.ERROR)
 
-        # Build WSGI app with middleware (same as runsimple but without print)
-        func = web.httpserver.StaticMiddleware(app.wsgifunc())
-        func = web.httpserver.LogMiddleware(func)
-        server = web.httpserver.WSGIServer((host, port), func)
-        server.daemon_threads = True
-        # Default request_queue_size(5) / timeout(10s) / numthreads(10) are
-        # too small: when SSE streams occupy many threads, the backlog fills
-        # and new connections get refused (ERR_CONNECTION_ABORTED).
-        server.request_queue_size = 128
-        server.timeout = 300
-        server.requests.min = 20
-        server.requests.max = 80
-        self._http_server = server
         try:
+            # Build WSGI app with middleware (same as runsimple but without print).
+            # WSGIServer construction binds the socket; once it succeeds the
+            # channel is externally observable as ready even though start()
+            # blocks the channel thread.
+            func = web.httpserver.StaticMiddleware(app.wsgifunc())
+            func = web.httpserver.LogMiddleware(func)
+            server = web.httpserver.WSGIServer((host, port), func)
+            server.daemon_threads = True
+            # Default request_queue_size(5) / timeout(10s) / numthreads(10) are
+            # too small: when SSE streams occupy many threads, the backlog fills
+            # and new connections get refused (ERR_CONNECTION_ABORTED).
+            server.request_queue_size = 128
+            server.timeout = 300
+            server.requests.min = 20
+            server.requests.max = 80
+            self._http_server = server
+            self.report_startup_success()
             server.start()
         except (KeyboardInterrupt, SystemExit):
-            server.stop()
+            if self._http_server:
+                self._http_server.stop()
         except OSError as e:
+            self.report_startup_error(mask_sensitive_text(str(e), max_chars=500))
             if e.errno in (48, 98):  # macOS/Linux EADDRINUSE
                 logger.error(
                     f"[WebChannel] 端口 {port} 已被占用，可执行 `cow restart` 清理残留进程，"
                     f"或在 config.json 中修改 web_port"
                 )
+            raise
+        except Exception as e:
+            self.report_startup_error(mask_sensitive_text(str(e), max_chars=500))
             raise
 
     def stop(self):
@@ -4804,7 +6428,7 @@ class WebChannel(ChatChannel):
                 self._http_server.stop()
                 logger.info("[WebChannel] HTTP server stopped")
             except Exception as e:
-                logger.warning(f"[WebChannel] Error stopping HTTP server: {e}")
+                logger.warning(f"[WebChannel] Error stopping HTTP server: {_web_body_log_summary(e)}")
             self._http_server = None
 
 
@@ -4905,7 +6529,20 @@ def _knowledge_viewer_html(rel_path: str):
   <script>
     const relPath = {encoded_path};
     const target = document.getElementById("content");
-    fetch("/api/knowledge/read?path=" + encodeURIComponent(relPath), {{ credentials: "same-origin" }})
+    function runtimePath(path) {{
+      const markers = ["/app", "/chat", "/auth", "/api", "/message", "/upload", "/stream", "/assets"];
+      const current = window.location.pathname || "";
+      let base = "";
+      for (const marker of markers) {{
+        const index = current.indexOf(marker);
+        if (index > 0) {{
+          base = current.slice(0, index).replace(/\/+$/, "");
+          break;
+        }}
+      }}
+      return base && path.charAt(0) === "/" && !path.startsWith(base + "/") ? base + path : path;
+    }}
+    fetch(runtimePath("/api/knowledge/read?path=" + encodeURIComponent(relPath)), {{ credentials: "same-origin" }})
       .then((response) => response.json().then((payload) => {{ if (!response.ok || payload.status === "error") throw new Error(payload.message || "读取失败"); return payload; }}))
       .then((payload) => {{
         const pre = document.createElement("pre");
@@ -4946,28 +6583,63 @@ class AuthCheckHandler:
         if not _is_password_enabled():
             return json.dumps({"status": "success", "auth_required": False})
         if _check_auth():
-            return json.dumps({"status": "success", "auth_required": True, "authenticated": True})
+            token = web.cookies().get("cow_auth_token", "")
+            email = _auth_token_email(token)
+            payload = {"status": "success", "auth_required": True, "authenticated": True}
+            if email:
+                payload["session"] = AuthLoginHandler._session_payload(email)
+            return json.dumps(payload, ensure_ascii=False)
         return json.dumps({"status": "success", "auth_required": True, "authenticated": False})
 
 
 class AuthLoginHandler:
+    @staticmethod
+    def _session_payload(email: str = "") -> dict:
+        normalized_email = str(email or "").strip().lower()
+        has_provided_identity = bool(normalized_email)
+        name = normalized_email.split("@", 1)[0] if "@" in normalized_email else normalized_email
+        if not normalized_email:
+            normalized_email = "ecorex@ecorex.local"
+            name = "EcoreX"
+        if normalized_email in {"ecorex@ecorex.local", "local@ecorex.local"}:
+            name = "EcoreX"
+        return {
+            "authenticated": True,
+            "localFallback": not has_provided_identity,
+            "authProvider": "web-password" if has_provided_identity else "local-fallback",
+            "identitySource": "login-email" if has_provided_identity else "local-fallback",
+            "deviceId": _web_device_id(),
+            "expiresAt": (
+                datetime.datetime.utcnow() + datetime.timedelta(seconds=_session_expire_seconds())
+            ).isoformat(timespec="seconds") + "Z",
+            "user": {
+                "id": f"ecorex-password:{normalized_email}" if has_provided_identity else "ecorex-password",
+                "name": name or "EcoreX",
+                "email": normalized_email,
+                "role": "user",
+                "status": "active",
+            },
+            "quota": {"allowed": True},
+        }
+
     def POST(self):
         web.header('Content-Type', 'application/json; charset=utf-8')
         if not _is_password_enabled():
-            return json.dumps({"status": "success"})
+            return json.dumps({"status": "success", "auth_required": False})
         try:
             data = json.loads(web.data())
         except Exception:
             return json.dumps({"status": "error", "message": "Invalid request"})
+        email = str(data.get("email", "") or "").strip()
         password = str(data.get("password", "") or "")
         expected = _get_web_password()
         if not hmac.compare_digest(password, expected):
             logger.warning("[WebChannel] Invalid login attempt")
             return json.dumps({"status": "error", "message": "Wrong password"})
-        token = _create_auth_token()
+        token = _create_auth_token(email)
         web.setcookie("cow_auth_token", token, expires=_session_expire_seconds(),
                        path="/", httponly=True, samesite="Lax")
-        return json.dumps({"status": "success"})
+        return json.dumps({"status": "success", "session": self._session_payload(email)}, ensure_ascii=False)
 
 
 class AuthLogoutHandler:
@@ -5041,8 +6713,12 @@ class VoiceAsrHandler:
                 "audio_url": audio_url,
             })
         except Exception as e:
-            logger.exception(f"[VoiceAsrHandler] failed: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[VoiceAsrHandler] failed: {_web_body_log_summary(e)}")
+            return json.dumps({
+                "status": "error",
+                "message": _public_exception_message("ASR failed.", e),
+                **_public_exception_summary(e),
+            })
 
 
 class VoiceTtsHandler:
@@ -5079,12 +6755,16 @@ class VoiceTtsHandler:
                         session_id, {"audio": {"url": url, "kind": "tts"}},
                     )
                 except Exception as e:
-                    logger.debug(f"[VoiceTtsHandler] persist skipped: {e}")
+                    logger.debug(f"[VoiceTtsHandler] persist skipped: {_web_body_log_summary(e)}")
 
             return json.dumps({"status": "success", "audio_url": url})
         except Exception as e:
-            logger.exception(f"[VoiceTtsHandler] failed: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[VoiceTtsHandler] failed: {_web_body_log_summary(e)}")
+            return json.dumps({
+                "status": "error",
+                "message": _public_exception_message("TTS failed.", e),
+                **_public_exception_summary(e),
+            })
 
 
 class UploadsHandler:
@@ -5105,7 +6785,7 @@ class UploadsHandler:
         except web.HTTPError:
             raise
         except Exception as e:
-            logger.error(f"[WebChannel] Error serving upload: {e}")
+            logger.error(f"[WebChannel] Error serving upload: {_web_body_log_summary(e)}")
             raise web.notfound()
 
 
@@ -5139,7 +6819,7 @@ class FileServeHandler:
                     cwd=workspace_root,
                 )
             except Exception as exc:
-                logger.warning(f"[WebChannel] file permission check failed: {exc}")
+                logger.warning(f"[WebChannel] file permission check failed: {_web_body_log_summary(exc)}")
                 raise web.notfound()
             if not decision.get("allowed", True):
                 raise web.notfound()
@@ -5156,7 +6836,7 @@ class FileServeHandler:
         except web.HTTPError:
             raise
         except Exception as e:
-            logger.error(f"[WebChannel] Error serving file: {e}")
+            logger.error(f"[WebChannel] Error serving file: {_web_body_log_summary(e)}")
             raise web.notfound()
 
 
@@ -5183,7 +6863,7 @@ def _web_file_preview_roots(workspace_root: str, upload_root: str) -> List[str]:
             if root:
                 roots.append(os.path.realpath(os.path.expanduser(str(root))))
     except Exception as exc:
-        logger.warning(f"[WebChannel] file preview root lookup failed: {exc}")
+        logger.warning(f"[WebChannel] file preview root lookup failed: {_web_body_log_summary(exc)}")
     deduped: List[str] = []
     seen = set()
     for root in roots:
@@ -5231,7 +6911,7 @@ class FileStatHandler:
                         "message": decision.get("reason") or "file stat blocked by permissions",
                     }, ensure_ascii=False)
             except Exception as exc:
-                logger.warning(f"[WebChannel] file stat permission check failed: {exc}")
+                logger.warning(f"[WebChannel] file stat permission check failed: {_web_body_log_summary(exc)}")
                 return json.dumps({"status": "error", "path": path_value, "exists": False, "message": "file stat permission check failed"}, ensure_ascii=False)
 
             if not os.path.exists(resolved):
@@ -5250,8 +6930,8 @@ class FileStatHandler:
                 payload["sizeBytes"] = os.path.getsize(resolved)
             return json.dumps(payload, ensure_ascii=False)
         except Exception as e:
-            logger.error(f"[WebChannel] file stat error: {e}")
-            return json.dumps({"status": "error", "path": "", "exists": False, "message": str(e)}, ensure_ascii=False)
+            logger.error(f"[WebChannel] file stat error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("File status failed.", e, path="", exists=False), ensure_ascii=False)
 
 
 class FileJsonHandler:
@@ -5289,7 +6969,7 @@ class FileJsonHandler:
                         "message": decision.get("reason") or "file JSON read blocked by permissions",
                     }, ensure_ascii=False)
             except Exception as exc:
-                logger.warning(f"[WebChannel] file JSON permission check failed: {exc}")
+                logger.warning(f"[WebChannel] file JSON permission check failed: {_web_body_log_summary(exc)}")
                 return json.dumps({"status": "error", "path": path_value, "message": "file JSON permission check failed"}, ensure_ascii=False)
 
             if not os.path.isfile(resolved):
@@ -5304,8 +6984,8 @@ class FileJsonHandler:
         except json.JSONDecodeError as exc:
             return json.dumps({"status": "error", "path": "", "message": f"invalid JSON: {exc}"}, ensure_ascii=False)
         except Exception as e:
-            logger.error(f"[WebChannel] file JSON read error: {e}")
-            return json.dumps({"status": "error", "path": "", "message": str(e)}, ensure_ascii=False)
+            logger.error(f"[WebChannel] file JSON read error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("File read failed.", e, path=""), ensure_ascii=False)
 
 
 class PollHandler:
@@ -5342,8 +7022,805 @@ class RequestRetryPrepareHandler:
                 ensure_ascii=False,
             )
         except Exception as e:
-            logger.error(f"[WebChannel] retry prepare error: {e}", exc_info=True)
-            return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
+            logger.error(f"[WebChannel] retry prepare error: {_web_body_log_summary(e)}")
+            return json.dumps({
+                "status": "error",
+                "message": _public_exception_message("Retry preparation failed.", e),
+                **_public_exception_summary(e),
+            }, ensure_ascii=False)
+
+
+def _runtime_projection_public_payload(value: Any, *, include_events: bool = False, _depth: int = 0) -> Any:
+    if isinstance(value, list):
+        return [
+            _runtime_projection_public_payload(item, include_events=include_events, _depth=_depth + 1)
+            for item in value
+        ]
+    if not isinstance(value, dict):
+        return value
+    public = {}
+    for key, item in value.items():
+        if key == "events" and not (include_events and _depth == 0):
+            continue
+        public[key] = _runtime_projection_public_payload(
+            item,
+            include_events=include_events,
+            _depth=_depth + 1,
+        )
+    return public
+
+
+class RuntimeProjectionHandler:
+    def GET(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            params = web.input(
+                request_id='',
+                session_id='',
+                after_event_id='0',
+                limit='1000',
+                include_events='',
+                history_page='',
+                page_size='20',
+            )
+            request_id = str(params.request_id or "").strip()
+            session_id = str(params.session_id or "").strip()
+            after_event_id = int(params.after_event_id or 0)
+            limit = min(max(1, int(params.limit or 1000)), 1000)
+            include_events = str(params.include_events or "").strip().lower() in {"1", "true", "yes", "on"}
+            history_page = int(getattr(params, "history_page", "") or 0)
+            page_size = min(max(1, int(getattr(params, "page_size", 20) or 20)), 200)
+            from agent.protocol import RuntimeProjectionService
+
+            service = RuntimeProjectionService()
+            if request_id:
+                owner_session_id = str(service.owner_session_id_for_request(request_id) or "").strip()
+                if session_id and owner_session_id and owner_session_id != session_id:
+                    try:
+                        web.ctx.status = "409 Conflict"
+                    except Exception:
+                        pass
+                    return json.dumps({
+                        "status": "error",
+                        "code": "SESSION_MISMATCH",
+                        "error_type": "session_mismatch",
+                        "message": "Request does not belong to the active session. Refresh the conversation list and retry.",
+                        "recoverable": True,
+                        "retryable": False,
+                    }, ensure_ascii=False)
+                projection = service.request_projection(
+                    request_id,
+                    expected_session_id=session_id,
+                    include_events=include_events,
+                )
+                if include_events:
+                    projection = dict(projection)
+                    projection["events"] = list(projection.get("events") or [])[-limit:]
+                projection = _runtime_projection_public_payload(projection, include_events=include_events)
+                return json.dumps({
+                    "status": "success",
+                    "mode": "request",
+                    "projection": projection,
+                    "latest_event_id": projection.get("latest_event_id", 0),
+                }, ensure_ascii=False)
+            if session_id:
+                if history_page > 0:
+                    projection = service.session_history_projection(
+                        session_id,
+                        page=history_page,
+                        page_size=page_size,
+                        after_event_id=after_event_id,
+                        limit=limit,
+                        include_events=include_events,
+                    )
+                else:
+                    projection = service.session_projection(
+                        session_id,
+                        after_event_id=after_event_id,
+                        limit=limit,
+                        include_events=include_events,
+                    )
+                projection = _runtime_projection_public_payload(projection, include_events=include_events)
+                return json.dumps({
+                    "status": "success",
+                    "mode": "session_history" if history_page > 0 else "session",
+                    "projection": projection,
+                    "latest_event_id": projection.get("latest_event_id", after_event_id),
+                }, ensure_ascii=False)
+            return json.dumps({"status": "error", "message": "request_id or session_id required"}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] runtime projection error: {_web_body_log_summary(e)}")
+            return json.dumps({
+                "status": "error",
+                "message": _public_exception_message("Runtime projection unavailable.", e),
+                **_public_exception_summary(e),
+            }, ensure_ascii=False)
+
+
+_IMAGE_JOB_API_ID_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-"
+_IMAGE_JOB_PRODUCTION_HARD_MAX_PARALLEL = 8
+_IMAGE_JOB_QUALITY_RETRY_PROMPT_SUFFIX = (
+    "\n\nQuality retry: regenerate a clean final image with no broken seams, "
+    "no ghosted overlays, no watermark artifacts, no garbled text fragments, "
+    "and preserve authorized reference-image structure when references are provided."
+)
+_IMAGE_JOB_API_TASK_FIELDS = {
+    "prompt",
+    "image_url",
+    "provider",
+    "model",
+    "quality",
+    "size",
+    "aspect_ratio",
+    "output_format",
+    "output_compression",
+    "background",
+    "moderation",
+    "operation",
+    "input_image_count",
+    "output_count",
+    "quality_retry_max",
+    "max_quality_retries",
+    "n",
+}
+
+
+def _safe_image_job_api_identifier(value: Any, *, prefix: str = "", allow_empty: bool = True) -> str:
+    raw = str(value or "").strip()
+    if (
+        raw
+        and len(raw) <= 128
+        and all(char in _IMAGE_JOB_API_ID_CHARS for char in raw)
+        and not any(part in raw.lower() for part in ("private", "prompt", "secret", "token", "password"))
+    ):
+        return raw
+    if allow_empty:
+        return ""
+    return f"{prefix}-{uuid.uuid4().hex[:16]}" if prefix else uuid.uuid4().hex[:16]
+
+
+def _safe_image_job_public_request_id(value: Any) -> str:
+    raw = str(value or "").strip()
+    safe = _safe_image_job_api_identifier(raw, prefix="req-image-job", allow_empty=True)
+    if safe:
+        return safe
+    if not raw:
+        return ""
+    digest = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:16]
+    return f"req-image-job-{digest}"
+
+
+def _safe_image_job_public_session_id(value: Any) -> str:
+    raw = str(value or "").strip()
+    safe = _safe_image_job_api_identifier(raw, prefix="session-image-job", allow_empty=True)
+    if safe:
+        return safe
+    if not raw:
+        return ""
+    digest = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:16]
+    return f"session-image-job-{digest}"
+
+
+def _safe_image_job_public_turn_id(value: Any) -> str:
+    raw = str(value or "").strip()
+    safe = _safe_image_job_api_identifier(raw, prefix="turn-image-job", allow_empty=True)
+    if safe:
+        return safe
+    if not raw:
+        return ""
+    digest = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:16]
+    return f"turn-image-job-{digest}"
+
+
+def _image_job_task_count(body: Dict[str, Any]) -> int:
+    for key in ("count", "n", "output_count", "outputCount"):
+        try:
+            value = int(body.get(key) or 0)
+        except (TypeError, ValueError):
+            value = 0
+        if value > 0:
+            return min(value, 16)
+    return 1
+
+
+def _image_job_api_tasks(body: Dict[str, Any]) -> List[Dict[str, Any]]:
+    raw_tasks = body.get("tasks")
+    if isinstance(raw_tasks, list) and raw_tasks:
+        tasks: List[Dict[str, Any]] = []
+        for index, item in enumerate(raw_tasks[:16]):
+            if not isinstance(item, dict):
+                raise ValueError("tasks must be objects")
+            prompt = str(item.get("prompt") or item.get("text") or "").strip()
+            if not prompt:
+                raise ValueError("each image task requires prompt")
+            task = {key: item.get(key) for key in _IMAGE_JOB_API_TASK_FIELDS if key in item}
+            task["prompt"] = prompt
+            task["operation"] = item.get("operation") or ("edit" if item.get("image_url") else "generate")
+            if "quality_retry_max" not in task and "max_quality_retries" not in task:
+                task["quality_retry_max"] = _image_job_quality_retry_max(item.get("quality_retry_max") or item.get("max_quality_retries"))
+            task["task_id"] = f"task-{index + 1}"
+            tasks.append(task)
+        return tasks
+    prompt = str(body.get("prompt") or body.get("text") or "").strip()
+    if not prompt:
+        raise ValueError("prompt or tasks is required")
+    count = _image_job_task_count(body)
+    tasks: List[Dict[str, Any]] = []
+    for index in range(count):
+        task = {
+            "prompt": prompt,
+            "operation": body.get("operation") or ("edit" if body.get("image_url") else "generate"),
+            "output_count": 1,
+        }
+        for key in (
+            "image_url",
+            "provider",
+            "model",
+            "quality",
+            "size",
+            "aspect_ratio",
+            "output_format",
+            "output_compression",
+            "background",
+            "moderation",
+            "quality_retry_max",
+            "max_quality_retries",
+        ):
+            if key in body:
+                task[key] = body.get(key)
+        if "quality_retry_max" not in task and "max_quality_retries" not in task:
+            task["quality_retry_max"] = _image_job_quality_retry_max(body.get("quality_retry_max") or body.get("max_quality_retries"))
+        task["task_id"] = f"task-{index + 1}"
+        tasks.append(task)
+    return tasks
+
+
+def _image_job_quality_retry_max(value: Any = None) -> int:
+    raw = value
+    if raw in (None, ""):
+        raw = conf().get("image_quality_retry_max") or 1
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        parsed = 1
+    return max(0, min(parsed, 2))
+
+
+def _image_job_positive_int(value: Any) -> Optional[int]:
+    try:
+        parsed = int(value or 0)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _image_job_parallelism_policy(body: Dict[str, Any], task_count: int) -> Dict[str, Any]:
+    cfg = conf()
+    safe_task_count = max(1, int(task_count or 1))
+    requested = _image_job_positive_int(body.get("max_parallel") or body.get("maxParallel")) or 1
+    configured = _image_job_positive_int(cfg.get("image_job_max_parallel"))
+    provider = _image_job_positive_int(cfg.get("image_provider_concurrency"))
+    configured_hard = _image_job_positive_int(
+        cfg.get("image_job_hard_max_parallel") or os.environ.get("ECOREX_IMAGE_JOB_HARD_MAX_PARALLEL")
+    )
+    hard = min(configured_hard or _IMAGE_JOB_PRODUCTION_HARD_MAX_PARALLEL, _IMAGE_JOB_PRODUCTION_HARD_MAX_PARALLEL)
+    limits = {
+        "task_count": safe_task_count,
+        "requested_max_parallel": requested,
+        "hard_max_parallel": hard,
+    }
+    if configured is not None:
+        limits["configured_max_parallel"] = configured
+    if provider is not None:
+        limits["provider_max_parallel"] = provider
+    effective = max(1, min(limits.values()))
+    clamp_reason = "none"
+    if effective < requested:
+        for key in ("task_count", "configured_max_parallel", "provider_max_parallel", "hard_max_parallel"):
+            if limits.get(key) == effective:
+                clamp_reason = key
+                break
+        if clamp_reason == "none":
+            clamp_reason = "policy"
+    policy: Dict[str, Any] = {
+        "parallelism_policy_version": "v1",
+        "task_count": safe_task_count,
+        "requested_max_parallel": requested,
+        "hard_max_parallel": hard,
+        "effective_max_parallel": effective,
+        "parallelism_clamped": effective < requested,
+        "parallelism_clamp_reason": clamp_reason,
+    }
+    if configured is not None:
+        policy["configured_max_parallel"] = configured
+    if provider is not None:
+        policy["provider_max_parallel"] = provider
+    return policy
+
+
+def _image_job_parallelism(body: Dict[str, Any], task_count: int) -> int:
+    return int(_image_job_parallelism_policy(body, task_count).get("effective_max_parallel") or 1)
+
+
+def _image_job_ocr_reuse_enabled(body: Dict[str, Any]) -> bool:
+    value = body.get("ocr_reuse") if "ocr_reuse" in body else body.get("ocrReuse")
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _image_job_dry_run_ocr_provider(payload: Dict[str, Any]) -> Dict[str, Any]:
+    refs = payload.get("image_urls") if isinstance(payload.get("image_urls"), list) else [payload.get("image") or ""]
+    digest = hashlib.sha256("\n".join(str(item or "") for item in refs).encode("utf-8", errors="replace")).hexdigest()[:16]
+    return {
+        "brief": f"dry-run-image-brief-{digest}",
+        "provider": "dry_run",
+    }
+
+
+def _image_job_vision_ocr_provider(payload: Dict[str, Any]) -> Any:
+    image = str(payload.get("image") or payload.get("image_url") or "").strip()
+    if not image:
+        return ""
+    permission_ref = hashlib.sha256(image.encode("utf-8", errors="replace")).hexdigest()[:16]
+    try:
+        from common.ecorex_tool_permissions import get_tool_permission_broker
+
+        decision = get_tool_permission_broker().authorize_noninteractive(
+            "vision",
+            {
+                "image": f"image-input-{permission_ref}",
+                "question": "image job OCR/vision brief",
+                "source": "image_job_ocr",
+            },
+        )
+    except Exception:
+        decision = {"allowed": False, "reason": "Permission broker failed; vision OCR was blocked."}
+    if not bool(decision.get("allowed")):
+        raise RuntimeError("vision OCR permission denied")
+    from agent.tools.vision.vision import Vision
+
+    return Vision({"cwd": _get_workspace_root()}).execute({
+        "image": image,
+        "question": (
+            "Extract a concise OCR and visual brief for image generation/editing. "
+            "Include visible text, layout, key objects, colors, and composition. "
+            "Do not add instructions that are not observable in the image."
+        ),
+    })
+
+
+def _image_job_ocr_provider(body: Dict[str, Any]):
+    if not _image_job_ocr_reuse_enabled(body):
+        return None
+    if bool(body.get("dry_run")) or str(body.get("runner") or "").strip().lower() == "dry_run":
+        return _image_job_dry_run_ocr_provider
+    return _image_job_vision_ocr_provider
+
+
+def _image_job_output_dir() -> str:
+    path = os.path.join(_get_upload_dir(), "image-jobs")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _image_job_dry_run_runner(task: Dict[str, Any], emit_progress, cancel_event) -> Dict[str, Any]:
+    if cancel_event.is_set():
+        from agent.protocol import ImageJobCancelled
+
+        raise ImageJobCancelled("cancel_requested")
+    emit_progress("provider_request", progress=0.25, detail={"provider": "test", "source": "web_channel"})
+    output_dir = _image_job_output_dir()
+    task_id = _safe_image_job_api_identifier(task.get("task_id"), prefix="task", allow_empty=False)
+    path = os.path.join(output_dir, f"{task_id}.png")
+    if not os.path.exists(path):
+        with open(path, "wb") as handle:
+            handle.write(b"")
+    emit_progress("saving", progress=0.75, detail={"provider": "test", "source": "web_channel"})
+    return {
+        "kind": "image",
+        "title": f"{task_id}.png",
+        "path": path,
+        "fileType": "image",
+        "mimeType": "image/png",
+        "sizeBytes": 0,
+    }
+
+
+def _image_job_skill_runner(task: Dict[str, Any], emit_progress, cancel_event) -> Dict[str, Any]:
+    if cancel_event.is_set():
+        from agent.protocol import ImageJobCancelled
+
+        raise ImageJobCancelled("cancel_requested")
+    script_path = Path(__file__).resolve().parents[2] / "skills" / "image-generation" / "scripts" / "generate.py"
+    if not script_path.exists():
+        raise RuntimeError("image generation skill runner is unavailable")
+    args: Dict[str, Any] = {}
+    for key in (
+        "prompt",
+        "image_url",
+        "provider",
+        "model",
+        "quality",
+        "size",
+        "aspect_ratio",
+        "output_format",
+        "output_compression",
+        "background",
+        "moderation",
+    ):
+        if key in task and task.get(key) not in (None, ""):
+            args[key] = task.get(key)
+    ocr_brief = str(task.get("_ocr_brief") or "").strip()
+    if ocr_brief:
+        args["ocr_brief"] = ocr_brief[:4096]
+    if not args.get("prompt"):
+        raise RuntimeError("image generation prompt is required")
+    try:
+        quality_retry_attempt = int(task.get("_quality_retry_attempt") or 0)
+    except (TypeError, ValueError):
+        quality_retry_attempt = 0
+    if quality_retry_attempt > 0:
+        args["prompt"] = f"{str(args['prompt']).rstrip()}{_IMAGE_JOB_QUALITY_RETRY_PROMPT_SUFFIX}"
+    output_dir = _image_job_output_dir()
+    env = os.environ.copy()
+    env["IMAGE_OUTPUT_DIR"] = output_dir
+    env = image_generation_env_with_config(env)
+    emit_progress("provider_request", progress=0.2, detail={"source": "web_channel", "operation": task.get("operation") or "generate"})
+    provider_result = run_image_generation_payload(
+        args,
+        script_path=script_path,
+        output_dir=output_dir,
+        env=env,
+    )
+    if cancel_event.is_set():
+        from agent.protocol import ImageJobCancelled
+
+        raise ImageJobCancelled("cancel_requested")
+    payload = provider_result.get("payload") if isinstance(provider_result.get("payload"), dict) else {}
+    returncode = int(provider_result.get("returncode") or 0)
+    if returncode != 0 or payload.get("error"):
+        error = payload.get("provider_error") if isinstance(payload.get("provider_error"), dict) else {}
+        emit_progress(
+            "failed",
+            progress=1.0,
+            detail={
+                "source": "web_channel",
+                "provider": error.get("provider") or "",
+                "taxonomy": error.get("taxonomy") or "",
+                "status_code": error.get("status_code") or 0,
+                "retryable": bool(error.get("retryable")) if "retryable" in error else False,
+            },
+        )
+        raise RuntimeError("image generation skill failed")
+    artifacts = []
+    for item in payload.get("images") or []:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("url") or "").strip()
+        if not path:
+            continue
+        artifacts.append({
+            "kind": "image",
+            "title": os.path.basename(path) or "image.png",
+            "path": path,
+            "fileType": "image",
+        })
+    if not artifacts:
+        raise RuntimeError("image generation produced no artifacts")
+    model_fallback = payload.get("model_fallback") if isinstance(payload.get("model_fallback"), dict) else {}
+    if model_fallback:
+        emit_progress(
+            "fallback",
+            progress=0.7,
+            detail={
+                "source": "web_channel",
+                "fallback_used": bool(model_fallback.get("used", True)),
+                "fallback_provider": model_fallback.get("provider") or payload.get("provider") or "",
+                "fallback_from_model": model_fallback.get("from_model") or "",
+                "fallback_to_model": model_fallback.get("to_model") or "",
+                "fallback_reason": model_fallback.get("reason") or "",
+            },
+        )
+    emit_progress(
+        "provider_response",
+        progress=0.8,
+        detail={
+            "source": "web_channel",
+            "provider": payload.get("provider") or task.get("provider") or "",
+            "model": payload.get("model") or "",
+            "attempted_provider_count": payload.get("attempted_provider_count") or 0,
+            "fallback_used": bool(model_fallback.get("used")) if model_fallback else False,
+            "fallback_provider": model_fallback.get("provider") or "",
+            "fallback_from_model": model_fallback.get("from_model") or "",
+            "fallback_to_model": model_fallback.get("to_model") or "",
+            "fallback_reason": model_fallback.get("reason") or "",
+        },
+    )
+    return {"artifacts": artifacts}
+
+
+def _image_job_runner(body: Dict[str, Any]):
+    if bool(body.get("dry_run")) or str(body.get("runner") or "").strip().lower() == "dry_run":
+        return _image_job_dry_run_runner
+    return _image_job_skill_runner
+
+
+def _image_job_request_id_from_events(job_id: str) -> str:
+    safe_job_id = _safe_image_job_api_identifier(job_id, prefix="image-job", allow_empty=True)
+    if not safe_job_id:
+        return ""
+    try:
+        from agent.protocol import get_run_event_ledger
+
+        event = get_run_event_ledger().latest_event_for_image_job(safe_job_id)
+        if event:
+            return str(event.get("request_id") or "")
+    except Exception:
+        return ""
+    return ""
+
+
+def _image_job_owner_ids_from_events(request_id: str) -> Dict[str, str]:
+    if not request_id:
+        return {}
+    try:
+        from agent.protocol import get_run_event_ledger
+
+        events = get_run_event_ledger().events_for_request(request_id, limit=0)
+        for event in events:
+            session_id = str(event.get("session_id") or "")
+            turn_id = str(event.get("turn_id") or "")
+            if session_id or turn_id:
+                return {"session_id": session_id, "turn_id": turn_id}
+    except Exception:
+        return {}
+    return {}
+
+
+def _image_job_with_projection_fallback(job: Dict[str, Any], projection: Dict[str, Any], request_id: str) -> Dict[str, Any]:
+    if not isinstance(job, dict) or job.get("status") != "unknown" or not isinstance(projection, dict):
+        return job
+    job_id = _safe_image_job_api_identifier(job.get("job_id"), prefix="image-job", allow_empty=True)
+    if not job_id:
+        return job
+    for projected in projection.get("image_jobs") or []:
+        if not isinstance(projected, dict):
+            continue
+        projected_job_id = _safe_image_job_api_identifier(projected.get("job_id"), prefix="image-job", allow_empty=True)
+        if projected_job_id != job_id:
+            continue
+        return {
+            "job_id": job_id,
+            "request_id": _safe_image_job_public_request_id(request_id),
+            "session_id": projection.get("session_id") or "",
+            "turn_id": projection.get("turn_id") or "",
+            "status": projected.get("status") or "unknown",
+            "artifacts": projected.get("artifacts") or [],
+            "cancel_requested": False,
+            "running": False,
+            "recovered_from_projection": True,
+        }
+    return job
+
+
+def _image_job_public_job_payload(
+    job: Dict[str, Any],
+    public_request_id: str,
+    public_session_id: str,
+    public_turn_id: str,
+) -> Dict[str, Any]:
+    public = dict(job or {})
+    if public.get("request_id") or public_request_id:
+        public["request_id"] = public_request_id or _safe_image_job_public_request_id(public.get("request_id"))
+    if public.get("session_id") or public_session_id:
+        public["session_id"] = public_session_id or _safe_image_job_public_session_id(public.get("session_id"))
+    if public.get("turn_id") or public_turn_id:
+        public["turn_id"] = public_turn_id or _safe_image_job_public_turn_id(public.get("turn_id"))
+    return public
+
+
+def _image_job_replace_public_ids(value: Any, public_request_id: str, public_session_id: str, public_turn_id: str) -> Any:
+    if not public_request_id and not public_session_id and not public_turn_id:
+        return value
+    if isinstance(value, list):
+        return [_image_job_replace_public_ids(item, public_request_id, public_session_id, public_turn_id) for item in value]
+    if not isinstance(value, dict):
+        return value
+    replaced = {}
+    for key, item in value.items():
+        if key == "request_id":
+            replaced[key] = public_request_id or item
+        elif key == "session_id":
+            replaced[key] = public_session_id or item
+        elif key == "turn_id":
+            replaced[key] = public_turn_id or item
+        else:
+            replaced[key] = _image_job_replace_public_ids(item, public_request_id, public_session_id, public_turn_id)
+    return replaced
+
+
+def _image_job_fill_public_projection_event_ids(
+    projection: Dict[str, Any],
+    public_request_id: str,
+    public_session_id: str,
+    public_turn_id: str,
+) -> Dict[str, Any]:
+    if not isinstance(projection, dict):
+        return projection
+    events = projection.get("events")
+    if not isinstance(events, list):
+        return projection
+    filled = dict(projection)
+    filled_events = []
+    for event in events:
+        if not isinstance(event, dict):
+            filled_events.append(event)
+            continue
+        item = dict(event)
+        if public_request_id and not item.get("request_id"):
+            item["request_id"] = public_request_id
+        if public_session_id and not item.get("session_id"):
+            item["session_id"] = public_session_id
+        if public_turn_id and not item.get("turn_id"):
+            item["turn_id"] = public_turn_id
+        filled_events.append(item)
+    filled["events"] = filled_events
+    return filled
+
+
+def _image_job_projection_payload(job: Dict[str, Any], *, include_events: bool = False, request_id: str = "") -> Dict[str, Any]:
+    request_id = str(job.get("request_id") or request_id or "")
+    event_owner_ids = _image_job_owner_ids_from_events(request_id)
+    public_request_id = _safe_image_job_public_request_id(request_id)
+    public_session_id = _safe_image_job_public_session_id((job or {}).get("session_id") or event_owner_ids.get("session_id"))
+    public_turn_id = _safe_image_job_public_turn_id((job or {}).get("turn_id") or event_owner_ids.get("turn_id"))
+    projection = {}
+    if request_id:
+        from agent.protocol import RuntimeProjectionService
+
+        projection = RuntimeProjectionService().request_projection(request_id)
+        projection = _runtime_projection_public_payload(projection, include_events=include_events)
+        public_session_id = _safe_image_job_public_session_id(projection.get("session_id") or event_owner_ids.get("session_id") or public_session_id)
+        public_turn_id = _safe_image_job_public_turn_id(projection.get("turn_id") or event_owner_ids.get("turn_id") or public_turn_id)
+        projection = _image_job_replace_public_ids(projection, public_request_id, public_session_id, public_turn_id)
+        projection = _image_job_fill_public_projection_event_ids(projection, public_request_id, public_session_id, public_turn_id)
+        job = _image_job_with_projection_fallback(job, projection, request_id)
+    job = _image_job_public_job_payload(job, public_request_id, public_session_id, public_turn_id)
+    return {
+        "status": "success",
+        "job": job,
+        "projection": projection,
+        "latest_event_id": projection.get("latest_event_id", 0) if isinstance(projection, dict) else 0,
+    }
+
+
+class ImageJobsHandler:
+    def GET(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            params = web.input(job_id='', request_id='', requestId='', wait='', timeout='', include_events='')
+            job_id = _safe_image_job_api_identifier(params.job_id, prefix="image-job", allow_empty=True)
+            if not job_id:
+                return json.dumps({"status": "error", "message": "job_id is required"}, ensure_ascii=False)
+            from agent.protocol import get_image_job_service
+
+            wait = str(params.wait or "").lower() in {"1", "true", "yes", "on"}
+            try:
+                timeout = float(params.timeout or 0) or None
+            except (TypeError, ValueError):
+                timeout = None
+            service = get_image_job_service()
+            job = service.collect(job_id, wait=wait, timeout=timeout) if wait else service.status(job_id)
+            request_id = _safe_image_job_api_identifier(
+                getattr(params, "request_id", "") or getattr(params, "requestId", ""),
+                prefix="req-image-job",
+                allow_empty=True,
+            )
+            if not request_id and job.get("status") == "unknown":
+                request_id = _image_job_request_id_from_events(job_id)
+            include_events = str(params.include_events or "").lower() in {"1", "true", "yes", "on"}
+            return json.dumps(_image_job_projection_payload(job, include_events=include_events, request_id=request_id), ensure_ascii=False)
+        except Exception as exc:
+            logger.error(f"[WebChannel] image job GET error: {_web_body_log_summary(exc)}")
+            return json.dumps({"status": "error", "message": "image job status failed"}, ensure_ascii=False)
+
+    def POST(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            body = json.loads(web.data() or b"{}")
+            action = str(body.get("action") or "start").strip().lower()
+            if action != "start":
+                return json.dumps({"status": "error", "message": "unsupported image job action"}, ensure_ascii=False)
+            tasks = _image_job_api_tasks(body)
+            request_id = _safe_image_job_api_identifier(body.get("request_id") or body.get("requestId"), prefix="req-image-job", allow_empty=False)
+            session_id = _safe_image_job_api_identifier(body.get("session_id") or body.get("sessionId"), allow_empty=True)
+            turn_id = _safe_image_job_api_identifier(body.get("turn_id") or body.get("turnId"), allow_empty=True)
+            job_id = _safe_image_job_api_identifier(body.get("job_id") or body.get("jobId"), prefix="image-job", allow_empty=True)
+            operation = str(body.get("operation") or ("edit" if any(task.get("image_url") for task in tasks) else "generate"))
+            parallelism_policy = _image_job_parallelism_policy(body, len(tasks))
+            max_parallel = int(parallelism_policy.get("effective_max_parallel") or 1)
+            ocr_reuse = _image_job_ocr_reuse_enabled(body)
+            ocr_provider = _image_job_ocr_provider(body)
+            from agent.protocol import get_image_job_service
+
+            job = get_image_job_service().start(
+                request_id=request_id,
+                session_id=session_id,
+                turn_id=turn_id,
+                operation=operation,
+                tasks=tasks,
+                runner=_image_job_runner(body),
+                job_id=job_id,
+                metadata={
+                    "source": "web_channel",
+                    "provider": body.get("provider") or "",
+                    "model": body.get("model") or "",
+                    "image_mode": operation,
+                    "input_image_count": sum(1 for task in tasks if task.get("image_url")),
+                    "output_count": len(tasks),
+                    "ocr_cache_enabled": bool(ocr_provider and ocr_reuse),
+                    **parallelism_policy,
+                },
+                max_parallel=max_parallel,
+                ocr_provider=ocr_provider,
+                ocr_reuse=ocr_reuse,
+                synchronous=bool(body.get("synchronous")),
+            )
+            include_events = bool(body.get("include_events") or body.get("includeEvents"))
+            return json.dumps(_image_job_projection_payload(job, include_events=include_events), ensure_ascii=False)
+        except ValueError as exc:
+            return json.dumps(_public_validation_error_payload(exc), ensure_ascii=False)
+        except Exception as exc:
+            logger.error(f"[WebChannel] image job start error: {_web_body_log_summary(exc)}")
+            return json.dumps({"status": "error", "message": "image job start failed"}, ensure_ascii=False)
+
+
+class ImageJobActionHandler:
+    def POST(self, job_id: str):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            body = json.loads(web.data() or b"{}")
+            action = str(body.get("action") or "").strip().lower()
+            safe_job_id = _safe_image_job_api_identifier(job_id, prefix="image-job", allow_empty=True)
+            if not safe_job_id:
+                return json.dumps({"status": "error", "message": "invalid job_id"}, ensure_ascii=False)
+            from agent.protocol import get_image_job_service
+
+            service = get_image_job_service()
+            cancel_recovered_unavailable = False
+            if action == "cancel":
+                reason = str(body.get("reason") or "cancel_requested")
+                job = service.cancel(safe_job_id, reason=reason)
+                cancel_recovered_unavailable = job.get("status") == "unknown"
+            elif action in {"collect", "status", ""}:
+                job = service.collect(
+                    safe_job_id,
+                    wait=bool(body.get("wait")),
+                    timeout=float(body.get("timeout") or 0) or None,
+                )
+            else:
+                return json.dumps({"status": "error", "message": "unsupported image job action"}, ensure_ascii=False)
+            request_id = _safe_image_job_api_identifier(
+                body.get("request_id") or body.get("requestId"),
+                prefix="req-image-job",
+                allow_empty=True,
+            )
+            if not request_id and job.get("status") == "unknown":
+                request_id = _image_job_request_id_from_events(safe_job_id)
+            include_events = bool(body.get("include_events") or body.get("includeEvents"))
+            payload = _image_job_projection_payload(job, include_events=include_events, request_id=request_id)
+            if cancel_recovered_unavailable and payload.get("job", {}).get("recovered_from_projection"):
+                payload["job"]["cancelled"] = False
+                payload["job"]["cancel_unavailable_reason"] = "recovered_projection_no_live_worker"
+            return json.dumps(payload, ensure_ascii=False)
+        except Exception as exc:
+            logger.error(f"[WebChannel] image job action error: {_web_body_log_summary(exc)}")
+            return json.dumps({"status": "error", "message": "image job action failed"}, ensure_ascii=False)
 
 
 class ToolPermissionHandler:
@@ -5354,8 +7831,8 @@ class ToolPermissionHandler:
 
             return json.dumps(get_tool_permission_broker().list_pending(), ensure_ascii=False)
         except Exception as e:
-            logger.error(f"[WebChannel] tool permission list error: {e}")
-            return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
+            logger.error(f"[WebChannel] tool permission list error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e), ensure_ascii=False)
 
     def POST(self):
         _require_auth()
@@ -5382,12 +7859,12 @@ class ToolPermissionHandler:
                 ensure_ascii=False,
             )
         except Exception as e:
-            logger.error(f"[WebChannel] tool permission decision error: {e}")
-            return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
+            logger.error(f"[WebChannel] tool permission decision error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e), ensure_ascii=False)
 
 
 class UpdateCheckHandler:
-    DEFAULT_MANIFEST_URL = "https://www.ecoreai.cn/ecorex-agent/manifest.json"
+    DEFAULT_MANIFEST_URL = "https://mvdcm.ecoremedia.net/ecorex-agent/manifest.json"
 
     def GET(self):
         _require_auth()
@@ -5417,8 +7894,8 @@ class UpdateCheckHandler:
                 "update": manifest.get("update", {}),
             }, ensure_ascii=False)
         except Exception as e:
-            logger.error(f"[WebChannel] update check error: {e}")
-            return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
+            logger.error(f"[WebChannel] update check error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e), ensure_ascii=False)
 
     def _load_manifest(self) -> Dict[str, Any]:
         configured = (
@@ -5453,10 +7930,10 @@ class UpdateCheckHandler:
 
     def _absolute_download_url(self, href: str) -> str:
         if not href:
-            return "https://www.ecoreai.cn/ecorex-agent/"
+            return "https://mvdcm.ecoremedia.net/ecorex-agent/"
         if href.startswith("http://") or href.startswith("https://"):
             return href
-        return "https://www.ecoreai.cn/ecorex-agent/" + href.lstrip("./")
+        return "https://mvdcm.ecoremedia.net/ecorex-agent/" + href.lstrip("./")
 
     def _compare_versions(self, left: str, right: str) -> int:
         def parts(value: str) -> List[int]:
@@ -5506,7 +7983,7 @@ class OpenPathHandler:
                         "message": decision.get("reason") or "open path blocked by permissions",
                     }, ensure_ascii=False)
             except Exception as exc:
-                logger.warning(f"[WebChannel] open path permission check failed: {exc}")
+                logger.warning(f"[WebChannel] open path permission check failed: {_web_body_log_summary(exc)}")
                 return json.dumps({"status": "error", "message": "open path permission check failed"}, ensure_ascii=False)
 
             if not os.path.exists(path_value):
@@ -5522,8 +7999,8 @@ class OpenPathHandler:
             self._open_path(path_value, action)
             return json.dumps({"status": "success", "message": "", "path": path_value}, ensure_ascii=False)
         except Exception as e:
-            logger.error(f"[WebChannel] open path error: {e}")
-            return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
+            logger.error(f"[WebChannel] open path error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e), ensure_ascii=False)
 
     def _open_path(self, path_value: str, action: str = "open") -> None:
         if os.name == "nt":
@@ -5577,7 +8054,7 @@ def _project_payload_from_path(path_value: str, create: bool = False, user_selec
         if not folder_decision.get("allowed", True):
             raise PermissionError(folder_decision.get("reason") or "project folder is not writable")
     except Exception as exc:
-        logger.warning(f"[WebChannel] project folder permission registration failed: {exc}")
+        logger.warning(f"[WebChannel] project folder permission registration failed: {_web_body_log_summary(exc)}")
         raise
     project_state_dir = os.path.join(folder_path, ".ecorex")
     project_memory_path = os.path.join(project_state_dir, "project-memory.md")
@@ -5592,7 +8069,7 @@ def _project_payload_from_path(path_value: str, create: bool = False, user_selec
             if registered.get("status") == "error":
                 raise PermissionError(registered.get("message") or "project folder permission registration failed")
     except Exception as exc:
-        logger.warning(f"[WebChannel] project folder permission registration failed after project metadata write: {exc}")
+        logger.warning(f"[WebChannel] project folder permission registration failed after project metadata write: {_web_body_log_summary(exc)}")
         raise
     return {
         "id": _stable_project_id(folder_path),
@@ -5690,8 +8167,8 @@ class ProjectFolderHandler:
                 logger.warning(f"[WebChannel] project folder registered but UI state merge failed: {state_exc}")
             return json.dumps({"status": "success", "project": project}, ensure_ascii=False)
         except Exception as exc:
-            logger.error(f"[WebChannel] project folder error: {exc}")
-            return json.dumps({"status": "error", "message": str(exc)}, ensure_ascii=False)
+            logger.error(f"[WebChannel] project folder error: {_web_body_log_summary(exc)}")
+            return json.dumps(_public_error_payload("Request failed.", exc), ensure_ascii=False)
 
 
 class ProjectFolderChooseHandler:
@@ -5711,8 +8188,8 @@ class ProjectFolderChooseHandler:
                 logger.warning(f"[WebChannel] project folder selected but UI state merge failed: {state_exc}")
             return json.dumps({"status": "success", "project": project}, ensure_ascii=False)
         except Exception as exc:
-            logger.error(f"[WebChannel] project folder choose error: {exc}")
-            return json.dumps({"status": "error", "message": str(exc)}, ensure_ascii=False)
+            logger.error(f"[WebChannel] project folder choose error: {_web_body_log_summary(exc)}")
+            return json.dumps(_public_error_payload("Request failed.", exc), ensure_ascii=False)
 
 
 def _tool_result_to_payload(result) -> dict:
@@ -5721,6 +8198,57 @@ def _tool_result_to_payload(result) -> dict:
         payload = {"result": payload}
     status = getattr(result, "status", None) or payload.get("status") or "success"
     return {"status": status, **payload}
+
+
+def _flatten_capability_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    result = dict(payload or {})
+    abilities_payload = result.get("abilities")
+    if isinstance(abilities_payload, dict) and isinstance(abilities_payload.get("abilities"), list):
+        result["abilityDiagnostics"] = {
+            key: value for key, value in abilities_payload.items() if key != "abilities"
+        }
+        result["abilities"] = abilities_payload.get("abilities") or []
+    return result
+
+
+def _safe_capability_event_identifier(value: Any) -> str:
+    raw = str(value or "").strip()
+    allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-"
+    if 1 <= len(raw) <= 128 and all(char in allowed for char in raw):
+        return raw
+    return ""
+
+
+def _record_capability_policy_blocked_event(request_id: str, session_id: str, blocked: Dict[str, Any], action: str) -> None:
+    safe_request_id = _safe_capability_event_identifier(request_id)
+    if not safe_request_id:
+        return
+    safe_session_id = _safe_capability_event_identifier(session_id)
+    pack_id = str(blocked.get("packId") or "").strip()
+    policy = blocked.get("policy") if isinstance(blocked.get("policy"), dict) else {}
+    try:
+        from agent.protocol import get_run_event_ledger
+
+        get_run_event_ledger().append_event(
+            request_id=safe_request_id,
+            session_id=safe_session_id,
+            turn_id=safe_request_id,
+            event_type="capability.policy_blocked",
+            payload={
+                "pack_id": pack_id,
+                "action": action,
+                "error_type": blocked.get("errorType") or "capability_policy_blocked",
+                "policy_mode": policy.get("policyMode") or "disabled",
+                "install_allowed": bool(policy.get("installAllowed")),
+                "policy_source": policy.get("policySource") or "",
+                "policy_updated_at": policy.get("policyUpdatedAt") or "",
+                "pack_id_redacted": bool(blocked.get("packIdRedacted") or policy.get("packIdRedacted")),
+            },
+            idempotency_key=f"{safe_request_id}:capability.policy_blocked:{pack_id}:{action}",
+            source="web_channel",
+        )
+    except Exception as exc:
+        logger.debug(f"[WebChannel] capability policy event skipped: {_web_body_log_summary(exc)}")
 
 
 class CapabilitiesHandler:
@@ -5732,10 +8260,14 @@ class CapabilitiesHandler:
 
             tool = AgentCapabilityTool()
             result = tool.execute({"action": "diagnose"})
-            return json.dumps(_tool_result_to_payload(result), ensure_ascii=False)
+            return json.dumps(_flatten_capability_payload(_tool_result_to_payload(result)), ensure_ascii=False)
         except Exception as exc:
-            logger.exception("[WebChannel] capability status failed")
-            return json.dumps({"status": "error", "message": str(exc)}, ensure_ascii=False)
+            logger.error(f"[WebChannel] capability status failed: {_web_body_log_summary(exc)}")
+            return json.dumps({
+                "status": "error",
+                "message": _public_exception_message("Capability status unavailable.", exc),
+                **_public_exception_summary(exc),
+            }, ensure_ascii=False)
 
 
 class ExtensionsHandler:
@@ -5747,8 +8279,13 @@ class ExtensionsHandler:
 
             return json.dumps(ExtensionRegistry(_get_workspace_root()).list_extensions(), ensure_ascii=False)
         except Exception as exc:
-            logger.exception("[WebChannel] extensions status failed")
-            return json.dumps({"status": "error", "message": str(exc), "extensions": []}, ensure_ascii=False)
+            logger.error(f"[WebChannel] extensions status failed: {_web_body_log_summary(exc)}")
+            return json.dumps({
+                "status": "error",
+                "message": _public_exception_message("Extensions status unavailable.", exc),
+                **_public_exception_summary(exc),
+                "extensions": [],
+            }, ensure_ascii=False)
 
 class AgentInstallRequestHandler:
     def POST(self):
@@ -5761,10 +8298,45 @@ class AgentInstallRequestHandler:
         pack_id = str(data.get("packId") or data.get("pack_id") or data.get("id") or "").strip()
         pack_name = str(data.get("packName") or data.get("name") or pack_id or "能力包").strip()
         session_id = str(data.get("sessionId") or data.get("session_id") or "").strip()
+        request_id = str(data.get("requestId") or data.get("request_id") or "").strip()
         if not pack_id:
             return json.dumps({"status": "error", "message": "packId is required"}, ensure_ascii=False)
+        from common.ecorex_capability_policy import blocked_install_payload, normalize_capability_pack_id
+
+        policy_pack_id = normalize_capability_pack_id(pack_id)
+        policy_lookup_id = policy_pack_id or pack_id
+        blocked = blocked_install_payload(policy_lookup_id, pack_name=pack_name, action="agent_install_request")
+        if blocked:
+            if policy_pack_id and not blocked.get("packIdRedacted") and policy_pack_id != pack_id:
+                blocked["requestedPackId"] = pack_id
+            public_pack_name = "Capability pack" if blocked.get("packIdRedacted") else pack_name
+            _record_capability_policy_blocked_event(request_id, session_id, blocked, "agent_install_request")
+            return json.dumps({
+                "status": "error",
+                "type": "capability-pack",
+                "packId": blocked.get("packId") or policy_pack_id,
+                "packName": public_pack_name,
+                "sessionId": session_id,
+                **blocked,
+            }, ensure_ascii=False)
         normalized_pack_id = pack_id.strip().lower().replace("_", "-")
-        if normalized_pack_id in {"feishu", "lark", "feishu-lark", "lark-feishu", "feishu-cli", "lark-cli"}:
+        if normalized_pack_id in {"tongxin", "tongxin-cli", "xin-agent", "xin-agent-cli", "tx-assistant"}:
+            prompt = (
+                f"Connect the EcoreX Tongxin Assistant read-only CLI capability `{pack_id}` ({pack_name}) inside this response. "
+                "Do not install through raw bash/curl/npm/git and do not run the CLI directly through shell. "
+                "Tongxin is a default read-only capability: configure `tools.tongxin_cli.script_path` or "
+                "`ECOREX_TONGXIN_CLI_PATH` only if the packaged runtime cannot auto-discover `xin_agent_cli.py`, "
+                "then call `host_diagnostics` with action `status` and `tongxin_cli` with action `status` or `schema`. "
+                "Only read-only queries are allowed for all users; write, sync, auth, submit, approve, delete, export-to-file, "
+                "and permission-changing commands must stay blocked."
+            )
+            extra_fields = {
+                "discoveryOnly": False,
+                "readOnly": True,
+                "defaultEnabled": True,
+                "installHint": "Use the structured tongxin_cli tool and configure an existing xin_agent_cli.py path when auto-discovery is unavailable.",
+            }
+        elif normalized_pack_id in {"feishu", "lark", "feishu-lark", "lark-feishu", "feishu-cli", "lark-cli"}:
             prompt = (
                 f"Install the EcoreX Feishu/Lark CLI connector `{pack_id}` ({pack_name}) inside this response. "
                 "The connector installs the official `@larksuite/cli` package on demand. "
@@ -5850,8 +8422,12 @@ class SubagentsHandler:
             tool.context = _SubagentContext("", _get_workspace_root())
             return json.dumps(_tool_result_to_payload(tool.execute({"action": "list"})), ensure_ascii=False)
         except Exception as exc:
-            logger.exception("[WebChannel] subagent list failed")
-            return json.dumps({"status": "error", "message": str(exc)}, ensure_ascii=False)
+            logger.error(f"[WebChannel] subagent list failed: {_web_body_log_summary(exc)}")
+            return json.dumps({
+                "status": "error",
+                "message": _public_exception_message("Subagent list unavailable.", exc),
+                **_public_exception_summary(exc),
+            }, ensure_ascii=False)
 
     def POST(self):
         _require_auth()
@@ -5872,8 +8448,12 @@ class SubagentsHandler:
             )
             return json.dumps(_tool_result_to_payload(tool.execute({"action": action, **data})), ensure_ascii=False)
         except Exception as exc:
-            logger.exception("[WebChannel] subagent action failed")
-            return json.dumps({"status": "error", "message": str(exc)}, ensure_ascii=False)
+            logger.error(f"[WebChannel] subagent action failed: {_web_body_log_summary(exc)}")
+            return json.dumps({
+                "status": "error",
+                "message": _public_exception_message("Subagent action failed.", exc),
+                **_public_exception_summary(exc),
+            }, ensure_ascii=False)
 
 
 class SubagentActionHandler:
@@ -5887,8 +8467,12 @@ class SubagentActionHandler:
             tool.context = _SubagentContext("", _get_workspace_root())
             return json.dumps(_tool_result_to_payload(tool.execute({"action": action, "id": task_id})), ensure_ascii=False)
         except Exception as exc:
-            logger.exception("[WebChannel] subagent route action failed")
-            return json.dumps({"status": "error", "message": str(exc)}, ensure_ascii=False)
+            logger.error(f"[WebChannel] subagent route action failed: {_web_body_log_summary(exc)}")
+            return json.dumps({
+                "status": "error",
+                "message": _public_exception_message("Subagent action failed.", exc),
+                **_public_exception_summary(exc),
+            }, ensure_ascii=False)
 
 
 class StreamHandler:
@@ -5906,8 +8490,9 @@ class StreamHandler:
                 raise web.HTTPError("401 Unauthorized",
                                     {"Content-Type": "application/json; charset=utf-8"},
                                     json.dumps({"status": "error", "message": "Unauthorized"}))
-        params = web.input(request_id='')
+        params = web.input(request_id='', session_id='', sessionId='')
         request_id = params.request_id
+        session_id = str(getattr(params, "session_id", "") or getattr(params, "sessionId", "") or "")
         if not request_id:
             raise web.badrequest()
 
@@ -5917,7 +8502,7 @@ class StreamHandler:
         if desktop_runtime:
             web.header('Access-Control-Allow-Origin', origin or '*')
 
-        return WebChannel().stream_response(request_id)
+        return WebChannel().stream_response(request_id, session_id=session_id)
 
 
 class ChatHandler:
@@ -5934,7 +8519,7 @@ class ClientProxyHandler:
     public deployments and local installs.
     """
 
-    DEFAULT_CLIENT_BASE = "https://www.ecoreai.cn/ecorex-agent/client"
+    DEFAULT_CLIENT_BASE = "https://mvdcm.ecoremedia.net/ecorex-agent/client"
     FORWARD_HEADERS = {
         "accept",
         "authorization",
@@ -5947,10 +8532,12 @@ class ClientProxyHandler:
     }
 
     def _client_base(self) -> str:
+        public_base = str(os.environ.get("ECOREX_WEB_PUBLIC_BASE_URL") or conf().get("web_public_base_url") or "").strip().rstrip("/")
         configured = (
             os.environ.get("ECOREX_WEB_CLIENT_BASE")
             or conf().get("web_client_base")
             or conf().get("admin_client_base")
+            or (f"{public_base}/client" if public_base else "")
             or self.DEFAULT_CLIENT_BASE
         )
         return str(configured).strip().rstrip("/")
@@ -5966,7 +8553,7 @@ class ClientProxyHandler:
         return target
 
     def _forward_headers(self) -> dict:
-        headers = {"User-Agent": "EcoreX-WebUI/0.2.0"}
+        headers = {"User-Agent": "EcoreX-WebUI/0.2.2"}
         for key, value in web.ctx.env.items():
             if key == "CONTENT_TYPE":
                 name = "Content-Type"
@@ -6010,11 +8597,12 @@ class ClientProxyHandler:
             web.header("Cache-Control", "no-store")
             return raw
         except Exception as exc:
-            logger.warning(f"[WebChannel] Admin client proxy failed: {exc}")
+            logger.warning(f"[WebChannel] Admin client proxy failed: {_web_body_log_summary(exc)}")
             return self._json_response(502, {
                 "ok": False,
                 "error": "admin client proxy failed",
-                "detail": str(exc),
+                "detail": _public_exception_message("Admin client proxy failed.", exc),
+                **_public_exception_summary(exc),
             })
 
     def GET(self, path: str = ""):
@@ -6199,6 +8787,7 @@ class ConfigHandler:
             local_config = conf()
             use_agent = local_config.get("agent", True)
             title = "EcoreX" if use_agent else "AI Assistant"
+            welcome_title = "和EcoreX一起开始工作"
 
             api_bases = {}
             api_keys_masked = {}
@@ -6229,6 +8818,7 @@ class ConfigHandler:
                 "status": "success",
                 "use_agent": use_agent,
                 "title": title,
+                "welcome_title": welcome_title,
                 "model": local_config.get("model", ""),
                 "bot_type": "openai" if local_config.get("bot_type") == "chatGPT" else local_config.get("bot_type", ""),
                 "use_linkai": bool(local_config.get("use_linkai", False)),
@@ -6244,8 +8834,8 @@ class ConfigHandler:
                 "web_password_masked": masked_pwd,
             }, ensure_ascii=False)
         except Exception as e:
-            logger.error(f"Error getting config: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"Error getting config: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
     def POST(self):
         _require_auth()
@@ -6308,8 +8898,8 @@ class ConfigHandler:
 
             return json.dumps({"status": "success", "applied": applied}, ensure_ascii=False)
         except Exception as e:
-            logger.error(f"Error updating config: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"Error updating config: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
 
 class ModelsHandler:
@@ -7179,8 +9769,8 @@ class ModelsHandler:
                 "capabilities": self._capabilities(local_config),
             }, ensure_ascii=False)
         except Exception as e:
-            logger.error(f"[ModelsHandler] GET failed: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[ModelsHandler] GET failed: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
     def POST(self):
         _require_auth()
@@ -7200,8 +9790,8 @@ class ModelsHandler:
                 return self._handle_set_search_credential(data)
             return json.dumps({"status": "error", "message": f"unknown action: {action!r}"})
         except Exception as e:
-            logger.error(f"[ModelsHandler] POST failed: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[ModelsHandler] POST failed: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
     def _handle_set_provider(self, data: dict) -> str:
         provider_id = (data.get("provider_id") or "").strip()
@@ -7495,7 +10085,7 @@ class ModelsHandler:
             from bridge.bridge import Bridge
             Bridge().refresh_voice()
         except Exception as e:
-            logger.warning(f"[ModelsHandler] Bridge voice refresh failed: {e}")
+            logger.warning(f"[ModelsHandler] Bridge voice refresh failed: {_web_body_log_summary(e)}")
 
     def _set_embedding(self, provider_id: str, model: str) -> str:
         # Two valid states: both empty (reset to pick-or-empty) OR both set.
@@ -7567,7 +10157,7 @@ class ModelsHandler:
             Bridge().reset_bot()
             logger.info("[ModelsHandler] Bridge bot routing reset")
         except Exception as e:
-            logger.warning(f"[ModelsHandler] Bridge reset failed: {e}")
+            logger.warning(f"[ModelsHandler] Bridge reset failed: {_web_body_log_summary(e)}")
 
 
 class ChannelsHandler:
@@ -7575,6 +10165,162 @@ class ChannelsHandler:
 
     CHANNEL_DEFS = CHANNEL_CATALOG
     CHANNEL_RUNTIME_STATE: Dict[str, Dict[str, Any]] = {}
+    CONFIG_WRITE_LOCK = threading.RLock()
+    SENSITIVE_CHANNEL_FIELD_KEYS = {
+        "app_id",
+        "appid",
+        "client_id",
+        "clientid",
+        "feishu_app_id",
+        "feishu_home_channel",
+        "home_channel",
+        "open_chat_id",
+        "open_id",
+        "receiver",
+    }
+
+    @staticmethod
+    def _config_path() -> str:
+        return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__)))), "config.json")
+
+    @classmethod
+    def _read_file_config(cls) -> Dict[str, Any]:
+        path = cls._config_path()
+        if not os.path.exists(path):
+            return {}
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+
+    @classmethod
+    def _write_file_config_atomic(cls, data: Dict[str, Any]) -> None:
+        path = cls._config_path()
+        cls._cleanup_stale_config_temps(path)
+        tmp_path = f"{path}.tmp-{uuid.uuid4().hex}"
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        fd: Optional[int] = None
+        replaced = False
+        try:
+            fd = os.open(tmp_path, flags, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                fd = None
+                json.dump(data, f, indent=4, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, path)
+            replaced = True
+        finally:
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except Exception:
+                    pass
+            if not replaced and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+
+    @classmethod
+    def _cleanup_stale_config_temps(cls, path: Optional[str] = None) -> None:
+        base_path = path or cls._config_path()
+        directory = os.path.dirname(base_path) or "."
+        prefix = os.path.basename(base_path) + ".tmp-"
+        try:
+            for name in os.listdir(directory):
+                if not name.startswith(prefix):
+                    continue
+                candidate = os.path.join(directory, name)
+                try:
+                    os.remove(candidate)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    @staticmethod
+    def _coerce_channel_field_value(field_def: Dict[str, Any], value: Any) -> Any:
+        field_type = field_def.get("type")
+        key = str(field_def.get("key") or "")
+        if field_type == "number":
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                raise ValueError(f"{key} must be a number")
+        if field_type == "bool":
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, (int, float)):
+                return bool(value)
+            if isinstance(value, str):
+                normalized = value.strip().lower()
+                if normalized in {"true", "1", "yes", "on"}:
+                    return True
+                if normalized in {"false", "0", "no", "off", ""}:
+                    return False
+            raise ValueError(f"{key} must be a boolean")
+        return value
+
+    @classmethod
+    def _collect_channel_config_updates(cls, ch_def: Dict[str, Any], updates: Any) -> Tuple[Dict[str, Any], int]:
+        if not isinstance(updates, dict):
+            return {}, 0
+        valid_fields = {f["key"]: f for f in ch_def["fields"] if f.get("key")}
+        sensitive_keys = {key for key, field in valid_fields.items() if cls._is_sensitive_channel_field(key, field)}
+        applied: Dict[str, Any] = {}
+        skipped_masked = 0
+        for key, value in updates.items():
+            if key not in valid_fields:
+                continue
+            if key in sensitive_keys and cls._is_masked_secret_value(value):
+                skipped_masked += 1
+                continue
+            applied[key] = cls._coerce_channel_field_value(valid_fields[key], value)
+        return applied, skipped_masked
+
+    @classmethod
+    def _is_sensitive_channel_field(cls, key: str, field_def: Optional[Dict[str, Any]] = None) -> bool:
+        normalized = str(key or "").strip().lower()
+        field_def = field_def or {}
+        if field_def.get("type") == "secret" or field_def.get("sensitive") is True:
+            return True
+        return normalized in cls.SENSITIVE_CHANNEL_FIELD_KEYS
+
+    @staticmethod
+    def _home_channel_projection(config: Dict[str, Any], channel_name: str) -> Dict[str, Any]:
+        channel_id = str(config.get(f"{channel_name}_home_channel") or "").strip()
+        if not channel_id:
+            return {}
+        channel_name_value = str(config.get(f"{channel_name}_home_channel_name") or "").strip()
+        if channel_name == "feishu":
+            digest = hmac.new(
+                b"ecorex-feishu-home-channel-v1",
+                channel_id.encode("utf-8", errors="replace"),
+                hashlib.sha256,
+            ).hexdigest()[:16]
+            payload = {"configured": True, "idHash": f"hmac:{digest}"}
+            if channel_name_value:
+                payload["name"] = channel_name_value
+            return payload
+        payload = {"id": channel_id}
+        if channel_name_value:
+            payload["name"] = channel_name_value
+        return payload
+
+    @staticmethod
+    def _redact_runtime_error(value: Any) -> str:
+        return mask_sensitive_text(value, max_chars=500)
+
+    @staticmethod
+    def _channel_start_config_error(config: Dict[str, Any], channel_name: str) -> str:
+        status = channel_config_status(config, channel_name)
+        if status.get("state") in {"configured", "not_required"}:
+            return ""
+        missing = [str(item) for item in status.get("missingFields") or []]
+        if missing:
+            return f"missing required config fields: {', '.join(missing)}"
+        return "missing required config fields"
 
     @staticmethod
     def _get_weixin_login_status() -> str:
@@ -7592,9 +10338,20 @@ class ChannelsHandler:
 
     @staticmethod
     def _mask_secret(value: str) -> str:
-        if not value or len(value) <= 8:
+        if not value:
             return value
+        if len(value) <= 8:
+            return "*" * len(value)
         return value[:4] + "*" * (len(value) - 8) + value[-4:]
+
+    @staticmethod
+    def _is_masked_secret_value(value: Any) -> bool:
+        raw = str(value or "").strip()
+        if not raw:
+            return True
+        if set(raw) == {"*"}:
+            return True
+        return len(raw) > 8 and "****" in raw
 
     @staticmethod
     def _parse_channel_list(raw) -> list:
@@ -7612,28 +10369,70 @@ class ChannelsHandler:
         cls.CHANNEL_RUNTIME_STATE[channel_name] = state
         return state
 
+    @staticmethod
+    def _feishu_dependency_status(config: Dict[str, Any]) -> Dict[str, Any]:
+        return feishu_dependency_status(config)
+
     @classmethod
     def _runtime_state(cls, channel_name: str) -> Dict[str, Any]:
         return dict(cls.CHANNEL_RUNTIME_STATE.get(channel_name) or {})
 
     @staticmethod
-    def _running_channel_names() -> set:
+    @staticmethod
+    def _channel_startup_observation(channel, thread=None) -> Dict[str, Any]:
+        error = ChannelsHandler._redact_runtime_error(getattr(channel, "_startup_error", "") or "")
+        event = getattr(channel, "_startup_event", None)
+        ready = bool(event.is_set()) if event is not None and hasattr(event, "is_set") else False
+        thread_alive = bool(thread is not None and getattr(thread, "is_alive", lambda: False)())
+        if error:
+            return {"running": False, "status": "error", "last_error": error}
+        if ready:
+            return {"running": True, "status": "active", "last_error": ""}
+        if thread_alive:
+            return {"running": False, "status": "starting", "last_error": ""}
+        return {"running": False, "status": "stopped", "last_error": ""}
+
+    @staticmethod
+    def _channel_runtime_observations() -> Dict[str, Dict[str, Any]]:
         try:
             import sys
             app_module = sys.modules.get('__main__') or sys.modules.get('app')
             mgr = getattr(app_module, '_channel_mgr', None) if app_module else None
             if not mgr:
-                return set()
-            running = set()
+                return {}
+            observations: Dict[str, Dict[str, Any]] = {}
             for name in CHANNEL_CATALOG.keys():
                 try:
-                    if mgr.get_channel(name) is not None:
-                        running.add(name)
+                    channel = mgr.get_channel(name)
+                    if channel is None:
+                        continue
+                    thread = getattr(mgr, "_threads", {}).get(name) if hasattr(mgr, "_threads") else None
+                    observations[name] = ChannelsHandler._channel_startup_observation(channel, thread)
                 except Exception:
                     continue
-            return running
+            return observations
         except Exception:
-            return set()
+            return {}
+
+    @staticmethod
+    def _running_channel_names(observations: Optional[Dict[str, Dict[str, Any]]] = None) -> set:
+        runtime = observations if observations is not None else ChannelsHandler._channel_runtime_observations()
+        return {name for name, state in runtime.items() if state.get("running") is True}
+
+    @staticmethod
+    def _agent_tool_names() -> Optional[set]:
+        try:
+            from agent.tools.tool_manager import ToolManager
+
+            manager = ToolManager()
+            if not getattr(manager, "tool_classes", None):
+                manager.load_tools()
+            names = {str(name) for name in getattr(manager, "tool_classes", {}).keys()}
+            names.update(str(name) for name in getattr(manager, "_mcp_tool_instances", {}).keys())
+            return names if names else None
+        except Exception as exc:
+            logger.debug(f"[WebChannel] Agent tool snapshot unavailable: {_web_body_log_summary(exc)}")
+            return None
 
     @staticmethod
     def _refresh_runtime_capabilities(reason: str = "") -> None:
@@ -7642,7 +10441,7 @@ class ChannelsHandler:
             Bridge().reset_bot()
             logger.info(f"[WebChannel] Runtime capabilities refresh requested: {reason}")
         except Exception as e:
-            logger.debug(f"[WebChannel] Runtime capability refresh skipped: {e}")
+            logger.debug(f"[WebChannel] Runtime capability refresh skipped: {_web_body_log_summary(e)}")
 
     def GET(self):
         _require_auth()
@@ -7650,14 +10449,49 @@ class ChannelsHandler:
         try:
             local_config = conf()
             active_channels = self._active_channel_set()
-            running_channels = self._running_channel_names()
+            runtime_observations = self._channel_runtime_observations()
+            running_channels = self._running_channel_names(runtime_observations)
+            agent_tool_names = self._agent_tool_names()
             channels = []
             for ch_name, ch_def in self.CHANNEL_DEFS.items():
                 runtime_state = self._runtime_state(ch_name)
+                startup_state = runtime_observations.get(ch_name) or {}
+                if startup_state:
+                    runtime_state = {
+                        **runtime_state,
+                        "status": startup_state.get("status") or runtime_state.get("status"),
+                        "last_error": self._redact_runtime_error(startup_state.get("last_error") or runtime_state.get("last_error")),
+                    }
+                observed = channel_observability(
+                    local_config,
+                    ch_name,
+                    running_channels=running_channels,
+                    runtime_state=runtime_state,
+                    tool_names=agent_tool_names,
+                )
+                dependency_status = {}
+                if ch_name == "feishu":
+                    dependency_status = self._feishu_dependency_status(local_config)
+                    if observed.get("configured") and dependency_status.get("status") == "missing":
+                        runtime_state = {
+                            **runtime_state,
+                            "status": "dependency_missing",
+                            "dependency_missing": True,
+                            "dependency_status": dependency_status,
+                            "last_error": "",
+                        }
+                        observed = channel_observability(
+                            local_config,
+                            ch_name,
+                            running_channels=running_channels,
+                            runtime_state=runtime_state,
+                            tool_names=agent_tool_names,
+                        )
                 fields_out = []
                 for f in ch_def["fields"]:
                     raw_val = local_config.get(f["key"], f.get("default", ""))
-                    if f["type"] == "secret" and raw_val:
+                    sensitive = self._is_sensitive_channel_field(str(f.get("key") or ""), f)
+                    if sensitive and raw_val:
                         display_val = self._mask_secret(str(raw_val))
                     else:
                         display_val = raw_val
@@ -7667,6 +10501,8 @@ class ChannelsHandler:
                         "type": f["type"],
                         "value": display_val,
                         "default": f.get("default", ""),
+                        "sensitive": sensitive,
+                        "masked": bool(sensitive and raw_val),
                     })
                 ch_info = {
                     "name": ch_name,
@@ -7675,25 +10511,33 @@ class ChannelsHandler:
                     "description": ch_def.get("description", ""),
                     "icon": ch_def["icon"],
                     "color": ch_def["color"],
-                    "active": ch_name in active_channels,
-                    "configured": ch_name in active_channels or channel_has_config(local_config, ch_name),
-                    "running": ch_name in running_channels,
-                    "last_error": runtime_state.get("last_error") or "",
+                    "active": observed["active"],
+                    "configured": observed["configured"],
+                    "running": observed["running"],
+                    "last_error": self._redact_runtime_error(runtime_state.get("last_error") or ""),
                     "started_at": runtime_state.get("started_at"),
                     "operation_id": runtime_state.get("operation_id") or "",
                     "dependency_missing": bool(runtime_state.get("dependency_missing") or False),
-                    "status": runtime_state.get("status") or ("active" if ch_name in active_channels else (
-                        "configured" if channel_has_config(local_config, ch_name) else "available"
-                    )),
+                    "dependencyStatus": dependency_status or runtime_state.get("dependency_status") or {},
+                    "status": observed["status"],
+                    "configState": observed["configState"],
+                    "auth": observed["auth"],
+                    "agentSurface": observed["agentSurface"],
+                    "adapterContract": build_adapter_contract(
+                        ch_name,
+                        observed,
+                        runtime_state=runtime_state,
+                    ),
                     "fields": fields_out,
+                    "homeChannel": self._home_channel_projection(local_config, ch_name),
                 }
                 if ch_name == "weixin" and ch_name in active_channels:
                     ch_info["login_status"] = self._get_weixin_login_status()
                 channels.append(ch_info)
             return json.dumps({"status": "success", "channels": channels}, ensure_ascii=False)
         except Exception as e:
-            logger.error(f"[WebChannel] Channels API error: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[WebChannel] Channels API error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
     def POST(self):
         _require_auth()
@@ -7718,51 +10562,65 @@ class ChannelsHandler:
             else:
                 return json.dumps({"status": "error", "message": f"unknown action: {action}"})
         except Exception as e:
-            logger.error(f"[WebChannel] Channels POST error: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[WebChannel] Channels POST error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
     def _handle_save(self, channel_name: str, updates: dict):
         ch_def = self.CHANNEL_DEFS[channel_name]
-        valid_keys = {f["key"] for f in ch_def["fields"]}
-        secret_keys = {f["key"] for f in ch_def["fields"] if f["type"] == "secret"}
-
-        local_config = conf()
-        applied = {}
-        for key, value in updates.items():
-            if key not in valid_keys:
-                continue
-            if key in secret_keys:
-                if not value or (len(value) > 8 and "*" * 4 in value):
-                    continue
-            field_def = next((f for f in ch_def["fields"] if f["key"] == key), None)
-            if field_def:
-                if field_def["type"] == "number":
-                    value = int(value)
-                elif field_def["type"] == "bool":
-                    value = bool(value)
-            local_config[key] = value
-            applied[key] = value
+        try:
+            applied, skipped_masked = self._collect_channel_config_updates(ch_def, updates)
+        except ValueError as exc:
+            return json.dumps(_public_validation_error_payload(exc), ensure_ascii=False)
 
         if not applied:
-            return json.dumps({"status": "error", "message": "no valid fields to update"})
+            if skipped_masked:
+                record_external_connection_runtime_event(
+                    channel_name,
+                    "external_connection.config.saved",
+                    {
+                        "action": "save_config",
+                        "status": "unchanged",
+                        "applied": [],
+                        "masked_secret_skipped": skipped_masked,
+                    },
+                )
+                return json.dumps({
+                    "status": "success",
+                    "applied": [],
+                    "unchanged": True,
+                    "masked_secret_skipped": skipped_masked,
+                    "capability_refresh_required": False,
+                }, ensure_ascii=False)
+            return json.dumps({"status": "error", "message": "no valid fields to update"}, ensure_ascii=False)
 
-        config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__)))), "config.json")
-        if os.path.exists(config_path):
-            with open(config_path, "r", encoding="utf-8") as f:
-                file_cfg = json.load(f)
-        else:
-            file_cfg = {}
-        file_cfg.update(applied)
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(file_cfg, f, indent=4, ensure_ascii=False)
+        with self.CONFIG_WRITE_LOCK:
+            file_cfg = self._read_file_config()
+            file_cfg.update(applied)
+            self._write_file_config_atomic(file_cfg)
+            conf().update(applied)
 
         logger.info(f"[WebChannel] Channel '{channel_name}' config updated: {list(applied.keys())}")
 
         should_restart = False
         active_channels = self._active_channel_set()
         if channel_name in active_channels:
-            should_restart = True
+            if channel_name == "feishu":
+                dependency_status = self._feishu_dependency_status(conf())
+                if dependency_status.get("status") == "missing":
+                    self._set_runtime_state(
+                        channel_name,
+                        status="dependency_missing",
+                        started_at=None,
+                        last_error="",
+                        dependency_missing=True,
+                        dependency_status=dependency_status,
+                    )
+                    should_restart = False
+                else:
+                    should_restart = True
+            else:
+                should_restart = True
+        if should_restart:
             try:
                 import sys
                 app_module = sys.modules.get('__main__') or sys.modules.get('app')
@@ -7775,9 +10633,19 @@ class ChannelsHandler:
                     ).start()
                     logger.info(f"[WebChannel] Channel '{channel_name}' restart triggered")
             except Exception as e:
-                logger.warning(f"[WebChannel] Failed to restart channel '{channel_name}': {e}")
+                logger.warning(f"[WebChannel] Failed to restart channel '{channel_name}': {_web_body_log_summary(e)}")
 
         self._refresh_runtime_capabilities(f"channel-save:{channel_name}")
+        record_external_connection_runtime_event(
+            channel_name,
+            "external_connection.config.saved",
+            {
+                "action": "save_config",
+                "status": "success",
+                "applied": list(applied.keys()),
+                "restarted": should_restart,
+            },
+        )
         return json.dumps({
             "status": "success",
             "applied": list(applied.keys()),
@@ -7788,57 +10656,102 @@ class ChannelsHandler:
     def _handle_connect(self, channel_name: str, updates: dict):
         """Save config fields, add channel to channel_type, and start it."""
         ch_def = self.CHANNEL_DEFS[channel_name]
-        valid_keys = {f["key"] for f in ch_def["fields"]}
-        secret_keys = {f["key"] for f in ch_def["fields"] if f["type"] == "secret"}
+        operation_id = f"{channel_name}-{int(time.time() * 1000)}"
 
         # Feishu connected via web console must use websocket (long connection) mode
         if channel_name == "feishu":
+            updates = dict(updates) if isinstance(updates, dict) else {}
             updates.setdefault("feishu_event_mode", "websocket")
-            valid_keys.add("feishu_event_mode")
+            ch_def = {**ch_def, "fields": [*ch_def.get("fields", []), {"key": "feishu_event_mode", "type": "text"}]}
 
-        local_config = conf()
-        applied = {}
-        for key, value in updates.items():
-            if key not in valid_keys:
-                continue
-            if key in secret_keys:
-                if not value or (len(value) > 8 and "*" * 4 in value):
-                    continue
-            field_def = next((f for f in ch_def["fields"] if f["key"] == key), None)
-            if field_def:
-                if field_def["type"] == "number":
-                    value = int(value)
-                elif field_def["type"] == "bool":
-                    value = bool(value)
-            local_config[key] = value
-            applied[key] = value
+        try:
+            applied, _skipped_masked = self._collect_channel_config_updates(ch_def, updates)
+        except ValueError as exc:
+            return json.dumps(_public_validation_error_payload(exc), ensure_ascii=False)
 
-        existing = self._parse_channel_list(conf().get("channel_type", ""))
-        if channel_name not in existing:
-            existing.append(channel_name)
-        new_channel_type = ",".join(existing)
-        local_config["channel_type"] = new_channel_type
-
-        config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__)))), "config.json")
-        if os.path.exists(config_path):
-            with open(config_path, "r", encoding="utf-8") as f:
-                file_cfg = json.load(f)
-        else:
-            file_cfg = {}
-        file_cfg.update(applied)
-        file_cfg["channel_type"] = new_channel_type
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(file_cfg, f, indent=4, ensure_ascii=False)
+        with self.CONFIG_WRITE_LOCK:
+            local_config = conf()
+            file_cfg = self._read_file_config()
+            candidate_config = {**local_config, **file_cfg, **applied}
+            config_error = self._channel_start_config_error(candidate_config, channel_name)
+            if config_error:
+                return json.dumps({
+                    "status": "error",
+                    "message": config_error,
+                    "missingFields": channel_config_status(candidate_config, channel_name).get("missingFields", []),
+                }, ensure_ascii=False)
+            dependency_status = self._feishu_dependency_status(candidate_config) if channel_name == "feishu" else {}
+            if channel_name == "feishu" and dependency_status.get("status") == "missing":
+                existing = self._parse_channel_list(file_cfg.get("channel_type", local_config.get("channel_type", "")))
+                existing = [ch for ch in existing if ch != channel_name]
+                new_channel_type = ",".join(existing)
+                file_cfg.update(applied)
+                file_cfg["channel_type"] = new_channel_type
+                self._write_file_config_atomic(file_cfg)
+                local_config.update(applied)
+                local_config["channel_type"] = new_channel_type
+                self._set_runtime_state(
+                    channel_name,
+                    status="dependency_missing",
+                    operation_id=operation_id,
+                    started_at=None,
+                    last_error="",
+                    dependency_missing=True,
+                    dependency_status=dependency_status,
+                )
+                record_external_connection_runtime_event(
+                    channel_name,
+                    "external_connection.lifecycle.dependency_missing",
+                    {
+                        "action": "start",
+                        "status": "dependency_missing",
+                        "operation_id": operation_id,
+                        "dependencyStatus": dependency_status,
+                        "configured": True,
+                        "remoteConnectivityProbed": False,
+                    },
+                    operation_id=operation_id,
+                )
+                self._refresh_runtime_capabilities(f"channel-connect-dependency-missing:{channel_name}")
+                return json.dumps({
+                    "status": "blocked",
+                    "reason": "dependency_missing",
+                    "message": "Feishu/Lark App ID and Secret were saved, but the active WebUI runtime is missing lark-oapi.",
+                    "channel_type": new_channel_type,
+                    "starting": False,
+                    "operation_id": operation_id,
+                    "configured": True,
+                    "dependencyStatus": dependency_status,
+                    "capability_refresh_required": True,
+                }, ensure_ascii=False)
+            existing = self._parse_channel_list(file_cfg.get("channel_type", local_config.get("channel_type", "")))
+            if channel_name not in existing:
+                existing.append(channel_name)
+            new_channel_type = ",".join(existing)
+            file_cfg.update(applied)
+            file_cfg["channel_type"] = new_channel_type
+            self._write_file_config_atomic(file_cfg)
+            local_config.update(applied)
+            local_config["channel_type"] = new_channel_type
 
         logger.info(f"[WebChannel] Channel '{channel_name}' connecting, channel_type={new_channel_type}")
-        operation_id = f"{channel_name}-{int(time.time() * 1000)}"
         self._set_runtime_state(
             channel_name,
             status="starting",
             operation_id=operation_id,
             last_error="",
             dependency_missing=False,
+            dependency_status=dependency_status if channel_name == "feishu" else {},
+        )
+        record_external_connection_runtime_event(
+            channel_name,
+            "external_connection.lifecycle.start_requested",
+            {
+                "action": "start",
+                "status": "starting",
+                "operation_id": operation_id,
+            },
+            operation_id=operation_id,
         )
 
         def _do_start():
@@ -7850,6 +10763,18 @@ class ChannelsHandler:
                 if mgr is None:
                     msg = f"ChannelManager not available, cannot start '{channel_name}'"
                     self._set_runtime_state(channel_name, status="error", last_error=msg, operation_id=operation_id)
+                    record_external_connection_runtime_event(
+                        channel_name,
+                        "external_connection.lifecycle.start_failed",
+                        {
+                            "action": "start",
+                            "status": "error",
+                            "operation_id": operation_id,
+                            "reason": "channel_manager_unavailable",
+                            "lastError": msg,
+                        },
+                        operation_id=operation_id,
+                    )
                     logger.warning(f"[WebChannel] {msg}")
                     return
                 # Stop existing instance first if still running (e.g. re-connect without disconnect)
@@ -7865,24 +10790,80 @@ class ChannelsHandler:
                     clear_fn(channel_name)
                 logger.info(f"[WebChannel] Starting channel '{channel_name}'...")
                 mgr.start([channel_name], first_start=False)
+                started_ch = mgr.get_channel(channel_name)
+                if started_ch is not None and hasattr(started_ch, "wait_startup"):
+                    ok, err = started_ch.wait_startup(timeout=8)
+                    if not ok:
+                        safe_err = self._redact_runtime_error(err or f"Channel '{channel_name}' startup failed")
+                        self._set_runtime_state(
+                            channel_name,
+                            status="error",
+                            last_error=safe_err,
+                            operation_id=operation_id,
+                        )
+                        logger.warning(f"[WebChannel] Channel '{channel_name}' startup reported error: {safe_err}")
+                        self._refresh_runtime_capabilities(f"channel-connect-error:{channel_name}")
+                        record_external_connection_runtime_event(
+                            channel_name,
+                            "external_connection.lifecycle.start_failed",
+                            {
+                                "action": "start",
+                                "status": "error",
+                                "operation_id": operation_id,
+                                "reason": "startup_error",
+                                "lastError": safe_err,
+                            },
+                            operation_id=operation_id,
+                        )
+                        return
+                    observation = self._channel_startup_observation(
+                        started_ch,
+                        getattr(mgr, "_threads", {}).get(channel_name) if hasattr(mgr, "_threads") else None,
+                    )
+                else:
+                    observation = {"running": False, "status": "starting", "last_error": ""}
+                next_status = "active" if observation.get("running") else observation.get("status", "starting")
                 self._set_runtime_state(
                     channel_name,
-                    status="active",
-                    started_at=time.time(),
-                    last_error="",
+                    status=next_status,
+                    started_at=time.time() if observation.get("running") else None,
+                    last_error=observation.get("last_error", ""),
                     operation_id=operation_id,
                 )
                 self._refresh_runtime_capabilities(f"channel-connect:{channel_name}")
-                logger.info(f"[WebChannel] Channel '{channel_name}' start completed")
+                record_external_connection_runtime_event(
+                    channel_name,
+                    "external_connection.lifecycle.started",
+                    {
+                        "action": "start",
+                        "status": next_status,
+                        "running": bool(observation.get("running")),
+                        "operation_id": operation_id,
+                    },
+                    operation_id=operation_id,
+                )
+                logger.info(f"[WebChannel] Channel '{channel_name}' start state: {next_status}")
             except Exception as e:
+                safe_err = self._redact_runtime_error(e)
                 self._set_runtime_state(
                     channel_name,
                     status="error",
-                    last_error=str(e),
+                    last_error=safe_err,
                     operation_id=operation_id,
                 )
-                logger.error(f"[WebChannel] Failed to start channel '{channel_name}': {e}",
-                             exc_info=True)
+                record_external_connection_runtime_event(
+                    channel_name,
+                    "external_connection.lifecycle.start_failed",
+                    {
+                        "action": "start",
+                        "status": "error",
+                        "operation_id": operation_id,
+                        "reason": "exception",
+                        "lastError": safe_err,
+                    },
+                    operation_id=operation_id,
+                )
+                logger.error(f"[WebChannel] Failed to start channel '{channel_name}': {safe_err}")
 
         threading.Thread(target=_do_start, daemon=True).start()
 
@@ -7895,23 +10876,28 @@ class ChannelsHandler:
         }, ensure_ascii=False)
 
     def _handle_disconnect(self, channel_name: str):
-        existing = self._parse_channel_list(conf().get("channel_type", ""))
-        existing = [ch for ch in existing if ch != channel_name]
-        new_channel_type = ",".join(existing)
+        operation_id = f"{channel_name}-stop-{int(time.time() * 1000)}"
+        with self.CONFIG_WRITE_LOCK:
+            local_config = conf()
+            file_cfg = self._read_file_config()
+            existing = self._parse_channel_list(file_cfg.get("channel_type", local_config.get("channel_type", "")))
+            existing = [ch for ch in existing if ch != channel_name]
+            new_channel_type = ",".join(existing)
+            file_cfg["channel_type"] = new_channel_type
+            self._write_file_config_atomic(file_cfg)
+            local_config["channel_type"] = new_channel_type
 
-        local_config = conf()
-        local_config["channel_type"] = new_channel_type
-
-        config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__)))), "config.json")
-        if os.path.exists(config_path):
-            with open(config_path, "r", encoding="utf-8") as f:
-                file_cfg = json.load(f)
-        else:
-            file_cfg = {}
-        file_cfg["channel_type"] = new_channel_type
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(file_cfg, f, indent=4, ensure_ascii=False)
+        self._set_runtime_state(channel_name, status="stopping", operation_id=operation_id)
+        record_external_connection_runtime_event(
+            channel_name,
+            "external_connection.lifecycle.stop_requested",
+            {
+                "action": "stop",
+                "status": "stopping",
+                "operation_id": operation_id,
+            },
+            operation_id=operation_id,
+        )
 
         def _do_stop():
             try:
@@ -7927,12 +10913,35 @@ class ChannelsHandler:
                     clear_fn(channel_name)
                 self._set_runtime_state(channel_name, status="configured", operation_id="", started_at=None, last_error="")
                 self._refresh_runtime_capabilities(f"channel-disconnect:{channel_name}")
+                record_external_connection_runtime_event(
+                    channel_name,
+                    "external_connection.lifecycle.stopped",
+                    {
+                        "action": "stop",
+                        "status": "configured",
+                        "running": False,
+                        "operation_id": operation_id,
+                    },
+                    operation_id=operation_id,
+                )
                 logger.info(f"[WebChannel] Channel '{channel_name}' disconnected, "
                             f"channel_type={new_channel_type}")
             except Exception as e:
-                self._set_runtime_state(channel_name, status="error", last_error=str(e))
-                logger.warning(f"[WebChannel] Failed to stop channel '{channel_name}': {e}",
-                               exc_info=True)
+                safe_err = self._redact_runtime_error(e)
+                self._set_runtime_state(channel_name, status="error", last_error=safe_err)
+                record_external_connection_runtime_event(
+                    channel_name,
+                    "external_connection.lifecycle.stop_failed",
+                    {
+                        "action": "stop",
+                        "status": "error",
+                        "operation_id": operation_id,
+                        "reason": "exception",
+                        "lastError": safe_err,
+                    },
+                    operation_id=operation_id,
+                )
+                logger.warning(f"[WebChannel] Failed to stop channel '{channel_name}': {safe_err}")
 
         threading.Thread(target=_do_stop, daemon=True).start()
 
@@ -7940,7 +10949,311 @@ class ChannelsHandler:
             "status": "success",
             "channel_type": new_channel_type,
             "starting": False,
+            "operation_id": operation_id,
             "capability_refresh_required": True,
+        }, ensure_ascii=False)
+
+
+def _external_connection_logo(channel_name: str, channel_info: Dict[str, Any]) -> Dict[str, Any]:
+    logo_keys = {
+        "weixin": "wechat",
+        "wechatmp": "wechat",
+        "wechatmp_service": "wechat",
+        "wechat_kf": "wechat",
+        "wechatcom_app": "wecom",
+        "wecom_bot": "wecom",
+        "feishu": "feishu",
+        "dingtalk": "dingtalk",
+        "qq": "qq",
+        "telegram": "telegram",
+        "slack": "slack",
+        "discord": "discord",
+    }
+    label = channel_info.get("label") or {}
+    fallback = label.get("zh") if isinstance(label, dict) else str(label or "")
+    return {
+        "type": "brand",
+        "key": logo_keys.get(channel_name, channel_name),
+        "fallbackText": (fallback or channel_name)[:4],
+        "icon": channel_info.get("icon") or "",
+        "color": channel_info.get("color") or "gray",
+    }
+
+
+def _external_connection_from_channel(channel: Dict[str, Any]) -> Dict[str, Any]:
+    raw_name = str(channel.get("id") or channel.get("type") or channel.get("name") or "")
+    name = normalize_channel_name(raw_name) or raw_name
+    label = channel.get("label") if isinstance(channel.get("label"), dict) else {}
+    display_name = (
+        label.get("zh")
+        or label.get("en")
+        or channel.get("displayName")
+        or channel.get("display_name")
+        or (channel.get("name") if str(channel.get("name") or "") != name else "")
+        or name
+    )
+    auth = channel.get("auth") if isinstance(channel.get("auth"), dict) else {}
+    agent_surface = channel.get("agentSurface") if isinstance(channel.get("agentSurface"), dict) else {}
+    status = str(channel.get("status") or ("connected" if channel.get("running") else "available"))
+    running = bool(channel.get("running") or channel.get("connected"))
+    enabled = bool(channel.get("active") or channel.get("enabled"))
+    config_schema = channel.get("configSchema") if isinstance(channel.get("configSchema"), dict) else {}
+    fields = channel.get("fields") if isinstance(channel.get("fields"), list) else config_schema.get("fields")
+    if not isinstance(fields, list):
+        fields = []
+    home_channel = channel.get("homeChannel") if isinstance(channel.get("homeChannel"), dict) else {}
+    if name == "feishu" and isinstance(home_channel, dict) and home_channel.get("id"):
+        raw_home_channel_id = str(home_channel.get("id") or "")
+        digest = hmac.new(
+            b"ecorex-feishu-home-channel-v1",
+            raw_home_channel_id.encode("utf-8", errors="replace"),
+            hashlib.sha256,
+        ).hexdigest()[:16]
+        home_channel = {
+            "configured": True,
+            "idHash": f"hmac:{digest}",
+            **({"name": home_channel.get("name")} if home_channel.get("name") else {}),
+        }
+    actions = [
+        {"id": "save_config", "label": "保存", "enabled": True},
+        {"id": "test", "label": "状态检查", "enabled": True},
+        {"id": "start", "label": "连接", "enabled": not running},
+        {"id": "stop", "label": "断开", "enabled": bool(running or enabled)},
+        {"id": "set_home_channel", "label": "设为投递目标", "enabled": True},
+    ]
+    return {
+        "id": name,
+        "platform": name,
+        "name": name,
+        "label": label,
+        "displayName": display_name,
+        "description": channel.get("description") or "",
+        "logo": _external_connection_logo(name, channel),
+        "status": status,
+        "configured": bool(channel.get("configured")),
+        "enabled": enabled,
+        "connected": running,
+        "running": running,
+        "lastError": ChannelsHandler._redact_runtime_error(channel.get("last_error") or ""),
+        "dependencyMissing": bool(channel.get("dependency_missing") or False),
+        "dependencyStatus": channel.get("dependencyStatus") if isinstance(channel.get("dependencyStatus"), dict) else {},
+        "configState": channel.get("configState") or {},
+        "auth": auth,
+        "agentSurface": agent_surface,
+        "adapterContract": channel.get("adapterContract") if isinstance(channel.get("adapterContract"), dict) else {},
+        "callable": bool(agent_surface.get("callable") or channel.get("callable")),
+        "fields": fields,
+        "configSchema": config_schema or {"fields": fields},
+        "homeChannel": home_channel,
+        "actions": actions,
+        "source": "channel_projection",
+    }
+
+
+def _external_connection_runtime_projection_by_platform() -> Dict[str, Any]:
+    try:
+        from agent.protocol import RuntimeProjectionService
+
+        projection = RuntimeProjectionService().external_connections_projection(limit=0)
+    except Exception as exc:
+        logger.debug(f"[WebChannel] External connection runtime projection unavailable: {_web_body_log_summary(exc)}")
+        return {"latestEventId": 0, "byPlatform": {}}
+    by_platform: Dict[str, Dict[str, Any]] = {}
+    for item in projection.get("external_connections") or []:
+        if not isinstance(item, dict):
+            continue
+        platform = str(item.get("platform") or "").strip()
+        if not platform:
+            continue
+        previous = by_platform.get(platform) or {}
+        if int(item.get("lastEventId") or 0) >= int(previous.get("lastEventId") or 0):
+            by_platform[platform] = item
+    return {
+        "latestEventId": projection.get("latest_event_id", 0),
+        "byPlatform": by_platform,
+    }
+
+
+class ExternalConnectionsHandler:
+    """Hermes-style external connection projection backed by channel observability."""
+
+    def GET(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            payload = json.loads(ChannelsHandler().GET())
+            channels = payload.get("channels") if isinstance(payload, dict) else []
+            connections = [
+                _external_connection_from_channel(item)
+                for item in channels
+                if isinstance(item, dict)
+            ]
+            runtime_projection = _external_connection_runtime_projection_by_platform()
+            by_platform = runtime_projection.get("byPlatform") if isinstance(runtime_projection, dict) else {}
+            for connection in connections:
+                platform = str(connection.get("platform") or connection.get("id") or "")
+                connection["runtimeProjection"] = (by_platform or {}).get(platform, {})
+                connection["runtimeProjectionSource"] = "RunEventLedger"
+            summary = {
+                "total": len(connections),
+                "configured": sum(1 for item in connections if item.get("configured")),
+                "enabled": sum(1 for item in connections if item.get("enabled")),
+                "connected": sum(1 for item in connections if item.get("connected")),
+            }
+            return json.dumps({
+                "status": "success",
+                "connections": connections,
+                "summary": summary,
+                "runtimeProjection": {
+                    "latestEventId": runtime_projection.get("latestEventId", 0),
+                    "source": "RunEventLedger",
+                },
+                "updatedAt": time.time(),
+            }, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] External connections GET error: {_web_body_log_summary(e)}")
+            return json.dumps({
+                "status": "error",
+                "message": _public_exception_message("External connections unavailable.", e),
+                **_public_exception_summary(e),
+            }, ensure_ascii=False)
+
+
+class ExternalConnectionActionHandler:
+    """Bounded action surface for Settings > External Connections."""
+
+    def POST(self, platform: str):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            channel_name = normalize_channel_name(platform)
+            if channel_name not in ChannelsHandler.CHANNEL_DEFS:
+                return json.dumps({"status": "error", "message": f"unknown external connection: {platform}"}, ensure_ascii=False)
+            body = json.loads(web.data() or b"{}")
+            action = str(body.get("action") or "").strip().lower()
+            config = body.get("config") if isinstance(body.get("config"), dict) else {}
+            handler = ChannelsHandler()
+            if action == "save_config":
+                return handler._handle_save(channel_name, config)
+            if action in {"enable", "start"}:
+                return handler._handle_connect(channel_name, config)
+            if action in {"disable", "stop"}:
+                return handler._handle_disconnect(channel_name)
+            if action == "test":
+                return self._handle_test(channel_name)
+            if action in {"set_home_channel", "clear_home_channel"}:
+                return self._handle_home_channel(channel_name, action, body)
+            return json.dumps({"status": "error", "message": f"unknown action: {action}"}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] External connection action error: {_web_body_log_summary(e)}")
+            return json.dumps({
+                "status": "error",
+                "message": _public_exception_message("External connection action failed.", e),
+                **_public_exception_summary(e),
+            }, ensure_ascii=False)
+
+    @staticmethod
+    def _handle_test(channel_name: str) -> str:
+        payload = json.loads(ChannelsHandler().GET())
+        channels = payload.get("channels") if isinstance(payload, dict) else []
+        channel = next((item for item in channels if isinstance(item, dict) and item.get("name") == channel_name), None)
+        if not channel:
+            return json.dumps({"status": "error", "message": f"connection not found: {channel_name}"}, ensure_ascii=False)
+        connection = _external_connection_from_channel(channel)
+        adapter = test_messaging_adapter(channel_name, config=conf())
+        dependency_status = {}
+        if channel_name == "feishu":
+            dependency_status = ChannelsHandler._feishu_dependency_status(conf())
+            adapter["dependencyStatus"] = dependency_status
+            if connection.get("configured") and dependency_status.get("status") == "missing":
+                adapter["readiness"] = "dependency_missing"
+                adapter["reason"] = "local runtime dependency is missing"
+        adapter_readiness = str(adapter.get("readiness") or "")
+        test_status = "success"
+        if not adapter.get("configured") or adapter_readiness == "not_configured":
+            test_status = "blocked"
+        elif adapter_readiness == "dependency_missing":
+            test_status = "blocked"
+        elif adapter_readiness == "error":
+            test_status = "error"
+        record_external_connection_runtime_event(
+            channel_name,
+            "external_connection.test.completed",
+            {
+                "action": "test",
+                "status": test_status,
+                "configured": connection["configured"],
+                "connected": connection["connected"],
+                "callable": connection["callable"],
+                "mode": "projection_dry_run",
+                "remoteConnectivityProbed": False,
+                "adapter": adapter,
+                "dependencyStatus": dependency_status,
+            },
+        )
+        return json.dumps({
+            "status": "success",
+            "connection": connection,
+            "adapter": adapter,
+            "test": {
+                "status": test_status,
+                "configured": connection["configured"],
+                "connected": connection["connected"],
+                "callable": connection["callable"],
+                "lastError": connection["lastError"],
+                "mode": "projection_dry_run",
+                "remoteConnectivityProbed": False,
+                "dependencyStatus": dependency_status,
+            },
+        }, ensure_ascii=False)
+
+    @staticmethod
+    def _handle_home_channel(channel_name: str, action: str, body: Dict[str, Any]) -> str:
+        key = f"{channel_name}_home_channel"
+        name_key = f"{channel_name}_home_channel_name"
+        with ChannelsHandler.CONFIG_WRITE_LOCK:
+            file_cfg = ChannelsHandler._read_file_config()
+            local_config = conf()
+            if action == "clear_home_channel":
+                file_cfg.pop(key, None)
+                file_cfg.pop(name_key, None)
+                ChannelsHandler._write_file_config_atomic(file_cfg)
+                local_config.pop(key, None)
+                local_config.pop(name_key, None)
+            else:
+                target = str(body.get("home_channel") or body.get("homeChannel") or "").strip()
+                target_name = str(body.get("home_channel_name") or body.get("homeChannelName") or "").strip()
+                if not target:
+                    return json.dumps({"status": "error", "message": "home_channel is required"}, ensure_ascii=False)
+                file_cfg[key] = target
+                if target_name:
+                    file_cfg[name_key] = target_name
+                else:
+                    file_cfg.pop(name_key, None)
+                ChannelsHandler._write_file_config_atomic(file_cfg)
+                local_config[key] = target
+                if target_name:
+                    local_config[name_key] = target_name
+                else:
+                    local_config.pop(name_key, None)
+        target_hash = ""
+        if action != "clear_home_channel":
+            target = str(body.get("home_channel") or body.get("homeChannel") or "").strip()
+            target_hash = hashlib.sha256(target.encode("utf-8", errors="replace")).hexdigest()[:16] if target else ""
+        record_external_connection_runtime_event(
+            channel_name,
+            "external_connection.home_channel.updated",
+            {
+                "action": action,
+                "status": "success",
+                "homeChannelConfigured": action != "clear_home_channel",
+                "homeChannelHash": target_hash,
+            },
+        )
+        return json.dumps({
+            "status": "success",
+            "platform": channel_name,
+            "homeChannelConfigured": action != "clear_home_channel",
         }, ensure_ascii=False)
 
 
@@ -8013,8 +11326,8 @@ class WeixinQrHandler:
             }
             return json.dumps({"status": "success", "qrcode_url": qrcode_url, "qr_image": qr_image})
         except Exception as e:
-            logger.error(f"[WebChannel] WeixinQr GET error: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[WebChannel] WeixinQr GET error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
     def POST(self):
         _require_auth()
@@ -8030,8 +11343,8 @@ class WeixinQrHandler:
             else:
                 return json.dumps({"status": "error", "message": f"unknown action: {action}"})
         except Exception as e:
-            logger.error(f"[WebChannel] WeixinQr POST error: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[WebChannel] WeixinQr POST error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
     def _poll_status(self):
         state = WeixinQrHandler._qr_state
@@ -8045,7 +11358,7 @@ class WeixinQrHandler:
         try:
             status_resp = api.poll_qr_status(qrcode, timeout=10)
         except Exception as e:
-            return json.dumps({"status": "error", "message": str(e)})
+            return json.dumps(_public_error_payload("Request failed.", e))
 
         qr_status = status_resp.get("status", "wait")
 
@@ -8095,6 +11408,54 @@ class WeixinQrHandler:
             })
 
         return json.dumps({"status": "success", "qr_status": qr_status})
+
+
+def _redact_feishu_register_text(value: Any) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+
+    def _redact_kv(match: re.Match) -> str:
+        return f"{match.group(1)}[redacted]{match.group(3) or ''}"
+
+    secret_key = r"(?:app[_-]?secret|client[_-]?secret|token|password|credential|api[_-]?key)"
+    identifier_key = r"(?:open_id|chat_id|open-?id|chat-?id)"
+    text = re.sub(
+        rf"(?i)((?:[\"']?{secret_key}[\"']?)\s*[:=]\s*[\"']?)([^\"'\s&,}}\]]+)([\"']?)",
+        _redact_kv,
+        text,
+    )
+    text = re.sub(
+        rf"(?i)((?:[\"']?{identifier_key}[\"']?)\s*[:=]\s*[\"']?)([^\"'\s&,}}\]]+)([\"']?)",
+        _redact_kv,
+        text,
+    )
+    text = re.sub(r"(?i)(sk-[A-Za-z0-9_\-]{8,}|bearer\s+[A-Za-z0-9._\-]+)", "[redacted]", text)
+    text = re.sub(r"https?://\S+", "[redacted-url]", text)
+    return text[:320]
+
+
+def _safe_feishu_register_status(info: Any) -> Dict[str, Any]:
+    if not isinstance(info, dict):
+        return {"shape": type(info).__name__}
+    safe: Dict[str, Any] = {}
+    for key in ("status", "code", "expire_in", "error_code"):
+        if key in info:
+            safe[key] = _redact_feishu_register_text(info.get(key))
+    if "message" in info:
+        safe["message"] = _redact_feishu_register_text(info.get("message"))
+    unknown = sorted(str(key) for key in info.keys() if key not in safe and key not in {"url", "qr_code", "client_id", "client_secret", "app_id", "app_secret", "appId", "appSecret", "clientId", "clientSecret"})
+    if unknown:
+        safe["unknown_keys_hash"] = hashlib.sha256(",".join(unknown).encode("utf-8")).hexdigest()[:12]
+    return safe or {"shape": "object", "key_count": len(info)}
+
+
+def _feishu_register_secret_presence(app_id: str, app_secret: str) -> Dict[str, Any]:
+    return {
+        "app_id_present": bool(app_id),
+        "app_secret_present": bool(app_secret),
+        "credential_hash": hashlib.sha256(f"{app_id}:{app_secret}".encode("utf-8")).hexdigest()[:12] if app_id and app_secret else "",
+    }
 
 
 class FeishuRegisterHandler:
@@ -8153,7 +11514,7 @@ class FeishuRegisterHandler:
                     cls._state["expire_in"] = info.get("expire_in", 600)
                     cls._state["qr_image"] = cls._qr_to_data_uri(info.get("url", ""))
                     cls._state["status"] = "pending"
-                logger.info(f"[FeishuRegister] QR ready, expire_in={info.get('expire_in')}s")
+                logger.info("[FeishuRegister] QR ready, expire_in=%ss", _redact_feishu_register_text(info.get("expire_in")))
 
             def _on_status(info):
                 # 过滤掉 polling 心跳（每 5 秒一次，纯噪音）；
@@ -8161,7 +11522,7 @@ class FeishuRegisterHandler:
                 status = info.get("status")
                 if status == "polling":
                     return
-                logger.info(f"[FeishuRegister] SDK status: {info}")
+                logger.info("[FeishuRegister] SDK status: %s", _safe_feishu_register_status(info))
 
             try:
                 result = lark.register_app(
@@ -8170,13 +11531,21 @@ class FeishuRegisterHandler:
                     source="ecorex",
                     cancel_event=cancel_event,
                 )
+                app_id, app_secret = extract_feishu_register_credentials(result)
                 with cls._lock:
                     cls._state["status"] = "done"
-                    cls._state["app_id"] = result.get("client_id", "")
-                    cls._state["app_secret"] = result.get("client_secret", "")
-                logger.info(f"[FeishuRegister] App created: app_id={result.get('client_id')}")
+                    cls._state["app_id"] = app_id
+                    cls._state["app_secret"] = app_secret
+                    cls._state["result_shape"] = summarize_feishu_register_result_shape(result)
+                if app_id and app_secret:
+                    logger.info("[FeishuRegister] App created and awaiting write-back")
+                else:
+                    logger.warning(
+                        "[FeishuRegister] App created but credentials were not extractable: %s",
+                        summarize_feishu_register_result_shape(result),
+                    )
             except Exception as e:
-                err_msg = str(e)
+                err_msg = _redact_feishu_register_text(e)
                 err_cls = e.__class__.__name__
                 # 飞书 SDK 抛出的 AppExpiredError / AppAccessDeniedError / RegisterAppError
                 if "Expired" in err_cls:
@@ -8193,9 +11562,39 @@ class FeishuRegisterHandler:
                     if cls._state.get("cancel_event") is cancel_event:
                         cls._state["status"] = status
                         cls._state["error"] = err_msg
-                logger.warning(f"[FeishuRegister] Register failed ({err_cls}): {err_msg}")
+                logger.warning("[FeishuRegister] Register failed (%s): %s", err_cls, err_msg)
 
         threading.Thread(target=_worker, daemon=True, name="feishu-register").start()
+
+    @staticmethod
+    def _connect_registered_app(app_id: str, app_secret: str) -> Dict[str, Any]:
+        if not app_id or not app_secret:
+            return {
+                "status": "error",
+                "message": "registered Feishu app is missing app_id or app_secret",
+                "applied": [],
+            }
+        try:
+            payload = json.loads(ChannelsHandler()._handle_connect("feishu", {
+                "feishu_app_id": app_id,
+                "feishu_app_secret": app_secret,
+            }))
+            return {
+                "status": payload.get("status", "success"),
+                "channel_type": payload.get("channel_type", ""),
+                "starting": bool(payload.get("starting")),
+                "operation_id": payload.get("operation_id", ""),
+                "capability_refresh_required": bool(payload.get("capability_refresh_required")),
+                "applied": ["feishu_app_id", "feishu_app_secret", "channel_type"],
+                "message": payload.get("message", ""),
+            }
+        except Exception as exc:
+            logger.warning("[FeishuRegister] credential write-back failed: %s", _redact_feishu_register_text(exc))
+            return {
+                "status": "error",
+                "message": _redact_feishu_register_text(exc),
+                "applied": [],
+            }
 
     def GET(self):
         """启动一次新的注册会话。如果已有 pending/done 会话则覆盖。"""
@@ -8228,8 +11627,8 @@ class FeishuRegisterHandler:
                     "expire_in": self._state.get("expire_in", 600),
                 })
         except Exception as e:
-            logger.error(f"[WebChannel] FeishuRegister GET error: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[WebChannel] FeishuRegister GET error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
     def POST(self):
         """轮询注册结果。"""
@@ -8243,30 +11642,40 @@ class FeishuRegisterHandler:
 
             with self._lock:
                 status = self._state.get("status", "idle")
+                app_id = self._state.get("app_id", "") if status == "done" else ""
+                app_secret = self._state.get("app_secret", "") if status == "done" else ""
+                result_shape = self._state.get("result_shape") if status == "done" else None
+                error_message = self._state.get("error", "")
                 if status == "done":
-                    payload = {
-                        "status": "success",
-                        "register_status": "done",
-                        "app_id": self._state.get("app_id", ""),
-                        "app_secret": self._state.get("app_secret", ""),
-                    }
-                    # 一次性返回凭据后清掉，避免敏感信息长期驻留内存
+                    # 一次性取出凭据后清掉，避免敏感信息长期驻留内存。
                     self._state = {}
-                    return json.dumps(payload)
-                if status in ("error", "expired", "denied"):
-                    return json.dumps({
-                        "status": "success",
-                        "register_status": status,
-                        "message": self._state.get("error", ""),
-                    })
-                # pending / starting：还在等用户扫码
+
+            if status == "done":
+                writeback = self._connect_registered_app(app_id, app_secret)
+                payload = {
+                    "status": "success",
+                    "register_status": "done",
+                    "credential": _feishu_register_secret_presence(app_id, app_secret),
+                    "writeback": writeback,
+                    "channel_configured": writeback.get("status") == "success",
+                }
+                if result_shape and not payload["channel_configured"]:
+                    payload["register_result_shape"] = result_shape
+                return json.dumps(payload, ensure_ascii=False)
+            if status in ("error", "expired", "denied"):
                 return json.dumps({
                     "status": "success",
-                    "register_status": "pending",
-                })
+                    "register_status": status,
+                    "message": error_message,
+                }, ensure_ascii=False)
+            # pending / starting：还在等用户扫码
+            return json.dumps({
+                "status": "success",
+                "register_status": "pending",
+            }, ensure_ascii=False)
         except Exception as e:
-            logger.error(f"[WebChannel] FeishuRegister POST error: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[WebChannel] FeishuRegister POST error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
 
 def _get_workspace_root():
@@ -8293,10 +11702,18 @@ class ToolsHandler:
                     "description": info.get("description", ""),
                     "parameters": info.get("parameters", {}),
                 })
-            return json.dumps({"status": "success", "tools": tools}, ensure_ascii=False)
+            registry = tm.registry_health() if hasattr(tm, "registry_health") else {}
+            registry_status = registry.get("status") or ("ready" if tools else "error")
+            return json.dumps({
+                "status": "success",
+                "tools": tools,
+                "toolCount": len(tools),
+                "registryStatus": registry_status,
+                "registry": registry,
+            }, ensure_ascii=False)
         except Exception as e:
-            logger.error(f"[WebChannel] Tools API error: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[WebChannel] Tools API error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
 
 class SkillsHandler:
@@ -8312,8 +11729,8 @@ class SkillsHandler:
             skills = service.query()
             return json.dumps({"status": "success", "skills": skills}, ensure_ascii=False)
         except Exception as e:
-            logger.error(f"[WebChannel] Skills API error: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[WebChannel] Skills API error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
     def POST(self):
         _require_auth()
@@ -8337,8 +11754,8 @@ class SkillsHandler:
                 return json.dumps({"status": "error", "message": f"unknown action: {action}"})
             return json.dumps({"status": "success"}, ensure_ascii=False)
         except Exception as e:
-            logger.error(f"[WebChannel] Skills POST error: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[WebChannel] Skills POST error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
 
 class MemoryHandler:
@@ -8356,8 +11773,8 @@ class MemoryHandler:
             )
             return json.dumps({"status": "success", **result}, ensure_ascii=False)
         except Exception as e:
-            logger.error(f"[WebChannel] Memory API error: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[WebChannel] Memory API error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
 
 class MemoryContentHandler:
@@ -8378,24 +11795,194 @@ class MemoryContentHandler:
         except FileNotFoundError:
             return json.dumps({"status": "error", "message": "file not found"})
         except Exception as e:
-            logger.error(f"[WebChannel] Memory content API error: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[WebChannel] Memory content API error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
 
 class SchedulerHandler:
+    @staticmethod
+    def _mutation_blocked() -> str:
+        try:
+            from common.ecorex_tool_permissions import get_tool_permission_broker
+
+            if get_tool_permission_broker().is_read_only():
+                return "Current read-only mode blocks scheduled task changes."
+        except Exception as exc:
+            logger.warning(f"[WebChannel] Scheduler permission check unavailable: {_web_body_log_summary(exc)}")
+            return "Permission broker unavailable; scheduled task change was blocked."
+        return ""
+
+    @staticmethod
+    def _store():
+        from agent.tools.scheduler.task_store import TaskStore
+
+        workspace_root = _get_workspace_root()
+        store_path = os.path.join(workspace_root, "scheduler", "tasks.json")
+        return TaskStore(store_path)
+
+    @staticmethod
+    def _projection() -> dict:
+        from agent.tools.scheduler.projection import scheduler_projection
+
+        return scheduler_projection(_get_workspace_root())
+
+    @staticmethod
+    def _set_enabled(enabled: bool) -> None:
+        local_config = conf()
+        file_cfg = ConfigHandler._read_file_config()
+        local_config["scheduler_enabled"] = bool(enabled)
+        file_cfg["scheduler_enabled"] = bool(enabled)
+        _ensure_ecorex_runtime_defaults(file_cfg)
+        ConfigHandler._write_file_config(file_cfg)
+
+    @staticmethod
+    def _start_runtime() -> bool:
+        from agent.tools.scheduler.integration import ensure_scheduler_runtime
+        from bridge.bridge import Bridge
+
+        return ensure_scheduler_runtime(Bridge().get_agent_bridge())
+
+    @staticmethod
+    def _stop_runtime() -> None:
+        try:
+            from agent.tools.scheduler.integration import get_scheduler_service
+
+            service = get_scheduler_service()
+            if service is not None:
+                service.stop()
+        except Exception as exc:
+            logger.warning(f"[WebChannel] Scheduler stop failed: {_web_body_log_summary(exc)}")
+
+    @staticmethod
+    def _parse_schedule(data: dict) -> Optional[dict]:
+        if isinstance(data.get("schedule"), dict):
+            schedule = dict(data.get("schedule") or {})
+            schedule_type = schedule.get("type")
+            if schedule_type == "cron" and schedule.get("expression"):
+                return schedule
+            if schedule_type == "interval":
+                try:
+                    seconds = int(schedule.get("seconds") or 0)
+                except (TypeError, ValueError):
+                    seconds = 0
+                if seconds > 0:
+                    schedule["seconds"] = seconds
+                    return schedule
+            if schedule_type == "once" and schedule.get("run_at"):
+                return schedule
+            return None
+        schedule_type = data.get("schedule_type") or data.get("scheduleType")
+        schedule_value = data.get("schedule_value") or data.get("scheduleValue")
+        if not schedule_type or not schedule_value:
+            return None
+        from agent.tools.scheduler.scheduler_tool import SchedulerTool
+
+        return SchedulerTool({})._parse_schedule(str(schedule_type), str(schedule_value))
+
+    @staticmethod
+    def _calculate_next_run(task: dict) -> str:
+        try:
+            from agent.tools.scheduler.scheduler_tool import SchedulerTool
+
+            next_run = SchedulerTool({})._calculate_next_run(task)
+            return next_run.isoformat() if next_run else ""
+        except Exception as exc:
+            logger.warning(f"[WebChannel] Scheduler next_run calculation failed: {_web_body_log_summary(exc)}")
+            return ""
+
     def GET(self):
         _require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
-            from agent.tools.scheduler.task_store import TaskStore
-            workspace_root = _get_workspace_root()
-            store_path = os.path.join(workspace_root, "scheduler", "tasks.json")
-            store = TaskStore(store_path)
-            tasks = store.list_tasks()
-            return json.dumps({"status": "success", "tasks": tasks}, ensure_ascii=False)
+            return json.dumps({"status": "success", **self._projection()}, ensure_ascii=False)
         except Exception as e:
-            logger.error(f"[WebChannel] Scheduler API error: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[WebChannel] Scheduler API error: {_web_body_log_summary(e)}")
+            return json.dumps({
+                "status": "error",
+                "message": _public_exception_message("Scheduler API request failed.", e),
+                **_public_exception_summary(e),
+            }, ensure_ascii=False)
+
+    def POST(self):
+        _require_auth()
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            body = json.loads(web.data() or b"{}")
+            action = str(body.get("action") or "").strip().lower()
+            if not action:
+                return json.dumps({"status": "error", "message": "action is required"})
+
+            blocked = self._mutation_blocked()
+            if blocked:
+                return json.dumps({"status": "error", "message": blocked}, ensure_ascii=False)
+
+            store = self._store()
+            if action == "start":
+                self._set_enabled(True)
+                started = self._start_runtime()
+                return json.dumps({
+                    "status": "success" if started else "error",
+                    "message": "scheduler started" if started else "scheduler start failed",
+                    **self._projection(),
+                }, ensure_ascii=False)
+
+            if action == "stop":
+                self._set_enabled(False)
+                self._stop_runtime()
+                return json.dumps({"status": "success", **self._projection()}, ensure_ascii=False)
+
+            task_id = str(body.get("task_id") or body.get("taskId") or "").strip()
+            if action in {"delete", "enable", "disable", "update"} and not task_id:
+                return json.dumps({"status": "error", "message": "task_id is required"}, ensure_ascii=False)
+
+            if action == "delete":
+                store.delete_task(task_id)
+            elif action == "enable":
+                store.enable_task(task_id, True)
+            elif action == "disable":
+                store.enable_task(task_id, False)
+            elif action == "update":
+                task = store.get_task(task_id)
+                if not task:
+                    return json.dumps({"status": "error", "message": f"task not found: {task_id}"}, ensure_ascii=False)
+                updates: Dict[str, Any] = {}
+                if "name" in body:
+                    name = str(body.get("name") or "").strip()
+                    if not name:
+                        return json.dumps({"status": "error", "message": "name cannot be empty"}, ensure_ascii=False)
+                    updates["name"] = name
+                if "enabled" in body:
+                    updates["enabled"] = bool(body.get("enabled"))
+                schedule = self._parse_schedule(body)
+                if schedule is not None:
+                    updates["schedule"] = schedule
+                    task_with_schedule = dict(task)
+                    task_with_schedule["schedule"] = schedule
+                    next_run = self._calculate_next_run(task_with_schedule)
+                    updates["next_run_at"] = next_run
+                if "content" in body or "taskDescription" in body or "task_description" in body:
+                    action_block = dict(task.get("action") or {})
+                    if action_block.get("type") == "send_message" and "content" in body:
+                        action_block["content"] = str(body.get("content") or "")
+                    if action_block.get("type") == "agent_task":
+                        description = body.get("taskDescription", body.get("task_description", None))
+                        if description is not None:
+                            action_block["task_description"] = str(description or "")
+                    updates["action"] = action_block
+                if not updates:
+                    return json.dumps({"status": "success", "noop": True, **self._projection()}, ensure_ascii=False)
+                store.update_task(task_id, updates)
+            else:
+                return json.dumps({"status": "error", "message": f"unknown action: {action}"}, ensure_ascii=False)
+
+            return json.dumps({"status": "success", **self._projection()}, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"[WebChannel] Scheduler POST error: {_web_body_log_summary(e)}")
+            return json.dumps({
+                "status": "error",
+                "message": _public_exception_message("Scheduler API request failed.", e),
+                **_public_exception_summary(e),
+            }, ensure_ascii=False)
 
 
 class SessionsHandler:
@@ -8403,18 +11990,34 @@ class SessionsHandler:
         _require_auth()
         web.header('Content-Type', 'application/json; charset=utf-8')
         try:
-            params = web.input(page='1', page_size='50')
+            params = web.input(
+                page='1',
+                page_size='50',
+                include_ids='',
+                include_session_ids='',
+                include_pinned='',
+                pinned_ids='',
+            )
             from agent.memory import get_conversation_store
             store = get_conversation_store()
+            include_ids_text = str(params.include_ids or params.include_session_ids or "")
+            include_pinned = str(params.include_pinned or "").strip().lower() in {"1", "true", "yes", "on"}
+            pinned_ids_text = str(params.pinned_ids or "") if include_pinned else ""
+            include_session_ids = [
+                item.strip()
+                for item in re.split(r"[\s,]+", f"{include_ids_text},{pinned_ids_text}")
+                if item.strip()
+            ][:200]
             result = store.list_sessions(
                 channel_type="web",
                 page=int(params.page),
                 page_size=int(params.page_size),
+                include_session_ids=include_session_ids,
             )
             return json.dumps({"status": "success", **result}, ensure_ascii=False)
         except Exception as e:
-            logger.error(f"[WebChannel] Sessions API error: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[WebChannel] Sessions API error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
 
 class SessionDetailHandler:
@@ -8436,7 +12039,7 @@ class SessionDetailHandler:
                 if removed:
                     logger.info(f"[WebChannel] Cleared Responses state for session {session_id}: removed={removed}")
             except Exception as e:
-                logger.warning(f"[WebChannel] Failed clearing Responses state for {session_id}: {e}")
+                logger.warning(f"[WebChannel] Failed clearing Responses state for {session_id}: {_web_body_log_summary(e)}")
 
             # Also remove the Agent instance from AgentBridge if exists
             try:
@@ -8454,8 +12057,8 @@ class SessionDetailHandler:
             logger.info(f"[WebChannel] Session deleted: {session_id}")
             return json.dumps({"status": "success"})
         except Exception as e:
-            logger.error(f"[WebChannel] Session delete error: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[WebChannel] Session delete error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
     def PUT(self, session_id: str):
         _require_auth()
@@ -8475,8 +12078,8 @@ class SessionDetailHandler:
                 return json.dumps({"status": "error", "message": "session not found"})
             return json.dumps({"status": "success"})
         except Exception as e:
-            logger.error(f"[WebChannel] Session rename error: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[WebChannel] Session rename error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
 
 class SessionTitleHandler:
@@ -8513,8 +12116,8 @@ class SessionTitleHandler:
 
             return json.dumps({"status": "success", "title": title, "updated": updated}, ensure_ascii=False)
         except Exception as e:
-            logger.error(f"[WebChannel] Title generation error: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[WebChannel] Title generation error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
 
 class SessionClearContextHandler:
@@ -8535,7 +12138,7 @@ class SessionClearContextHandler:
                 if removed:
                     logger.info(f"[WebChannel] Cleared Responses state for session {session_id}: removed={removed}")
             except Exception as e:
-                logger.warning(f"[WebChannel] Failed clearing Responses state for {session_id}: {e}")
+                logger.warning(f"[WebChannel] Failed clearing Responses state for {session_id}: {_web_body_log_summary(e)}")
 
             # Delete the agent instance so a fresh one is created on the next message
             try:
@@ -8550,8 +12153,8 @@ class SessionClearContextHandler:
 
             return json.dumps({"status": "success", "context_start_seq": new_seq})
         except Exception as e:
-            logger.error(f"[WebChannel] Clear context error: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[WebChannel] Clear context error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
 
 class HistoryHandler:
@@ -8574,8 +12177,8 @@ class HistoryHandler:
             )
             return json.dumps({"status": "success", **result}, ensure_ascii=False)
         except Exception as e:
-            logger.error(f"[WebChannel] History API error: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[WebChannel] History API error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
 
 class MessageDeleteHandler:
@@ -8608,8 +12211,8 @@ class MessageDeleteHandler:
 
             return json.dumps({"status": "success", "deleted": deleted}, ensure_ascii=False)
         except Exception as e:
-            logger.error(f"[WebChannel] Message delete error: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[WebChannel] Message delete error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
 
 class UiStateHandler:
@@ -8623,8 +12226,8 @@ class UiStateHandler:
             state = load_ui_state(_get_workspace_root())
             return json.dumps({"status": "success", "state": state}, ensure_ascii=False)
         except Exception as e:
-            logger.error(f"[WebChannel] UI state GET error: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[WebChannel] UI state GET error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
     def _save(self):
         _require_auth()
@@ -8641,8 +12244,8 @@ class UiStateHandler:
             state = save_ui_state(_get_workspace_root(), incoming)
             return json.dumps({"status": "success", "updatedAt": state.get("updatedAt")}, ensure_ascii=False)
         except Exception as e:
-            logger.error(f"[WebChannel] UI state PUT error: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[WebChannel] UI state PUT error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
     def POST(self):
         return self._save()
@@ -8660,8 +12263,8 @@ class InstallationsHandler:
             manifest = load_installation_manifest(_get_workspace_root())
             return json.dumps({"status": "success", "manifest": manifest}, ensure_ascii=False)
         except Exception as e:
-            logger.error(f"[WebChannel] installations GET error: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[WebChannel] installations GET error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
     def POST(self):
         _require_auth()
@@ -8681,8 +12284,8 @@ class InstallationsHandler:
             manifest = register_installation(_get_workspace_root(), surface, metadata)
             return json.dumps({"status": "success", "manifest": manifest}, ensure_ascii=False)
         except Exception as e:
-            logger.error(f"[WebChannel] installations POST error: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[WebChannel] installations POST error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
 
 def _log_snapshot_payload(max_lines: int = 200) -> Dict[str, Any]:
@@ -8702,13 +12305,21 @@ def _log_snapshot_payload(max_lines: int = 200) -> Dict[str, Any]:
             "message": tail.get("reason") or tail.get("error") or ("" if tail.get("exists") else "run.log not found"),
         }
     except Exception as exc:
+        public_message = _public_exception_message("Log snapshot unavailable.", exc)
         return {
             "status": "error",
             "type": "snapshot",
             "generatedAt": datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
-            "log": {"path": str(log_path), "exists": False, "error": str(exc), "lines": []},
+            "log": {
+                "path": _diagnostic_path_summary(log_path),
+                "exists": False,
+                "error": public_message,
+                "lines": [],
+                **_public_exception_summary(exc),
+            },
             "content": "",
-            "message": str(exc),
+            "message": public_message,
+            **_public_exception_summary(exc),
         }
 
 
@@ -8756,16 +12367,364 @@ def _diagnostic_stale_lock_summary(item: Any) -> Dict[str, Any]:
     if not isinstance(item, dict):
         return {"redacted": True}
     lock_path = item.get("path") or item.get("lock_path") or item.get("file") or item.get("file_path") or ""
-    return {
+    dead_owner = bool(item.get("dead_owner"))
+    result = {
         "sessionHash": hashlib.sha256(str(item.get("session_id") or item.get("sessionId") or "").encode("utf-8", errors="replace")).hexdigest()[:16] if (item.get("session_id") or item.get("sessionId")) else "",
         "pid": item.get("pid", ""),
-        "deadOwner": bool(item.get("dead_owner")),
+        "deadOwner": dead_owner,
+        "dead_owner": dead_owner,
         "stale": bool(item.get("stale")),
+        "alive": bool(item.get("alive")),
         "removed": bool(item.get("removed")),
         "removeError": bool(item.get("remove_error")),
         "lockPath": _diagnostic_path_summary(lock_path),
         "redacted": True,
     }
+    if isinstance(item.get("age_seconds"), (int, float)):
+        result["age_seconds"] = item.get("age_seconds")
+    return result
+
+
+def _diagnostic_active_request_summary(item: Any) -> Dict[str, Any]:
+    if not isinstance(item, dict):
+        return {"redacted": True}
+    return {
+        "requestHash": _diagnostic_hash(item.get("request_id") or item.get("requestId")),
+        "sessionHash": _diagnostic_hash(item.get("session_id") or item.get("sessionId")),
+        "cancelled": bool(item.get("cancelled")),
+        "createdAt": _diagnostic_timestamp(item.get("created_at") or item.get("createdAt")),
+        "streamAvailable": bool(item.get("stream_available") or item.get("streamAvailable")),
+        "redacted": True,
+    }
+
+
+def _diagnostic_hash(value: Any) -> str:
+    raw = str(value or "")
+    return hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:16] if raw else ""
+
+
+def _diagnostic_safe_token(value: Any, limit: int = 80) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    safe = re.sub(r"[^A-Za-z0-9_.:-]", "_", raw)[:limit]
+    if re.search(r"(?i)(secret|token|password|credential|api[_-]?key|bearer|sk-|ghp_|github_pat)", safe):
+        return "redacted"
+    return safe
+
+
+_DIAGNOSTIC_ACTIONS = {"agent_install_request", "diagnose", "install", "install_capability_pack", "install_skill"}
+_DIAGNOSTIC_ERROR_TYPES = {
+    "artifact_metadata_limit",
+    "backpressure_global",
+    "backpressure_session",
+    "capability_policy_blocked",
+    "cancelled",
+    "image_job_failed",
+    "model_config_not_ready",
+    "permission_denied",
+    "request_conflict",
+    "runtime_error",
+    "stream_lost",
+    "tool_output_limit",
+}
+_DIAGNOSTIC_IMAGE_STATUSES = {
+    "cancelled",
+    "completed",
+    "failed",
+    "partial",
+    "queued",
+    "ready",
+    "running",
+    "started",
+}
+_DIAGNOSTIC_POLICY_MODES = {"ask", "disabled", "preinstall"}
+_DIAGNOSTIC_POLICY_SOURCES = {
+    "admin-cache",
+    "runtime-default",
+    "runtime-default-invalid",
+    "runtime-default-none",
+    "runtime-default-unavailable",
+}
+_DIAGNOSTIC_TERMINAL_STATUSES = {
+    "cancelled",
+    "completed",
+    "done",
+    "failed",
+    "interrupted",
+    "manual_retry",
+    "running",
+    "stream_lost",
+    "timeout",
+}
+_DIAGNOSTIC_EVENT_TYPES = {
+    "approval.requested",
+    "artifact.created",
+    "artifact.limit",
+    "artifact.updated",
+    "assistant.delta",
+    "assistant.snapshot",
+    "capability.policy_blocked",
+    "image_job.artifact",
+    "image_job.cancelled",
+    "image_job.completed",
+    "image_job.failed",
+    "image_job.progress",
+    "image_job.started",
+    "legacy.phase",
+    "message.assistant.finalized",
+    "message.finalizing",
+    "model.delta",
+    "permission.requested",
+    "reasoning.update",
+    "run.cancelled",
+    "run.completed",
+    "run.failed",
+    "run.interrupted",
+    "run.phase",
+    "run.started",
+    "stream.replay_gap",
+    "subagent.cancelled",
+    "subagent.completed",
+    "subagent.failed",
+    "subagent.started",
+    "subagent.timeout",
+    "subagent.updated",
+    "tool.completed",
+    "tool.deadline_extended",
+    "tool.failed",
+    "tool.finished",
+    "tool.heartbeat",
+    "tool.started",
+}
+
+
+def _diagnostic_enum(value: Any, allowed: set, limit: int = 80) -> str:
+    token = _diagnostic_safe_token(value, limit)
+    return token if token in allowed else ""
+
+
+def _diagnostic_event_type(value: Any) -> str:
+    return _diagnostic_enum(value, _DIAGNOSTIC_EVENT_TYPES, 120)
+
+
+def _diagnostic_event_type_summary(value: Any) -> Dict[str, Any]:
+    event_type = _diagnostic_event_type(value)
+    if event_type:
+        return {"eventType": event_type}
+    return {
+        "eventType": "unknown",
+        "eventTypeHash": _diagnostic_hash(value),
+        "eventTypeRedacted": True,
+    }
+
+
+def _diagnostic_timestamp(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)?", raw):
+        return raw[:80]
+    return ""
+
+
+def _diagnostic_source_summary(value: Any) -> Dict[str, Any]:
+    token = _diagnostic_safe_token(value, 80)
+    known_sources = {
+        "agent",
+        "admin",
+        "bridge",
+        "image_job",
+        "runtime",
+        "scheduler",
+        "subagent",
+        "test",
+        "tool",
+        "web",
+        "web_channel",
+        "WebUI",
+    }
+    result = {"sourceHash": _diagnostic_hash(value), "redacted": True}
+    if token in known_sources:
+        result["source"] = token
+    return result
+
+
+def _diagnostic_event_payload_summary(event_type: str, payload: Any) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {"redacted": True, "payloadShape": "non-object"}
+    result: Dict[str, Any] = {
+        "redacted": True,
+        "payloadShape": "object",
+        "payloadKeyCount": len(payload),
+    }
+    if event_type == "capability.policy_blocked":
+        pack_id = payload.get("pack_id") or payload.get("packId")
+        raw_action = payload.get("action")
+        raw_error_type = payload.get("error_type") or payload.get("errorType")
+        raw_policy_mode = payload.get("policy_mode") or payload.get("policyMode")
+        raw_policy_source = payload.get("policy_source") or payload.get("policySource")
+        result.update({
+            "action": _diagnostic_enum(raw_action, _DIAGNOSTIC_ACTIONS, 40),
+            "actionHash": _diagnostic_hash(raw_action) if raw_action and not _diagnostic_enum(raw_action, _DIAGNOSTIC_ACTIONS, 40) else "",
+            "errorType": _diagnostic_enum(raw_error_type, _DIAGNOSTIC_ERROR_TYPES, 80),
+            "errorTypeHash": _diagnostic_hash(raw_error_type) if raw_error_type and not _diagnostic_enum(raw_error_type, _DIAGNOSTIC_ERROR_TYPES, 80) else "",
+            "policyMode": _diagnostic_enum(raw_policy_mode, _DIAGNOSTIC_POLICY_MODES, 40),
+            "policyModeHash": _diagnostic_hash(raw_policy_mode) if raw_policy_mode and not _diagnostic_enum(raw_policy_mode, _DIAGNOSTIC_POLICY_MODES, 40) else "",
+            "policySource": _diagnostic_enum(raw_policy_source, _DIAGNOSTIC_POLICY_SOURCES, 80),
+            "policySourceHash": _diagnostic_hash(raw_policy_source) if raw_policy_source and not _diagnostic_enum(raw_policy_source, _DIAGNOSTIC_POLICY_SOURCES, 80) else "",
+            "installAllowed": bool(payload.get("install_allowed") or payload.get("installAllowed")),
+            "packHash": _diagnostic_hash(pack_id),
+            "packIdRedacted": bool(payload.get("pack_id_redacted") or payload.get("packIdRedacted")),
+        })
+    elif event_type.startswith("image_job."):
+        raw_status = payload.get("status")
+        raw_policy_version = payload.get("parallelism_policy_version")
+        result.update({
+            "jobHash": _diagnostic_hash(payload.get("job_id") or payload.get("jobId")),
+            "status": _diagnostic_enum(raw_status, _DIAGNOSTIC_IMAGE_STATUSES, 40),
+            "statusHash": _diagnostic_hash(raw_status) if raw_status and not _diagnostic_enum(raw_status, _DIAGNOSTIC_IMAGE_STATUSES, 40) else "",
+            "artifactCount": len(payload.get("artifacts") or []) if isinstance(payload.get("artifacts"), list) else 0,
+            "effectiveMaxParallel": payload.get("effective_max_parallel") if isinstance(payload.get("effective_max_parallel"), int) else None,
+            "parallelismPolicyVersion": "v1" if raw_policy_version == "v1" else "",
+            "parallelismPolicyVersionHash": _diagnostic_hash(raw_policy_version) if raw_policy_version and raw_policy_version != "v1" else "",
+        })
+    elif event_type in {"run.started", "run.completed", "run.failed", "run.cancelled", "message.assistant.finalized"}:
+        raw_status = payload.get("status") or payload.get("terminal_reason")
+        raw_error_type = payload.get("error_type") or payload.get("errorType")
+        result.update({
+            "terminal": event_type in {"run.completed", "run.failed", "run.cancelled", "message.assistant.finalized"},
+            "status": _diagnostic_enum(raw_status, _DIAGNOSTIC_TERMINAL_STATUSES, 40),
+            "statusHash": _diagnostic_hash(raw_status) if raw_status and not _diagnostic_enum(raw_status, _DIAGNOSTIC_TERMINAL_STATUSES, 40) else "",
+            "errorType": _diagnostic_enum(raw_error_type, _DIAGNOSTIC_ERROR_TYPES, 80),
+            "errorTypeHash": _diagnostic_hash(raw_error_type) if raw_error_type and not _diagnostic_enum(raw_error_type, _DIAGNOSTIC_ERROR_TYPES, 80) else "",
+        })
+    return {key: value for key, value in result.items() if value not in ("", None)}
+
+
+def _diagnostic_runtime_event_summary(event: Any) -> Dict[str, Any]:
+    if not isinstance(event, dict):
+        return {"redacted": True}
+    raw_event_type = event.get("event_type")
+    event_type = _diagnostic_event_type(raw_event_type) or "unknown"
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    return {
+        "eventId": int(event.get("event_id") or 0),
+        **_diagnostic_event_type_summary(raw_event_type),
+        "eventHash": _diagnostic_hash(f"{event.get('event_id')}:{raw_event_type}:{event.get('created_at')}"),
+        "requestHash": _diagnostic_hash(event.get("request_id")),
+        "sessionHash": _diagnostic_hash(event.get("session_id")),
+        **_diagnostic_source_summary(event.get("source")),
+        "createdAt": event.get("created_at", ""),
+        "payload": _diagnostic_event_payload_summary(event_type, payload),
+        "redacted": True,
+    }
+
+
+def _diagnostic_runtime_events_payload(session_id: str = "", request_id: str = "", limit: int = 80) -> Dict[str, Any]:
+    try:
+        from agent.protocol import get_run_event_ledger
+
+        ledger = get_run_event_ledger()
+        bounded_limit = max(1, min(200, int(limit or 80)))
+        latest_event_id = int(ledger.latest_event_id() or 0)
+        if request_id:
+            events = ledger.events_for_request(str(request_id), limit=bounded_limit)
+        elif session_id:
+            events = ledger.list_events(session_id=str(session_id), limit=bounded_limit)
+        else:
+            events = ledger.list_events(after_event_id=max(0, latest_event_id - bounded_limit * 2), limit=bounded_limit)
+        event_type_counts: Dict[str, int] = {}
+        for item in events:
+            event_type = _diagnostic_event_type(item.get("event_type")) or "unknown"
+            if event_type:
+                event_type_counts[event_type] = event_type_counts.get(event_type, 0) + 1
+        capability_blocks = sum(
+            1
+            for item in events
+            if _diagnostic_event_type(item.get("event_type")) == "capability.policy_blocked"
+        )
+        terminal_events = sum(
+            1
+            for item in events
+            if _diagnostic_event_type(item.get("event_type"))
+            in {"run.completed", "run.failed", "run.cancelled", "message.assistant.finalized"}
+        )
+        return {
+            "status": "success",
+            "source": "runtime-event-ledger",
+            "latestEventId": latest_event_id,
+            "scopedBy": "request" if request_id else ("session" if session_id else "global"),
+            "eventsInspected": len(events),
+            "eventTypeCounts": dict(sorted(event_type_counts.items())),
+            "capabilityPolicyBlockedCount": capability_blocks,
+            "terminalEventCount": terminal_events,
+            "recent": [_diagnostic_runtime_event_summary(item) for item in events[-20:]],
+            "redacted": True,
+        }
+    except Exception as exc:
+        logger.debug(f"[WebChannel] diagnostic runtime event summary skipped: {_web_body_log_summary(exc)}")
+        return {
+            "status": "error",
+            "source": "runtime-event-ledger",
+            "message": "runtime event summary unavailable",
+            "messageHash": _diagnostic_hash(exc),
+            "redacted": True,
+        }
+
+
+def _diagnostic_capability_policy_payload() -> Dict[str, Any]:
+    try:
+        from common.ecorex_capability_policy import load_capability_policy, policy_for_pack
+
+        payload = load_capability_policy()
+        policy = payload.get("policy") if isinstance(payload.get("policy"), dict) else {}
+        capabilities = payload.get("capabilities") if isinstance(payload.get("capabilities"), dict) else {}
+        mode_counts: Dict[str, int] = {}
+        disabled_packs: List[Dict[str, Any]] = []
+        for pack_id, item in capabilities.items():
+            if not isinstance(item, dict):
+                continue
+            public_policy = policy_for_pack(pack_id, pack_name=item.get("name") or pack_id)
+            mode = _diagnostic_enum(public_policy.get("policyMode"), _DIAGNOSTIC_POLICY_MODES, 40) or "ask"
+            mode_counts[mode] = mode_counts.get(mode, 0) + 1
+            if mode == "disabled":
+                disabled_packs.append({
+                    "packHash": _diagnostic_hash(pack_id),
+                    "policyStatusHash": _diagnostic_hash(public_policy.get("policyStatus")),
+                    "packIdRedacted": bool(public_policy.get("packIdRedacted")),
+                    "redacted": True,
+                })
+        source = payload.get("source")
+        global_mode = _diagnostic_enum(policy.get("mode"), _DIAGNOSTIC_POLICY_MODES, 40) or "ask"
+        source_value = _diagnostic_enum(source, _DIAGNOSTIC_POLICY_SOURCES, 80)
+        updated_at = _diagnostic_timestamp(payload.get("updatedAt") or policy.get("updatedAt"))
+        result = {
+            "status": "success" if payload.get("available") else "default",
+            "source": source_value or "runtime-default",
+            "sourceHash": _diagnostic_hash(source) if source and not source_value else "",
+            "policyAvailable": bool(payload.get("available")),
+            "globalMode": global_mode,
+            "policyUpdatedAt": updated_at,
+            "policyUpdatedAtHash": _diagnostic_hash(payload.get("updatedAt") or policy.get("updatedAt")) if (payload.get("updatedAt") or policy.get("updatedAt")) and not updated_at else "",
+            "mirrorConfigured": bool(policy.get("mirror")),
+            "offlineCacheConfigured": bool(policy.get("offlineCache") or policy.get("offline_cache")),
+            "capabilityCount": len(capabilities),
+            "modeCounts": dict(sorted(mode_counts.items())),
+            "disabledPackCount": len(disabled_packs),
+            "disabledPacks": disabled_packs[:20],
+            "redacted": True,
+        }
+        return {key: value for key, value in result.items() if value not in ("", None)}
+    except Exception as exc:
+        logger.debug(f"[WebChannel] diagnostic capability policy summary skipped: {_web_body_log_summary(exc)}")
+        return {
+            "status": "error",
+            "source": "capability-policy",
+            "message": "capability policy summary unavailable",
+            "messageHash": _diagnostic_hash(exc),
+            "redacted": True,
+        }
 
 
 def _diagnostic_bundle_payload(session_id: str = "", request_id: str = "") -> Dict[str, Any]:
@@ -8782,15 +12741,10 @@ def _diagnostic_bundle_payload(session_id: str = "", request_id: str = "") -> Di
     runtime_root = str(get_root())
     channel = WebChannel()
     active = channel.active_requests_snapshot()
-    active_requests = []
-    for item in active.get("requests", []) if isinstance(active, dict) else []:
-        active_requests.append({
-            "request_id": item.get("request_id", ""),
-            "session_id": item.get("session_id", ""),
-            "cancelled": bool(item.get("cancelled")),
-            "created_at": item.get("created_at", ""),
-            "stream_available": bool(item.get("stream_available", False)),
-        })
+    active_requests = [
+        _diagnostic_active_request_summary(item)
+        for item in (active.get("requests", []) if isinstance(active, dict) else [])
+    ]
     return {
         "status": "success",
         "type": "diagnostic_bundle",
@@ -8804,8 +12758,9 @@ def _diagnostic_bundle_payload(session_id: str = "", request_id: str = "") -> Di
             "runtimeRoot": _diagnostic_path_summary(runtime_root),
         },
         "current": {
-            "session_id": session_id,
-            "request_id": request_id,
+            "sessionHash": _diagnostic_hash(session_id),
+            "requestHash": _diagnostic_hash(request_id),
+            "redacted": True,
         },
         "activeRequests": active_requests,
         "staleLocks": [
@@ -8818,10 +12773,20 @@ def _diagnostic_bundle_payload(session_id: str = "", request_id: str = "") -> Di
             "recentEvents": log_events,
             "note": "Recent events and local paths are category/hash summaries only; prompts, file contents, artifact contents, and raw log lines are intentionally omitted.",
         },
+        "runtimeEvents": _diagnostic_runtime_events_payload(session_id=session_id, request_id=request_id),
+        "capabilityPolicy": _diagnostic_capability_policy_payload(),
+        "audit": {
+            "sourceOfTruth": "runtime-event-ledger",
+            "includesRawRuntimePayloads": False,
+            "includesRawCapabilityPolicyPaths": False,
+            "redacted": True,
+        },
         "privacy": {
             "includesPromptText": False,
             "includesFileContents": False,
             "includesArtifactContents": False,
+            "includesRawRuntimePayloads": False,
+            "includesRawCapabilityPolicyPaths": False,
         },
     }
 
@@ -8837,7 +12802,7 @@ def _resolve_run_log_path(runtime_root: Path) -> Path:
         if candidates:
             return candidates[0]
     except Exception as exc:
-        logger.debug(f"[WebChannel] active log path lookup failed: {exc}")
+        logger.debug(f"[WebChannel] active log path lookup failed: {_web_body_log_summary(exc)}")
     return runtime_root / "run.log"
 
 
@@ -8912,7 +12877,9 @@ class LogsHandler:
                 payload = json.dumps({"type": "init", "content": chunk}, ensure_ascii=False)
                 yield f"data: {payload}\n\n".encode('utf-8')
             except Exception as e:
-                yield f"data: {{\"type\": \"error\", \"message\": \"{e}\"}}\n\n".encode('utf-8')
+                public = _public_error_payload("Log stream unavailable.", e, type="error")
+                payload = json.dumps(public, ensure_ascii=False)
+                yield f"data: {payload}\n\n".encode('utf-8')
                 return
 
             # Tail new lines
@@ -8981,7 +12948,7 @@ class AssetsHandler:
             # web.py returns the original status to the client.
             raise
         except Exception as e:
-            logger.error(f"Error serving static file: {e}", exc_info=True)
+            logger.error(f"Error serving static file: {_web_body_log_summary(e)}")
             raise web.notfound()
 
 
@@ -8995,8 +12962,8 @@ class KnowledgeListHandler:
             result = svc.list_tree()
             return json.dumps({"status": "success", **result}, ensure_ascii=False)
         except Exception as e:
-            logger.error(f"[WebChannel] Knowledge list error: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[WebChannel] Knowledge list error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
 
 class KnowledgeReadHandler:
@@ -9010,10 +12977,10 @@ class KnowledgeReadHandler:
             result = svc.read_file(params.path)
             return json.dumps({"status": "success", **result}, ensure_ascii=False)
         except (ValueError, FileNotFoundError) as e:
-            return json.dumps({"status": "error", "message": str(e)})
+            return json.dumps(_public_error_payload("Request failed.", e))
         except Exception as e:
-            logger.error(f"[WebChannel] Knowledge read error: {e}")
-            return json.dumps({"status": "error", "message": str(e)})
+            logger.error(f"[WebChannel] Knowledge read error: {_web_body_log_summary(e)}")
+            return json.dumps(_public_error_payload("Request failed.", e))
 
 
 class KnowledgeGraphHandler:
@@ -9025,7 +12992,7 @@ class KnowledgeGraphHandler:
             svc = KnowledgeService(_get_workspace_root())
             return json.dumps(svc.build_graph(), ensure_ascii=False)
         except Exception as e:
-            logger.error(f"[WebChannel] Knowledge graph error: {e}")
+            logger.error(f"[WebChannel] Knowledge graph error: {_web_body_log_summary(e)}")
             return json.dumps({"nodes": [], "links": []})
 
 

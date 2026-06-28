@@ -76,6 +76,17 @@ const USER_VISIBLE_REPLACEMENT = "已停止重复调用同一能力，正在整�
 const NETWORK_ERROR_REPLACEMENT = "网络连接被中断，请稍后重试；如果持续出现，请检查当前网络、代理或模型接口地址。";
 const RAW_NETWORK_ERROR_PATTERN = /(?:❌\s*)?(?:Connection error|Stream interrupted|Stream error):[\s\S]*?(?:ConnectionResetError\([^)]*\)|connection reset by peer|Connection aborted\.[\s\S]*?)(?:\s*\(Status:\s*0,\s*Code:\s*,\s*Type:\s*\))?/gi;
 const RAW_STATUS_ZERO_PATTERN = /[\s\S]*?(?:ConnectionResetError|connection reset by peer|Connection aborted)[\s\S]*?\(Status:\s*0,\s*Code:\s*,\s*Type:\s*\)[\s\S]*/i;
+const TOOL_SENSITIVE_KEY_PATTERN = /(api[_-]?key|token|password|passwd|secret|authorization|cookie|session)/i;
+const TOOL_CONTENT_KEY_PATTERN = /^(content|contents|body|file_content|file_contents|source|script|code|markdown|prompt|instructions?)$/i;
+const TOOL_SENSITIVE_TEXT_PATTERNS: Array<[RegExp, string]> = [
+  [/sk-[A-Za-z0-9_\-]{8,}/g, "sk-***"],
+  [/gh[pousr]_[A-Za-z0-9_]{8,}/g, "ghp_***"],
+  [/xox[baprs]-[A-Za-z0-9\-]{8,}/g, "xox-***"],
+  [/xapp-[A-Za-z0-9\-]{8,}/g, "xapp-***"],
+  [/\b\d{6,12}:[A-Za-z0-9_\-]{20,}\b/g, "telegram-***"],
+  [/(bearer\s+)[A-Za-z0-9._\-]+/gi, "$1***"],
+  [/(api[_-]?key|token|password|passwd|secret|authorization|cookie)(["']?\s*[:=]\s*["']?)[^"',\s&}]+/gi, "$1$2***"]
+];
 
 export function containsInternalPromptText(value: unknown) {
   const text = String(value ?? "");
@@ -95,4 +106,61 @@ export function redactInternalPromptText(value: unknown) {
     .join("\n")
     .trim();
   return redacted || USER_VISIBLE_REPLACEMENT;
+}
+
+function redactToolText(value: unknown, maxChars = 512) {
+  let text = String(value ?? "");
+  for (const [pattern, replacement] of TOOL_SENSITIVE_TEXT_PATTERNS) {
+    text = text.replace(pattern, replacement);
+  }
+  if (text.length > maxChars) return `${text.slice(0, maxChars)}\n...[redacted ${text.length - maxChars} chars]`;
+  return text;
+}
+
+export function redactToolDisclosureValue(value: unknown, maxDepth = 5): unknown {
+  function visit(item: unknown, depth: number, parentKey = ""): unknown {
+    if (TOOL_SENSITIVE_KEY_PATTERN.test(parentKey)) return "[redacted]";
+    if (TOOL_CONTENT_KEY_PATTERN.test(parentKey)) return "[redacted-content]";
+    if (depth <= 0) return "[redacted-nested]";
+    if (item === undefined || item === null) return item;
+    if (typeof item === "boolean" || typeof item === "number") return item;
+    if (typeof item === "string") {
+      const trimmed = item.trim();
+      if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+        try {
+          return visit(JSON.parse(trimmed) as unknown, depth - 1, parentKey);
+        } catch {
+          // Fall through to text masking for non-JSON strings.
+        }
+      }
+      return redactToolText(item);
+    }
+    if (Array.isArray(item)) {
+      const safe = item.slice(0, 20).map((child) => visit(child, depth - 1, parentKey));
+      if (item.length > 20) safe.push({ redacted_omitted_item_count: item.length - 20 });
+      return safe;
+    }
+    if (typeof item === "object") {
+      const safe: Record<string, unknown> = {};
+      let omitted = 0;
+      for (const [key, child] of Object.entries(item as Record<string, unknown>)) {
+        if (Object.keys(safe).length >= 20) {
+          omitted += 1;
+          continue;
+        }
+        if (TOOL_SENSITIVE_KEY_PATTERN.test(key)) {
+          safe[key] = "[redacted]";
+        } else if (TOOL_CONTENT_KEY_PATTERN.test(key)) {
+          safe[key] = "[redacted-content]";
+        } else {
+          safe[key] = visit(child, depth - 1, key);
+        }
+      }
+      if (omitted) safe.redacted_omitted_field_count = omitted;
+      return safe;
+    }
+    return redactToolText(item);
+  }
+
+  return visit(value, maxDepth);
 }

@@ -1,0 +1,445 @@
+{
+  "console_errors": [],
+  "duration_ms": 3533,
+  "metrics": {
+    "browserFunctions": {
+      "eventSourceRuntimeWrapper": true,
+      "fetchRuntimeWrapper": false
+    },
+    "network": {
+      "apiRequestCount": 29,
+      "historyRequests": [],
+      "pollRequests": [
+        {
+          "body_session_id": "session-real-network-smoke"
+        }
+      ],
+      "runtimeProjectionRequests": [
+        {
+          "after_event_id": "",
+          "history_page": "1",
+          "request_id": "",
+          "session_id": "session-real-network-smoke"
+        },
+        {
+          "after_event_id": "",
+          "history_page": "",
+          "request_id": "",
+          "session_id": "session-real-network-smoke"
+        },
+        {
+          "after_event_id": "",
+          "history_page": "",
+          "request_id": "req-real-stable",
+          "session_id": "session-real-network-smoke"
+        },
+        {
+          "after_event_id": "",
+          "history_page": "",
+          "request_id": "req-real-loss",
+          "session_id": "session-real-network-smoke"
+        }
+      ],
+      "streamAttempts": {
+        "req-real-loss": 11,
+        "req-real-stable": 1
+      },
+      "streamRequests": [
+        {
+          "attempt": 1,
+          "last_event_id": "",
+          "last_event_id_header": "",
+          "request_id": "req-real-stable"
+        },
+        {
+          "attempt": 1,
+          "last_event_id": "",
+          "last_event_id_header": "",
+          "request_id": "req-real-loss"
+        },
+        {
+          "attempt": 2,
+          "last_event_id": "rn-loss-1",
+          "last_event_id_header": "",
+          "request_id": "req-real-loss"
+        },
+        {
+          "attempt": 3,
+          "last_event_id": "rn-loss-1",
+          "last_event_id_header": "",
+          "request_id": "req-real-loss"
+        },
+        {
+          "attempt": 4,
+          "last_event_id": "rn-loss-1",
+          "last_event_id_header": "",
+          "request_id": "req-real-loss"
+        },
+        {
+          "attempt": 5,
+          "last_event_id": "rn-loss-1",
+          "last_event_id_header": "",
+          "request_id": "req-real-loss"
+        },
+        {
+          "attempt": 6,
+          "last_event_id": "rn-loss-1",
+          "last_event_id_header": "",
+          "request_id": "req-real-loss"
+        },
+        {
+          "attempt": 7,
+          "last_event_id": "rn-loss-1",
+          "last_event_id_header": "",
+          "request_id": "req-real-loss"
+        },
+        {
+          "attempt": 8,
+          "last_event_id": "rn-loss-1",
+          "last_event_id_header": "",
+          "request_id": "req-real-loss"
+        },
+        {
+          "attempt": 9,
+          "last_event_id": "rn-loss-1",
+          "last_event_id_header": "",
+          "request_id": "req-real-loss"
+        },
+        {
+          "attempt": 10,
+          "last_event_id": "rn-loss-1",
+          "last_event_id_header": "",
+          "request_id": "req-real-loss"
+        },
+        {
+          "attempt": 11,
+          "last_event_id": "rn-loss-1",
+          "last_event_id_header": "",
+          "request_id": "req-real-loss"
+        }
+      ]
+    },
+    "reconnect": {
+      "botCount": 1,
+      "eventId": "420",
+      "heading": "Real Network Recovery",
+      "lastEventIds": [
+        "rn-loss-1",
+        "rn-loss-1",
+        "rn-loss-1",
+        "rn-loss-1",
+        "rn-loss-1",
+        "rn-loss-1",
+        "rn-loss-1",
+        "rn-loss-1",
+        "rn-loss-1",
+        "rn-loss-1"
+      ],
+      "source": "stream_lost",
+      "toolSteps": 1
+    },
+    "stable": {
+      "botCount": 1,
+      "eventId": "310",
+      "heading": "Real Stable Network",
+      "source": "sse_terminal"
+    },
+    "visibleText": "EcoreX Real Network Smoke\n\n\u6211\u53ef\u4ee5\u5e2e\u4f60\u89e3\u7b54\u95ee\u9898\u3001\u7ba1\u7406\u8ba1\u7b97\u673a\u3001\u521b\u9020\u548c\u6267\u884c\u6280\u80fd\uff0c\u5e76\u901a\u8fc7\n\u957f\u671f\u8bb0\u5fc6\u548c\u77e5\u8bc6\u5e93\u4e0d\u65ad\u6210\u957f\n\n\u7cfb\u7edf\u7ba1\u7406\n\n\u67e5\u770b\u5de5\u4f5c\u7a7a\u95f4\u91cc\u6709\u54ea\u4e9b\u6587\u4ef6\n\n\u5b9a\u65f6\u4efb\u52a1\n\n1\u5206\u949f\u540e\u63d0\u9192\u6211\u68c0\u67e5\u670d\u52a1\u5668\n\n\u7f16\u7a0b\u52a9\u624b\n\n\u641c\u7d22AI\u8d44\u8baf\u5e76\u751f\u6210\u53ef\u89c6\u5316\u7f51\u9875\u62a5\u544a\n\n\u77e5\u8bc6\u5e93\n\n\u67e5\u770b\u77e5\u8bc6\u5e93\u5f53\u524d\u6587\u6863\u60c5\u51b5\n\n\u6280\u80fd\u7cfb\u7edf\n\n\u67e5\u770b\u6240\u6709\u652f\u6301\u7684\u5de5\u5177\u548c\u6280\u80fd\n\n\u6307\u4ee4\u4e2d\u5fc3\n\n\u67e5\u770b\u5168\u90e8\u547d\u4ee4\n\nReal Stable Network\n\nCompleted over a real local EventSource connection.\n\n17:12\nruntime_projection\nReal Network Recovery\n\nRecovered after real local network loss.\n\n17:12"
+  },
+  "screenshot": "C:\\CowAgent\\docs\\v0.2.2\\artifacts\\web-runtime-real-network-browser-smoke.png",
+  "server_state": {
+    "api_requests": [
+      {
+        "method": "GET",
+        "path": "/chat.html",
+        "query": {}
+      },
+      {
+        "method": "GET",
+        "path": "/assets/vendor/fontawesome/css/all.min.css",
+        "query": {}
+      },
+      {
+        "method": "GET",
+        "path": "/assets/vendor/fonts/inter/inter.css",
+        "query": {}
+      },
+      {
+        "method": "GET",
+        "path": "/assets/vendor/highlightjs/styles/github.min.css",
+        "query": {}
+      },
+      {
+        "method": "GET",
+        "path": "/assets/vendor/highlightjs/styles/github-dark.min.css",
+        "query": {}
+      },
+      {
+        "method": "GET",
+        "path": "/assets/vendor/tailwind/tailwind.min.js",
+        "query": {}
+      },
+      {
+        "method": "GET",
+        "path": "/assets/css/console.css",
+        "query": {}
+      },
+      {
+        "method": "GET",
+        "path": "/assets/vendor/markdown-it/markdown-it.min.js",
+        "query": {}
+      },
+      {
+        "method": "GET",
+        "path": "/assets/vendor/highlightjs/highlight.min.js",
+        "query": {}
+      },
+      {
+        "method": "GET",
+        "path": "/assets/vendor/highlightjs/languages/python.min.js",
+        "query": {}
+      },
+      {
+        "method": "GET",
+        "path": "/assets/vendor/highlightjs/languages/javascript.min.js",
+        "query": {}
+      },
+      {
+        "method": "GET",
+        "path": "/assets/vendor/highlightjs/languages/java.min.js",
+        "query": {}
+      },
+      {
+        "method": "GET",
+        "path": "/assets/vendor/highlightjs/languages/go.min.js",
+        "query": {}
+      },
+      {
+        "method": "GET",
+        "path": "/assets/vendor/highlightjs/languages/bash.min.js",
+        "query": {}
+      },
+      {
+        "method": "GET",
+        "path": "/assets/icon.png",
+        "query": {}
+      },
+      {
+        "method": "GET",
+        "path": "/assets/js/console.js",
+        "query": {}
+      },
+      {
+        "method": "GET",
+        "path": "/assets/vendor/fonts/inter/inter-latin.woff2",
+        "query": {}
+      },
+      {
+        "method": "GET",
+        "path": "/assets/vendor/fontawesome/webfonts/fa-solid-900.woff2",
+        "query": {}
+      },
+      {
+        "method": "GET",
+        "path": "/assets/vendor/fontawesome/webfonts/fa-brands-400.woff2",
+        "query": {}
+      },
+      {
+        "method": "GET",
+        "path": "/config",
+        "query": {}
+      },
+      {
+        "method": "POST",
+        "path": "/poll",
+        "query": {}
+      },
+      {
+        "method": "GET",
+        "path": "/auth/check",
+        "query": {}
+      },
+      {
+        "method": "GET",
+        "path": "/api/runtime-projection",
+        "query": {
+          "history_page": [
+            "1"
+          ],
+          "limit": [
+            "1000"
+          ],
+          "page_size": [
+            "20"
+          ],
+          "session_id": [
+            "session-real-network-smoke"
+          ]
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/api/knowledge/list",
+        "query": {}
+      },
+      {
+        "method": "GET",
+        "path": "/api/version",
+        "query": {}
+      },
+      {
+        "method": "GET",
+        "path": "/api/runtime-projection",
+        "query": {
+          "limit": [
+            "1000"
+          ],
+          "session_id": [
+            "session-real-network-smoke"
+          ]
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/api/models",
+        "query": {}
+      },
+      {
+        "method": "GET",
+        "path": "/api/runtime-projection",
+        "query": {
+          "limit": [
+            "1000"
+          ],
+          "request_id": [
+            "req-real-stable"
+          ]
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/api/runtime-projection",
+        "query": {
+          "limit": [
+            "1000"
+          ],
+          "request_id": [
+            "req-real-loss"
+          ]
+        }
+      }
+    ],
+    "history_requests": [],
+    "poll_requests": [
+      {
+        "body_session_id": "session-real-network-smoke"
+      }
+    ],
+    "runtime_projection_requests": [
+      {
+        "after_event_id": "",
+        "history_page": "1",
+        "request_id": "",
+        "session_id": "session-real-network-smoke"
+      },
+      {
+        "after_event_id": "",
+        "history_page": "",
+        "request_id": "",
+        "session_id": "session-real-network-smoke"
+      },
+      {
+        "after_event_id": "",
+        "history_page": "",
+        "request_id": "req-real-stable",
+        "session_id": "session-real-network-smoke"
+      },
+      {
+        "after_event_id": "",
+        "history_page": "",
+        "request_id": "req-real-loss",
+        "session_id": "session-real-network-smoke"
+      }
+    ],
+    "stream_attempts": {
+      "req-real-loss": 11,
+      "req-real-stable": 1
+    },
+    "stream_requests": [
+      {
+        "attempt": 1,
+        "last_event_id": "",
+        "last_event_id_header": "",
+        "request_id": "req-real-stable"
+      },
+      {
+        "attempt": 1,
+        "last_event_id": "",
+        "last_event_id_header": "",
+        "request_id": "req-real-loss"
+      },
+      {
+        "attempt": 2,
+        "last_event_id": "rn-loss-1",
+        "last_event_id_header": "",
+        "request_id": "req-real-loss"
+      },
+      {
+        "attempt": 3,
+        "last_event_id": "rn-loss-1",
+        "last_event_id_header": "",
+        "request_id": "req-real-loss"
+      },
+      {
+        "attempt": 4,
+        "last_event_id": "rn-loss-1",
+        "last_event_id_header": "",
+        "request_id": "req-real-loss"
+      },
+      {
+        "attempt": 5,
+        "last_event_id": "rn-loss-1",
+        "last_event_id_header": "",
+        "request_id": "req-real-loss"
+      },
+      {
+        "attempt": 6,
+        "last_event_id": "rn-loss-1",
+        "last_event_id_header": "",
+        "request_id": "req-real-loss"
+      },
+      {
+        "attempt": 7,
+        "last_event_id": "rn-loss-1",
+        "last_event_id_header": "",
+        "request_id": "req-real-loss"
+      },
+      {
+        "attempt": 8,
+        "last_event_id": "rn-loss-1",
+        "last_event_id_header": "",
+        "request_id": "req-real-loss"
+      },
+      {
+        "attempt": 9,
+        "last_event_id": "rn-loss-1",
+        "last_event_id_header": "",
+        "request_id": "req-real-loss"
+      },
+      {
+        "attempt": 10,
+        "last_event_id": "rn-loss-1",
+        "last_event_id_header": "",
+        "request_id": "req-real-loss"
+      },
+      {
+        "attempt": 11,
+        "last_event_id": "rn-loss-1",
+        "last_event_id_header": "",
+        "request_id": "req-real-loss"
+      }
+    ]
+  },
+  "status": "PASS",
+  "url": "http://127.0.0.1:49860/chat.html"
+}

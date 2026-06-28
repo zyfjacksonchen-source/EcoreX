@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${VERSION:-0.2.0}"
+VERSION="${VERSION:-0.2.3}"
 RELEASE_ROOT="${RELEASE_ROOT:-/srv/ecorex-agent-download}"
 ADMIN_ROOT="${ADMIN_ROOT:-/srv/ecorex-agent-admin}"
-PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-https://www.ecoreai.cn/ecorex-agent}"
+PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-https://mvdcm.ecoremedia.net/ecorex-agent}"
+ADMIN_HTPASSWD="${ADMIN_HTPASSWD:-/etc/nginx/ecorex-admin.htpasswd}"
+ADMIN_BASIC_USER="${ADMIN_BASIC_USER:-}"
+ADMIN_BASIC_PASSWORD="${ADMIN_BASIC_PASSWORD:-}"
 CHECK_PUBLIC="${CHECK_PUBLIC:-1}"
 CHECK_CADDY="${CHECK_CADDY:-1}"
 
@@ -66,6 +69,70 @@ need_python() {
   fi
 }
 
+check_http_basic() {
+  local name="$1"
+  local url="$2"
+  local expected="$3"
+  local username="$4"
+  local password="$5"
+  local status
+  status="$(python3 - "$url" "$username" "$password" <<'PY'
+import base64
+import sys
+import urllib.error
+import urllib.request
+
+url, username, password = sys.argv[1:4]
+token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+request = urllib.request.Request(url, method="GET", headers={"Authorization": "Basic " + token})
+try:
+    with urllib.request.urlopen(request, timeout=20) as response:
+        print(response.status)
+except urllib.error.HTTPError as exc:
+    print(exc.code)
+except Exception as exc:
+    print(f"error:{exc}")
+PY
+)"
+  if [[ "$status" == "$expected" ]]; then
+    echo "PASS http $name $url -> $status"
+  else
+    echo "FAIL http $name $url -> $status expected $expected"
+    failures=$((failures + 1))
+  fi
+}
+
+check_admin_basic_file_readable() {
+  local path="$1"
+  if [[ ! -f "$path" ]]; then
+    echo "FAIL missing admin Basic Auth file $path"
+    failures=$((failures + 1))
+    return
+  fi
+  echo "PASS file $path"
+
+  local worker_user=""
+  if command -v nginx >/dev/null 2>&1; then
+    worker_user="$(nginx -T 2>/dev/null | awk '/^[[:space:]]*user[[:space:]]+/ {gsub(";", "", $2); print $2; exit}' || true)"
+  fi
+  if [[ -z "$worker_user" || "$worker_user" == "root" ]]; then
+    worker_user="$(ps -eo user,comm | awk '$2 ~ /^nginx$/ && $1 != "root" {print $1; exit}' || true)"
+  fi
+  if [[ -n "$worker_user" && "$worker_user" != "root" ]] && id "$worker_user" >/dev/null 2>&1; then
+    if runuser -u "$worker_user" -- test -r "$path"; then
+      echo "PASS admin Basic Auth file readable by nginx worker $worker_user"
+    else
+      echo "FAIL admin Basic Auth file is not readable by nginx worker $worker_user: $path"
+      failures=$((failures + 1))
+    fi
+  elif [[ -r "$path" ]]; then
+    echo "PASS admin Basic Auth file readable by current checker"
+  else
+    echo "FAIL admin Basic Auth file is not readable: $path"
+    failures=$((failures + 1))
+  fi
+}
+
 need_python
 
 current="$RELEASE_ROOT/current"
@@ -76,6 +143,7 @@ check_file "$current/admin/index.html"
 check_file "$ADMIN_ROOT/app/ecorex_admin_api.py"
 check_file "$ADMIN_ROOT/env/ecorex-admin-api.env"
 check_file "$ADMIN_ROOT/server/caddy/Caddyfile.example"
+check_admin_basic_file_readable "$ADMIN_HTPASSWD"
 
 if ! python3 - "$current/manifest.json" "$current/downloads" "$VERSION" <<'PY'
 import hashlib
@@ -298,6 +366,10 @@ if [[ "$CHECK_PUBLIC" == "1" ]]; then
     check_http "public-asset-$asset" "$PUBLIC_BASE_URL/$asset" "200"
   done
   check_http "public-admin-auth" "$PUBLIC_BASE_URL/admin/" "401"
+  if [[ -n "$ADMIN_BASIC_USER" && -n "$ADMIN_BASIC_PASSWORD" ]]; then
+    check_http_basic "public-admin-page-authenticated" "$PUBLIC_BASE_URL/admin/" "200" "$ADMIN_BASIC_USER" "$ADMIN_BASIC_PASSWORD"
+    check_http_basic "public-admin-api-authenticated" "$PUBLIC_BASE_URL/admin/api/state?limit=1" "200" "$ADMIN_BASIC_USER" "$ADMIN_BASIC_PASSWORD"
+  fi
   check_http "public-client-gate" "$PUBLIC_BASE_URL/client/model-config" "403"
   public_manifest_tmp="$(mktemp)"
   if python3 - "$PUBLIC_BASE_URL/manifest.json" "$public_manifest_tmp" <<'PY'

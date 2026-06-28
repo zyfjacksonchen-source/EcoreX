@@ -1,0 +1,32 @@
+{
+  "version": "0.2.3",
+  "slice": "R23-16P-04",
+  "scenario": "complex-task-soak",
+  "generatedAt": "2026-06-27T00:48:01.285534+00:00",
+  "status": "pass",
+  "metrics": {
+    "cpuP95Percent": 0.0,
+    "memoryPeakMb": 0.777,
+    "memoryCurrentMb": 0.159,
+    "threadDeltaAfterIdle": 0,
+    "processDeltaAfterIdle": null,
+    "processDeltaMeasured": false,
+    "cacheBytesAfterIdle": null,
+    "cacheBytesMeasured": false,
+    "sseApplyP95Ms": 4.599,
+    "schedulerStopMs": 0.617,
+    "imageJobCountBeforeCleanup": 1,
+    "imageRunningJobCountBeforeCleanup": 0,
+    "imageJobCountAfterCleanup": 0,
+    "imageCleanupRemovedJobCount": 1,
+    "ocrTextUrlP95Ms": 0.082,
+    "totalMs": 1914.588
+  },
+  "failureCodes": [],
+  "redaction": {
+    "containsRawPrompts": false,
+    "containsRawMessageBodies": false,
+    "containsFullPaths": false,
+    "containsSecretShapedValues": false
+  }
+}

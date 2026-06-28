@@ -25,8 +25,8 @@
         theme: {
             extend: {
                 fontFamily: {
-                    sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
-                    mono: ['"JetBrains Mono"', '"Fira Code"', 'Consolas', 'monospace'],
+                    sans: ['-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', '"PingFang SC"', '"Microsoft YaHei"', '"Helvetica Neue"', 'Arial', 'system-ui', 'sans-serif'],
+                    mono: ['ui-monospace', '"SFMono-Regular"', '"SF Mono"', 'Menlo', 'Monaco', 'Consolas', '"Liberation Mono"', 'monospace'],
                 },
                 colors: {
                     primary: {
@@ -317,72 +317,24 @@
                     <div id="chat-messages" class="flex-1 overflow-y-auto">
                         <!-- Welcome Screen -->
                         <div id="welcome-screen" class="flex flex-col items-center justify-center h-full px-6 pb-16" style="padding-top: 6vh">
-                            <img src="assets/icon.png" alt="EcoreX" class="w-16 h-16 rounded-2xl mb-6 shadow-lg shadow-primary-500/20">
-                            <h1 id="welcome-title" class="text-2xl font-bold text-slate-800 dark:text-slate-100 mb-3">EcoreX</h1>
-                            <p id="welcome-subtitle" class="text-slate-500 dark:text-slate-400 text-center max-w-lg mb-10 leading-relaxed"
-                               data-i18n-html="welcome_subtitle">我可以帮你解答问题、管理计算机、创造和执行技能，并通过<br>长期记忆和知识库不断成长</p>
-
-                            <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 w-full max-w-2xl">
-                                <div class="example-card group bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-xl p-4
-                                            cursor-pointer hover:border-primary-300 dark:hover:border-primary-600 hover:shadow-md transition-all duration-200">
-                                    <div class="flex items-center gap-2 mb-2">
-                                        <div class="w-7 h-7 rounded-lg bg-blue-50 dark:bg-blue-900/30 flex items-center justify-center">
-                                            <i class="fas fa-folder-open text-blue-500 text-xs"></i>
-                                        </div>
-                                        <span class="font-medium text-sm text-slate-700 dark:text-slate-200" data-i18n="example_sys_title">系统管理</span>
+                            <div class="w-full max-w-4xl flex flex-col items-center gap-8">
+                                <h1 id="welcome-title" class="text-3xl sm:text-4xl font-medium tracking-normal text-slate-900 dark:text-slate-50 text-center">和EcoreX一起开始工作</h1>
+                                <div class="w-full rounded-[24px] bg-slate-100 dark:bg-[#262626] border border-slate-200 dark:border-white/10 shadow-sm overflow-hidden">
+                                    <button type="button"
+                                            class="w-full min-h-[96px] px-5 py-4 text-left text-lg text-slate-500 dark:text-slate-400 focus:outline-none"
+                                            onclick="document.getElementById('chat-input')?.focus()">
+                                        随心输入
+                                    </button>
+                                    <div class="flex items-center justify-between gap-3 px-4 py-3 border-t border-slate-200/80 dark:border-white/10 text-sm text-slate-500 dark:text-slate-400">
+                                        <button type="button" class="new-session-entry inline-flex items-center gap-2 px-2 py-1.5 hover:text-slate-800 dark:hover:text-slate-100 transition-colors" onclick="document.getElementById('chat-input')?.focus()">
+                                            <i class="fas fa-folder-open text-xs"></i>
+                                            <span>项目文件夹</span>
+                                        </button>
+                                        <button type="button" class="new-session-entry inline-flex items-center gap-2 px-2 py-1.5 hover:text-slate-800 dark:hover:text-slate-100 transition-colors" onclick="document.getElementById('chat-input')?.focus()">
+                                            <i class="fas fa-comments text-xs"></i>
+                                            <span>通用会话</span>
+                                        </button>
                                     </div>
-                                    <p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed" data-i18n="example_sys_text">查看工作空间里有哪些文件</p>
-                                </div>
-                                <div class="example-card group bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-xl p-4
-                                            cursor-pointer hover:border-primary-300 dark:hover:border-primary-600 hover:shadow-md transition-all duration-200">
-                                    <div class="flex items-center gap-2 mb-2">
-                                        <div class="w-7 h-7 rounded-lg bg-amber-50 dark:bg-amber-900/30 flex items-center justify-center">
-                                            <i class="fas fa-clock text-amber-500 text-xs"></i>
-                                        </div>
-                                        <span class="font-medium text-sm text-slate-700 dark:text-slate-200" data-i18n="example_task_title">定时任务</span>
-                                    </div>
-                                    <p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed" data-i18n="example_task_text">1分钟后提醒我检查服务器</p>
-                                </div>
-                                <div class="example-card group bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-xl p-4
-                                            cursor-pointer hover:border-primary-300 dark:hover:border-primary-600 hover:shadow-md transition-all duration-200">
-                                    <div class="flex items-center gap-2 mb-2">
-                                        <div class="w-7 h-7 rounded-lg bg-emerald-50 dark:bg-emerald-900/30 flex items-center justify-center">
-                                            <i class="fas fa-code text-emerald-500 text-xs"></i>
-                                        </div>
-                                        <span class="font-medium text-sm text-slate-700 dark:text-slate-200" data-i18n="example_code_title">编程助手</span>
-                                    </div>
-                                    <p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed" data-i18n="example_code_text">搜索AI资讯并生成可视化网页报告</p>
-                                </div>
-                                <div class="example-card group bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-xl p-4
-                                            cursor-pointer hover:border-primary-300 dark:hover:border-primary-600 hover:shadow-md transition-all duration-200">
-                                    <div class="flex items-center gap-2 mb-2">
-                                        <div class="w-7 h-7 rounded-lg bg-violet-50 dark:bg-violet-900/30 flex items-center justify-center">
-                                            <i class="fas fa-book text-violet-500 text-xs"></i>
-                                        </div>
-                                        <span class="font-medium text-sm text-slate-700 dark:text-slate-200" data-i18n="example_knowledge_title">知识库</span>
-                                    </div>
-                                    <p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed" data-i18n="example_knowledge_text">查看知识库当前文档情况</p>
-                                </div>
-                                <div class="example-card group bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-xl p-4
-                                            cursor-pointer hover:border-primary-300 dark:hover:border-primary-600 hover:shadow-md transition-all duration-200">
-                                    <div class="flex items-center gap-2 mb-2">
-                                        <div class="w-7 h-7 rounded-lg bg-rose-50 dark:bg-rose-900/30 flex items-center justify-center">
-                                            <i class="fas fa-puzzle-piece text-rose-500 text-xs"></i>
-                                        </div>
-                                        <span class="font-medium text-sm text-slate-700 dark:text-slate-200" data-i18n="example_skill_title">技能系统</span>
-                                    </div>
-                                    <p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed" data-i18n="example_skill_text">查看所有支持的工具和技能</p>
-                                </div>
-                                <div class="example-card group bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-xl p-4
-                                            cursor-pointer hover:border-primary-300 dark:hover:border-primary-600 hover:shadow-md transition-all duration-200"
-                                     data-send="/help">
-                                    <div class="flex items-center gap-2 mb-2">
-                                        <div class="w-7 h-7 rounded-lg bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
-                                            <i class="fas fa-terminal text-slate-500 text-xs"></i>
-                                        </div>
-                                        <span class="font-medium text-sm text-slate-700 dark:text-slate-200" data-i18n="example_web_title">指令中心</span>
-                                    </div>
-                                    <p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed" data-i18n="example_web_text">查看全部命令</p>
                                 </div>
                             </div>
                         </div>
@@ -712,7 +664,7 @@
                                     <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100" data-i18n="skills_title">技能管理</h2>
                                     <p class="text-sm text-slate-500 dark:text-slate-400 mt-1" data-i18n="skills_desc">查看、启用或禁用 Agent 技能</p>
                                 </div>
-                                <a href="https://github.com/zhangyifanjackson-dotcom/EcoreX" target="_blank"
+                                <a href="https://github.com/zhangyifanjackson-dotcom/EcoreX" target="_blank" rel="noopener noreferrer"
                                    class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-primary-500 bg-primary-50 dark:bg-primary-900/20 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors">
                                     <i class="fas fa-puzzle-piece text-[10px]"></i>
                                     <span data-i18n="skills_hub_btn">探索技能广场</span>
@@ -995,7 +947,15 @@
                                     <h2 class="text-xl font-bold text-slate-800 dark:text-slate-100" data-i18n="tasks_title">定时任务</h2>
                                     <p class="text-sm text-slate-500 dark:text-slate-400 mt-1" data-i18n="tasks_desc">查看和管理定时任务</p>
                                 </div>
+                                <button id="tasks-refresh-btn" onclick="loadTasksView(true)"
+                                        class="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10
+                                               text-slate-600 dark:text-slate-300 text-sm hover:bg-slate-50 dark:hover:bg-white/5
+                                               cursor-pointer transition-colors duration-150">
+                                    <i class="fas fa-rotate text-xs"></i>
+                                    <span data-i18n="tasks_refresh">Refresh</span>
+                                </button>
                             </div>
+                            <div id="tasks-runtime-status" class="scheduler-runtime-panel mb-4 hidden"></div>
                             <div id="tasks-empty" class="flex flex-col items-center justify-center py-20">
                                 <div class="w-16 h-16 rounded-2xl bg-rose-50 dark:bg-rose-900/20 flex items-center justify-center mb-4">
                                     <i class="fas fa-clock text-rose-400 text-xl"></i>

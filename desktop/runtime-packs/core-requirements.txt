@@ -2,6 +2,16 @@ aiohttp>=3.8.6,<3.10
 requests>=2.28.2
 chardet>=5.1.0
 Pillow
+pypdf
+pdfminer.six
+python-docx
+python-pptx
+openpyxl
+xlsxwriter
+markdownify
+reportlab
+PyMuPDF
+rapidocr-onnxruntime
 python-dotenv>=1.0.0
 PyYAML>=6.0
 croniter>=2.0.0
@@ -9,6 +19,7 @@ click>=8.0
 qrcode
 json-repair
 playwright
+lark-oapi>=1.5.5
 web.py; python_version < "3.13"
 web.py @ git+https://github.com/webpy/webpy.git ; python_version >= "3.13"
 legacy-cgi; python_version >= "3.13"

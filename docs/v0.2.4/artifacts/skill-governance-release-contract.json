@@ -1,0 +1,159 @@
+{
+  "status": "PASS",
+  "generatedAt": "2026-06-28T14:15:31Z",
+  "scope": "R24-01B webui release skill governance contract",
+  "windows": {
+    "artifactId": "webui-windows-x64",
+    "artifactName": "EcoreX_0.2.4-webui-windows-x64.zip",
+    "size": 136394935,
+    "sha256": "8F1BB474D78A2D7BA461D45724EB8B5BD6F812497575E8A9A3A640520BA0AD8C"
+  },
+  "macos": {
+    "artifactId": "webui-macos-universal",
+    "artifactName": "EcoreX_0.2.4-webui-macos-universal.zip",
+    "size": 263172470,
+    "sha256": "8A4A8B2F4824D09608F394CF08E0A944610E73676A77BB21B016CC18FC9864D5"
+  },
+  "publicRelease": {
+    "artifactId": "public-release",
+    "artifactName": "EcoreX_0.2.4-public-release.zip",
+    "size": 399407438,
+    "sha256": "2E5118DE0E24A668F3928804D6A441912887BAB7A5F165201AF3D083DC2F07E3"
+  },
+  "checks": [
+    {
+      "label": "webui-windows-x64 Skill governance API schema packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "agent/skills/service.py"
+      }
+    },
+    {
+      "label": "webui-windows-x64 Skill governance builtin lock packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "agent/skills/manager.py"
+      }
+    },
+    {
+      "label": "webui-windows-x64 Skill governance extension projection packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "agent/extensions/registry.py"
+      }
+    },
+    {
+      "label": "webui-windows-x64 Skill governance legacy console lock packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "channel/web/static/js/console.js"
+      }
+    },
+    {
+      "label": "webui-windows-x64 Skill governance WebUI display packaged",
+      "status": "PASS",
+      "evidence": {
+        "bundleTextScanned": true
+      }
+    },
+    {
+      "label": "webui-windows-x64 Skill governance Streaming Markdown live render packaged",
+      "status": "PASS",
+      "evidence": {
+        "bundleTextScanned": true
+      }
+    },
+    {
+      "label": "webui-macos-universal Skill governance API schema packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "agent/skills/service.py"
+      }
+    },
+    {
+      "label": "webui-macos-universal Skill governance builtin lock packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "agent/skills/manager.py"
+      }
+    },
+    {
+      "label": "webui-macos-universal Skill governance extension projection packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "agent/extensions/registry.py"
+      }
+    },
+    {
+      "label": "webui-macos-universal Skill governance legacy console lock packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "channel/web/static/js/console.js"
+      }
+    },
+    {
+      "label": "webui-macos-universal Skill governance WebUI display packaged",
+      "status": "PASS",
+      "evidence": {
+        "bundleTextScanned": true
+      }
+    },
+    {
+      "label": "webui-macos-universal Skill governance Streaming Markdown live render packaged",
+      "status": "PASS",
+      "evidence": {
+        "bundleTextScanned": true
+      }
+    },
+    {
+      "label": "public release embeds webui-windows-x64",
+      "status": "PASS",
+      "evidence": {
+        "entry": "site/downloads/EcoreX_0.2.4-webui-windows-x64.zip"
+      }
+    },
+    {
+      "label": "public manifest matches webui-windows-x64",
+      "status": "PASS",
+      "evidence": {
+        "manifestSize": 136394935,
+        "artifactSize": 136394935,
+        "hashMatches": true
+      }
+    },
+    {
+      "label": "public release embeds webui-macos-universal",
+      "status": "PASS",
+      "evidence": {
+        "entry": "site/downloads/EcoreX_0.2.4-webui-macos-universal.zip"
+      }
+    },
+    {
+      "label": "public manifest matches webui-macos-universal",
+      "status": "PASS",
+      "evidence": {
+        "manifestSize": 263172470,
+        "artifactSize": 263172470,
+        "hashMatches": true
+      }
+    },
+    {
+      "label": "public release embeds web-linux-service",
+      "status": "PASS",
+      "evidence": {
+        "entry": "site/downloads/EcoreX_0.2.4-web-linux-service.tar.gz"
+      }
+    },
+    {
+      "label": "public manifest matches web-linux-service",
+      "status": "PASS",
+      "evidence": {
+        "manifestSize": 3806498,
+        "artifactSize": 3806498,
+        "hashMatches": true
+      }
+    }
+  ],
+  "failed": [],
+  "redacted": true
+}

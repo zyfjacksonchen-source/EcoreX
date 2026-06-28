@@ -1,0 +1,112 @@
+{
+  "status": "PASS",
+  "cleanActualRender": {
+    "status": "unavailable",
+    "errorType": "OfficePdfRuntimeError"
+  },
+  "cleanActualRenderAvailable": false,
+  "mismatchActualRender": {
+    "status": "unavailable",
+    "errorType": "OfficePdfRuntimeError"
+  },
+  "mismatchActualRenderAvailable": false,
+  "syntheticRenderRejected": true,
+  "cleanStatus": "fail",
+  "cleanFailedChecks": [
+    "page-render"
+  ],
+  "expectedCleanNoRenderFailures": [
+    "page-render"
+  ],
+  "blankStatus": "fail",
+  "blankFailedChecks": [
+    "layout-inspection",
+    "page-render",
+    "text-orientation"
+  ],
+  "requiredBlankFailures": [
+    "layout-inspection",
+    "page-render",
+    "text-orientation"
+  ],
+  "mismatchStatus": "fail",
+  "mismatchFailedChecks": [
+    "page-render",
+    "visual-diff"
+  ],
+  "requiredMismatchFailures": [
+    "visual-diff"
+  ],
+  "cleanSummary": {
+    "pageCount": 1,
+    "pagesInspected": 1,
+    "encrypted": false,
+    "metadataKeyCount": 9,
+    "textExtractablePageCount": 1,
+    "emptyTextPageCount": 0,
+    "textExtractionErrorPageCount": 0,
+    "totalExtractedTextChars": 105,
+    "replacementGlyphCount": 0,
+    "nullGlyphCount": 0,
+    "glyphRiskPageCount": 0,
+    "rotatedPageCount": 0,
+    "unexpectedRotationCount": 0,
+    "portraitPageCount": 1,
+    "landscapePageCount": 0,
+    "squarePageCount": 0,
+    "pageSizeVariantCount": 1,
+    "imageObjectCount": 0,
+    "drawingObjectCount": 12,
+    "horizontalLineCount": 24,
+    "verticalLineCount": 24,
+    "tableCandidatePageCount": 1,
+    "tableTextCandidatePageCount": 0,
+    "blankPageRiskCount": 0,
+    "imageOnlyPageCount": 0,
+    "fitzInspectionAvailable": false,
+    "truncated": false
+  },
+  "blankSummary": {
+    "pageCount": 1,
+    "pagesInspected": 1,
+    "encrypted": false,
+    "metadataKeyCount": 9,
+    "textExtractablePageCount": 0,
+    "emptyTextPageCount": 1,
+    "textExtractionErrorPageCount": 0,
+    "totalExtractedTextChars": 0,
+    "replacementGlyphCount": 0,
+    "nullGlyphCount": 0,
+    "glyphRiskPageCount": 0,
+    "rotatedPageCount": 0,
+    "unexpectedRotationCount": 0,
+    "portraitPageCount": 1,
+    "landscapePageCount": 0,
+    "squarePageCount": 0,
+    "pageSizeVariantCount": 1,
+    "imageObjectCount": 0,
+    "drawingObjectCount": 0,
+    "horizontalLineCount": 0,
+    "verticalLineCount": 0,
+    "tableCandidatePageCount": 0,
+    "tableTextCandidatePageCount": 0,
+    "blankPageRiskCount": 1,
+    "imageOnlyPageCount": 0,
+    "fitzInspectionAvailable": false,
+    "truncated": false
+  },
+  "mismatchDiffSummary": {
+    "referencePageCount": 1,
+    "candidatePageCount": 1,
+    "pageCountMatch": true,
+    "pagesCompared": 1,
+    "pageSizeMismatchCount": 1,
+    "orientationMismatchCount": 1,
+    "textLengthBucketMismatchCount": 0,
+    "tableCandidateMismatchCount": 0,
+    "imageObjectCountMismatchCount": 0,
+    "mismatchCount": 2
+  },
+  "leakCount": 0,
+  "redacted": true
+}

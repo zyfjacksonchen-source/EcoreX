@@ -1,0 +1,107 @@
+{
+  "status": "PASS",
+  "generatedAt": "2026-06-27T10:04:35Z",
+  "toolCount": 22,
+  "extensionCount": 136,
+  "checks": [
+    {
+      "label": "tool manager loads v0.2.2 core tools",
+      "status": "PASS",
+      "evidence": []
+    },
+    {
+      "label": "tool manager loads v0.2.3 tool surfaces",
+      "status": "PASS",
+      "evidence": []
+    },
+    {
+      "label": "bash executes a real command",
+      "status": "PASS"
+    },
+    {
+      "label": "extensions expose builtin bash tool",
+      "status": "PASS"
+    },
+    {
+      "label": "extensions expose builtin file tools",
+      "status": "PASS"
+    },
+    {
+      "label": "extensions expose v0.2.3 browser and feishu tools",
+      "status": "PASS"
+    },
+    {
+      "label": "api tools expose builtin shell and v0.2.3 tools",
+      "status": "PASS",
+      "evidence": []
+    },
+    {
+      "label": "api tools registry health is not empty",
+      "status": "PASS",
+      "evidence": {
+        "status": "ready",
+        "firstPartyToolCount": 22,
+        "mcpToolCount": 0,
+        "totalToolCount": 22,
+        "missingConfiguredTools": [],
+        "errors": [],
+        "mcpStatus": {}
+      }
+    },
+    {
+      "label": "api extensions expose builtin tools",
+      "status": "PASS"
+    },
+    {
+      "label": "channel snapshot self-loads feishu_cli",
+      "status": "PASS"
+    },
+    {
+      "label": "feishu channel schema is visible after cold snapshot",
+      "status": "PASS",
+      "evidence": {
+        "tool": "feishu_cli",
+        "declaredDiscoverable": true,
+        "schemaVisible": true,
+        "discoverable": true,
+        "toolSchemaCallable": true,
+        "callable": false,
+        "readiness": "unverified",
+        "callableReason": "tool schema is visible, but CLI/auth readiness requires an explicit status probe",
+        "requiresStatusProbe": true,
+        "permissionGated": true,
+        "policy": "find-skill-first-on-demand-cli",
+        "installAbility": "feishu-cli",
+        "installPack": "feishu-lark",
+        "statusAction": {
+          "tool": "feishu_cli",
+          "action": "status"
+        },
+        "authorizationAction": {
+          "tool": "feishu_cli",
+          "action": "auth_login",
+          "domain": "base"
+        },
+        "status": "schema_visible_unverified"
+      }
+    },
+    {
+      "label": "optional ability browser-cdp remains discoverable",
+      "status": "PASS"
+    },
+    {
+      "label": "optional ability chrome-devtools-mcp remains discoverable",
+      "status": "PASS"
+    },
+    {
+      "label": "optional ability feishu-cli remains discoverable",
+      "status": "PASS"
+    },
+    {
+      "label": "optional ability fast-ocr remains discoverable",
+      "status": "PASS"
+    }
+  ],
+  "failed": [],
+  "redacted": true
+}

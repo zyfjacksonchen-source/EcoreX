@@ -1,0 +1,392 @@
+{
+  "version": "0.2.3",
+  "slice": "R23-16P",
+  "generatedAt": "2026-06-26",
+  "status": "partial-pass",
+  "redactionContract": {
+    "allowed": [
+      "hashes",
+      "event ids",
+      "event types",
+      "counts",
+      "enum statuses",
+      "durations",
+      "byte sizes",
+      "process categories",
+      "bounded numeric samples"
+    ],
+    "forbidden": [
+      "raw prompts",
+      "raw OCR text",
+      "message bodies",
+      "cookies",
+      "bearer tokens",
+      "API keys",
+      "full local paths",
+      "browser profile contents",
+      "secret-shaped values"
+    ]
+  },
+  "scenarios": [
+    {
+      "id": "long-session-projection",
+      "status": "partial-pass",
+      "description": "200/500/1000-message sessions with mixed assistant, tool, artifact, permission, image_job, and subagent events.",
+      "commands": [
+        "python -m py_compile agent/protocol/run_event_ledger.py agent/protocol/runtime_projection.py channel/web/web_channel.py tests/test_v023_performance_projection.py scripts/smoke-runtime-projection-performance.py",
+        "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_v023_performance_projection.py -q",
+        "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py::TestV022RunEventLedger::test_v023_runtime_projection_include_events_redacts_generic_event_bodies -q",
+        "python scripts/smoke-runtime-projection-performance.py --output docs/v0.2.3/artifacts/perf-long-session.json --request-count 200 --iterations 5",
+        "python scripts/scan-session-artifacts-privacy.py docs/v0.2.3/artifacts/perf-long-session.json --json-output docs/v0.2.3/artifacts/perf-long-session-privacy-scan.json --salt v023-performance"
+      ],
+      "metrics": [
+        "request_projection_p95_ms",
+        "session_projection_p95_ms",
+        "history_projection_p95_ms",
+        "event_count",
+        "payload_bytes"
+      ],
+      "thresholds": {
+        "request_projection_p95_ms": 150,
+        "history_projection_p95_ms": 300,
+        "same_machine_regression_max_percent": 10
+      },
+      "artifact": "docs/v0.2.3/artifacts/perf-long-session.json",
+      "privacyArtifact": "docs/v0.2.3/artifacts/perf-long-session-privacy-scan.json",
+      "latestEvidence": {
+        "request_count": 200,
+        "event_count": 800,
+        "session_projection_p95_ms": 24.904,
+        "request_projection_p95_ms": 2.069,
+        "include_events": false,
+        "redaction_clean": true,
+        "include_events_body_redaction": true
+      },
+      "releaseBlocking": true
+    },
+    {
+      "id": "frontend-render-state-isolation",
+      "status": "partial-pass",
+      "description": "Long assistant replies and process details render bounded collapsed views until the user expands them.",
+      "commands": [
+        "python -m py_compile scripts/smoke-frontend-render-performance.py tests/test_v023_performance_projection.py",
+        "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_v023_performance_projection.py -q",
+        "python scripts/smoke-frontend-render-performance.py --output docs/v0.2.3/artifacts/perf-frontend-render.json",
+        "python scripts/scan-session-artifacts-privacy.py docs/v0.2.3/artifacts/perf-frontend-render.json --json-output docs/v0.2.3/artifacts/perf-frontend-render-privacy-scan.json --salt v023-frontend-render",
+        "npm --prefix desktop run typecheck",
+        "npm --prefix desktop run build:renderer"
+      ],
+      "metrics": [
+        "collapsed_markdown_chars",
+        "collapsed_markdown_reduction_percent",
+        "closed_process_detail_mounted_step_list",
+        "expanded_process_detail_mounted_step_list"
+      ],
+      "thresholds": {
+        "collapsed_markdown_reduction_percent_min": 95,
+        "closed_process_detail_mounted_step_list_max": 0,
+        "same_machine_regression_max_percent": 10
+      },
+      "artifact": "docs/v0.2.3/artifacts/perf-frontend-render.json",
+      "privacyArtifact": "docs/v0.2.3/artifacts/perf-frontend-render-privacy-scan.json",
+      "latestEvidence": {
+        "synthetic_long_reply_chars": 200000,
+        "collapsed_markdown_chars": 1404,
+        "collapsed_markdown_reduction_percent": 99.298,
+        "closed_process_detail_mounted_step_list": 0,
+        "redaction_clean": true
+      },
+      "releaseBlocking": true
+    },
+    {
+      "id": "complex-task-soak",
+      "status": "partial-pass",
+      "description": "Synthetic scheduler stop + OCR text URL + image-job artifacts/cleanup + RuntimeProjection steady-state workflow. Browser/CDP process and subagent lifecycle gates remain separate scenarios.",
+      "commands": [
+        "python -m py_compile agent/protocol/image_job_service.py agent/protocol/runtime_projection.py agent/tools/scheduler/scheduler_service.py channel/web/web_channel.py tests/test_v023_performance_projection.py scripts/smoke-complex-task-resource-lifecycle.py",
+        "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_v023_performance_projection.py -q",
+        "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_ecorex_web_parallel_backend.py -k \"image_jobs_api_recovery_sanitizes_legacy_request_id or image_jobs_api_rejects_missing_prompt_without_runtime_events or image_jobs_api_recovered_cancel_does_not_write_terminal_event\" -q",
+        "python scripts/smoke-complex-task-resource-lifecycle.py --output docs/v0.2.3/artifacts/perf-complex-task-soak.json",
+        "python scripts/scan-session-artifacts-privacy.py docs/v0.2.3/artifacts/perf-complex-task-soak.json --json-output docs/v0.2.3/artifacts/perf-complex-task-soak-privacy-scan.json --salt v023-complex-soak"
+      ],
+      "metrics": [
+        "cpu_p95_percent",
+        "memory_peak_mb",
+        "thread_delta_after_idle",
+        "process_delta_after_idle_pending",
+        "cache_bytes_after_idle_pending",
+        "sse_apply_p95_ms"
+      ],
+      "thresholds": {
+        "sse_apply_p95_ms": 50,
+        "thread_delta_after_idle": 0,
+        "same_machine_regression_max_percent": 10
+      },
+      "artifact": "docs/v0.2.3/artifacts/perf-complex-task-soak.json",
+      "privacyArtifact": "docs/v0.2.3/artifacts/perf-complex-task-soak-privacy-scan.json",
+      "latestEvidence": {
+        "thread_delta_after_idle": 0,
+        "process_delta_measured": false,
+        "cache_bytes_measured": false,
+        "sse_apply_p95_ms": 4.599,
+        "scheduler_stop_ms": 0.617,
+        "image_job_count_after_cleanup": 0,
+        "ocr_text_url_p95_ms": 0.082,
+        "redaction_clean": true
+      },
+      "releaseBlocking": true
+    },
+    {
+      "id": "refresh-replay",
+      "status": "pass",
+      "description": "In-flight refresh, completed refresh, reconnect loop, and history pagination through RuntimeProjection only.",
+      "commands": [
+        "python -m py_compile scripts/smoke-performance-refresh-replay.py tests/test_v023_performance_projection.py",
+        "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_v023_performance_projection.py -q",
+        "npm --prefix desktop run build:renderer",
+        "python scripts/smoke-performance-refresh-replay.py --output docs/v0.2.3/artifacts/perf-refresh-replay.json",
+        "python scripts/scan-session-artifacts-privacy.py docs/v0.2.3/artifacts/perf-refresh-replay.json --json-output docs/v0.2.3/artifacts/perf-refresh-replay-privacy-scan.json --salt v023-refresh-replay"
+      ],
+      "metrics": [
+        "reconnect_count",
+        "latest_event_id_delta_pending",
+        "duplicate_message_count",
+        "duplicate_artifact_count_pending",
+        "replay_p95_ms"
+      ],
+      "thresholds": {
+        "duplicate_message_count": 0
+      },
+      "artifact": "docs/v0.2.3/artifacts/perf-refresh-replay.json",
+      "privacyArtifact": "docs/v0.2.3/artifacts/perf-refresh-replay-privacy-scan.json",
+      "latestEvidence": {
+        "replay_p95_ms": 2921.8,
+        "duplicate_message_count": 0,
+        "duplicate_artifact_count": null,
+        "duplicate_artifact_count_measured": false,
+        "latest_event_id_delta": null,
+        "latest_event_id_delta_measured": false,
+        "reconnect_count": 11,
+        "projection_call_count": 1,
+        "stream_call_count": 1,
+        "history_projection_fetch_count": 4,
+        "history_fallback_call_count": 1,
+        "console_error_count": 0,
+        "redaction_clean": true
+      },
+      "releaseBlocking": true
+    },
+    {
+      "id": "image-artifact-ocr",
+      "status": "pass",
+      "description": "Multi-artifact image job, OCR reuse, cancellation, failure, retry, and artifact merge.",
+      "commands": [
+        "python -m py_compile scripts/smoke-performance-image-artifact-ocr.py tests/test_v023_performance_projection.py",
+        "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_v023_performance_projection.py -q",
+        "python scripts/smoke-performance-image-artifact-ocr.py --output docs/v0.2.3/artifacts/perf-image-artifact-ocr.json --task-count 12 --artifacts-per-task 2 --projection-iterations 8",
+        "python scripts/scan-session-artifacts-privacy.py docs/v0.2.3/artifacts/perf-image-artifact-ocr.json --json-output docs/v0.2.3/artifacts/perf-image-artifact-ocr-privacy-scan.json --salt v023-image-artifact-ocr"
+      ],
+      "metrics": [
+        "ocrReuseP95Ms",
+        "ocrProviderCallCount",
+        "ocrCacheHitCount",
+        "ocrCacheMissCount",
+        "imageJobQueueWaitP95Ms",
+        "artifactMergeP95Ms",
+        "eventCount",
+        "payloadBytes",
+        "threadDeltaAfterIdle"
+      ],
+      "thresholds": {
+        "artifactMergeP95Ms": 50,
+        "eventCount": 160,
+        "payloadBytes": 40000,
+        "projectedArtifactFingerprintCount": 24,
+        "projectedArtifactShapeValidCount": 24,
+        "threadDeltaAfterIdle": 0,
+        "jobsAfterCleanup": 0,
+        "same_machine_regression_max_percent": 10
+      },
+      "artifact": "docs/v0.2.3/artifacts/perf-image-artifact-ocr.json",
+      "privacyArtifact": "docs/v0.2.3/artifacts/perf-image-artifact-ocr-privacy-scan.json",
+      "current": {
+        "ocrReuseP95Ms": 1.112,
+        "ocrProviderCallCount": 4,
+        "ocrCacheHitCount": 10,
+        "ocrCacheMissCount": 2,
+        "imageJobQueueWaitP95Ms": 11.569,
+        "artifactMergeP95Ms": 13.4,
+        "eventCount": 121,
+        "payloadBytes": 25824,
+        "projectedArtifactCount": 24,
+        "projectedArtifactFingerprintCount": 24,
+        "projectedArtifactShapeValidCount": 24,
+        "retryEventCount": 1,
+        "threadDeltaAfterIdle": 0,
+        "jobsAfterCleanup": 0,
+        "privacyFindingCount": 0
+      },
+      "releaseBlocking": true
+    },
+    {
+      "id": "scheduler-subagent",
+      "status": "pass",
+      "description": "Scheduled task batches and concurrent subagent heartbeat, timeout, and cancel projection.",
+      "commands": [
+        "python -m py_compile scripts/smoke-performance-scheduler-subagent.py tests/test_v023_performance_projection.py",
+        "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_v023_performance_projection.py -q",
+        "python scripts/smoke-performance-scheduler-subagent.py --output docs/v0.2.3/artifacts/perf-scheduler-subagent.json --subagent-count 40 --scheduler-task-count 60 --projection-iterations 8",
+        "python scripts/scan-session-artifacts-privacy.py docs/v0.2.3/artifacts/perf-scheduler-subagent.json --json-output docs/v0.2.3/artifacts/perf-scheduler-subagent-privacy-scan.json --salt v023-scheduler-subagent"
+      ],
+      "metrics": [
+        "subagentProjectionP95Ms",
+        "schedulerProjectionP95Ms",
+        "projectedSubagentToolCount",
+        "projectedSchedulerTaskCount",
+        "completedSubagentCount",
+        "timeoutSubagentCount",
+        "cancelledSubagentCount",
+        "failedSubagentCount",
+        "orphanTimerCount",
+        "orphanThreadCount"
+      ],
+      "thresholds": {
+        "subagentProjectionP95Ms": 120,
+        "schedulerProjectionP95Ms": 120,
+        "projectedSubagentToolCount": 40,
+        "projectedSubagentToolShapeValidCount": 40,
+        "projectedSubagentToolFingerprintCount": 40,
+        "projectedSchedulerTaskCount": 60,
+        "projectedSchedulerTaskShapeValidCount": 60,
+        "schedulerSendMessageTaskCount": 15,
+        "schedulerAgentTaskCount": 15,
+        "schedulerToolCallTaskCount": 15,
+        "schedulerSkillCallTaskCount": 15,
+        "schedulerErrorTaskCount": 6,
+        "orphanTimerCount": 0,
+        "orphanThreadCount": 0,
+        "same_machine_regression_max_percent": 10
+      },
+      "artifact": "docs/v0.2.3/artifacts/perf-scheduler-subagent.json",
+      "privacyArtifact": "docs/v0.2.3/artifacts/perf-scheduler-subagent-privacy-scan.json",
+      "current": {
+        "subagentProjectionP95Ms": 23.515,
+        "schedulerProjectionP95Ms": 32.675,
+        "projectedSubagentToolCount": 40,
+        "projectedSubagentToolShapeValidCount": 40,
+        "projectedSubagentToolFingerprintCount": 40,
+        "projectedSchedulerTaskCount": 60,
+        "projectedSchedulerTaskShapeValidCount": 60,
+        "completedSubagentCount": 10,
+        "timeoutSubagentCount": 10,
+        "cancelledSubagentCount": 10,
+        "failedSubagentCount": 10,
+        "schedulerSendMessageTaskCount": 15,
+        "schedulerAgentTaskCount": 15,
+        "schedulerToolCallTaskCount": 15,
+        "schedulerSkillCallTaskCount": 15,
+        "schedulerErrorTaskCount": 6,
+        "schedulerStopMs": 0.457,
+        "orphanTimerCount": 0,
+        "orphanThreadCount": 0,
+        "privacyFindingCount": 0
+      },
+      "releaseBlocking": true
+    },
+    {
+      "id": "browser-ocr",
+      "status": "pass",
+      "description": "CDP auto-launch, Playwright fallback, text URL extraction, RapidOCR screenshot URL OCR, and no-local-provider fallback.",
+      "commands": [
+        "python -m py_compile agent/tools/browser/browser_service.py scripts/smoke-performance-browser-ocr.py tests/test_v023_performance_projection.py",
+        "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_v023_performance_projection.py -q",
+        "python scripts/smoke-performance-browser-ocr.py --output docs/v0.2.3/artifacts/perf-browser-ocr.json --iterations 20 --timeout-ms 15000",
+        "python scripts/scan-session-artifacts-privacy.py docs/v0.2.3/artifacts/perf-browser-ocr.json --json-output docs/v0.2.3/artifacts/perf-browser-ocr-privacy-scan.json --salt v023-browser-ocr"
+      ],
+      "metrics": [
+        "browser_first_action_ms",
+        "browser_fallback_ms",
+        "ocr_text_url_p95_ms",
+        "ocr_image_url_p95_ms",
+        "live_browser_process_delta_after_idle"
+      ],
+      "thresholds": {
+        "ocr_text_url_p95_ms": 2000,
+        "ocr_image_url_p95_ms": 2000,
+        "live_browser_process_delta_after_idle": 0,
+        "same_machine_regression_max_percent": 10
+      },
+      "artifact": "docs/v0.2.3/artifacts/perf-browser-ocr.json",
+      "privacyArtifact": "docs/v0.2.3/artifacts/perf-browser-ocr-privacy-scan.json",
+      "latestEvidence": {
+        "browser_first_action_ms": 6860.603,
+        "browser_first_action_mode": "cdp",
+        "browser_fallback_ms": 5817.352,
+        "browser_fallback_mode": "persistent",
+        "ocr_text_url_p95_ms": 0.017,
+        "ocr_image_url_p95_ms": 2.966,
+        "ocr_image_url_measured": true,
+        "ocr_image_provider": "rapidocr_onnxruntime",
+        "live_browser_process_delta_after_idle": 0,
+        "live_browser_process_delta_measured": true,
+        "redaction_clean": true
+      },
+      "releaseBlocking": true
+    },
+    {
+      "id": "performance-evidence-audit",
+      "status": "pass",
+      "description": "Aggregate privacy gate for all R23-16P performance evidence and paired privacy scans.",
+      "commands": [
+        "python -m py_compile scripts/audit-performance-evidence.py tests/test_v023_performance_projection.py",
+        "$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'; python -m pytest tests/test_v023_performance_projection.py -q",
+        "python scripts/audit-performance-evidence.py --output docs/v0.2.3/artifacts/perf-evidence-audit.json --salt v023-performance-evidence",
+        "python scripts/scan-session-artifacts-privacy.py docs/v0.2.3/artifacts/perf-evidence-audit.json --json-output docs/v0.2.3/artifacts/perf-evidence-audit-privacy-scan.json --salt v023-performance-evidence-audit"
+      ],
+      "metrics": [
+        "matrixScenarioCount",
+        "scenarioPairCount",
+        "selfAuditScenarioCount",
+        "requiredScenarioMissingCount",
+        "matrixConfigIssueCount",
+        "mainArtifactCount",
+        "scanArtifactCount",
+        "scannedArtifactCount",
+        "missingMainArtifactCount",
+        "missingScanArtifactCount",
+        "scanNotCleanCount",
+        "findingBucketCount"
+      ],
+      "thresholds": {
+        "matrixScenarioCount": 8,
+        "scenarioPairCount": 7,
+        "selfAuditScenarioCount": 1,
+        "requiredScenarioMissingCount": 0,
+        "matrixConfigIssueCount": 0,
+        "missingMainArtifactCount": 0,
+        "missingScanArtifactCount": 0,
+        "scanNotCleanCount": 0,
+        "findingBucketCount": 0
+      },
+      "artifact": "docs/v0.2.3/artifacts/perf-evidence-audit.json",
+      "privacyArtifact": "docs/v0.2.3/artifacts/perf-evidence-audit-privacy-scan.json",
+      "current": {
+        "matrixScenarioCount": 8,
+        "scenarioPairCount": 7,
+        "selfAuditScenarioCount": 1,
+        "requiredScenarioMissingCount": 0,
+        "matrixConfigIssueCount": 0,
+        "mainArtifactCount": 7,
+        "scanArtifactCount": 7,
+        "scannedArtifactCount": 14,
+        "missingMainArtifactCount": 0,
+        "missingScanArtifactCount": 0,
+        "scanNotCleanCount": 0,
+        "findingBucketCount": 0,
+        "findingTotalCount": 0,
+        "privacyFindingCount": 0
+      },
+      "releaseBlocking": true
+    }
+  ]
+}

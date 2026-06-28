@@ -1,0 +1,117 @@
+{
+  "status": "PASS",
+  "redacted": true,
+  "mode": "fake-provider-overhead",
+  "provider": "openai",
+  "providerDelayMs": 250,
+  "realProviderReady": {
+    "openai": false,
+    "linkai": false,
+    "gemini": false,
+    "seedream": false,
+    "qwen": false,
+    "minimax": false
+  },
+  "timingSemantics": {
+    "providerLatencyMs": "whole in-process provider runner latency, including provider API call, response decode, and local image save",
+    "providerRunnerOverheadMs": "fake-provider mode only: provider latency minus configured synthetic provider delay per attempt",
+    "ecorexControllableOverheadMs": "fake-provider mode only: final usable-image time minus configured synthetic provider delay per attempt"
+  },
+  "codexComparison": {
+    "available": false,
+    "status": "pending-codex-result"
+  },
+  "cases": [
+    {
+      "caseId": "icon-no-reference",
+      "promptHash": "7cc74acddacf4fd6",
+      "promptLength": 86,
+      "referenceImageCount": 0,
+      "size": "1024x1024",
+      "outputFormat": "png",
+      "qualityRetryMax": 1,
+      "provider": "openai",
+      "providerDelayMs": 250,
+      "ecorexDirect": {
+        "status": "pass",
+        "wallMs": 319,
+        "finalUsableMs": 312,
+        "providerTotalLatencyMs": 280,
+        "qualityTotalLatencyMs": 31,
+        "finalizationTotalLatencyMs": 0,
+        "postprocessTotalLatencyMs": 31,
+        "attemptCount": 1,
+        "retryCount": 0,
+        "finalizationStatus": "final",
+        "imageCount": 1,
+        "providerRunnerOverheadMs": 30,
+        "qaAndFinalizationMs": 31,
+        "ecorexControllableOverheadMs": 62
+      },
+      "ecorexJob": {
+        "status": "pass",
+        "finalUsableMs": 375,
+        "providerTotalMs": 266,
+        "qualityTotalMs": 31,
+        "finalizationTotalMs": 0,
+        "postprocessTotalMs": 31,
+        "taskStatus": "completed",
+        "artifactCount": 1,
+        "retryCount": 0,
+        "providerRunnerOverheadMs": 16,
+        "qaAndFinalizationMs": 31,
+        "ecorexControllableOverheadMs": 125
+      },
+      "comparison": {
+        "available": false,
+        "status": "pending"
+      }
+    },
+    {
+      "caseId": "poster-reference-edit",
+      "promptHash": "f821a39587639d06",
+      "promptLength": 87,
+      "referenceImageCount": 1,
+      "size": "1024x1024",
+      "outputFormat": "png",
+      "qualityRetryMax": 1,
+      "provider": "openai",
+      "providerDelayMs": 250,
+      "ecorexDirect": {
+        "status": "pass",
+        "wallMs": 299,
+        "finalUsableMs": 297,
+        "providerTotalLatencyMs": 264,
+        "qualityTotalLatencyMs": 31,
+        "finalizationTotalLatencyMs": 0,
+        "postprocessTotalLatencyMs": 31,
+        "attemptCount": 1,
+        "retryCount": 0,
+        "finalizationStatus": "final",
+        "imageCount": 1,
+        "providerRunnerOverheadMs": 14,
+        "qaAndFinalizationMs": 31,
+        "ecorexControllableOverheadMs": 47
+      },
+      "ecorexJob": {
+        "status": "pass",
+        "finalUsableMs": 327,
+        "providerTotalMs": 250,
+        "qualityTotalMs": 16,
+        "finalizationTotalMs": 0,
+        "postprocessTotalMs": 16,
+        "taskStatus": "completed",
+        "artifactCount": 1,
+        "retryCount": 0,
+        "providerRunnerOverheadMs": 0,
+        "qaAndFinalizationMs": 16,
+        "ecorexControllableOverheadMs": 77
+      },
+      "comparison": {
+        "available": false,
+        "status": "pending"
+      }
+    }
+  ],
+  "failedCases": []
+}

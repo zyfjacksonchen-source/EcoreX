@@ -8,6 +8,13 @@ export type RuntimeSession = {
   msg_count?: number;
   title_locked?: boolean;
   titleLocked?: boolean;
+  projectId?: string;
+  projectName?: string;
+  projectPath?: string;
+  memoryPath?: string;
+  dreamsPath?: string;
+  scope?: "project" | "general" | string;
+  project?: ProjectSessionBinding | null;
 };
 
 export type RuntimeActiveRequest = {
@@ -46,6 +53,15 @@ export type RuntimeActiveRequest = {
 };
 
 export type RuntimeSessionLock = {
+  sessionHash?: string;
+  lockPath?: {
+    present?: boolean;
+    pathHash?: string;
+    redacted?: boolean;
+  };
+  removeError?: boolean;
+  deadOwner?: boolean;
+  redacted?: boolean;
   path?: string;
   session_id?: string;
   pid?: number | string;
@@ -69,8 +85,22 @@ export type RuntimeSkill = {
   display_name?: string;
   description?: string;
   source?: string;
+  source_group?: string;
+  sourceGroup?: string;
+  source_label?: string;
+  sourceLabel?: string;
+  purpose_group?: string;
+  purposeGroup?: string;
+  purpose_label?: string;
+  purposeLabel?: string;
   path?: string;
   enabled?: boolean;
+  default_enabled?: boolean;
+  defaultEnabled?: boolean;
+  toggleable?: boolean;
+  locked?: boolean;
+  lock_reason?: string;
+  lockReason?: string;
   category?: string;
   user_invocable?: boolean;
   disable_model_invocation?: boolean;
@@ -80,16 +110,65 @@ export type RuntimeSkill = {
   primary_env?: string;
 };
 
+export type RuntimeChannelAuth = {
+  mode?: string;
+  channelAuthorization?: string;
+  channelAuthSupported?: boolean;
+  authEndpoint?: string;
+  authEndpointMethods?: string[];
+  statusProbe?: string;
+  channelConfigState?: string;
+  requiredFields?: string[];
+  presentFields?: string[];
+  missingFields?: string[];
+  agentAuthSupported?: boolean;
+  agentAuthorizationAction?: Record<string, unknown> | null;
+};
+
+export type RuntimeChannelAgentSurface = {
+  tool?: string;
+  declaredDiscoverable?: boolean;
+  schemaVisible?: boolean | null;
+  discoverable?: boolean;
+  toolSchemaCallable?: boolean;
+  callable?: boolean;
+  readiness?: string;
+  callableReason?: string;
+  requiresStatusProbe?: boolean;
+  permissionGated?: boolean;
+  policy?: string;
+  installAbility?: string;
+  installPack?: string;
+  statusAction?: Record<string, unknown> | null;
+  authorizationAction?: Record<string, unknown> | null;
+  status?: string;
+};
+
 export type RuntimeExtension = {
   id: string;
   type: "builtin_skill" | "user_skill" | "connector" | "mcp_server" | "capability_pack" | "plugin" | string;
   displayName?: string;
   description?: string;
   origin?: string;
+  source?: string;
+  source_group?: string;
+  sourceGroup?: string;
+  source_label?: string;
+  sourceLabel?: string;
+  purpose_group?: string;
+  purposeGroup?: string;
+  purpose_label?: string;
+  purposeLabel?: string;
   sourceUrl?: string;
   sourcePath?: string;
   version?: string;
   enabled?: boolean;
+  default_enabled?: boolean;
+  defaultEnabled?: boolean;
+  toggleable?: boolean;
+  locked?: boolean;
+  lock_reason?: string;
+  lockReason?: string;
   installed?: boolean;
   policy?: string;
   permissions?: string[];
@@ -105,6 +184,12 @@ export type RuntimeExtension = {
   mentionable?: boolean;
   mention_category?: string;
   mention_hidden_reason?: string;
+  active?: boolean;
+  configured?: boolean;
+  running?: boolean;
+  configState?: string;
+  auth?: RuntimeChannelAuth;
+  agentSurface?: RuntimeChannelAgentSurface;
 };
 
 export type RuntimeChannel = {
@@ -117,7 +202,191 @@ export type RuntimeChannel = {
   description?: string;
   active?: boolean;
   configured?: boolean;
+  running?: boolean;
   status?: string;
+  configState?: string;
+  auth?: RuntimeChannelAuth;
+  agentSurface?: RuntimeChannelAgentSurface;
+};
+
+export type ExternalConnectionField = {
+  key: string;
+  label?: string;
+  type?: "text" | "secret" | "number" | "bool" | string;
+  value?: unknown;
+  default?: unknown;
+  sensitive?: boolean;
+  masked?: boolean;
+};
+
+export type ExternalConnectionAction = {
+  id: string;
+  label?: string;
+  enabled?: boolean;
+};
+
+export type ExternalConnectionLogo = {
+  type?: "brand" | string;
+  key?: string;
+  fallbackText?: string;
+  icon?: string;
+  color?: string;
+};
+
+export type ExternalConnectionAdapterContract = {
+  version?: string;
+  platform?: string;
+  readiness?: Record<string, unknown>;
+  lifecycle?: Record<string, unknown>;
+  ingress?: Record<string, unknown>;
+  egress?: Record<string, unknown>;
+  projection?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
+export type ExternalConnection = {
+  id: string;
+  platform?: string;
+  name?: string;
+  label?: { zh?: string; en?: string };
+  displayName?: string;
+  description?: string;
+  logo?: ExternalConnectionLogo;
+  status?: string;
+  configured?: boolean;
+  enabled?: boolean;
+  connected?: boolean;
+  running?: boolean;
+  callable?: boolean;
+  lastError?: string;
+  dependencyMissing?: boolean;
+  dependencyStatus?: Record<string, unknown>;
+  configState?: unknown;
+  auth?: RuntimeChannelAuth;
+  agentSurface?: RuntimeChannelAgentSurface;
+  adapterContract?: ExternalConnectionAdapterContract;
+  fields?: ExternalConnectionField[];
+  homeChannel?: { id?: string; idHash?: string; configured?: boolean; name?: string; [key: string]: unknown };
+  configSchema?: { fields?: ExternalConnectionField[]; [key: string]: unknown };
+  actions?: ExternalConnectionAction[];
+  source?: string;
+};
+
+export type ExternalConnectionAdapterTest = {
+  testMode?: string;
+  remoteConnectivityProbed?: boolean;
+  [key: string]: unknown;
+};
+
+export type ExternalConnectionTestResult = {
+  configured?: boolean;
+  connected?: boolean;
+  callable?: boolean;
+  lastError?: string;
+  mode?: string;
+  remoteConnectivityProbed?: boolean;
+  [key: string]: unknown;
+};
+
+export type ExternalConnectionActionResponse = {
+  status?: string;
+  message?: string;
+  connection?: ExternalConnection;
+  adapter?: ExternalConnectionAdapterTest;
+  test?: ExternalConnectionTestResult;
+  channel_type?: string;
+  starting?: boolean;
+  operation_id?: string;
+  capability_refresh_required?: boolean;
+  homeChannelConfigured?: boolean;
+  applied?: string[];
+  unchanged?: boolean;
+  [key: string]: unknown;
+};
+
+export type ExternalConnectionsPayload = {
+  status?: string;
+  connections?: ExternalConnection[];
+  summary?: Record<string, number>;
+  updatedAt?: number;
+  message?: string;
+};
+
+export type RuntimeSchedulerDeliveryTarget = {
+  status?: string;
+  channelType?: string;
+  source?: string;
+  reason?: string;
+  receiverHash?: string;
+  homeChannelRequired?: boolean;
+  homeChannelConfigured?: boolean;
+};
+
+export type RuntimeSchedulerTaskAction = {
+  type?: string;
+  channelType?: string;
+  receiverNameHash?: string;
+  receiverHash?: string;
+  isGroup?: boolean;
+  contentPreview?: string;
+  contentHash?: string;
+  contentLength?: number;
+  contentBytes?: number;
+  taskDescriptionPreview?: string;
+  taskDescriptionHash?: string;
+  taskDescriptionLength?: number;
+  taskDescriptionBytes?: number;
+  toolName?: string;
+  toolParams?: Record<string, unknown>;
+  skillName?: string;
+  skillArgs?: Record<string, unknown>;
+  resultPrefixPreview?: string;
+  resultPrefixHash?: string;
+  resultPrefixLength?: number;
+  resultPrefixBytes?: number;
+  deliveryTarget?: RuntimeSchedulerDeliveryTarget;
+};
+
+export type RuntimeSchedulerTask = {
+  id: string;
+  name?: string;
+  enabled?: boolean;
+  state?: string;
+  schedule?: Record<string, unknown>;
+  scheduleDescription?: string;
+  action?: RuntimeSchedulerTaskAction;
+  createdAt?: string;
+  updatedAt?: string;
+  nextRunAt?: string;
+  lastRunAt?: string;
+  lastError?: string;
+  lastErrorAt?: string;
+};
+
+export type RuntimeSchedulerProjection = {
+  enabled?: boolean;
+  initialized?: boolean;
+  running?: boolean;
+  threadAlive?: boolean;
+  serviceStatus?: string;
+  blockingReason?: string;
+  taskStore?: {
+    path?: string;
+    exists?: boolean;
+  };
+  tasks?: RuntimeSchedulerTask[];
+  taskCount?: number;
+  counts?: {
+    total?: number;
+    enabled?: number;
+    disabled?: number;
+    error?: number;
+  };
+  loadError?: string;
+  canStart?: boolean;
+  canModify?: boolean;
+  modifyBlockingReason?: string;
+  pollIntervalSeconds?: number;
 };
 
 export type RuntimeToolCall = {
@@ -127,9 +396,14 @@ export type RuntimeToolCall = {
   arguments?: unknown;
   input?: unknown;
   result?: unknown;
+  qualityEvidence?: QualityEvidence;
   status?: string;
   is_error?: boolean;
   execution_time?: number;
+  deadline_seconds?: number;
+  max_seconds?: number;
+  extension_count?: number;
+  lastHeartbeatAt?: number;
   function?: {
     name?: string;
     arguments?: unknown;
@@ -160,9 +434,14 @@ export type RuntimeStep = {
   arguments?: unknown;
   input?: unknown;
   result?: unknown;
+  qualityEvidence?: QualityEvidence;
   status?: string;
   is_error?: boolean;
   execution_time?: number;
+  deadline_seconds?: number;
+  max_seconds?: number;
+  extension_count?: number;
+  lastHeartbeatAt?: number;
   has_tool_calls?: boolean;
   file_name?: string;
   file_type?: string;
@@ -173,6 +452,7 @@ export type RuntimeStep = {
 export type RuntimeMessage = {
   role?: "user" | "assistant";
   content?: string;
+  pending?: boolean;
   created_at?: number;
   seq?: number;
   _seq?: number;
@@ -180,6 +460,7 @@ export type RuntimeMessage = {
   reasoning?: string;
   steps?: RuntimeStep[];
   tool_calls?: RuntimeToolCall[];
+  artifacts?: AgentArtifact[];
   kind?: string;
   request_id?: string;
   extras?: {
@@ -196,11 +477,74 @@ export type RuntimeMessage = {
 export type RuntimeHistoryResult = {
   messages: RuntimeMessage[];
   contextStartSeq: number;
+  projectContext?: ProjectSessionBinding | null;
   total?: number;
   page?: number;
   pageSize?: number;
   hasMore?: boolean;
 };
+
+export type RuntimeProjectionEvent = {
+  event_id?: number;
+  request_id?: string;
+  session_id?: string;
+  turn_id?: string;
+  event_seq?: number;
+  event_type?: string;
+  source?: string;
+  created_at?: number;
+  payload?: Record<string, unknown>;
+};
+
+export type RuntimeRequestProjection = {
+  request_id?: string;
+  session_id?: string;
+  turn_id?: string;
+  state?: string;
+  terminal_reason?: string;
+  terminal_message?: string;
+  first_event_id?: number;
+  latest_event_id?: number;
+  event_count?: number;
+  messages?: RuntimeMessage[];
+  events?: RuntimeProjectionEvent[];
+};
+
+export type RuntimeSessionProjection = {
+  session_id?: string;
+  after_event_id?: number;
+  latest_event_id?: number;
+  requests?: RuntimeRequestProjection[];
+  events?: RuntimeProjectionEvent[];
+};
+
+export type RuntimeRequestProjectionResult = {
+  mode: "request";
+  latestEventId: number;
+  projection: RuntimeRequestProjection;
+};
+
+export type RuntimeSessionProjectionResult = {
+  mode: "session";
+  latestEventId: number;
+  projection: RuntimeSessionProjection;
+};
+
+export type RuntimeProjectionResult = RuntimeRequestProjectionResult | RuntimeSessionProjectionResult;
+
+export type RuntimeProjectionInput =
+  | {
+      mode: "request";
+      requestId: string;
+      sessionId?: string;
+      limit?: number;
+    }
+  | {
+      mode: "session";
+      sessionId: string;
+      afterEventId?: number;
+      limit?: number;
+    };
 
 export type FileAttachment = {
   file_path: string;
@@ -234,6 +578,33 @@ export type AgentArtifactOperation = "created" | "modified" | "exported" | "down
 export type AgentArtifactStatus = "pending" | "ready" | "failed" | "superseded";
 export type OpenPathAction = "open" | "reveal" | "openWith";
 
+export type QualityEvidenceStatus = "pass" | "fail" | "warn" | "pending" | "skipped" | "unknown";
+export type QualityEvidenceCheck = {
+  id?: string;
+  status?: QualityEvidenceStatus | string;
+  detail?: string;
+};
+export type QualityEvidence = {
+  schemaVersion?: string;
+  kind?: "presentation" | "spreadsheet" | "document" | "pdf" | "image" | string;
+  sourceRef?: string;
+  qualityGates?: string[];
+  checks?: QualityEvidenceCheck[];
+  missingQualityGates?: string[];
+  status?: QualityEvidenceStatus | string;
+  renderedArtifacts?: Array<Record<string, unknown>>;
+  redacted?: boolean;
+  qualityEvidenceSanitized?: boolean;
+  omittedQualityEvidenceFieldCount?: number;
+  presentationAnalysis?: Record<string, unknown>;
+  spreadsheetAnalysis?: Record<string, unknown>;
+  documentAnalysis?: Record<string, unknown>;
+  pdfAnalysis?: Record<string, unknown>;
+  pdfDiffAnalysis?: Record<string, unknown>;
+  imageAnalysis?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
 export type AgentArtifact = {
   id: string;
   requestId?: string;
@@ -250,6 +621,7 @@ export type AgentArtifact = {
   previewUrl?: string;
   thumbnailUrl?: string;
   statusPath?: string;
+  qualityEvidence?: QualityEvidence;
   stats?: {
     addedLines?: number;
     removedLines?: number;
@@ -285,12 +657,58 @@ export type RuntimeSnapshot = {
   extensionsCount?: number;
   extensionSummary?: Record<string, number>;
   modelCapabilities?: Record<string, unknown>;
+  scheduler?: RuntimeSchedulerProjection;
 };
+
+export type RuntimeSnapshotOptions = {
+  includeSessionIds?: string[];
+};
+
+const PINNED_SESSIONS_STORAGE_KEY = "ecorex-pinned-sessions";
+const LAST_ACTIVE_SESSION_STORAGE_KEY = "ecorex-last-active-session-id";
+
+function safeReadJsonObject(key: string): Record<string, unknown> {
+  if (typeof window === "undefined" || !window.localStorage) return {};
+  try {
+    const raw = window.localStorage.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function runtimeSnapshotSessionIncludes(options: RuntimeSnapshotOptions = {}) {
+  const includeIds = new Set<string>();
+  const pinnedIds: string[] = [];
+  (options.includeSessionIds || []).forEach((value) => {
+    const sessionId = String(value || "").trim();
+    if (sessionId) includeIds.add(sessionId);
+  });
+  Object.entries(safeReadJsonObject(PINNED_SESSIONS_STORAGE_KEY)).forEach(([sessionId, pinned]) => {
+    if (!pinned) return;
+    const normalized = String(sessionId || "").trim();
+    if (!normalized) return;
+    includeIds.add(normalized);
+    pinnedIds.push(normalized);
+  });
+  if (typeof window !== "undefined" && window.localStorage) {
+    const activeSessionId = String(window.localStorage.getItem(LAST_ACTIVE_SESSION_STORAGE_KEY) || "").trim();
+    if (activeSessionId) includeIds.add(activeSessionId);
+  }
+  return {
+    includeIds: Array.from(includeIds).slice(0, 200),
+    pinnedIds: Array.from(new Set(pinnedIds)).slice(0, 200)
+  };
+}
 
 export type RuntimeUiStateSync = {
   schemaVersion?: number;
   projects?: ProjectFolder[];
   sessionProjects?: Record<string, string>;
+  sessionProjectBindings?: Record<string, ProjectSessionBinding>;
   sessionTitles?: Record<string, string>;
   sessionUiState?: Record<string, unknown>;
   pinnedSessions?: Record<string, boolean>;
@@ -361,10 +779,14 @@ export type CapabilityPack = {
   name: string;
   summary: string;
   installMode: "user-or-admin" | "admin-recommended";
+  defaultEnabled?: boolean;
+  readOnly?: boolean;
+  configureOnly?: boolean;
   discoveryOnly?: boolean;
   sourceUrl?: string;
   mirrorUrls?: string[];
   installHint?: string;
+  allowedCommands?: string[];
   estimatedSizeMb?: number;
   state: CapabilityState;
   message: string;
@@ -373,8 +795,11 @@ export type CapabilityPack = {
   missingModules?: string[];
   updatedAt?: string;
   policyMode?: "ask" | "preinstall" | "disabled";
+  installAllowed?: boolean;
+  disabledReason?: string;
   policyStatus?: string;
   policyUpdatedAt?: string;
+  policySource?: string;
 };
 
 export type ProjectFolder = {
@@ -385,6 +810,17 @@ export type ProjectFolder = {
   memoryPath?: string;
   dreamsPath?: string;
   updatedAt: string;
+};
+
+export type ProjectSessionBinding = {
+  projectId: string;
+  projectName: string;
+  projectPath: string;
+  memoryPath?: string;
+  dreamsPath?: string;
+  createdAt?: string;
+  lastUsedAt?: string;
+  source?: "project-new-session" | "project-session-send" | "runtime" | string;
 };
 
 export type MemoryFile = {
@@ -498,8 +934,15 @@ export type StreamItem = {
   arguments?: unknown;
   input?: unknown;
   result?: unknown;
+  qualityEvidence?: QualityEvidence;
   status?: string;
   execution_time?: number;
+  elapsed_seconds?: number;
+  timeout_seconds?: number;
+  previous_deadline_seconds?: number;
+  deadline_seconds?: number;
+  max_seconds?: number;
+  extension_count?: number;
   has_tool_calls?: boolean;
   permission_request_id?: string;
   tool_call_id?: string;
@@ -544,6 +987,44 @@ function countArray(value: unknown) {
   return Array.isArray(value) ? value.length : 0;
 }
 
+function toolNameFromBuiltinExtension(extension: RuntimeExtension) {
+  const id = String(extension.id || "").trim();
+  if (id.startsWith("tool:")) return id.slice("tool:".length).trim();
+  if (extension.type === "builtin_tool") {
+    const providedTool = (extension.provides || [])
+      .map((item) => String(item || "").trim())
+      .find((item) => item && item !== "tool");
+    if (providedTool) return providedTool;
+  }
+  return "";
+}
+
+function extensionDeclaresReadyTool(extension: RuntimeExtension) {
+  const status = String(extension.status || "").trim().toLowerCase();
+  return extension.type === "builtin_tool"
+    && extension.enabled !== false
+    && extension.installed !== false
+    && !["disabled", "error", "missing", "not_loaded"].includes(status);
+}
+
+function mergeBuiltinExtensionTools(tools: RuntimeTool[], extensions: RuntimeExtension[]) {
+  const byName = new Map<string, RuntimeTool>();
+  for (const tool of tools) {
+    const name = String(tool.name || "").trim();
+    if (name) byName.set(name, tool);
+  }
+  for (const extension of extensions) {
+    if (!extensionDeclaresReadyTool(extension)) continue;
+    const name = toolNameFromBuiltinExtension(extension);
+    if (!name || byName.has(name)) continue;
+    byName.set(name, {
+      name,
+      description: extension.description || extension.displayName || ""
+    });
+  }
+  return Array.from(byName.values());
+}
+
 function delay(ms: number) {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
@@ -585,7 +1066,7 @@ async function loadRuntimeCapabilities(): Promise<RuntimeCapabilitySnapshot> {
     apiJson<{ extensions?: RuntimeExtension[]; count?: number; summary?: Record<string, number> }>("/api/extensions").catch(() => ({ extensions: [], count: 0, summary: {} })),
     apiJson<{ channels?: RuntimeChannel[] }>("/api/channels").catch(() => ({ channels: [] }))
   ]).then(([tools, skills, models, extensions, channels]) => {
-    const runtimeTools = Array.isArray(tools.tools) ? tools.tools : [];
+    const apiRuntimeTools = Array.isArray(tools.tools) ? tools.tools : [];
     const runtimeSkills = Array.isArray(skills.skills) ? skills.skills : [];
     const extensionMap = new Map<string, RuntimeExtension>();
     for (const extension of Array.isArray(extensions.extensions) ? extensions.extensions : []) {
@@ -613,6 +1094,7 @@ async function loadRuntimeCapabilities(): Promise<RuntimeCapabilitySnapshot> {
       }
     }
     const runtimeExtensions = Array.from(extensionMap.values());
+    const runtimeTools = mergeBuiltinExtensionTools(apiRuntimeTools, runtimeExtensions);
     const extensionSummary: Record<string, number> = {};
     for (const extension of runtimeExtensions) {
       const type = extension.type || "unknown";
@@ -671,7 +1153,16 @@ export async function checkEnterpriseQuota(estimatedTokens: number): Promise<Ent
   return window.ecorexDesktop.checkEnterpriseQuota(estimatedTokens) as Promise<EnterpriseQuotaCheckResult>;
 }
 
-export async function loadRuntimeSnapshot(): Promise<RuntimeSnapshot> {
+export async function loadRuntimeSnapshot(options: RuntimeSnapshotOptions = {}): Promise<RuntimeSnapshot> {
+  const sessionIncludes = runtimeSnapshotSessionIncludes(options);
+  const sessionsParams = new URLSearchParams({ page: "1", page_size: "40" });
+  if (sessionIncludes.includeIds.length) {
+    sessionsParams.set("include_ids", sessionIncludes.includeIds.join(","));
+  }
+  if (sessionIncludes.pinnedIds.length) {
+    sessionsParams.set("include_pinned", "1");
+    sessionsParams.set("pinned_ids", sessionIncludes.pinnedIds.join(","));
+  }
   try {
     const activeRequestsPromise = apiJson<{
       status?: string;
@@ -693,11 +1184,22 @@ export async function loadRuntimeSnapshot(): Promise<RuntimeSnapshot> {
         staleLocks: [],
         stale_locks: []
       }));
-    const [version, sessions, activeRequests, capabilities] = await Promise.all([
+    const schedulerPromise = apiJson<RuntimeSchedulerProjection & { status?: string; message?: string }>("/api/scheduler")
+      .catch(() => ({
+        enabled: false,
+        initialized: false,
+        running: false,
+        serviceStatus: "unavailable",
+        tasks: [],
+        taskCount: 0,
+        counts: { total: 0, enabled: 0, disabled: 0, error: 0 }
+      } satisfies RuntimeSchedulerProjection));
+    const [version, sessions, activeRequests, capabilities, scheduler] = await Promise.all([
       apiJson<{ version?: string; releaseNotes?: RuntimeReleaseNotes }>("/api/version"),
-      apiJson<{ sessions?: RuntimeSession[]; total?: number; message?: string }>("/api/sessions?page=1&page_size=40"),
+      apiJson<{ sessions?: RuntimeSession[]; total?: number; message?: string }>(`/api/sessions?${sessionsParams.toString()}`),
       activeRequestsPromise,
-      loadRuntimeCapabilities()
+      loadRuntimeCapabilities(),
+      schedulerPromise
     ]);
 
     const runtimeSessions = Array.isArray(sessions.sessions) ? sessions.sessions : [];
@@ -738,7 +1240,8 @@ export async function loadRuntimeSnapshot(): Promise<RuntimeSnapshot> {
       currentModel: capabilities.currentModel,
       tools: capabilities.tools,
       skills: capabilities.skills,
-      modelCapabilities: capabilities.modelCapabilities
+      modelCapabilities: capabilities.modelCapabilities,
+      scheduler
     };
   } catch (error) {
     return {
@@ -757,7 +1260,16 @@ export async function loadRuntimeSnapshot(): Promise<RuntimeSnapshot> {
       modelsCount: 0,
       tools: [],
       skills: [],
-      modelCapabilities: {}
+      modelCapabilities: {},
+      scheduler: {
+        enabled: false,
+        initialized: false,
+        running: false,
+        serviceStatus: "unavailable",
+        tasks: [],
+        taskCount: 0,
+        counts: { total: 0, enabled: 0, disabled: 0, error: 0 }
+      }
     };
   }
 }
@@ -802,6 +1314,7 @@ export async function sendChatMessage(input: {
   message: string;
   visibleMessage?: string;
   hiddenContext?: string;
+  projectContext?: ProjectSessionBinding | null;
   attachments?: FileAttachment[];
   lang?: string;
   internalAction?: boolean;
@@ -835,6 +1348,7 @@ export async function sendChatMessage(input: {
       message: input.message,
       visible_message: input.visibleMessage ?? input.message,
       hidden_context: input.hiddenContext || "",
+      project_context_meta: input.projectContext || null,
       internal_action: Boolean(input.internalAction),
       stream: true,
       timestamp: new Date().toISOString(),
@@ -895,6 +1409,7 @@ export async function loadSessionHistoryWithMeta(sessionId: string): Promise<Run
   const result = await apiJson<{
     messages?: RuntimeMessage[];
     context_start_seq?: number;
+    project_context?: ProjectSessionBinding | null;
     total?: number;
     page?: number;
     page_size?: number;
@@ -905,6 +1420,7 @@ export async function loadSessionHistoryWithMeta(sessionId: string): Promise<Run
   return {
     messages: Array.isArray(result.messages) ? result.messages : [],
     contextStartSeq: typeof result.context_start_seq === "number" ? result.context_start_seq : 0,
+    projectContext: result.project_context || null,
     total: result.total,
     page: result.page,
     pageSize: result.page_size,
@@ -914,6 +1430,37 @@ export async function loadSessionHistoryWithMeta(sessionId: string): Promise<Run
 
 export async function loadSessionHistory(sessionId: string): Promise<RuntimeMessage[]> {
   return (await loadSessionHistoryWithMeta(sessionId)).messages;
+}
+
+export async function loadRuntimeProjection(input: RuntimeProjectionInput): Promise<RuntimeProjectionResult> {
+  const params = new URLSearchParams();
+  if (input.mode === "request") {
+    params.set("request_id", input.requestId);
+    if (input.sessionId) params.set("session_id", input.sessionId);
+    if (typeof input.limit === "number") params.set("limit", String(Math.max(1, input.limit)));
+  } else {
+    params.set("session_id", input.sessionId);
+    if (typeof input.afterEventId === "number") params.set("after_event_id", String(Math.max(0, input.afterEventId)));
+    if (typeof input.limit === "number") params.set("limit", String(Math.max(1, input.limit)));
+  }
+  const result = await apiJson<{
+    mode?: "request" | "session";
+    latest_event_id?: number;
+    projection?: RuntimeRequestProjection | RuntimeSessionProjection;
+  }>(`/api/runtime-projection?${params.toString()}`);
+  const latestEventId = typeof result.latest_event_id === "number" ? result.latest_event_id : 0;
+  if (input.mode === "session") {
+    return {
+      mode: "session",
+      latestEventId,
+      projection: (result.projection || {}) as RuntimeSessionProjection
+    };
+  }
+  return {
+    mode: "request",
+    latestEventId,
+    projection: (result.projection || {}) as RuntimeRequestProjection
+  };
 }
 
 export async function generateSessionTitle(input: { sessionId: string; userMessage: string; assistantReply?: string }) {
@@ -1128,11 +1675,18 @@ export async function listCapabilityPacks(): Promise<CapabilityPack[]> {
 }
 
 function capabilityPacksFromRuntime(payload: Record<string, unknown>): CapabilityPack[] {
-  const rawAbilities = Array.isArray(payload.abilities)
-    ? payload.abilities
-    : Array.isArray((payload.result as Record<string, unknown> | undefined)?.abilities)
-      ? ((payload.result as Record<string, unknown>).abilities as unknown[])
-      : [];
+  const abilitiesPayload = payload.abilities;
+  const resultPayload = payload.result as Record<string, unknown> | undefined;
+  const resultAbilitiesPayload = resultPayload?.abilities;
+  const rawAbilities = Array.isArray(abilitiesPayload)
+    ? abilitiesPayload
+    : abilitiesPayload && typeof abilitiesPayload === "object" && Array.isArray((abilitiesPayload as Record<string, unknown>).abilities)
+      ? ((abilitiesPayload as Record<string, unknown>).abilities as unknown[])
+      : Array.isArray(resultAbilitiesPayload)
+        ? resultAbilitiesPayload
+        : resultAbilitiesPayload && typeof resultAbilitiesPayload === "object" && Array.isArray((resultAbilitiesPayload as Record<string, unknown>).abilities)
+          ? ((resultAbilitiesPayload as Record<string, unknown>).abilities as unknown[])
+          : [];
   return rawAbilities
     .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
     .filter((item) => Boolean(item.agentCanInstall || item.packId || item.kind === "capability-pack"))
@@ -1149,11 +1703,19 @@ function capabilityPacksFromRuntime(payload: Record<string, unknown>): Capabilit
         : Array.isArray(state.mirrorUrls)
           ? state.mirrorUrls.filter((url): url is string => typeof url === "string")
           : undefined;
+      const allowedCommands = Array.isArray(item.allowedCommands)
+        ? item.allowedCommands.filter((command): command is string => typeof command === "string")
+        : Array.isArray(state.allowedCommands)
+          ? state.allowedCommands.filter((command): command is string => typeof command === "string")
+          : undefined;
       return {
         id,
         name: String(item.label || id),
         summary: String(item.notes || item.defaultPolicy || ""),
         installMode: "user-or-admin",
+        defaultEnabled: item.defaultEnabled === true || state.defaultEnabled === true,
+        readOnly: item.readOnly === true || state.readOnly === true,
+        configureOnly: item.configureOnly === true || state.configureOnly === true,
         discoveryOnly: item.discoveryOnly === true || state.discoveryOnly === true,
         sourceUrl: typeof item.sourceUrl === "string"
           ? item.sourceUrl
@@ -1166,12 +1728,20 @@ function capabilityPacksFromRuntime(payload: Record<string, unknown>): Capabilit
           : typeof state.installHint === "string"
             ? state.installHint
             : undefined,
+        allowedCommands,
         state: capabilityState,
         message: String(state.message || (installed ? "能力包已安装" : "点击安装后由当前会话 agent 处理")),
         installed,
         logPath: typeof state.logPath === "string" ? state.logPath : undefined,
         updatedAt: typeof state.updatedAt === "string" ? state.updatedAt : undefined,
-        policyMode: "ask"
+        policyMode: item.policyMode === "disabled" || item.policyMode === "preinstall" || item.policyMode === "ask"
+          ? item.policyMode
+          : "ask",
+        installAllowed: item.installAllowed !== false,
+        disabledReason: typeof item.disabledReason === "string" ? item.disabledReason : undefined,
+        policyStatus: typeof item.policyStatus === "string" ? item.policyStatus : undefined,
+        policyUpdatedAt: typeof item.policyUpdatedAt === "string" ? item.policyUpdatedAt : undefined,
+        policySource: typeof item.policySource === "string" ? item.policySource : undefined
       } satisfies CapabilityPack;
     })
     .filter((pack) => Boolean(pack.id));
@@ -1191,10 +1761,38 @@ export async function setSkillEnabled(name: string, enabled: boolean) {
   return result;
 }
 
+export async function loadSchedulerProjection(): Promise<RuntimeSchedulerProjection> {
+  const result = await apiJson<RuntimeSchedulerProjection & { status?: string }>("/api/scheduler");
+  return result;
+}
+
+export async function updateScheduler(input: Record<string, unknown>): Promise<RuntimeSchedulerProjection & { status?: string; message?: string }> {
+  return apiJson<RuntimeSchedulerProjection & { status?: string; message?: string }>("/api/scheduler", "POST", input);
+}
+
+export async function loadExternalConnections(): Promise<ExternalConnectionsPayload> {
+  return apiJson<ExternalConnectionsPayload>("/api/external-connections");
+}
+
+export async function updateExternalConnection(platform: string, input: Record<string, unknown>): Promise<ExternalConnectionActionResponse> {
+  const id = String(platform || "").trim();
+  if (!id) {
+    throw new Error("external connection platform is required");
+  }
+  invalidateRuntimeCapabilities();
+  const result = await apiJson<ExternalConnectionActionResponse>(
+    `/api/external-connections/${encodeURIComponent(id)}/actions`,
+    "POST",
+    input
+  );
+  invalidateRuntimeCapabilities();
+  return result;
+}
+
 export async function enableDefaultSkills(skills: RuntimeSkill[]) {
   const disabledBuiltIns = skills.filter((skill) => {
     if (!skill.name || skill.enabled !== false) return false;
-    return skill.source === "builtin" || skill.source === "custom";
+    return skill.source_group === "builtin" || skill.sourceGroup === "builtin" || skill.source === "builtin";
   });
   await Promise.all(disabledBuiltIns.map((skill) => setSkillEnabled(skill.name || "", true).catch(() => undefined)));
   return disabledBuiltIns.length;
@@ -1275,13 +1873,25 @@ export function hasMessageStreamCursor(requestId: string) {
   return Boolean(requestId && streamLastEventIds.has(requestId));
 }
 
+function isTerminalVoiceStreamItem(item: StreamItem) {
+  if (item.type !== "voice_attach") return false;
+  const record = item as StreamItem & { terminal?: unknown; final?: unknown; done?: unknown };
+  return record.terminal === true
+    || record.final === true
+    || record.done === true
+    || item.status === "done"
+    || item.status === "completed";
+}
+
 export function openMessageStream(input: {
   requestId: string;
+  sessionId?: string;
   webPort: number;
   onItem: (item: StreamItem) => void;
   onError: () => void;
 }) {
   const params = new URLSearchParams({ request_id: input.requestId });
+  if (input.sessionId) params.set("session_id", input.sessionId);
   const lastEventId = streamLastEventIds.get(input.requestId);
   if (lastEventId) params.set("last_event_id", lastEventId);
   // Electron injects X-EcoreX-Runtime-Token for loopback EventSource
@@ -1292,7 +1902,7 @@ export function openMessageStream(input: {
   let lastEventAt = Date.now();
   let firstTransientErrorAt = 0;
   let terminal = false;
-  const STREAM_TRANSIENT_ERROR_GRACE_MS = 12_000;
+  const STREAM_TRANSIENT_ERROR_GRACE_MS = 75_000;
   events.onopen = () => {
     lastEventAt = Date.now();
     firstTransientErrorAt = 0;
@@ -1303,7 +1913,7 @@ export function openMessageStream(input: {
       firstTransientErrorAt = 0;
       rememberStreamCursor(input.requestId, event.lastEventId);
       const item = JSON.parse(event.data) as StreamItem;
-      if (item.type === "done" || item.type === "error" || item.type === "cancelled" || item.type === "interrupted" || item.type === "replay_gap" || item.type === "voice_attach") {
+      if (item.type === "done" || item.type === "error" || item.type === "cancelled" || item.type === "interrupted" || item.type === "replay_gap" || isTerminalVoiceStreamItem(item)) {
         terminal = true;
         scheduleStreamCursorCleanup(input.requestId);
       }
@@ -1318,7 +1928,6 @@ export function openMessageStream(input: {
       firstTransientErrorAt = firstTransientErrorAt || now;
       if (
         events.readyState !== EventSource.CLOSED
-        && now - lastEventAt < STREAM_TRANSIENT_ERROR_GRACE_MS
         && now - firstTransientErrorAt < STREAM_TRANSIENT_ERROR_GRACE_MS
       ) {
         return;

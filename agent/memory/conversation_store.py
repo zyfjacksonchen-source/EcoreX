@@ -23,6 +23,38 @@ from typing import Any, Dict, List, Optional
 from common.log import logger
 
 
+class ConversationSessionOwnerConflict(ValueError):
+    """Raised when a session write attempts to change canonical ownership."""
+
+    code = "SESSION_OWNER_CONFLICT"
+
+    def __init__(self, reason: str = "session_owner_conflict"):
+        self.reason = reason
+        super().__init__("session owner conflict")
+
+
+def _normalize_include_session_ids(values: Any, *, limit: int = 200) -> List[str]:
+    if values is None:
+        return []
+    if isinstance(values, str):
+        raw_values = re.split(r"[\s,]+", values)
+    elif isinstance(values, (list, tuple, set)):
+        raw_values = list(values)
+    else:
+        raw_values = [values]
+    normalized: List[str] = []
+    seen = set()
+    for value in raw_values:
+        session_id = str(value or "").strip()
+        if not session_id or session_id in seen:
+            continue
+        seen.add(session_id)
+        normalized.append(session_id)
+        if len(normalized) >= limit:
+            break
+    return normalized
+
+
 # ---------------------------------------------------------------------------
 # Schema
 # ---------------------------------------------------------------------------
@@ -34,6 +66,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     title             TEXT    NOT NULL DEFAULT '',
     title_locked      INTEGER NOT NULL DEFAULT 0,
     context_start_seq INTEGER NOT NULL DEFAULT 0,
+    project_id        TEXT    NOT NULL DEFAULT '',
+    project_name      TEXT    NOT NULL DEFAULT '',
+    project_path      TEXT    NOT NULL DEFAULT '',
+    project_memory_path TEXT  NOT NULL DEFAULT '',
+    project_dreams_path TEXT  NOT NULL DEFAULT '',
+    metadata_json     TEXT    NOT NULL DEFAULT '',
     created_at        INTEGER NOT NULL,
     last_active       INTEGER NOT NULL,
     msg_count         INTEGER NOT NULL DEFAULT 0
@@ -76,6 +114,15 @@ ALTER TABLE sessions ADD COLUMN title_locked INTEGER NOT NULL DEFAULT 0;
 _MIGRATION_ADD_CONTEXT_START_SEQ = """
 ALTER TABLE sessions ADD COLUMN context_start_seq INTEGER NOT NULL DEFAULT 0;
 """
+
+_SESSION_PROJECT_MIGRATIONS = {
+    "project_id": "ALTER TABLE sessions ADD COLUMN project_id TEXT NOT NULL DEFAULT '';",
+    "project_name": "ALTER TABLE sessions ADD COLUMN project_name TEXT NOT NULL DEFAULT '';",
+    "project_path": "ALTER TABLE sessions ADD COLUMN project_path TEXT NOT NULL DEFAULT '';",
+    "project_memory_path": "ALTER TABLE sessions ADD COLUMN project_memory_path TEXT NOT NULL DEFAULT '';",
+    "project_dreams_path": "ALTER TABLE sessions ADD COLUMN project_dreams_path TEXT NOT NULL DEFAULT '';",
+    "metadata_json": "ALTER TABLE sessions ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '';",
+}
 
 # Generic JSON sidecar for per-message attachments (TTS audio URL, future use).
 # Always optional — readers must tolerate missing column / empty / invalid JSON.
@@ -213,6 +260,113 @@ def _extract_tool_results(content: Any) -> Dict[str, dict]:
 
 def _display_text_key(value: str) -> str:
     return " ".join(str(value or "").split())
+
+
+def _normalize_project_context(value: Any) -> Dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    project_id = str(value.get("projectId") or value.get("project_id") or "").strip()
+    project_path = str(value.get("projectPath") or value.get("project_path") or "").strip()
+    if not project_id and not project_path:
+        return {}
+    project_name = str(value.get("projectName") or value.get("project_name") or project_id or "").strip()
+    return {
+        "project_id": project_id[:256],
+        "project_name": project_name[:512],
+        "project_path": project_path[:4096],
+        "project_memory_path": str(value.get("memoryPath") or value.get("memory_path") or "").strip()[:4096],
+        "project_dreams_path": str(value.get("dreamsPath") or value.get("dreams_path") or "").strip()[:4096],
+    }
+
+
+def _session_project_payload(row: sqlite3.Row | tuple | None, offset: int = 0) -> Dict[str, Any]:
+    if not row:
+        return {}
+    values = row[offset: offset + 5]
+    project_id, project_name, project_path, memory_path, dreams_path = [str(item or "") for item in values]
+    if not (project_id or project_path):
+        return {}
+    return {
+        "projectId": project_id,
+        "projectName": project_name or project_id,
+        "projectPath": project_path,
+        "memoryPath": memory_path,
+        "dreamsPath": dreams_path,
+    }
+
+
+def _canonical_project_owner(project: Dict[str, str]) -> tuple[str, str]:
+    project_id = str(project.get("project_id") or project.get("projectId") or "").strip()
+    project_path = str(project.get("project_path") or project.get("projectPath") or "").strip()
+    if project_id:
+        return ("id", project_id)
+    if project_path:
+        return ("path", str(Path(project_path).expanduser()))
+    return ("general", "")
+
+
+def _session_row_project(row: sqlite3.Row | tuple | None, offset: int = 0) -> Dict[str, str]:
+    if not row:
+        return {}
+    values = row[offset: offset + 5]
+    project_id, project_name, project_path, memory_path, dreams_path = [str(item or "") for item in values]
+    if not (project_id or project_path):
+        return {}
+    return {
+        "project_id": project_id,
+        "project_name": project_name,
+        "project_path": project_path,
+        "project_memory_path": memory_path,
+        "project_dreams_path": dreams_path,
+    }
+
+
+def _project_owners_match(left: Dict[str, str], right: Dict[str, str]) -> bool:
+    return _canonical_project_owner(left) == _canonical_project_owner(right)
+
+
+def _attachment_history_context(extras: Dict[str, Any]) -> str:
+    raw = extras.get("attachments") if isinstance(extras, dict) else None
+    if not isinstance(raw, list):
+        return ""
+    refs: List[str] = []
+    for item in raw[:12]:
+        if not isinstance(item, dict):
+            continue
+        file_path = str(item.get("file_path") or item.get("path") or "").strip()
+        if not file_path:
+            continue
+        file_type = str(item.get("file_type") or item.get("type") or "file").strip().lower()
+        if file_type == "image":
+            label = "历史图片"
+        elif file_type == "video":
+            label = "历史视频"
+        elif file_type == "audio":
+            label = "历史音频"
+        elif file_type == "directory":
+            label = "历史目录"
+        else:
+            label = "历史文件"
+        refs.append(f"[{label}: {file_path[:4096]}]")
+    if not refs:
+        return ""
+    return "\n".join(refs)
+
+
+def _content_with_attachment_history_context(content: Any, extras: Dict[str, Any]) -> Any:
+    attachment_context = _attachment_history_context(extras)
+    if not attachment_context:
+        return content
+    if isinstance(content, str):
+        return f"{content.rstrip()}\n{attachment_context}".strip()
+    if isinstance(content, list):
+        copied = [dict(block) if isinstance(block, dict) else block for block in content]
+        for block in reversed(copied):
+            if isinstance(block, dict) and block.get("type") == "text":
+                block["text"] = f"{str(block.get('text') or '').rstrip()}\n{attachment_context}".strip()
+                return copied
+        return [{"type": "text", "text": attachment_context}, *copied]
+    return content
 
 
 def _group_into_display_turns(
@@ -465,20 +619,39 @@ class ConversationStore:
             try:
                 # Respect context_start_seq: only load messages at or after the boundary
                 ctx_row = conn.execute(
-                    "SELECT context_start_seq FROM sessions WHERE session_id = ?",
+                    """
+                    SELECT context_start_seq, project_id, project_name, project_path,
+                           project_memory_path, project_dreams_path
+                    FROM sessions WHERE session_id = ?
+                    """,
                     (session_id,),
                 ).fetchone()
                 ctx_start = ctx_row[0] if ctx_row else 0
+                project_payload = _session_project_payload(ctx_row, 1)
 
-                rows = conn.execute(
-                    """
-                    SELECT seq, role, content
-                    FROM messages
-                    WHERE session_id = ? AND seq >= ?
-                    ORDER BY seq DESC
-                    """,
-                    (session_id, ctx_start),
-                ).fetchall()
+                try:
+                    rows = conn.execute(
+                        """
+                        SELECT seq, role, content, extras
+                        FROM messages
+                        WHERE session_id = ? AND seq >= ?
+                        ORDER BY seq DESC
+                        """,
+                        (session_id, ctx_start),
+                    ).fetchall()
+                except sqlite3.OperationalError:
+                    rows = [
+                        (seq, role, content, "")
+                        for seq, role, content in conn.execute(
+                            """
+                            SELECT seq, role, content
+                            FROM messages
+                            WHERE session_id = ? AND seq >= ?
+                            ORDER BY seq DESC
+                            """,
+                            (session_id, ctx_start),
+                        ).fetchall()
+                    ]
             finally:
                 conn.close()
 
@@ -486,7 +659,7 @@ class ConversationStore:
             return []
 
         visible_turn_seqs: List[int] = []
-        for seq, role, raw_content in rows:
+        for seq, role, raw_content, _raw_extras in rows:
             if role != "user":
                 continue
             try:
@@ -502,13 +675,21 @@ class ConversationStore:
             cutoff_seq = visible_turn_seqs[max_turns - 1]
 
         result = []
-        for seq, role, raw_content in reversed(rows):
+        for seq, role, raw_content, raw_extras in reversed(rows):
             if cutoff_seq is not None and seq < cutoff_seq:
                 continue
             try:
                 content = json.loads(raw_content)
             except Exception:
                 content = raw_content
+            try:
+                extras = json.loads(raw_extras) if raw_extras else {}
+                if not isinstance(extras, dict):
+                    extras = {}
+            except Exception:
+                extras = {}
+            if role == "user":
+                content = _content_with_attachment_history_context(content, extras)
             # Strip thinking blocks — they are stored for UI display only
             if role == "assistant" and isinstance(content, list):
                 content = [b for b in content if b.get("type") != "thinking"]
@@ -520,6 +701,7 @@ class ConversationStore:
         session_id: str,
         messages: List[Dict[str, Any]],
         channel_type: str = "",
+        project_context: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
         Append new messages to a session's history.
@@ -537,10 +719,22 @@ class ConversationStore:
             return
 
         now = int(time.time())
+        normalized_project = _normalize_project_context(project_context)
         with self._lock:
             conn = self._connect()
             try:
                 with conn:
+                    existing = conn.execute(
+                        """
+                        SELECT msg_count, project_id, project_name, project_path,
+                               project_memory_path, project_dreams_path
+                        FROM sessions
+                        WHERE session_id = ?
+                        """,
+                        (session_id,),
+                    ).fetchone()
+                    self._raise_on_owner_conflict(existing, normalized_project)
+
                     # INSERT OR IGNORE creates the row on first visit;
                     # the UPDATE always refreshes last_active.
                     # Avoids ON CONFLICT...DO UPDATE (requires SQLite >= 3.24).
@@ -556,6 +750,26 @@ class ConversationStore:
                         "UPDATE sessions SET last_active = ? WHERE session_id = ?",
                         (now, session_id),
                     )
+                    if normalized_project:
+                        conn.execute(
+                            """
+                            UPDATE sessions
+                            SET project_id = ?,
+                                project_name = ?,
+                                project_path = ?,
+                                project_memory_path = ?,
+                                project_dreams_path = ?
+                            WHERE session_id = ?
+                            """,
+                            (
+                                normalized_project.get("project_id", ""),
+                                normalized_project.get("project_name", ""),
+                                normalized_project.get("project_path", ""),
+                                normalized_project.get("project_memory_path", ""),
+                                normalized_project.get("project_dreams_path", ""),
+                                session_id,
+                            ),
+                        )
 
                     # Determine starting seq for the new batch.
                     row = conn.execute(
@@ -1192,10 +1406,16 @@ class ConversationStore:
             conn = self._connect()
             try:
                 ctx_row = conn.execute(
-                    "SELECT context_start_seq FROM sessions WHERE session_id = ?",
+                    """
+                    SELECT context_start_seq, project_id, project_name, project_path,
+                           project_memory_path, project_dreams_path
+                    FROM sessions
+                    WHERE session_id = ?
+                    """,
                     (session_id,),
                 ).fetchone()
                 ctx_start = ctx_row[0] if ctx_row else 0
+                project_payload = _session_project_payload(ctx_row, offset=1)
 
                 visible_user_seqs_desc: List[int] = []
                 for seq, raw_content in conn.execute(
@@ -1220,6 +1440,7 @@ class ConversationStore:
                     return {
                         "messages": [],
                         "context_start_seq": ctx_start,
+                        "project_context": project_payload,
                         "total": len(visible_user_seqs_desc) * 2,
                         "page": page,
                         "page_size": page_size,
@@ -1308,10 +1529,51 @@ class ConversationStore:
         return {
             "messages": page_items,
             "context_start_seq": ctx_start,
+            "project_context": project_payload,
             "total": total,
             "page": page,
             "page_size": page_size,
             "has_more": has_more,
+        }
+
+    def validate_session_owner(
+        self,
+        session_id: str,
+        *,
+        channel_type: str = "",
+        project_context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Validate a pending session write without mutating persistent state."""
+        normalized_project = _normalize_project_context(project_context)
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    """
+                    SELECT msg_count, project_id, project_name, project_path,
+                           project_memory_path, project_dreams_path
+                    FROM sessions
+                    WHERE session_id = ?
+                    """,
+                    (session_id,),
+                ).fetchone()
+                self._raise_on_owner_conflict(row, normalized_project)
+            finally:
+                conn.close()
+        row_project = _session_project_payload(row, 1) if row else {}
+        pending_project = _session_project_payload((
+            normalized_project.get("project_id", ""),
+            normalized_project.get("project_name", ""),
+            normalized_project.get("project_path", ""),
+            normalized_project.get("project_memory_path", ""),
+            normalized_project.get("project_dreams_path", ""),
+        ), 0) if normalized_project else {}
+        project_payload = row_project or pending_project
+        return {
+            "status": "ok",
+            "channel_type": channel_type,
+            "scope": "project" if project_payload else "general",
+            "project": project_payload or None,
         }
 
     def list_sessions(
@@ -1319,6 +1581,7 @@ class ConversationStore:
         channel_type: Optional[str] = None,
         page: int = 1,
         page_size: int = 50,
+        include_session_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         List sessions ordered by last_active DESC, with optional channel_type filter.
@@ -1333,6 +1596,12 @@ class ConversationStore:
             }
         """
         page = max(1, page)
+        page_size = max(1, min(int(page_size or 50), 500))
+        include_ids = _normalize_include_session_ids(include_session_ids)
+        select_columns = """
+                        SELECT session_id, title, created_at, last_active, msg_count, title_locked,
+                               project_id, project_name, project_path, project_memory_path, project_dreams_path
+        """
         with self._lock:
             conn = self._connect()
             try:
@@ -1342,8 +1611,8 @@ class ConversationStore:
                         (channel_type,),
                     ).fetchone()[0]
                     rows = conn.execute(
-                        """
-                        SELECT session_id, title, created_at, last_active, msg_count, title_locked
+                        f"""
+                        {select_columns}
                         FROM sessions
                         WHERE channel_type = ?
                         ORDER BY last_active DESC
@@ -1356,34 +1625,72 @@ class ConversationStore:
                         "SELECT COUNT(*) FROM sessions",
                     ).fetchone()[0]
                     rows = conn.execute(
-                        """
-                        SELECT session_id, title, created_at, last_active, msg_count, title_locked
+                        f"""
+                        {select_columns}
                         FROM sessions
                         ORDER BY last_active DESC
                         LIMIT ? OFFSET ?
                         """,
                         (page_size, (page - 1) * page_size),
                     ).fetchall()
+                row_session_ids = {str(row[0] or "") for row in rows}
+                missing_include_ids = [session_id for session_id in include_ids if session_id not in row_session_ids]
+                included_rows = []
+                if missing_include_ids:
+                    placeholders = ",".join("?" for _ in missing_include_ids)
+                    if channel_type:
+                        included_rows = conn.execute(
+                            f"""
+                            {select_columns}
+                            FROM sessions
+                            WHERE channel_type = ? AND session_id IN ({placeholders})
+                            ORDER BY last_active DESC
+                            """,
+                            (channel_type, *missing_include_ids),
+                        ).fetchall()
+                    else:
+                        included_rows = conn.execute(
+                            f"""
+                            {select_columns}
+                            FROM sessions
+                            WHERE session_id IN ({placeholders})
+                            ORDER BY last_active DESC
+                            """,
+                            tuple(missing_include_ids),
+                        ).fetchall()
+                    rows = list(rows) + list(included_rows)
             finally:
                 conn.close()
 
-        sessions = [
-            {
+        sessions = []
+        for r in rows:
+            project_payload = _session_project_payload(r, 6)
+            scope = "project" if project_payload else "general"
+            sessions.append({
                 "session_id": r[0],
                 "title": r[1],
                 "created_at": r[2],
                 "last_active": r[3],
+                "lastActivityAt": r[3],
                 "msg_count": r[4],
                 "title_locked": bool(r[5]),
                 "titleLocked": bool(r[5]),
-            }
-            for r in rows
-        ]
+                "scope": scope,
+                "project": project_payload or None,
+                "sourceRevision": "conversation-store-v1",
+                "provenance": ["conversation_store"],
+                **project_payload,
+            })
         return {
             "sessions": sessions,
             "total": total,
             "page": page,
             "page_size": page_size,
+            "included_session_ids": [
+                str(row[0] or "")
+                for row in rows
+                if str(row[0] or "") in include_ids
+            ],
             "has_more": (page - 1) * page_size + page_size < total,
         }
 
@@ -1465,6 +1772,22 @@ class ConversationStore:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _raise_on_owner_conflict(
+        self,
+        existing_row: sqlite3.Row | tuple | None,
+        normalized_project: Dict[str, str],
+    ) -> None:
+        if not existing_row or not normalized_project:
+            return
+        msg_count = int(existing_row[0] or 0)
+        existing_project = _session_row_project(existing_row, 1)
+        if existing_project:
+            if not _project_owners_match(existing_project, normalized_project):
+                raise ConversationSessionOwnerConflict("project_owner_mismatch")
+            return
+        if msg_count > 0:
+            raise ConversationSessionOwnerConflict("general_to_project_owner_change")
+
     def _init_db(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = self._connect()
@@ -1509,6 +1832,15 @@ class ConversationStore:
                 logger.info("[ConversationStore] Migrated: added context_start_seq column")
             except Exception as e:
                 logger.warning(f"[ConversationStore] Migration (context_start_seq) failed: {e}")
+        for column, ddl in _SESSION_PROJECT_MIGRATIONS.items():
+            if column in cols:
+                continue
+            try:
+                conn.execute(ddl)
+                conn.commit()
+                logger.info(f"[ConversationStore] Migrated: added sessions.{column} column")
+            except Exception as e:
+                logger.warning(f"[ConversationStore] Migration ({column}) failed: {e}")
 
         msg_cols = {
             row[1]

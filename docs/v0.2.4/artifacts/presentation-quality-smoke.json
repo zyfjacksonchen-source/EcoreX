@@ -1,0 +1,63 @@
+{
+  "status": "PASS",
+  "renderBackend": "provided-redacted-metadata",
+  "actualRender": {
+    "status": "unavailable",
+    "errorType": "OfficePdfRuntimeError"
+  },
+  "actualRenderAvailable": false,
+  "syntheticRenderRejected": true,
+  "cleanStatus": "fail",
+  "cleanFailedChecks": [
+    "render-preview"
+  ],
+  "badStatus": "fail",
+  "badFailedChecks": [
+    "font-size-check",
+    "layout-bounds",
+    "overlap-check",
+    "render-preview"
+  ],
+  "requiredBadFailures": [
+    "font-size-check",
+    "layout-bounds",
+    "overlap-check",
+    "render-preview"
+  ],
+  "cleanSummary": {
+    "slideCount": 2,
+    "slidesInspected": 2,
+    "emptySlideCount": 0,
+    "missingTitleCount": 0,
+    "titleWrapRiskCount": 0,
+    "outOfBoundsCount": 0,
+    "overlapWarningCount": 0,
+    "fontViolationCount": 0,
+    "fontUnspecifiedRunCount": 0,
+    "chartCount": 1,
+    "chartIssueCount": 0,
+    "pictureCount": 0,
+    "tableCount": 0,
+    "textShapeCount": 4,
+    "truncated": false
+  },
+  "badSummary": {
+    "slideCount": 1,
+    "slidesInspected": 1,
+    "emptySlideCount": 0,
+    "missingTitleCount": 0,
+    "titleWrapRiskCount": 0,
+    "outOfBoundsCount": 1,
+    "overlapWarningCount": 1,
+    "fontViolationCount": 3,
+    "fontUnspecifiedRunCount": 1,
+    "chartCount": 0,
+    "chartIssueCount": 0,
+    "pictureCount": 0,
+    "tableCount": 0,
+    "textShapeCount": 4,
+    "truncated": false
+  },
+  "leakCount": 0,
+  "redacted": true
+}

@@ -95,6 +95,27 @@ class ToolManager:
         if not hasattr(self, '_mcp_active_configs'):
             # server_name -> normalized config dict, for diff-based reload.
             self._mcp_active_configs: dict = {}
+        if not hasattr(self, '_registry_errors'):
+            self._registry_errors: list = []
+        if not hasattr(self, '_missing_configured_tools'):
+            self._missing_configured_tools: list = []
+
+    def _record_registry_error(self, source: str, exc_or_message: Any) -> None:
+        if isinstance(exc_or_message, BaseException):
+            error_type = exc_or_message.__class__.__name__
+            message = str(exc_or_message)
+        else:
+            error_type = "Error"
+            message = str(exc_or_message)
+        entry = {
+            "source": str(source or "unknown"),
+            "errorType": error_type,
+            "message": message,
+        }
+        if entry not in self._registry_errors:
+            self._registry_errors.append(entry)
+        if len(self._registry_errors) > 50:
+            self._registry_errors = self._registry_errors[-50:]
 
     def load_tools(self, tools_dir: str = "", config_dict=None):
         """
@@ -161,6 +182,7 @@ class ToolManager:
                                     self.tool_classes[tool_name] = cls
                                     logger.debug(f"Loaded tool: {tool_name} from class {class_name}")
                                 except ImportError as e:
+                                    self._record_registry_error(class_name, e)
                                     # Handle missing dependencies with helpful messages
                                     error_msg = str(e)
                                     if "playwright" in error_msg:
@@ -178,16 +200,20 @@ class ToolManager:
                                     else:
                                         logger.warning(f"[ToolManager] {cls.__name__} not loaded due to missing dependency: {error_msg}")
                                 except Exception as e:
+                                    self._record_registry_error(class_name, e)
                                     logger.error(f"Error initializing tool class {cls.__name__}: {e}")
                     except Exception as e:
+                        self._record_registry_error(class_name, e)
                         logger.error(f"Error importing class {class_name}: {e}")
 
                 return len(self.tool_classes) > 0
             return False
-        except ImportError:
+        except ImportError as e:
+            self._record_registry_error("agent.tools", e)
             logger.warning("Could not import agent.tools package")
             return False
         except Exception as e:
+            self._record_registry_error("agent.tools", e)
             logger.error(f"Error loading tools from __init__.__all__: {e}")
             return False
 
@@ -231,6 +257,7 @@ class ToolManager:
                                 # Store the class, not the instance
                                 self.tool_classes[tool_name] = cls
                             except ImportError as e:
+                                self._record_registry_error(attr_name, e)
                                 # Handle missing dependencies with helpful messages
                                 error_msg = str(e)
                                 if "playwright" in error_msg:
@@ -248,8 +275,10 @@ class ToolManager:
                                 else:
                                     logger.warning(f"[ToolManager] {cls.__name__} not loaded due to missing dependency: {error_msg}")
                             except Exception as e:
+                                self._record_registry_error(attr_name, e)
                                 logger.error(f"Error initializing tool class {cls.__name__}: {e}")
             except Exception as e:
+                self._record_registry_error(str(py_file), e)
                 print(f"Error importing module {py_file}: {e}")
 
     def _configure_tools_from_config(self, config_dict=None):
@@ -270,6 +299,7 @@ class ToolManager:
                     missing_tools.append(tool_name)
 
             # If there are missing tools, record warnings
+            self._missing_configured_tools = list(missing_tools)
             if missing_tools:
                 for tool_name in missing_tools:
                     if tool_name == "browser":
@@ -289,6 +319,7 @@ class ToolManager:
                         logger.warning(f"[ToolManager] Tool '{tool_name}' is configured but could not be loaded.")
 
         except Exception as e:
+            self._record_registry_error("tool_config", e)
             logger.error(f"Error configuring tools from config: {e}")
 
     def _mcp_json_path(self) -> str:
@@ -634,20 +665,69 @@ class ToolManager:
         result = {}
         for name, tool_class in self.tool_classes.items():
             # Create a temporary instance to get schema
-            temp_instance = tool_class()
-            result[name] = {
-                "description": temp_instance.description,
-                "parameters": temp_instance.get_json_schema()
-            }
+            try:
+                temp_instance = tool_class()
+                result[name] = {
+                    "description": temp_instance.description,
+                    "parameters": temp_instance.get_json_schema()
+                }
+            except Exception as e:
+                self._record_registry_error(f"schema:{name}", e)
+                logger.warning(f"[ToolManager] tool schema unavailable for {name}: {e}")
 
         # Include MCP tool instances
         for name, mcp_tool in self._mcp_tool_instances.items():
-            result[name] = {
-                "description": mcp_tool.description,
-                "parameters": mcp_tool.params,
-            }
+            try:
+                result[name] = {
+                    "description": mcp_tool.description,
+                    "parameters": mcp_tool.params,
+                }
+            except Exception as e:
+                self._record_registry_error(f"mcp_schema:{name}", e)
+                logger.warning(f"[ToolManager] MCP tool schema unavailable for {name}: {e}")
 
         return result
+
+    def registry_health(self) -> dict:
+        """Return a public health snapshot for tool discovery diagnostics."""
+        import_errors = []
+        try:
+            tools_package = importlib.import_module("agent.tools")
+            getter = getattr(tools_package, "get_tool_import_errors", None)
+            if callable(getter):
+                import_errors = getter()
+        except Exception as e:
+            self._record_registry_error("agent.tools.health", e)
+
+        first_party_count = len(self.tool_classes)
+        mcp_count = len(self._mcp_tool_instances)
+        errors = list(self._registry_errors)
+        for entry in import_errors:
+            if isinstance(entry, dict):
+                mapped = {
+                    "source": f"{entry.get('module', '')}.{entry.get('class', '')}".strip("."),
+                    "errorType": str(entry.get("errorType") or "Error"),
+                    "message": str(entry.get("message") or ""),
+                }
+                if mapped not in errors:
+                    errors.append(mapped)
+
+        if first_party_count > 0:
+            status = "ready" if not errors else "degraded"
+        elif mcp_count > 0:
+            status = "degraded"
+        else:
+            status = "error"
+
+        return {
+            "status": status,
+            "firstPartyToolCount": first_party_count,
+            "mcpToolCount": mcp_count,
+            "totalToolCount": first_party_count + mcp_count,
+            "missingConfiguredTools": list(self._missing_configured_tools),
+            "errors": errors[:50],
+            "mcpStatus": self.list_mcp_status(),
+        }
 
     def shutdown_mcp(self):
         """Shut down all MCP server clients."""

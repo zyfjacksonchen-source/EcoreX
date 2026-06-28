@@ -65,8 +65,12 @@ class TestImageGenerationSkillRetry(unittest.TestCase):
             calls.append((url, kwargs))
             return [rate_limited, success][len(calls) - 1]
 
+        def record_sleep(value):
+            if value == 0.25:
+                sleeps.append(value)
+
         with tempfile.TemporaryDirectory() as output_dir:
-            with patch.object(module.time, "sleep", sleeps.append):
+            with patch.object(module.time, "sleep", record_sleep):
                 with patch.object(module.requests, "post", side_effect=fake_post):
                     with patch.object(module, "_save_image", return_value=str(Path(output_dir) / "out.png")):
                         paths = provider.generate("draw", output_dir=output_dir)
@@ -99,7 +103,11 @@ class TestImageGenerationSkillRetry(unittest.TestCase):
                     calls.append((url, kwargs))
                     return [rate_limited, success][len(calls) - 1]
 
-                with patch.object(module.time, "sleep", sleeps.append):
+                def record_sleep(value):
+                    if value == 0.1:
+                        sleeps.append(value)
+
+                with patch.object(module.time, "sleep", record_sleep):
                     with patch.object(module.requests, "post", side_effect=fake_post):
                         result = module._post_json_with_retries(
                             label,
@@ -167,8 +175,8 @@ class TestImageGenerationSkillRetry(unittest.TestCase):
         self.assertFalse(payload["provider_error"]["fallback_allowed"])
         self.assertEqual(len(payload["attempted_providers"]), 1)
 
-    def test_main_default_gpt_image_pro_fails_closed_after_retryable_exhaustion(self):
-        module = load_image_generation_module("ecorex_image_generation_retry_fail_closed_test")
+    def test_main_default_gpt_image_pro_falls_back_to_standard_after_retryable_exhaustion(self):
+        module = load_image_generation_module("ecorex_image_generation_retry_model_fallback_test")
         outage = FakeResponse(
             503,
             {
@@ -179,8 +187,10 @@ class TestImageGenerationSkillRetry(unittest.TestCase):
                 }
             },
         )
-        responses = [outage, outage]
+        success = FakeResponse(200, {"data": [{"b64_json": "aGVsbG8="}]})
+        responses = [outage, outage, success]
         sleeps = []
+        payload_models = []
         stdout = io.StringIO()
         env = {
             "OPENAI_API_KEY": "sk-test",
@@ -189,26 +199,121 @@ class TestImageGenerationSkillRetry(unittest.TestCase):
         }
         argv = ["generate.py", json.dumps({"prompt": "recover with fallback"})]
 
-        def fake_post(_url, **_kwargs):
+        def fake_post(_url, **kwargs):
+            payload_models.append(kwargs["json"]["model"])
+            return responses.pop(0)
+
+        def record_sleep(value):
+            if value == 2.0:
+                sleeps.append(value)
+
+        with patch.dict(os.environ, env, clear=False):
+            with patch.object(sys, "argv", argv):
+                with patch.object(module.time, "sleep", record_sleep):
+                    with patch.object(module.requests, "post", side_effect=fake_post) as post:
+                        with patch.object(module, "_save_image", return_value="fallback.png"):
+                            with contextlib.redirect_stdout(stdout):
+                                module.main()
+
+        self.assertEqual(post.call_count, 3)
+        self.assertEqual(payload_models, ["gpt-image-2-pro", "gpt-image-2-pro", "gpt-image-2"])
+        self.assertEqual(sleeps, [2.0])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["model"], "gpt-image-2")
+        self.assertEqual(payload["images"], [{"url": "fallback.png"}])
+        self.assertEqual(payload["model_fallback"]["used"], True)
+        self.assertEqual(payload["model_fallback"]["from_model"], "gpt-image-2-pro")
+        self.assertEqual(payload["model_fallback"]["to_model"], "gpt-image-2")
+        self.assertEqual(payload["model_fallback"]["reason"], "server_error")
+
+    def test_main_default_gpt_image_pro_falls_back_when_model_not_found(self):
+        module = load_image_generation_module("ecorex_image_generation_model_not_found_fallback_test")
+        not_found = FakeResponse(
+            404,
+            {
+                "error": {
+                    "message": "model gpt-image-2-pro does not exist or is unavailable",
+                    "code": "model_not_found",
+                    "type": "invalid_request_error",
+                }
+            },
+        )
+        success = FakeResponse(200, {"data": [{"b64_json": "aGVsbG8="}]})
+        responses = [not_found, success]
+        payload_models = []
+        stdout = io.StringIO()
+        env = {
+            "OPENAI_API_KEY": "sk-test",
+            "IMAGE_OUTPUT_DIR": tempfile.gettempdir(),
+        }
+        argv = ["generate.py", json.dumps({"prompt": "recover from unavailable pro"})]
+
+        def fake_post(_url, **kwargs):
+            payload_models.append(kwargs["json"]["model"])
             return responses.pop(0)
 
         with patch.dict(os.environ, env, clear=False):
             with patch.object(sys, "argv", argv):
-                with patch.object(module.time, "sleep", sleeps.append):
-                    with patch.object(module.requests, "post", side_effect=fake_post) as post:
-                        with patch.object(module, "_save_image", return_value="fallback.png"):
-                            with contextlib.redirect_stdout(stdout):
-                                with self.assertRaises(SystemExit) as raised:
-                                    module.main()
+                with patch.object(module.requests, "post", side_effect=fake_post) as post:
+                    with patch.object(module, "_save_image", return_value="fallback.png"):
+                        with contextlib.redirect_stdout(stdout):
+                            module.main()
 
-        self.assertEqual(raised.exception.code, 1)
         self.assertEqual(post.call_count, 2)
-        self.assertEqual(sleeps, [2.0])
+        self.assertEqual(payload_models, ["gpt-image-2-pro", "gpt-image-2"])
         payload = json.loads(stdout.getvalue())
-        self.assertEqual(payload["provider_error"]["provider"], "OpenAI")
-        self.assertEqual(payload["provider_error"]["status_code"], 503)
-        self.assertEqual(payload["provider_error"]["fallback_allowed"], True)
-        self.assertEqual(len(payload["attempted_providers"]), 1)
+        self.assertEqual(payload["model"], "gpt-image-2")
+        self.assertEqual(payload["model_fallback"]["reason"], "client_error")
+
+    def test_openai_image_edit_uses_gpt_image_pro_then_standard_fallback(self):
+        module = load_image_generation_module("ecorex_image_generation_edit_fallback_test")
+        provider = module.OpenAIProvider("sk-test", "https://api.openai.test/v1", "gpt-image-2-pro")
+        calls = []
+        outage = module.ImageProviderError(
+            "pro temporarily unavailable",
+            provider="OpenAI",
+            status_code=503,
+            error_type="server_error",
+            retry_attempt=1,
+            max_retries=1,
+        )
+        success = {"data": [{"b64_json": "aGVsbG8="}]}
+
+        def fake_post_multipart(url, fields, files):
+            calls.append({
+                "url": url,
+                "fields": dict(fields),
+                "files": list(files),
+            })
+            if len(calls) == 1:
+                raise outage
+            return success
+
+        with tempfile.TemporaryDirectory() as output_dir:
+            with patch.object(provider, "_post_multipart", side_effect=fake_post_multipart):
+                with patch.object(module, "_load_image", return_value=b"fake-input-image"):
+                    with patch.object(module, "_compress_image", return_value=b"\x89PNG\r\nfake"):
+                        with patch.object(module, "_save_image", return_value=str(Path(output_dir) / "edited.png")):
+                            paths = provider.generate(
+                                "make the logo sharper",
+                                image_url="input.png",
+                                output_dir=output_dir,
+                                output_format="png",
+                            )
+
+        self.assertEqual(paths, [str(Path(output_dir) / "edited.png")])
+        self.assertEqual([call["url"] for call in calls], [
+            "https://api.openai.test/v1/images/edits",
+            "https://api.openai.test/v1/images/edits",
+        ])
+        self.assertEqual([call["fields"]["model"] for call in calls], ["gpt-image-2-pro", "gpt-image-2"])
+        self.assertEqual([call["fields"]["prompt"] for call in calls], ["make the logo sharper"] * 2)
+        self.assertEqual(calls[0]["files"][0][0], "image")
+        self.assertEqual(provider.model, "gpt-image-2")
+        self.assertEqual(provider.model_fallback["used"], True)
+        self.assertEqual(provider.model_fallback["from_model"], "gpt-image-2-pro")
+        self.assertEqual(provider.model_fallback["to_model"], "gpt-image-2")
+        self.assertEqual(provider.model_fallback["reason"], "server_error")
 
     def test_build_providers_defaults_to_gpt_image_pro_and_linkai_only_when_openai_missing(self):
         module = load_image_generation_module("ecorex_image_generation_default_provider_test")
@@ -329,6 +434,29 @@ class TestImageGenerationSkillRetry(unittest.TestCase):
                 self.assertEqual(error.code, expected_code)
                 self.assertEqual(error.taxonomy, "client_error")
                 self.assertFalse(error.retryable)
+
+    def test_v022_image_generation_tool_invocation_smoke_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        script = (root / "scripts" / "smoke-image-generation-tool-invocation.py").read_text(encoding="utf-8")
+
+        self.assertIn("skills/image-generation/scripts/generate.py", script)
+        self.assertIn("[sys.executable, str(GENERATE), \"--stdin\"]", script)
+        self.assertIn("FakeImageApiServer", script)
+        self.assertIn("/images/generations", script)
+        self.assertIn("/images/edits", script)
+        self.assertIn("gpt-image-2-pro", script)
+        self.assertIn("gpt-image-2", script)
+        self.assertIn("model_fallback", script)
+        self.assertIn("artifact", script)
+        self.assertIn("OPENAI_API_BASE", script)
+        self.assertIn("OPENAI_API_KEY", script)
+        self.assertIn("LINKAI_API_KEY", script)
+        self.assertIn("SKILL_IMAGE_GENERATION_PROVIDER", script)
+        self.assertIn("SKILL_IMAGE_GENERATION_MODEL", script)
+        self.assertIn("generation route calls mismatch", script)
+        self.assertIn("edit route did not receive multipart image file", script)
+        self.assertIn("fallback target mismatch", script)
+        self.assertIn("leaked fake API key", script)
 
 
 if __name__ == "__main__":

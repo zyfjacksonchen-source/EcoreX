@@ -1,0 +1,109 @@
+{
+  "artifact": "release-artifacts\\EcoreX_0.2.3-webui-macos-universal.zip",
+  "size": 158597406,
+  "topCompressedEntries": [
+    {
+      "path": "Install EcoreX WebUI.app/Contents/Resources/package/wheelhouse/mac-x64/playwright-1.60.0-py3-none-macosx_11_0_universal2.whl",
+      "size": 43474636,
+      "compressedSize": 42956645
+    },
+    {
+      "path": "Install EcoreX WebUI.app/Contents/Resources/package/wheelhouse/mac-arm64/playwright-1.60.0-py3-none-macosx_11_0_arm64.whl",
+      "size": 42261327,
+      "compressedSize": 41770278
+    },
+    {
+      "path": "Install EcoreX WebUI.app/Contents/Resources/package/python/cpython-3.11.15+20260602-aarch64-apple-darwin-install_only_stripped.tar.gz",
+      "size": 27091323,
+      "compressedSize": 27020162
+    },
+    {
+      "path": "Install EcoreX WebUI.app/Contents/Resources/package/python/cpython-3.11.15+20260602-x86_64-apple-darwin-install_only_stripped.tar.gz",
+      "size": 27000688,
+      "compressedSize": 26916006
+    },
+    {
+      "path": "Install EcoreX WebUI.app/Contents/Resources/package/wheelhouse/mac-x64/pillow-12.2.0-cp311-cp311-macosx_10_10_x86_64.whl",
+      "size": 5354347,
+      "compressedSize": 5332335
+    },
+    {
+      "path": "Install EcoreX WebUI.app/Contents/Resources/package/wheelhouse/mac-arm64/pillow-12.2.0-cp311-cp311-macosx_11_0_arm64.whl",
+      "size": 4695873,
+      "compressedSize": 4667851
+    },
+    {
+      "path": "Install EcoreX WebUI.app/Contents/Resources/package/wheelhouse/mac-x64/chardet-7.4.3-cp311-cp311-macosx_10_9_x86_64.whl",
+      "size": 870747,
+      "compressedSize": 865144
+    },
+    {
+      "path": "Install EcoreX WebUI.app/Contents/Resources/package/wheelhouse/mac-arm64/chardet-7.4.3-cp311-cp311-macosx_11_0_arm64.whl",
+      "size": 853210,
+      "compressedSize": 846772
+    },
+    {
+      "path": "Install EcoreX WebUI.app/Contents/Resources/package/wheelhouse/mac-x64/aiohttp-3.9.5-cp311-cp311-macosx_10_9_x86_64.whl",
+      "size": 402427,
+      "compressedSize": 395078
+    },
+    {
+      "path": "Install EcoreX WebUI.app/Contents/Resources/package/wheelhouse/mac-arm64/aiohttp-3.9.5-cp311-cp311-macosx_11_0_arm64.whl",
+      "size": 390243,
+      "compressedSize": 382859
+    },
+    {
+      "path": "Install EcoreX WebUI.app/Contents/Resources/package/wheelhouse/mac-arm64/charset_normalizer-3.4.7-cp311-cp311-macosx_10_9_universal2.whl",
+      "size": 309705,
+      "compressedSize": 306649
+    },
+    {
+      "path": "Install EcoreX WebUI.app/Contents/Resources/package/wheelhouse/mac-x64/charset_normalizer-3.4.7-cp311-cp311-macosx_10_9_universal2.whl",
+      "size": 309705,
+      "compressedSize": 306649
+    },
+    {
+      "path": "Install EcoreX WebUI.app/Contents/Resources/package/wheelhouse/mac-arm64/greenlet-3.5.3-cp311-cp311-macosx_11_0_universal2.whl",
+      "size": 287424,
+      "compressedSize": 278128
+    },
+    {
+      "path": "Install EcoreX WebUI.app/Contents/Resources/package/wheelhouse/mac-x64/greenlet-3.5.3-cp311-cp311-macosx_11_0_universal2.whl",
+      "size": 287424,
+      "compressedSize": 278128
+    },
+    {
+      "path": "Install EcoreX WebUI.app/Contents/Resources/package/wheelhouse/mac-arm64/python_dateutil-2.9.0.post0-py2.py3-none-any.whl",
+      "size": 229892,
+      "compressedSize": 228248
+    },
+    {
+      "path": "Install EcoreX WebUI.app/Contents/Resources/package/wheelhouse/mac-x64/python_dateutil-2.9.0.post0-py2.py3-none-any.whl",
+      "size": 229892,
+      "compressedSize": 228248
+    },
+    {
+      "path": "Install EcoreX WebUI.app/Contents/Resources/package/runtime/channel/web/static/app/assets/index-BC5jFAov.js",
+      "size": 547087,
+      "compressedSize": 182273
+    },
+    {
+      "path": "Install EcoreX WebUI.app/Contents/Resources/package/wheelhouse/mac-x64/pyyaml-6.0.3-cp311-cp311-macosx_10_13_x86_64.whl",
+      "size": 185826,
+      "compressedSize": 181650
+    },
+    {
+      "path": "Install EcoreX WebUI.app/Contents/Resources/package/wheelhouse/mac-arm64/pyyaml-6.0.3-cp311-cp311-macosx_11_0_arm64.whl",
+      "size": 175577,
+      "compressedSize": 172396
+    },
+    {
+      "path": "Install EcoreX WebUI.app/Contents/Resources/package/runtime/channel/web/static/vendor/fontawesome/webfonts/fa-solid-900.woff2",
+      "size": 150124,
+      "compressedSize": 150174
+    }
+  ],
+  "containsRapidOcrWheelhouse": false,
+  "containsOpenCvWheelhouse": false,
+  "containsLarkOapiWheelhouse": false
+}

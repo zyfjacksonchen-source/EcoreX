@@ -1,0 +1,413 @@
+{
+  "status": "fail",
+  "version": "0.2.0",
+  "taskCount": 30,
+  "passed": 29,
+  "failed": 1,
+  "generatedAt": "2026-06-24T02:20:18Z",
+  "tasks": [
+    {
+      "id": "T01",
+      "name": "local-webui-version",
+      "status": "pass",
+      "elapsedMs": 15.89,
+      "evidence": {
+        "version": "0.2.0"
+      }
+    },
+    {
+      "id": "T02",
+      "name": "local-release-notes-hide-run-center",
+      "status": "pass",
+      "elapsedMs": 14.11,
+      "evidence": {
+        "releaseNotesChars": 1010
+      }
+    },
+    {
+      "id": "T03",
+      "name": "public-root-http-200",
+      "status": "pass",
+      "elapsedMs": 174.28,
+      "evidence": {
+        "url": "https://www.ecoreai.cn/ecorex-agent/",
+        "status": 200,
+        "length": 8213
+      }
+    },
+    {
+      "id": "T04",
+      "name": "public-manifest-version",
+      "status": "pass",
+      "elapsedMs": 529.72,
+      "evidence": {
+        "product": "EcoreX",
+        "version": "0.2.0"
+      }
+    },
+    {
+      "id": "T05",
+      "name": "manifest-windows-webui-ready",
+      "status": "pass",
+      "elapsedMs": 0.01,
+      "evidence": {
+        "id": "webui-windows-x64",
+        "size": 81093961,
+        "sha256": "F97A17E5A72F4932478946E8396E77DA4EDA5069ED8AB2B4BEEBBD31D67F6641"
+      }
+    },
+    {
+      "id": "T06",
+      "name": "manifest-macos-webui-ready",
+      "status": "pass",
+      "elapsedMs": 0.01,
+      "evidence": {
+        "id": "webui-macos-universal",
+        "size": 158205186,
+        "sha256": "3DA292C890CF1DD1786EE0D591542481805AD1337CCD01978FFF1BECE0A869CF"
+      }
+    },
+    {
+      "id": "T07",
+      "name": "public-windows-download-sha",
+      "status": "pass",
+      "elapsedMs": 252939.51,
+      "evidence": {
+        "url": "https://www.ecoreai.cn/ecorex-agent/downloads/EcoreX_0.2.0-webui-windows-x64.zip",
+        "status": 200,
+        "length": 81093961,
+        "sha256": "F97A17E5A72F4932478946E8396E77DA4EDA5069ED8AB2B4BEEBBD31D67F6641",
+        "source": "downloaded",
+        "path": "C:\\CowAgent\\release-artifacts\\public-download-cache\\EcoreX_0.2.0-webui-windows-x64.zip"
+      }
+    },
+    {
+      "id": "T08",
+      "name": "public-macos-download-sha",
+      "status": "pass",
+      "elapsedMs": 406894.69,
+      "evidence": {
+        "url": "https://www.ecoreai.cn/ecorex-agent/downloads/EcoreX_0.2.0-webui-macos-universal.zip",
+        "status": 200,
+        "length": 158205186,
+        "sha256": "3DA292C890CF1DD1786EE0D591542481805AD1337CCD01978FFF1BECE0A869CF",
+        "source": "downloaded",
+        "path": "C:\\CowAgent\\release-artifacts\\public-download-cache\\EcoreX_0.2.0-webui-macos-universal.zip"
+      }
+    },
+    {
+      "id": "T09",
+      "name": "local-public-zip-sha",
+      "status": "pass",
+      "elapsedMs": 379.82,
+      "evidence": {
+        "path": "C:\\CowAgent\\release-artifacts\\EcoreX_0.2.0-public-release.zip",
+        "size": 241236692,
+        "sha256": "2F20B80DAD3AC3EB788A32993CC3A6ED4A73BF7E2E01B6914998AFDAF21A78E9"
+      }
+    },
+    {
+      "id": "T10",
+      "name": "local-windows-zip-sha",
+      "status": "pass",
+      "elapsedMs": 125.01,
+      "evidence": {
+        "path": "C:\\CowAgent\\release-artifacts\\EcoreX_0.2.0-webui-windows-x64.zip",
+        "size": 81093961,
+        "sha256": "F97A17E5A72F4932478946E8396E77DA4EDA5069ED8AB2B4BEEBBD31D67F6641"
+      }
+    },
+    {
+      "id": "T11",
+      "name": "local-macos-zip-sha",
+      "status": "pass",
+      "elapsedMs": 291.48,
+      "evidence": {
+        "path": "C:\\CowAgent\\release-artifacts\\EcoreX_0.2.0-webui-macos-universal.zip",
+        "size": 158205186,
+        "sha256": "3DA292C890CF1DD1786EE0D591542481805AD1337CCD01978FFF1BECE0A869CF"
+      }
+    },
+    {
+      "id": "T12",
+      "name": "windows-zip-runtime-markers",
+      "status": "pass",
+      "elapsedMs": 92.92,
+      "evidence": {
+        "path": "C:\\CowAgent\\release-artifacts\\EcoreX_0.2.0-webui-windows-x64.zip",
+        "entries": {
+          "agent/protocol/agent_stream.py": {
+            "entry": "runtime/agent/protocol/agent_stream.py",
+            "markers": [
+              "def _feishu_cli_chain_key",
+              "def _ensure_final_response_message",
+              "external-capability-chain-budget"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "T13",
+      "name": "windows-zip-finalization-modules",
+      "status": "pass",
+      "elapsedMs": 62.02,
+      "evidence": {
+        "path": "C:\\CowAgent\\release-artifacts\\EcoreX_0.2.0-webui-windows-x64.zip",
+        "entries": {
+          "bridge/agent_bridge.py": {
+            "entry": "runtime/bridge/agent_bridge.py",
+            "markers": [
+              "def _ensure_final_response_in_messages",
+              "cancelled by user"
+            ]
+          },
+          "agent/memory/conversation_store.py": {
+            "entry": "runtime/agent/memory/conversation_store.py",
+            "markers": [
+              "def get_latest_pair_seqs",
+              "Tool-use-only assistant rows",
+              "skip pure tool_result"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "T14",
+      "name": "macos-zip-runtime-markers",
+      "status": "pass",
+      "elapsedMs": 6.63,
+      "evidence": {
+        "path": "C:\\CowAgent\\release-artifacts\\EcoreX_0.2.0-webui-macos-universal.zip",
+        "entries": {
+          "agent/protocol/agent_stream.py": {
+            "entry": "Install EcoreX WebUI.app/Contents/Resources/package/runtime/agent/protocol/agent_stream.py",
+            "markers": [
+              "def _feishu_cli_chain_key",
+              "def _ensure_final_response_message",
+              "external-capability-chain-budget"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "T15",
+      "name": "macos-zip-finalization-modules",
+      "status": "pass",
+      "elapsedMs": 10.24,
+      "evidence": {
+        "path": "C:\\CowAgent\\release-artifacts\\EcoreX_0.2.0-webui-macos-universal.zip",
+        "entries": {
+          "bridge/agent_bridge.py": {
+            "entry": "Install EcoreX WebUI.app/Contents/Resources/package/runtime/bridge/agent_bridge.py",
+            "markers": [
+              "def _ensure_final_response_in_messages",
+              "cancelled by user"
+            ]
+          },
+          "agent/memory/conversation_store.py": {
+            "entry": "Install EcoreX WebUI.app/Contents/Resources/package/runtime/agent/memory/conversation_store.py",
+            "markers": [
+              "def get_latest_pair_seqs",
+              "Tool-use-only assistant rows",
+              "skip pure tool_result"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "T16",
+      "name": "windows-zip-renderer-asset",
+      "status": "pass",
+      "elapsedMs": 25.21,
+      "evidence": {
+        "path": "C:\\CowAgent\\release-artifacts\\EcoreX_0.2.0-webui-windows-x64.zip",
+        "matches": [
+          "runtime/channel/web/static/app/assets/index-Cq3X-tPV.js"
+        ]
+      }
+    },
+    {
+      "id": "T17",
+      "name": "macos-zip-renderer-asset",
+      "status": "pass",
+      "elapsedMs": 4.51,
+      "evidence": {
+        "path": "C:\\CowAgent\\release-artifacts\\EcoreX_0.2.0-webui-macos-universal.zip",
+        "matches": [
+          "Install EcoreX WebUI.app/Contents/Resources/package/runtime/channel/web/static/app/assets/index-Cq3X-tPV.js"
+        ]
+      }
+    },
+    {
+      "id": "T18",
+      "name": "github-windows-webui-digest",
+      "status": "pass",
+      "elapsedMs": 1364.43,
+      "evidence": {
+        "name": "EcoreX_0.2.0-webui-windows-x64.zip",
+        "size": 81093961,
+        "digest": "sha256:f97a17e5a72f4932478946e8396e77da4eda5069ed8ab2b4beebbd31d67f6641"
+      }
+    },
+    {
+      "id": "T19",
+      "name": "github-macos-webui-digest",
+      "status": "pass",
+      "elapsedMs": 0.0,
+      "evidence": {
+        "name": "EcoreX_0.2.0-webui-macos-universal.zip",
+        "size": 158205186,
+        "digest": "sha256:3da292c890cf1dd1786ee0d591542481805ad1337ccd01978fff1bece0a869cf"
+      }
+    },
+    {
+      "id": "T20",
+      "name": "windows-install-download-resume-simulation",
+      "status": "pass",
+      "elapsedMs": 5270.72,
+      "evidence": {
+        "script": "C:\\CowAgent\\deploy\\ecorex-site\\install-webui.ps1",
+        "payloadBytes": 397312,
+        "ranges": [
+          "bytes=132437-",
+          "bytes=397312-",
+          "bytes=397312-"
+        ],
+        "stdoutTail": [
+          "Verifying SHA256...",
+          "Download verified: C:\\Users\\user\\AppData\\Local\\Temp\\tmpf7z8dlap\\stale.zip",
+          "OK"
+        ]
+      }
+    },
+    {
+      "id": "T21",
+      "name": "macos-install-download-resume-simulation",
+      "status": "fail",
+      "elapsedMs": 170883.35,
+      "evidence": {},
+      "error": "MatrixFailure: missing curl resume range in []"
+    },
+    {
+      "id": "T22",
+      "name": "feishu-distinct-chat-batch-not-blocked",
+      "status": "pass",
+      "elapsedMs": 5058.84,
+      "evidence": {
+        "distinctChats": 9
+      }
+    },
+    {
+      "id": "T23",
+      "name": "feishu-same-chat-repeat-blocked",
+      "status": "pass",
+      "elapsedMs": 0.22,
+      "evidence": {
+        "blocked": true,
+        "reason": "Feishu/Lark tool chain has been used repeatedly without converging. Stop calling Feishu commands now: summarize what is known, state the exact blocker (auth, empty attachment output, slow page, missing field, or unsupported command), and ask the user for the next authorization or input if needed."
+      }
+    },
+    {
+      "id": "T24",
+      "name": "tool-schema-database-boundary",
+      "status": "pass",
+      "elapsedMs": 6.03,
+      "evidence": {
+        "databaseGroups": [],
+        "feishuGroups": [
+          "feishu"
+        ]
+      }
+    },
+    {
+      "id": "T25",
+      "name": "tool-schema-explicit-feishu-with-mcp",
+      "status": "pass",
+      "elapsedMs": 3.53,
+      "evidence": {
+        "selected": [
+          "feishu_cli",
+          "read"
+        ],
+        "reason": "core"
+      }
+    },
+    {
+      "id": "T26",
+      "name": "tool-schema-fallback-avoids-feishu",
+      "status": "pass",
+      "elapsedMs": 1.04,
+      "evidence": {
+        "selected": [
+          "mcp__server__tool"
+        ]
+      }
+    },
+    {
+      "id": "T27",
+      "name": "executor-run-stream-final-response-visible",
+      "status": "pass",
+      "elapsedMs": 7.97,
+      "evidence": {
+        "turnRequests": 2,
+        "events": [
+          "agent_start",
+          "turn_start",
+          "tool_schema_budget",
+          "context_budget",
+          "message_start",
+          "message_end",
+          "tool_execution_start",
+          "tool_execution_end",
+          "turn_end",
+          "turn_start",
+          "tool_schema_budget",
+          "context_budget",
+          "message_start",
+          "message_update",
+          "message_end",
+          "turn_end",
+          "agent_end"
+        ],
+        "finalText": "最终结论：已读取飞书群聊消息，并整理出明确结果。",
+        "messageCount": 4
+      }
+    },
+    {
+      "id": "T28",
+      "name": "bridge-final-response-synthesized",
+      "status": "pass",
+      "elapsedMs": 80.47,
+      "evidence": {
+        "messages": 2,
+        "agentMessages": 1
+      }
+    },
+    {
+      "id": "T29",
+      "name": "bridge-cancelled-response-not-synthesized",
+      "status": "pass",
+      "elapsedMs": 0.02,
+      "evidence": {
+        "messages": 1,
+        "agentMessages": 0
+      }
+    },
+    {
+      "id": "T30",
+      "name": "conversation-store-latest-bot-seq-text",
+      "status": "pass",
+      "elapsedMs": 2132.76,
+      "evidence": {
+        "seqs": {
+          "user_seq": 0,
+          "bot_seq": 1
+        }
+      }
+    }
+  ]
+}

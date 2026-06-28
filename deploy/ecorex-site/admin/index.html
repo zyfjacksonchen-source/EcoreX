@@ -18,6 +18,7 @@
         <button class="nav-item active" type="button" data-panel="users">用户</button>
         <button class="nav-item" type="button" data-panel="usage">用量</button>
         <button class="nav-item" type="button" data-panel="logs">错误回溯</button>
+        <button class="nav-item" type="button" data-panel="runtime-audit">Audit</button>
         <button class="nav-item" type="button" data-panel="models">模型</button>
         <button class="nav-item" type="button" data-panel="capabilities">能力包</button>
         <button class="nav-item" type="button" data-panel="release">发布</button>
@@ -44,7 +45,7 @@
         <article><span>未读错误</span><strong data-metric="errors">0</strong></article>
         <article><span>能力包</span><strong data-metric="capabilities">0</strong></article>
         <article><span>模型</span><strong data-metric="modelCredentials">0</strong></article>
-        <article><span>客户端版本</span><strong data-metric="version">0.2.0</strong></article>
+        <article><span>客户端版本</span><strong data-metric="version">0.2.2</strong></article>
       </section>
 
       <section class="panel active" data-panel-view="users">
@@ -94,6 +95,31 @@
           <button type="submit">筛选</button>
         </form>
         <div class="log-list" data-logs></div>
+      </section>
+
+      <section class="panel" data-panel-view="runtime-audit">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Runtime Audit</p>
+            <h2>Runtime event projection</h2>
+          </div>
+          <button class="soft-button" type="button" data-refresh>Refresh</button>
+        </div>
+        <div class="audit-summary-grid" data-runtime-audit-summary></div>
+        <div class="audit-layout">
+          <section>
+            <h3>Event types</h3>
+            <div class="audit-count-list" data-runtime-audit-types></div>
+          </section>
+          <section>
+            <h3>Requests</h3>
+            <div class="audit-request-list" data-runtime-audit-requests></div>
+          </section>
+        </div>
+        <section class="audit-events">
+          <h3>Recent events</h3>
+          <div class="audit-event-list" data-runtime-audit-events></div>
+        </section>
       </section>
 
       <section class="panel" data-panel-view="models">

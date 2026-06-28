@@ -1,0 +1,206 @@
+{
+  "blockers": [],
+  "checks": [
+    {
+      "detail": "matrix status=REVIEWED-PASS rows=19 commands=34",
+      "id": "harness-matrix-reviewed",
+      "status": "pass"
+    },
+    {
+      "detail": "R22-01 through R22-19 present",
+      "id": "acceptance-ids-complete",
+      "status": "pass"
+    },
+    {
+      "detail": "all non-release R22 items are non-pending",
+      "id": "non-release-acceptance-complete",
+      "status": "pass"
+    },
+    {
+      "detail": "PASS",
+      "id": "r22-12-status",
+      "status": "pass"
+    },
+    {
+      "detail": "real read-only Feishu IM smoke passed with itemCount=1",
+      "id": "feishu-im-real-credential-smoke-valid",
+      "status": "pass"
+    },
+    {
+      "detail": "7 scripts present",
+      "id": "release-scripts-present",
+      "status": "pass"
+    },
+    {
+      "detail": "public manifest promotes 3 Web artifacts to 0.2.2 with matching download size/hash",
+      "id": "public-manifest-promoted",
+      "status": "pass"
+    },
+    {
+      "detail": "6 release default version markers point to 0.2.2",
+      "id": "release-default-versions-promoted",
+      "status": "pass"
+    },
+    {
+      "detail": "release-artifacts/EcoreX_0.2.2-public-release.zip size=264864808 sha256=BFA0DD949907ECE14787FB5C1D32F3163C42E72ABFB9A83EF9A7BE8FE6DD5F7C",
+      "id": "public-release-package-valid",
+      "status": "pass"
+    },
+    {
+      "detail": "release-artifacts/EcoreX_0.2.2-web-linux-service.tar.gz scope=local-filesystem-web-linux-service size=3679009 checksums=490 pointer=manifest-pointer-fallback",
+      "id": "deploy-rollback-smoke-valid",
+      "status": "pass"
+    },
+    {
+      "detail": "release-artifacts/EcoreX_0.2.2-web-linux-service.tar.gz scope=target-environment-web-linux-service size=3679009 checksums=490 pointer=target-current-symlink",
+      "id": "target-deploy-rollback-smoke-valid",
+      "status": "pass"
+    },
+    {
+      "detail": "READY_FOR_TARGET_INPUT target handoff template does not execute target or clear blocker",
+      "id": "target-command-template-valid",
+      "status": "pass"
+    },
+    {
+      "detail": "target-environment deploy/rollback smoke passed",
+      "id": "target-environment-deploy-rollback",
+      "status": "pass"
+    },
+    {
+      "detail": "production Web/admin deploy passed with web tar 3BEA1EF91C61E9E42235AE7695DDAEBEF25B4A6C5B13B6726240539CC937CCF7",
+      "id": "production-deploy-online-valid",
+      "status": "pass"
+    },
+    {
+      "detail": "online browser smoke explicitly waived by operator with hash-only evidence",
+      "id": "online-web-browser-smoke-waiver-valid",
+      "status": "pass"
+    },
+    {
+      "detail": "online browser smoke status expected 'PASS', got 'FAIL'",
+      "id": "online-web-browser-smoke-valid",
+      "status": "waived"
+    },
+    {
+      "detail": "release-gate.md documents PASS state",
+      "id": "release-gate-doc",
+      "status": "pass"
+    },
+    {
+      "detail": "manifest references release-artifacts/EcoreX_0.2.2-web-linux-service.tar.gz and pass release evidence",
+      "id": "release-manifest-valid",
+      "status": "pass"
+    }
+  ],
+  "errors": [],
+  "matrix": {
+    "command_shell": "PowerShell",
+    "commands": 34,
+    "coverage": {
+      "artifacts": [
+        "runtime-ledger-replay-core",
+        "web-runtime-projection-reconnect-browser",
+        "artifact-and-image-job-projection",
+        "image-jobs-seven-scenario-smoke",
+        "web-ui-polish-browser"
+      ],
+      "channels": [
+        "channels-observability-browser"
+      ],
+      "disconnect": [
+        "web-runtime-projection-reconnect-browser",
+        "web-runtime-real-network-browser",
+        "web-runtime-projection-history-pagination-browser",
+        "sidecar-restart-and-replay-gap"
+      ],
+      "feishu": [
+        "channels-observability-browser",
+        "feishu-agent-capability-contract"
+      ],
+      "image-fallback": [
+        "image-generation-tool-invocation-fallback",
+        "image-jobs-provider-fallback-api",
+        "image-jobs-seven-scenario-smoke"
+      ],
+      "image-jobs": [
+        "web-runtime-projection-reconnect-browser",
+        "artifact-and-image-job-projection",
+        "image-jobs-provider-fallback-api",
+        "image-jobs-ocr-reuse-api",
+        "image-jobs-seven-scenario-smoke"
+      ],
+      "markdown": [
+        "web-markdown-it-browser",
+        "web-ui-polish-browser"
+      ],
+      "permissions": [
+        "runtime-ledger-replay-core",
+        "permission-audit-contract",
+        "feishu-agent-capability-contract",
+        "scheduler-management-permission-harness"
+      ],
+      "project-sessions": [
+        "project-session-browser-isolation"
+      ],
+      "refresh": [
+        "web-runtime-projection-reconnect-browser",
+        "web-runtime-real-network-browser",
+        "web-runtime-projection-history-pagination-browser",
+        "artifact-and-image-job-projection",
+        "image-jobs-seven-scenario-smoke",
+        "scheduler-management-permission-harness",
+        "project-session-browser-isolation"
+      ],
+      "replay": [
+        "runtime-ledger-replay-core",
+        "web-runtime-projection-reconnect-browser",
+        "web-runtime-real-network-browser",
+        "web-runtime-projection-history-pagination-browser",
+        "sidecar-restart-and-replay-gap",
+        "artifact-and-image-job-projection",
+        "image-jobs-seven-scenario-smoke"
+      ],
+      "restart": [
+        "sidecar-restart-and-replay-gap",
+        "artifact-and-image-job-projection",
+        "image-jobs-seven-scenario-smoke"
+      ],
+      "run-center": [
+        "web-run-center-hidden-browser"
+      ],
+      "scheduler": [
+        "scheduler-management-permission-harness"
+      ],
+      "status-motion": [
+        "web-status-motion-browser"
+      ],
+      "ui-polish": [
+        "web-ui-polish-browser"
+      ]
+    },
+    "external_blockers": 1,
+    "matrix": "docs\\v0.2.2\\harness-matrix.json",
+    "required_surfaces": [
+      "artifacts",
+      "channels",
+      "disconnect",
+      "feishu",
+      "image-fallback",
+      "image-jobs",
+      "markdown",
+      "permissions",
+      "project-sessions",
+      "refresh",
+      "replay",
+      "restart",
+      "run-center",
+      "scheduler",
+      "status-motion",
+      "ui-polish"
+    ],
+    "rows": 19,
+    "status": "REVIEWED-PASS"
+  },
+  "releasable": true,
+  "status": "PASS"
+}

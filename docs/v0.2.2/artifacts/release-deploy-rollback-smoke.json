@@ -1,0 +1,66 @@
+{
+  "artifact": {
+    "artifactId": "web-linux-service",
+    "path": "release-artifacts/EcoreX_0.2.2-web-linux-service.tar.gz",
+    "releaseJson": {
+      "artifactFile": "EcoreX_0.2.2-web-linux-service.tar.gz",
+      "artifactId": "web-linux-service",
+      "includesDesktopArtifacts": false,
+      "product": "EcoreX",
+      "serviceName": "ecorex-web",
+      "version": "0.2.2",
+      "webBuild": "desktop-renderer-build"
+    },
+    "sha256": "3BEA1EF91C61E9E42235AE7695DDAEBEF25B4A6C5B13B6726240539CC937CCF7",
+    "sha256File": {
+      "filename": "EcoreX_0.2.2-web-linux-service.tar.gz",
+      "matches": true,
+      "path": "release-artifacts/EcoreX_0.2.2-web-linux-service.tar.gz.sha256",
+      "sha256": "3BEA1EF91C61E9E42235AE7695DDAEBEF25B4A6C5B13B6726240539CC937CCF7"
+    },
+    "size": 3679009,
+    "version": "0.2.2"
+  },
+  "deploy": {
+    "candidateReleaseId": "20260626055513-v0.2.2",
+    "currentVersionAfterDeploy": "0.2.2",
+    "verified": true
+  },
+  "notes": [
+    "Local filesystem smoke only; this does not start systemd, hit HTTP endpoints, or validate a production host.",
+    "The pointer fallback is recorded when Windows cannot create a directory symlink."
+  ],
+  "packageChecks": {
+    "checksumsJsonFilesVerified": 490,
+    "releaseJsonCovered": true,
+    "requiredPaths": [
+      "README.txt",
+      "runtime/app.py",
+      "runtime/requirements.txt",
+      "runtime/channel/web/chat.html",
+      "runtime/channel/web/static/app/index.html",
+      "scripts/install-ecorex-web.sh",
+      "scripts/check-ecorex-web-release.sh",
+      "service/caddy/ecorex-agent.routes.caddy",
+      "service/nginx/ecorex-agent.conf.example",
+      "service/systemd/ecorex-web.service.example",
+      "release.json",
+      "checksums.json",
+      "SHA256SUMS.txt"
+    ],
+    "sha256SumsFilesVerified": 490
+  },
+  "pointerMethod": "manifest-pointer-fallback",
+  "productionEnvironment": false,
+  "requiresNetwork": false,
+  "requiresRoot": false,
+  "requiresSystemd": false,
+  "rollback": {
+    "candidateRetainedForAudit": true,
+    "currentVersionAfterRollback": "0.2.1",
+    "rollbackReleaseId": "20260624000000-v0.2.1",
+    "verified": true
+  },
+  "scope": "local-filesystem-web-linux-service",
+  "status": "PASS"
+}

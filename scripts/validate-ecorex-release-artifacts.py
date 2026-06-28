@@ -52,6 +52,8 @@ REQUIRED_SITE_ASSETS = (
     "site/assets/ecorex-ecosystem-hub.png",
 )
 REQUIRED_RUNTIME_SUFFIXES = (
+    "runtime/config.py",
+    "runtime/config-template.json",
     "runtime/channel/web/web_channel.py",
     "runtime/agent/protocol/cancel.py",
     "runtime/agent/protocol/agent_stream.py",
@@ -60,6 +62,7 @@ REQUIRED_RUNTIME_SUFFIXES = (
     "runtime/agent/skills/manager.py",
     "runtime/agent/tools/base_tool.py",
     "runtime/agent/tools/tool_manager.py",
+    "runtime/agent/tools/__init__.py",
     "runtime/common/ecorex_release_notes.py",
     "runtime/common/ecorex_tool_permissions.py",
     "runtime/agent/tools/read/read.py",
@@ -78,14 +81,26 @@ REQUIRED_RUNTIME_SUFFIXES = (
     "runtime/agent/tools/web_fetch/web_fetch.py",
     "runtime/agent/tools/web_search/web_search.py",
     "runtime/agent/tools/vision/vision.py",
+    "runtime/agent/tools/ocr/ocr.py",
+    "runtime/agent/tools/imagegen/imagegen.py",
+    "runtime/agent/tools/browser/browser_tool.py",
+    "runtime/agent/tools/browser/browser_service.py",
+    "runtime/agent/tools/browser/browser_automation_service.py",
     "runtime/agent/memory/summarizer.py",
     "runtime/agent/knowledge/service.py",
     "runtime/skills/image-generation/scripts/generate.py",
     "runtime/skills/find/SKILL.md",
-    "runtime/skills/create-xiaohongshu-note/SKILL.md",
-    "runtime/skills/create-xiaohongshu-note/scripts/generate_cover_image.py",
+    "runtime/skills/skill-creator/SKILL.md",
+    "runtime/skills/skill-creator/scripts/init_skill.py",
+    "runtime/skills/skill-creator/scripts/quick_validate.py",
+)
+REQUIRED_WEBUI_RUNTIME_SUFFIXES = (
+    "runtime/common/office_pdf_runtime.py",
+    "runtime/common/image_quality_runtime.py",
 )
 REQUIRED_DESKTOP_RUNTIME_FILES = (
+    "config.py",
+    "config-template.json",
     "channel/web/web_channel.py",
     "agent/protocol/cancel.py",
     "agent/protocol/agent_stream.py",
@@ -94,6 +109,9 @@ REQUIRED_DESKTOP_RUNTIME_FILES = (
     "agent/skills/manager.py",
     "agent/tools/base_tool.py",
     "agent/tools/tool_manager.py",
+    "agent/tools/__init__.py",
+    "common/office_pdf_runtime.py",
+    "common/image_quality_runtime.py",
     "common/ecorex_release_notes.py",
     "common/ecorex_tool_permissions.py",
     "agent/tools/read/read.py",
@@ -112,12 +130,18 @@ REQUIRED_DESKTOP_RUNTIME_FILES = (
     "agent/tools/web_fetch/web_fetch.py",
     "agent/tools/web_search/web_search.py",
     "agent/tools/vision/vision.py",
+    "agent/tools/ocr/ocr.py",
+    "agent/tools/imagegen/imagegen.py",
+    "agent/tools/browser/browser_tool.py",
+    "agent/tools/browser/browser_service.py",
+    "agent/tools/browser/browser_automation_service.py",
     "agent/memory/summarizer.py",
     "agent/knowledge/service.py",
     "skills/image-generation/scripts/generate.py",
     "skills/find/SKILL.md",
-    "skills/create-xiaohongshu-note/SKILL.md",
-    "skills/create-xiaohongshu-note/scripts/generate_cover_image.py",
+    "skills/skill-creator/SKILL.md",
+    "skills/skill-creator/scripts/init_skill.py",
+    "skills/skill-creator/scripts/quick_validate.py",
 )
 
 
@@ -459,7 +483,7 @@ def validate_zip_assets(path: pathlib.Path, label: str) -> None:
                 any("/wheelhouse/mac-x64/playwright-" in name for name in names),
                 f"{label} missing macOS x64 Playwright wheel",
             )
-        for required in REQUIRED_RUNTIME_SUFFIXES:
+        for required in REQUIRED_RUNTIME_SUFFIXES + REQUIRED_WEBUI_RUNTIME_SUFFIXES:
             require(any(name.endswith(required) for name in names), f"{label} missing {required}")
         for forbidden in FORBIDDEN_WEB_ASSETS:
             require(not any(name.endswith(forbidden) for name in names), f"{label} contains stale asset {forbidden}")
@@ -749,6 +773,18 @@ def require_section_not_contains(text: str, start: str, end: str, needle: str, l
 
 
 def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
+    config_text = read_text_by_suffix("config.py")
+    require_contains(config_text, "DEFAULT_CDP_ENDPOINT", f"{label} config")
+    require_contains(config_text, "def chrome_devtools_mcp_args", f"{label} config")
+    require_contains(config_text, "--experimentalVision", f"{label} config")
+    require_contains(config_text, '"cdp_auto_launch": True', f"{label} config")
+
+    tools_init = read_text_by_suffix("agent/tools/__init__.py")
+    require_contains(tools_init, "def _safe_import", f"{label} tools init")
+    require_contains(tools_init, "get_tool_import_errors", f"{label} tools init")
+    require_contains(tools_init, "ImageGenTool", f"{label} tools init")
+    require_contains(tools_init, "TongxinCli", f"{label} tools init")
+
     base_tool = read_text_by_suffix("agent/tools/base_tool.py")
     require_contains(base_tool, "def apply_config", f"{label} base tool")
 
@@ -764,6 +800,12 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
     require_contains(web_channel, "def _push_sse_event", f"{label} web channel")
     require_contains(web_channel, "id: {event_id}", f"{label} web channel")
     require_contains(web_channel, "authorize_file_access(", f"{label} web channel")
+    require_contains(web_channel, "quality_retry_max", f"{label} web channel image retry")
+    require_contains(web_channel, "_image_job_quality_retry_max", f"{label} web channel image retry")
+    require_contains(web_channel, "_quality_retry_attempt", f"{label} web channel image retry")
+    require_contains(web_channel, "run_image_generation_payload", f"{label} web channel image runner")
+    require_contains(web_channel, "image_generation_env_with_config", f"{label} web channel image runner")
+    require_contains(web_channel, "Quality retry: regenerate", f"{label} web channel image retry")
 
     cancel_registry = read_text_by_suffix("agent/protocol/cancel.py")
     require_contains(cancel_registry, "def snapshot", f"{label} cancel registry")
@@ -771,17 +813,109 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
     require_contains(cancel_registry, "\"state\": \"cancelling\"", f"{label} cancel registry")
 
     agent_stream = read_text_by_suffix("agent/protocol/agent_stream.py")
+    require_contains(agent_stream, "TOOL_NAME_ALIASES", f"{label} agent stream")
+    require_contains(agent_stream, '"shell": "bash"', f"{label} agent stream")
+    require_contains(agent_stream, '"image_generation": "imagegen"', f"{label} agent stream")
+    require_contains(agent_stream, "function_call", f"{label} agent stream")
     require_contains(agent_stream, "Permission blocked this external capability", f"{label} agent stream")
     require_contains(agent_stream, "mcp__chrome-devtools__", f"{label} agent stream")
     require_contains(agent_stream, "_force_text_response_once(\"permission-denied\")", f"{label} agent stream")
     require_contains(agent_stream, "def _external_capability_autoroute", f"{label} agent stream")
     require_contains(agent_stream, "def _extract_simple_lark_cli_args", f"{label} agent stream")
     require_contains(agent_stream, "def _looks_like_feishu_cli_command", f"{label} agent stream")
+    require_contains(agent_stream, "def _extract_simple_tongxin_cli_args", f"{label} agent stream")
+    require_contains(agent_stream, "def _looks_like_tongxin_cli_command", f"{label} agent stream")
+    require_contains(agent_stream, "raw bash tongxin-cli", f"{label} agent stream")
     require_contains(agent_stream, "@larksuite/cli", f"{label} agent stream")
     require_contains(agent_stream, "scripts/run.js", f"{label} agent stream")
     require_contains(agent_stream, "\"reroutedFrom\"", f"{label} agent stream")
 
+    runtime_projection = read_text_by_suffix("agent/protocol/runtime_projection.py")
+    require_contains(runtime_projection, "_QUALITY_EVIDENCE_ALLOWED_GATES", f"{label} runtime projection")
+    require_contains(runtime_projection, "_QUALITY_EVIDENCE_METRIC_KEYS", f"{label} runtime projection")
+    require_contains(runtime_projection, "_extract_projection_quality_evidence", f"{label} runtime projection")
+    require_contains(runtime_projection, "_safe_projection_quality_check_detail", f"{label} runtime projection")
+    require_contains(runtime_projection, "_safe_projection_quality_evidence", f"{label} runtime projection")
+    require_contains(runtime_projection, "_safe_projection_quality_metric_string", f"{label} runtime projection")
+    require_contains(runtime_projection, "_safe_projection_quality_rendered_artifacts", f"{label} runtime projection")
+    require_contains(runtime_projection, "_quality_ref_is_hmac", f"{label} runtime projection")
+    require_contains(runtime_projection, "qualityEvidence", f"{label} runtime projection")
+    require_contains(runtime_projection, '"renderProof",', f"{label} runtime projection")
+    require_contains(runtime_projection, 'record["qualityEvidence"]', f"{label} runtime projection")
+    require_contains(runtime_projection, '"decode-valid"', f"{label} runtime projection")
+    require_contains(runtime_projection, '"seam-check"', f"{label} runtime projection")
+    require_contains(runtime_projection, '"text-glyph-check"', f"{label} runtime projection")
+    require_contains(runtime_projection, '"watermark-check"', f"{label} runtime projection")
+    require_contains(runtime_projection, '"anomaly-check"', f"{label} runtime projection")
+    require_contains(runtime_projection, '"reference-fidelity"', f"{label} runtime projection")
+    require_contains(runtime_projection, '"imageAnalysis"', f"{label} runtime projection")
+    require_contains(runtime_projection, '"retryGate"', f"{label} runtime projection")
+    require_contains(runtime_projection, "_safe_projection_quality_gate(text)", f"{label} runtime projection")
+
+    image_quality_runtime = read_text_by_suffix("common/image_quality_runtime.py")
+    require_contains(image_quality_runtime, "def build_image_quality_evidence", f"{label} image quality runtime")
+    require_contains(image_quality_runtime, "def analyze_image_quality", f"{label} image quality runtime")
+    require_contains(image_quality_runtime, '"decode-valid"', f"{label} image quality runtime")
+    require_contains(image_quality_runtime, '"seam-check"', f"{label} image quality runtime")
+    require_contains(image_quality_runtime, '"overlay-ghosting-check"', f"{label} image quality runtime")
+    require_contains(image_quality_runtime, '"text-glyph-check"', f"{label} image quality runtime")
+    require_contains(image_quality_runtime, '"watermark-check"', f"{label} image quality runtime")
+    require_contains(image_quality_runtime, '"subject-structure-check"', f"{label} image quality runtime")
+    require_contains(image_quality_runtime, '"anomaly-check"', f"{label} image quality runtime")
+    require_contains(image_quality_runtime, '"reference-fidelity"', f"{label} image quality runtime")
+    require_contains(image_quality_runtime, "def compare_image_reference_quality", f"{label} image quality runtime")
+    require_contains(image_quality_runtime, "def build_image_finalization_decision", f"{label} image quality runtime")
+    require_contains(image_quality_runtime, "def attach_image_finalization_evidence", f"{label} image quality runtime")
+    require_contains(image_quality_runtime, "IMAGE_FINALIZATION_POLICY_VERSION", f"{label} image quality runtime")
+    require_contains(image_quality_runtime, "def _analysis_sample", f"{label} image quality runtime")
+    require_contains(image_quality_runtime, "def _apply_decoder_draft", f"{label} image quality runtime")
+    require_contains(image_quality_runtime, "def _alpha_sample_metrics", f"{label} image quality runtime")
+    require_contains(image_quality_runtime, "def _vision_risk_summary", f"{label} image quality runtime")
+    require_contains(image_quality_runtime, "referenceMismatchRisk", f"{label} image quality runtime")
+    require_contains(image_quality_runtime, "glyphFragmentRisk", f"{label} image quality runtime")
+    require_contains(image_quality_runtime, "_EVIDENCE_HMAC_KEY", f"{label} image quality runtime")
+
+    image_job_service = read_text_by_suffix("agent/protocol/image_job_service.py")
+    require_contains(image_job_service, "build_image_quality_evidence", f"{label} image job service")
+    require_contains(image_job_service, '"qualityEvidence"', f"{label} image job service")
+    require_contains(image_job_service, "_authorized_quality_reference_images", f"{label} image job service")
+    require_contains(image_job_service, "_image_quality_target", f"{label} image job service")
+    require_contains(image_job_service, "_quality_retry_limit", f"{label} image job service")
+    require_contains(image_job_service, "_finalize_safe_artifacts", f"{label} image job service")
+    require_contains(image_job_service, '"retry"', f"{label} image job service")
+    require_contains(image_job_service, "reference_images = _authorized_quality_reference_images(task)", f"{label} image job service")
+    require_contains(image_job_service, "reference_images=reference_images", f"{label} image job service")
+    require_contains(image_job_service, "authorize_file_access(\"read\"", f"{label} image job service")
+    require_contains(image_job_service, "state.artifacts.append(safe_artifact)", f"{label} image job service")
+    require_contains(image_job_service, "provider_latency_ms", f"{label} image job service")
+    require_contains(image_job_service, "quality_latency_ms", f"{label} image job service")
+    require_contains(image_job_service, '"quality_check"', f"{label} image job service")
+
+    imagegen_tool = read_text_by_suffix("agent/tools/imagegen/imagegen.py")
+    provider_runner = read_text_by_suffix("agent/tools/imagegen/provider_runner.py")
+    require_contains(provider_runner, "def run_image_generation_payload", f"{label} imagegen provider runner")
+    require_contains(provider_runner, "load_image_generation_module", f"{label} imagegen provider runner")
+    require_contains(provider_runner, "_build_providers_with_env", f"{label} imagegen provider runner")
+    require_contains(provider_runner, "runnerMode", f"{label} imagegen provider runner")
+    require_contains(imagegen_tool, "build_image_quality_evidence", f"{label} imagegen tool")
+    require_contains(imagegen_tool, "run_image_generation_payload", f"{label} imagegen tool")
+    require_contains(imagegen_tool, "image_generation_env_with_config", f"{label} imagegen tool")
+    require_contains(imagegen_tool, "def _aggregate_image_quality_evidence", f"{label} imagegen tool")
+    require_contains(imagegen_tool, "reference_images=authorized_sources", f"{label} imagegen tool")
+    require_contains(imagegen_tool, "_with_image_finalization", f"{label} imagegen tool")
+    require_contains(imagegen_tool, "quality_retry_max", f"{label} imagegen tool")
+    require_contains(imagegen_tool, "Quality retry: regenerate", f"{label} imagegen tool")
+    require_contains(imagegen_tool, "def _safe_image_result_row", f"{label} imagegen tool")
+    require_contains(imagegen_tool, "def _safe_imagegen_failure_payload", f"{label} imagegen tool")
+    require_contains(imagegen_tool, "def _safe_text_presence", f"{label} imagegen tool")
+    require_not_contains(imagegen_tool, "stderrTail", f"{label} imagegen tool")
+    require_contains(imagegen_tool, '"qualityEvidence"', f"{label} imagegen tool")
+    require_contains(imagegen_tool, '"timing"', f"{label} imagegen tool")
+    require_contains(imagegen_tool, "providerTotalLatencyMs", f"{label} imagegen tool")
+
     tool_manager = read_text_by_suffix("agent/tools/tool_manager.py")
+    require_contains(tool_manager, "def registry_health", f"{label} tool manager")
+    require_contains(tool_manager, "missingConfiguredTools", f"{label} tool manager")
     require_contains(tool_manager, "def _mcp_public_tool_name", f"{label} tool manager")
     require_contains(tool_manager, "Refusing to replace first-party tool", f"{label} tool manager")
     require_contains(tool_manager, "apply_config(self.tool_configs[name])", f"{label} tool manager")
@@ -793,6 +927,8 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
     require_contains(broker, "def _glob_matches", f"{label} permission broker")
     require_contains(broker, "get_appdata_dir", f"{label} permission broker")
     require_contains(broker, "\"filesystem-access\"", f"{label} permission broker")
+    require_contains(broker, '"tongxin_cli"', f"{label} permission broker")
+    require_contains(broker, "default-read-only-tongxin-cli", f"{label} permission broker")
 
     release_notes = read_text_by_suffix("common/ecorex_release_notes.py")
     require(
@@ -839,6 +975,13 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
     require_contains(feishu_cli, "def apply_config", f"{label} feishu cli")
     require_contains(feishu_cli, "self.package = str(self.config.get(\"package\")", f"{label} feishu cli")
 
+    tongxin_cli = read_text_by_suffix("agent/tools/tongxin_cli/tongxin_cli.py")
+    require_contains(tongxin_cli, "class TongxinCli", f"{label} tongxin cli")
+    require_contains(tongxin_cli, "READ_ONLY_ALLOWED_COMMANDS", f"{label} tongxin cli")
+    require_contains(tongxin_cli, "validate_read_only_tongxin_args", f"{label} tongxin cli")
+    require_contains(tongxin_cli, "subprocess.Popen(command", f"{label} tongxin cli")
+    require_not_contains(tongxin_cli, "shell=True", f"{label} tongxin cli")
+
     ecorex_cli = read_text_by_suffix("agent/tools/ecorex_cli/ecorex_cli.py")
     require_contains(ecorex_cli, "class EcoreXCli", f"{label} ecorex cli")
     require_contains(ecorex_cli, "\"skill_list\"", f"{label} ecorex cli")
@@ -847,8 +990,28 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
 
     optional_abilities = read_text_by_suffix("agent/tools/optional_abilities/optional_abilities.py")
     require_contains(optional_abilities, "class OptionalAbilities", f"{label} optional abilities")
+    require_contains(optional_abilities, "config.py is missing v0.2.3 CDP symbols", f"{label} optional abilities")
     require_contains(optional_abilities, "\"chrome-devtools-mcp\"", f"{label} optional abilities")
     require_contains(optional_abilities, "\"browser-automation\"", f"{label} optional abilities")
+
+    browser_tool = read_text_by_suffix("agent/tools/browser/browser_tool.py")
+    require_contains(browser_tool, "DEFAULT_CDP_ENDPOINT", f"{label} browser tool")
+    require_contains(browser_tool, "setdefault(\"cdp_auto_launch\", True)", f"{label} browser tool")
+    require_contains(browser_tool, "setdefault(\"cdp_fallback\", True)", f"{label} browser tool")
+
+    imagegen_tool = read_text_by_suffix("agent/tools/imagegen/imagegen.py")
+    require_contains(imagegen_tool, "class ImageGenTool", f"{label} imagegen tool")
+    require_contains(imagegen_tool, "generate.py", f"{label} imagegen tool")
+    require_contains(imagegen_tool, "run_image_generation_payload", f"{label} imagegen tool")
+    require_contains(imagegen_tool, "IMAGE_OUTPUT_DIR", f"{label} imagegen tool")
+    require_contains(imagegen_tool, "[REDACTED]", f"{label} imagegen tool")
+    require_contains(imagegen_tool, 'authorize_file_access("read"', f"{label} imagegen tool")
+    require_contains(imagegen_tool, 'authorize_file_access("write"', f"{label} imagegen tool")
+    require_contains(imagegen_tool, "image input read blocked by permissions", f"{label} imagegen tool")
+    require_contains(imagegen_tool, "image output directory blocked by permissions", f"{label} imagegen tool")
+
+    permissions = read_text_by_suffix("common/ecorex_tool_permissions.py")
+    require_contains(permissions, '"imagegen"', f"{label} permission broker")
 
     skill_formatter = read_text_by_suffix("agent/skills/formatter.py")
     require_contains(skill_formatter, "format_skill_diagnostics_for_prompt", f"{label} skill formatter")
@@ -867,12 +1030,13 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
 
     host_diagnostics = read_text_by_suffix("agent/tools/host_diagnostics/host_diagnostics.py")
     require_contains(host_diagnostics, "def _skill_status", f"{label} host diagnostics")
+    require_contains(host_diagnostics, "def _tongxin_status", f"{label} host diagnostics")
     require_contains(host_diagnostics, "authorize_file_access(", f"{label} host diagnostics")
     require_contains(host_diagnostics, "\"read\"", f"{label} host diagnostics")
     require_contains(host_diagnostics, "\"blocked\": True", f"{label} host diagnostics")
     require_contains(host_diagnostics, "\"skills\": _skill_status(self.cwd)", f"{label} host diagnostics")
     require_contains(host_diagnostics, "\"hasGoalTool\": False", f"{label} host diagnostics")
-    require_contains(host_diagnostics, "\"availableStructuredCliTools\": [\"feishu_cli\", \"ecorex_cli\", \"optional_abilities\"]", f"{label} host diagnostics")
+    require_contains(host_diagnostics, "\"availableStructuredCliTools\": [\"feishu_cli\", \"tongxin_cli\", \"ecorex_cli\", \"optional_abilities\"]", f"{label} host diagnostics")
 
     mcp_tool = read_text_by_suffix("agent/tools/mcp/mcp_tool.py")
     require_contains(mcp_tool, "self.remote_name", f"{label} mcp tool")
@@ -899,15 +1063,14 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
     require_contains(find_skill, "name: find", f"{label} find skill")
     require_contains(find_skill, "Use the `find` tool", f"{label} find skill")
 
-    xhs_image = read_text_by_suffix("skills/create-xiaohongshu-note/scripts/generate_cover_image.py")
-    require_contains(xhs_image, "\"output_format\"", f"{label} xhs image generation")
-    require_contains(xhs_image, "/images/generations", f"{label} xhs image generation")
-    require_contains(xhs_image, "def generate_final_image", f"{label} xhs image generation")
-    require_contains(xhs_image, '"image_kind": "final"', f"{label} xhs image generation")
-    require_contains(xhs_image, '"draft": False', f"{label} xhs image generation")
-    require_not_contains(xhs_image, 'parser.add_argument("--fallback-model"', f"{label} xhs image generation")
-    require_not_contains(xhs_image, "def generate_with_fallback", f"{label} xhs image generation")
-    require_not_contains(xhs_image, "from openai import OpenAI", f"{label} xhs image generation")
+    skill_creator = read_text_by_suffix("skills/skill-creator/SKILL.md")
+    require_contains(skill_creator, "name: skill-creator", f"{label} skill-creator")
+    require_contains(skill_creator, "Skill Creation Process", f"{label} skill-creator")
+    require_contains(skill_creator, "scripts/init_skill.py", f"{label} skill-creator")
+    init_skill = read_text_by_suffix("skills/skill-creator/scripts/init_skill.py")
+    quick_validate = read_text_by_suffix("skills/skill-creator/scripts/quick_validate.py")
+    require_contains(init_skill, "SKILL.md", f"{label} skill-creator init")
+    require_contains(quick_validate, "frontmatter", f"{label} skill-creator validation")
 
     web_channel = read_text_by_suffix("channel/web/web_channel.py")
     require_regex(web_channel, r'"openai"\s*:\s*\[\s*"gpt-image-2-pro"', f"{label} admin image model catalog")
@@ -931,6 +1094,16 @@ def validate_frontend_bundle_texts(read_text_by_suffix, label: str) -> None:
     require_contains(renderer, "/api/project-folder", f"{label} renderer bundle")
     require_contains(renderer, "/api/open-path", f"{label} renderer bundle")
     require_contains(renderer, "data-ecorex-file-path", f"{label} renderer bundle")
+    require_contains(renderer, "decode-valid", f"{label} renderer bundle")
+    require_contains(renderer, "seam-check", f"{label} renderer bundle")
+    require_contains(renderer, "text-glyph-check", f"{label} renderer bundle")
+    require_contains(renderer, "watermark-check", f"{label} renderer bundle")
+    require_contains(renderer, "anomaly-check", f"{label} renderer bundle")
+    require_contains(renderer, "reference-fidelity", f"{label} renderer bundle")
+    require_contains(renderer, "reference-fidelity-skipped-review", f"{label} renderer bundle")
+    require_contains(renderer, "retry_count", f"{label} renderer bundle")
+    require_contains(renderer, "max_retries", f"{label} renderer bundle")
+    require_contains(renderer, "retry_gate", f"{label} renderer bundle")
 
 
 def zip_text_by_suffix(archive: zipfile.ZipFile, suffix: str) -> str:

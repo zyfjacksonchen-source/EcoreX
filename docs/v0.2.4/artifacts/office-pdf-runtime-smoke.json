@@ -1,0 +1,336 @@
+{
+  "status": "PASS",
+  "generatedAt": "2026-06-27T20:45:59Z",
+  "scope": "R24-04 shared Office/PDF runtime primitives",
+  "probeSummary": {
+    "status": "partial",
+    "pdfRenderStatus": "ready",
+    "artifactToolAvailable": false,
+    "kindStatuses": {
+      "presentation": {
+        "parseStatus": "ready",
+        "writeStatus": "ready",
+        "renderStatus": "missing"
+      },
+      "spreadsheet": {
+        "parseStatus": "ready",
+        "writeStatus": "ready",
+        "renderStatus": "missing"
+      },
+      "document": {
+        "parseStatus": "ready",
+        "writeStatus": "ready",
+        "renderStatus": "missing"
+      },
+      "pdf": {
+        "parseStatus": "ready",
+        "writeStatus": "ready",
+        "renderStatus": "ready"
+      }
+    }
+  },
+  "sampleInspections": [
+    {
+      "kind": "document",
+      "extension": ".docx",
+      "summary": {
+        "paragraphCount": 1,
+        "tableCount": 1,
+        "sectionCount": 1
+      },
+      "checks": [
+        {
+          "id": "file-exists",
+          "status": "pass",
+          "detail": ""
+        }
+      ]
+    },
+    {
+      "kind": "spreadsheet",
+      "extension": ".xlsx",
+      "summary": {
+        "sheetCount": 1,
+        "dimensions": [
+          {
+            "maxRows": 1,
+            "maxColumns": 2
+          }
+        ],
+        "formulaCellCount": 1,
+        "cellsScanned": 2,
+        "sheetsInspected": 1,
+        "truncated": false
+      },
+      "checks": [
+        {
+          "id": "file-exists",
+          "status": "pass",
+          "detail": ""
+        }
+      ]
+    },
+    {
+      "kind": "presentation",
+      "extension": ".pptx",
+      "summary": {
+        "slideCount": 1,
+        "shapeCount": 1,
+        "chartCount": 0
+      },
+      "checks": [
+        {
+          "id": "file-exists",
+          "status": "pass",
+          "detail": ""
+        }
+      ]
+    },
+    {
+      "kind": "pdf",
+      "extension": ".pdf",
+      "summary": {
+        "pageCount": 1,
+        "encrypted": false,
+        "metadataKeyCount": 9
+      },
+      "checks": [
+        {
+          "id": "file-exists",
+          "status": "pass",
+          "detail": ""
+        }
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "label": "office-pdf runtime probe schema",
+      "status": "PASS",
+      "evidence": {
+        "status": "partial"
+      }
+    },
+    {
+      "label": "presentation parser/writer readiness",
+      "status": "PASS",
+      "evidence": {
+        "parseStatus": "ready",
+        "writeStatus": "ready",
+        "missingParserModules": [],
+        "missingWriterModules": []
+      }
+    },
+    {
+      "label": "presentation quality gate contract",
+      "status": "PASS",
+      "evidence": {
+        "qualityGates": [
+          "story-flow",
+          "artifact-tool-authoring",
+          "layout-bounds",
+          "font-size-check",
+          "chart-integrity",
+          "render-preview",
+          "overlap-check",
+          "visual-inspection"
+        ]
+      }
+    },
+    {
+      "label": "spreadsheet parser/writer readiness",
+      "status": "PASS",
+      "evidence": {
+        "parseStatus": "ready",
+        "writeStatus": "ready",
+        "missingParserModules": [],
+        "missingWriterModules": []
+      }
+    },
+    {
+      "label": "spreadsheet quality gate contract",
+      "status": "PASS",
+      "evidence": {
+        "qualityGates": [
+          "typed-values",
+          "formula-audit",
+          "dashboard-structure",
+          "chart-render",
+          "render-preview",
+          "visual-inspection",
+          "export-verify"
+        ]
+      }
+    },
+    {
+      "label": "document parser/writer readiness",
+      "status": "PASS",
+      "evidence": {
+        "parseStatus": "ready",
+        "writeStatus": "ready",
+        "missingParserModules": [],
+        "missingWriterModules": []
+      }
+    },
+    {
+      "label": "document quality gate contract",
+      "status": "PASS",
+      "evidence": {
+        "qualityGates": [
+          "design-preset",
+          "structure-check",
+          "render-docx",
+          "table-geometry",
+          "visual-inspection",
+          "redline-preserve"
+        ]
+      }
+    },
+    {
+      "label": "pdf parser/writer readiness",
+      "status": "PASS",
+      "evidence": {
+        "parseStatus": "ready",
+        "writeStatus": "ready",
+        "missingParserModules": [],
+        "missingWriterModules": []
+      }
+    },
+    {
+      "label": "pdf quality gate contract",
+      "status": "PASS",
+      "evidence": {
+        "qualityGates": [
+          "text-orientation",
+          "page-render",
+          "layout-inspection",
+          "table-structure",
+          "generation-verify",
+          "visual-diff"
+        ]
+      }
+    },
+    {
+      "label": "document sample creation",
+      "status": "PASS",
+      "evidence": {
+        "extension": ".docx"
+      }
+    },
+    {
+      "label": "document content-free inspection",
+      "status": "PASS",
+      "evidence": {
+        "summaryKeys": [
+          "paragraphCount",
+          "sectionCount",
+          "tableCount"
+        ]
+      }
+    },
+    {
+      "label": "spreadsheet sample creation",
+      "status": "PASS",
+      "evidence": {
+        "extension": ".xlsx"
+      }
+    },
+    {
+      "label": "spreadsheet content-free inspection",
+      "status": "PASS",
+      "evidence": {
+        "summaryKeys": [
+          "cellsScanned",
+          "dimensions",
+          "formulaCellCount",
+          "sheetCount",
+          "sheetsInspected",
+          "truncated"
+        ]
+      }
+    },
+    {
+      "label": "presentation sample creation",
+      "status": "PASS",
+      "evidence": {
+        "extension": ".pptx"
+      }
+    },
+    {
+      "label": "presentation content-free inspection",
+      "status": "PASS",
+      "evidence": {
+        "summaryKeys": [
+          "chartCount",
+          "shapeCount",
+          "slideCount"
+        ]
+      }
+    },
+    {
+      "label": "pdf sample creation",
+      "status": "PASS",
+      "evidence": {
+        "extension": ".pdf"
+      }
+    },
+    {
+      "label": "pdf content-free inspection",
+      "status": "PASS",
+      "evidence": {
+        "summaryKeys": [
+          "encrypted",
+          "metadataKeyCount",
+          "pageCount"
+        ]
+      }
+    },
+    {
+      "label": "pdf page render primitive",
+      "status": "PASS",
+      "evidence": {
+        "renderedCount": 1,
+        "artifactCount": 1,
+        "firstArtifact": {
+          "page": 1,
+          "artifactRef": "hmac:fab7be0c93f4abd7",
+          "extension": ".png",
+          "sizeBytes": 7066,
+          "width": 794,
+          "height": 1123,
+          "renderProof": "hmac:7f19651ca97537e5"
+        }
+      }
+    },
+    {
+      "label": "presentation shared QA evidence schema",
+      "status": "PASS",
+      "evidence": {
+        "gateCount": 8
+      }
+    },
+    {
+      "label": "spreadsheet shared QA evidence schema",
+      "status": "PASS",
+      "evidence": {
+        "gateCount": 7
+      }
+    },
+    {
+      "label": "document shared QA evidence schema",
+      "status": "PASS",
+      "evidence": {
+        "gateCount": 6
+      }
+    },
+    {
+      "label": "pdf shared QA evidence schema",
+      "status": "PASS",
+      "evidence": {
+        "gateCount": 6
+      }
+    }
+  ],
+  "failed": [],
+  "redacted": true
+}

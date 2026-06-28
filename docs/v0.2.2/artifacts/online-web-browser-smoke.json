@@ -1,0 +1,87 @@
+{
+  "status": "FAIL",
+  "generatedAt": "2026-06-27T06:01:43.656050+00:00",
+  "duration_ms": 127893,
+  "target": {
+    "domainHash": "A753D877497CBE35",
+    "appUrlHash": "1B7579CF66120189",
+    "rawTargetPersisted": false
+  },
+  "login": {
+    "status": 200,
+    "sessionEmailVisible": true,
+    "sessionProvider": "web-password",
+    "emailHash": "DBA00142378AE9B5",
+    "emailSource": "default"
+  },
+  "manifest": {
+    "status": 200,
+    "version": "0.2.3",
+    "artifactVersions": [
+      "0.2.3"
+    ]
+  },
+  "adminHealth": {
+    "status": 200,
+    "version": "0.2.2",
+    "pathHash": "CA021530C8BD5FA4"
+  },
+  "metrics": {
+    "emailVisible": true,
+    "versionVisible": false,
+    "newSessionHeadline": true,
+    "oldHeadlineHidden": true,
+    "projectEntry": true,
+    "generalEntry": true,
+    "runCenterHidden": true,
+    "localFallbackHidden": true,
+    "bodyFont": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei\", \"Helvetica Neue\", Arial, system-ui, sans-serif",
+    "codeFont": "",
+    "bodyHasSystemStack": true,
+    "codeHasMonoStack": true,
+    "textHash": "60C5D374776B747A",
+    "projectStartMenu": {
+      "visible": true,
+      "hasImport": true,
+      "hasNoProject": true,
+      "hasSearch": true,
+      "closedOnBlank": true
+    },
+    "runTiming": {
+      "attempted": true,
+      "visible": false,
+      "inProcessSummary": false,
+      "fallbackVisible": false,
+      "finalLabelVisible": false
+    },
+    "runTimingVisible": false,
+    "runTimingInProcessSummary": false,
+    "runTimingFallbackVisible": false,
+    "narrowViewport": {
+      "width": 390,
+      "height": 760,
+      "overflow": {
+        "document": 0,
+        "chatPane": 0,
+        "messageList": 0
+      },
+      "noHorizontalOverflow": true
+    }
+  },
+  "consoleErrors": [],
+  "consoleWarnings": [
+    "console:error:Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+  ],
+  "assertionErrors": [
+    "run timing smoke failed: Page.wait_for_function: Timeout 120000ms exceeded.",
+    "versionVisible failed",
+    "runTimingVisible failed",
+    "manifest version/status failed status=200 version=0.2.3"
+  ],
+  "screenshot": "C:\\CowAgent\\docs\\v0.2.2\\artifacts\\online-web-browser-smoke.png",
+  "redaction": {
+    "rawTargetPersisted": false,
+    "rawPasswordPersisted": false,
+    "rawSecretsPersisted": false
+  }
+}

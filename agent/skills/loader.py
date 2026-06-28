@@ -25,7 +25,7 @@ class SkillLoader:
         - Recursive SKILL.md files under subdirectories
 
         :param dir_path: Directory path to scan
-        :param source: Source identifier ('builtin' or 'custom')
+        :param source: Source identifier ('builtin', 'extra', or 'custom')
         :return: LoadSkillsResult with skills and diagnostics
         """
         skills = []
@@ -228,12 +228,15 @@ class SkillLoader:
 
         Precedence (lowest to highest):
         1. builtin  — project root ``skills/``, shipped with the codebase
-        2. custom   — workspace ``skills/``, installed via cloud console or skill creator
+        2. extra    — read-only global/plugin skills, including Codex skill roots
+        3. custom   — workspace ``skills/``, installed via cloud console or skill creator
 
-        Same-name custom skills override builtin ones.
+        Same-name extra skills override built-ins, and same-name custom skills
+        override both builtin and extra entries.
 
         :param builtin_dir: Built-in skills directory
         :param custom_dir: Custom skills directory
+        :param extra_dirs: Additional read-only skill roots
         :return: Dictionary mapping skill name to SkillEntry
         """
         skill_map: Dict[str, SkillEntry] = {}

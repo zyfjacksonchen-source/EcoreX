@@ -1,0 +1,23 @@
+{
+  "status": "PASS",
+  "generatedAt": "2026-06-27T10:04:41Z",
+  "generation": {
+    "model": "gpt-image-2",
+    "imageCount": 1,
+    "attemptedModels": [
+      "gpt-image-2-pro",
+      "gpt-image-2"
+    ],
+    "durationMs": 3841
+  },
+  "edit": {
+    "model": "gpt-image-2",
+    "imageCount": 1,
+    "attemptedModels": [
+      "gpt-image-2-pro",
+      "gpt-image-2"
+    ],
+    "durationMs": 6279
+  },
+  "redacted": true
+}

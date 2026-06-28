@@ -1,0 +1,67 @@
+{
+  "consoleErrorCount": 0,
+  "failures": [],
+  "generatedAt": "2026-06-27T15:01:04Z",
+  "metrics": {
+    "extensionsCalls": 1,
+    "skillPostCount": 0,
+    "skillsCalls": 1,
+    "sourceSectionCount": 3
+  },
+  "redacted": true,
+  "scenario": "v024-skill-source-purpose-governance",
+  "sourceSections": [
+    {
+      "count": "1",
+      "heading": "内置",
+      "purposeHeadings": [
+        "办公能力"
+      ],
+      "rows": [
+        {
+          "className": "toggle-row is-readonly",
+          "inputChecked": true,
+          "inputDisabled": true,
+          "meta": "内置 · @可提及 · ready · built-in-locked",
+          "status": "内置能力默认启用",
+          "title": "Office Documents"
+        }
+      ]
+    },
+    {
+      "count": "1",
+      "heading": "自建",
+      "purposeHeadings": [
+        "系统能力"
+      ],
+      "rows": [
+        {
+          "className": "toggle-row",
+          "inputChecked": true,
+          "inputDisabled": false,
+          "meta": "自建 · @可提及 · ready · user-overlay",
+          "status": "已启用",
+          "title": "My Custom Skill"
+        }
+      ]
+    },
+    {
+      "count": "1",
+      "heading": "外部",
+      "purposeHeadings": [
+        "图像 / 媒体"
+      ],
+      "rows": [
+        {
+          "className": "toggle-row",
+          "inputChecked": false,
+          "inputDisabled": false,
+          "meta": "外部 · @可提及 · disabled · global-skill",
+          "status": "已关闭",
+          "title": "Vendor Image Skill"
+        }
+      ]
+    }
+  ],
+  "status": "PASS"
+}

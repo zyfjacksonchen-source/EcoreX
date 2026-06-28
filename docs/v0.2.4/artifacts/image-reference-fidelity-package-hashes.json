@@ -1,0 +1,156 @@
+{
+  "files": [
+    {
+      "path": "common/image_quality_runtime.py",
+      "exists": true,
+      "sha256": "508EAC0BE910757371F5C33F4B1EF4F9123CC2E30F036D2185A563EDA2C681C6",
+      "size": 30279
+    },
+    {
+      "path": "desktop/runtime/ecorex-runtime/common/image_quality_runtime.py",
+      "exists": true,
+      "sha256": "508EAC0BE910757371F5C33F4B1EF4F9123CC2E30F036D2185A563EDA2C681C6",
+      "size": 30279
+    },
+    {
+      "path": "agent/protocol/runtime_projection.py",
+      "exists": true,
+      "sha256": "CFB37B21E0E43C9FD468A48459BDABFD5F8015D92794B01CD43D2CBD2A4C4F40",
+      "size": 117305
+    },
+    {
+      "path": "desktop/runtime/ecorex-runtime/agent/protocol/runtime_projection.py",
+      "exists": true,
+      "sha256": "CFB37B21E0E43C9FD468A48459BDABFD5F8015D92794B01CD43D2CBD2A4C4F40",
+      "size": 117305
+    },
+    {
+      "path": "agent/tools/imagegen/imagegen.py",
+      "exists": true,
+      "sha256": "71DB4DA7AE99483D793817812D3D8D72177AD91FCBB9A4AB69A9D3CA71B2D162",
+      "size": 15560
+    },
+    {
+      "path": "desktop/runtime/ecorex-runtime/agent/tools/imagegen/imagegen.py",
+      "exists": true,
+      "sha256": "71DB4DA7AE99483D793817812D3D8D72177AD91FCBB9A4AB69A9D3CA71B2D162",
+      "size": 15560
+    },
+    {
+      "path": "agent/protocol/image_job_service.py",
+      "exists": true,
+      "sha256": "6B1D7DE7E4DA9BE3F20A9F1A3F9596D0AED1AA8FBC8DEF92595FF53442FEDE24",
+      "size": 45838
+    },
+    {
+      "path": "desktop/runtime/ecorex-runtime/agent/protocol/image_job_service.py",
+      "exists": true,
+      "sha256": "6B1D7DE7E4DA9BE3F20A9F1A3F9596D0AED1AA8FBC8DEF92595FF53442FEDE24",
+      "size": 45838
+    }
+  ],
+  "archives": [
+    {
+      "archive": "release-artifacts/EcoreX_0.2.3-webui-windows-x64.zip",
+      "exists": true,
+      "sha256": "5E55A6D83A0AC1A5021C6D69889BC9A25700A16568F7467DB7E4DAC05D8F102F",
+      "matches": [
+        {
+          "name": "runtime/agent/protocol/image_job_service.py",
+          "sha256": "6B1D7DE7E4DA9BE3F20A9F1A3F9596D0AED1AA8FBC8DEF92595FF53442FEDE24",
+          "size": 45838,
+          "hasImageQualityTarget": true
+        },
+        {
+          "name": "runtime/agent/protocol/runtime_projection.py",
+          "sha256": "CFB37B21E0E43C9FD468A48459BDABFD5F8015D92794B01CD43D2CBD2A4C4F40",
+          "size": 117305,
+          "hasImageQualityTarget": false
+        },
+        {
+          "name": "runtime/agent/tools/imagegen/imagegen.py",
+          "sha256": "71DB4DA7AE99483D793817812D3D8D72177AD91FCBB9A4AB69A9D3CA71B2D162",
+          "size": 15560,
+          "hasImageQualityTarget": false
+        },
+        {
+          "name": "runtime/common/image_quality_runtime.py",
+          "sha256": "508EAC0BE910757371F5C33F4B1EF4F9123CC2E30F036D2185A563EDA2C681C6",
+          "size": 30279,
+          "hasImageQualityTarget": false
+        }
+      ],
+      "markers": {
+        "referenceFidelitySkippedReview": true
+      }
+    },
+    {
+      "archive": "release-artifacts/EcoreX_0.2.3-webui-macos-universal.zip",
+      "exists": true,
+      "sha256": "80AEDF1AFBC5229710B15E37B44950CD99C03171176248FAD412AB2AC7399541",
+      "matches": [
+        {
+          "name": "Install EcoreX WebUI.app/Contents/Resources/package/runtime/agent/protocol/image_job_service.py",
+          "sha256": "6B1D7DE7E4DA9BE3F20A9F1A3F9596D0AED1AA8FBC8DEF92595FF53442FEDE24",
+          "size": 45838,
+          "hasImageQualityTarget": true
+        },
+        {
+          "name": "Install EcoreX WebUI.app/Contents/Resources/package/runtime/agent/protocol/runtime_projection.py",
+          "sha256": "CFB37B21E0E43C9FD468A48459BDABFD5F8015D92794B01CD43D2CBD2A4C4F40",
+          "size": 117305,
+          "hasImageQualityTarget": false
+        },
+        {
+          "name": "Install EcoreX WebUI.app/Contents/Resources/package/runtime/agent/tools/imagegen/imagegen.py",
+          "sha256": "71DB4DA7AE99483D793817812D3D8D72177AD91FCBB9A4AB69A9D3CA71B2D162",
+          "size": 15560,
+          "hasImageQualityTarget": false
+        },
+        {
+          "name": "Install EcoreX WebUI.app/Contents/Resources/package/runtime/common/image_quality_runtime.py",
+          "sha256": "508EAC0BE910757371F5C33F4B1EF4F9123CC2E30F036D2185A563EDA2C681C6",
+          "size": 30279,
+          "hasImageQualityTarget": false
+        }
+      ],
+      "markers": {
+        "referenceFidelitySkippedReview": true
+      }
+    },
+    {
+      "archive": "release-artifacts/EcoreX_0.2.3-web-linux-service.tar.gz",
+      "exists": true,
+      "sha256": "C256CE68AC8D87BEB0D2D562A95CB6D13ADC579CE55505305C32C6BAB2BD3F88",
+      "matches": [
+        {
+          "name": "ecorex-web-linux-service-0.2.3/runtime/common/image_quality_runtime.py",
+          "sha256": "508EAC0BE910757371F5C33F4B1EF4F9123CC2E30F036D2185A563EDA2C681C6",
+          "size": 30279,
+          "hasImageQualityTarget": false
+        },
+        {
+          "name": "ecorex-web-linux-service-0.2.3/runtime/agent/tools/imagegen/imagegen.py",
+          "sha256": "71DB4DA7AE99483D793817812D3D8D72177AD91FCBB9A4AB69A9D3CA71B2D162",
+          "size": 15560,
+          "hasImageQualityTarget": false
+        },
+        {
+          "name": "ecorex-web-linux-service-0.2.3/runtime/agent/protocol/image_job_service.py",
+          "sha256": "6B1D7DE7E4DA9BE3F20A9F1A3F9596D0AED1AA8FBC8DEF92595FF53442FEDE24",
+          "size": 45838,
+          "hasImageQualityTarget": true
+        },
+        {
+          "name": "ecorex-web-linux-service-0.2.3/runtime/agent/protocol/runtime_projection.py",
+          "sha256": "CFB37B21E0E43C9FD468A48459BDABFD5F8015D92794B01CD43D2CBD2A4C4F40",
+          "size": 117305,
+          "hasImageQualityTarget": false
+        }
+      ],
+      "markers": {
+        "referenceFidelitySkippedReview": true
+      }
+    }
+  ]
+}

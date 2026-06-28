@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.2.0",
+    [string]$Version = "0.2.4",
     [string]$RuntimeRoot = ".",
     [string]$SiteRoot = "deploy/ecorex-site",
     [string]$WebBuildRoot = "",
@@ -97,6 +97,25 @@ function Write-Utf8NoBom {
     [System.IO.File]::WriteAllText($Path, $Value, $encoding)
 }
 
+function Get-EcoreXFileSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $resolved = Resolve-RequiredPath $Path
+    if (Get-Command Get-FileHash -ErrorAction SilentlyContinue) {
+        return (Get-FileHash -Algorithm SHA256 -LiteralPath $resolved).Hash.ToUpperInvariant()
+    }
+    $stream = [System.IO.File]::OpenRead($resolved)
+    try {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            return (($sha.ComputeHash($stream) | ForEach-Object { $_.ToString("x2") }) -join "").ToUpperInvariant()
+        } finally {
+            $sha.Dispose()
+        }
+    } finally {
+        $stream.Dispose()
+    }
+}
+
 function Get-ReleaseMigrationReadmeNote {
     $readmePath = Join-Path $repoRoot "desktop\build\README-migration.txt"
     if (-not (Test-Path -LiteralPath $readmePath)) {
@@ -168,6 +187,11 @@ $runtimeFiles = @(
 foreach ($fileName in $runtimeFiles) {
     Copy-IfExists -Source (Join-Path $runtimeRootResolved $fileName) -Destination (Join-Path $runtimeOut $fileName)
 }
+Copy-IfExists -Source (Join-Path $repoRoot "config.py") -Destination (Join-Path $runtimeOut "config.py")
+Copy-IfExists -Source (Join-Path $repoRoot "config-template.json") -Destination (Join-Path $runtimeOut "config-template.json")
+Copy-IfExists -Source (Join-Path $runtimeRootResolved "capabilities.json") -Destination (Join-Path $runtimeOut "capabilities.json")
+Copy-IfExists -Source (Join-Path $repoRoot "desktop/runtime-packs/capabilities.json") -Destination (Join-Path $runtimeOut "capabilities.json")
+Copy-IfExists -Source (Join-Path $repoRoot "desktop/runtime-packs/core-requirements.txt") -Destination (Join-Path $runtimeOut "core-requirements.txt")
 
 $runtimeDirs = @(
     "agent",
@@ -242,6 +266,10 @@ foreach ($entry in $scriptFiles) {
     Copy-IfExists -Source (Join-Path $repoRoot $entry.Source) -Destination (Join-Path $scriptsOut $entry.Target)
 }
 
+$runtimeScriptsOut = Join-Path $runtimeOut "scripts"
+New-Item -ItemType Directory -Force -Path $runtimeScriptsOut | Out-Null
+Copy-IfExists -Source (Join-Path $repoRoot "scripts/install-capability.py") -Destination (Join-Path $runtimeScriptsOut "install-capability.py")
+
 $serviceFiles = @(
     @{ Source = "deploy/ecorex-site/caddy/Caddyfile.example"; Target = "caddy/Caddyfile.example" },
     @{ Source = "deploy/ecorex-site/caddy/ecorex-agent.routes.caddy"; Target = "caddy/ecorex-agent.routes.caddy" },
@@ -277,7 +305,7 @@ Get-ChildItem -LiteralPath $stagingRoot -Recurse -File | Sort-Object FullName | 
     if ($relativePath -in "SHA256SUMS.txt", "checksums.json") {
         return
     }
-    $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToUpperInvariant()
+    $hash = Get-EcoreXFileSha256 -Path $_.FullName
     $fileRows += [pscustomobject]@{
         path = $relativePath
         size = $_.Length
@@ -308,7 +336,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "tar failed with exit code $LASTEXITCODE"
 }
 
-$tarHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $tarPath).Hash.ToUpperInvariant()
+$tarHash = Get-EcoreXFileSha256 -Path $tarPath
 $tarItem = Get-Item -LiteralPath $tarPath
 "$tarHash  $(Split-Path -Leaf $tarPath)" | Set-Content -LiteralPath $shaPath -Encoding ASCII
 

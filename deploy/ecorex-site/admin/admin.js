@@ -11,7 +11,16 @@ const state = {
     globalModel: null,
     modelCredentials: [],
     summary: {},
-    version: "0.2.0",
+    runtimeAudit: {
+      summary: {},
+      eventTypeCounts: {},
+      sourceCounts: {},
+      statusCounts: {},
+      requests: [],
+      recentEvents: [],
+      privacy: {},
+    },
+    version: "0.2.2",
   },
   connected: false,
 };
@@ -119,6 +128,7 @@ function mergeState(payload) {
     ...payload,
     capabilityPolicy: { ...state.data.capabilityPolicy, ...(payload.capabilityPolicy || {}) },
     summary: { ...state.data.summary, ...(payload.summary || {}) },
+    runtimeAudit: { ...state.data.runtimeAudit, ...(payload.runtimeAudit || {}) },
   };
 }
 
@@ -200,6 +210,85 @@ function renderLogs() {
     .join("") || `<p class="empty">暂无错误日志。</p>`;
 }
 
+function renderRuntimeAudit() {
+  const audit = state.data.runtimeAudit || {};
+  const summary = audit.summary || {};
+  const summaryTarget = $("[data-runtime-audit-summary]");
+  if (summaryTarget) {
+    const cards = [
+      ["Events", summary.events],
+      ["Requests", summary.requests],
+      ["Sessions", summary.sessions],
+      ["Artifacts", summary.artifacts],
+      ["Messages", summary.messages],
+      ["Terminal", summary.terminalEvents],
+      ["Policy blocked", summary.capabilityPolicyBlocked],
+      ["Unknown types", summary.unknownEventTypes],
+    ];
+    summaryTarget.innerHTML = cards
+      .map(([label, value]) => `<article><span>${escapeHtml(label)}</span><strong>${formatNumber(value || 0)}</strong></article>`)
+      .join("");
+  }
+
+  const typeTarget = $("[data-runtime-audit-types]");
+  if (typeTarget) {
+    const entries = Object.entries(audit.eventTypeCounts || {}).sort((a, b) => b[1] - a[1]);
+    typeTarget.innerHTML = entries
+      .map(([type, count]) => `
+        <article class="audit-count-row">
+          <strong>${escapeHtml(type)}</strong>
+          <span>${formatNumber(count)}</span>
+        </article>
+      `)
+      .join("") || `<p class="empty">No runtime events synced yet.</p>`;
+  }
+
+  const requestTarget = $("[data-runtime-audit-requests]");
+  if (requestTarget) {
+    requestTarget.innerHTML = (audit.requests || [])
+      .map((item) => `
+        <article class="audit-request-row">
+          <div>
+            <strong>req:${escapeHtml(item.requestHash || "none")}</strong>
+            <span>session:${escapeHtml(item.sessionHash || "none")} / user:${escapeHtml(item.userHash || "none")}</span>
+          </div>
+          <span>${formatNumber(item.eventCount || 0)} events</span>
+          <span>${formatNumber(item.artifactCount || 0)} artifacts</span>
+          <span>${formatNumber(item.messageCount || 0)} messages</span>
+          <span>${formatTime(item.lastIngestedAt || item.lastEventAt)}</span>
+        </article>
+      `)
+      .join("") || `<p class="empty">No request projection available.</p>`;
+  }
+
+  const eventTarget = $("[data-runtime-audit-events]");
+  if (eventTarget) {
+    eventTarget.innerHTML = (audit.recentEvents || [])
+      .map((item) => {
+        const detail = item.detail || {};
+        const detailMeta = [
+          detail.keyCount ? `${detail.keyCount} keys` : "",
+          detail.unknownKeyCount ? `${detail.unknownKeyCount} redacted` : "",
+          Array.isArray(detail.keys) && detail.keys.length ? `known: ${detail.keys.join(", ")}` : "",
+        ].filter(Boolean).join(" / ");
+        return `
+          <article class="audit-event-row">
+            <span class="pill" data-status="${escapeHtml(item.status || "active")}">${escapeHtml(item.eventType || "unknown")}</span>
+            <div>
+              <strong>${escapeHtml(item.eventHash || "event")}</strong>
+              <span>req:${escapeHtml(item.requestHash || "none")} / session:${escapeHtml(item.sessionHash || "none")}</span>
+            </div>
+            <span>${escapeHtml(item.status || "unknown")}</span>
+            <span>${escapeHtml(item.source || "unknown")}</span>
+            <span>${formatTime(item.ingestedAt || item.createdAt)}</span>
+            <code>${escapeHtml(detailMeta || "redacted detail")}</code>
+          </article>
+        `;
+      })
+      .join("") || `<p class="empty">No recent runtime events.</p>`;
+  }
+}
+
 function renderModel() {
   const target = $("[data-global-model]");
   if (!target) return;
@@ -254,7 +343,7 @@ function renderRelease() {
   fetch("../manifest.json", { cache: "no-store" })
     .then((response) => response.json())
     .then((manifest) => {
-      setMetric("version", manifest.version || "0.2.0");
+      setMetric("version", manifest.version || "0.2.2");
       const target = $("[data-release]");
       target.innerHTML = manifest.artifacts
         .map(
@@ -284,7 +373,7 @@ function renderMetrics() {
   setMetric("errors", formatNumber(summary.errors ?? 0));
   setMetric("capabilities", formatNumber(summary.capabilities ?? 0));
   setMetric("modelCredentials", formatNumber(summary.modelCredentials ?? (state.data.globalModel ? 1 : 0)));
-  setMetric("version", state.data.version || summary.version || "0.2.0");
+  setMetric("version", state.data.version || summary.version || "0.2.2");
 }
 
 function render() {
@@ -293,6 +382,7 @@ function render() {
   renderUsage();
   renderLogFilters();
   renderLogs();
+  renderRuntimeAudit();
   renderModel();
   renderCapabilities();
   renderRelease();
@@ -383,7 +473,9 @@ $("[data-modal]")?.addEventListener("click", (event) => {
   if (event.target.matches("[data-modal]")) closeModal();
 });
 
-$("[data-refresh]")?.addEventListener("click", () => loadState());
+$all("[data-refresh]").forEach((button) => {
+  button.addEventListener("click", () => loadState());
+});
 
 $("[data-user-form]")?.addEventListener("submit", async (event) => {
   event.preventDefault();

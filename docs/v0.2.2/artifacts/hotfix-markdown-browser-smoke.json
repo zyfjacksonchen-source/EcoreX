@@ -1,0 +1,143 @@
+{
+  "status": "PASS",
+  "url": "http://127.0.0.1:52064/chat.html",
+  "duration_ms": 3050,
+  "screenshot": "",
+  "metrics": {
+    "title": "EcoreX Console",
+    "rendererReady": true,
+    "final": {
+      "h1Text": "Browser Smoke \u2713",
+      "listItems": 2,
+      "tableCells": 2,
+      "codeWrappers": 1,
+      "copyButtons": 1,
+      "safeLinks": 3,
+      "imageArtifacts": 1,
+      "rawScriptableImages": 0,
+      "rawMdPreserved": true,
+      "visibleText": "Browser Smoke \u2713\n\nfirst line\nsecond line \ud83d\ude00\n\nitem one\nitem two\n\nquoted content\n\nA\tB\n1\t2\njavascript\nconst x = 1 < 2;\n\n\nSee https://example.com/page\n\n<img src=x onerror=alert(1)>"
+    },
+    "streaming": {
+      "loneHeading": {
+        "text": "",
+        "html": "<div class=\"agent-content-body streaming-markdown-preview\"></div>",
+        "h1": 0,
+        "listItems": 0,
+        "codeBlocks": 0,
+        "copyButtons": 0
+      },
+      "stableHeading": {
+        "text": "Browser Smoke",
+        "html": "<div class=\"agent-content-body streaming-markdown-preview\"><h1>Browser Smoke</h1>\n</div>",
+        "h1": 1,
+        "listItems": 0,
+        "codeBlocks": 0,
+        "copyButtons": 0
+      },
+      "danglingList": {
+        "text": "",
+        "html": "<div class=\"agent-content-body streaming-markdown-preview\"></div>",
+        "h1": 0,
+        "listItems": 0,
+        "codeBlocks": 0,
+        "copyButtons": 0
+      },
+      "stableList": {
+        "text": "item",
+        "html": "<div class=\"agent-content-body streaming-markdown-preview\"><ul>\n<li>item</li>\n</ul>\n</div>",
+        "h1": 0,
+        "listItems": 1,
+        "codeBlocks": 0,
+        "copyButtons": 0
+      },
+      "partialFence": {
+        "text": "",
+        "html": "<div class=\"agent-content-body streaming-markdown-preview\"></div>",
+        "h1": 0,
+        "listItems": 0,
+        "codeBlocks": 0,
+        "copyButtons": 0
+      },
+      "openFence": {
+        "text": "const x = 1 < 2",
+        "html": "<div class=\"agent-content-body streaming-markdown-preview\"><pre class=\"streaming-open-code\"><code class=\"language-javascript\">const x = 1 &lt; 2</code></pre></div>",
+        "h1": 0,
+        "listItems": 0,
+        "codeBlocks": 1,
+        "copyButtons": 0
+      },
+      "tableDelimiter": {
+        "text": "",
+        "html": "<div class=\"agent-content-body streaming-markdown-preview\"></div>",
+        "h1": 0,
+        "listItems": 0,
+        "codeBlocks": 0,
+        "copyButtons": 0
+      },
+      "partialTableRow": {
+        "text": "",
+        "html": "<div class=\"agent-content-body streaming-markdown-preview\"></div>",
+        "h1": 0,
+        "listItems": 0,
+        "codeBlocks": 0,
+        "copyButtons": 0
+      },
+      "partialLink": {
+        "text": "",
+        "html": "<div class=\"agent-content-body streaming-markdown-preview\"></div>",
+        "h1": 0,
+        "listItems": 0,
+        "codeBlocks": 0,
+        "copyButtons": 0
+      },
+      "partialImage": {
+        "text": "",
+        "html": "<div class=\"agent-content-body streaming-markdown-preview\"></div>",
+        "h1": 0,
+        "listItems": 0,
+        "codeBlocks": 0,
+        "copyButtons": 0
+      },
+      "partialStrong": {
+        "text": "",
+        "html": "<div class=\"agent-content-body streaming-markdown-preview\"></div>",
+        "h1": 0,
+        "listItems": 0,
+        "codeBlocks": 0,
+        "copyButtons": 0
+      },
+      "xss": {
+        "text": "<img src=x onerror=alert(1)>",
+        "html": "<div class=\"agent-content-body streaming-markdown-preview\"><p>&lt;img src=x onerror=alert(1)&gt;</p>\n</div>",
+        "h1": 0,
+        "listItems": 0,
+        "codeBlocks": 0,
+        "copyButtons": 0
+      }
+    },
+    "bot": {
+      "rawMdPreserved": true,
+      "h1Text": "Browser Smoke \u2713",
+      "codeWrappers": 1
+    },
+    "projection": {
+      "inserted": true,
+      "source": "browser_smoke",
+      "state": "running",
+      "hasStreamingPreview": true,
+      "h1Text": "Streaming Projection"
+    },
+    "longAnswer": {
+      "hasPreview": 1,
+      "previewHeadings": 80,
+      "hasToggle": 1
+    },
+    "css": {
+      "paragraphLineHeight": "27.2px",
+      "preOverflowX": "auto",
+      "listStyleType": "disc"
+    }
+  },
+  "console_errors": []
+}

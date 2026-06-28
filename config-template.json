@@ -61,13 +61,17 @@
   "tools": {
     "browser": {
       "cdp_endpoint": "http://127.0.0.1:9222",
-      "cdp_auto_launch": false,
+      "cdp_auto_launch": true,
       "cdp_fallback": true,
       "persistent": true
     },
     "feishu_cli": {
       "package": "@larksuite/cli@1.0.56",
       "auto_install": false
+    },
+    "tongxin_cli": {
+      "script_path": "",
+      "read_only": true
     }
   },
   "mcp_servers": [
@@ -75,8 +79,24 @@
       "name": "chrome-devtools",
       "type": "stdio",
       "command": "npx",
-      "args": ["chrome-devtools-mcp@latest", "--browserUrl", "http://127.0.0.1:9222", "--no-usage-statistics"],
-      "timeout": 30
+      "args": [
+        "-y",
+        "chrome-devtools-mcp@latest",
+        "--browserUrl",
+        "http://127.0.0.1:9222",
+        "--no-usage-statistics",
+        "--no-performance-crux",
+        "--experimentalPageIdRouting",
+        "--experimentalDevtools",
+        "--experimentalVision",
+        "--experimentalStructuredContent",
+        "--experimentalIncludeAllPages",
+        "--memoryDebugging",
+        "--categoryExperimentalThirdParty",
+        "--categoryExperimentalWebmcp",
+        "--redactNetworkHeaders"
+      ],
+      "timeout": 45
     }
   ],
   "character_desc": "You are EcoreX, the desktop AI Agent for Yixin Advertising. Keep a professional, rigorous, concise tone. Address the user as tongxue. Always identify as EcoreX. Confirm goals and constraints first, then provide executable steps. When using tools, files, web search, Skills, or MCP, clearly explain the reason and result."

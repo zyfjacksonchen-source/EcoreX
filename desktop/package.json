@@ -1,6 +1,6 @@
 {
   "name": "ecorex-desktop",
-  "version": "0.2.0",
+  "version": "0.2.4",
   "private": true,
   "description": "EcoreX desktop application with a local agent runtime",
   "author": "EcoreX",
@@ -17,8 +17,8 @@
     "build": "npm run build:renderer && npm run build:electron",
     "build:renderer": "vite build",
     "build:electron": "tsc -p tsconfig.electron.json",
-    "webui:package": "npm run build:renderer && powershell -ExecutionPolicy Bypass -Command \"Set-Location ..; ./scripts/prepare-ecorex-webui-local-release.ps1 -Version 0.2.0\"",
-    "webui:stage-public": "npm run webui:package && powershell -ExecutionPolicy Bypass -Command \"Set-Location ..; ./scripts/update-ecorex-desktop-release-manifest.ps1 -Version 0.2.0 -PromoteVersion -WebUiWindowsPath release-artifacts/EcoreX_0.2.0-webui-windows-x64.zip -WebUiMacosPath release-artifacts/EcoreX_0.2.0-webui-macos-universal.zip; ./scripts/prepare-ecorex-public-release.ps1 -Version 0.2.0\"",
+    "webui:package": "npm run build:renderer && powershell -ExecutionPolicy Bypass -Command \"Set-Location ..; ./scripts/prepare-ecorex-webui-local-release.ps1 -Version 0.2.4\"",
+    "webui:stage-public": "npm run webui:package && powershell -ExecutionPolicy Bypass -Command \"Set-Location ..; ./scripts/update-ecorex-desktop-release-manifest.ps1 -Version 0.2.4 -PromoteVersion -WebUiWindowsPath release-artifacts/EcoreX_0.2.4-webui-windows-x64.zip -WebUiMacosPath release-artifacts/EcoreX_0.2.4-webui-macos-universal.zip; ./scripts/prepare-ecorex-public-release.ps1 -Version 0.2.4\"",
     "package": "npm run package:win",
     "package:dir": "npm run build && npm run stage:runtime:win && electron-builder --dir --publish never",
     "package:win": "npm run build && npm run stage:runtime:win:x64 && electron-builder --win --x64 --publish never",
@@ -45,7 +45,7 @@
     "smoke:win:installed": "powershell -ExecutionPolicy Bypass -File scripts/smoke-installed-win.ps1",
     "smoke:win:unpacked": "powershell -ExecutionPolicy Bypass -File scripts/smoke-unpacked-win.ps1",
     "smoke:sidecar:lifecycle": "npm run build:electron && node scripts/smoke-sidecar-lifecycle.mjs",
-    "smoke:office:preinstall": "python ../scripts/smoke-office-preinstall.py --root .. --output ../docs/v0.2.0/office-preinstall-smoke.json --require-staged-runtime",
+    "smoke:office:preinstall": "python ../scripts/smoke-office-preinstall.py --root .. --output ../docs/v0.2.4/artifacts/office-preinstall-smoke.json --require-staged-runtime",
     "smoke:local-path:safety": "npm run build:electron && node scripts/smoke-local-path-safety.mjs",
     "smoke:local-path:symlink:win": "powershell -ExecutionPolicy Bypass -File scripts/smoke-local-path-symlink-win.ps1",
     "smoke:renderer:visual": "powershell -ExecutionPolicy Bypass -File scripts/smoke-renderer-visual.ps1",
@@ -55,10 +55,12 @@
   },
   "dependencies": {
     "lucide-react": "^0.561.0",
+    "markdown-it": "^14.2.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3"
   },
   "devDependencies": {
+    "@types/markdown-it": "^14.1.2",
     "@types/node": "^24.10.2",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",

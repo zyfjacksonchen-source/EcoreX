@@ -1,0 +1,220 @@
+{
+  "blockers": [
+    {
+      "id": "public-manifest-not-promoted",
+      "reason": "Public download manifest is not promoted to v0.2.2 web-linux-service evidence.",
+      "surface": "release"
+    },
+    {
+      "id": "public-release-package-not-built",
+      "reason": "Default public release package is not built or does not match the promoted v0.2.2 evidence.",
+      "surface": "release"
+    }
+  ],
+  "checks": [
+    {
+      "detail": "matrix status=REVIEWED-PASS rows=19 commands=34",
+      "id": "harness-matrix-reviewed",
+      "status": "pass"
+    },
+    {
+      "detail": "R22-01 through R22-19 present",
+      "id": "acceptance-ids-complete",
+      "status": "pass"
+    },
+    {
+      "detail": "all non-release R22 items are non-pending",
+      "id": "non-release-acceptance-complete",
+      "status": "pass"
+    },
+    {
+      "detail": "PASS",
+      "id": "r22-12-status",
+      "status": "pass"
+    },
+    {
+      "detail": "real read-only Feishu IM smoke passed with itemCount=1",
+      "id": "feishu-im-real-credential-smoke-valid",
+      "status": "pass"
+    },
+    {
+      "detail": "7 scripts present",
+      "id": "release-scripts-present",
+      "status": "pass"
+    },
+    {
+      "detail": "webui-windows-x64.size=83335855; webui-windows-x64.sha256='075FAE724C209A1EB7E9EBF2368775FED872986E82380F64AAC4472545EA1567'; webui-macos-universal.size=158450816; webui-macos-universal.sha256='92C9E1D278E6B726CDADED937A35B4C589ECCFCC9C25DC68FB3FCBE34DF21880'",
+      "id": "public-manifest-promoted",
+      "status": "blocked"
+    },
+    {
+      "detail": "6 release default version markers point to 0.2.2",
+      "id": "release-default-versions-promoted",
+      "status": "pass"
+    },
+    {
+      "detail": "size=247415588; sha256=8B4CBA0452BDCBC46D1BC74852AF70DCE53ABF04BED51E2863E37A1D03BB0A77",
+      "id": "public-release-package-valid",
+      "status": "blocked"
+    },
+    {
+      "detail": "release-artifacts/EcoreX_0.2.2-web-linux-service.tar.gz scope=local-filesystem-web-linux-service size=3542886 checksums=489 pointer=manifest-pointer-fallback",
+      "id": "deploy-rollback-smoke-valid",
+      "status": "pass"
+    },
+    {
+      "detail": "release-artifacts/EcoreX_0.2.2-web-linux-service.tar.gz scope=target-environment-web-linux-service size=3542886 checksums=489 pointer=target-current-symlink",
+      "id": "target-deploy-rollback-smoke-valid",
+      "status": "pass"
+    },
+    {
+      "detail": "READY_FOR_TARGET_INPUT target handoff template does not execute target or clear blocker",
+      "id": "target-command-template-valid",
+      "status": "pass"
+    },
+    {
+      "detail": "target-environment deploy/rollback smoke passed",
+      "id": "target-environment-deploy-rollback",
+      "status": "pass"
+    },
+    {
+      "detail": "production Web/admin deploy passed with web tar 9631E563D5457B7032228384F139370E49535AA317E9C24BA1A0442F39792D4D",
+      "id": "production-deploy-online-valid",
+      "status": "pass"
+    },
+    {
+      "detail": "online browser smoke explicitly waived by operator with hash-only evidence",
+      "id": "online-web-browser-smoke-waiver-valid",
+      "status": "pass"
+    },
+    {
+      "detail": "online browser smoke status expected 'PASS', got 'FAIL'",
+      "id": "online-web-browser-smoke-valid",
+      "status": "waived"
+    },
+    {
+      "detail": "release-gate.md missing blocked markers: Current status: `BLOCKED`, BLOCKED, public-manifest-not-promoted, public-release-package-not-built",
+      "id": "release-gate-doc",
+      "status": "fail"
+    },
+    {
+      "detail": "release-manifest.md missing markers: RELEASE-CANDIDATE-EVIDENCE-BLOCKED, Known Non-Final Gates, public-manifest-not-promoted, public-release-package-not-built",
+      "id": "release-manifest-valid",
+      "status": "fail"
+    }
+  ],
+  "errors": [
+    "release-gate.md missing blocked markers: Current status: `BLOCKED`, BLOCKED, public-manifest-not-promoted, public-release-package-not-built",
+    "release-manifest.md missing markers: RELEASE-CANDIDATE-EVIDENCE-BLOCKED, Known Non-Final Gates, public-manifest-not-promoted, public-release-package-not-built"
+  ],
+  "matrix": {
+    "command_shell": "PowerShell",
+    "commands": 34,
+    "coverage": {
+      "artifacts": [
+        "runtime-ledger-replay-core",
+        "web-runtime-projection-reconnect-browser",
+        "artifact-and-image-job-projection",
+        "image-jobs-seven-scenario-smoke",
+        "web-ui-polish-browser"
+      ],
+      "channels": [
+        "channels-observability-browser"
+      ],
+      "disconnect": [
+        "web-runtime-projection-reconnect-browser",
+        "web-runtime-real-network-browser",
+        "web-runtime-projection-history-pagination-browser",
+        "sidecar-restart-and-replay-gap"
+      ],
+      "feishu": [
+        "channels-observability-browser",
+        "feishu-agent-capability-contract"
+      ],
+      "image-fallback": [
+        "image-generation-tool-invocation-fallback",
+        "image-jobs-provider-fallback-api",
+        "image-jobs-seven-scenario-smoke"
+      ],
+      "image-jobs": [
+        "web-runtime-projection-reconnect-browser",
+        "artifact-and-image-job-projection",
+        "image-jobs-provider-fallback-api",
+        "image-jobs-ocr-reuse-api",
+        "image-jobs-seven-scenario-smoke"
+      ],
+      "markdown": [
+        "web-markdown-it-browser",
+        "web-ui-polish-browser"
+      ],
+      "permissions": [
+        "runtime-ledger-replay-core",
+        "permission-audit-contract",
+        "feishu-agent-capability-contract",
+        "scheduler-management-permission-harness"
+      ],
+      "project-sessions": [
+        "project-session-browser-isolation"
+      ],
+      "refresh": [
+        "web-runtime-projection-reconnect-browser",
+        "web-runtime-real-network-browser",
+        "web-runtime-projection-history-pagination-browser",
+        "artifact-and-image-job-projection",
+        "image-jobs-seven-scenario-smoke",
+        "scheduler-management-permission-harness",
+        "project-session-browser-isolation"
+      ],
+      "replay": [
+        "runtime-ledger-replay-core",
+        "web-runtime-projection-reconnect-browser",
+        "web-runtime-real-network-browser",
+        "web-runtime-projection-history-pagination-browser",
+        "sidecar-restart-and-replay-gap",
+        "artifact-and-image-job-projection",
+        "image-jobs-seven-scenario-smoke"
+      ],
+      "restart": [
+        "sidecar-restart-and-replay-gap",
+        "artifact-and-image-job-projection",
+        "image-jobs-seven-scenario-smoke"
+      ],
+      "run-center": [
+        "web-run-center-hidden-browser"
+      ],
+      "scheduler": [
+        "scheduler-management-permission-harness"
+      ],
+      "status-motion": [
+        "web-status-motion-browser"
+      ],
+      "ui-polish": [
+        "web-ui-polish-browser"
+      ]
+    },
+    "external_blockers": 1,
+    "matrix": "docs\\v0.2.2\\harness-matrix.json",
+    "required_surfaces": [
+      "artifacts",
+      "channels",
+      "disconnect",
+      "feishu",
+      "image-fallback",
+      "image-jobs",
+      "markdown",
+      "permissions",
+      "project-sessions",
+      "refresh",
+      "replay",
+      "restart",
+      "run-center",
+      "scheduler",
+      "status-motion",
+      "ui-polish"
+    ],
+    "rows": 19,
+    "status": "REVIEWED-PASS"
+  },
+  "releasable": false,
+  "status": "BLOCKED"
+}

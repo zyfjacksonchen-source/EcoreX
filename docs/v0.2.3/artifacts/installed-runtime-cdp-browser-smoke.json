@@ -1,0 +1,19 @@
+{
+  "status": "PASS",
+  "browserConfig": {
+    "cdp_endpoint": "http://127.0.0.1:9222",
+    "cdp_auto_launch": true,
+    "cdp_fallback": true,
+    "persistent": true,
+    "cdp_user_data_dir": "~/.cow/chrome_cdp_profile"
+  },
+  "directStatus": "success",
+  "directHasUnavailable": false,
+  "ocrStatus": "success",
+  "ocrUrlCount": 1,
+  "viaOcrStatus": "success",
+  "viaOcrHasUnavailable": false,
+  "directTitleSeen": true,
+  "viaOcrTitleSeen": true,
+  "redacted": true
+}

@@ -1,0 +1,55 @@
+{
+  "version": "0.2.3",
+  "slice": "R23-16P-07",
+  "scenario": "image-artifact-ocr",
+  "generatedAt": "2026-06-27T02:22:14.130084+00:00",
+  "status": "pass",
+  "inputShape": {
+    "taskCount": 12,
+    "artifactsPerTask": 2,
+    "projectionIterations": 8
+  },
+  "identity": {
+    "sessionHash": "hmac:baaa9c4fc3f3c2a3",
+    "completedHash": "hmac:8b21a1e628c9ee8e",
+    "failedHash": "hmac:5c2eb9f468797d8c",
+    "cancelledHash": "hmac:eca13e6f2d013595"
+  },
+  "metrics": {
+    "ocrReuseP95Ms": 1.112,
+    "ocrProviderCallCount": 4,
+    "ocrCacheHitCount": 10,
+    "ocrCacheMissCount": 2,
+    "imageJobQueueWaitP95Ms": 11.569,
+    "artifactMergeP95Ms": 13.4,
+    "eventCount": 121,
+    "payloadBytes": 25824,
+    "projectedArtifactCount": 24,
+    "projectedArtifactFingerprintCount": 24,
+    "projectedArtifactShapeValidCount": 24,
+    "expectedArtifactCount": 24,
+    "retryEventCount": 1,
+    "completedJobMs": 1320.305,
+    "threadDeltaAfterIdle": 0,
+    "jobsBeforeCleanup": 3,
+    "runningJobsBeforeCleanup": 0,
+    "jobsAfterCleanup": 0,
+    "cleanupRemovedJobCount": 3
+  },
+  "coverage": {
+    "completedPath": true,
+    "failurePath": true,
+    "cancelPath": true,
+    "retryPath": true,
+    "projectionPath": true,
+    "cleanupPath": true
+  },
+  "failureCodes": [],
+  "redaction": {
+    "fullPathsStored": false,
+    "fullTextStored": false,
+    "sensitivePatternStored": false,
+    "eventBodiesStored": false
+  },
+  "totalMs": 1639.545
+}

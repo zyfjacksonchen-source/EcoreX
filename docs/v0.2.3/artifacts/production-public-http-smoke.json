@@ -1,0 +1,43 @@
+{
+  "status": "PASS",
+  "generatedAt": "2026-06-27T10:14:51.593739+00:00",
+  "scope": "production-public-http-smoke",
+  "checks": {
+    "rootStatus200": true,
+    "rootMentionsEcoreX": true,
+    "manifestStatus200": true,
+    "manifestVersion023": true,
+    "manifestArtifactCount": 7,
+    "adminProtected": true,
+    "artifactHeadsOk": true,
+    "artifactSizesMatch": true
+  },
+  "artifactChecks": [
+    {
+      "id": "webui-windows-x64",
+      "status": 200,
+      "manifestSize": 81510864,
+      "size": 81510864,
+      "sizeMatchesManifest": true
+    },
+    {
+      "id": "webui-macos-universal",
+      "status": 200,
+      "manifestSize": 158637393,
+      "size": 158637393,
+      "sizeMatchesManifest": true
+    },
+    {
+      "id": "web-linux-service",
+      "status": 200,
+      "manifestSize": 3731678,
+      "size": 3731678,
+      "sizeMatchesManifest": true
+    }
+  ],
+  "target": {
+    "domainHash": "A753D877497CBE35",
+    "rawUrlPersisted": false
+  },
+  "redacted": true
+}

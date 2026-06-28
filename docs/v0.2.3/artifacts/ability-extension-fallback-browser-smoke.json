@@ -1,0 +1,71 @@
+{
+  "consoleErrorCount": 0,
+  "failed": [],
+  "generatedAt": "2026-06-27T07:33:40Z",
+  "metrics": {
+    "extensionsApiCallCount": 1,
+    "rowCount": 9,
+    "toolsApiCallCount": 1,
+    "toolsApiReturnsEmpty": true,
+    "unloadedCount": 0
+  },
+  "redacted": true,
+  "rows": [
+    {
+      "className": "is-waiting",
+      "name": "联网搜索",
+      "status": "需凭据",
+      "text": "联网搜索\n已启用入口，等待搜索服务凭据\n需凭据"
+    },
+    {
+      "className": "is-ready",
+      "name": "Bash / Shell",
+      "status": "已加载",
+      "text": "Bash / Shell\n可在项目上下文中执行命令\n已加载"
+    },
+    {
+      "className": "is-ready",
+      "name": "本地文件读写",
+      "status": "已加载",
+      "text": "本地文件读写\n读取、写入、编辑、目录浏览已就绪\n已加载"
+    },
+    {
+      "className": "is-ready",
+      "name": "OCR / 图像理解",
+      "status": "已加载",
+      "text": "OCR / 图像理解\n快速 OCR 与图像理解工具已加载\n已加载"
+    },
+    {
+      "className": "is-waiting",
+      "name": "Image Gen",
+      "status": "未启用",
+      "text": "Image Gen\n等待开启图像生成 Skill\n未启用"
+    },
+    {
+      "className": "is-ready",
+      "name": "定时任务",
+      "status": "工具已加载",
+      "text": "定时任务\n已启用，未运行，0 个任务\n工具已加载"
+    },
+    {
+      "className": "is-ready",
+      "name": "飞书 / Lark CLI",
+      "status": "已加载",
+      "text": "飞书 / Lark CLI\n结构化 feishu_cli 已加载；授权缺失时会引导登录，不走 raw lark-cli\n已加载"
+    },
+    {
+      "className": "is-ready",
+      "name": "Playwright 浏览器",
+      "status": "已加载",
+      "text": "Playwright 浏览器\n浏览器工具已加载，CDP 优先并按需 fallback\n已加载"
+    },
+    {
+      "className": "is-ready",
+      "name": "项目记忆",
+      "status": "已开启",
+      "text": "项目记忆\n通用会话保留原项目内置记忆入口\n已开启"
+    }
+  ],
+  "scenario": "settings-abilities-builtin-extension-fallback",
+  "status": "PASS"
+}
