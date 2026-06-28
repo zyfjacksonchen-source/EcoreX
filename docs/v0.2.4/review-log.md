@@ -30,3 +30,13 @@
 ## Production Deployment
 
 - 2026-06-28: Release/deployment check passed for v0.2.4 WebUI dual-end. Local typecheck/build/package/manifest/public-release/validator/release-contract/install-packaging checks passed before deploy; production deployment evidence reports v0.2.3 pre-state and v0.2.4 post-state for service, installation manifest, and public manifest. Final gate remains `PENDING` because R24-14B real EcoreX-vs-Codex timing was explicitly skipped by user instruction.
+- 2026-06-28: Windows command-line install hotfix reviewed after user reported `Remove-Item` path-not-found from `Microsoft.PowerShell.Archive` during `Expand-Archive -Force`. Public bootstrap now prefers `curl.exe` resumable download and falls back to PowerShell streaming, and extraction uses `Expand-EcoreXZip` with zip-slip guard instead of `Expand-Archive`; release validator and install packaging contract now enforce both markers. Production online script check confirms curl/resume/robust-zip markers and no `Expand-Archive`.
+
+## R24-16 Hotfix Review
+
+- Status: PASS.
+- Architecture/tool-surface review: PASS locally. `agent/skills/tool_bridge.py`, `agent/skills/formatter.py`, `agent/extensions/registry.py`, `bridge/agent_initializer.py`, and `agent/protocol/agent_stream.py` expose official-style callable tool names while preserving EcoreX skill IDs. Office/PDF wrapper tools are registered through `agent/tools/__init__.py`, and Tongxin CLI is included in the same alias surface.
+- Feishu CLI auth/security review: PASS locally. `agent/tools/feishu_cli/feishu_cli.py` implements the Codex-like split flow, QR generation, device-code completion, stdin credential initialization, and argument redaction. `channel/web/web_channel.py` exposes only sanitized `agentCliStatus` in external-connection tests.
+- Release/install review: PASS locally. `scripts/smoke-v024-release-artifact-contracts.py`, `scripts/validate-ecorex-release-artifacts.py`, and `scripts/smoke-v023-install-packaging-contracts.py` cover the hotfix markers. Online install smoke passed in a short isolated Windows install shape; long temporary extraction remains covered by `Expand-EcoreXZip` instead of `Expand-Archive`.
+- Sub-agent cross-review: Turing returned PASS across architecture/tool-surface, Feishu CLI auth/security, and release/install/deploy. It also checked local release artifact size/SHA consistency with `deploy/ecorex-site/manifest.json` and the public release ZIP embedded manifest.
+- Verification evidence: `skill-tool-exposure-hotfix-source.json`, `feishu-cli-auth-parity-source.json`, `online-install-smoke-short-path.json`, and refreshed `production-deploy-online.json`.

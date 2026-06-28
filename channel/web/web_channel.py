@@ -4011,9 +4011,10 @@ class WebChannel(ChatChannel):
                 bounded_list.append(self._bounded_tool_value(child, limits, truncated_fields, f"{path}[{index}]", depth + 1))
             return bounded_list
         if isinstance(value, str) and path:
+            key = path.rsplit(".", 1)[-1].strip("[]")
             limited, meta = self._limit_text_with_marker(
                 value,
-                limits.get("output_field_chars", self.TOOL_OUTPUT_FIELD_CHAR_LIMIT),
+                self._artifact_text_limit_for_key(key, limits),
             )
             if meta:
                 truncated_fields.append({"field": path, **meta})
@@ -4051,8 +4052,8 @@ class WebChannel(ChatChannel):
     def _bounded_tool_result_for_sse(self, result: Any) -> Tuple[str, Dict[str, Any]]:
         limits = self._tool_output_limits()
         truncated_fields: List[Dict[str, Any]] = []
-        public_result = redact_public_tool_value(result)
-        bounded_result = self._bounded_tool_value(public_result, limits, truncated_fields)
+        bounded_raw_result = self._bounded_tool_value(result, limits, truncated_fields)
+        bounded_result = redact_public_tool_value(bounded_raw_result)
         if isinstance(bounded_result, (dict, list)):
             result_str = json.dumps(
                 bounded_result,
@@ -11074,6 +11075,26 @@ def _external_connection_runtime_projection_by_platform() -> Dict[str, Any]:
     }
 
 
+def _safe_feishu_cli_status_probe(payload: Any) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {"status": "error", "available": False, "authState": "unknown"}
+    safe: Dict[str, Any] = {
+        "status": str(payload.get("status") or ""),
+        "available": bool(payload.get("available")),
+        "authState": str(payload.get("authState") or "unknown"),
+        "authenticated": bool(payload.get("authenticated")),
+        "commandAvailable": bool(payload.get("command")),
+    }
+    next_action = payload.get("nextAction")
+    if isinstance(next_action, dict):
+        safe["nextAction"] = {
+            "tool": str(next_action.get("tool") or "feishu_cli"),
+            "action": str(next_action.get("action") or "auth_login"),
+            **({"domain": str(next_action.get("domain"))} if next_action.get("domain") else {}),
+        }
+    return safe
+
+
 class ExternalConnectionsHandler:
     """Hermes-style external connection projection backed by channel observability."""
 
@@ -11168,6 +11189,9 @@ class ExternalConnectionActionHandler:
             if connection.get("configured") and dependency_status.get("status") == "missing":
                 adapter["readiness"] = "dependency_missing"
                 adapter["reason"] = "local runtime dependency is missing"
+            agent_cli_status = ExternalConnectionActionHandler._probe_feishu_cli_status()
+            adapter["agentCliStatus"] = agent_cli_status
+            connection["agentCliStatus"] = agent_cli_status
         adapter_readiness = str(adapter.get("readiness") or "")
         test_status = "success"
         if not adapter.get("configured") or adapter_readiness == "not_configured":
@@ -11189,6 +11213,7 @@ class ExternalConnectionActionHandler:
                 "remoteConnectivityProbed": False,
                 "adapter": adapter,
                 "dependencyStatus": dependency_status,
+                "agentCliStatus": adapter.get("agentCliStatus", {}),
             },
         )
         return json.dumps({
@@ -11204,8 +11229,27 @@ class ExternalConnectionActionHandler:
                 "mode": "projection_dry_run",
                 "remoteConnectivityProbed": False,
                 "dependencyStatus": dependency_status,
+                "agentCliStatus": adapter.get("agentCliStatus", {}),
             },
         }, ensure_ascii=False)
+
+    @staticmethod
+    def _probe_feishu_cli_status() -> Dict[str, Any]:
+        try:
+            from agent.tools.feishu_cli.feishu_cli import FeishuCli
+
+            result = FeishuCli({"cwd": _get_workspace_root()}).execute({"action": "status", "timeout": 15})
+            safe = _safe_feishu_cli_status_probe(getattr(result, "result", {}))
+            safe["toolStatus"] = str(getattr(result, "status", "") or "")
+            return safe
+        except Exception as exc:
+            return {
+                "status": "error",
+                "available": False,
+                "authState": "unknown",
+                "message": _public_exception_message("Feishu CLI status probe failed.", exc),
+                **_public_exception_summary(exc),
+            }
 
     @staticmethod
     def _handle_home_channel(channel_name: str, action: str, body: Dict[str, Any]) -> str:

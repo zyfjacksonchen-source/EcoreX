@@ -981,7 +981,11 @@
   - `release-artifacts/EcoreX_0.2.4-webui-windows-x64.zip` SHA256 `8F1BB474D78A2D7BA461D45724EB8B5BD6F812497575E8A9A3A640520BA0AD8C`, size `136394935`.
   - `release-artifacts/EcoreX_0.2.4-webui-macos-universal.zip` SHA256 `8A4A8B2F4824D09608F394CF08E0A944610E73676A77BB21B016CC18FC9864D5`, size `263172470`.
   - `release-artifacts/EcoreX_0.2.4-web-linux-service.tar.gz` SHA256 `364C7F2EDCE786E2725C892C17FC2A285C27A820308585AF31CC986D81FE5828`, size `3806498`.
-  - `release-artifacts/EcoreX_0.2.4-public-release.zip` SHA256 `2E5118DE0E24A668F3928804D6A441912887BAB7A5F165201AF3D083DC2F07E3`, size `399407438`.
+  - `release-artifacts/EcoreX_0.2.4-public-release.zip` SHA256 `2F8C14FC0489518EAEE9E3FEC9F293FA2B93C734D6E757C683840B9D38C70F5E`, size `399408328`.
+- 2026-06-28 command-line install hotfix after a Windows user hit `Microsoft.PowerShell.Archive` cleanup race during `Expand-Archive -Force`:
+  - `deploy/ecorex-site/install-webui.ps1` now prefers `curl.exe` with `--continue-at -`, retry, speed-stall detection, and SHA256 verification before falling back to the PowerShell streaming downloader.
+  - The Windows bootstrap no longer calls `Expand-Archive`; it uses `Expand-EcoreXZip`, a `.NET ZipFile` extractor that clears a fresh destination, extracts entries one by one, and blocks unsafe zip-slip paths.
+  - Rebuilt public release ZIP only; WebUI Windows/macOS package hashes remain unchanged. Online `https://mvdcm.ecoremedia.net/ecorex-agent/install-webui.ps1` contains `Try-SaveUrlWithCurl` and `Expand-EcoreXZip`, and contains no `Expand-Archive`.
 - Verification before deploy:
   - `npm --prefix desktop run typecheck` -> PASS.
   - `npm --prefix desktop run build:renderer` -> PASS.
@@ -991,7 +995,7 @@
   - `scripts/prepare-ecorex-public-release.ps1 -Version 0.2.4` -> PASS.
   - `scripts/validate-ecorex-release-artifacts.py --version 0.2.4` -> PASS.
   - `scripts/smoke-v024-release-artifact-contracts.py --version 0.2.4` -> PASS for native facades, skill governance, Tongxin, Lark, and Office/PDF.
-  - `scripts/smoke-v023-install-packaging-contracts.py --version 0.2.4` -> PASS, including `windows package preinstalls lark_oapi before first-run` and `windows first-run installer does not run pip`.
+  - `scripts/smoke-v023-install-packaging-contracts.py --version 0.2.4` -> PASS, including `windows package preinstalls lark_oapi before first-run`, `windows first-run installer does not run pip`, `windows bootstrap prefers curl accelerated resumable download`, and `windows bootstrap avoids Expand-Archive cleanup race`.
   - `tests/test_v024_final_release_gate.py` -> `21 passed`; regenerated final release gate remains `PENDING` with R24-14B/R24-15 remaining.
   - Deployment exception, final-gate, and production deployment privacy scans all report `findingCount=0`.
 - Production deployment evidence:
@@ -1001,3 +1005,26 @@
   - Final post-state is v0.2.4 for web service, installation manifest, and public manifest.
   - Online checks: `serviceActive=true`, `serviceEnabled=true`, `/api/version` status `200`, and body contains `0.2.4`.
   - Public release check passed manifest/root/assets/admin gate/client gate and download URLs for Windows WebUI, macOS WebUI, and web-linux-service.
+
+## R24-16 Skill Tool Exposure and Feishu CLI Auth Hotfix
+
+- 2026-06-29: Added a standalone v0.2.4 hotfix slice for newly added skills whose instructions were visible but whose callable tools were not exposed into the model/runtime environment:
+  - Added an EcoreX-native skill-to-tool bridge so official-style Office/PDF, ImageGen, and Tongxin aliases resolve to callable tool names while preserving old EcoreX skill IDs.
+  - Added `<callable_tool>` prompt metadata, extension-registry `agentSurface` projection, model tool-schema aliases, and Office/PDF wrapper tools for documents, presentations, spreadsheets, and PDF.
+  - Included Tongxin CLI in the same exposure path so the default read-only CLI capability is visible as a callable tool instead of only as a configuration surface.
+- Feishu CLI auth parity now follows the Codex/lark-shared split flow:
+  - Auth start uses non-blocking JSON output and generates a QR image from the returned URL.
+  - Auth completion accepts a device code in a later call.
+  - App configuration supports stdin credential initialization and masks sensitive command arguments in display output.
+  - External Connections test results now include a sanitized `agentCliStatus` probe instead of raw CLI output.
+- Verification:
+  - Real CLI status probe reported `authState=ready` and `authenticated=true`.
+  - Real read-only Feishu CLI help and user-scoped contact command both succeeded; raw user data was not persisted into artifacts.
+  - Source and package tests passed: py_compile PASS; backend regression `395 passed, 26 subtests passed`; focused v0.2.4 hotfix pytest `50 passed`; typecheck/build PASS; release validation PASS; release artifact contracts PASS; install packaging contract PASS.
+  - Online short-path Windows install smoke passed: download SHA verified, robust ZIP extraction completed, local installer finished, WebUI returned HTTP 200, package files for tool bridge/Office wrappers/Feishu CLI were present, and bundled Lark runtime readiness reported SDK version `1.6.9` without relying on full SDK import.
+- Final rebuilt/deployed artifacts:
+  - `release-artifacts/EcoreX_0.2.4-webui-windows-x64.zip` SHA256 `7B8DF00B62C9C7EE6D07AA3D8431DFD677B8E3E1EC1D8F6DE3942347187CB98E`, size `113975793`.
+  - `release-artifacts/EcoreX_0.2.4-webui-macos-universal.zip` SHA256 `CB749E9BE716E1B66C9C6E2B4B3289AEB1B1525242F5377FBFB7A37769186319`, size `263183329`.
+  - `release-artifacts/EcoreX_0.2.4-web-linux-service.tar.gz` SHA256 `B52C30B92BBE26FF6A78DC6FCAF2EA20DABC0BE561425013B4608DBC77760A5B`, size `3813695`.
+  - `release-artifacts/EcoreX_0.2.4-public-release.zip` SHA256 `4430E029180D2CF370284459C7145E99BEEEA36FD558F69A7C7E31875A924F7D`, size `380157446`.
+- Production deployment was refreshed successfully after clearing only stale deployment staging directories under the remote temporary release prefix. Final online checks remain v0.2.4 for web service, installation manifest, and public manifest.

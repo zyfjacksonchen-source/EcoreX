@@ -76,6 +76,10 @@ Vision = _safe_import("agent.tools.vision.vision", "Vision")
 OcrTool = _safe_import("agent.tools.ocr.ocr", "OcrTool")
 BrowserTool = _safe_import("agent.tools.browser.browser_tool", "BrowserTool")
 ImageGenTool = _safe_import("agent.tools.imagegen.imagegen", "ImageGenTool")
+OfficeDocumentsTool = _safe_import("agent.tools.office_artifacts.office_artifacts", "OfficeDocumentsTool")
+OfficePdfTool = _safe_import("agent.tools.office_artifacts.office_artifacts", "OfficePdfTool")
+OfficePresentationsTool = _safe_import("agent.tools.office_artifacts.office_artifacts", "OfficePresentationsTool")
+OfficeSpreadsheetsTool = _safe_import("agent.tools.office_artifacts.office_artifacts", "OfficeSpreadsheetsTool")
 McpTool = _safe_import("agent.tools.mcp.mcp_tool", "McpTool")
 McpClientRegistry = _safe_import("agent.tools.mcp.mcp_client", "McpClientRegistry")
 
@@ -108,5 +112,9 @@ __all__ = [
     "OcrTool",
     "BrowserTool",
     "ImageGenTool",
+    "OfficeDocumentsTool",
+    "OfficePdfTool",
+    "OfficePresentationsTool",
+    "OfficeSpreadsheetsTool",
     "McpTool",
 ]

@@ -1,30 +1,30 @@
 {
   "status": "PASS",
-  "generatedAt": "2026-06-28T14:15:31Z",
+  "generatedAt": "2026-06-28T18:07:58Z",
   "scope": "R24-04 webui release Office/PDF runtime contract",
   "windows": {
     "artifactId": "webui-windows-x64",
     "artifactName": "EcoreX_0.2.4-webui-windows-x64.zip",
-    "size": 136394935,
-    "sha256": "8F1BB474D78A2D7BA461D45724EB8B5BD6F812497575E8A9A3A640520BA0AD8C"
+    "size": 113975793,
+    "sha256": "7B8DF00B62C9C7EE6D07AA3D8431DFD677B8E3E1EC1D8F6DE3942347187CB98E"
   },
   "macos": {
     "artifactId": "webui-macos-universal",
     "artifactName": "EcoreX_0.2.4-webui-macos-universal.zip",
-    "size": 263172470,
-    "sha256": "8A4A8B2F4824D09608F394CF08E0A944610E73676A77BB21B016CC18FC9864D5"
+    "size": 263183329,
+    "sha256": "CB749E9BE716E1B66C9C6E2B4B3289AEB1B1525242F5377FBFB7A37769186319"
   },
   "webLinuxService": {
     "artifactId": "web-linux-service",
     "artifactName": "EcoreX_0.2.4-web-linux-service.tar.gz",
-    "size": 3806498,
-    "sha256": "364C7F2EDCE786E2725C892C17FC2A285C27A820308585AF31CC986D81FE5828"
+    "size": 3813695,
+    "sha256": "B52C30B92BBE26FF6A78DC6FCAF2EA20DABC0BE561425013B4608DBC77760A5B"
   },
   "publicRelease": {
     "artifactId": "public-release",
     "artifactName": "EcoreX_0.2.4-public-release.zip",
-    "size": 399407438,
-    "sha256": "2E5118DE0E24A668F3928804D6A441912887BAB7A5F165201AF3D083DC2F07E3"
+    "size": 380157446,
+    "sha256": "4430E029180D2CF370284459C7145E99BEEEA36FD558F69A7C7E31875A924F7D"
   },
   "checks": [
     {
@@ -43,6 +43,14 @@
       "status": "PASS",
       "evidence": {
         "bundleTextScanned": true
+      }
+    },
+    {
+      "label": "webui-windows-x64 Office/PDF callable skill tools packaged",
+      "status": "PASS",
+      "evidence": {
+        "toolsInitEntrySuffix": "agent/tools/__init__.py",
+        "officeToolsEntrySuffix": "agent/tools/office_artifacts/office_artifacts.py"
       }
     },
     {
@@ -206,6 +214,14 @@
       "status": "PASS",
       "evidence": {
         "bundleTextScanned": true
+      }
+    },
+    {
+      "label": "webui-macos-universal Office/PDF callable skill tools packaged",
+      "status": "PASS",
+      "evidence": {
+        "toolsInitEntrySuffix": "agent/tools/__init__.py",
+        "officeToolsEntrySuffix": "agent/tools/office_artifacts/office_artifacts.py"
       }
     },
     {
@@ -409,8 +425,8 @@
       "label": "public manifest matches webui-windows-x64",
       "status": "PASS",
       "evidence": {
-        "manifestSize": 136394935,
-        "artifactSize": 136394935,
+        "manifestSize": 113975793,
+        "artifactSize": 113975793,
         "hashMatches": true
       }
     },
@@ -425,8 +441,8 @@
       "label": "public manifest matches webui-macos-universal",
       "status": "PASS",
       "evidence": {
-        "manifestSize": 263172470,
-        "artifactSize": 263172470,
+        "manifestSize": 263183329,
+        "artifactSize": 263183329,
         "hashMatches": true
       }
     },
@@ -441,8 +457,8 @@
       "label": "public manifest matches web-linux-service",
       "status": "PASS",
       "evidence": {
-        "manifestSize": 3806498,
-        "artifactSize": 3806498,
+        "manifestSize": 3813695,
+        "artifactSize": 3813695,
         "hashMatches": true
       }
     }

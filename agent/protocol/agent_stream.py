@@ -15,6 +15,7 @@ from typing import List, Dict, Any, Optional, Callable, Tuple
 from agent.protocol.cancel import AgentCancelledError
 from agent.protocol.models import LLMRequest, LLMModel
 from agent.protocol.message_utils import sanitize_claude_messages, compress_turn_to_text_only
+from agent.skills.tool_bridge import SKILL_CALLABLE_TOOL_ALIASES
 from agent.tools.base_tool import BaseTool, ToolResult
 from common.ecorex_identity import sanitize_assistant_identity, sanitize_message_identity
 from common.log import logger
@@ -259,6 +260,7 @@ TOOL_NAME_ALIASES = {
     "xin_agent_cli": "tongxin_cli",
     "xin-agent-cli": "tongxin_cli",
 }
+TOOL_NAME_ALIASES.update(SKILL_CALLABLE_TOOL_ALIASES)
 
 TOOL_SCHEMA_INTENT_KEYWORDS = {
     "browser": (
@@ -274,6 +276,13 @@ TOOL_SCHEMA_INTENT_KEYWORDS = {
     "tongxin": (
         "tongxin", "xin_agent", "xin agent", "芯助手", "通芯", "实时消耗", "账号数据", "三端口",
         "本土小红书", "医美小红书", "乘风小红书", "mpi", "广告主", "消耗", "展现", "点击",
+    ),
+    "office": (
+        "office", "document", "documents", "word", "doc", "docx", "pdf",
+        "presentation", "presentations", "powerpoint", "ppt", "pptx", "slides",
+        "spreadsheet", "spreadsheets", "excel", "workbook", "xlsx", "xlsm", "csv", "tsv",
+        "文档", "word文档", "docx", "pdf", "幻灯片", "演示文稿", "ppt", "pptx",
+        "表格", "电子表格", "excel", "xlsx", "工作簿", "质量检查", "渲染预览",
     ),
     "scheduler": (
         "schedule", "scheduler", "remind", "cron", "定时", "提醒", "自动化", "每天", "每周",
@@ -1130,6 +1139,8 @@ class AgentStreamExecutor:
             return "ocr"
         if name == "imagegen":
             return "imagegen"
+        if name in {"office_documents", "office_pdf", "office_presentations", "office_spreadsheets"}:
+            return "office"
         if name in {"memory_search", "memory_get"}:
             return "memory"
         if name in {"host_diagnostics", "optional_abilities", "agent_capability", "ecorex_cli", "env_config"}:

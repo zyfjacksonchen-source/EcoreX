@@ -72,11 +72,18 @@ def redact_public_tool_value(value: Any, *, max_depth: int = 5, max_items: int =
             return mask_sensitive_text(item, max_chars=max_chars)
         if isinstance(item, dict):
             safe: Dict[str, Any] = {}
-            omitted = 0
+            try:
+                total_items = len(item)
+            except Exception:
+                total_items = None
             for index, (key, child) in enumerate(item.items()):
                 if index >= max_items:
-                    omitted += 1
-                    continue
+                    safe["redacted_omitted_field_count"] = (
+                        max(1, total_items - max_items)
+                        if isinstance(total_items, int)
+                        else 1
+                    )
+                    break
                 normalized = str(key or "")
                 if _SENSITIVE_KEY_RE.search(normalized):
                     safe[normalized] = "[redacted]"
@@ -85,8 +92,6 @@ def redact_public_tool_value(value: Any, *, max_depth: int = 5, max_items: int =
                     safe[normalized] = "[redacted-content]"
                     continue
                 safe[normalized] = _redact(child, depth - 1, normalized)
-            if omitted:
-                safe["redacted_omitted_field_count"] = omitted
             return safe
         if isinstance(item, (list, tuple)):
             safe_list: List[Any] = [

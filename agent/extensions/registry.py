@@ -136,11 +136,13 @@ class ExtensionRegistry:
         try:
             from agent.skills.manager import SkillManager
             from agent.skills.service import _decorate_mention_metadata, _decorate_skill_governance
+            from agent.skills.tool_bridge import resolve_callable_tool_name, skill_agent_surface
 
             custom_dir = Path(self.workspace_root) / "skills"
             manager = SkillManager(custom_dir=str(custom_dir))
             skills = manager.skills
             saved = manager.get_skills_config()
+            agent_tool_names = self._agent_tool_names()
             entries: List[ExtensionEntry] = []
             for name, skill_entry in sorted(skills.items()):
                 skill = skill_entry.skill if skill_entry else None
@@ -169,6 +171,8 @@ class ExtensionRegistry:
                 kind = "builtin_skill" if row.get("source_group") == "builtin" else "user_skill"
                 enabled = bool(row.get("enabled", previous.get("enabled", default_enabled)))
                 policy = "built-in-locked" if row.get("source_group") == "builtin" else "user-overlay" if source == "custom" else "global-skill"
+                callable_tool = resolve_callable_tool_name(skill) if skill else resolve_callable_tool_name(name)
+                agent_surface = skill_agent_surface(skill or name, agent_tool_names, enabled=enabled)
                 entries.append({
                     "id": f"skill:{name}",
                     "type": kind,
@@ -197,9 +201,13 @@ class ExtensionRegistry:
                     "lockReason": row.get("lockReason"),
                     "lock_reason": row.get("lock_reason"),
                     "requires": getattr(metadata, "requires", {}) if metadata else {},
-                    "provides": ["skill"],
+                    "provides": ["skill"] + ([f"tool:{callable_tool}"] if callable_tool else []),
                     "configRefs": [{"path": "skills_config.json", "key": name}],
                     "status": "ready" if enabled else "disabled",
+                    "toolName": callable_tool or "",
+                    "schemaVisible": bool(agent_surface.get("schemaVisible")),
+                    "toolSchemaCallable": bool(agent_surface.get("toolSchemaCallable")),
+                    "agentSurface": agent_surface,
                     "category": row.get("category"),
                     "primary_env": row.get("primary_env"),
                     "user_invocable": row.get("user_invocable"),

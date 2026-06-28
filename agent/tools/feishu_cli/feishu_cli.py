@@ -9,6 +9,7 @@ after a structured find-skill discovery gate requests that on-demand setup.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import shutil
@@ -218,6 +219,7 @@ def _run_process(
     env: Dict[str, str],
     cwd: Optional[str] = None,
     cancel_event=None,
+    input_text: Optional[str] = None,
 ) -> subprocess.CompletedProcess:
     kwargs: Dict[str, Any] = {
         "cwd": cwd or os.getcwd(),
@@ -228,17 +230,21 @@ def _run_process(
         "errors": "replace",
         "env": env,
     }
+    if input_text is not None:
+        kwargs["stdin"] = subprocess.PIPE
     if os.name == "nt":
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     else:
         kwargs["start_new_session"] = True
     process = subprocess.Popen(command, **kwargs)
     deadline = time.time() + max(1, timeout)
+    pending_input = input_text
     while True:
         try:
-            stdout, stderr = process.communicate(timeout=0.25)
+            stdout, stderr = process.communicate(input=pending_input, timeout=0.25)
             break
         except subprocess.TimeoutExpired:
+            pending_input = None
             if cancel_event is not None and getattr(cancel_event, "is_set", lambda: False)():
                 _kill_process_tree(process)
                 try:
@@ -280,6 +286,51 @@ def _as_args(raw: Any) -> List[str]:
     if isinstance(raw, list):
         return [str(item) for item in raw]
     return []
+
+
+def _clean_cli_value(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _json_find_first(payload: Any, keys: Iterable[str]) -> str:
+    wanted = {key.lower() for key in keys}
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if str(key).lower() in wanted:
+                text = _clean_cli_value(value)
+                if text:
+                    return text
+        for value in payload.values():
+            found = _json_find_first(value, keys)
+            if found:
+                return found
+    elif isinstance(payload, list):
+        for item in payload:
+            found = _json_find_first(item, keys)
+            if found:
+                return found
+    return ""
+
+
+def _extract_first_url(text: str) -> str:
+    match = re.search(r"https?://[^\s\"'<>]+", text or "")
+    return match.group(0) if match else ""
+
+
+def _auth_url_from_result(result: Dict[str, Any]) -> str:
+    parsed = result.get("json")
+    url = _json_find_first(parsed, (
+        "verification_url",
+        "verification_uri",
+        "verification_uri_complete",
+        "console_url",
+        "url",
+    ))
+    return url or _extract_first_url(str(result.get("output") or ""))
+
+
+def _device_code_from_result(result: Dict[str, Any]) -> str:
+    return _json_find_first(result.get("json"), ("device_code", "deviceCode", "device-code"))
 
 
 def _auth_json_bool(payload: Any) -> Optional[bool]:
@@ -440,6 +491,22 @@ class FeishuCli(BaseTool):
             "domain": {
                 "type": "string",
                 "description": "Domain for auth_login, e.g. base, docs, drive. Defaults to base.",
+            },
+            "device_code": {
+                "type": "string",
+                "description": "Device code returned by a previous auth_login --no-wait flow; completes authorization.",
+            },
+            "app_id": {
+                "type": "string",
+                "description": "Feishu/Lark app ID for config_init. If omitted, EcoreX uses saved external connection credentials.",
+            },
+            "app_secret": {
+                "type": "string",
+                "description": "Feishu/Lark app secret for config_init. Passed to lark-cli over stdin, never as a command argument.",
+            },
+            "brand": {
+                "type": "string",
+                "description": "Brand for config_init, usually feishu or lark. Defaults to feishu.",
             },
             "timeout": {
                 "type": "integer",
@@ -673,11 +740,37 @@ class FeishuCli(BaseTool):
         command = _resolve_lark_command(env)
         if not command:
             return ToolResult.fail(self._missing_payload(env))
+        app_id, app_secret, credential_source = self._feishu_credentials(args)
+        brand = _clean_cli_value(args.get("brand") or "feishu") or "feishu"
+        if app_id and app_secret:
+            cli_args = ["config", "init", "--app-id", app_id, "--app-secret-stdin", "--brand", brand]
+            name = _clean_cli_value(args.get("name"))
+            if name:
+                cli_args.extend(["--name", name])
+            extra = _as_args(args.get("args"))
+            if extra:
+                cli_args.extend(extra)
+            result = self._safe_run(command + cli_args, env, timeout, input_text=app_secret + "\n")
+            result["credentialSource"] = credential_source
+            result["message"] = (
+                "lark-cli config initialized from EcoreX Feishu external connection credentials."
+                if result.get("exitCode") == 0
+                else "lark-cli config initialization failed."
+            )
+            if result.get("exitCode") != 0:
+                return ToolResult.fail(result)
+            return ToolResult.success(result)
+
         cli_args = ["config", "init", "--new"]
         extra = _as_args(args.get("args"))
         if extra:
             cli_args.extend(extra)
         result = self._safe_run(command + cli_args, env, timeout)
+        url = _auth_url_from_result(result)
+        if url:
+            result["verificationUrl"] = url
+            result["qrCode"] = self._generate_auth_qrcode(command, env, url, timeout)
+            result["authRequired"] = True
         if result.get("exitCode") != 0:
             return ToolResult.fail(result)
         return ToolResult.success(result)
@@ -686,6 +779,16 @@ class FeishuCli(BaseTool):
         command = _resolve_lark_command(env)
         if not command:
             return ToolResult.fail(self._missing_payload(env))
+
+        device_code = _clean_cli_value(args.get("device_code") or args.get("deviceCode"))
+        if device_code:
+            result = self._safe_run(command + ["auth", "login", "--device-code", device_code], env, timeout)
+            result["authFlow"] = "complete"
+            result["authCompleted"] = result.get("exitCode") == 0
+            if result.get("exitCode") != 0:
+                return ToolResult.fail(result)
+            result["authStatus"] = self._status(env, auth_timeout=max(1, min(timeout, 15)))
+            return ToolResult.success(result)
 
         cli_args = ["auth", "login"]
         scope = str(args.get("scope") or "").strip()
@@ -699,15 +802,88 @@ class FeishuCli(BaseTool):
         cli_args.extend(["--no-wait", "--json"])
 
         result = self._safe_run(command + cli_args, env, timeout)
-        parsed = result.get("json")
-        if isinstance(parsed, dict):
-            url = parsed.get("verification_url") or parsed.get("verification_uri") or parsed.get("verification_uri_complete")
-            if url:
-                result["authRequired"] = True
-                result["message"] = "Open the verification URL, finish Feishu authorization, then ask EcoreX to continue."
+        url = _auth_url_from_result(result)
+        device_code = _device_code_from_result(result)
+        result["authFlow"] = "start"
+        if device_code:
+            result["deviceCode"] = device_code
+        if url:
+            result["verificationUrl"] = url
+            result["qrCode"] = self._generate_auth_qrcode(command, env, url, timeout)
+            result["authRequired"] = True
+            result["message"] = (
+                "Open the verification URL or scan the QR code, finish Feishu authorization, "
+                "then run feishu_cli auth_login again with device_code to complete."
+            )
+            result["nextAction"] = {
+                "tool": "feishu_cli",
+                "action": "auth_login",
+                "device_code": device_code,
+            }
         if result.get("exitCode") != 0:
             return ToolResult.fail(result)
         return ToolResult.success(result)
+
+    def _feishu_credentials(self, args: Dict[str, Any]) -> tuple[str, str, str]:
+        app_id = _clean_cli_value(
+            args.get("app_id")
+            or args.get("appId")
+            or args.get("feishu_app_id")
+            or args.get("client_id")
+            or args.get("clientId")
+        )
+        app_secret = _clean_cli_value(
+            args.get("app_secret")
+            or args.get("appSecret")
+            or args.get("feishu_app_secret")
+            or args.get("client_secret")
+            or args.get("clientSecret")
+        )
+        if app_id and app_secret:
+            return app_id, app_secret, "tool_args"
+
+        env_app_id = _clean_cli_value(os.environ.get("FEISHU_APP_ID") or os.environ.get("LARK_APP_ID"))
+        env_app_secret = _clean_cli_value(os.environ.get("FEISHU_APP_SECRET") or os.environ.get("LARK_APP_SECRET"))
+        if env_app_id and env_app_secret:
+            return env_app_id, env_app_secret, "environment"
+
+        try:
+            from config import conf, load_config
+
+            cfg = conf()
+            if not cfg:
+                load_config()
+                cfg = conf()
+            config_app_id = _clean_cli_value(cfg.get("feishu_app_id") or cfg.get("lark_app_id"))
+            config_app_secret = _clean_cli_value(cfg.get("feishu_app_secret") or cfg.get("lark_app_secret"))
+            if config_app_id and config_app_secret:
+                return config_app_id, config_app_secret, "ecorex_external_connection"
+        except Exception as exc:
+            logger.debug(f"[FeishuCli] failed reading Feishu credentials from config: {exc}")
+        return "", "", "missing"
+
+    def _generate_auth_qrcode(self, command: List[str], env: Dict[str, str], url: str, timeout: int) -> Dict[str, Any]:
+        if not url:
+            return {"status": "skipped", "message": "verification URL missing"}
+        cwd = Path(self.cwd or os.getcwd()).expanduser()
+        cwd.mkdir(parents=True, exist_ok=True)
+        qr_dir = cwd / ".ecorex" / "lark-auth"
+        qr_dir.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+        relative_output = f".ecorex/lark-auth/feishu-auth-{digest}.png"
+        result = self._safe_run(
+            command + ["auth", "qrcode", url, "--output", relative_output, "--size", "256"],
+            env,
+            max(5, min(timeout, 30)),
+        )
+        path = cwd / relative_output
+        return {
+            "status": result.get("status"),
+            "exitCode": result.get("exitCode"),
+            "path": str(path),
+            "relativePath": relative_output,
+            "output": result.get("output", ""),
+        }
 
     def _run_cli(self, args: Dict[str, Any], env: Dict[str, str], timeout: int) -> ToolResult:
         command = _resolve_lark_command(env)
@@ -734,7 +910,7 @@ class FeishuCli(BaseTool):
             return ToolResult.fail(result)
         return ToolResult.success(result)
 
-    def _safe_run(self, command: List[str], env: Dict[str, str], timeout: int) -> Dict[str, Any]:
+    def _safe_run(self, command: List[str], env: Dict[str, str], timeout: int, input_text: Optional[str] = None) -> Dict[str, Any]:
         try:
             result = _run_process(
                 command,
@@ -742,6 +918,7 @@ class FeishuCli(BaseTool):
                 env=env,
                 cwd=self.cwd,
                 cancel_event=getattr(self, "cancel_event", None),
+                input_text=input_text,
             )
         except subprocess.TimeoutExpired as exc:
             return {
@@ -772,9 +949,24 @@ class FeishuCli(BaseTool):
     @staticmethod
     def _display_command(command: List[str]) -> List[str]:
         display = []
+        redact_next = False
+        sensitive_flags = {
+            "--app-id",
+            "--app_secret",
+            "--app-secret",
+            "--device-code",
+            "--access-token",
+            "--refresh-token",
+        }
         for part in command:
             text = str(part)
-            if re.search(r"(?i)(token|secret|password|api[_-]?key)", text):
+            if redact_next:
+                display.append("***")
+                redact_next = False
+            elif text in sensitive_flags:
+                display.append(text)
+                redact_next = True
+            elif re.search(r"(?i)(token|secret|password|api[_-]?key)", text):
                 display.append("***")
             else:
                 display.append(text)

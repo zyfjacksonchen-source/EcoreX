@@ -22,6 +22,14 @@ EXPECTED_FACADES = {
     "image-generation": "imagegen",
 }
 
+EXPECTED_TOOLS = {
+    "office-presentations": "office_presentations",
+    "office-spreadsheets": "office_spreadsheets",
+    "office-documents": "office_documents",
+    "office-pdf": "office_pdf",
+    "image-generation": "imagegen",
+}
+
 OFFICE_RUNTIME_REQUIREMENTS = (
     "pypdf",
     "pdfminer.six",
@@ -286,6 +294,16 @@ def inspect_webui_artifact(path: pathlib.Path, artifact_id: str, install_suffix:
     with zipfile.ZipFile(path) as archive:
         archive_names = [name.replace("\\", "/") for name in archive.namelist()]
         archive_names_lower = [name.lower() for name in archive_names]
+        bytecode_entries = [
+            name for name in archive_names_lower
+            if "/__pycache__/" in name or name.endswith((".pyc", ".pyo"))
+        ]
+        add_check(
+            checks,
+            f"{artifact_id} release package strips generated Python bytecode",
+            not bytecode_entries,
+            {"entryCount": len(bytecode_entries)},
+        )
         for legacy_id, official_skill in EXPECTED_FACADES.items():
             entry, text = zip_text_by_suffix(archive, f"runtime/skills/{legacy_id}/SKILL.md")
             ok, evidence = facade_doc_ok(text, legacy_id, official_skill)
@@ -295,8 +313,10 @@ def inspect_webui_artifact(path: pathlib.Path, artifact_id: str, install_suffix:
         formatter_entry, formatter = zip_text_by_suffix(archive, "runtime/agent/skills/formatter.py")
         service_entry, service = zip_text_by_suffix(archive, "runtime/agent/skills/service.py")
         manager_entry, manager = zip_text_by_suffix(archive, "runtime/agent/skills/manager.py")
+        skill_bridge_entry, skill_bridge = zip_text_by_suffix(archive, "runtime/agent/skills/tool_bridge.py")
         registry_entry, registry = zip_text_by_suffix(archive, "runtime/agent/extensions/registry.py")
         tools_init_entry, tools_init = zip_text_by_suffix(archive, "runtime/agent/tools/__init__.py")
+        office_tools_entry, office_tools = zip_text_by_suffix(archive, "runtime/agent/tools/office_artifacts/office_artifacts.py")
         agent_stream_entry, agent_stream = zip_text_by_suffix(archive, "runtime/agent/protocol/agent_stream.py")
         runtime_projection_entry, runtime_projection = zip_text_by_suffix(archive, "runtime/agent/protocol/runtime_projection.py")
         agent_capability_entry, agent_capability = zip_text_by_suffix(archive, "runtime/agent/tools/agent_capability/agent_capability.py")
@@ -304,6 +324,7 @@ def inspect_webui_artifact(path: pathlib.Path, artifact_id: str, install_suffix:
         broker_entry, broker = zip_text_by_suffix(archive, "runtime/common/ecorex_tool_permissions.py")
         bash_entry, bash_tool = zip_text_by_suffix(archive, "runtime/agent/tools/bash/bash.py")
         web_channel_entry, web_channel = zip_text_by_suffix(archive, "runtime/channel/web/web_channel.py")
+        feishu_cli_entry, feishu_cli = zip_text_by_suffix(archive, "runtime/agent/tools/feishu_cli/feishu_cli.py")
         tongxin_entry, tongxin_tool = zip_text_by_suffix(archive, "runtime/agent/tools/tongxin_cli/tongxin_cli.py")
         image_quality_entry, image_quality_runtime = zip_text_by_suffix(archive, "runtime/common/image_quality_runtime.py")
         image_job_entry, image_job_service = zip_text_by_suffix(archive, "runtime/agent/protocol/image_job_service.py")
@@ -317,6 +338,39 @@ def inspect_webui_artifact(path: pathlib.Path, artifact_id: str, install_suffix:
             and "<ecorex_native_facade>" in formatter
             and "<quality_gates>" in formatter,
             {"entrySuffix": formatter_entry.split("runtime/", 1)[-1]},
+        )
+        missing_callable_tools = [
+            tool_name
+            for tool_name in EXPECTED_TOOLS.values()
+            if f"<callable_tool>{{_escape_xml(callable_tool)}}</callable_tool>" not in formatter
+            and tool_name not in skill_bridge
+        ]
+        add_check(
+            checks,
+            f"{artifact_id} prompt exposes callable tool bridge",
+            "<callable_tool>" in formatter
+            and "resolve_callable_tool_name" in formatter
+            and not missing_callable_tools,
+            {
+                "formatterEntrySuffix": formatter_entry.split("runtime/", 1)[-1],
+                "skillBridgeEntrySuffix": skill_bridge_entry.split("runtime/", 1)[-1],
+                "missingTools": missing_callable_tools,
+            },
+        )
+        add_check(
+            checks,
+            f"{artifact_id} Feishu CLI Codex-style split auth bridge",
+            "--device-code" in feishu_cli
+            and '"auth", "qrcode"' in feishu_cli
+            and "--app-secret-stdin" in feishu_cli
+            and "input_text=app_secret + \"\\n\"" in feishu_cli
+            and "def _feishu_credentials" in feishu_cli
+            and "def _safe_feishu_cli_status_probe" in web_channel
+            and "agentCliStatus" in web_channel,
+            {
+                "feishuCliEntrySuffix": feishu_cli_entry.split("runtime/", 1)[-1],
+                "webChannelEntrySuffix": web_channel_entry.split("runtime/", 1)[-1],
+            },
         )
         add_check(
             checks,
@@ -359,8 +413,21 @@ def inspect_webui_artifact(path: pathlib.Path, artifact_id: str, install_suffix:
             and "purposeLabel" in registry
             and "builtinCatalog" in registry
             and "toggleable" in registry
-            and "built-in-locked" in registry,
+            and "built-in-locked" in registry
+            and "skill_agent_surface" in registry
+            and "toolSchemaCallable" in registry,
             {"entrySuffix": registry_entry.split("runtime/", 1)[-1]},
+        )
+        add_check(
+            checks,
+            f"{artifact_id} skill callable tool bridge packaged",
+            "SKILL_CALLABLE_TOOL_ALIASES" in skill_bridge
+            and '"office-pdf": "office_pdf"' in skill_bridge
+            and '"presentations": "office_presentations"' in skill_bridge
+            and '"tongxin-cli": "tongxin_cli"' in skill_bridge
+            and '"芯助手": "tongxin_cli"' in skill_bridge
+            and "def skill_agent_surface" in skill_bridge,
+            {"entrySuffix": skill_bridge_entry.split("runtime/", 1)[-1]},
         )
         console_entry, console_js = zip_text_by_suffix(archive, "runtime/channel/web/static/js/console.js")
         add_check(
@@ -448,11 +515,36 @@ def inspect_webui_artifact(path: pathlib.Path, artifact_id: str, install_suffix:
             and "def _extract_simple_tongxin_cli_args" in agent_stream
             and "raw bash tongxin-cli" in agent_stream
             and "agent_capability_install_pack_preflight" in agent_stream
+            and "SKILL_CALLABLE_TOOL_ALIASES" in agent_stream
+            and '"office": (' in agent_stream
+            and "office_presentations" in agent_stream
+            and "office_spreadsheets" in agent_stream
+            and "office_documents" in agent_stream
+            and "office_pdf" in agent_stream
             and "Do not call Tongxin Assistant CLI through raw bash" in bash_tool,
             {
                 "brokerEntrySuffix": broker_entry.split("runtime/", 1)[-1],
                 "agentStreamEntrySuffix": agent_stream_entry.split("runtime/", 1)[-1],
                 "bashEntrySuffix": bash_entry.split("runtime/", 1)[-1],
+            },
+        )
+        add_check(
+            checks,
+            f"{artifact_id} Office/PDF callable skill tools packaged",
+            "OfficeDocumentsTool" in tools_init
+            and "OfficePdfTool" in tools_init
+            and "OfficePresentationsTool" in tools_init
+            and "OfficeSpreadsheetsTool" in tools_init
+            and "class OfficeDocumentsTool" in office_tools
+            and "class OfficePdfTool" in office_tools
+            and "class OfficePresentationsTool" in office_tools
+            and "class OfficeSpreadsheetsTool" in office_tools
+            and "build_pdf_quality_evidence" in office_tools
+            and "build_presentation_quality_evidence" in office_tools
+            and "authorize_file_access" in office_tools,
+            {
+                "toolsInitEntrySuffix": tools_init_entry.split("runtime/", 1)[-1],
+                "officeToolsEntrySuffix": office_tools_entry.split("runtime/", 1)[-1],
             },
         )
         add_check(
@@ -801,6 +893,16 @@ def inspect_webui_artifact(path: pathlib.Path, artifact_id: str, install_suffix:
             bool(lark_entries),
             {"entryCount": len(lark_entries), "installEnsuresOnFirstRun": False},
         )
+        lark_dep_entries = [
+            name for name in archive_names_lower
+            if "requests_toolbelt" in name or "requests-toolbelt" in name
+        ]
+        add_check(
+            checks,
+            f"{artifact_id} bundled lark dependency payload present",
+            bool(lark_dep_entries),
+            {"entryCount": len(lark_dep_entries)},
+        )
 
         channel_entry, channel_source = zip_text_by_suffix(archive, "runtime/channel/feishu/feishu_channel.py")
         message_entry, message_source = zip_text_by_suffix(archive, "runtime/channel/feishu/feishu_message.py")
@@ -1072,7 +1174,10 @@ def main() -> int:
     for platform_payload in artifacts.values():
         native_checks.extend(
             item for item in platform_payload["checks"]
-            if "facade" in item["label"] or "skill API" in item["label"] or "prompt exposes" in item["label"]
+            if "facade" in item["label"]
+            or "skill API" in item["label"]
+            or "prompt exposes" in item["label"]
+            or "callable tool" in item["label"]
         )
         skill_checks.extend(
             item for item in platform_payload["checks"]

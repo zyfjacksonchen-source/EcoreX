@@ -574,6 +574,42 @@ def validate_public_zip(
             "webui-macos-universal",
             "public site WebUI macOS artifact",
         )
+        install_webui_ps1 = archive.read("site/install-webui.ps1").decode("utf-8", errors="replace")
+        require_contains(
+            install_webui_ps1,
+            "function Try-SaveUrlWithCurl",
+            "public Windows WebUI bootstrap curl download acceleration",
+        )
+        require_contains(
+            install_webui_ps1,
+            '"--continue-at", "-"',
+            "public Windows WebUI bootstrap resumable curl download",
+        )
+        require_contains(
+            install_webui_ps1,
+            "function Expand-EcoreXZip",
+            "public Windows WebUI bootstrap robust zip extraction",
+        )
+        require_contains(
+            install_webui_ps1,
+            "function ConvertTo-EcoreXLongPath",
+            "public Windows WebUI bootstrap long path extraction support",
+        )
+        require_contains(
+            install_webui_ps1,
+            "$source.CopyTo($target)",
+            "public Windows WebUI bootstrap stream-copy extraction",
+        )
+        require_contains(
+            install_webui_ps1,
+            "Blocked unsafe zip entry",
+            "public Windows WebUI bootstrap zip-slip guard",
+        )
+        require_not_contains(
+            install_webui_ps1,
+            "Expand-Archive",
+            "public Windows WebUI bootstrap avoids PowerShell Archive cleanup race",
+        )
         require_not_contains(
             site_js,
             '"windows-x64"',
@@ -784,6 +820,10 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
     require_contains(tools_init, "get_tool_import_errors", f"{label} tools init")
     require_contains(tools_init, "ImageGenTool", f"{label} tools init")
     require_contains(tools_init, "TongxinCli", f"{label} tools init")
+    require_contains(tools_init, "OfficeDocumentsTool", f"{label} tools init")
+    require_contains(tools_init, "OfficePdfTool", f"{label} tools init")
+    require_contains(tools_init, "OfficePresentationsTool", f"{label} tools init")
+    require_contains(tools_init, "OfficeSpreadsheetsTool", f"{label} tools init")
 
     base_tool = read_text_by_suffix("agent/tools/base_tool.py")
     require_contains(base_tool, "def apply_config", f"{label} base tool")
@@ -816,6 +856,12 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
     require_contains(agent_stream, "TOOL_NAME_ALIASES", f"{label} agent stream")
     require_contains(agent_stream, '"shell": "bash"', f"{label} agent stream")
     require_contains(agent_stream, '"image_generation": "imagegen"', f"{label} agent stream")
+    require_contains(agent_stream, "SKILL_CALLABLE_TOOL_ALIASES", f"{label} agent stream")
+    require_contains(agent_stream, '"office": (', f"{label} agent stream")
+    require_contains(agent_stream, "office_presentations", f"{label} agent stream")
+    require_contains(agent_stream, "office_spreadsheets", f"{label} agent stream")
+    require_contains(agent_stream, "office_documents", f"{label} agent stream")
+    require_contains(agent_stream, "office_pdf", f"{label} agent stream")
     require_contains(agent_stream, "function_call", f"{label} agent stream")
     require_contains(agent_stream, "Permission blocked this external capability", f"{label} agent stream")
     require_contains(agent_stream, "mcp__chrome-devtools__", f"{label} agent stream")
@@ -974,6 +1020,14 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
     feishu_cli = read_text_by_suffix("agent/tools/feishu_cli/feishu_cli.py")
     require_contains(feishu_cli, "def apply_config", f"{label} feishu cli")
     require_contains(feishu_cli, "self.package = str(self.config.get(\"package\")", f"{label} feishu cli")
+    require_contains(feishu_cli, "--device-code", f"{label} feishu cli")
+    require_contains(feishu_cli, "\"auth\", \"qrcode\"", f"{label} feishu cli")
+    require_contains(feishu_cli, "--app-secret-stdin", f"{label} feishu cli")
+    require_contains(feishu_cli, "input_text=app_secret + \"\\n\"", f"{label} feishu cli")
+    require_contains(feishu_cli, "def _feishu_credentials", f"{label} feishu cli")
+    web_channel = read_text_by_suffix("channel/web/web_channel.py")
+    require_contains(web_channel, "def _safe_feishu_cli_status_probe", f"{label} web channel")
+    require_contains(web_channel, "agentCliStatus", f"{label} web channel")
 
     tongxin_cli = read_text_by_suffix("agent/tools/tongxin_cli/tongxin_cli.py")
     require_contains(tongxin_cli, "class TongxinCli", f"{label} tongxin cli")
@@ -1007,6 +1061,31 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
     require_contains(imagegen_tool, "[REDACTED]", f"{label} imagegen tool")
     require_contains(imagegen_tool, 'authorize_file_access("read"', f"{label} imagegen tool")
     require_contains(imagegen_tool, 'authorize_file_access("write"', f"{label} imagegen tool")
+
+    skill_bridge = read_text_by_suffix("agent/skills/tool_bridge.py")
+    require_contains(skill_bridge, "SKILL_CALLABLE_TOOL_ALIASES", f"{label} skill tool bridge")
+    require_contains(skill_bridge, '"office-pdf": "office_pdf"', f"{label} skill tool bridge")
+    require_contains(skill_bridge, '"presentations": "office_presentations"', f"{label} skill tool bridge")
+    require_contains(skill_bridge, '"tongxin-cli": "tongxin_cli"', f"{label} skill tool bridge")
+    require_contains(skill_bridge, '"芯助手": "tongxin_cli"', f"{label} skill tool bridge")
+    require_contains(skill_bridge, "def skill_agent_surface", f"{label} skill tool bridge")
+
+    skill_formatter = read_text_by_suffix("agent/skills/formatter.py")
+    require_contains(skill_formatter, "resolve_callable_tool_name", f"{label} skill formatter")
+    require_contains(skill_formatter, "<callable_tool>", f"{label} skill formatter")
+
+    extension_registry = read_text_by_suffix("agent/extensions/registry.py")
+    require_contains(extension_registry, "skill_agent_surface", f"{label} extension registry")
+    require_contains(extension_registry, "toolSchemaCallable", f"{label} extension registry")
+
+    office_tools = read_text_by_suffix("agent/tools/office_artifacts/office_artifacts.py")
+    require_contains(office_tools, "class OfficeDocumentsTool", f"{label} office tools")
+    require_contains(office_tools, "class OfficePdfTool", f"{label} office tools")
+    require_contains(office_tools, "class OfficePresentationsTool", f"{label} office tools")
+    require_contains(office_tools, "class OfficeSpreadsheetsTool", f"{label} office tools")
+    require_contains(office_tools, "build_pdf_quality_evidence", f"{label} office tools")
+    require_contains(office_tools, "build_presentation_quality_evidence", f"{label} office tools")
+    require_contains(office_tools, "authorize_file_access", f"{label} office tools")
     require_contains(imagegen_tool, "image input read blocked by permissions", f"{label} imagegen tool")
     require_contains(imagegen_tool, "image output directory blocked by permissions", f"{label} imagegen tool")
 

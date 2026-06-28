@@ -56,6 +56,143 @@ function Write-DownloadStatus {
     }
 }
 
+function Test-CurlRetryAllErrors {
+    param([Parameter(Mandatory = $true)][string]$CurlPath)
+    try {
+        $help = & $CurlPath --help all 2>$null
+        return (($help -join "`n") -match "--retry-all-errors")
+    } catch {
+        return $false
+    }
+}
+
+function Try-SaveUrlWithCurl {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [Parameter(Mandatory = $true)][string]$CachePath,
+        [Parameter(Mandatory = $true)][string]$PartialPath,
+        [Parameter(Mandatory = $true)][string]$ExpectedSha256
+    )
+
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if (-not $curl) {
+        return $false
+    }
+
+    Write-Host "Using curl.exe accelerated download with resume support."
+    if (Test-Path -LiteralPath $PartialPath) {
+        Write-Host ("Existing partial package found: {0}" -f (Format-Mib ((Get-Item -LiteralPath $PartialPath).Length)))
+    }
+
+    $curlArgs = @(
+        "--fail",
+        "--location",
+        "--retry", "5",
+        "--retry-delay", "2",
+        "--retry-max-time", "1800",
+        "--connect-timeout", "20",
+        "--speed-time", "120",
+        "--speed-limit", "1024",
+        "--progress-bar",
+        "--continue-at", "-",
+        "--output", $PartialPath,
+        $Uri
+    )
+    if (Test-CurlRetryAllErrors -CurlPath $curl.Source) {
+        $curlArgs = @("--retry-all-errors") + $curlArgs
+    }
+
+    & $curl.Source @curlArgs
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "curl.exe download did not complete (exit $LASTEXITCODE); falling back to PowerShell streaming download."
+        return $false
+    }
+
+    Write-Host "Verifying SHA256..."
+    $actual = Get-Sha256 -Path $PartialPath
+    if ($actual -ne $ExpectedSha256.ToUpperInvariant()) {
+        Remove-Item -LiteralPath $PartialPath -Force -ErrorAction SilentlyContinue
+        throw "SHA256 mismatch for downloaded package: $actual"
+    }
+    Move-Item -LiteralPath $PartialPath -Destination $CachePath -Force
+    Write-Host "Download verified: $CachePath"
+    return $true
+}
+
+function ConvertTo-EcoreXLongPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $full = [System.IO.Path]::GetFullPath($Path)
+    if ($full.StartsWith("\\?\")) {
+        return $full
+    }
+    if ($full.StartsWith("\\")) {
+        return "\\?\UNC\" + $full.TrimStart("\")
+    }
+    return "\\?\" + $full
+}
+
+function Expand-EcoreXZip {
+    param(
+        [Parameter(Mandatory = $true)][string]$ZipPath,
+        [Parameter(Mandatory = $true)][string]$DestinationPath
+    )
+
+    if (Test-Path -LiteralPath $DestinationPath) {
+        Remove-Item -LiteralPath $DestinationPath -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    New-Item -ItemType Directory -Force -Path $DestinationPath | Out-Null
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $destinationFull = [System.IO.Path]::GetFullPath($DestinationPath)
+    if (-not $destinationFull.EndsWith([System.IO.Path]::DirectorySeparatorChar.ToString())) {
+        $destinationFull += [System.IO.Path]::DirectorySeparatorChar
+    }
+
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+    try {
+        foreach ($entry in $archive.Entries) {
+            $entryName = $entry.FullName.Replace("\", "/")
+            if ([string]::IsNullOrWhiteSpace($entryName)) {
+                continue
+            }
+
+            $targetPath = [System.IO.Path]::GetFullPath((Join-Path $DestinationPath $entryName))
+            if (-not $targetPath.StartsWith($destinationFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw "Blocked unsafe zip entry: $entryName"
+            }
+            $targetIoPath = ConvertTo-EcoreXLongPath -Path $targetPath
+
+            if ($entryName.EndsWith("/")) {
+                if ([System.IO.File]::Exists($targetIoPath)) {
+                    [System.IO.File]::Delete($targetIoPath)
+                }
+                [System.IO.Directory]::CreateDirectory($targetIoPath) | Out-Null
+                continue
+            }
+
+            $parent = Split-Path -Parent $targetPath
+            if ($parent) {
+                [System.IO.Directory]::CreateDirectory((ConvertTo-EcoreXLongPath -Path $parent)) | Out-Null
+            }
+            if ([System.IO.Directory]::Exists($targetIoPath)) {
+                [System.IO.Directory]::Delete($targetIoPath, $true)
+            } elseif ([System.IO.File]::Exists($targetIoPath)) {
+                [System.IO.File]::Delete($targetIoPath)
+            }
+            $source = $entry.Open()
+            $target = [System.IO.File]::Open($targetIoPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+            try {
+                $source.CopyTo($target)
+            } finally {
+                $target.Dispose()
+                $source.Dispose()
+            }
+        }
+    } finally {
+        $archive.Dispose()
+    }
+}
+
 function Save-UrlWithProgress {
     param(
         [Parameter(Mandatory = $true)][string]$Uri,
@@ -73,6 +210,9 @@ function Save-UrlWithProgress {
     $cacheDir = Split-Path -Parent $CachePath
     New-Item -ItemType Directory -Force -Path $cacheDir, $WorkDir | Out-Null
     $partialPath = "$CachePath.part"
+    if (Try-SaveUrlWithCurl -Uri $Uri -CachePath $CachePath -PartialPath $partialPath -ExpectedSha256 $ExpectedSha256) {
+        return $CachePath
+    }
 
     for ($attempt = 1; $attempt -le $Retries; $attempt++) {
         try {
@@ -205,7 +345,7 @@ try {
     $packagePath = Save-UrlWithProgress -Uri $artifactUrl -CachePath $zipPath -WorkDir $tempRoot -ExpectedSha256 ([string]$artifact.sha256)
 
     Write-Host "Extracting package..."
-    Expand-Archive -LiteralPath $packagePath -DestinationPath $extractRoot -Force
+    Expand-EcoreXZip -ZipPath $packagePath -DestinationPath $extractRoot
     Write-Host "Package extracted."
 
     $installer = Get-ChildItem -LiteralPath $extractRoot -Recurse -Filter "install-ecorex-webui-win.ps1" | Select-Object -First 1

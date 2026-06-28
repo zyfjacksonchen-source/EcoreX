@@ -1,0 +1,326 @@
+{
+  "status": "PASS",
+  "generatedAt": "2026-06-28T16:49:03Z",
+  "scope": "R24-01 native skill facade compatibility mapping",
+  "checks": [
+    {
+      "label": "office-presentations root facade API",
+      "status": "PASS",
+      "evidence": {
+        "compatibility_id": "office-presentations",
+        "adopts_official_skill": "Presentations",
+        "ecorex_native_facade": true,
+        "quality_gates": [
+          "story-flow",
+          "artifact-tool-authoring",
+          "layout-bounds",
+          "font-size-check",
+          "chart-integrity",
+          "render-preview",
+          "overlap-check",
+          "visual-inspection"
+        ]
+      }
+    },
+    {
+      "label": "office-presentations prompt facade fields",
+      "status": "PASS",
+      "evidence": {
+        "promptLength": 867
+      }
+    },
+    {
+      "label": "office-presentations callable tool prompt bridge",
+      "status": "PASS",
+      "evidence": {
+        "toolName": "office_presentations",
+        "promptLength": 867
+      }
+    },
+    {
+      "label": "office-presentations callable tool schema registered",
+      "status": "PASS",
+      "evidence": {
+        "toolName": "office_presentations",
+        "registered": true,
+        "toolCount": 27
+      }
+    },
+    {
+      "label": "office-presentations root skill doc facade metadata",
+      "status": "PASS",
+      "evidence": {
+        "path": "skills/office-presentations/SKILL.md",
+        "compatibility": true,
+        "official": true,
+        "nativeFacade": true,
+        "qualityGates": true
+      }
+    },
+    {
+      "label": "office-presentations staged runtime skill doc facade metadata",
+      "status": "PASS",
+      "evidence": {
+        "path": "desktop/runtime/ecorex-runtime/skills/office-presentations/SKILL.md",
+        "compatibility": true,
+        "official": true,
+        "nativeFacade": true,
+        "qualityGates": true
+      }
+    },
+    {
+      "label": "office-spreadsheets root facade API",
+      "status": "PASS",
+      "evidence": {
+        "compatibility_id": "office-spreadsheets",
+        "adopts_official_skill": "Spreadsheets",
+        "ecorex_native_facade": true,
+        "quality_gates": [
+          "typed-values",
+          "formula-audit",
+          "dashboard-structure",
+          "chart-render",
+          "render-preview",
+          "visual-inspection",
+          "export-verify"
+        ]
+      }
+    },
+    {
+      "label": "office-spreadsheets prompt facade fields",
+      "status": "PASS",
+      "evidence": {
+        "promptLength": 871
+      }
+    },
+    {
+      "label": "office-spreadsheets callable tool prompt bridge",
+      "status": "PASS",
+      "evidence": {
+        "toolName": "office_spreadsheets",
+        "promptLength": 871
+      }
+    },
+    {
+      "label": "office-spreadsheets callable tool schema registered",
+      "status": "PASS",
+      "evidence": {
+        "toolName": "office_spreadsheets",
+        "registered": true,
+        "toolCount": 27
+      }
+    },
+    {
+      "label": "office-spreadsheets root skill doc facade metadata",
+      "status": "PASS",
+      "evidence": {
+        "path": "skills/office-spreadsheets/SKILL.md",
+        "compatibility": true,
+        "official": true,
+        "nativeFacade": true,
+        "qualityGates": true
+      }
+    },
+    {
+      "label": "office-spreadsheets staged runtime skill doc facade metadata",
+      "status": "PASS",
+      "evidence": {
+        "path": "desktop/runtime/ecorex-runtime/skills/office-spreadsheets/SKILL.md",
+        "compatibility": true,
+        "official": true,
+        "nativeFacade": true,
+        "qualityGates": true
+      }
+    },
+    {
+      "label": "office-documents root facade API",
+      "status": "PASS",
+      "evidence": {
+        "compatibility_id": "office-documents",
+        "adopts_official_skill": "documents",
+        "ecorex_native_facade": true,
+        "quality_gates": [
+          "design-preset",
+          "structure-check",
+          "render-docx",
+          "table-geometry",
+          "visual-inspection",
+          "redline-preserve"
+        ]
+      }
+    },
+    {
+      "label": "office-documents prompt facade fields",
+      "status": "PASS",
+      "evidence": {
+        "promptLength": 770
+      }
+    },
+    {
+      "label": "office-documents callable tool prompt bridge",
+      "status": "PASS",
+      "evidence": {
+        "toolName": "office_documents",
+        "promptLength": 770
+      }
+    },
+    {
+      "label": "office-documents callable tool schema registered",
+      "status": "PASS",
+      "evidence": {
+        "toolName": "office_documents",
+        "registered": true,
+        "toolCount": 27
+      }
+    },
+    {
+      "label": "office-documents root skill doc facade metadata",
+      "status": "PASS",
+      "evidence": {
+        "path": "skills/office-documents/SKILL.md",
+        "compatibility": true,
+        "official": true,
+        "nativeFacade": true,
+        "qualityGates": true
+      }
+    },
+    {
+      "label": "office-documents staged runtime skill doc facade metadata",
+      "status": "PASS",
+      "evidence": {
+        "path": "desktop/runtime/ecorex-runtime/skills/office-documents/SKILL.md",
+        "compatibility": true,
+        "official": true,
+        "nativeFacade": true,
+        "qualityGates": true
+      }
+    },
+    {
+      "label": "office-pdf root facade API",
+      "status": "PASS",
+      "evidence": {
+        "compatibility_id": "office-pdf",
+        "adopts_official_skill": "pdf",
+        "ecorex_native_facade": true,
+        "quality_gates": [
+          "text-orientation",
+          "page-render",
+          "layout-inspection",
+          "table-structure",
+          "generation-verify",
+          "visual-diff"
+        ]
+      }
+    },
+    {
+      "label": "office-pdf prompt facade fields",
+      "status": "PASS",
+      "evidence": {
+        "promptLength": 706
+      }
+    },
+    {
+      "label": "office-pdf callable tool prompt bridge",
+      "status": "PASS",
+      "evidence": {
+        "toolName": "office_pdf",
+        "promptLength": 706
+      }
+    },
+    {
+      "label": "office-pdf callable tool schema registered",
+      "status": "PASS",
+      "evidence": {
+        "toolName": "office_pdf",
+        "registered": true,
+        "toolCount": 27
+      }
+    },
+    {
+      "label": "office-pdf root skill doc facade metadata",
+      "status": "PASS",
+      "evidence": {
+        "path": "skills/office-pdf/SKILL.md",
+        "compatibility": true,
+        "official": true,
+        "nativeFacade": true,
+        "qualityGates": true
+      }
+    },
+    {
+      "label": "office-pdf staged runtime skill doc facade metadata",
+      "status": "PASS",
+      "evidence": {
+        "path": "desktop/runtime/ecorex-runtime/skills/office-pdf/SKILL.md",
+        "compatibility": true,
+        "official": true,
+        "nativeFacade": true,
+        "qualityGates": true
+      }
+    },
+    {
+      "label": "image-generation root facade API",
+      "status": "PASS",
+      "evidence": {
+        "compatibility_id": "image-generation",
+        "adopts_official_skill": "imagegen",
+        "ecorex_native_facade": true,
+        "quality_gates": [
+          "project-safe-output",
+          "structural-image-qa",
+          "vision-anomaly-qa",
+          "reference-fidelity-qa",
+          "retry-ledger"
+        ]
+      }
+    },
+    {
+      "label": "image-generation prompt facade fields",
+      "status": "PASS",
+      "evidence": {
+        "promptLength": 771
+      }
+    },
+    {
+      "label": "image-generation callable tool prompt bridge",
+      "status": "PASS",
+      "evidence": {
+        "toolName": "imagegen",
+        "promptLength": 771
+      }
+    },
+    {
+      "label": "image-generation callable tool schema registered",
+      "status": "PASS",
+      "evidence": {
+        "toolName": "imagegen",
+        "registered": true,
+        "toolCount": 27
+      }
+    },
+    {
+      "label": "image-generation root skill doc facade metadata",
+      "status": "PASS",
+      "evidence": {
+        "path": "skills/image-generation/SKILL.md",
+        "compatibility": true,
+        "official": true,
+        "nativeFacade": true,
+        "qualityGates": true
+      }
+    },
+    {
+      "label": "image-generation staged runtime skill doc facade metadata",
+      "status": "PASS",
+      "evidence": {
+        "path": "desktop/runtime/ecorex-runtime/skills/image-generation/SKILL.md",
+        "compatibility": true,
+        "official": true,
+        "nativeFacade": true,
+        "qualityGates": true
+      }
+    }
+  ],
+  "failed": [],
+  "redacted": true
+}

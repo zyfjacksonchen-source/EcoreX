@@ -4,6 +4,7 @@ Skill formatter for generating prompts from skills.
 
 from typing import Any, Dict, List
 from agent.skills.types import Skill, SkillEntry
+from agent.skills.tool_bridge import resolve_callable_tool_name
 
 
 def format_skills_for_prompt(skills: List[Skill]) -> str:
@@ -37,6 +38,7 @@ def format_skills_for_prompt(skills: List[Skill]) -> str:
         official_skill = _frontmatter_scalar(skill.frontmatter, "adopts-official-skill", "adopts_official_skill")
         native_facade = _frontmatter_bool(skill.frontmatter, "ecorex-native-facade", "ecorex_native_facade")
         quality_gates = _frontmatter_list(skill.frontmatter, "quality-gates", "quality_gates")
+        callable_tool = resolve_callable_tool_name(skill)
         if compatibility_id:
             lines.append(f"    <compatibility_id>{_escape_xml(compatibility_id)}</compatibility_id>")
         if official_skill:
@@ -45,6 +47,8 @@ def format_skills_for_prompt(skills: List[Skill]) -> str:
             lines.append(f"    <ecorex_native_facade>{str(native_facade).lower()}</ecorex_native_facade>")
         if quality_gates:
             lines.append(f"    <quality_gates>{_escape_xml(', '.join(quality_gates))}</quality_gates>")
+        if callable_tool:
+            lines.append(f"    <callable_tool>{_escape_xml(callable_tool)}</callable_tool>")
         lines.append("  </skill>")
     
     lines.append("</available_skills>")

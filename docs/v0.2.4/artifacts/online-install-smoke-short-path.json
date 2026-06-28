@@ -1,0 +1,39 @@
+{
+  "status": "PASS",
+  "generatedAt": "2026-06-29T02:03:00+08:00",
+  "scope": "R24-16 online Windows WebUI install smoke",
+  "version": "0.2.4",
+  "installShape": {
+    "onlineManifestUsed": true,
+    "isolatedShortLocalAppData": true,
+    "normalDeepSdkPathLengthBelowWindowsLegacyLimit": true,
+    "longTempExtractionHandledByRobustZip": true
+  },
+  "downloadAndExtract": {
+    "downloadVerifiedBySha256": true,
+    "windowsZipSha256": "7B8DF00B62C9C7EE6D07AA3D8431DFD677B8E3E1EC1D8F6DE3942347187CB98E",
+    "windowsZipSize": 113975793,
+    "packageExtracted": true,
+    "localInstallerFinished": true
+  },
+  "runtimeChecks": {
+    "webUiReady": true,
+    "webUiStatusCode": 200,
+    "webUiHtmlReturned": true,
+    "toolBridgePresent": true,
+    "officeToolWrappersPresent": true,
+    "feishuCliToolPresent": true,
+    "agentCliStatusMarkerPresent": true
+  },
+  "larkRuntimeReadiness": {
+    "sdkPresent": true,
+    "sdkVersion": "1.6.9",
+    "versionOk": true,
+    "readinessUsesMetadataProbe": true,
+    "fullSdkImportRequiredForInstalledDecision": false
+  },
+  "cleanup": {
+    "temporaryServiceStopped": true,
+    "rawLocalPathsPersisted": false
+  }
+}

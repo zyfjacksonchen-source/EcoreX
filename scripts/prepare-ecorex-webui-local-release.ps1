@@ -348,7 +348,7 @@ function Test-PackagedPythonModule {
         [Parameter(Mandatory = $true)][string]$Python,
         [Parameter(Mandatory = $true)][string]$ModuleName
     )
-    & $Python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('$ModuleName') else 1)"
+    & $Python -s -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('$ModuleName') else 1)"
     return ($LASTEXITCODE -eq 0)
 }
 
@@ -367,9 +367,19 @@ function Install-WindowsRuntimeDependency {
         return
     }
     Write-Host "Preinstalling Windows Python dependency for ${Reason}: $PackageSpec"
-    & $python -m pip install --disable-pip-version-check --no-cache-dir --prefer-binary $PackageSpec
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to preinstall Windows Python dependency '$PackageSpec' for $Reason"
+    $oldNoUserSite = $env:PYTHONNOUSERSITE
+    $env:PYTHONNOUSERSITE = "1"
+    try {
+        & $python -s -m pip install --disable-pip-version-check --no-cache-dir --prefer-binary $PackageSpec
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to preinstall Windows Python dependency '$PackageSpec' for $Reason"
+        }
+    } finally {
+        if ($null -eq $oldNoUserSite) {
+            Remove-Item Env:\PYTHONNOUSERSITE -ErrorAction SilentlyContinue
+        } else {
+            $env:PYTHONNOUSERSITE = $oldNoUserSite
+        }
     }
     if (-not (Test-PackagedPythonModule -Python $python -ModuleName $ModuleName)) {
         throw "Windows Python dependency '$PackageSpec' installed but module '$ModuleName' is still unavailable."
@@ -419,6 +429,7 @@ Sync-DesktopWebBuild -RuntimeDir $winRuntime
 Copy-OptionalLarkCliWindows -RuntimeDir $winRuntime
 Invoke-ReleaseRuntimeSanitizer -RuntimeDir $winRuntime
 Install-WindowsRuntimeDependency -RuntimeDir $winRuntime -ModuleName "lark_oapi" -PackageSpec "lark-oapi>=1.5.5" -Reason "Feishu/Lark websocket external connection"
+Remove-GeneratedNoise -Root $winRuntime
 
 $windowsCmd = @'
 @echo off
@@ -491,7 +502,7 @@ function Test-PythonModule {
         [Parameter(Mandatory = $true)][string]$Python,
         [Parameter(Mandatory = $true)][string]$ModuleName
     )
-    & $Python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('$ModuleName') else 1)"
+    & $Python -s -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('$ModuleName') else 1)"
     return ($LASTEXITCODE -eq 0)
 }
 

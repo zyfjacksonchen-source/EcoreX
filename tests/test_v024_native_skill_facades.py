@@ -19,6 +19,14 @@ EXPECTED_FACADES = {
     "image-generation": "imagegen",
 }
 
+EXPECTED_TOOLS = {
+    "office-presentations": "office_presentations",
+    "office-spreadsheets": "office_spreadsheets",
+    "office-documents": "office_documents",
+    "office-pdf": "office_pdf",
+    "image-generation": "imagegen",
+}
+
 
 def _load_builtin_only_manager() -> SkillManager:
     tmp = tempfile.TemporaryDirectory(prefix="ecorex-v024-facades-")
@@ -64,3 +72,4 @@ def test_v024_native_facade_metadata_is_visible_in_skill_prompt():
         assert f"<adopts_official_skill>{official_skill}</adopts_official_skill>" in prompt
         assert "<ecorex_native_facade>true</ecorex_native_facade>" in prompt
         assert "<quality_gates>" in prompt
+        assert f"<callable_tool>{EXPECTED_TOOLS[legacy_id]}</callable_tool>" in prompt

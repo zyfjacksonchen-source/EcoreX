@@ -20,6 +20,14 @@ EXPECTED_FACADES = {
     "image-generation": "imagegen",
 }
 
+EXPECTED_TOOLS = {
+    "office-presentations": "office_presentations",
+    "office-spreadsheets": "office_spreadsheets",
+    "office-documents": "office_documents",
+    "office-pdf": "office_pdf",
+    "image-generation": "imagegen",
+}
+
 
 def add_check(checks: list[dict[str, Any]], label: str, ok: bool, evidence: Any) -> None:
     checks.append({
@@ -34,6 +42,7 @@ def load_rows(root: pathlib.Path):
     from agent.skills.formatter import format_skills_for_prompt
     from agent.skills.manager import SkillManager
     from agent.skills.service import SkillService
+    from agent.tools.tool_manager import ToolManager
 
     tmp = tempfile.TemporaryDirectory(prefix="ecorex-v024-native-facades-")
     manager = SkillManager(
@@ -49,8 +58,13 @@ def load_rows(root: pathlib.Path):
         for name in EXPECTED_FACADES
         if name in manager.skills
     }
+    tool_manager = ToolManager()
+    tool_manager.tool_classes = {}
+    tool_manager._mcp_tool_instances = {}
+    tool_manager.load_tools(config_dict={"tongxin_cli": {"script_path": ""}})
+    tool_infos = tool_manager.list_tools()
     tmp.cleanup()
-    return rows, prompts
+    return rows, prompts, tool_infos
 
 
 def _display_path(root: pathlib.Path, path: pathlib.Path) -> str:
@@ -90,7 +104,7 @@ def main(argv: list[str]) -> int:
     if not (root / "agent").is_dir() and (root.parent / "agent").is_dir():
         root = root.parent
 
-    rows, prompts = load_rows(root)
+    rows, prompts, tool_infos = load_rows(root)
     checks: list[dict[str, Any]] = []
     for legacy_id, official_skill in EXPECTED_FACADES.items():
         row = rows.get(legacy_id) or {}
@@ -118,6 +132,24 @@ def main(argv: list[str]) -> int:
             and "<ecorex_native_facade>true</ecorex_native_facade>" in prompt
             and "<quality_gates>" in prompt,
             {"promptLength": len(prompt)},
+        )
+        tool_name = EXPECTED_TOOLS[legacy_id]
+        add_check(
+            checks,
+            f"{legacy_id} callable tool prompt bridge",
+            f"<callable_tool>{tool_name}</callable_tool>" in prompt,
+            {"toolName": tool_name, "promptLength": len(prompt)},
+        )
+
+        add_check(
+            checks,
+            f"{legacy_id} callable tool schema registered",
+            tool_name in tool_infos,
+            {
+                "toolName": tool_name,
+                "registered": tool_name in tool_infos,
+                "toolCount": len(tool_infos),
+            },
         )
 
         root_ok, root_doc = check_skill_doc(root, root / "skills" / legacy_id / "SKILL.md", legacy_id, official_skill)

@@ -27,6 +27,7 @@ def check(label: str, ok: bool) -> dict[str, Any]:
 
 def main() -> int:
     packaging = read("scripts/prepare-ecorex-webui-local-release.ps1")
+    install_ps1 = read("deploy/ecorex-site/install-webui.ps1")
     web_release = read("scripts/prepare-ecorex-web-release.ps1")
     runtime_packs = read("desktop/runtime-packs/core-requirements.txt")
     runtime_copy = read("desktop/runtime/ecorex-runtime/core-requirements.txt")
@@ -38,12 +39,38 @@ def main() -> int:
             "windows package preinstalls lark_oapi before first-run",
             'Install-WindowsRuntimeDependency -RuntimeDir $winRuntime -ModuleName "lark_oapi"' in packaging
             and 'PackageSpec "lark-oapi>=1.5.5"' in packaging
+            and 'PYTHONNOUSERSITE = "1"' in packaging
+            and "& $python -s -m pip install" in packaging
+            and '& $Python -s -c "import importlib.util' in packaging
             and 'Ensure-PythonDependency -Python $python -StateDir $stateDir -ModuleName "lark_oapi"' not in packaging,
+        ),
+        check(
+            "windows package strips pycache after preinstalling dependencies",
+            'Install-WindowsRuntimeDependency -RuntimeDir $winRuntime -ModuleName "lark_oapi"' in packaging
+            and 'Install-WindowsRuntimeDependency -RuntimeDir $winRuntime -ModuleName "lark_oapi"' in packaging
+            and packaging.index('Install-WindowsRuntimeDependency -RuntimeDir $winRuntime -ModuleName "lark_oapi"')
+            < packaging.index('Remove-GeneratedNoise -Root $winRuntime', packaging.index('Install-WindowsRuntimeDependency -RuntimeDir $winRuntime -ModuleName "lark_oapi"')),
         ),
         check(
             "windows first-run installer does not run pip",
             "function Ensure-PythonDependency" not in packaging
             and "python-deps-install.last.log" not in packaging,
+        ),
+        check(
+            "windows bootstrap prefers curl accelerated resumable download",
+            "function Try-SaveUrlWithCurl" in install_ps1
+            and "Get-Command curl.exe" in install_ps1
+            and '"--continue-at", "-"' in install_ps1
+            and "falling back to PowerShell streaming download" in install_ps1,
+        ),
+        check(
+            "windows bootstrap avoids Expand-Archive cleanup race",
+            "function Expand-EcoreXZip" in install_ps1
+            and "function ConvertTo-EcoreXLongPath" in install_ps1
+            and "Blocked unsafe zip entry" in install_ps1
+            and "$source.CopyTo($target)" in install_ps1
+            and "Expand-EcoreXZip -ZipPath $packagePath -DestinationPath $extractRoot" in install_ps1
+            and "Expand-Archive" not in install_ps1,
         ),
         check(
             "mac local installer keeps lark-oapi while pruning rapidocr",
