@@ -61,7 +61,8 @@ TONGXIN_CLI_PACK_ID = "tongxin-cli"
 TONGXIN_CLI_ALIASES = {"tongxin", "tongxin-cli", "xin-agent", "xin-agent-cli", "tx-assistant"}
 TONGXIN_CLI_INSTALL_HINT = (
     "Tongxin CLI is a default read-only EcoreX capability. Use the structured tongxin_cli tool; "
-    "EcoreX can auto-configure an existing local xin_agent_cli.py path from the capability screen. "
+    "EcoreX can auto-configure an existing local xin_agent_cli.py path from the capability screen, "
+    "or bootstrap it from an authenticated server when tools.tongxin_cli.bootstrap_url and bootstrap_sha256 are configured. "
     "Do not install it as a generic capability pack."
 )
 
@@ -430,6 +431,65 @@ def _ensure_chrome_devtools_mcp(config: Dict[str, Any]) -> None:
     })
 
 
+def _safe_mcp_server_ref(value: Any) -> str:
+    text = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "").strip()).strip(".-")
+    return text[:48] or "server"
+
+
+def _is_feishu_lark_mcp_config(config: Any) -> bool:
+    if not isinstance(config, dict):
+        return False
+    haystack = json.dumps(config, ensure_ascii=False, sort_keys=True).lower()
+    return any(token in haystack for token in ("feishu", "lark", "飞书"))
+
+
+def _feishu_lark_mcp_snapshot() -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "configured": False,
+        "configuredServers": [],
+        "status": {},
+        "toolCount": 0,
+        "callable": False,
+    }
+    try:
+        from agent.tools import ToolManager
+
+        manager = ToolManager()
+        try:
+            configs = manager._load_mcp_configs()
+        except Exception:
+            configs = []
+        configured = [
+            _safe_mcp_server_ref(cfg.get("name"))
+            for cfg in configs
+            if isinstance(cfg, dict) and _is_feishu_lark_mcp_config(cfg)
+        ]
+        status = manager.list_mcp_status()
+        relevant_status = {
+            _safe_mcp_server_ref(name): state
+            for name, state in status.items()
+            if _safe_mcp_server_ref(name) in set(configured)
+            or any(token in str(name).lower() for token in ("feishu", "lark"))
+        }
+        mcp_tools = getattr(manager, "_mcp_tool_instances", {}) or {}
+        tool_count = 0
+        for tool in mcp_tools.values():
+            server_name = _safe_mcp_server_ref(getattr(tool, "server_name", ""))
+            if server_name in set(configured) or any(token in server_name.lower() for token in ("feishu", "lark")):
+                tool_count += 1
+        payload.update({
+            "configured": bool(configured),
+            "configuredServers": configured[:8],
+            "status": relevant_status,
+            "toolCount": tool_count,
+            "callable": bool(tool_count and any(state == "ready" for state in relevant_status.values())),
+        })
+    except Exception as exc:
+        payload["errorType"] = exc.__class__.__name__
+        payload["message"] = "Feishu/Lark MCP status probe failed."
+    return payload
+
+
 def _set_nested(data: Dict[str, Any], *keys: str, value: Any) -> None:
     target = data
     for key in keys[:-1]:
@@ -745,6 +805,7 @@ class OptionalAbilities(BaseTool):
         if key == "feishu-cli":
             item["larkCli"] = bool(_which("lark-cli"))
             item["npm"] = bool(_which("npm"))
+            item["feishuMcp"] = _feishu_lark_mcp_snapshot()
         if meta.get("packId"):
             item["packId"] = meta["packId"]
             item["capabilityState"] = _capability_state(str(meta["packId"]))
@@ -757,6 +818,10 @@ class OptionalAbilities(BaseTool):
         if script_path:
             configure_args["script_path"] = script_path
         result = TongxinCli().execute(configure_args)
+        if result.status != "success" and not script_path:
+            bootstrap = TongxinCli().execute({"action": "bootstrap"})
+            if bootstrap.status == "success":
+                result = bootstrap
         payload = result.result if isinstance(result.result, dict) else {"result": result.result}
         configured = result.status == "success" and bool(payload.get("configured"))
         available = bool(payload.get("available"))
@@ -779,7 +844,7 @@ class OptionalAbilities(BaseTool):
             "message": payload.get("message") or (
                 "Tongxin CLI read-only capability is ready."
                 if configured else
-                "Tongxin CLI script was not found. Configure an existing xin_agent_cli.py path to enable data reads."
+                "Tongxin CLI script was not found. Configure an existing xin_agent_cli.py path or authenticated bootstrap settings to enable data reads."
             ),
             "installHint": TONGXIN_CLI_INSTALL_HINT,
             "configKey": "tools.tongxin_cli.script_path",

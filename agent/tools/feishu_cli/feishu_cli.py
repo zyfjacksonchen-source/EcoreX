@@ -32,6 +32,11 @@ DEFAULT_NPM_REGISTRY = "https://registry.npmjs.org"
 DOMESTIC_NPM_REGISTRY = "https://registry.npmmirror.com"
 DEFAULT_TIMEOUT_SECONDS = 45
 DEFAULT_AUTH_URL_WAIT_SECONDS = 20
+AUTH_SESSION_RETENTION_SECONDS = 15 * 60
+AUTH_SESSION_OUTPUT_LIMIT = 12000
+
+_AUTH_SESSIONS: Dict[str, Dict[str, Any]] = {}
+_AUTH_SESSIONS_LOCK = threading.Lock()
 
 
 _SECRET_PATTERNS = [
@@ -302,6 +307,208 @@ def _trim_chunks(chunks: List[str], max_chars: int = 12000) -> None:
         chunks[:] = [text[-max_chars:]]
 
 
+def _cleanup_auth_sessions_locked(now: Optional[float] = None) -> None:
+    current = now or time.time()
+    stale: List[str] = []
+    for session_id, session in list(_AUTH_SESSIONS.items()):
+        process = session.get("process")
+        deadline_at = float(session.get("deadlineAt") or session.get("startedAt") or current)
+        retention_until = deadline_at + AUTH_SESSION_RETENTION_SECONDS
+        running = bool(process is not None and getattr(process, "poll", lambda: 1)() is None)
+        if not running and current > retention_until:
+            stale.append(session_id)
+    for session_id in stale:
+        _AUTH_SESSIONS.pop(session_id, None)
+
+
+def _register_auth_session(session: Dict[str, Any]) -> None:
+    session_id = str(session.get("sessionId") or "").strip()
+    if not session_id:
+        return
+    with _AUTH_SESSIONS_LOCK:
+        _cleanup_auth_sessions_locked()
+        _AUTH_SESSIONS[session_id] = session
+    threading.Thread(
+        target=_auth_session_watchdog,
+        args=(session_id,),
+        daemon=True,
+        name="feishu-config-init-watchdog",
+    ).start()
+
+
+def _auth_session_watchdog(session_id: str) -> None:
+    while True:
+        process = None
+        with _AUTH_SESSIONS_LOCK:
+            session = _AUTH_SESSIONS.get(session_id)
+            if not session:
+                return
+            process = session.get("process")
+            if process is None or process.poll() is not None:
+                return
+            wait_seconds = float(session.get("deadlineAt") or time.time()) - time.time()
+            if wait_seconds <= 0:
+                session["timedOut"] = True
+                break
+        time.sleep(min(max(wait_seconds, 0.1), 30.0))
+    if process is not None and process.poll() is None:
+        _kill_process_tree(process)
+    with _AUTH_SESSIONS_LOCK:
+        session = _AUTH_SESSIONS.get(session_id)
+        if session:
+            session["exitCode"] = process.poll() if process is not None else session.get("exitCode")
+            session["completedAt"] = time.time()
+
+
+def _cancel_running_auth_sessions_for_workdir(workdir: Path) -> int:
+    try:
+        target = str(workdir.expanduser().resolve())
+    except Exception:
+        target = str(workdir)
+    victims: List[subprocess.Popen] = []
+    with _AUTH_SESSIONS_LOCK:
+        for session in _AUTH_SESSIONS.values():
+            process = session.get("process")
+            session_cwd = str(session.get("cwd") or "")
+            try:
+                session_cwd = str(Path(session_cwd).expanduser().resolve())
+            except Exception:
+                pass
+            if session_cwd == target and process is not None and process.poll() is None:
+                session["superseded"] = True
+                session["completedAt"] = time.time()
+                victims.append(process)
+    for process in victims:
+        _kill_process_tree(process)
+    return len(victims)
+
+
+def _auth_status_is_ready(status_payload: Dict[str, Any]) -> bool:
+    return bool(status_payload.get("authenticated")) or str(status_payload.get("authState") or "").strip().lower() == "ready"
+
+
+def _auth_status_state(status_payload: Dict[str, Any]) -> str:
+    return str(status_payload.get("authState") or ("ready" if status_payload.get("authenticated") else "unknown"))
+
+
+def _auth_session_output(session: Dict[str, Any]) -> tuple[str, Any]:
+    lock = session.get("lock")
+    stdout_chunks = session.get("stdoutChunks")
+    stderr_chunks = session.get("stderrChunks")
+    if lock is not None and isinstance(stdout_chunks, list) and isinstance(stderr_chunks, list):
+        with lock:
+            stdout = "".join(stdout_chunks)[-AUTH_SESSION_OUTPUT_LIMIT:]
+            stderr = "".join(stderr_chunks)[-AUTH_SESSION_OUTPUT_LIMIT:]
+    else:
+        stdout = ""
+        stderr = ""
+        stdout_path = Path(str(session.get("stdoutLogPath") or ""))
+        stderr_path = Path(str(session.get("stderrLogPath") or ""))
+        for path, target in ((stdout_path, "stdout"), (stderr_path, "stderr")):
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")[-AUTH_SESSION_OUTPUT_LIMIT:]
+            except Exception:
+                text = ""
+            if target == "stdout":
+                stdout = text
+            else:
+                stderr = text
+    output = stdout + ("\n" + stderr if stderr else "")
+    return (
+        output[-AUTH_SESSION_OUTPUT_LIMIT:] if len(output) > AUTH_SESSION_OUTPUT_LIMIT else output,
+        _sanitize_json_payload(_parse_json_output(stdout)),
+    )
+
+
+def _auth_session_snapshot(session_id: str, *, kill_expired: bool = True) -> Dict[str, Any]:
+    clean_id = str(session_id or "").strip()
+    if not clean_id:
+        return {"status": "error", "message": "session_id is required", "writebackPending": False}
+    with _AUTH_SESSIONS_LOCK:
+        _cleanup_auth_sessions_locked()
+        session = _AUTH_SESSIONS.get(clean_id)
+    if not session:
+        return {
+            "status": "not_found",
+            "sessionId": clean_id,
+            "writebackPending": False,
+            "backgroundProcess": False,
+            "message": "Feishu CLI auth session was not found or already expired.",
+        }
+
+    process = session.get("process")
+    now = time.time()
+    deadline_at = float(session.get("deadlineAt") or now)
+    exit_code = process.poll() if process is not None else session.get("exitCode")
+    timed_out = bool(session.get("timedOut"))
+    superseded = bool(session.get("superseded"))
+    if exit_code is None and kill_expired and now >= deadline_at:
+        timed_out = True
+        try:
+            _kill_process_tree(process)
+        except Exception:
+            pass
+        exit_code = process.poll() if process is not None else None
+
+    output, parsed = _auth_session_output(session)
+    url = str(session.get("verificationUrl") or "").strip() or _auth_url_from_result({"output": output, "json": parsed})
+    if superseded:
+        status = "cancelled"
+        writeback_pending = False
+        background = False
+    elif timed_out or session.get("timedOut"):
+        status = "timeout"
+        writeback_pending = False
+        background = False
+    elif exit_code is None:
+        status = "auth_pending"
+        writeback_pending = True
+        background = True
+    else:
+        status = "success" if exit_code == 0 else "error"
+        writeback_pending = False
+        background = False
+
+    lock = session.get("lock")
+    if lock is not None:
+        with lock:
+            if url:
+                session["verificationUrl"] = url
+            session["exitCode"] = exit_code
+            session["timedOut"] = bool(timed_out or session.get("timedOut"))
+            if exit_code is not None and not session.get("completedAt"):
+                session["completedAt"] = now
+
+    payload: Dict[str, Any] = {
+        "status": status,
+        "sessionId": clean_id,
+        "exitCode": exit_code,
+        "pid": session.get("pid"),
+        "authFlow": "config_init_status",
+        "backgroundProcess": background,
+        "writebackPending": writeback_pending,
+        "cliWritebackTimeoutSeconds": int(session.get("timeoutSeconds") or DEFAULT_TIMEOUT_SECONDS),
+        "startedAt": session.get("startedAt"),
+        "deadlineAt": session.get("deadlineAt"),
+        "output": output or "(no output)",
+        "json": parsed,
+        "stdoutLogPath": session.get("stdoutLogPath"),
+        "stderrLogPath": session.get("stderrLogPath"),
+    }
+    if url:
+        payload["verificationUrl"] = url
+    if status == "auth_pending":
+        payload["message"] = "Waiting for lark-cli to receive Feishu auth write-back."
+    elif status == "success":
+        payload["processCompleted"] = True
+        payload["message"] = "lark-cli config process completed; verifying Feishu CLI auth status."
+    elif status == "timeout":
+        payload["message"] = "Feishu CLI auth write-back window expired; start authorization again."
+    else:
+        payload["message"] = "Feishu CLI auth/config process exited before write-back completed."
+    return payload
+
+
 def _run_process_until_auth_url(
     command: List[str],
     timeout: int,
@@ -313,13 +520,19 @@ def _run_process_until_auth_url(
     """Start a blocking auth/config command and return once its URL appears."""
     workdir = Path(cwd or os.getcwd()).expanduser()
     workdir.mkdir(parents=True, exist_ok=True)
+    try:
+        workdir = workdir.resolve()
+    except Exception:
+        pass
     log_dir = workdir / ".ecorex" / "lark-auth"
     log_dir.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256((" ".join(command) + str(time.time())).encode("utf-8")).hexdigest()[:16]
+    session_id = f"lark-auth-{digest}"
     stdout_path = log_dir / f"lark-config-init-{digest}.out.log"
     stderr_path = log_dir / f"lark-config-init-{digest}.err.log"
     stdout_path.touch()
     stderr_path.touch()
+    _cancel_running_auth_sessions_for_workdir(workdir)
 
     kwargs: Dict[str, Any] = {
         "cwd": str(workdir),
@@ -340,6 +553,25 @@ def _run_process_until_auth_url(
     lock = threading.Lock()
     stdout_chunks: List[str] = []
     stderr_chunks: List[str] = []
+    started_at = time.time()
+    timeout_seconds = max(1, int(timeout))
+    session = {
+        "sessionId": session_id,
+        "process": process,
+        "pid": process.pid,
+        "lock": lock,
+        "stdoutChunks": stdout_chunks,
+        "stderrChunks": stderr_chunks,
+        "stdoutLogPath": str(stdout_path),
+        "stderrLogPath": str(stderr_path),
+        "startedAt": started_at,
+        "deadlineAt": started_at + timeout_seconds,
+        "timeoutSeconds": timeout_seconds,
+        "cwd": str(workdir),
+        "command": list(command),
+        "verificationUrl": "",
+    }
+    _register_auth_session(session)
 
     def _reader(stream, path: Path, chunks: List[str]) -> None:
         try:
@@ -398,6 +630,7 @@ def _run_process_until_auth_url(
             output, _ = _snapshot()
             return {
                 "status": "cancelled",
+                "sessionId": session_id,
                 "exitCode": None,
                 "pid": process.pid,
                 "output": output or "(no output)",
@@ -410,8 +643,12 @@ def _run_process_until_auth_url(
         output, parsed = _snapshot()
         url = _auth_url_from_result({"output": output, "json": parsed})
         if url:
+            with lock:
+                session["verificationUrl"] = url
+                session["exitCode"] = exit_code
             return {
                 "status": "auth_pending" if exit_code is None else ("success" if exit_code == 0 else "error"),
+                "sessionId": session_id,
                 "exitCode": exit_code,
                 "pid": process.pid,
                 "backgroundProcess": exit_code is None,
@@ -424,8 +661,12 @@ def _run_process_until_auth_url(
                 "verificationUrl": url,
             }
         if exit_code is not None:
+            with lock:
+                session["exitCode"] = exit_code
+                session["completedAt"] = time.time()
             return {
                 "status": "success" if exit_code == 0 else "error",
+                "sessionId": session_id,
                 "exitCode": exit_code,
                 "pid": process.pid,
                 "backgroundProcess": False,
@@ -437,9 +678,13 @@ def _run_process_until_auth_url(
             }
         if time.time() >= deadline:
             _kill_process_tree(process)
+            with lock:
+                session["timedOut"] = True
+                session["exitCode"] = process.poll()
             output, _ = _snapshot()
             return {
                 "status": "timeout",
+                "sessionId": session_id,
                 "exitCode": None,
                 "pid": process.pid,
                 "backgroundProcess": False,
@@ -662,7 +907,11 @@ class FeishuCli(BaseTool):
         "properties": {
             "action": {
                 "type": "string",
-                "description": "One of: status, ensure, diagnose, install, config_init, auth_login, run",
+                "description": "One of: status, ensure, diagnose, install, config_init, config_init_status, auth_login, run",
+            },
+            "session_id": {
+                "type": "string",
+                "description": "Session ID returned by config_init for polling CLI auth/config write-back.",
             },
             "args": {
                 "type": "array",
@@ -760,6 +1009,8 @@ class FeishuCli(BaseTool):
             if not ensure.get("available"):
                 return ToolResult.fail(ensure)
             return self._config_init(args, env, timeout)
+        if action in {"config_init_status", "agent_auth_status", "auth_status"}:
+            return self._config_init_status(args, env, timeout)
         if action == "auth_login":
             ensure = self._ensure_payload(env, timeout, install_if_missing)
             if not ensure.get("available"):
@@ -770,7 +1021,7 @@ class FeishuCli(BaseTool):
             if not ensure.get("available"):
                 return ToolResult.fail(ensure)
             return self._run_cli(args, env, timeout)
-        return ToolResult.fail({"status": "error", "message": "action must be one of: status, ensure, diagnose, install, config_init, auth_login, run"})
+        return ToolResult.fail({"status": "error", "message": "action must be one of: status, ensure, diagnose, install, config_init, config_init_status, auth_login, run"})
 
     def _status(self, env: Dict[str, str], auth_timeout: int = 15) -> Dict[str, Any]:
         command = _resolve_lark_command(env)
@@ -969,7 +1220,10 @@ class FeishuCli(BaseTool):
                     "Open the verification URL or scan the QR code now. "
                     f"The lark-cli config process is still running and can write back within {timeout} seconds."
                 )
-                result["nextAction"] = {"tool": "feishu_cli", "action": "status"}
+                next_action = {"tool": "feishu_cli", "action": "config_init_status"}
+                if result.get("sessionId"):
+                    next_action["session_id"] = result.get("sessionId")
+                result["nextAction"] = next_action
             elif result.get("exitCode") == 0:
                 result["authRequired"] = False
                 result["message"] = "lark-cli config initialization completed."
@@ -981,6 +1235,30 @@ class FeishuCli(BaseTool):
             return ToolResult.fail(result)
         return ToolResult.success(result)
 
+    def _config_init_status(self, args: Dict[str, Any], env: Dict[str, str], timeout: int) -> ToolResult:
+        session_id = _clean_cli_value(args.get("session_id") or args.get("sessionId"))
+        snapshot = _auth_session_snapshot(session_id)
+        if snapshot.get("status") == "not_found" or snapshot.get("status") == "error":
+            return ToolResult.fail(snapshot)
+        if snapshot.get("status") == "success":
+            auth_status = self._status(env, auth_timeout=max(1, min(timeout, 15)))
+            snapshot["authStatus"] = auth_status
+            snapshot["authState"] = _auth_status_state(auth_status)
+            snapshot["authenticated"] = _auth_status_is_ready(auth_status)
+            snapshot["authCompleted"] = bool(snapshot["authenticated"])
+            snapshot["authRequired"] = not bool(snapshot["authenticated"])
+            if not snapshot["authenticated"]:
+                snapshot["status"] = "auth_incomplete"
+                snapshot["message"] = (
+                    "lark-cli config process exited, but Feishu CLI auth status is not ready yet. "
+                    "Retry authorization or run feishu_cli status for details."
+                )
+        else:
+            snapshot["authRequired"] = bool(snapshot.get("writebackPending"))
+        if snapshot.get("status") in {"timeout", "error", "cancelled", "auth_incomplete"}:
+            return ToolResult.fail(snapshot)
+        return ToolResult.success(snapshot)
+
     def _auth_login(self, args: Dict[str, Any], env: Dict[str, str], timeout: int) -> ToolResult:
         command = _resolve_lark_command(env)
         if not command:
@@ -990,10 +1268,16 @@ class FeishuCli(BaseTool):
         if device_code:
             result = self._safe_run(command + ["auth", "login", "--device-code", device_code], env, timeout)
             result["authFlow"] = "complete"
-            result["authCompleted"] = result.get("exitCode") == 0
             if result.get("exitCode") != 0:
                 return ToolResult.fail(result)
             result["authStatus"] = self._status(env, auth_timeout=max(1, min(timeout, 15)))
+            result["authState"] = _auth_status_state(result["authStatus"])
+            result["authenticated"] = _auth_status_is_ready(result["authStatus"])
+            result["authCompleted"] = bool(result["authenticated"])
+            if not result["authenticated"]:
+                result["status"] = "auth_incomplete"
+                result["message"] = "lark-cli auth login exited 0, but Feishu CLI auth status is not ready."
+                return ToolResult.fail(result)
             return ToolResult.success(result)
 
         cli_args = ["auth", "login"]

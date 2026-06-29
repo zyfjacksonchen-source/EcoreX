@@ -51,6 +51,12 @@ SKILL_CALLABLE_TOOL_ALIASES: dict[str, str] = {
     "芯助手cli": "tongxin_cli",
     "通芯": "tongxin_cli",
     "通芯助手": "tongxin_cli",
+    "feishu": "feishu_cli",
+    "feishu-cli": "feishu_cli",
+    "feishu_cli": "feishu_cli",
+    "lark": "feishu_cli",
+    "lark-cli": "feishu_cli",
+    "lark_cli": "feishu_cli",
 }
 
 _FRONTMATTER_TOOL_KEYS = (
@@ -113,6 +119,8 @@ def resolve_callable_tool_name(skill_or_name: Any) -> Optional[str]:
         key = normalize_skill_tool_alias(candidate)
         if key in SKILL_CALLABLE_TOOL_ALIASES:
             return SKILL_CALLABLE_TOOL_ALIASES[key]
+        if key.startswith(("lark-", "feishu-")):
+            return "feishu_cli"
     return None
 
 

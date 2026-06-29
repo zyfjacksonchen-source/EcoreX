@@ -364,8 +364,19 @@ def inspect_webui_artifact(path: pathlib.Path, artifact_id: str, install_suffix:
             and '"auth", "qrcode"' in feishu_cli
             and "--app-secret-stdin" in feishu_cli
             and "input_text=app_secret + \"\\n\"" in feishu_cli
+            and "_AUTH_SESSIONS" in feishu_cli
+            and "def _auth_session_watchdog" in feishu_cli
+            and "def _cancel_running_auth_sessions_for_workdir" in feishu_cli
+            and "def _auth_session_snapshot" in feishu_cli
+            and "config_init_status" in feishu_cli
+            and "auth_incomplete" in feishu_cli
+            and "sessionId" in feishu_cli
             and "def _feishu_credentials" in feishu_cli
             and "def _safe_feishu_cli_status_probe" in web_channel
+            and "def _handle_agent_auth_status" in web_channel
+            and "agent_auth_status" in web_channel
+            and "startFeishuCliAuthPolling" in web_channel
+            and "showFeishuCliAuthFailedNotice" in web_channel
             and "agentCliStatus" in web_channel,
             {
                 "feishuCliEntrySuffix": feishu_cli_entry.split("runtime/", 1)[-1],
@@ -387,9 +398,11 @@ def inspect_webui_artifact(path: pathlib.Path, artifact_id: str, install_suffix:
             "SKILL_SOURCE_GROUP_LABELS" in service
             and "SKILL_PURPOSE_GROUP_LABELS" in service
             and "_decorate_skill_governance" in service
+            and "_is_lark_cli_skill" in service
             and "builtin_catalog" in service
             and "source_group" in service
             and "purpose_group" in service
+            and '"collaboration": "协作连接"' in service
             and "toggleable" in service
             and "Built-in factory skills are always enabled and cannot be disabled." in service,
             {"entrySuffix": service_entry.split("runtime/", 1)[-1]},
@@ -426,10 +439,24 @@ def inspect_webui_artifact(path: pathlib.Path, artifact_id: str, install_suffix:
             and '"presentations": "office_presentations"' in skill_bridge
             and '"tongxin-cli": "tongxin_cli"' in skill_bridge
             and '"芯助手": "tongxin_cli"' in skill_bridge
+            and '"lark-cli": "feishu_cli"' in skill_bridge
+            and 'key.startswith(("lark-", "feishu-"))' in skill_bridge
             and "def skill_agent_surface" in skill_bridge,
             {"entrySuffix": skill_bridge_entry.split("runtime/", 1)[-1]},
         )
         console_entry, console_js = zip_text_by_suffix(archive, "runtime/channel/web/static/js/console.js")
+        add_check(
+            checks,
+            f"{artifact_id} Feishu CLI WebUI writeback polling packaged",
+            "pollFeishuCliAuthStatus" in console_js
+            and "agent_auth_status" in console_js
+            and "sessionId" in console_js
+            and "const failed = !pending && !completed" in console_js
+            and "fa-xmark text-red-500" in console_js
+            and "auth_incomplete" in console_js
+            and "feishu_scan_ready" in console_js,
+            {"entrySuffix": console_entry.split("runtime/", 1)[-1]},
+        )
         add_check(
             checks,
             f"{artifact_id} Skill governance legacy console lock packaged",
@@ -493,6 +520,10 @@ def inspect_webui_artifact(path: pathlib.Path, artifact_id: str, install_suffix:
             and "class TongxinCli" in tongxin_tool
             and "READ_ONLY_ALLOWED_COMMANDS" in tongxin_tool
             and "validate_read_only_tongxin_args" in tongxin_tool
+            and "is_config_driven_tongxin_bootstrap_request" in tongxin_tool
+            and "MAX_BOOTSTRAP_BYTES" in tongxin_tool
+            and "bootstrap_sha256" in tongxin_tool
+            and 'headers["Authorization"] = f"Bearer {token}"' in tongxin_tool
             and "_COMMAND_ALLOWED_FLAGS" in tongxin_tool
             and "_sanitize_json" in tongxin_tool
             and "_is_sensitive_json_key" in tongxin_tool
@@ -512,6 +543,7 @@ def inspect_webui_artifact(path: pathlib.Path, artifact_id: str, install_suffix:
             f"{artifact_id} Tongxin CLI permission and raw bash guard packaged",
             '"tongxin_cli"' in broker
             and "default-read-only-tongxin-cli" in broker
+            and "default-tongxin-cli-authenticated-bootstrap" in broker
             and "def _extract_simple_tongxin_cli_args" in agent_stream
             and "raw bash tongxin-cli" in agent_stream
             and "agent_capability_install_pack_preflight" in agent_stream
@@ -552,6 +584,7 @@ def inspect_webui_artifact(path: pathlib.Path, artifact_id: str, install_suffix:
             f"{artifact_id} Tongxin CLI configure-only auto-configuration packaged",
             "TONGXIN_CLI_INSTALL_HINT" in optional_abilities
             and "_configure_tongxin_cli" in optional_abilities
+            and '{"action": "bootstrap"}' in optional_abilities
             and "configurationState" in optional_abilities
             and "agentCanInstall\": bool(meta.get(\"packId\")) and not bool(meta.get(\"configureOnly\"))" in optional_abilities
             and "OptionalAbilities().execute(configure_args)" in agent_capability
@@ -569,6 +602,7 @@ def inspect_webui_artifact(path: pathlib.Path, artifact_id: str, install_suffix:
             and "Connect the EcoreX Tongxin Assistant read-only CLI capability" in web_channel
             and "Do not install through raw bash/curl/npm/git" in web_channel
             and "tools.tongxin_cli.script_path" in web_channel
+            and "tools.tongxin_cli.bootstrap_url" in web_channel
             and "Only read-only queries are allowed for all users" in web_channel,
             {"webChannelEntrySuffix": web_channel_entry.split("runtime/", 1)[-1]},
         )

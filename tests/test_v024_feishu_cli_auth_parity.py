@@ -3,6 +3,7 @@ import subprocess
 import sys
 import time
 import types
+from pathlib import Path
 from unittest.mock import patch
 
 
@@ -142,6 +143,10 @@ def test_feishu_cli_config_init_new_returns_url_before_cli_writeback(tmp_path):
             "    sys.stdout.write('{\"appId\":\"cli_test\",\"appSecret\":\"real-secret-after-writeback\",\"brand\":\"feishu\"}\\n')",
             "    sys.stdout.flush()",
             "    sys.exit(0)",
+            "if args[:3] == ['auth', 'status', '--json']:",
+            "    sys.stdout.write('{\"authenticated\": true}\\n')",
+            "    sys.stdout.flush()",
+            "    sys.exit(0)",
             "sys.stderr.write('unexpected command: ' + ' '.join(args))",
             "sys.exit(2)",
         ]),
@@ -154,6 +159,12 @@ def test_feishu_cli_config_init_new_returns_url_before_cli_writeback(tmp_path):
         started = time.monotonic()
         result = tool.execute({"action": "config_init", "timeout": 240})
         elapsed = time.monotonic() - started
+        time.sleep(1.0)
+        poll = tool.execute({
+            "action": "config_init_status",
+            "session_id": result.result["sessionId"],
+            "timeout": 15,
+        })
 
     assert elapsed < 5
     assert result.status == "success"
@@ -164,14 +175,106 @@ def test_feishu_cli_config_init_new_returns_url_before_cli_writeback(tmp_path):
     assert result.result["writebackPending"] is True
     assert result.result["cliWritebackTimeoutSeconds"] == 240
     assert result.result["verificationUrl"] == "https://open.feishu.cn/page/cli?user_code=ABCD-1234&from=cli"
-    assert result.result["nextAction"] == {"tool": "feishu_cli", "action": "status"}
+    assert result.result["sessionId"].startswith("lark-auth-")
+    assert result.result["nextAction"] == {
+        "tool": "feishu_cli",
+        "action": "config_init_status",
+        "session_id": result.result["sessionId"],
+    }
+    assert poll.status == "success"
+    assert poll.result["status"] == "success"
+    assert poll.result["writebackPending"] is False
+    assert poll.result["authCompleted"] is True
+    assert poll.result["authState"] == "ready"
+    assert poll.result["authenticated"] is True
     assert result.result["stdoutLogPath"].endswith(".out.log")
     assert result.result["stderrLogPath"].endswith(".err.log")
-    time.sleep(1.0)
     stdout_log = open(result.result["stdoutLogPath"], encoding="utf-8").read()
     stderr_log = open(result.result["stderrLogPath"], encoding="utf-8").read()
     assert "real-secret-after-writeback" not in stdout_log + stderr_log
     assert "appSecret" in stdout_log
+
+
+def test_feishu_cli_config_init_status_requires_ready_auth_state(tmp_path):
+    from agent.tools.feishu_cli.feishu_cli import FeishuCli
+
+    fake_cli = tmp_path / "fake_lark_cli_incomplete.py"
+    fake_cli.write_text(
+        "\n".join([
+            "import sys, time",
+            "args = sys.argv[1:]",
+            "if args[:3] == ['config', 'init', '--new']:",
+            "    sys.stderr.write('https://open.feishu.cn/page/cli?user_code=INCOMPLETE\\n')",
+            "    sys.stderr.flush()",
+            "    time.sleep(0.2)",
+            "    sys.stdout.write('{\"appId\":\"cli_test\",\"brand\":\"feishu\"}\\n')",
+            "    sys.stdout.flush()",
+            "    sys.exit(0)",
+            "if args[:3] == ['auth', 'status', '--json']:",
+            "    sys.stdout.write('{\"authenticated\": false}\\n')",
+            "    sys.stdout.flush()",
+            "    sys.exit(0)",
+            "sys.exit(2)",
+        ]),
+        encoding="utf-8",
+    )
+
+    tool = FeishuCli({"cwd": str(tmp_path)})
+    with patch("agent.tools.feishu_cli.feishu_cli._resolve_lark_command", return_value=[sys.executable, str(fake_cli)]), \
+            patch.object(FeishuCli, "_generate_auth_qrcode", return_value={"status": "success", "path": "qr.png"}):
+        result = tool.execute({"action": "config_init", "timeout": 240})
+        time.sleep(0.5)
+        poll = tool.execute({
+            "action": "config_init_status",
+            "session_id": result.result["sessionId"],
+            "timeout": 15,
+        })
+
+    assert result.status == "success"
+    assert poll.status == "error"
+    assert poll.result["status"] == "auth_incomplete"
+    assert poll.result["authCompleted"] is False
+    assert poll.result["authenticated"] is False
+    assert poll.result["authRequired"] is True
+
+
+def test_feishu_cli_config_init_watchdog_kills_expired_writeback_process(tmp_path):
+    import importlib
+
+    from agent.tools.feishu_cli.feishu_cli import FeishuCli
+
+    module = importlib.import_module("agent.tools.feishu_cli.feishu_cli")
+    fake_cli = tmp_path / "fake_lark_cli_hangs.py"
+    fake_cli.write_text(
+        "\n".join([
+            "import sys, time",
+            "args = sys.argv[1:]",
+            "if args[:3] == ['config', 'init', '--new']:",
+            "    sys.stderr.write('https://open.feishu.cn/page/cli?user_code=HANG\\n')",
+            "    sys.stderr.flush()",
+            "    time.sleep(60)",
+            "    sys.exit(0)",
+            "sys.exit(2)",
+        ]),
+        encoding="utf-8",
+    )
+
+    tool = FeishuCli({"cwd": str(tmp_path)})
+    with patch("agent.tools.feishu_cli.feishu_cli._resolve_lark_command", return_value=[sys.executable, str(fake_cli)]), \
+            patch.object(FeishuCli, "_generate_auth_qrcode", return_value={"status": "success", "path": "qr.png"}):
+        result = tool.execute({"action": "config_init", "timeout": 1})
+
+    session_id = result.result["sessionId"]
+    process = module._AUTH_SESSIONS[session_id]["process"]
+    deadline = time.time() + 6
+    while process.poll() is None and time.time() < deadline:
+        time.sleep(0.1)
+
+    assert process.poll() is not None
+    poll = tool.execute({"action": "config_init_status", "session_id": session_id, "timeout": 2})
+    assert poll.status == "error"
+    assert poll.result["status"] == "timeout"
+    assert poll.result["writebackPending"] is False
 
 
 def test_feishu_cli_safe_run_redacts_json_payload():
@@ -378,6 +481,57 @@ def test_feishu_external_connection_agent_auth_returns_visible_cli_link(monkeypa
     assert "stderrLogPath" not in payload["agentAuth"]
     assert "C:/workspace/.ecorex/lark-auth/qr.png" not in serialized
     assert "raw-secret" not in serialized
+
+
+def test_feishu_external_connection_agent_auth_status_polls_session(monkeypatch):
+    _install_web_stub()
+    from agent.tools.base_tool import ToolResult
+    from agent.tools.feishu_cli.feishu_cli import FeishuCli
+    from channel.web import web_channel
+
+    monkeypatch.setattr(web_channel, "_get_workspace_root", lambda: "C:/workspace")
+    monkeypatch.setattr(web_channel, "record_external_connection_runtime_event", lambda *args, **kwargs: None)
+
+    def fake_execute(self, args):
+        assert args["action"] == "config_init_status"
+        assert args["session_id"] == "lark-auth-test"
+        return ToolResult.success({
+            "status": "success",
+            "sessionId": "lark-auth-test",
+            "authCompleted": True,
+            "authenticated": True,
+            "authState": "ready",
+            "writebackPending": False,
+            "verificationUrl": "https://open.feishu.cn/page/cli?user_code=ABCD",
+            "stdoutLogPath": "C:/workspace/.ecorex/lark-auth/raw.out.log",
+            "json": {"appSecret": "raw-secret"},
+        })
+
+    monkeypatch.setattr(FeishuCli, "execute", fake_execute)
+
+    payload = json.loads(web_channel.ExternalConnectionActionHandler._handle_agent_auth_status("feishu", {
+        "sessionId": "lark-auth-test",
+    }))
+    serialized = json.dumps(payload, ensure_ascii=False)
+
+    assert payload["status"] == "success"
+    assert payload["sessionId"] == "lark-auth-test"
+    assert payload["authCompleted"] is True
+    assert payload["authenticated"] is True
+    assert payload["agentAuth"]["authState"] == "ready"
+    assert "raw-secret" not in serialized
+    assert "stdoutLogPath" not in payload["agentAuth"]
+
+
+def test_feishu_web_console_auth_poll_has_failed_state_contract():
+    console_source = Path("channel/web/static/js/console.js").read_text(encoding="utf-8")
+    web_source = Path("channel/web/web_channel.py").read_text(encoding="utf-8")
+
+    assert "const failed = !pending && !completed" in console_source
+    assert "auth_incomplete" in console_source
+    assert "fa-xmark text-red-500" in console_source
+    assert "showFeishuCliAuthFailedNotice" in web_source
+    assert "agent_auth_status" in web_source
 
 
 def test_feishu_external_connection_projection_exposes_cli_auth_action():

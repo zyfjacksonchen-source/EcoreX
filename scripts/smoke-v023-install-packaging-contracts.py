@@ -40,7 +40,11 @@ def main() -> int:
             'Install-WindowsRuntimeDependency -RuntimeDir $winRuntime -ModuleName "lark_oapi"' in packaging
             and 'PackageSpec "lark-oapi>=1.5.5"' in packaging
             and 'PYTHONNOUSERSITE = "1"' in packaging
+            and 'PYTHONDONTWRITEBYTECODE = "1"' in packaging
             and "& $python -s -m pip install" in packaging
+            and "--no-compile" in packaging
+            and "--timeout 60" in packaging
+            and "--retries 2" in packaging
             and '& $Python -s -c "import importlib.util' in packaging
             and 'Ensure-PythonDependency -Python $python -StateDir $stateDir -ModuleName "lark_oapi"' not in packaging,
         ),

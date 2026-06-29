@@ -5,13 +5,13 @@
     {
       "id": "tongxin-cli",
       "name": "通芯助手 CLI 只读数据",
-      "summary": "默认启用的只读账户数据能力。通过结构化 tongxin_cli 工具访问既有 xin_agent_cli.py，仅允许账号、项目、报表、笔记和今日实时汇总查询。",
+      "summary": "默认启用的只读账户数据能力。通过结构化 tongxin_cli 工具访问既有或鉴权下载的 xin_agent_cli.py，仅允许账号、项目、报表、笔记和今日实时汇总查询。",
       "installMode": "user-or-admin",
       "defaultEnabled": true,
       "readOnly": true,
       "configureOnly": true,
       "discoveryOnly": false,
-      "installHint": "默认只读能力。请使用结构化 tongxin_cli 工具；仅在无法自动发现时配置 tools.tongxin_cli.script_path 或 ECOREX_TONGXIN_CLI_PATH 指向既有 xin_agent_cli.py，不要作为通用能力包安装。",
+      "installHint": "默认只读能力。请使用结构化 tongxin_cli 工具；无法自动发现时可配置 tools.tongxin_cli.bootstrap_url/bootstrap_sha256 鉴权下载，或配置 tools.tongxin_cli.script_path / ECOREX_TONGXIN_CLI_PATH 指向既有 xin_agent_cli.py，不要作为通用能力包安装。",
       "requirements": [],
       "moduleChecks": [],
       "allowedCommands": [
@@ -22,7 +22,7 @@
         "note detail",
         "realtime summary --xhs-channel all"
       ],
-      "failureHint": "请配置 tools.tongxin_cli.script_path 或 ECOREX_TONGXIN_CLI_PATH 指向只读 xin_agent_cli.py；不要通过 bash 直接调用或安装。"
+      "failureHint": "请配置 tools.tongxin_cli.bootstrap_url/bootstrap_sha256 鉴权下载，或配置 tools.tongxin_cli.script_path / ECOREX_TONGXIN_CLI_PATH 指向只读 xin_agent_cli.py；不要通过 bash 直接调用或安装。"
     },
     {
       "id": "feishu-lark",

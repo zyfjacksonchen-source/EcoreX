@@ -1,24 +1,24 @@
 {
   "status": "PASS",
-  "generatedAt": "2026-06-29T02:33:58Z",
+  "generatedAt": "2026-06-29T04:37:27Z",
   "scope": "R24-02A webui release lark runtime contract",
   "windows": {
     "artifactId": "webui-windows-x64",
     "artifactName": "EcoreX_0.2.4-webui-windows-x64.zip",
-    "size": 116299310,
-    "sha256": "1E395A345555330B6F475E7EA1BCBC7845CFD17EEB98E846BFA40FCD2A5F307E"
+    "size": 113925024,
+    "sha256": "13535AAB7541E19ECC6DE95D9A13670AEABC78B11784CEB6C99946A39AFE7322"
   },
   "macos": {
     "artifactId": "webui-macos-universal",
     "artifactName": "EcoreX_0.2.4-webui-macos-universal.zip",
-    "size": 263191059,
-    "sha256": "DA5DC96EAF80A75D161BB5B85AF7228120833F06B658A1512B35F1A99E4426BB"
+    "size": 263199687,
+    "sha256": "27801CFCAB2C52619ED8A08280301E16F4292A0D0443FCE47BB84E3A2E9D4FBE"
   },
   "publicRelease": {
     "artifactId": "public-release",
     "artifactName": "EcoreX_0.2.4-public-release.zip",
-    "size": 382672062,
-    "sha256": "E3B003CFE32B2993410E1587DF9DAAA7B8308EF81284ABF18A8F447ADDBD0566"
+    "size": 380138246,
+    "sha256": "C0167695F6DF52117479046E7CCAE282A778D1C5F1A31C134A01726B3E90463B"
   },
   "checks": [
     {
@@ -27,6 +27,13 @@
       "evidence": {
         "feishuCliEntrySuffix": "agent/tools/feishu_cli/feishu_cli.py",
         "webChannelEntrySuffix": "channel/web/web_channel.py"
+      }
+    },
+    {
+      "label": "webui-windows-x64 Feishu CLI WebUI writeback polling packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "channel/web/static/js/console.js"
       }
     },
     {
@@ -97,6 +104,13 @@
       }
     },
     {
+      "label": "webui-macos-universal Feishu CLI WebUI writeback polling packaged",
+      "status": "PASS",
+      "evidence": {
+        "entrySuffix": "channel/web/static/js/console.js"
+      }
+    },
+    {
       "label": "webui-macos-universal Lark SDK readiness probe packaged",
       "status": "PASS",
       "evidence": {
@@ -159,8 +173,8 @@
       "label": "public manifest matches webui-windows-x64",
       "status": "PASS",
       "evidence": {
-        "manifestSize": 116299310,
-        "artifactSize": 116299310,
+        "manifestSize": 113925024,
+        "artifactSize": 113925024,
         "hashMatches": true
       }
     },
@@ -175,8 +189,8 @@
       "label": "public manifest matches webui-macos-universal",
       "status": "PASS",
       "evidence": {
-        "manifestSize": 263191059,
-        "artifactSize": 263191059,
+        "manifestSize": 263199687,
+        "artifactSize": 263199687,
         "hashMatches": true
       }
     },
@@ -191,8 +205,8 @@
       "label": "public manifest matches web-linux-service",
       "status": "PASS",
       "evidence": {
-        "manifestSize": 3820515,
-        "artifactSize": 3820515,
+        "manifestSize": 3828980,
+        "artifactSize": 3828980,
         "hashMatches": true
       }
     }

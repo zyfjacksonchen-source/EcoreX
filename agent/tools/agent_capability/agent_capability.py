@@ -196,7 +196,7 @@ class AgentCapabilityTool(BaseTool):
             "server": {"type": "object", "description": "MCP server config for configure_mcp."},
             "script_path": {
                 "type": "string",
-                "description": "Optional local xin_agent_cli.py path when configuring the Tongxin CLI capability pack.",
+                "description": "Optional local xin_agent_cli.py path when configuring the Tongxin CLI capability pack. If omitted, EcoreX may auto-detect or use configured authenticated bootstrap settings.",
             },
             "timeout": {"type": "integer", "description": "Install timeout seconds."},
         },

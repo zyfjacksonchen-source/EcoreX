@@ -159,12 +159,12 @@ def _purpose_group_for(row: dict) -> str:
         _normalize_skill_text(row.get(key))
         for key in ("name", "display_name", "displayName", "description", "source", "origin", "path", "primary_env")
     )
+    if re.search(r"lark|feishu|飞书|calendar|mail|approval|attendance|contact|wiki|base|minutes|okr|task|协作|日历|邮箱|审批", text):
+        return "collaboration"
     if re.search(r"office|document|documents|pdf|spreadsheet|slides|presentation|docx|pptx|xlsx|xlsm|文档|表格|幻灯片|办公", text):
         return "office"
     if re.search(r"image|vision|media|video|audio|figma|hallmark|remotion|design|creative|生成|图像|图片|视觉|媒体|设计", text):
         return "image_media"
-    if re.search(r"lark|feishu|飞书|calendar|mail|approval|attendance|contact|wiki|base|minutes|okr|task|协作|日历|邮箱|审批", text):
-        return "collaboration"
     if re.search(r"data|database|sql|csv|analytics|chart|dashboard|base|数据|分析|仪表盘", text):
         return "data"
     if re.search(r"github|openai|plugin|skill|codex|cli|developer|swift|xcode|debug|test|开发|调试|测试", text):
@@ -267,9 +267,14 @@ def _decorate_mention_metadata(row: dict) -> None:
         mentionable = False
         hidden_reason = hidden_reason or "background-triggered"
     if _is_lark_cli_skill(row):
-        category = "background"
-        mentionable = False
-        hidden_reason = hidden_reason or "lark-cli-triggered"
+        if explicit_mentionable is False or row.get("user_invocable") is False or row.get("disable_model_invocation") is True:
+            category = "background"
+            mentionable = False
+            hidden_reason = hidden_reason or "background-triggered"
+        else:
+            category = "automation"
+            mentionable = True
+            hidden_reason = ""
     if _is_test_fixture_skill(row):
         category = "background"
         mentionable = False
@@ -279,6 +284,8 @@ def _decorate_mention_metadata(row: dict) -> None:
     row["mention_category"] = category if mentionable else "background"
     if hidden_reason:
         row["mention_hidden_reason"] = hidden_reason
+    else:
+        row.pop("mention_hidden_reason", None)
 
 
 class SkillService:

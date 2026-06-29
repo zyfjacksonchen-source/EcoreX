@@ -10,6 +10,9 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -19,6 +22,7 @@ from common.log import logger
 
 DEFAULT_TIMEOUT_SECONDS = 60
 MAX_OUTPUT_CHARS = 12000
+MAX_BOOTSTRAP_BYTES = 10 * 1024 * 1024
 DEFAULT_SCRIPT_NAME = "xin_agent_cli.py"
 SUPPORTED_SCRIPT_NAMES = (
     DEFAULT_SCRIPT_NAME,
@@ -27,6 +31,13 @@ SUPPORTED_SCRIPT_NAMES = (
     "tongxin_cli.py",
 )
 DEFAULT_TONGXIN_SCOPE = "all-users-read-only"
+BOOTSTRAP_CONFIG_KEYS = {
+    "url": ("bootstrap_url", "bootstrapUrl", "download_url", "downloadUrl", "remote_url", "remoteUrl"),
+    "manifest_url": ("bootstrap_manifest_url", "bootstrapManifestUrl", "manifest_url", "manifestUrl"),
+    "sha256": ("bootstrap_sha256", "bootstrapSha256", "expected_sha256", "expectedSha256", "sha256"),
+    "token": ("bootstrap_token", "bootstrapToken", "auth_token", "authToken"),
+    "target_dir": ("bootstrap_dir", "bootstrapDir", "install_dir", "installDir"),
+}
 
 READ_ONLY_ALLOWED_COMMANDS = (
     "schema",
@@ -371,6 +382,35 @@ def is_read_only_tongxin_request(args: Dict[str, Any]) -> bool:
     return False
 
 
+def is_config_driven_tongxin_bootstrap_request(args: Dict[str, Any]) -> bool:
+    action = str((args or {}).get("action") or "").strip().lower()
+    if action not in {"bootstrap", "download"}:
+        return False
+    explicit_keys = {
+        "url",
+        "download_url",
+        "downloadUrl",
+        "remote_url",
+        "remoteUrl",
+        "manifest_url",
+        "manifestUrl",
+        "bootstrap_url",
+        "bootstrapUrl",
+        "bootstrap_manifest_url",
+        "bootstrapManifestUrl",
+        "token",
+        "auth_token",
+        "authToken",
+        "bootstrap_token",
+        "bootstrapToken",
+        "target_dir",
+        "targetDir",
+        "bootstrap_dir",
+        "bootstrapDir",
+    }
+    return not any((args or {}).get(key) for key in explicit_keys)
+
+
 def _kill_process_tree(process: subprocess.Popen) -> None:
     if process.poll() is not None:
         return
@@ -434,7 +474,7 @@ class TongxinCli(BaseTool):
     description: str = (
         "Default all-user read-only access to Tongxin Assistant / Xin Agent account data. "
         "Use this instead of bash for xin_agent_cli.py. It can configure an existing "
-        "local CLI path, run schema, and run approved "
+        "local CLI path, bootstrap the CLI from an authenticated server with SHA256 verification, run schema, and run approved "
         "read-only account/project/report/note/realtime queries only; write, sync, auth, "
         "submit, approve, delete, and permission-changing commands are blocked."
     )
@@ -443,7 +483,7 @@ class TongxinCli(BaseTool):
         "properties": {
             "action": {
                 "type": "string",
-                "description": "One of: status, configure, schema, diagnose, run.",
+                "description": "One of: status, configure, bootstrap, download, schema, diagnose, run.",
             },
             "script_path": {
                 "type": "string",
@@ -457,6 +497,22 @@ class TongxinCli(BaseTool):
             "timeout": {
                 "type": "integer",
                 "description": f"Timeout seconds. Default: {DEFAULT_TIMEOUT_SECONDS}; maximum: 300.",
+            },
+            "url": {
+                "type": "string",
+                "description": "Optional authenticated HTTPS download URL for action=bootstrap/download. Prefer configuring tools.tongxin_cli.bootstrap_url.",
+            },
+            "manifest_url": {
+                "type": "string",
+                "description": "Optional authenticated HTTPS manifest URL returning downloadUrl/url and sha256 for action=bootstrap/download.",
+            },
+            "expected_sha256": {
+                "type": "string",
+                "description": "Required SHA256 for direct bootstrap downloads unless a manifest provides sha256.",
+            },
+            "auth_token": {
+                "type": "string",
+                "description": "Optional bearer token for authenticated bootstrap downloads. Redacted from all outputs.",
             },
             "include_paths": {
                 "type": "boolean",
@@ -481,6 +537,8 @@ class TongxinCli(BaseTool):
             return ToolResult.success(self._status(include_paths=include_paths, diagnose=action == "diagnose"))
         if action == "configure":
             return self._configure(args, include_paths=include_paths)
+        if action in {"bootstrap", "download"}:
+            return self._bootstrap(args, timeout, include_paths=include_paths)
         if action == "schema":
             return self._run_cli(["schema"], timeout, include_paths=include_paths)
         if action == "run":
@@ -495,7 +553,7 @@ class TongxinCli(BaseTool):
                     "allowedCommands": list(READ_ONLY_ALLOWED_COMMANDS),
                 })
             return self._run_cli(cli_args, timeout, include_paths=include_paths)
-        return ToolResult.fail({"status": "error", "message": "action must be one of: status, configure, schema, diagnose, run"})
+        return ToolResult.fail({"status": "error", "message": "action must be one of: status, configure, bootstrap, download, schema, diagnose, run"})
 
     def _status(self, *, include_paths: bool = False, diagnose: bool = False) -> Dict[str, Any]:
         script = self._script_path()
@@ -540,7 +598,8 @@ class TongxinCli(BaseTool):
         if not script:
             payload["message"] = (
                 "Tongxin CLI script was not found. Configure tools.tongxin_cli.script_path "
-                "or ECOREX_TONGXIN_CLI_PATH to the read-only xin_agent_cli.py path."
+                "or ECOREX_TONGXIN_CLI_PATH to the read-only xin_agent_cli.py path, or configure "
+                "tools.tongxin_cli.bootstrap_url/bootstrap_sha256 for authenticated server bootstrap."
             )
         elif not configured:
             if auto_configurable:
@@ -607,6 +666,125 @@ class TongxinCli(BaseTool):
             payload["scriptPathRef"] = _path_ref(script)
             payload["configPathRef"] = _path_ref(config_path)
         return ToolResult.success(payload)
+
+    def _bootstrap(self, args: Dict[str, Any], timeout: int, *, include_paths: bool = False) -> ToolResult:
+        try:
+            manifest = self._load_bootstrap_manifest(args, timeout)
+            url = (
+                str(args.get("url") or args.get("download_url") or args.get("downloadUrl") or args.get("remote_url") or args.get("remoteUrl") or "").strip()
+                or str(manifest.get("downloadUrl") or manifest.get("download_url") or manifest.get("url") or "").strip()
+                or self._bootstrap_setting("url")
+            )
+            expected_sha = (
+                str(args.get("expected_sha256") or args.get("expectedSha256") or args.get("sha256") or "").strip()
+                or str(manifest.get("sha256") or manifest.get("expectedSha256") or manifest.get("expected_sha256") or "").strip()
+                or self._bootstrap_setting("sha256")
+            )
+            token = (
+                str(args.get("auth_token") or args.get("authToken") or args.get("token") or "").strip()
+                or self._bootstrap_setting("token")
+            )
+            file_name = str(args.get("file_name") or args.get("fileName") or manifest.get("fileName") or manifest.get("file_name") or DEFAULT_SCRIPT_NAME).strip()
+
+            if not url:
+                return ToolResult.fail({
+                    "status": "error",
+                    "configurationState": "bootstrap_not_configured",
+                    "message": (
+                        "Tongxin CLI bootstrap URL is not configured. Set tools.tongxin_cli.bootstrap_url "
+                        "or ECOREX_TONGXIN_CLI_BOOTSTRAP_URL, plus bootstrap_sha256."
+                    ),
+                    "readOnly": True,
+                })
+            if not self._is_allowed_bootstrap_url(url, args=args):
+                return ToolResult.fail({
+                    "status": "error",
+                    "configurationState": "bootstrap_url_rejected",
+                    "sourceRef": self._safe_url_ref(url),
+                    "message": "Tongxin CLI bootstrap requires HTTPS, except explicit localhost test URLs.",
+                })
+            expected_sha = expected_sha.upper()
+            if not re.fullmatch(r"[A-Fa-f0-9]{64}", expected_sha or ""):
+                return ToolResult.fail({
+                    "status": "error",
+                    "configurationState": "bootstrap_sha256_required",
+                    "sourceRef": self._safe_url_ref(url),
+                    "message": "Tongxin CLI bootstrap requires a 64-character expected_sha256 before writing a downloaded CLI.",
+                })
+
+            script_name = Path(file_name).name
+            if script_name.lower() not in {name.lower() for name in SUPPORTED_SCRIPT_NAMES}:
+                return ToolResult.fail({
+                    "status": "error",
+                    "configurationState": "bootstrap_name_rejected",
+                    "sourceRef": self._safe_url_ref(url),
+                    "message": "Downloaded Tongxin CLI file name must be xin_agent_cli.py or a supported variant.",
+                })
+
+            data = self._download_bootstrap_bytes(url, token=token, timeout=timeout)
+            actual_sha = hashlib.sha256(data).hexdigest().upper()
+            if actual_sha != expected_sha:
+                return ToolResult.fail({
+                    "status": "error",
+                    "configurationState": "bootstrap_sha256_mismatch",
+                    "sourceRef": self._safe_url_ref(url),
+                    "expectedSha256": expected_sha,
+                    "actualSha256": actual_sha,
+                    "message": "Downloaded Tongxin CLI SHA256 did not match the expected value; file was not installed.",
+                })
+            self._validate_bootstrap_python(data)
+            target_dir = self._bootstrap_target_dir()
+            script = target_dir / script_name
+            target_dir.mkdir(parents=True, exist_ok=True)
+            tmp = script.with_name(f".{script.name}.{hashlib.sha256((actual_sha + str(time.time())).encode()).hexdigest()[:12]}.tmp")
+            tmp.write_bytes(data)
+            os.replace(tmp, script)
+            try:
+                script.chmod(0o600)
+            except Exception:
+                pass
+            config_path = self._persist_script_path(script)
+            payload: Dict[str, Any] = {
+                "status": "success",
+                "available": True,
+                "configured": True,
+                "persistedConfig": True,
+                "downloaded": True,
+                "configurationState": "configured",
+                "tool": self.name,
+                "scriptName": script.name,
+                "readOnly": True,
+                "defaultAudience": DEFAULT_TONGXIN_SCOPE,
+                "configKey": "tools.tongxin_cli.script_path",
+                "sourceRef": self._safe_url_ref(url),
+                "sha256": actual_sha,
+                "size": len(data),
+                "message": "Tongxin CLI downloaded from authenticated source, verified by SHA256, and configured for read-only EcoreX access.",
+            }
+            if include_paths:
+                payload["pathsRedacted"] = True
+                payload["scriptPathRef"] = _path_ref(script)
+                payload["configPathRef"] = _path_ref(config_path)
+            return ToolResult.success(payload)
+        except urllib.error.HTTPError as exc:
+            return ToolResult.fail({
+                "status": "error",
+                "configurationState": "bootstrap_http_error",
+                "httpStatus": int(getattr(exc, "code", 0) or 0),
+                "message": "Tongxin CLI bootstrap download failed with an HTTP error.",
+            })
+        except urllib.error.URLError:
+            return ToolResult.fail({
+                "status": "error",
+                "configurationState": "bootstrap_network_error",
+                "message": "Tongxin CLI bootstrap download failed with a network error.",
+            })
+        except Exception as exc:
+            return ToolResult.fail({
+                "status": "error",
+                "configurationState": "bootstrap_failed",
+                "message": f"Tongxin CLI bootstrap failed: {_sanitize(str(exc))}",
+            })
 
     def _run_cli(self, cli_args: List[str], timeout: int, *, include_paths: bool = False) -> ToolResult:
         script = self._execution_script_path()
@@ -800,6 +978,113 @@ class TongxinCli(BaseTool):
         if extra:
             roots.extend(Path(item).expanduser() for item in extra.split(os.pathsep) if item.strip())
         return roots
+
+    def _bootstrap_setting(self, group: str) -> str:
+        keys = BOOTSTRAP_CONFIG_KEYS.get(group, ())
+        for key in keys:
+            value = self.config.get(key)
+            if value:
+                return str(value).strip()
+        file_cfg = self._read_runtime_config()
+        file_tools = file_cfg.get("tools") if isinstance(file_cfg.get("tools"), dict) else {}
+        file_tongxin = file_tools.get("tongxin_cli") if isinstance(file_tools, dict) else None
+        if isinstance(file_tongxin, dict):
+            for key in keys:
+                value = file_tongxin.get(key)
+                if value:
+                    return str(value).strip()
+        env_map = {
+            "url": ("ECOREX_TONGXIN_CLI_BOOTSTRAP_URL", "ECOREX_TONGXIN_CLI_DOWNLOAD_URL"),
+            "manifest_url": ("ECOREX_TONGXIN_CLI_BOOTSTRAP_MANIFEST_URL",),
+            "sha256": ("ECOREX_TONGXIN_CLI_BOOTSTRAP_SHA256", "ECOREX_TONGXIN_CLI_SHA256"),
+            "token": ("ECOREX_TONGXIN_CLI_BOOTSTRAP_TOKEN", "ECOREX_TONGXIN_CLI_TOKEN"),
+            "target_dir": ("ECOREX_TONGXIN_CLI_BOOTSTRAP_DIR",),
+        }
+        for key in env_map.get(group, ()):
+            value = os.environ.get(key)
+            if value:
+                return str(value).strip()
+        return ""
+
+    def _load_bootstrap_manifest(self, args: Dict[str, Any], timeout: int) -> Dict[str, Any]:
+        manifest_url = (
+            str(args.get("manifest_url") or args.get("manifestUrl") or args.get("bootstrap_manifest_url") or args.get("bootstrapManifestUrl") or "").strip()
+            or self._bootstrap_setting("manifest_url")
+        )
+        if not manifest_url:
+            return {}
+        if not self._is_allowed_bootstrap_url(manifest_url, args=args):
+            raise ValueError("Tongxin bootstrap manifest URL must use HTTPS, except explicit localhost test URLs.")
+        token = (
+            str(args.get("auth_token") or args.get("authToken") or args.get("token") or "").strip()
+            or self._bootstrap_setting("token")
+        )
+        data = self._download_bootstrap_bytes(manifest_url, token=token, timeout=timeout, max_bytes=256 * 1024)
+        payload = json.loads(data.decode("utf-8-sig"))
+        if not isinstance(payload, dict):
+            raise ValueError("Tongxin bootstrap manifest must be a JSON object.")
+        return payload
+
+    def _download_bootstrap_bytes(self, url: str, *, token: str = "", timeout: int = DEFAULT_TIMEOUT_SECONDS, max_bytes: int = MAX_BOOTSTRAP_BYTES) -> bytes:
+        headers = {
+            "Accept": "application/json, text/x-python, text/plain, */*",
+            "User-Agent": "EcoreX-Tongxin-Bootstrap/0.2.4",
+        }
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        request = urllib.request.Request(url, headers=headers)
+        chunks: List[bytes] = []
+        total = 0
+        with urllib.request.urlopen(request, timeout=max(1, min(int(timeout), 300))) as response:
+            while True:
+                chunk = response.read(64 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    raise ValueError("Tongxin CLI bootstrap payload is larger than the allowed limit.")
+                chunks.append(chunk)
+        data = b"".join(chunks)
+        if not data:
+            raise ValueError("Tongxin CLI bootstrap payload is empty.")
+        return data
+
+    def _validate_bootstrap_python(self, data: bytes) -> None:
+        if b"\x00" in data[:4096]:
+            raise ValueError("Tongxin CLI bootstrap payload is not a text Python file.")
+        try:
+            source = data.decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise ValueError("Tongxin CLI bootstrap payload must be UTF-8 Python source.") from exc
+        compile(source, DEFAULT_SCRIPT_NAME, "exec")
+
+    def _bootstrap_target_dir(self) -> Path:
+        configured = self._bootstrap_setting("target_dir")
+        target = Path(configured).expanduser() if configured else Path(__file__).resolve().parents[3] / "tools" / "tongxin"
+        trusted = any(self._path_within(target, root) or self._same_path(target, root) for root in self._trusted_auto_config_roots())
+        if not trusted:
+            raise ValueError("Tongxin CLI bootstrap target directory is outside trusted Tongxin roots.")
+        return target
+
+    @staticmethod
+    def _is_allowed_bootstrap_url(url: str, *, args: Dict[str, Any]) -> bool:
+        parsed = urllib.parse.urlparse(str(url or "").strip())
+        if parsed.scheme == "https" and parsed.netloc:
+            return True
+        if parsed.scheme == "http" and str(parsed.hostname or "").lower() in {"127.0.0.1", "localhost", "::1"}:
+            return bool(args.get("allow_insecure_localhost") or os.environ.get("ECOREX_TONGXIN_ALLOW_INSECURE_LOCALHOST_BOOTSTRAP") == "1")
+        return False
+
+    @staticmethod
+    def _safe_url_ref(url: str) -> Dict[str, Any]:
+        parsed = urllib.parse.urlparse(str(url or "").strip())
+        host = str(parsed.hostname or "")
+        path = str(parsed.path or "")
+        return {
+            "scheme": parsed.scheme or "",
+            "hostHash": hashlib.sha256(host.encode("utf-8", errors="replace")).hexdigest()[:16] if host else "",
+            "pathHash": hashlib.sha256(path.encode("utf-8", errors="replace")).hexdigest()[:16] if path else "",
+        }
 
     def _matches_env_script_path(self, script: Path) -> bool:
         for value in self._env_script_path_values():

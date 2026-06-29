@@ -267,6 +267,7 @@ const I18N = {
         feishu_scan_tip: '完成授权后保持本页面打开；EcoreX 会在本机 CLI 配置就绪后使用它',
         feishu_scan_open_link: '或点击此处在浏览器中打开',
         feishu_scan_success: 'CLI 授权已启动',
+        feishu_scan_ready: 'CLI 授权已完成',
         feishu_scan_expired: '二维码已过期，请重试',
         feishu_scan_denied: '已取消授权',
         feishu_scan_fail: 'CLI 授权失败',
@@ -479,6 +480,7 @@ const I18N = {
         feishu_scan_tip: 'Keep this page open after completing authorization; EcoreX will use the local CLI config when ready',
         feishu_scan_open_link: 'Or click here to open in browser',
         feishu_scan_success: 'CLI authorization started',
+        feishu_scan_ready: 'CLI authorization completed',
         feishu_scan_expired: 'QR code expired, please retry',
         feishu_scan_denied: 'Authorization cancelled',
         feishu_scan_fail: 'CLI authorization failed',
@@ -9072,6 +9074,45 @@ function openFeishuAuthUrl(url) {
     } catch (_) {}
 }
 
+function feishuCliAuthSessionId(payload) {
+    const agentAuth = payload && typeof payload.agentAuth === 'object' ? payload.agentAuth : {};
+    return String(payload && (payload.sessionId || agentAuth.sessionId) || '').trim();
+}
+
+function pollFeishuCliAuthStatus(statusId, payload) {
+    const sessionId = feishuCliAuthSessionId(payload);
+    if (!sessionId) return;
+    stopFeishuCliAuthTimer();
+    const agentAuth = payload && typeof payload.agentAuth === 'object' ? payload.agentAuth : {};
+    const timeoutSeconds = Number(payload.cliWritebackTimeoutSeconds || agentAuth.cliWritebackTimeoutSeconds || 240);
+    const deadline = Date.now() + Math.max(10, timeoutSeconds) * 1000;
+    const poll = () => {
+        fetch('/api/external-connections/feishu/actions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'agent_auth_status', sessionId })
+        })
+            .then(r => r.json())
+            .then(data => {
+                renderFeishuCliAuth(statusId, data);
+                const next = data && typeof data.agentAuth === 'object' ? data.agentAuth : {};
+                if (data.authCompleted === true || next.authCompleted === true) {
+                    stopFeishuCliAuthTimer();
+                    return;
+                }
+                if ((data.writebackPending === true || next.writebackPending === true) && Date.now() < deadline) {
+                    _feishuCliAuthTimer = setTimeout(poll, 3000);
+                }
+            })
+            .catch(() => {
+                if (Date.now() < deadline) {
+                    _feishuCliAuthTimer = setTimeout(poll, 3000);
+                }
+            });
+    };
+    _feishuCliAuthTimer = setTimeout(poll, 3000);
+}
+
 function startFeishuCliAuth(targetStatusId) {
     const statusId = targetStatusId || 'feishu-scan-status';
     const statusEl = document.getElementById(statusId);
@@ -9099,6 +9140,7 @@ function startFeishuCliAuth(targetStatusId) {
             renderFeishuCliAuth(statusId, data);
             const url = String(data.verificationUrl || (data.agentAuth && data.agentAuth.verificationUrl) || '').trim();
             openFeishuAuthUrl(url);
+            pollFeishuCliAuthStatus(statusId, data);
         })
         .catch(err => {
             renderFeishuCliAuthError(statusId, err.message || t('feishu_scan_fail'));
@@ -9117,20 +9159,33 @@ function renderFeishuCliAuth(statusId, payload) {
     const qr = agentAuth.qrCode && typeof agentAuth.qrCode === 'object' ? agentAuth.qrCode : {};
     const qrPath = String(qr.path || qr.relativePath || '').trim();
     const qrImageUrl = qrPath ? _toWebUrl(qrPath) : '';
+    const completed = payload.authCompleted === true || agentAuth.authCompleted === true;
     const pending = payload.writebackPending === true || agentAuth.writebackPending === true;
-    const message = String(payload.message || agentAuth.message || (pending ? t('feishu_scan_waiting') : t('feishu_scan_success'))).trim();
-    const imgHtml = qrImageUrl
+    const statusValue = String(agentAuth.status || payload.agentAuthStatus || payload.status || '').toLowerCase();
+    const failed = !pending && !completed && (
+        payload.status === 'error' ||
+        ['error', 'timeout', 'cancelled', 'not_found', 'auth_incomplete'].includes(statusValue)
+    );
+    const message = String(payload.message || agentAuth.message || (failed ? t('feishu_scan_fail') : completed ? t('feishu_scan_ready') : pending ? t('feishu_scan_waiting') : t('feishu_scan_success'))).trim();
+    const tone = failed ? 'fail' : pending && !completed ? 'pending' : 'success';
+    const imgHtml = qrImageUrl && !completed && !failed
         ? `<img src="${escapeHtml(qrImageUrl)}" alt="QR" class="w-44 h-44 rounded-lg border border-slate-200 dark:border-white/10 bg-white p-2"/>`
-        : `<div class="w-12 h-12 rounded-full ${pending ? 'bg-amber-50 dark:bg-amber-900/30' : 'bg-emerald-50 dark:bg-emerald-900/30'} flex items-center justify-center">
-                <i class="fas ${pending ? 'fa-clock text-amber-500' : 'fa-check text-emerald-500'} text-lg"></i>
+        : `<div class="w-12 h-12 rounded-full ${tone === 'fail' ? 'bg-red-50 dark:bg-red-900/30' : tone === 'pending' ? 'bg-amber-50 dark:bg-amber-900/30' : 'bg-emerald-50 dark:bg-emerald-900/30'} flex items-center justify-center">
+                <i class="fas ${tone === 'fail' ? 'fa-xmark text-red-500' : tone === 'pending' ? 'fa-clock text-amber-500' : 'fa-check text-emerald-500'} text-lg"></i>
            </div>`;
     statusEl.innerHTML = `
         <div class="flex flex-col items-center gap-3">
             ${imgHtml}
-            <p class="text-sm font-medium ${pending ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'} text-center">${escapeHtml(message)}</p>
+            <p class="text-sm font-medium ${tone === 'fail' ? 'text-red-500' : tone === 'pending' ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'} text-center">${escapeHtml(message)}</p>
             <p class="text-xs text-slate-400 dark:text-slate-500">${t('feishu_scan_tip')}</p>
             ${authUrl ? `<a href="${escapeHtml(authUrl)}" target="_blank" rel="noopener"
                 class="text-xs text-blue-500 hover:text-blue-600 underline break-all">${t('feishu_scan_open_link')}</a>` : ''}
+            ${failed ? `<button onclick="startFeishuCliAuth('${statusId}')"
+                class="mt-1 px-4 py-1.5 rounded-md text-xs font-medium
+                       bg-slate-100 dark:bg-white/10 text-slate-700 dark:text-slate-200
+                       hover:bg-slate-200 dark:hover:bg-white/20 cursor-pointer">
+                <i class="fas fa-rotate-right mr-1"></i>${t('feishu_scan_retry')}
+            </button>` : ''}
         </div>`;
 }
 

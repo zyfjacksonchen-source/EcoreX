@@ -14,6 +14,9 @@ def _reset_tool_manager():
     manager = ToolManager()
     manager.tool_classes = {}
     manager._mcp_tool_instances = {}
+    manager._mcp_status = {}
+    manager._mcp_active_configs = {}
+    manager._mcp_loaded = False
     manager._registry_errors = []
     manager._missing_configured_tools = []
     manager.load_tools(config_dict={"tongxin_cli": {"script_path": ""}})
@@ -37,9 +40,91 @@ def test_v024_skill_tool_bridge_maps_official_facades_and_tongxin_aliases():
         "tongxin-cli": "tongxin_cli",
         "xin-agent-cli": "tongxin_cli",
         "芯助手": "tongxin_cli",
+        "feishu": "feishu_cli",
+        "lark-cli": "feishu_cli",
+        "lark-doc": "feishu_cli",
+        "lark-base": "feishu_cli",
+        "feishu-doc": "feishu_cli",
     }
     for alias, tool_name in expected.items():
         assert resolve_callable_tool_name(alias) == tool_name
+
+
+def test_v024_lark_skills_are_discoverable_and_mapped_to_feishu_cli(tmp_path):
+    from agent.skills.manager import SkillManager
+    from agent.skills.service import SkillService
+    from agent.skills.tool_bridge import resolve_callable_tool_name, skill_agent_surface
+
+    external_root = tmp_path / "external"
+    skill_dir = external_root / "lark-doc"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: lark-doc\n"
+        "description: 飞书文档 skill, uses lark-cli for doc read and write.\n"
+        "metadata:\n"
+        "  requires:\n"
+        "    bins: [\"lark-cli\"]\n"
+        "---\n"
+        "\nUse lark-cli docs safely.\n",
+        encoding="utf-8",
+    )
+
+    manager = SkillManager(
+        builtin_dir=str(tmp_path / "empty-builtin"),
+        custom_dir=str(tmp_path / "workspace" / "skills"),
+        config={},
+    )
+    Path(manager.builtin_dir).mkdir(parents=True, exist_ok=True)
+    manager.extra_dirs = [str(external_root)]
+    manager.refresh_skills()
+
+    row = {item["name"]: item for item in SkillService(manager).query()}["lark-doc"]
+    skill = manager.skills["lark-doc"].skill
+
+    assert row["source_group"] == "external"
+    assert row["purpose_group"] == "collaboration"
+    assert row["mentionable"] is True
+    assert row["mention_category"] == "automation"
+    assert "mention_hidden_reason" not in row
+    assert resolve_callable_tool_name(skill) == "feishu_cli"
+    assert skill_agent_surface(skill, {"feishu_cli"}, enabled=True)["status"] == "ready"
+
+
+def test_v024_feishu_cli_ability_reports_lark_mcp_observation_state(monkeypatch):
+    from agent.tools.optional_abilities.optional_abilities import OptionalAbilities
+
+    manager = _reset_tool_manager()
+    monkeypatch.setattr(manager, "_load_mcp_configs", lambda: [])
+
+    payload = OptionalAbilities().execute({"action": "status", "ability": "feishu-cli"}).result
+    item = payload["abilities"][0]
+
+    assert item["id"] == "feishu-cli"
+    assert item["feishuMcp"] == {
+        "configured": False,
+        "configuredServers": [],
+        "status": {},
+        "toolCount": 0,
+        "callable": False,
+    }
+
+    manager._mcp_status = {"lark": "ready"}
+    manager._mcp_tool_instances = {"mcp__lark__doc": types.SimpleNamespace(server_name="lark")}
+    monkeypatch.setattr(
+        manager,
+        "_load_mcp_configs",
+        lambda: [{"name": "lark", "type": "stdio", "command": "lark-mcp"}],
+    )
+
+    payload = OptionalAbilities().execute({"action": "status", "ability": "feishu-cli"}).result
+    feishu_mcp = payload["abilities"][0]["feishuMcp"]
+
+    assert feishu_mcp["configured"] is True
+    assert feishu_mcp["configuredServers"] == ["lark"]
+    assert feishu_mcp["status"] == {"lark": "ready"}
+    assert feishu_mcp["toolCount"] == 1
+    assert feishu_mcp["callable"] is True
 
 
 def test_v024_native_facade_prompt_exposes_callable_tool_names():

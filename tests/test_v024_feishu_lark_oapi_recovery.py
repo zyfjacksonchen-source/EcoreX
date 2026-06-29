@@ -274,6 +274,10 @@ def test_webui_packaging_requires_lark_oapi_runtime_install():
     hotfix_contract = (ROOT / "scripts" / "smoke-web-hotfix-contracts.py").read_text(encoding="utf-8")
 
     assert 'Install-WindowsRuntimeDependency -RuntimeDir $winRuntime -ModuleName "lark_oapi"' in packaging
+    assert 'PYTHONDONTWRITEBYTECODE = "1"' in packaging
+    assert "--no-compile" in packaging
+    assert "--timeout 60" in packaging
+    assert "--retries 2" in packaging
     assert 'Ensure-PythonDependency -Python $python -StateDir $stateDir -ModuleName "lark_oapi"' not in packaging
     assert 'Write-OptionalPythonDependencyNotice -StateDir $stateDir -ModuleName "lark_oapi"' in packaging
     assert 'StartsWith("lark-oapi")' not in packaging

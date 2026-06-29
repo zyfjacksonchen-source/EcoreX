@@ -5,6 +5,8 @@ import tempfile
 import textwrap
 import types
 import copy
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
@@ -268,6 +270,20 @@ def test_tongxin_cli_broker_allows_readonly_and_blocks_mutations_in_readonly_mod
             )
             assert denied["allowed"] is False
             assert "read-only" in denied["reason"]
+
+            bootstrap = broker.authorize_noninteractive(
+                "tongxin_cli",
+                {"action": "bootstrap"},
+            )
+            assert bootstrap["allowed"] is True
+            assert bootstrap["reason"] == "default-tongxin-cli-authenticated-bootstrap"
+
+            explicit_bootstrap = broker.authorize_noninteractive(
+                "tongxin_cli",
+                {"action": "bootstrap", "url": "https://example.invalid/xin_agent_cli.py", "auth_token": "secret-token"},
+            )
+            assert explicit_bootstrap["allowed"] is False
+            assert "read-only" in explicit_bootstrap["reason"]
         finally:
             if old_user_data is None:
                 os.environ.pop("ECOREX_USER_DATA", None)
@@ -277,6 +293,130 @@ def test_tongxin_cli_broker_allows_readonly_and_blocks_mutations_in_readonly_mod
                 os.environ.pop("ECOREX_DESKTOP", None)
             else:
                 os.environ["ECOREX_DESKTOP"] = old_desktop
+
+
+def test_tongxin_cli_authenticated_bootstrap_downloads_verifies_and_configures():
+    from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
+    from config import conf
+
+    script_body = textwrap.dedent(
+        """
+        import json
+        import sys
+        if sys.argv[1:] == ["schema"]:
+            print(json.dumps({"ok": True, "name": "xin_agent_cli"}))
+        else:
+            print(json.dumps({"ok": True, "args": sys.argv[1:]}))
+        """
+    ).strip() + "\n"
+    script_bytes = script_body.encode("utf-8")
+    script_sha = __import__("hashlib").sha256(script_bytes).hexdigest().upper()
+    seen_headers = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen_headers.append(self.headers.get("Authorization"))
+            if self.path == "/manifest.json":
+                payload = {
+                    "downloadUrl": f"http://127.0.0.1:{self.server.server_port}/xin_agent_cli.py",
+                    "sha256": script_sha,
+                    "fileName": "xin_agent_cli.py",
+                }
+                body = json.dumps(payload).encode("utf-8")
+            elif self.path == "/xin_agent_cli.py":
+                body = script_bytes
+            else:
+                self.send_response(404)
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            return
+
+    with tempfile.TemporaryDirectory() as workspace:
+        config_path = Path(workspace) / "config.json"
+        target_dir = Path(workspace) / "runtime" / "tools" / "tongxin"
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        old_tools = copy.deepcopy(conf().get("tools", {}))
+        conf()["tools"] = {}
+        try:
+            tool = TongxinCli({
+                "cwd": workspace,
+                "config_path": str(config_path),
+                "bootstrap_manifest_url": f"http://127.0.0.1:{server.server_port}/manifest.json",
+                "bootstrap_token": "secret-bootstrap-token",
+                "bootstrap_dir": str(target_dir),
+            })
+            with patch.object(TongxinCli, "_trusted_auto_config_roots", return_value=[Path(workspace)]):
+                result = tool.execute({"action": "bootstrap", "allow_insecure_localhost": True, "include_paths": True})
+                assert result.status == "success"
+                serialized = json.dumps(result.result, ensure_ascii=False)
+                assert "secret-bootstrap-token" not in serialized
+                assert f"127.0.0.1:{server.server_port}" not in serialized
+                assert result.result["downloaded"] is True
+                assert result.result["sha256"] == script_sha
+                assert result.result["scriptPathRef"]["name"] == "xin_agent_cli.py"
+                assert seen_headers and all(header == "Bearer secret-bootstrap-token" for header in seen_headers)
+
+                configured = json.loads(config_path.read_text(encoding="utf-8"))
+                script_path = Path(configured["tools"]["tongxin_cli"]["script_path"])
+                assert script_path.name == "xin_agent_cli.py"
+                assert script_path.read_text(encoding="utf-8") == script_body
+
+                schema = tool.execute({"action": "schema"})
+                assert schema.status == "success"
+                assert schema.result["json"]["name"] == "xin_agent_cli"
+        finally:
+            server.shutdown()
+            server.server_close()
+            conf()["tools"] = old_tools
+
+
+def test_tongxin_cli_bootstrap_rejects_sha_mismatch_without_writing():
+    from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
+
+    body = b"print('not trusted')\n"
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            return
+
+    with tempfile.TemporaryDirectory() as workspace:
+        config_path = Path(workspace) / "config.json"
+        target_dir = Path(workspace) / "runtime" / "tools" / "tongxin"
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            tool = TongxinCli({
+                "cwd": workspace,
+                "config_path": str(config_path),
+                "bootstrap_url": f"http://127.0.0.1:{server.server_port}/xin_agent_cli.py",
+                "bootstrap_sha256": "0" * 64,
+                "bootstrap_dir": str(target_dir),
+            })
+            with patch.object(TongxinCli, "_trusted_auto_config_roots", return_value=[Path(workspace)]):
+                result = tool.execute({"action": "bootstrap", "allow_insecure_localhost": True})
+                assert result.status == "error"
+                assert result.result["configurationState"] == "bootstrap_sha256_mismatch"
+                assert not (target_dir / "xin_agent_cli.py").exists()
+                assert not config_path.exists()
+        finally:
+            server.shutdown()
+            server.server_close()
 
 
 def test_raw_tongxin_cli_bash_is_blocked_and_autorouted():

@@ -1032,3 +1032,40 @@
   - `release-artifacts/EcoreX_0.2.4-web-linux-service.tar.gz` SHA256 `C8CEC63F0F722FF30DCE9848A7E6617735824B5D879783CCA6F0861156594A18`, size `3820515`.
   - `release-artifacts/EcoreX_0.2.4-public-release.zip` SHA256 `E3B003CFE32B2993410E1587DF9DAAA7B8308EF81284ABF18A8F447ADDBD0566`, size `382672062`.
 - Production deployment was refreshed successfully with the Web-only package. Final online checks remain v0.2.4 for web service, installation manifest, and public manifest; `/api/version` returns 200 and contains `0.2.4`.
+
+## R24-17 Feishu CLI Writeback and Lark Skill Discovery Hotfix
+
+- 2026-06-29: Added a follow-up Web-only hotfix slice after the user reported that Feishu CLI authorization could open/close the browser page but never write back to the local CLI config, and that Feishu/Lark skills/MCP were probably not being discovered or callable in EcoreX.
+- Feishu CLI writeback now has a durable in-process auth session:
+  - `feishu_cli config_init --new` still returns the official Feishu/Lark authorization URL as soon as it appears, but now also registers the blocking `lark-cli` process, stdout/stderr readers, log paths, deadline, and `sessionId` in `_AUTH_SESSIONS`.
+  - New `feishu_cli config_init_status` / `agent_auth_status` polling reads the same session, reports `writebackPending`, `authCompleted`, `authState`, and `authenticated`, and probes `auth status` only after the CLI process completes.
+  - Process completion alone is not enough to mark authorization complete; if `auth status` is not ready/authenticated, the session reports `auth_incomplete`, while timeout and superseded sessions are killed/cancelled and surfaced as failures.
+  - Web External Connections now supports `agent_auth_status`; both the injected WebChannel bridge and legacy Web console poll the session after opening/copying the auth URL, so closing the Feishu authorization page does not lose the local writeback confirmation.
+  - The Web console now renders timeout/error/cancelled/auth-incomplete states as failures with retry, rather than showing a green completed state for a non-pending non-success result.
+  - `config_init_status` is treated as read-only by `ToolPermissionBroker`; install/run/write-style Feishu CLI actions remain permission-gated.
+- Lark skill discovery and callable mapping are now explicit:
+  - `agent/skills/tool_bridge.py` maps `feishu`, `lark`, `lark-cli`, and all `lark-*` / `feishu-*` skill names to `feishu_cli`.
+  - `SkillService` no longer hides lark/feishu skills as `background` only; they are visible as external collaboration skills unless a skill explicitly disables invocation.
+  - Local runtime scan found 26 `lark-*` skills, all `source_group=external`, `purpose_group=collaboration`, `mentionable=True`, and `tool=feishu_cli`.
+- MCP observation:
+  - Current local EcoreX MCP status is `{}` with `mcpToolCount=0`; no Feishu/Lark MCP server is configured in `mcp.json` or `mcp_servers`.
+  - Codex's Feishu path in this environment is `lark-*` skills plus `lark-cli`, not an active Feishu MCP server. This is recorded to avoid chasing a non-configured MCP as a hidden runtime bug.
+  - `optional_abilities` now exposes a `feishuMcp` observation object with `configured`, `configuredServers`, `status`, `toolCount`, and `callable`, so Web/diagnostics can distinguish "not configured" from "configured but not ready/callable".
+- Tongxin CLI remote bootstrap from the same hotfix train:
+  - `tongxin_cli bootstrap/download` can now use configured authenticated server URLs with required SHA256 verification, safe target naming, UTF-8 Python compilation, atomic write, and persisted `script_path`.
+  - Permission broker allows only config-driven bootstrap by default; explicit URL/token bootstrap remains outside the default read-only path.
+- Final verification:
+  - `python -m py_compile` over changed Feishu/Tongxin/skill/Web/validator files -> PASS.
+  - `node --check channel/web/static/js/console.js` -> PASS.
+  - Focused Feishu auth regression -> `17 passed, 3 warnings`.
+  - Focused regression: `tests/test_v024_feishu_cli_auth_parity.py`, `tests/test_v024_tongxin_cli_readonly.py`, `tests/test_v024_skill_tool_exposure.py`, `tests/test_v024_skill_governance.py`, `tests/test_v024_feishu_lark_oapi_recovery.py::test_webui_packaging_requires_lark_oapi_runtime_install`, and `TestAgentCapabilityPermissions` -> `68 passed, 3 warnings, 10 subtests passed`.
+  - Real local Feishu CLI status probe -> `available=True`, `authState=ready`, `authenticated=True`, `commandPresent=True`.
+  - Sub-agent lifecycle review first found auth-completion, frontend failure-state, timeout cleanup, and repeated-start process risks; all were fixed, re-reviewed PASS, and the two low-risk follow-ups were applied.
+  - Source evidence: `docs/v0.2.4/artifacts/feishu-cli-writeback-skill-discovery-source.json`.
+  - Release validator PASS; v0.2.4 artifact contracts PASS; install packaging contract PASS; local Windows install smoke PASS; production deploy PASS; privacy scan over R24-17 source/install/deploy evidence has `findingCount=0`.
+- Final rebuilt/deployed artifacts:
+  - `release-artifacts/EcoreX_0.2.4-webui-windows-x64.zip` SHA256 `13535AAB7541E19ECC6DE95D9A13670AEABC78B11784CEB6C99946A39AFE7322`, size `113925024`.
+  - `release-artifacts/EcoreX_0.2.4-webui-macos-universal.zip` SHA256 `27801CFCAB2C52619ED8A08280301E16F4292A0D0443FCE47BB84E3A2E9D4FBE`, size `263199687`.
+  - `release-artifacts/EcoreX_0.2.4-web-linux-service.tar.gz` SHA256 `AA5DF4F7C65E7097D16B08F62C005A529618CFBE995D2BEDF78E748B2EA19D2A`, size `3828980`.
+  - `release-artifacts/EcoreX_0.2.4-public-release.zip` SHA256 `C0167695F6DF52117479046E7CCAE282A778D1C5F1A31C134A01726B3E90463B`, size `380138246`.
+- Production deployment was refreshed successfully. Final online checks report web service, installation manifest, and public manifest all on v0.2.4; service is active/enabled; `/api/version` returns 200 and contains `0.2.4`.

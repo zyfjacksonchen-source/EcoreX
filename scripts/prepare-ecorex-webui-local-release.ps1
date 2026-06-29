@@ -368,9 +368,11 @@ function Install-WindowsRuntimeDependency {
     }
     Write-Host "Preinstalling Windows Python dependency for ${Reason}: $PackageSpec"
     $oldNoUserSite = $env:PYTHONNOUSERSITE
+    $oldDontWriteBytecode = $env:PYTHONDONTWRITEBYTECODE
     $env:PYTHONNOUSERSITE = "1"
+    $env:PYTHONDONTWRITEBYTECODE = "1"
     try {
-        & $python -s -m pip install --disable-pip-version-check --no-cache-dir --prefer-binary $PackageSpec
+        & $python -s -m pip install --disable-pip-version-check --no-cache-dir --prefer-binary --no-compile --no-warn-script-location --timeout 60 --retries 2 $PackageSpec
         if ($LASTEXITCODE -ne 0) {
             throw "Failed to preinstall Windows Python dependency '$PackageSpec' for $Reason"
         }
@@ -379,6 +381,11 @@ function Install-WindowsRuntimeDependency {
             Remove-Item Env:\PYTHONNOUSERSITE -ErrorAction SilentlyContinue
         } else {
             $env:PYTHONNOUSERSITE = $oldNoUserSite
+        }
+        if ($null -eq $oldDontWriteBytecode) {
+            Remove-Item Env:\PYTHONDONTWRITEBYTECODE -ErrorAction SilentlyContinue
+        } else {
+            $env:PYTHONDONTWRITEBYTECODE = $oldDontWriteBytecode
         }
     }
     if (-not (Test-PackagedPythonModule -Python $python -ModuleName $ModuleName)) {
@@ -673,6 +680,9 @@ $config = [ordered]@{
         tongxin_cli = [ordered]@{
             script_path = ""
             read_only = $true
+            bootstrap_url = ""
+            bootstrap_sha256 = ""
+            bootstrap_token = ""
         }
     }
     mcp_servers = @(
