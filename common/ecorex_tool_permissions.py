@@ -276,9 +276,49 @@ def _is_tongxin_config_driven_bootstrap_request(args: Dict[str, Any]) -> bool:
         )
 
 
+def _is_tongxin_config_driven_auth_request(args: Dict[str, Any]) -> bool:
+    try:
+        from agent.tools.tongxin_cli.tongxin_cli import is_config_driven_tongxin_auth_request
+
+        return is_config_driven_tongxin_auth_request(args)
+    except Exception:
+        action = str((args or {}).get("action") or "").strip().lower().replace("-", "_")
+        return action in {"auth", "login", "auto_configure", "auto_config"} and not any(
+            (args or {}).get(key)
+            for key in (
+                "auth_url",
+                "authUrl",
+                "login_url",
+                "loginUrl",
+                "remote_auth_url",
+                "remoteAuthUrl",
+                "url",
+                "download_url",
+                "downloadUrl",
+                "remote_url",
+                "remoteUrl",
+                "manifest_url",
+                "manifestUrl",
+                "bootstrap_url",
+                "bootstrapUrl",
+                "bootstrap_manifest_url",
+                "bootstrapManifestUrl",
+                "auth_token",
+                "authToken",
+                "bootstrap_token",
+                "bootstrapToken",
+                "token",
+                "target_dir",
+                "targetDir",
+                "bootstrap_dir",
+                "bootstrapDir",
+            )
+        )
+
+
 def _is_read_only_feishu_cli_request(args: Dict[str, Any]) -> bool:
     action = str((args or {}).get("action") or "").strip().lower()
-    return action in {"status", "diagnose", "config_init_status", "agent_auth_status", "auth_status"}
+    return action in {"config_init_status", "agent_auth_status", "auth_status"}
 
 
 def _is_tongxin_capability_configure_request(tool_name: str, args: Dict[str, Any]) -> bool:
@@ -470,6 +510,9 @@ class ToolPermissionBroker:
         if normalized_tool == "tongxin_cli" and _is_tongxin_config_driven_bootstrap_request(args):
             self._audit("tool-execution", "allow", {"tool": normalized_tool, "reason": "default-tongxin-cli-authenticated-bootstrap"})
             return {"allowed": True, "reason": "default-tongxin-cli-authenticated-bootstrap"}
+        if normalized_tool == "tongxin_cli" and _is_tongxin_config_driven_auth_request(args):
+            self._audit("tool-execution", "allow", {"tool": normalized_tool, "reason": "default-tongxin-cli-configured-auth"})
+            return {"allowed": True, "reason": "default-tongxin-cli-configured-auth"}
         if normalized_tool == "tongxin_cli" and _is_read_only_tongxin_cli_request(args):
             self._audit("tool-execution", "allow", {"tool": normalized_tool, "reason": "default-read-only-tongxin-cli"})
             return {"allowed": True, "reason": "default-read-only-tongxin-cli"}
@@ -607,6 +650,9 @@ class ToolPermissionBroker:
         if normalized_tool == "tongxin_cli" and _is_tongxin_config_driven_bootstrap_request(args):
             self._audit("tool-execution", "allow", {"tool": normalized_tool, "reason": "default-tongxin-cli-authenticated-bootstrap"})
             return {"allowed": True, "reason": "default-tongxin-cli-authenticated-bootstrap"}
+        if normalized_tool == "tongxin_cli" and _is_tongxin_config_driven_auth_request(args):
+            self._audit("tool-execution", "allow", {"tool": normalized_tool, "reason": "default-tongxin-cli-configured-auth"})
+            return {"allowed": True, "reason": "default-tongxin-cli-configured-auth"}
         if normalized_tool == "tongxin_cli" and _is_read_only_tongxin_cli_request(args):
             self._audit("tool-execution", "allow", {"tool": normalized_tool, "reason": "default-read-only-tongxin-cli"})
             return {"allowed": True, "reason": "default-read-only-tongxin-cli"}

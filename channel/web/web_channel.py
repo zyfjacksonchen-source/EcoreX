@@ -29,6 +29,7 @@ from bridge.reply import Reply, ReplyType
 from channel.channel_catalog import (
     CHANNEL_CATALOG,
     active_channel_set,
+    channel_auth_surface,
     channel_config_status,
     channel_observability,
     normalize_channel_name,
@@ -349,7 +350,7 @@ def _web_app_bridge_script() -> str:
     notice.id = "ecorex-feishu-cli-auth-notice";
     notice.style.cssText = "position:fixed;right:18px;top:18px;z-index:99999;max-width:min(460px,calc(100vw - 36px));padding:14px 16px;border:1px solid rgba(59,130,246,.28);border-radius:10px;background:#fff;color:#0f172a;box-shadow:0 18px 48px rgba(15,23,42,.18);font:14px/1.45 system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;";
     var title = document.createElement("div");
-    title.textContent = "飞书 CLI 授权链接已打开并复制";
+    title.textContent = "飞书 Agent 授权链接已打开并复制";
     title.style.cssText = "font-weight:650;margin-bottom:6px;";
     var hint = document.createElement("div");
     hint.textContent = "如果浏览器拦截了弹窗，请点击下方链接完成授权。";
@@ -381,8 +382,8 @@ def _web_app_bridge_script() -> str:
     if (!existing) return;
     var title = existing.querySelector("div:nth-child(2)");
     var hint = existing.querySelector("div:nth-child(3)");
-    if (title) title.textContent = "飞书 CLI 授权已完成";
-    if (hint) hint.textContent = "本机 CLI 配置已完成回写，后续飞书技能可直接调用。";
+    if (title) title.textContent = "飞书 Agent 授权已完成";
+    if (hint) hint.textContent = "本机飞书配置已完成回写，后续飞书技能可直接调用。";
   }
 
   function showFeishuCliAuthFailedNotice(message) {
@@ -391,8 +392,8 @@ def _web_app_bridge_script() -> str:
     existing.style.borderColor = "rgba(239,68,68,.35)";
     var title = existing.querySelector("div:nth-child(2)");
     var hint = existing.querySelector("div:nth-child(3)");
-    if (title) title.textContent = "飞书 CLI 授权未完成";
-    if (hint) hint.textContent = String(message || "本机 CLI 未确认写回配置，请重新发起授权。").slice(0, 220);
+    if (title) title.textContent = "飞书 Agent 授权未完成";
+    if (hint) hint.textContent = String(message || "本机飞书配置未确认写回，请重新发起授权。").slice(0, 220);
   }
 
   function startFeishuCliAuthPolling(payload) {
@@ -11249,7 +11250,13 @@ def _external_connection_from_channel(channel: Dict[str, Any]) -> Dict[str, Any]
     actions = [
         {"id": "save_config", "label": "保存", "enabled": True},
         {"id": "test", "label": "状态检查", "enabled": True},
-        *([{"id": "agent_auth", "label": "CLI 授权", "enabled": True}] if name == "feishu" and auth.get("agentAuthSupported") else []),
+        *([{
+            "id": "agent_auth",
+            "label": "Agent 授权",
+            "enabled": True,
+            "tool": (auth.get("agentAuthorizationAction") or {}).get("tool") if isinstance(auth.get("agentAuthorizationAction"), dict) else "",
+            "discoveryDriven": True,
+        }] if auth.get("agentAuthSupported") else []),
         {"id": "start", "label": "连接", "enabled": not running},
         {"id": "stop", "label": "断开", "enabled": bool(running or enabled)},
         {"id": "set_home_channel", "label": "设为投递目标", "enabled": True},
@@ -11489,32 +11496,21 @@ class ExternalConnectionActionHandler:
 
     @staticmethod
     def _handle_agent_auth(channel_name: str, config: Dict[str, Any]) -> str:
+        channel_name = normalize_channel_name(channel_name)
         if channel_name != "feishu":
-            return json.dumps({"status": "error", "message": f"agent auth is not supported for: {channel_name}"}, ensure_ascii=False)
+            return ExternalConnectionActionHandler._handle_generic_agent_auth(channel_name, config)
         try:
             from agent.tools.feishu_cli.feishu_cli import FeishuCli
 
-            current = conf()
-            app_id = str(
-                config.get("feishu_app_id")
-                or config.get("app_id")
-                or current.get("feishu_app_id")
-                or ""
-            ).strip()
-            app_secret = str(
-                config.get("feishu_app_secret")
-                or config.get("app_secret")
-                or current.get("feishu_app_secret")
-                or ""
-            ).strip()
-            if "****" in app_id:
-                app_id = str(current.get("feishu_app_id") or "").strip()
-            if "****" in app_secret:
-                app_secret = str(current.get("feishu_app_secret") or "").strip()
-            args: Dict[str, Any] = {"action": "config_init", "timeout": 240}
-            if app_id and app_secret:
-                args["feishu_app_id"] = app_id
-                args["feishu_app_secret"] = app_secret
+            # Keep the Web entry thin: the structured tool probes official
+            # lark-cli diagnostics and chooses the auth/config flow itself.
+            # Do not pass saved app credentials here, or this can regress into
+            # a fixed config_init branch that bypasses the visible CLI auth URL.
+            args: Dict[str, Any] = {
+                "action": "agent_auth",
+                "timeout": 240,
+                "surface": "web_external_connection",
+            }
 
             result = FeishuCli({"cwd": _get_workspace_root()}).execute(args)
             raw = getattr(result, "result", {})
@@ -11558,6 +11554,77 @@ class ExternalConnectionActionHandler:
             return json.dumps({
                 "status": "error",
                 "message": _public_exception_message("Feishu CLI auth/config failed.", exc),
+                **_public_exception_summary(exc),
+            }, ensure_ascii=False)
+
+    @staticmethod
+    def _handle_generic_agent_auth(channel_name: str, config: Dict[str, Any]) -> str:
+        definition = CHANNEL_CATALOG.get(channel_name) or {}
+        auth_surface = channel_auth_surface(conf(), channel_name)
+        action_spec = auth_surface.get("agentAuthorizationAction") if isinstance(auth_surface.get("agentAuthorizationAction"), dict) else {}
+        tool_name = str(action_spec.get("tool") or "").strip()
+        if not tool_name:
+            return json.dumps({
+                "status": "error",
+                "platform": channel_name,
+                "discoveryDriven": True,
+                "message": (
+                    "This external connection has no declared agent authorization tool yet. "
+                    "Ask the agent to discover the official install/config/auth diagnostics first."
+                ),
+                "nextAction": {
+                    "tool": "agent_capability",
+                    "action": "diagnose",
+                    "platform": channel_name,
+                },
+            }, ensure_ascii=False)
+        try:
+            from agent.tools.tool_manager import ToolManager
+
+            tool = ToolManager().create_tool(tool_name)
+            if tool is None:
+                return json.dumps({
+                    "status": "error",
+                    "platform": channel_name,
+                    "discoveryDriven": True,
+                    "message": f"Declared agent authorization tool is not loaded: {tool_name}",
+                    "nextAction": {
+                        "tool": "agent_capability",
+                        "action": "diagnose",
+                        "platform": channel_name,
+                        "declaredTool": tool_name,
+                    },
+                }, ensure_ascii=False)
+            args = {key: value for key, value in action_spec.items() if key not in {"tool"}}
+            args.setdefault("action", "agent_auth")
+            args.setdefault("surface", "web_external_connection")
+            args.setdefault("platform", channel_name)
+            if isinstance(config, dict):
+                for key in ("scope", "domain", "thread_id", "threadId"):
+                    if config.get(key):
+                        args[key] = config.get(key)
+            result = tool.execute(args)
+            raw = getattr(result, "result", {})
+            public = redact_public_tool_value(raw)
+            status = "success" if getattr(result, "status", "") == "success" else "error"
+            return json.dumps({
+                "status": status,
+                "platform": channel_name,
+                "agentAuth": public,
+                "discoveryDriven": True,
+                "message": (
+                    public.get("message")
+                    if isinstance(public, dict) and public.get("message")
+                    else f"{channel_name} agent auth action completed through {tool_name}."
+                ),
+            }, ensure_ascii=False)
+        except Exception as exc:
+            label = definition.get("label") if isinstance(definition.get("label"), dict) else {}
+            display = label.get("zh") or label.get("en") or channel_name
+            return json.dumps({
+                "status": "error",
+                "platform": channel_name,
+                "message": _public_exception_message(f"{display} agent auth failed.", exc),
                 **_public_exception_summary(exc),
             }, ensure_ascii=False)
 

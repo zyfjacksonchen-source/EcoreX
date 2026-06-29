@@ -61,8 +61,8 @@ TONGXIN_CLI_PACK_ID = "tongxin-cli"
 TONGXIN_CLI_ALIASES = {"tongxin", "tongxin-cli", "xin-agent", "xin-agent-cli", "tx-assistant"}
 TONGXIN_CLI_INSTALL_HINT = (
     "Tongxin CLI is a default read-only EcoreX capability. Use the structured tongxin_cli tool; "
-    "EcoreX can auto-configure an existing local xin_agent_cli.py path from the capability screen, "
-    "or bootstrap it from an authenticated server when tools.tongxin_cli.bootstrap_url and bootstrap_sha256 are configured. "
+    "EcoreX can auto-configure a trusted local xin_agent_cli.py path, "
+    "or authenticate to the configured Tongxin server and bootstrap the CLI with SHA256 verification. "
     "Do not install it as a generic capability pack."
 )
 
@@ -327,7 +327,7 @@ def _builtin_capability_state(pack_id: str) -> Optional[Dict[str, Any]]:
         elif available:
             message = "Tongxin CLI script was detected; click configuration check to persist it for EcoreX."
         else:
-            message = "Tongxin CLI wrapper is built in; configure an existing xin_agent_cli.py path to enable data reads."
+            message = "Tongxin CLI wrapper is built in; run auto_configure to use a trusted local script or configured remote auth/bootstrap."
         return {
             "installed": configured,
             "state": "installed" if configured else "not-installed",
@@ -642,7 +642,7 @@ def _ability_defs() -> Dict[str, Dict[str, Any]]:
                 "realtime summary --xhs-channel all",
             ],
             "installHint": TONGXIN_CLI_INSTALL_HINT,
-            "notes": "Default all-user read-only access through the structured tongxin_cli tool; configure an existing xin_agent_cli.py path when auto-discovery is unavailable.",
+            "notes": "Default all-user read-only access through the structured tongxin_cli tool; auto-configure a trusted local script or configured remote auth/bootstrap when unavailable.",
         },
         "memory-heavy": {
             "label": "Heavy memory/data pack",
@@ -814,7 +814,7 @@ class OptionalAbilities(BaseTool):
     def _configure_tongxin_cli(self, ability: str, script_path: Any = None) -> ToolResult:
         from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
 
-        configure_args: Dict[str, Any] = {"action": "configure"}
+        configure_args: Dict[str, Any] = {"action": "configure" if script_path else "auto_configure"}
         if script_path:
             configure_args["script_path"] = script_path
         result = TongxinCli().execute(configure_args)

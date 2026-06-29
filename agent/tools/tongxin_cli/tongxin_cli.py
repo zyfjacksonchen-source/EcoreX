@@ -31,12 +31,16 @@ SUPPORTED_SCRIPT_NAMES = (
     "tongxin_cli.py",
 )
 DEFAULT_TONGXIN_SCOPE = "all-users-read-only"
+TONGXIN_DATA_HEALTH_PROBE_ARGS = ("project", "list", "--source", "cache", "--limit", "1")
 BOOTSTRAP_CONFIG_KEYS = {
     "url": ("bootstrap_url", "bootstrapUrl", "download_url", "downloadUrl", "remote_url", "remoteUrl"),
     "manifest_url": ("bootstrap_manifest_url", "bootstrapManifestUrl", "manifest_url", "manifestUrl"),
     "sha256": ("bootstrap_sha256", "bootstrapSha256", "expected_sha256", "expectedSha256", "sha256"),
     "token": ("bootstrap_token", "bootstrapToken", "auth_token", "authToken"),
     "target_dir": ("bootstrap_dir", "bootstrapDir", "install_dir", "installDir"),
+}
+REMOTE_AUTH_CONFIG_KEYS = {
+    "url": ("auth_url", "authUrl", "login_url", "loginUrl", "remote_auth_url", "remoteAuthUrl"),
 }
 
 READ_ONLY_ALLOWED_COMMANDS = (
@@ -411,6 +415,41 @@ def is_config_driven_tongxin_bootstrap_request(args: Dict[str, Any]) -> bool:
     return not any((args or {}).get(key) for key in explicit_keys)
 
 
+def is_config_driven_tongxin_auth_request(args: Dict[str, Any]) -> bool:
+    action = str((args or {}).get("action") or "").strip().lower()
+    if action not in {"auth", "login", "auto_configure", "auto-configure", "auto_config"}:
+        return False
+    explicit_remote_keys = {
+        "auth_url",
+        "authUrl",
+        "login_url",
+        "loginUrl",
+        "remote_auth_url",
+        "remoteAuthUrl",
+        "url",
+        "download_url",
+        "downloadUrl",
+        "remote_url",
+        "remoteUrl",
+        "manifest_url",
+        "manifestUrl",
+        "bootstrap_url",
+        "bootstrapUrl",
+        "bootstrap_manifest_url",
+        "bootstrapManifestUrl",
+        "auth_token",
+        "authToken",
+        "bootstrap_token",
+        "bootstrapToken",
+        "token",
+        "target_dir",
+        "targetDir",
+        "bootstrap_dir",
+        "bootstrapDir",
+    }
+    return not any((args or {}).get(key) for key in explicit_remote_keys)
+
+
 def _kill_process_tree(process: subprocess.Popen) -> None:
     if process.poll() is not None:
         return
@@ -474,8 +513,8 @@ class TongxinCli(BaseTool):
     description: str = (
         "Default all-user read-only access to Tongxin Assistant / Xin Agent account data. "
         "Use this instead of bash for xin_agent_cli.py. It can configure an existing "
-        "local CLI path, bootstrap the CLI from an authenticated server with SHA256 verification, run schema, and run approved "
-        "read-only account/project/report/note/realtime queries only; write, sync, auth, "
+        "local CLI path, authenticate to the Tongxin server with per-call login input, bootstrap the CLI from an authenticated server with SHA256 verification, run schema, and run approved "
+        "read-only account/project/report/note/realtime queries only; data writes, sync, "
         "submit, approve, delete, and permission-changing commands are blocked."
     )
     params: dict = {
@@ -483,7 +522,7 @@ class TongxinCli(BaseTool):
         "properties": {
             "action": {
                 "type": "string",
-                "description": "One of: status, configure, bootstrap, download, schema, diagnose, run.",
+                "description": "One of: status, configure, auto_configure, auth, login, bootstrap, download, schema, diagnose, run.",
             },
             "script_path": {
                 "type": "string",
@@ -514,6 +553,22 @@ class TongxinCli(BaseTool):
                 "type": "string",
                 "description": "Optional bearer token for authenticated bootstrap downloads. Redacted from all outputs.",
             },
+            "auth_url": {
+                "type": "string",
+                "description": "Optional HTTPS Tongxin login endpoint. Prefer tools.tongxin_cli.auth_url or ECOREX_TONGXIN_AUTH_URL.",
+            },
+            "username": {
+                "type": "string",
+                "description": "Per-call Tongxin username for remote auth. Not read from or written to persisted config.",
+            },
+            "password": {
+                "type": "string",
+                "description": "Per-call Tongxin password for remote auth. Never returned or persisted.",
+            },
+            "thread_id": {
+                "type": "string",
+                "description": "Optional per-call EcoreX/Codex thread id used as a remote auth context hint.",
+            },
             "include_paths": {
                 "type": "boolean",
                 "description": "Include resolved local script path in diagnostics. Default false.",
@@ -523,11 +578,17 @@ class TongxinCli(BaseTool):
     }
 
     def __init__(self, config: Optional[dict] = None):
+        self._script_health_cache: Dict[str, Dict[str, Any]] = {}
+        self._last_script_health_failure: Dict[str, Any] = {}
         self.apply_config(config or {})
 
     def apply_config(self, config: dict) -> None:
         self.config = config or {}
         self.cwd = str(self.config.get("cwd") or os.getcwd())
+        if not hasattr(self, "_script_health_cache"):
+            self._script_health_cache = {}
+        if not hasattr(self, "_last_script_health_failure"):
+            self._last_script_health_failure = {}
 
     def execute(self, args: Dict[str, Any]) -> ToolResult:
         action = str(args.get("action") or "").strip().lower()
@@ -536,7 +597,11 @@ class TongxinCli(BaseTool):
         if action in {"status", "diagnose"}:
             return ToolResult.success(self._status(include_paths=include_paths, diagnose=action == "diagnose"))
         if action == "configure":
-            return self._configure(args, include_paths=include_paths)
+            return self._configure(args, timeout, include_paths=include_paths)
+        if action in {"auto_configure", "auto-configure", "auto_config"}:
+            return self._auto_configure(args, timeout, include_paths=include_paths)
+        if action in {"auth", "login"}:
+            return self._remote_auth(args, timeout)
         if action in {"bootstrap", "download"}:
             return self._bootstrap(args, timeout, include_paths=include_paths)
         if action == "schema":
@@ -553,7 +618,7 @@ class TongxinCli(BaseTool):
                     "allowedCommands": list(READ_ONLY_ALLOWED_COMMANDS),
                 })
             return self._run_cli(cli_args, timeout, include_paths=include_paths)
-        return ToolResult.fail({"status": "error", "message": "action must be one of: status, configure, bootstrap, download, schema, diagnose, run"})
+        return ToolResult.fail({"status": "error", "message": "action must be one of: status, configure, auto_configure, auth, login, bootstrap, download, schema, diagnose, run"})
 
     def _status(self, *, include_paths: bool = False, diagnose: bool = False) -> Dict[str, Any]:
         script = self._script_path()
@@ -561,11 +626,27 @@ class TongxinCli(BaseTool):
         configured_path = self._configured_script_path()
         persisted = bool(configured_path)
         configured_script = self._resolve_configurable_script(configured_path) if configured_path else None
+        configured_health = self._script_health(configured_script) if configured_script else None
         configured = bool(
             configured_script
+            and configured_health
+            and configured_health.get("ok")
             and script
             and self._same_path(configured_script, script)
         )
+        health_failure = configured_health if configured_health and not configured_health.get("ok") else None
+        configuration_state = (
+            str(health_failure.get("configurationState") or "dependency_failed")
+            if health_failure
+            else "configured"
+            if configured
+            else "detected_unconfigured"
+            if auto_configurable
+            else "detected_untrusted"
+            if script
+            else "missing"
+        )
+        remote_auth_url = self._remote_auth_setting("url")
         payload: Dict[str, Any] = {
             "status": "success",
             "available": bool(script),
@@ -574,19 +655,15 @@ class TongxinCli(BaseTool):
             "readOnly": True,
             "defaultAudience": DEFAULT_TONGXIN_SCOPE,
             "allowedCommands": list(READ_ONLY_ALLOWED_COMMANDS),
+            "remoteAuthConfigured": bool(remote_auth_url),
+            "remoteBootstrapAvailable": bool(remote_auth_url),
             "configured": configured,
             "persistedConfig": persisted,
             "autoConfigurable": bool(auto_configurable),
-            "configurationState": (
-                "configured"
-                if configured
-                else "detected_unconfigured"
-                if auto_configurable
-                else "detected_untrusted"
-                if script
-                else "missing"
-            ),
+            "configurationState": configuration_state,
         }
+        if health_failure:
+            payload["scriptHealth"] = health_failure
         if include_paths:
             payload["pathsRedacted"] = True
             payload["scriptPathRef"] = _path_ref(script)
@@ -595,11 +672,18 @@ class TongxinCli(BaseTool):
         if diagnose:
             payload["pythonRef"] = _path_ref(sys.executable)
             payload["cwdRef"] = _path_ref(self.cwd)
-        if not script:
+            payload["remoteAuthSourceRef"] = self._safe_url_ref(remote_auth_url) if remote_auth_url else {"present": False}
+        if health_failure:
+            payload["message"] = (
+                "Configured Tongxin CLI script failed the read-only data-layer health probe. "
+                "Run tongxin_cli action=auto_configure to switch to a healthy local script or bootstrap a verified script."
+            )
+        elif not script:
             payload["message"] = (
                 "Tongxin CLI script was not found. Configure tools.tongxin_cli.script_path "
-                "or ECOREX_TONGXIN_CLI_PATH to the read-only xin_agent_cli.py path, or configure "
-                "tools.tongxin_cli.bootstrap_url/bootstrap_sha256 for authenticated server bootstrap."
+                "or ECOREX_TONGXIN_CLI_PATH to the read-only xin_agent_cli.py path, configure "
+                "tools.tongxin_cli.bootstrap_url/bootstrap_sha256, or use tools.tongxin_cli.auth_url "
+                "with per-call Tongxin login input for authenticated server bootstrap."
             )
         elif not configured:
             if auto_configurable:
@@ -614,13 +698,13 @@ class TongxinCli(BaseTool):
                 )
         return payload
 
-    def _configure(self, args: Dict[str, Any], *, include_paths: bool = False) -> ToolResult:
+    def _configure(self, args: Dict[str, Any], timeout: int = DEFAULT_TIMEOUT_SECONDS, *, include_paths: bool = False) -> ToolResult:
         explicit_path = any(args.get(key) for key in ("script_path", "scriptPath", "path"))
         candidate = (
             args.get("script_path")
             or args.get("scriptPath")
             or args.get("path")
-            or self._auto_configurable_script_path()
+            or self._auto_configurable_script_path(timeout)
         )
         script = self._resolve_configurable_script(candidate)
         if not script:
@@ -636,6 +720,27 @@ class TongxinCli(BaseTool):
                     "No local Tongxin xin_agent_cli.py script was found to configure."
                 ),
             })
+            return ToolResult.fail(payload)
+        health = self._script_health(script, timeout)
+        if not health.get("ok"):
+            payload: Dict[str, Any] = {
+                "status": "error",
+                "available": True,
+                "configured": False,
+                "persistedConfig": False,
+                "configurationState": health.get("configurationState") or "data_probe_failed",
+                "scriptName": script.name,
+                "readOnly": True,
+                "defaultAudience": DEFAULT_TONGXIN_SCOPE,
+                "scriptHealth": health,
+                "message": (
+                    "Tongxin CLI script was found, but it failed the read-only data-layer health probe. "
+                    "EcoreX did not persist this script path."
+                ),
+            }
+            if include_paths:
+                payload["pathsRedacted"] = True
+                payload["scriptPathRef"] = _path_ref(script)
             return ToolResult.fail(payload)
         try:
             config_path = self._persist_script_path(script)
@@ -667,21 +772,86 @@ class TongxinCli(BaseTool):
             payload["configPathRef"] = _path_ref(config_path)
         return ToolResult.success(payload)
 
+    def _auto_configure(self, args: Dict[str, Any], timeout: int, *, include_paths: bool = False) -> ToolResult:
+        status = self._status(include_paths=include_paths)
+        if status.get("configured"):
+            status.update({
+                "status": "success",
+                "autoConfigured": False,
+                "message": "Tongxin CLI is already configured for read-only EcoreX access.",
+            })
+            return ToolResult.success(status)
+
+        configured = self._configure({}, timeout, include_paths=include_paths)
+        if configured.status == "success":
+            payload = configured.result if isinstance(configured.result, dict) else {"result": configured.result}
+            payload["autoConfigured"] = True
+            payload["autoConfigureStep"] = "local_trusted_script"
+            return ToolResult.success(payload)
+
+        bootstrapped = self._bootstrap(args, timeout, include_paths=include_paths)
+        payload = bootstrapped.result if isinstance(bootstrapped.result, dict) else {"result": bootstrapped.result}
+        payload["autoConfigureStep"] = "remote_authenticated_bootstrap"
+        payload["previousLocalStatus"] = status
+        if bootstrapped.status == "success":
+            payload["autoConfigured"] = True
+            return ToolResult.success(payload)
+        payload["autoConfigured"] = False
+        return ToolResult.fail(payload)
+
+    def _remote_auth(self, args: Dict[str, Any], timeout: int) -> ToolResult:
+        try:
+            auth_payload = self._remote_auth_payload(args, timeout, require_credentials=True)
+            safe_payload = self._safe_remote_auth_public_payload(auth_payload, args)
+            self._persist_remote_auth_state(safe_payload)
+            return ToolResult.success(safe_payload)
+        except urllib.error.HTTPError as exc:
+            return ToolResult.fail({
+                "status": "error",
+                "configurationState": "auth_http_error",
+                "httpStatus": int(getattr(exc, "code", 0) or 0),
+                "message": "Tongxin remote authentication failed with an HTTP error.",
+            })
+        except urllib.error.URLError:
+            return ToolResult.fail({
+                "status": "error",
+                "configurationState": "auth_network_error",
+                "message": "Tongxin remote authentication failed with a network error.",
+            })
+        except Exception as exc:
+            return ToolResult.fail({
+                "status": "error",
+                "configurationState": "auth_failed",
+                "message": f"Tongxin remote authentication failed: {_sanitize(str(exc))}",
+            })
+
     def _bootstrap(self, args: Dict[str, Any], timeout: int, *, include_paths: bool = False) -> ToolResult:
         try:
-            manifest = self._load_bootstrap_manifest(args, timeout)
+            auth_payload = self._remote_auth_payload(args, timeout, require_credentials=False)
+            auth_token = self._token_from_auth_payload(auth_payload)
+            embedded_manifest = self._manifest_from_auth_payload(auth_payload)
+            auth_manifest_url = self._manifest_url_from_auth_payload(auth_payload)
+            manifest = embedded_manifest or self._load_bootstrap_manifest(
+                args,
+                timeout,
+                token_override=auth_token,
+                manifest_url_override=auth_manifest_url,
+            )
             url = (
                 str(args.get("url") or args.get("download_url") or args.get("downloadUrl") or args.get("remote_url") or args.get("remoteUrl") or "").strip()
                 or str(manifest.get("downloadUrl") or manifest.get("download_url") or manifest.get("url") or "").strip()
+                or str(auth_payload.get("downloadUrl") or auth_payload.get("download_url") or auth_payload.get("url") or "").strip()
                 or self._bootstrap_setting("url")
             )
             expected_sha = (
                 str(args.get("expected_sha256") or args.get("expectedSha256") or args.get("sha256") or "").strip()
                 or str(manifest.get("sha256") or manifest.get("expectedSha256") or manifest.get("expected_sha256") or "").strip()
+                or str(auth_payload.get("sha256") or auth_payload.get("expectedSha256") or auth_payload.get("expected_sha256") or "").strip()
                 or self._bootstrap_setting("sha256")
             )
             token = (
                 str(args.get("auth_token") or args.get("authToken") or args.get("token") or "").strip()
+                or auth_token
                 or self._bootstrap_setting("token")
             )
             file_name = str(args.get("file_name") or args.get("fileName") or manifest.get("fileName") or manifest.get("file_name") or DEFAULT_SCRIPT_NAME).strip()
@@ -736,11 +906,58 @@ class TongxinCli(BaseTool):
             target_dir = self._bootstrap_target_dir()
             script = target_dir / script_name
             target_dir.mkdir(parents=True, exist_ok=True)
-            tmp = script.with_name(f".{script.name}.{hashlib.sha256((actual_sha + str(time.time())).encode()).hexdigest()[:12]}.tmp")
+            install_nonce = hashlib.sha256((actual_sha + str(time.time())).encode()).hexdigest()[:12]
+            tmp = script.with_name(f".{script.name}.{install_nonce}.tmp")
+            backup = script.with_name(f".{script.name}.{install_nonce}.bak")
             tmp.write_bytes(data)
-            os.replace(tmp, script)
             try:
-                script.chmod(0o600)
+                tmp.chmod(0o600)
+            except Exception:
+                pass
+            had_existing_script = script.exists()
+            if had_existing_script:
+                os.replace(script, backup)
+            os.replace(tmp, script)
+            health = self._script_health(script, timeout)
+            if not health.get("ok"):
+                try:
+                    if script.exists():
+                        script.unlink()
+                except Exception:
+                    pass
+                if had_existing_script and backup.exists():
+                    os.replace(backup, script)
+                else:
+                    try:
+                        backup.unlink()
+                    except Exception:
+                        pass
+                payload: Dict[str, Any] = {
+                    "status": "error",
+                    "available": True,
+                    "configured": False,
+                    "persistedConfig": False,
+                    "downloaded": True,
+                    "configurationState": health.get("configurationState") or "data_probe_failed",
+                    "tool": self.name,
+                    "scriptName": script.name,
+                    "readOnly": True,
+                    "defaultAudience": DEFAULT_TONGXIN_SCOPE,
+                    "sourceRef": self._safe_url_ref(url),
+                    "sha256": actual_sha,
+                    "size": len(data),
+                    "scriptHealth": health,
+                    "message": (
+                        "Downloaded Tongxin CLI verified by SHA256, but failed the read-only data-layer health probe. "
+                        "EcoreX did not persist this script path."
+                    ),
+                }
+                if include_paths:
+                    payload["pathsRedacted"] = True
+                    payload["scriptPathRef"] = _path_ref(script)
+                return ToolResult.fail(payload)
+            try:
+                backup.unlink()
             except Exception:
                 pass
             config_path = self._persist_script_path(script)
@@ -759,8 +976,12 @@ class TongxinCli(BaseTool):
                 "sourceRef": self._safe_url_ref(url),
                 "sha256": actual_sha,
                 "size": len(data),
+                "remoteAuthenticated": bool(auth_payload),
+                "permission": self._permission_snapshot(auth_payload),
                 "message": "Tongxin CLI downloaded from authenticated source, verified by SHA256, and configured for read-only EcoreX access.",
             }
+            if auth_payload:
+                self._persist_remote_auth_state(self._safe_remote_auth_public_payload(auth_payload, args))
             if include_paths:
                 payload["pathsRedacted"] = True
                 payload["scriptPathRef"] = _path_ref(script)
@@ -797,8 +1018,29 @@ class TongxinCli(BaseTool):
                     "Use tongxin_cli action=configure for trusted local installs, or pass script_path explicitly and approve configuration."
                 )
             return ToolResult.fail(payload)
-        env = os.environ.copy()
-        env.setdefault("PYTHONIOENCODING", "utf-8")
+        if self._requires_data_health(cli_args):
+            health = self._script_health(script, timeout)
+            if not health.get("ok"):
+                payload: Dict[str, Any] = {
+                    "status": "error",
+                    "available": True,
+                    "configured": False,
+                    "configurationState": health.get("configurationState") or "data_probe_failed",
+                    "scriptName": script.name,
+                    "command": self._display_command(cli_args),
+                    "readOnly": True,
+                    "defaultAudience": DEFAULT_TONGXIN_SCOPE,
+                    "scriptHealth": health,
+                    "message": (
+                        "Configured Tongxin CLI script failed the read-only data-layer health probe; "
+                        "run tongxin_cli action=auto_configure to switch to a healthy script or bootstrap a verified script."
+                    ),
+                }
+                if include_paths:
+                    payload["pathsRedacted"] = True
+                    payload["scriptPathRef"] = _path_ref(script)
+                return ToolResult.fail(payload)
+        env = self._cli_env()
         command = [sys.executable, str(script), *cli_args]
         try:
             result = _run_process(
@@ -850,6 +1092,132 @@ class TongxinCli(BaseTool):
         if result.returncode != 0:
             return ToolResult.fail(payload)
         return ToolResult.success(payload)
+
+    @staticmethod
+    def _requires_data_health(cli_args: List[str]) -> bool:
+        tokens = _lower_tokens(cli_args)
+        if not tokens:
+            return False
+        return tokens[0] not in {"schema", "help", "--help", "-h"}
+
+    @staticmethod
+    def _cli_env() -> Dict[str, str]:
+        env = os.environ.copy()
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+        env.pop("PYTHONPATH", None)
+        return env
+
+    def _script_health(self, script: Optional[Path], timeout: int = DEFAULT_TIMEOUT_SECONDS) -> Dict[str, Any]:
+        if not script:
+            return {
+                "ok": False,
+                "configurationState": "missing",
+                "message": "Tongxin CLI script was not found.",
+            }
+        cache_key = self._script_health_cache_key(script)
+        cached = self._script_health_cache.get(cache_key)
+        if cached:
+            return dict(cached)
+
+        probe_timeout = max(1, min(int(timeout or DEFAULT_TIMEOUT_SECONDS), 8))
+        probes: List[Tuple[str, Tuple[str, ...]]] = [
+            ("schema", ("schema",)),
+            ("data", TONGXIN_DATA_HEALTH_PROBE_ARGS),
+        ]
+        for phase, probe_args in probes:
+            command = [sys.executable, str(script), *probe_args]
+            try:
+                result = _run_process(
+                    command,
+                    timeout=probe_timeout,
+                    cwd=str(script.parent),
+                    env=self._cli_env(),
+                    cancel_event=getattr(self, "cancel_event", None),
+                )
+            except subprocess.TimeoutExpired as exc:
+                output = _sanitize((exc.output or "") + ("\n" + exc.stderr if exc.stderr else ""))
+                payload = self._script_health_failure(script, phase, None, output, timed_out=True)
+                self._script_health_cache[cache_key] = payload
+                self._last_script_health_failure = dict(payload)
+                return dict(payload)
+            except _ProcessCancelled as exc:
+                output = _sanitize((exc.stdout or "") + ("\n" + exc.stderr if exc.stderr else ""))
+                payload = self._script_health_failure(script, phase, None, output, cancelled=True)
+                self._script_health_cache[cache_key] = payload
+                self._last_script_health_failure = dict(payload)
+                return dict(payload)
+            except Exception as exc:
+                payload = self._script_health_failure(script, phase, None, _sanitize(str(exc)))
+                self._script_health_cache[cache_key] = payload
+                self._last_script_health_failure = dict(payload)
+                return dict(payload)
+
+            output = _sanitize((result.stdout or "") + ("\n" + result.stderr if result.stderr else ""))
+            if result.returncode != 0:
+                payload = self._script_health_failure(script, phase, result.returncode, output)
+                self._script_health_cache[cache_key] = payload
+                self._last_script_health_failure = dict(payload)
+                return dict(payload)
+
+        payload = {
+            "ok": True,
+            "configurationState": "healthy",
+            "scriptName": script.name,
+            "schemaProbe": "passed",
+            "dataProbe": "passed",
+            "dataProbeCommand": self._display_command(list(TONGXIN_DATA_HEALTH_PROBE_ARGS)),
+        }
+        self._script_health_cache[cache_key] = payload
+        return dict(payload)
+
+    @staticmethod
+    def _script_health_cache_key(script: Path) -> str:
+        try:
+            stat = script.stat()
+            raw = f"{script.resolve()}|{stat.st_mtime_ns}|{stat.st_size}"
+        except Exception:
+            raw = str(script)
+        return raw
+
+    def _script_health_failure(
+        self,
+        script: Path,
+        phase: str,
+        exit_code: Optional[int],
+        output: str,
+        *,
+        timed_out: bool = False,
+        cancelled: bool = False,
+    ) -> Dict[str, Any]:
+        lowered = (output or "").lower()
+        if "models" in lowered and "database" in lowered:
+            state = "dependency_failed"
+            message = (
+                "Tongxin CLI script imports an incompatible models module; "
+                "the read-only data-layer health probe could not enter the data layer."
+            )
+        elif cancelled:
+            state = "health_probe_cancelled"
+            message = "Tongxin CLI health probe was cancelled before the script could be validated."
+        elif timed_out:
+            state = f"{phase}_probe_timeout"
+            message = "Tongxin CLI health probe timed out before the script could be validated."
+        elif phase == "schema":
+            state = "schema_probe_failed"
+            message = "Tongxin CLI script failed the schema health probe."
+        else:
+            state = "data_probe_failed"
+            message = "Tongxin CLI script failed the read-only data-layer health probe."
+        return {
+            "ok": False,
+            "configurationState": state,
+            "scriptName": script.name,
+            "probe": phase,
+            "exitCode": exit_code,
+            "dataProbeCommand": self._display_command(list(TONGXIN_DATA_HEALTH_PROBE_ARGS)),
+            "output": _truncate(output or "", 1200),
+            "message": message,
+        }
 
     def _candidate_script_paths(self) -> List[Path]:
         configured = self._configured_script_path()
@@ -919,7 +1287,7 @@ class TongxinCli(BaseTool):
                 return script
         return None
 
-    def _auto_configurable_script_path(self) -> Optional[Path]:
+    def _auto_configurable_script_path(self, timeout: int = DEFAULT_TIMEOUT_SECONDS) -> Optional[Path]:
         raw: List[Any] = [
             *self._env_script_path_values(),
             *self._trusted_auto_config_roots(),
@@ -929,7 +1297,10 @@ class TongxinCli(BaseTool):
                 continue
             script = self._resolve_configurable_script(item)
             if script and (self._matches_env_script_path(script) or self._is_trusted_auto_config_path(script)):
-                return script
+                health = self._script_health(script, timeout)
+                if health.get("ok"):
+                    return script
+                self._last_script_health_failure = dict(health)
         return None
 
     def _resolve_configurable_script(self, candidate: Any) -> Optional[Path]:
@@ -1006,9 +1377,239 @@ class TongxinCli(BaseTool):
                 return str(value).strip()
         return ""
 
-    def _load_bootstrap_manifest(self, args: Dict[str, Any], timeout: int) -> Dict[str, Any]:
+    def _remote_auth_setting(self, group: str) -> str:
+        keys = REMOTE_AUTH_CONFIG_KEYS.get(group, ())
+        for key in keys:
+            value = self.config.get(key)
+            if value:
+                return str(value).strip()
+        file_cfg = self._read_runtime_config()
+        file_tools = file_cfg.get("tools") if isinstance(file_cfg.get("tools"), dict) else {}
+        file_tongxin = file_tools.get("tongxin_cli") if isinstance(file_tools, dict) else None
+        if isinstance(file_tongxin, dict):
+            for key in keys:
+                value = file_tongxin.get(key)
+                if value:
+                    return str(value).strip()
+        env_map = {
+            "url": ("ECOREX_TONGXIN_AUTH_URL", "ECOREX_TONGXIN_LOGIN_URL"),
+        }
+        for key in env_map.get(group, ()):
+            value = os.environ.get(key)
+            if value:
+                return str(value).strip()
+        return ""
+
+    def _remote_auth_payload(self, args: Dict[str, Any], timeout: int, *, require_credentials: bool) -> Dict[str, Any]:
+        auth_url = (
+            str(args.get("auth_url") or args.get("authUrl") or args.get("login_url") or args.get("loginUrl") or args.get("remote_auth_url") or args.get("remoteAuthUrl") or "").strip()
+            or self._remote_auth_setting("url")
+        )
+        username = (
+            str(args.get("username") or args.get("user") or args.get("account") or args.get("login") or "").strip()
+        )
+        password = (
+            str(args.get("password") or args.get("passwd") or args.get("passcode") or "").strip()
+        )
+        if not auth_url:
+            if require_credentials:
+                raise ValueError("Tongxin remote auth URL is not configured.")
+            return {}
+        if not self._is_allowed_bootstrap_url(auth_url, args=args):
+            raise ValueError("Tongxin remote auth URL must use HTTPS, except explicit localhost test URLs.")
+        if not username or not password:
+            if require_credentials:
+                raise ValueError("Tongxin username and password are required for remote auth.")
+            return {}
+
+        thread_id = (
+            str(args.get("thread_id") or args.get("threadId") or args.get("auth_thread_id") or args.get("authThreadId") or "").strip()
+        )
+        body = {
+            "username": username,
+            "password": password,
+            "threadId": thread_id,
+            "scope": DEFAULT_TONGXIN_SCOPE,
+            "readOnly": True,
+            "visibility": "permission-visible-data-only",
+        }
+        response = self._post_json(auth_url, body, timeout=timeout)
+        if not isinstance(response, dict):
+            raise ValueError("Tongxin remote auth response must be a JSON object.")
+        if response.get("ok") is False or str(response.get("status") or "").lower() in {"error", "failed", "fail"}:
+            message = str(response.get("message") or response.get("error") or "Tongxin remote auth rejected login input.")
+            raise ValueError(_sanitize(message))
+        response["_ecorexAuthUrlRef"] = self._safe_url_ref(auth_url)
+        response["_ecorexUsernameRef"] = self._safe_text_ref(username)
+        response["_ecorexThreadRef"] = self._safe_text_ref(thread_id)
+        response["_ecorexReadOnly"] = True
+        return response
+
+    def _post_json(self, url: str, payload: Dict[str, Any], *, timeout: int) -> Dict[str, Any]:
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(
+            url,
+            data=data,
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json; charset=utf-8",
+                "User-Agent": "EcoreX-Tongxin-Auth/0.2.4",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=max(1, min(int(timeout), 300))) as response:
+            raw = response.read(512 * 1024)
+        if not raw:
+            return {}
+        return json.loads(raw.decode("utf-8-sig"))
+
+    @staticmethod
+    def _token_from_auth_payload(payload: Dict[str, Any]) -> str:
+        if not isinstance(payload, dict):
+            return ""
+        for key in ("bootstrapToken", "bootstrap_token", "accessToken", "access_token", "token", "authToken", "auth_token"):
+            value = payload.get(key)
+            if value:
+                return str(value).strip()
+        data = payload.get("data")
+        if isinstance(data, dict):
+            return TongxinCli._token_from_auth_payload(data)
+        return ""
+
+    @staticmethod
+    def _manifest_from_auth_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            return {}
+        manifest = payload.get("manifest") or payload.get("bootstrapManifest") or payload.get("bootstrap_manifest")
+        if isinstance(manifest, dict):
+            return manifest
+        data = payload.get("data")
+        if isinstance(data, dict):
+            return TongxinCli._manifest_from_auth_payload(data)
+        return {}
+
+    @staticmethod
+    def _manifest_url_from_auth_payload(payload: Dict[str, Any]) -> str:
+        if not isinstance(payload, dict):
+            return ""
+        for key in ("manifestUrl", "manifest_url", "bootstrapManifestUrl", "bootstrap_manifest_url"):
+            value = payload.get(key)
+            if value:
+                return str(value).strip()
+        data = payload.get("data")
+        if isinstance(data, dict):
+            return TongxinCli._manifest_url_from_auth_payload(data)
+        return ""
+
+    def _safe_remote_auth_public_payload(self, payload: Dict[str, Any], args: Dict[str, Any]) -> Dict[str, Any]:
+        token_present = bool(self._token_from_auth_payload(payload))
+        manifest = self._manifest_from_auth_payload(payload)
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        manifest_url = (
+            str(payload.get("manifestUrl") or payload.get("manifest_url") or "").strip()
+            or str(data.get("manifestUrl") or data.get("manifest_url") or "").strip()
+        )
+        safe: Dict[str, Any] = {
+            "status": "success",
+            "authenticated": True,
+            "configurationState": "remote_authenticated",
+            "tool": self.name,
+            "readOnly": True,
+            "defaultAudience": DEFAULT_TONGXIN_SCOPE,
+            "remoteAuthenticated": True,
+            "tokenReceived": token_present,
+            "bootstrapManifestAvailable": bool(manifest or manifest_url),
+            "permission": self._permission_snapshot(payload),
+            "sourceRef": payload.get("_ecorexAuthUrlRef") or self._safe_url_ref(
+                str(args.get("auth_url") or args.get("authUrl") or self._remote_auth_setting("url") or "")
+            ),
+            "usernameRef": payload.get("_ecorexUsernameRef") or self._safe_text_ref(
+                str(args.get("username") or args.get("user") or "")
+            ),
+            "threadRef": payload.get("_ecorexThreadRef") or self._safe_text_ref(
+                str(args.get("thread_id") or args.get("threadId") or "")
+            ),
+            "message": "Tongxin remote auth succeeded; only permission-visible read-only data may be disclosed.",
+        }
+        return safe
+
+    def _permission_snapshot(self, payload: Any) -> Dict[str, Any]:
+        return {
+            "readOnly": bool(payload.get("_ecorexReadOnly", True)) if isinstance(payload, dict) else True,
+            "scope": DEFAULT_TONGXIN_SCOPE,
+            "visibility": "permission-visible-data-only",
+        }
+
+    @staticmethod
+    def _scrub_persisted_login_fields(tongxin: Any) -> None:
+        if not isinstance(tongxin, dict):
+            return
+        for key in (
+            "username",
+            "user",
+            "account",
+            "login",
+            "login_name",
+            "loginName",
+            "password",
+            "passwd",
+            "passcode",
+            "thread_id",
+            "threadId",
+            "auth_thread_id",
+            "authThreadId",
+            "token",
+            "auth_token",
+            "authToken",
+            "bootstrap_token",
+            "bootstrapToken",
+            "ticket",
+            "bootstrapTicket",
+            "bootstrap_ticket",
+        ):
+            tongxin.pop(key, None)
+
+    def _persist_remote_auth_state(self, safe_payload: Dict[str, Any]) -> None:
+        try:
+            config_path = self._runtime_config_path()
+            data = self._read_runtime_config()
+            tools = data.get("tools")
+            if not isinstance(tools, dict):
+                tools = {}
+                data["tools"] = tools
+            tongxin = tools.get("tongxin_cli")
+            if not isinstance(tongxin, dict):
+                tongxin = {}
+                tools["tongxin_cli"] = tongxin
+            self._scrub_persisted_login_fields(tongxin)
+            self._scrub_persisted_login_fields(self.config)
+            tongxin["read_only"] = True
+            tongxin["last_auth"] = {
+                "authenticated": bool(safe_payload.get("authenticated")),
+                "read_only": True,
+                "default_audience": DEFAULT_TONGXIN_SCOPE,
+                "source_ref": safe_payload.get("sourceRef"),
+                "username_ref": safe_payload.get("usernameRef"),
+                "thread_ref": safe_payload.get("threadRef"),
+                "permission": safe_payload.get("permission"),
+                "updated_at": int(time.time()),
+            }
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        except Exception as exc:
+            logger.debug(f"[TongxinCli] remote auth state persist skipped: {exc}")
+
+    def _load_bootstrap_manifest(
+        self,
+        args: Dict[str, Any],
+        timeout: int,
+        *,
+        token_override: str = "",
+        manifest_url_override: str = "",
+    ) -> Dict[str, Any]:
         manifest_url = (
             str(args.get("manifest_url") or args.get("manifestUrl") or args.get("bootstrap_manifest_url") or args.get("bootstrapManifestUrl") or "").strip()
+            or manifest_url_override
             or self._bootstrap_setting("manifest_url")
         )
         if not manifest_url:
@@ -1017,6 +1618,7 @@ class TongxinCli(BaseTool):
             raise ValueError("Tongxin bootstrap manifest URL must use HTTPS, except explicit localhost test URLs.")
         token = (
             str(args.get("auth_token") or args.get("authToken") or args.get("token") or "").strip()
+            or token_override
             or self._bootstrap_setting("token")
         )
         data = self._download_bootstrap_bytes(manifest_url, token=token, timeout=timeout, max_bytes=256 * 1024)
@@ -1086,6 +1688,14 @@ class TongxinCli(BaseTool):
             "pathHash": hashlib.sha256(path.encode("utf-8", errors="replace")).hexdigest()[:16] if path else "",
         }
 
+    @staticmethod
+    def _safe_text_ref(value: str) -> Dict[str, Any]:
+        raw = str(value or "").strip()
+        return {
+            "present": bool(raw),
+            "hash": hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:16] if raw else "",
+        }
+
     def _matches_env_script_path(self, script: Path) -> bool:
         for value in self._env_script_path_values():
             for candidate in self._expand_script_candidates(value):
@@ -1152,10 +1762,12 @@ class TongxinCli(BaseTool):
         if not isinstance(tongxin, dict):
             tongxin = {}
             tools["tongxin_cli"] = tongxin
+        self._scrub_persisted_login_fields(tongxin)
         tongxin["script_path"] = str(script)
         tongxin["read_only"] = True
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        self._scrub_persisted_login_fields(self.config)
         self.config["script_path"] = str(script)
         try:
             from config import conf
@@ -1169,6 +1781,7 @@ class TongxinCli(BaseTool):
             if not isinstance(live_tongxin, dict):
                 live_tongxin = {}
                 live_tools["tongxin_cli"] = live_tongxin
+            self._scrub_persisted_login_fields(live_tongxin)
             live_tongxin["script_path"] = str(script)
             live_tongxin["read_only"] = True
         except Exception as exc:

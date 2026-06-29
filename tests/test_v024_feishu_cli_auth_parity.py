@@ -97,6 +97,59 @@ def test_feishu_cli_auth_complete_uses_device_code_without_blocking_start_flags(
     assert safe_run.call_args.args[0] == ["lark-cli", "auth", "login", "--device-code", "device-code-123"]
 
 
+def test_feishu_cli_auth_login_without_target_does_not_default_to_base():
+    from agent.tools.feishu_cli.feishu_cli import FeishuCli
+
+    tool = FeishuCli()
+    with patch("agent.tools.feishu_cli.feishu_cli._resolve_lark_command", return_value=["lark-cli"]), \
+            patch.object(FeishuCli, "_safe_run") as safe_run:
+        result = tool.execute({"action": "auth_login"})
+
+    assert result.status == "error"
+    assert result.result["status"] == "needs_target_scope"
+    assert result.result["fixedFlow"] is False
+    assert result.result["nextAction"]["action"] == "agent_auth"
+    safe_run.assert_not_called()
+
+
+def test_feishu_cli_agent_auth_uses_official_diagnostics_before_selecting_flow():
+    from agent.tools.base_tool import ToolResult
+    from agent.tools.feishu_cli.feishu_cli import FeishuCli
+
+    tool = FeishuCli()
+    captured = {}
+
+    def fake_config_init(self, args, env, timeout):
+        captured.update(args)
+        return ToolResult.success({
+            "status": "auth_pending",
+            "authRequired": True,
+            "verificationUrl": "https://open.feishu.cn/page/cli?user_code=ABCD",
+        })
+
+    diagnostics = {
+        "authState": "needs_login",
+        "capabilities": {
+            "configInitNew": True,
+            "authLoginNoWaitJson": True,
+            "authLoginDeviceCode": True,
+        },
+        "selectionPolicy": "official lark-cli diagnostics",
+    }
+    with patch("agent.tools.feishu_cli.feishu_cli._resolve_lark_command", return_value=["lark-cli"]), \
+            patch.object(FeishuCli, "_status", return_value={"authState": "needs_login", "authenticated": False}), \
+            patch.object(FeishuCli, "_official_auth_diagnostics", return_value=diagnostics), \
+            patch.object(FeishuCli, "_config_init", fake_config_init):
+        result = tool.execute({"action": "agent_auth", "timeout": 240})
+
+    assert result.status == "success"
+    assert captured["use_saved_credentials"] is False
+    assert captured["args"] == []
+    assert result.result["authDecision"] == "config_init_new_from_official_diagnostics"
+    assert result.result["officialAuthDiagnostics"] == diagnostics
+    assert result.result["fixedFlow"] is False
+
+
 def test_feishu_cli_config_init_uses_external_credentials_over_stdin():
     from agent.tools.feishu_cli.feishu_cli import FeishuCli
 
@@ -359,7 +412,7 @@ def test_feishu_cli_external_connection_status_probe_is_secret_free():
         "authenticated": True,
         "command": ["lark-cli"],
         "authStatus": {"output": "open_id=ou_secret scope=calendar:calendar:read"},
-        "nextAction": {"tool": "feishu_cli", "action": "auth_login", "domain": "base"},
+        "nextAction": {"tool": "feishu_cli", "action": "agent_auth"},
     })
 
     serialized = json.dumps(safe, ensure_ascii=False)
@@ -457,7 +510,8 @@ def test_feishu_external_connection_agent_auth_returns_visible_cli_link(monkeypa
     monkeypatch.setattr(web_channel, "record_external_connection_runtime_event", lambda *args, **kwargs: None)
 
     def fake_execute(self, args):
-        assert args["action"] == "config_init"
+        assert args["action"] == "agent_auth"
+        assert args["surface"] == "web_external_connection"
         return ToolResult.success({
             "status": "auth_pending",
             "authRequired": True,
@@ -547,4 +601,40 @@ def test_feishu_external_connection_projection_exposes_cli_auth_action():
 
     actions = {item["id"]: item for item in connection["actions"]}
     assert actions["agent_auth"]["enabled"] is True
-    assert actions["agent_auth"]["label"] == "CLI 授权"
+    assert actions["agent_auth"]["label"] == "Agent 授权"
+    assert actions["agent_auth"]["discoveryDriven"] is True
+
+
+def test_external_connection_agent_auth_action_is_catalog_driven_not_feishu_special_case():
+    _install_web_stub()
+    from channel.web import web_channel
+
+    connection = web_channel._external_connection_from_channel({
+        "name": "slack",
+        "label": {"zh": "Slack", "en": "Slack"},
+        "auth": {
+            "agentAuthSupported": True,
+            "agentAuthorizationAction": {"tool": "slack_cli", "action": "agent_auth"},
+        },
+        "agentSurface": {"tool": "slack_cli", "callable": False},
+    })
+
+    actions = {item["id"]: item for item in connection["actions"]}
+    assert actions["agent_auth"]["enabled"] is True
+    assert actions["agent_auth"]["tool"] == "slack_cli"
+    assert actions["agent_auth"]["discoveryDriven"] is True
+
+
+def test_channel_catalog_exposes_agent_discovery_contract_for_all_external_connections():
+    from channel.channel_catalog import CHANNEL_CATALOG, channel_auth_surface
+
+    for name in CHANNEL_CATALOG:
+        auth = channel_auth_surface({}, name)
+        contract = auth["agentDiscoveryContract"]
+        assert contract["version"] == "external-connection-agent-discovery-v1"
+        assert contract["discoveryDriven"] is True
+        assert contract["webOwnsInstallOrAuthFlow"] is False
+    feishu = channel_auth_surface({}, "feishu")
+    assert feishu["agentAuthorizationAction"]["action"] == "agent_auth"
+    assert feishu["agentDiscoveryContract"]["officialDiagnosticsRequired"] is True
+    assert feishu["agentDiscoveryContract"]["declaredTool"] == "feishu_cli"

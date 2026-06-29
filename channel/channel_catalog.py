@@ -62,7 +62,7 @@ CHANNEL_CATALOG: "OrderedDict[str, ChannelDef]" = OrderedDict([
             "policy": "find-skill-first-on-demand-cli",
             "permission_gated": True,
             "status_action": {"tool": "feishu_cli", "action": "status"},
-            "authorization_action": {"tool": "feishu_cli", "action": "config_init"},
+            "authorization_action": {"tool": "feishu_cli", "action": "agent_auth"},
         },
     }),
     ("dingtalk", {
@@ -375,6 +375,7 @@ def channel_auth_surface(config: Mapping[str, Any], channel_name: str) -> Dict[s
     endpoint = str(auth.get("auth_endpoint") or "")
     methods = auth.get("auth_endpoint_methods") if isinstance(auth.get("auth_endpoint_methods"), list) else []
     auth_supported = bool(endpoint or definition.get("fields") or mode not in {"", "none"})
+    authorization_action = agent.get("authorization_action") if isinstance(agent.get("authorization_action"), dict) else None
     return {
         "mode": mode,
         "channelAuthorization": str(auth.get("channel_authorization") or mode),
@@ -386,8 +387,18 @@ def channel_auth_surface(config: Mapping[str, Any], channel_name: str) -> Dict[s
         "requiredFields": config_status["requiredFields"],
         "presentFields": config_status["presentFields"],
         "missingFields": config_status["missingFields"],
-        "agentAuthSupported": bool(agent.get("authorization_action")),
-        "agentAuthorizationAction": agent.get("authorization_action") or None,
+        "agentAuthSupported": bool(authorization_action),
+        "agentAuthorizationAction": authorization_action,
+        "agentDiscoveryContract": {
+            "version": "external-connection-agent-discovery-v1",
+            "discoveryDriven": True,
+            "webOwnsInstallOrAuthFlow": False,
+            "officialDiagnosticsRequired": bool(authorization_action or agent.get("status_action") or agent.get("tool")),
+            "manualCredentialOnly": not bool(authorization_action or agent.get("tool")),
+            "declaredTool": str(agent.get("tool") or ""),
+            "statusAction": agent.get("status_action") if isinstance(agent.get("status_action"), dict) else None,
+            "authorizationAction": authorization_action,
+        },
     }
 
 

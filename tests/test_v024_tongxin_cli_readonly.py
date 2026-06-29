@@ -13,7 +13,18 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
+def test_tongxin_cli_config_template_does_not_persist_login_fields():
+    root = Path(__file__).resolve().parents[1]
+    template = json.loads((root / "config-template.json").read_text(encoding="utf-8"))
+    tongxin = template["tools"]["tongxin_cli"]
+
+    assert "auth_url" in tongxin
+    for key in ("username", "password", "auth_thread_id", "thread_id", "token", "bootstrap_token"):
+        assert key not in tongxin
+
+
 def _make_tongxin_script(root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
     script = root / "xin_agent_cli.py"
     script.write_text(
         textwrap.dedent(
@@ -53,6 +64,28 @@ def _make_tongxin_script(root: Path) -> Path:
             else:
                 print(json.dumps({"ok": False, "args": args}))
                 sys.exit(2)
+            """
+        ).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    return script
+
+
+def _make_tongxin_script_with_bad_models(root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    script = root / "xin_agent_cli.py"
+    script.write_text(
+        textwrap.dedent(
+            """
+            import json
+            import sys
+
+            args = sys.argv[1:]
+            if args == ["schema"]:
+                print(json.dumps({"ok": True, "name": "xin_agent_cli", "mode": "read_only"}))
+            else:
+                raise AttributeError("module 'models' has no attribute 'DATABASE'")
             """
         ).strip()
         + "\n",
@@ -135,9 +168,17 @@ def test_tongxin_cli_auto_detects_and_persists_local_script_path():
     with tempfile.TemporaryDirectory() as workspace:
         script = _make_tongxin_script(Path(workspace))
         config_path = Path(workspace) / "config.json"
+        stale_fields = {
+            "username": "persisted-user@example.test",
+            "password": "persisted-password-secret",
+            "auth_thread_id": "persisted-thread-id",
+            "token": "persisted-token-secret",
+            "bootstrap_token": "persisted-bootstrap-token-secret",
+        }
+        config_path.write_text(json.dumps({"tools": {"tongxin_cli": dict(stale_fields)}}), encoding="utf-8")
         tool = TongxinCli({"cwd": workspace, "config_path": str(config_path)})
         old_tools = copy.deepcopy(conf().get("tools", {}))
-        conf()["tools"] = {}
+        conf()["tools"] = {"tongxin_cli": dict(stale_fields)}
 
         try:
             with patch.object(TongxinCli, "_trusted_auto_config_roots", return_value=[]), \
@@ -167,14 +208,93 @@ def test_tongxin_cli_auto_detects_and_persists_local_script_path():
                 assert str(config_path) not in json.dumps(configured.result, ensure_ascii=False)
 
             data = json.loads(config_path.read_text(encoding="utf-8"))
+            persisted_text = json.dumps(data, ensure_ascii=False)
             assert data["tools"]["tongxin_cli"]["script_path"] == str(script.resolve())
             assert data["tools"]["tongxin_cli"]["read_only"] is True
+            for value in stale_fields.values():
+                assert value not in persisted_text
+
+            live_text = json.dumps(conf()["tools"]["tongxin_cli"], ensure_ascii=False)
+            assert conf()["tools"]["tongxin_cli"]["script_path"] == str(script.resolve())
+            assert conf()["tools"]["tongxin_cli"]["read_only"] is True
+            for value in stale_fields.values():
+                assert value not in live_text
 
             ready = tool.execute({"action": "status"})
             assert ready.result["configured"] is True
             assert ready.result["configurationState"] == "configured"
         finally:
             conf()["tools"] = old_tools
+
+
+def test_tongxin_cli_configure_rejects_script_that_fails_data_health_probe():
+    from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
+
+    with tempfile.TemporaryDirectory() as workspace:
+        bad_root = Path(workspace) / "bad-cli"
+        bad_script = _make_tongxin_script_with_bad_models(bad_root)
+        config_path = Path(workspace) / "config.json"
+        tool = TongxinCli({"cwd": workspace, "config_path": str(config_path)})
+
+        result = tool.execute({"action": "configure", "script_path": str(bad_script), "include_paths": True})
+
+    assert result.status == "error"
+    assert result.result["configured"] is False
+    assert result.result["persistedConfig"] is False
+    assert result.result["configurationState"] == "dependency_failed"
+    assert result.result["scriptHealth"]["configurationState"] == "dependency_failed"
+    serialized = json.dumps(result.result, ensure_ascii=False)
+    assert "models" in serialized
+    assert "DATABASE" in serialized
+    assert str(bad_script) not in serialized
+    assert not config_path.exists() or "script_path" not in config_path.read_text(encoding="utf-8")
+
+
+def test_tongxin_cli_auto_configure_skips_bad_models_script_and_persists_healthy_copy():
+    from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
+    from config import conf
+
+    with tempfile.TemporaryDirectory() as workspace:
+        bad_root = Path(workspace) / "bad-cli"
+        good_root = Path(workspace) / "good-cli"
+        bad_script = _make_tongxin_script_with_bad_models(bad_root)
+        good_script = _make_tongxin_script(good_root)
+        config_path = Path(workspace) / "config.json"
+        old_tools = copy.deepcopy(conf().get("tools", {}))
+        conf()["tools"] = {}
+        try:
+            tool = TongxinCli({"cwd": workspace, "config_path": str(config_path)})
+            with patch.object(TongxinCli, "_trusted_auto_config_roots", return_value=[bad_root, good_root]), \
+                    patch.object(TongxinCli, "_env_script_path_values", return_value=[]):
+                result = tool.execute({"action": "auto_configure", "include_paths": True})
+
+            assert result.status == "success"
+            assert result.result["configured"] is True
+            assert result.result["configurationState"] == "configured"
+            assert result.result["autoConfigureStep"] == "local_trusted_script"
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+            persisted_path = Path(data["tools"]["tongxin_cli"]["script_path"])
+            assert persisted_path.resolve() == good_script.resolve()
+            assert persisted_path.resolve() != bad_script.resolve()
+        finally:
+            conf()["tools"] = old_tools
+
+
+def test_tongxin_cli_run_reports_dependency_probe_failure_before_data_query():
+    from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
+
+    with tempfile.TemporaryDirectory() as workspace:
+        bad_root = Path(workspace) / "bad-cli"
+        bad_script = _make_tongxin_script_with_bad_models(bad_root)
+        tool = TongxinCli({"cwd": workspace, "script_path": str(bad_script)})
+
+        result = tool.execute({"action": "run", "args": ["realtime", "summary", "--xhs-channel", "all"]})
+
+    assert result.status == "error"
+    assert result.result["configurationState"] == "dependency_failed"
+    assert result.result["scriptHealth"]["configurationState"] == "dependency_failed"
+    assert "auto_configure" in result.result["message"]
+    assert str(bad_script) not in json.dumps(result.result, ensure_ascii=False)
 
 
 def test_tongxin_cli_read_only_contract_is_command_specific():
@@ -278,12 +398,40 @@ def test_tongxin_cli_broker_allows_readonly_and_blocks_mutations_in_readonly_mod
             assert bootstrap["allowed"] is True
             assert bootstrap["reason"] == "default-tongxin-cli-authenticated-bootstrap"
 
+            auth = broker.authorize_noninteractive(
+                "tongxin_cli",
+                {"action": "auth"},
+            )
+            assert auth["allowed"] is True
+            assert auth["reason"] == "default-tongxin-cli-configured-auth"
+
+            auto_configure = broker.authorize_noninteractive(
+                "tongxin_cli",
+                {"action": "auto_configure"},
+            )
+            assert auto_configure["allowed"] is True
+            assert auto_configure["reason"] == "default-tongxin-cli-configured-auth"
+
             explicit_bootstrap = broker.authorize_noninteractive(
                 "tongxin_cli",
                 {"action": "bootstrap", "url": "https://example.invalid/xin_agent_cli.py", "auth_token": "secret-token"},
             )
             assert explicit_bootstrap["allowed"] is False
             assert "read-only" in explicit_bootstrap["reason"]
+
+            explicit_auth = broker.authorize_noninteractive(
+                "tongxin_cli",
+                {"action": "auth", "auth_url": "https://example.invalid/login"},
+            )
+            assert explicit_auth["allowed"] is False
+            assert "read-only" in explicit_auth["reason"]
+
+            explicit_auto_configure = broker.authorize_noninteractive(
+                "tongxin_cli",
+                {"action": "auto_configure", "bootstrap_url": "https://example.invalid/xin_agent_cli.py"},
+            )
+            assert explicit_auto_configure["allowed"] is False
+            assert "read-only" in explicit_auto_configure["reason"]
         finally:
             if old_user_data is None:
                 os.environ.pop("ECOREX_USER_DATA", None)
@@ -340,6 +488,16 @@ def test_tongxin_cli_authenticated_bootstrap_downloads_verifies_and_configures()
 
     with tempfile.TemporaryDirectory() as workspace:
         config_path = Path(workspace) / "config.json"
+        config_path.write_text(json.dumps({
+            "tools": {
+                "tongxin_cli": {
+                    "username": "persisted-user@example.test",
+                    "password": "persisted-password-secret",
+                    "auth_thread_id": "persisted-thread-id",
+                    "token": "persisted-token-secret",
+                }
+            }
+        }), encoding="utf-8")
         target_dir = Path(workspace) / "runtime" / "tools" / "tongxin"
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -377,6 +535,249 @@ def test_tongxin_cli_authenticated_bootstrap_downloads_verifies_and_configures()
             server.shutdown()
             server.server_close()
             conf()["tools"] = old_tools
+
+
+def test_tongxin_cli_auto_configure_authenticates_then_bootstraps_without_secret_leak():
+    from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
+    from config import conf
+
+    script_body = textwrap.dedent(
+        """
+        import json
+        import sys
+        if sys.argv[1:] == ["schema"]:
+            print(json.dumps({"ok": True, "name": "xin_agent_cli", "mode": "read_only"}))
+        else:
+            print(json.dumps({"ok": True, "args": sys.argv[1:]}))
+        """
+    ).strip() + "\n"
+    script_bytes = script_body.encode("utf-8")
+    script_sha = __import__("hashlib").sha256(script_bytes).hexdigest().upper()
+    seen_auth_bodies = []
+    seen_download_headers = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            if self.path != "/login":
+                self.send_response(404)
+                self.end_headers()
+                return
+            length = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(length).decode("utf-8"))
+            seen_auth_bodies.append(body)
+            payload = {
+                "ok": True,
+                "bootstrapToken": "remote-bootstrap-token",
+                "manifestUrl": f"http://127.0.0.1:{self.server.server_port}/manifest.json",
+                "permission": {"scope": "all-users-read-only", "accounts": ["visible-only"]},
+            }
+            raw = json.dumps(payload).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def do_GET(self):
+            seen_download_headers.append(self.headers.get("Authorization"))
+            if self.path == "/manifest.json":
+                payload = {
+                    "downloadUrl": f"http://127.0.0.1:{self.server.server_port}/xin_agent_cli.py",
+                    "sha256": script_sha,
+                    "fileName": "xin_agent_cli.py",
+                }
+                body = json.dumps(payload).encode("utf-8")
+            elif self.path == "/xin_agent_cli.py":
+                body = script_bytes
+            else:
+                self.send_response(404)
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            return
+
+    with tempfile.TemporaryDirectory() as workspace:
+        config_path = Path(workspace) / "config.json"
+        target_dir = Path(workspace) / "runtime" / "tools" / "tongxin"
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        old_tools = copy.deepcopy(conf().get("tools", {}))
+        conf()["tools"] = {}
+        try:
+            tool = TongxinCli({
+                "cwd": workspace,
+                "config_path": str(config_path),
+                "auth_url": f"http://127.0.0.1:{server.server_port}/login",
+                "bootstrap_dir": str(target_dir),
+            })
+            with patch.object(TongxinCli, "_trusted_auto_config_roots", return_value=[Path(workspace)]):
+                result = tool.execute({
+                    "action": "auto_configure",
+                    "allow_insecure_localhost": True,
+                    "include_paths": True,
+                    "username": "xin-user@example.test",
+                    "password": "xin-password-secret",
+                    "auth_thread_id": "019f044f-ef11-77f1-a7c9-55619a50a7d3",
+                })
+                assert result.status == "success"
+                serialized = json.dumps(result.result, ensure_ascii=False)
+                assert "xin-password-secret" not in serialized
+                assert "remote-bootstrap-token" not in serialized
+                assert "xin-user@example.test" not in serialized
+                assert result.result["remoteAuthenticated"] is True
+                assert result.result["permission"]["readOnly"] is True
+                assert result.result["autoConfigureStep"] == "remote_authenticated_bootstrap"
+
+                assert seen_auth_bodies[0]["username"] == "xin-user@example.test"
+                assert seen_auth_bodies[0]["password"] == "xin-password-secret"
+                assert seen_auth_bodies[0]["threadId"] == "019f044f-ef11-77f1-a7c9-55619a50a7d3"
+                assert seen_auth_bodies[0]["readOnly"] is True
+                assert seen_download_headers == ["Bearer remote-bootstrap-token", "Bearer remote-bootstrap-token"]
+
+                persisted = json.loads(config_path.read_text(encoding="utf-8"))
+                persisted_text = json.dumps(persisted, ensure_ascii=False)
+                assert persisted["tools"]["tongxin_cli"]["read_only"] is True
+                assert persisted["tools"]["tongxin_cli"]["script_path"].endswith("xin_agent_cli.py")
+                assert persisted["tools"]["tongxin_cli"]["last_auth"]["permission"]["readOnly"] is True
+                assert "serverPermission" not in persisted["tools"]["tongxin_cli"]["last_auth"]["permission"]
+                assert "xin-password-secret" not in persisted_text
+                assert "remote-bootstrap-token" not in persisted_text
+                assert "xin-user@example.test" not in persisted_text
+                assert "persisted-password-secret" not in persisted_text
+                assert "persisted-user@example.test" not in persisted_text
+                assert "persisted-thread-id" not in persisted_text
+                assert "persisted-token-secret" not in persisted_text
+        finally:
+            server.shutdown()
+            server.server_close()
+            conf()["tools"] = old_tools
+
+
+def test_tongxin_cli_bootstrap_health_probe_uses_final_target_directory_and_restores_old_script():
+    from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
+    from config import conf
+
+    old_script_body = textwrap.dedent(
+        """
+        import json
+        import sys
+        if sys.argv[1:] == ["schema"]:
+            print(json.dumps({"ok": True, "name": "xin_agent_cli", "version": "old-good"}))
+        else:
+            print(json.dumps({"ok": True, "data": [{"id": "old-good"}]}))
+        """
+    ).strip() + "\n"
+    new_script_body = textwrap.dedent(
+        """
+        import json
+        import sys
+        args = sys.argv[1:]
+        if args == ["schema"]:
+            print(json.dumps({"ok": True, "name": "xin_agent_cli", "version": "new-candidate"}))
+        else:
+            import models
+            print(models.DATABASE)
+        """
+    ).strip() + "\n"
+    new_script_bytes = new_script_body.encode("utf-8")
+    new_script_sha = __import__("hashlib").sha256(new_script_bytes).hexdigest().upper()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/manifest.json":
+                body = json.dumps({
+                    "downloadUrl": f"http://127.0.0.1:{self.server.server_port}/xin_agent_cli.py",
+                    "sha256": new_script_sha,
+                    "fileName": "xin_agent_cli.py",
+                }).encode("utf-8")
+            elif self.path == "/xin_agent_cli.py":
+                body = new_script_bytes
+            else:
+                self.send_response(404)
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            return
+
+    with tempfile.TemporaryDirectory() as workspace:
+        target_dir = Path(workspace) / "runtime" / "tools" / "tongxin"
+        target_dir.mkdir(parents=True)
+        old_script = target_dir / "xin_agent_cli.py"
+        old_script.write_text(old_script_body, encoding="utf-8")
+        (target_dir / "models.py").write_text("# Wrong local dependency, missing DATABASE\n", encoding="utf-8")
+        config_path = Path(workspace) / "config.json"
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        old_tools = copy.deepcopy(conf().get("tools", {}))
+        conf()["tools"] = {}
+        try:
+            tool = TongxinCli({
+                "cwd": workspace,
+                "config_path": str(config_path),
+                "bootstrap_manifest_url": f"http://127.0.0.1:{server.server_port}/manifest.json",
+                "bootstrap_dir": str(target_dir),
+            })
+            with patch.object(TongxinCli, "_trusted_auto_config_roots", return_value=[target_dir]):
+                result = tool.execute({"action": "bootstrap", "allow_insecure_localhost": True, "include_paths": True})
+
+            assert result.status == "error"
+            assert result.result["configurationState"] == "dependency_failed"
+            assert result.result["configured"] is False
+            assert old_script.read_text(encoding="utf-8") == old_script_body
+            assert not config_path.exists() or "script_path" not in config_path.read_text(encoding="utf-8")
+            serialized = json.dumps(result.result, ensure_ascii=False)
+            assert "models" in serialized
+            assert "DATABASE" in serialized
+            assert str(target_dir) not in serialized
+        finally:
+            server.shutdown()
+            server.server_close()
+            conf()["tools"] = old_tools
+
+
+def test_tongxin_cli_remote_auth_does_not_read_persisted_login_fields():
+    from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
+
+    with tempfile.TemporaryDirectory() as workspace:
+        config_path = Path(workspace) / "config.json"
+        config_path.write_text(json.dumps({
+            "tools": {
+                "tongxin_cli": {
+                    "auth_url": "https://tongxin.example.invalid/login",
+                    "username": "persisted-user@example.test",
+                    "password": "persisted-password-secret",
+                    "auth_thread_id": "persisted-thread-id",
+                }
+            }
+        }), encoding="utf-8")
+        tool = TongxinCli({
+            "cwd": workspace,
+            "config_path": str(config_path),
+            "auth_url": "https://tongxin.example.invalid/login",
+        })
+
+        result = tool.execute({"action": "auth"})
+
+    assert result.status == "error"
+    serialized = json.dumps(result.result, ensure_ascii=False)
+    assert "required" in serialized
+    assert "persisted-user@example.test" not in serialized
+    assert "persisted-password-secret" not in serialized
+    assert "persisted-thread-id" not in serialized
 
 
 def test_tongxin_cli_bootstrap_rejects_sha_mismatch_without_writing():
@@ -556,7 +957,7 @@ def test_tongxin_capability_pack_configures_detected_local_cli():
         {"action": "install_pack", "pack_id": "tx-assistant"},
     )
     assert proxy_name == "tongxin_cli"
-    assert proxy_args["action"] == "configure"
+    assert proxy_args["action"] == "auto_configure"
 
 
 def test_tongxin_diagnostics_and_initializer_behaviour():

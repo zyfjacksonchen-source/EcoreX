@@ -898,16 +898,17 @@ class FeishuCli(BaseTool):
     name: str = "feishu_cli"
     description: str = (
         "Use this instead of bash for Feishu/Lark operations when lark-cli is already "
-        "available. It checks user auth, starts split-flow auth with --no-wait, runs "
-        "bounded lark-cli commands, and can install the official @larksuite/cli only after "
-        "a find-skill/on-demand flow requests it."
+        "available. It runs official lark-cli status/help diagnostics first, lets the "
+        "agent choose the next auth/config step from that evidence, runs bounded "
+        "lark-cli commands, and can install the official @larksuite/cli only after a "
+        "find-skill/on-demand flow requests it."
     )
     params: dict = {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
-                "description": "One of: status, ensure, diagnose, install, config_init, config_init_status, auth_login, run",
+                "description": "One of: status, ensure, diagnose, install, agent_auth, config_init, config_init_status, auth_login, run",
             },
             "session_id": {
                 "type": "string",
@@ -924,7 +925,7 @@ class FeishuCli(BaseTool):
             },
             "domain": {
                 "type": "string",
-                "description": "Domain for auth_login, e.g. base, docs, drive. Defaults to base.",
+                "description": "Domain for auth_login, e.g. base, docs, drive. Omit when the agent has not diagnosed the target domain yet.",
             },
             "device_code": {
                 "type": "string",
@@ -1004,6 +1005,11 @@ class FeishuCli(BaseTool):
             if not _has_find_skill_gate(args):
                 return ToolResult.fail(_find_skill_gate_error(self.package))
             return self._install(env, timeout, registry=str(args.get("registry") or "").strip())
+        if action in {"agent_auth", "agent_authorize", "authorize_agent"}:
+            ensure = self._ensure_payload(env, timeout, install_if_missing)
+            if not ensure.get("available"):
+                return ToolResult.fail(ensure)
+            return self._agent_auth(args, env, timeout)
         if action == "config_init":
             ensure = self._ensure_payload(env, timeout, install_if_missing)
             if not ensure.get("available"):
@@ -1021,7 +1027,7 @@ class FeishuCli(BaseTool):
             if not ensure.get("available"):
                 return ToolResult.fail(ensure)
             return self._run_cli(args, env, timeout)
-        return ToolResult.fail({"status": "error", "message": "action must be one of: status, ensure, diagnose, install, config_init, config_init_status, auth_login, run"})
+        return ToolResult.fail({"status": "error", "message": "action must be one of: status, ensure, diagnose, install, agent_auth, config_init, config_init_status, auth_login, run"})
 
     def _status(self, env: Dict[str, str], auth_timeout: int = 15) -> Dict[str, Any]:
         command = _resolve_lark_command(env)
@@ -1054,7 +1060,11 @@ class FeishuCli(BaseTool):
             payload["authState"] = _auth_state_from_status_result(result)
             payload["authenticated"] = payload["authState"] == "ready"
             if payload["authState"] == "needs_login":
-                payload["nextAction"] = {"tool": "feishu_cli", "action": "auth_login", "domain": "base"}
+                payload["nextAction"] = {
+                    "tool": "feishu_cli",
+                    "action": "agent_auth",
+                    "reason": "diagnose official lark-cli auth/config flow before choosing scope, domain, or config init",
+                }
         return payload
 
     def _ensure(self, env: Dict[str, str], timeout: int, install_if_missing: bool) -> ToolResult:
@@ -1083,10 +1093,141 @@ class FeishuCli(BaseTool):
             "officialRegistry": DEFAULT_NPM_REGISTRY,
             "domesticRegistry": DOMESTIC_NPM_REGISTRY,
         })
+        command = _resolve_lark_command(env)
+        if command:
+            status["officialAuthDiagnostics"] = self._official_auth_diagnostics(command, env, timeout=15)
         node = _which("node", env)
         if node:
             status["nodeVersion"] = self._safe_run([node, "--version"], env, 10)
         return status
+
+    def _official_auth_diagnostics(self, command: List[str], env: Dict[str, str], timeout: int) -> Dict[str, Any]:
+        """Ask lark-cli what auth/config capabilities it exposes before choosing a flow."""
+        probe_timeout = max(3, min(int(timeout or DEFAULT_TIMEOUT_SECONDS), 8))
+        probes: Dict[str, Any] = {}
+        probe_commands = {
+            "authStatusJson": ["auth", "status", "--json"],
+            "authLoginHelp": ["auth", "login", "--help"],
+            "configInitHelp": ["config", "init", "--help"],
+            "authQrcodeHelp": ["auth", "qrcode", "--help"],
+        }
+        for probe_name, probe_args in probe_commands.items():
+            result = self._safe_run(command + probe_args, env, probe_timeout)
+            output = str(result.get("output") or "")
+            probes[probe_name] = {
+                "exitCode": result.get("exitCode"),
+                "status": result.get("status"),
+                "json": result.get("json"),
+                "outputPreview": output[:1600],
+            }
+
+        auth_help = str(probes.get("authLoginHelp", {}).get("outputPreview") or "").lower()
+        config_help = str(probes.get("configInitHelp", {}).get("outputPreview") or "").lower()
+        qrcode_help = str(probes.get("authQrcodeHelp", {}).get("outputPreview") or "").lower()
+        status_payload = {
+            "status": "success",
+            "authState": _auth_state_from_status_result({
+                "status": probes.get("authStatusJson", {}).get("status"),
+                "exitCode": probes.get("authStatusJson", {}).get("exitCode"),
+                "output": probes.get("authStatusJson", {}).get("outputPreview"),
+                "json": probes.get("authStatusJson", {}).get("json"),
+            }),
+            "probes": probes,
+            "capabilities": {
+                "authLoginNoWaitJson": "--no-wait" in auth_help and "--json" in auth_help,
+                "authLoginDeviceCode": "--device-code" in auth_help,
+                "configInitNew": "--new" in config_help,
+                "configInitSecretStdin": "--app-secret-stdin" in config_help,
+                "authQrcode": "qrcode" in qrcode_help or "--output" in qrcode_help,
+            },
+            "selectionPolicy": (
+                "Agent chooses from official lark-cli diagnostics at runtime. "
+                "EcoreX does not default to a fixed domain/scope or rewrite Feishu URLs."
+            ),
+        }
+        return status_payload
+
+    @staticmethod
+    def _merge_official_diagnostics(payload: Any, diagnostics: Dict[str, Any], decision: str) -> Dict[str, Any]:
+        merged = payload if isinstance(payload, dict) else {"result": payload}
+        merged["officialAuthDiagnostics"] = diagnostics
+        merged["authDecision"] = decision
+        merged["fixedFlow"] = False
+        return merged
+
+    def _agent_auth(self, args: Dict[str, Any], env: Dict[str, str], timeout: int) -> ToolResult:
+        command = _resolve_lark_command(env)
+        if not command:
+            return ToolResult.fail(self._missing_payload(env))
+
+        status = self._status(env, auth_timeout=max(1, min(timeout, 15)))
+        diagnostics = self._official_auth_diagnostics(command, env, timeout)
+        if _auth_status_is_ready(status):
+            return ToolResult.success({
+                "status": "success",
+                "authRequired": False,
+                "authCompleted": True,
+                "authenticated": True,
+                "authState": _auth_status_state(status),
+                "officialAuthDiagnostics": diagnostics,
+                "authDecision": "status_ready",
+                "fixedFlow": False,
+                "message": "Feishu/Lark CLI is already authenticated according to official lark-cli status.",
+            })
+
+        device_code = _clean_cli_value(args.get("device_code") or args.get("deviceCode"))
+        if device_code:
+            result = self._auth_login(args, env, timeout)
+            result.result = self._merge_official_diagnostics(getattr(result, "result", {}), diagnostics, "complete_device_code")
+            return result
+
+        scope = str(args.get("scope") or "").strip()
+        domain = str(args.get("domain") or "").strip()
+        if scope or domain:
+            result = self._auth_login(args, env, timeout)
+            result.result = self._merge_official_diagnostics(getattr(result, "result", {}), diagnostics, "auth_login_split_flow_from_agent_target")
+            return result
+
+        capabilities = diagnostics.get("capabilities") if isinstance(diagnostics.get("capabilities"), dict) else {}
+        if capabilities.get("configInitNew") is not False:
+            flow_args = dict(args)
+            flow_args["use_saved_credentials"] = False
+            flow_args["args"] = []
+            result = self._config_init(flow_args, env, timeout)
+            result.result = self._merge_official_diagnostics(getattr(result, "result", {}), diagnostics, "config_init_new_from_official_diagnostics")
+            return result
+
+        if capabilities.get("authLoginNoWaitJson"):
+            return ToolResult.fail({
+                "status": "needs_target_scope",
+                "authRequired": True,
+                "authCompleted": False,
+                "authenticated": False,
+                "authState": _auth_status_state(status),
+                "officialAuthDiagnostics": diagnostics,
+                "fixedFlow": False,
+                "message": (
+                    "lark-cli exposes split-flow login, but the agent needs to choose a scope or domain "
+                    "from the user's actual task before starting auth_login."
+                ),
+                "nextAction": {
+                    "tool": "feishu_cli",
+                    "action": "agent_auth",
+                    "requires": ["scope or domain derived from the target Feishu operation"],
+                },
+            })
+
+        return ToolResult.fail({
+            "status": "error",
+            "authRequired": True,
+            "authCompleted": False,
+            "authenticated": False,
+            "authState": _auth_status_state(status),
+            "officialAuthDiagnostics": diagnostics,
+            "fixedFlow": False,
+            "message": "No supported official lark-cli auth/config flow was found from diagnostics.",
+            "nextAction": {"tool": "feishu_cli", "action": "diagnose"},
+        })
 
     def _install(self, env: Dict[str, str], timeout: int, registry: str = "") -> ToolResult:
         existing = _resolve_lark_command(env)
@@ -1282,13 +1423,19 @@ class FeishuCli(BaseTool):
 
         cli_args = ["auth", "login"]
         scope = str(args.get("scope") or "").strip()
-        domain = str(args.get("domain") or "base").strip()
+        domain = str(args.get("domain") or "").strip()
         if scope:
             cli_args.extend(["--scope", scope])
         elif domain:
             cli_args.extend(["--domain", domain])
         else:
-            return ToolResult.fail({"status": "error", "message": "auth_login requires scope or domain"})
+            return ToolResult.fail({
+                "status": "needs_target_scope",
+                "authRequired": True,
+                "fixedFlow": False,
+                "message": "auth_login requires a scope or domain chosen from official lark-cli diagnostics and the target operation.",
+                "nextAction": {"tool": "feishu_cli", "action": "agent_auth"},
+            })
         cli_args.extend(["--no-wait", "--json"])
 
         result = self._safe_run(command + cli_args, env, timeout)
@@ -1331,6 +1478,12 @@ class FeishuCli(BaseTool):
         )
         if app_id and app_secret:
             return app_id, app_secret, "tool_args"
+
+        use_saved = args.get("use_saved_credentials")
+        if use_saved is None:
+            use_saved = args.get("useSavedCredentials")
+        if use_saved is False:
+            return "", "", "disabled_by_agent_auth"
 
         env_app_id = _clean_cli_value(os.environ.get("FEISHU_APP_ID") or os.environ.get("LARK_APP_ID"))
         env_app_secret = _clean_cli_value(os.environ.get("FEISHU_APP_SECRET") or os.environ.get("LARK_APP_SECRET"))

@@ -259,20 +259,20 @@ const I18N = {
         wecom_scan_success: '创建成功，正在启动通道...',
         wecom_scan_fail: '创建失败',
         wecom_mode_scan: '扫码接入', wecom_mode_manual: '手动填写',
-        feishu_scan_btn: '启动 CLI 授权',
-        feishu_scan_desc: '打开飞书 CLI 授权链接，在飞书完成授权后自动回写本机 CLI 配置',
-        feishu_scan_replace_desc: '为当前设备打开飞书 CLI 授权链接，已保存的通道凭据不会被覆盖',
-        feishu_scan_loading: '正在启动飞书 CLI 授权...',
-        feishu_scan_waiting: '等待 CLI 回写...',
-        feishu_scan_tip: '完成授权后保持本页面打开；EcoreX 会在本机 CLI 配置就绪后使用它',
+        feishu_scan_btn: '启动 Agent 授权',
+        feishu_scan_desc: '打开飞书官方授权链接，Agent 完成诊断后会回写本机配置',
+        feishu_scan_replace_desc: '为当前设备打开飞书官方授权链接，已保存的通道凭据不会被覆盖',
+        feishu_scan_loading: '正在启动飞书 Agent 授权...',
+        feishu_scan_waiting: '等待授权回写...',
+        feishu_scan_tip: '完成授权后保持本页面打开；EcoreX 会在本机配置就绪后使用它',
         feishu_scan_open_link: '或点击此处在浏览器中打开',
-        feishu_scan_success: 'CLI 授权已启动',
-        feishu_scan_ready: 'CLI 授权已完成',
+        feishu_scan_success: 'Agent 授权已启动',
+        feishu_scan_ready: 'Agent 授权已完成',
         feishu_scan_expired: '二维码已过期，请重试',
         feishu_scan_denied: '已取消授权',
-        feishu_scan_fail: 'CLI 授权失败',
+        feishu_scan_fail: 'Agent 授权失败',
         feishu_scan_retry: '重试',
-        feishu_mode_scan: 'CLI 授权', feishu_mode_manual: '手动填写',
+        feishu_mode_scan: 'Agent 授权', feishu_mode_manual: '手动填写',
         tasks_title: '定时任务', tasks_desc: '查看和管理定时任务',
         tasks_coming: '即将推出', tasks_coming_desc: '定时任务管理功能即将在此提供',
         tasks_refresh: '刷新',
@@ -472,20 +472,20 @@ const I18N = {
         wecom_scan_success: 'Bot created, starting channel...',
         wecom_scan_fail: 'Bot creation failed',
         wecom_mode_scan: 'Scan QR', wecom_mode_manual: 'Manual',
-        feishu_scan_btn: 'Start CLI Authorization',
-        feishu_scan_desc: 'Open the Feishu CLI authorization link, then finish setup in Feishu to write the local CLI config',
-        feishu_scan_replace_desc: 'Open the Feishu CLI authorization link for this device. Saved channel credentials are preserved.',
-        feishu_scan_loading: 'Starting Feishu CLI authorization...',
-        feishu_scan_waiting: 'Waiting for CLI writeback...',
-        feishu_scan_tip: 'Keep this page open after completing authorization; EcoreX will use the local CLI config when ready',
+        feishu_scan_btn: 'Start Agent Authorization',
+        feishu_scan_desc: 'Open the official Feishu authorization link; the agent will diagnose and write local config when ready',
+        feishu_scan_replace_desc: 'Open the official Feishu authorization link for this device. Saved channel credentials are preserved.',
+        feishu_scan_loading: 'Starting Feishu Agent authorization...',
+        feishu_scan_waiting: 'Waiting for authorization writeback...',
+        feishu_scan_tip: 'Keep this page open after completing authorization; EcoreX will use the local config when ready',
         feishu_scan_open_link: 'Or click here to open in browser',
-        feishu_scan_success: 'CLI authorization started',
-        feishu_scan_ready: 'CLI authorization completed',
+        feishu_scan_success: 'Agent authorization started',
+        feishu_scan_ready: 'Agent authorization completed',
         feishu_scan_expired: 'QR code expired, please retry',
         feishu_scan_denied: 'Authorization cancelled',
-        feishu_scan_fail: 'CLI authorization failed',
+        feishu_scan_fail: 'Agent authorization failed',
         feishu_scan_retry: 'Retry',
-        feishu_mode_scan: 'CLI Auth', feishu_mode_manual: 'Manual',
+        feishu_mode_scan: 'Agent Auth', feishu_mode_manual: 'Manual',
         tasks_title: 'Scheduled Tasks', tasks_desc: 'View and manage scheduled tasks',
         tasks_coming: 'Coming Soon', tasks_coming_desc: 'Scheduled task management will be available here',
         tasks_refresh: 'Refresh',
@@ -8155,7 +8155,7 @@ function renderActiveChannels() {
 
         const weixinWaiting = chName === 'weixin' && ch.login_status && ch.login_status !== 'logged_in';
         const wecomNeedsCreds = chName === 'wecom_bot' && !_wecomBotHasCreds(ch);
-        // 飞书 active 卡片渲染带 Tab 的 panel：手动填写 + CLI 授权
+        // 飞书 active 卡片渲染带 Tab 的 panel：手动填写 + Agent 授权
         const isFeishu = chName === 'feishu';
         const transportSummary = channelTransportSummary(ch);
         const statusDot = transportSummary.dot;
@@ -8942,7 +8942,7 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 // =====================================================================
-// Feishu CLI Authorization (lark-cli config init)
+// Feishu Agent Setup (diagnostic-driven lark-cli flow)
 // =====================================================================
 let _feishuCliAuthTimer = null;
 
@@ -8956,7 +8956,7 @@ function _feishuHasCreds(ch) {
 function buildFeishuPanel(ch, isActive) {
     const scanLabel = t('feishu_mode_scan');
     const manualLabel = t('feishu_mode_manual');
-    // 已有凭据时默认进入手动 Tab，方便修改；否则推荐 CLI 授权
+    // 已有凭据时默认进入手动 Tab，方便修改；否则推荐 Agent 授权
     const defaultMode = _feishuHasCreds(ch) ? 'manual' : 'scan';
     const activeAttr = isActive ? 'data-active="1"' : '';
     return `
@@ -8997,7 +8997,7 @@ function switchFeishuMode(mode) {
         scanTab.className = `flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${activeClasses}`;
         manualTab.className = `flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${inactiveClasses}`;
         if (actions) actions.classList.add('hidden');
-        // active 卡片下使用 CLI 授权提示，明确不会覆盖通道凭据
+        // active 卡片下使用 Agent 授权提示，明确不会覆盖通道凭据
         const desc = isActive
             ? t('feishu_scan_replace_desc')
             : t('feishu_scan_desc');

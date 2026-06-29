@@ -71,7 +71,11 @@
     },
     "tongxin_cli": {
       "script_path": "",
-      "read_only": true
+      "read_only": true,
+      "auth_url": "",
+      "bootstrap_manifest_url": "",
+      "bootstrap_url": "",
+      "bootstrap_sha256": ""
     }
   },
   "mcp_servers": [

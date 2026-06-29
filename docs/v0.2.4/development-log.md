@@ -1069,3 +1069,54 @@
   - `release-artifacts/EcoreX_0.2.4-web-linux-service.tar.gz` SHA256 `AA5DF4F7C65E7097D16B08F62C005A529618CFBE995D2BEDF78E748B2EA19D2A`, size `3828980`.
   - `release-artifacts/EcoreX_0.2.4-public-release.zip` SHA256 `C0167695F6DF52117479046E7CCAE282A778D1C5F1A31C134A01726B3E90463B`, size `380138246`.
 - Production deployment was refreshed successfully. Final online checks report web service, installation manifest, and public manifest all on v0.2.4; service is active/enabled; `/api/version` returns 200 and contains `0.2.4`.
+
+## R24-18 External Connection Agent-Discovery and Tongxin Open-Box Auth Hotfix
+
+- 2026-06-29: Started a v0.2.4 follow-up long-goal slice after the user clarified that Feishu CLI authorization and other external connection tools must not encode fixed install/auth/config flows in WebUI or prompts. The slice records a cross-connection rule: Web surfaces only display/forward declared agent actions; the agent/tool must inspect official diagnostics/status/help and choose the flow at runtime.
+- Feishu CLI changes:
+  - Added `feishu_cli agent_auth` as the Web/default authorization entrypoint.
+  - `agent_auth` runs official `lark-cli` `auth status`, `auth login --help`, `config init --help`, and `auth qrcode --help` probes before choosing a flow.
+  - `auth_login` no longer defaults to `domain=base`; missing scope/domain now returns `needs_target_scope` with `nextAction=agent_auth`.
+  - Raw `lark auth login` without explicit `--scope` or `--domain` now autoroutes to `feishu_cli agent_auth`; explicit official flags are preserved without inventing defaults.
+  - Web External Connections no longer passes saved Feishu App ID/Secret into CLI auth, preventing a static credential branch from bypassing the visible official CLI URL flow.
+- External connection contract:
+  - `channel_auth_surface()` now exposes `agentDiscoveryContract` for all external connections with `discoveryDriven=true` and `webOwnsInstallOrAuthFlow=false`.
+  - Web action projection now reads `auth.agentAuthSupported` and `agentAuthorizationAction` from catalog/runtime projection instead of hardcoding `name == feishu`.
+  - Non-Feishu declared agent auth actions use a generic handler that dispatches the declared structured tool; undeclared platforms return a discovery instruction rather than a fake fixed flow.
+  - Prompt host-boundary rules now instruct agents to call structured tool `status/diagnose/agent_auth` first and avoid hardcoding vendor auth parameters in WebUI, prompts, or raw shell.
+  - Feishu authorization labels in the Web console and injected notice now say Agent authorization instead of the old CLI authorization wording.
+- Tongxin/Xin Assistant changes:
+  - Added `tongxin_cli auth/login/auto_configure`.
+  - `auto_configure` first accepts an already configured/trusted local script, then falls back to configured remote auth/bootstrap.
+  - Remote auth posts username/password/thread context to a configured auth endpoint, receives a token and inline or URL manifest, downloads `xin_agent_cli.py`, verifies SHA256, validates UTF-8 Python source, writes atomically, and persists only `script_path`, read-only state, and safe refs.
+  - No raw Tongxin password, token, username, or raw remote URL is returned or persisted; public output records only hashed refs and read-only permission-visible scope.
+  - Permission broker allows config-driven `auth/auto_configure/bootstrap` by default but denies explicit remote URL/token/bootstrap paths in read-only mode.
+  - `optional_abilities`, `agent_capability`, and `AgentStreamExecutor` now proxy default Tongxin install/config requests to `auto_configure` when no explicit local script path is supplied.
+- Source verification:
+  - `python -m py_compile` over changed Feishu/Tongxin/channel/Web/permission/prompt/test files -> PASS.
+  - `node --check channel/web/static/js/console.js` -> PASS.
+  - Focused regression with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` -> `38 passed, 3 warnings`.
+  - Anti-regression search found no `domain=base` default auth flow, no `agentAuthorizationAction=config_init`, no Feishu-only Web action projection, and no legacy `CLI 授权` marker.
+  - Evidence: `docs/v0.2.4/artifacts/external-connection-agent-discovery-hotfix-source.json`.
+- Follow-up after runtime user report:
+  - Added Tongxin script health probing for `configure`, `auto_configure`, `bootstrap`, and real read-only `run` calls. The probe runs `schema` plus `project list --source cache --limit 1`, clears `PYTHONPATH`, and classifies `models.DATABASE` failures as `dependency_failed` rather than letting the query fail with a raw Python import error.
+  - `auto_configure` now skips bad local script copies and continues to a healthy trusted copy or configured remote bootstrap. Bad scripts are not persisted.
+  - `bootstrap` now backs up any previous target script, places the candidate into the final target directory, runs the health probe under final target-dir dependency semantics, restores the previous script if the probe fails, and only persists `script_path` after the final probe passes.
+  - Added regression coverage for explicit bad-script configure rejection, auto-configure skipping bad script copies, pre-query dependency failure reporting, and final target-dir bootstrap recovery when a bad local `models.py` shadows the candidate.
+- Final verification:
+  - `python -m py_compile agent\tools\tongxin_cli\tongxin_cli.py tests\test_v024_tongxin_cli_readonly.py` -> PASS.
+  - `node --check channel\web\static\js\console.js` -> PASS.
+  - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=. pytest -q tests\test_v024_tongxin_cli_readonly.py` -> `17 passed`.
+  - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=. pytest -q tests\test_v024_skill_tool_exposure.py tests\test_v024_skill_governance.py tests\test_v024_feishu_lark_oapi_recovery.py tests\test_v024_feishu_cli_auth_parity.py tests\test_v024_tongxin_cli_readonly.py` -> `59 passed, 3 warnings`.
+  - `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=. pytest -q tests\test_ecorex_web_parallel_backend.py` -> `399 passed, 3 warnings, 26 subtests passed`.
+  - Release validation, v0.2.4 artifact contracts, and install packaging contracts -> PASS.
+  - Nash cross-review first found the final target-dir bootstrap health blocker, then re-reviewed the restored-script fix and returned PASS.
+- Final rebuilt/deployed artifacts:
+  - `release-artifacts/EcoreX_0.2.4-webui-windows-x64.zip` SHA256 `5A0DC6E0A59C70CB3823DE2A256EA44F334E056D37BD6A2510AA49878E9ADF61`, size `113931610`.
+  - `release-artifacts/EcoreX_0.2.4-webui-macos-universal.zip` SHA256 `00BF5C1E67FF7855F6CCA59D87073B77869CD83064893D1CBD8F18183A2EFBAD`, size `263206273`.
+  - `release-artifacts/EcoreX_0.2.4-web-linux-service.tar.gz` SHA256 `0EC37896C78879A9B390C68AC5036BA651473EF268D72CBD65B386082B04989A`, size `3834803`.
+  - `release-artifacts/EcoreX_0.2.4-public-release.zip` SHA256 `0038903FEA2437989C120FF6AD32EFD5D99C4E6126C89F93BCFD72317EC6ADC9`, size `380156993`.
+- Production deployment:
+  - Final `docs/v0.2.4/artifacts/production-deploy-online.json` reports `status=PASS`; web service, installation manifest, and public manifest are all v0.2.4; service is active/enabled; `/api/version` returns 200 and contains `0.2.4`.
+  - The first final deploy retry failed because old `/tmp/ecorex-v024-release-*` staging directories filled `/tmp` to `100%`; removed only 5 matching deployment staging directories, reducing `/tmp` to `66%`, then redeployed successfully.
+  - Privacy scan over R24-18 source/deploy evidence reports `findingCount=0`.

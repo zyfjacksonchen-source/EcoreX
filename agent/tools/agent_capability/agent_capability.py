@@ -262,7 +262,7 @@ class AgentCapabilityTool(BaseTool):
                 ),
                 "nextAction": {
                     "tool": "tongxin_cli",
-                    "action": "status" if configured else "configure",
+                    "action": "status" if configured else "auto_configure",
                 },
             }
             return ToolResult.success(response) if configured else ToolResult.fail(response)

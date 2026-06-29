@@ -708,11 +708,11 @@ class AgentStreamExecutor:
                 ability = args.get("pack_id") or args.get("ability") or ""
                 normalized_ability = str(ability or "").strip().lower().replace("_", "-")
                 if normalized_ability in {"tongxin", "tongxin-cli", "xin-agent", "xin-agent-cli", "tx-assistant"}:
+                    script_path = args.get("script_path") or args.get("scriptPath") or args.get("path")
                     proxy_args = {
-                        "action": "configure",
+                        "action": "configure" if script_path else "auto_configure",
                         "scope": "agent_capability_install_pack_preflight",
                     }
-                    script_path = args.get("script_path") or args.get("scriptPath") or args.get("path")
                     if script_path:
                         proxy_args["script_path"] = script_path
                     return "tongxin_cli", proxy_args
@@ -1678,8 +1678,8 @@ class AgentStreamExecutor:
                 return (
                     "Do not call Feishu/Lark CLI through raw bash. Use the `feishu_cli` tool first "
                     "so EcoreX can handle packaged CLI resolution, auth, timeouts, and safe output. "
-                    "For first-time CLI app configuration, call `feishu_cli` with action `config_init`; "
-                    "for user-scope authorization, call action `auth_login` and ask the user to finish "
+                    "For first-time CLI app configuration or user-scope authorization, call `feishu_cli` "
+                    "with action `agent_auth` so the tool can inspect official diagnostics before choosing "
                     "the displayed Feishu authorization flow."
                 )
             if "host_diagnostics" in self.tools:
@@ -1891,7 +1891,8 @@ class AgentStreamExecutor:
                     routed["scope"] = str(lark_args[idx + 1])
                 if value == "--domain" and idx + 1 < len(lark_args):
                     routed["domain"] = str(lark_args[idx + 1])
-            routed.setdefault("domain", "base")
+            if not routed.get("scope") and not routed.get("domain"):
+                routed = {"action": "agent_auth"}
         elif lowered[:2] == ["config", "init"]:
             routed = {"action": "config_init"}
             for idx, value in enumerate(lowered):

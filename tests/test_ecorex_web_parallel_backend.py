@@ -6239,7 +6239,9 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertEqual(feishu["configState"], "configured")
         self.assertEqual(feishu["auth"]["mode"], "bot_app_credentials")
         self.assertEqual(feishu["auth"]["authEndpoint"], "")
-        self.assertEqual(feishu["auth"]["agentAuthorizationAction"]["action"], "config_init")
+        self.assertEqual(feishu["auth"]["agentAuthorizationAction"]["action"], "agent_auth")
+        self.assertTrue(feishu["auth"]["agentDiscoveryContract"]["discoveryDriven"])
+        self.assertFalse(feishu["auth"]["agentDiscoveryContract"]["webOwnsInstallOrAuthFlow"])
         self.assertEqual(feishu["agentSurface"]["tool"], "feishu_cli")
         self.assertTrue(feishu["agentSurface"]["schemaVisible"])
         self.assertTrue(feishu["agentSurface"]["toolSchemaCallable"])
@@ -14128,7 +14130,7 @@ class TestAgentHostBoundary(unittest.TestCase):
             result = executor._execute_tool({
                 "id": "tool-call-feishu-auth",
                 "name": "feishu_cli",
-                "arguments": {"action": "auth_login", "domain": "base"},
+                "arguments": {"action": "auth_login", "scope": "calendar:calendar:read"},
             })
 
         self.assertEqual(result["status"], "success")
@@ -14147,6 +14149,30 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertEqual(routed["brand"], "feishu")
         self.assertEqual(routed["timeout"], 240)
         self.assertNotEqual(routed.get("action"), "run")
+
+    def test_feishu_auth_login_raw_cli_autoroutes_to_agent_auth_without_fixed_domain(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        routed = AgentStreamExecutor._feishu_autoroute_args(
+            ["auth", "login"],
+            {"timeout": 240},
+        )
+
+        self.assertEqual(routed["action"], "agent_auth")
+        self.assertEqual(routed["timeout"], 240)
+        self.assertNotIn("domain", routed)
+
+    def test_feishu_auth_login_raw_cli_preserves_explicit_scope(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        routed = AgentStreamExecutor._feishu_autoroute_args(
+            ["auth", "login", "--scope", "calendar:calendar:read"],
+            {"timeout": 240},
+        )
+
+        self.assertEqual(routed["action"], "auth_login")
+        self.assertEqual(routed["scope"], "calendar:calendar:read")
+        self.assertNotIn("domain", routed)
 
     def test_agent_stream_tool_log_helpers_redact_feishu_sensitive_args(self):
         from agent.protocol.agent_stream import _safe_tool_arg_log_value, _safe_tool_result_log_preview
