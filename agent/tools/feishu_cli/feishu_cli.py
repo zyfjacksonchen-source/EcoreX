@@ -16,6 +16,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -30,12 +31,16 @@ FEISHU_LARK_MIRROR_URLS = ["https://registry.npmmirror.com/@larksuite/cli"]
 DEFAULT_NPM_REGISTRY = "https://registry.npmjs.org"
 DOMESTIC_NPM_REGISTRY = "https://registry.npmmirror.com"
 DEFAULT_TIMEOUT_SECONDS = 45
+DEFAULT_AUTH_URL_WAIT_SECONDS = 20
 
 
 _SECRET_PATTERNS = [
     re.compile(r"(?i)(access[_-]?token|refresh[_-]?token|app[_-]?secret|tenant[_-]?token|authorization)(\"?\s*[:=]\s*\")([^\"\s,]+)"),
     re.compile(r"(?i)(token|secret|password|api[_-]?key)(=|:)\s*[^\s,&}\"]+"),
 ]
+_SENSITIVE_JSON_KEY_RE = re.compile(
+    r"(?i)(access[_-]?token|refresh[_-]?token|tenant[_-]?token|token|secret|password|api[_-]?key|authorization|cookie)"
+)
 
 
 class _ProcessCancelled(Exception):
@@ -47,6 +52,11 @@ class _ProcessCancelled(Exception):
 
 def _sanitize(text: str) -> str:
     value = text or ""
+    value = re.sub(
+        r"(?i)([\"']?(?:access[_-]?token|refresh[_-]?token|tenant[_-]?token|app[_-]?secret|auth[_-]?header|authorization|api[_-]?key|token|secret|password)[\"']?\s*[:=]\s*[\"']?)(?:bearer\s+)?[^\"'\r\n,}&]+",
+        r"\1***",
+        value,
+    )
     for pattern in _SECRET_PATTERNS:
         if pattern.groups >= 3:
             value = pattern.sub(lambda m: f"{m.group(1)}{m.group(2)}***", value)
@@ -54,6 +64,22 @@ def _sanitize(text: str) -> str:
             value = pattern.sub(lambda m: f"{m.group(1)}{m.group(2)}***", value)
     value = re.sub(r"sk-[A-Za-z0-9_\-]{12,}", "sk-***", value)
     value = re.sub(r"gh[pousr]_[A-Za-z0-9_]{12,}", "ghp_***", value)
+    return value
+
+
+def _sanitize_json_payload(value: Any, depth: int = 0) -> Any:
+    if depth > 8:
+        return "[redacted-nested]"
+    if isinstance(value, dict):
+        safe: Dict[str, Any] = {}
+        for key, child in value.items():
+            key_text = str(key)
+            safe[key_text] = "***" if _SENSITIVE_JSON_KEY_RE.search(key_text) else _sanitize_json_payload(child, depth + 1)
+        return safe
+    if isinstance(value, list):
+        return [_sanitize_json_payload(item, depth + 1) for item in value[:200]]
+    if isinstance(value, str):
+        return _sanitize(value)
     return value
 
 
@@ -268,6 +294,165 @@ def _run_process(
                     stdout, stderr = process.communicate()
                 raise subprocess.TimeoutExpired(command, timeout, output=stdout, stderr=stderr)
     return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
+def _trim_chunks(chunks: List[str], max_chars: int = 12000) -> None:
+    text = "".join(chunks)
+    if len(text) > max_chars:
+        chunks[:] = [text[-max_chars:]]
+
+
+def _run_process_until_auth_url(
+    command: List[str],
+    timeout: int,
+    env: Dict[str, str],
+    cwd: Optional[str] = None,
+    cancel_event=None,
+    url_wait_seconds: int = DEFAULT_AUTH_URL_WAIT_SECONDS,
+) -> Dict[str, Any]:
+    """Start a blocking auth/config command and return once its URL appears."""
+    workdir = Path(cwd or os.getcwd()).expanduser()
+    workdir.mkdir(parents=True, exist_ok=True)
+    log_dir = workdir / ".ecorex" / "lark-auth"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256((" ".join(command) + str(time.time())).encode("utf-8")).hexdigest()[:16]
+    stdout_path = log_dir / f"lark-config-init-{digest}.out.log"
+    stderr_path = log_dir / f"lark-config-init-{digest}.err.log"
+    stdout_path.touch()
+    stderr_path.touch()
+
+    kwargs: Dict[str, Any] = {
+        "cwd": str(workdir),
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
+        "env": env,
+    }
+    if os.name == "nt":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    else:
+        kwargs["start_new_session"] = True
+
+    process = subprocess.Popen(command, **kwargs)
+    lock = threading.Lock()
+    stdout_chunks: List[str] = []
+    stderr_chunks: List[str] = []
+
+    def _reader(stream, path: Path, chunks: List[str]) -> None:
+        try:
+            with path.open("a", encoding="utf-8", errors="replace") as handle:
+                while True:
+                    piece = stream.readline()
+                    if not piece:
+                        break
+                    sanitized = _sanitize(piece)
+                    handle.write(sanitized)
+                    handle.flush()
+                    with lock:
+                        chunks.append(sanitized)
+                        _trim_chunks(chunks)
+        except Exception as exc:
+            logger.debug(f"[FeishuCli] auth log reader failed for {path}: {exc}")
+        finally:
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+    def _snapshot() -> tuple[str, Any]:
+        with lock:
+            stdout = "".join(stdout_chunks)[-12000:]
+            stderr = "".join(stderr_chunks)[-12000:]
+        output = stdout + ("\n" + stderr if stderr else "")
+        return (
+            output[-12000:] if len(output) > 12000 else output,
+            _sanitize_json_payload(_parse_json_output(stdout)),
+        )
+
+    threading.Thread(
+        target=_reader,
+        args=(process.stdout, stdout_path, stdout_chunks),
+        daemon=True,
+        name="feishu-config-init-stdout",
+    ).start()
+    threading.Thread(
+        target=_reader,
+        args=(process.stderr, stderr_path, stderr_chunks),
+        daemon=True,
+        name="feishu-config-init-stderr",
+    ).start()
+    threading.Thread(
+        target=lambda: process.wait(),
+        daemon=True,
+        name="feishu-config-init-wait",
+    ).start()
+
+    wait_seconds = max(1, min(max(1, int(timeout)), max(1, int(url_wait_seconds))))
+    deadline = time.time() + wait_seconds
+    while True:
+        if cancel_event is not None and getattr(cancel_event, "is_set", lambda: False)():
+            _kill_process_tree(process)
+            output, _ = _snapshot()
+            return {
+                "status": "cancelled",
+                "exitCode": None,
+                "pid": process.pid,
+                "output": output or "(no output)",
+                "stdoutLogPath": str(stdout_path),
+                "stderrLogPath": str(stderr_path),
+                "message": "lark-cli command cancelled by user",
+            }
+
+        exit_code = process.poll()
+        output, parsed = _snapshot()
+        url = _auth_url_from_result({"output": output, "json": parsed})
+        if url:
+            return {
+                "status": "auth_pending" if exit_code is None else ("success" if exit_code == 0 else "error"),
+                "exitCode": exit_code,
+                "pid": process.pid,
+                "backgroundProcess": exit_code is None,
+                "writebackPending": exit_code is None,
+                "cliWritebackTimeoutSeconds": max(1, int(timeout)),
+                "output": output or "(no output)",
+                "json": parsed,
+                "stdoutLogPath": str(stdout_path),
+                "stderrLogPath": str(stderr_path),
+                "verificationUrl": url,
+            }
+        if exit_code is not None:
+            return {
+                "status": "success" if exit_code == 0 else "error",
+                "exitCode": exit_code,
+                "pid": process.pid,
+                "backgroundProcess": False,
+                "writebackPending": False,
+                "output": output or "(no output)",
+                "json": parsed,
+                "stdoutLogPath": str(stdout_path),
+                "stderrLogPath": str(stderr_path),
+            }
+        if time.time() >= deadline:
+            _kill_process_tree(process)
+            output, _ = _snapshot()
+            return {
+                "status": "timeout",
+                "exitCode": None,
+                "pid": process.pid,
+                "backgroundProcess": False,
+                "writebackPending": False,
+                "output": output or "(no output)",
+                "stdoutLogPath": str(stdout_path),
+                "stderrLogPath": str(stderr_path),
+                "message": (
+                    f"lark-cli did not emit a verification URL within {wait_seconds} seconds; "
+                    "the config process was stopped before the write-back window expired."
+                ),
+            }
+        time.sleep(0.1)
 
 
 def _parse_json_output(output: str) -> Any:
@@ -765,13 +950,34 @@ class FeishuCli(BaseTool):
         extra = _as_args(args.get("args"))
         if extra:
             cli_args.extend(extra)
-        result = self._safe_run(command + cli_args, env, timeout)
-        url = _auth_url_from_result(result)
+        result = _run_process_until_auth_url(
+            command + cli_args,
+            timeout=timeout,
+            env=env,
+            cwd=self.cwd,
+            cancel_event=getattr(self, "cancel_event", None),
+        )
+        result["command"] = self._display_command(command + cli_args)
+        url = str(result.get("verificationUrl") or _auth_url_from_result(result))
         if url:
             result["verificationUrl"] = url
             result["qrCode"] = self._generate_auth_qrcode(command, env, url, timeout)
+            result["authFlow"] = "config_init_start"
             result["authRequired"] = True
-        if result.get("exitCode") != 0:
+            if result.get("backgroundProcess"):
+                result["message"] = (
+                    "Open the verification URL or scan the QR code now. "
+                    f"The lark-cli config process is still running and can write back within {timeout} seconds."
+                )
+                result["nextAction"] = {"tool": "feishu_cli", "action": "status"}
+            elif result.get("exitCode") == 0:
+                result["authRequired"] = False
+                result["message"] = "lark-cli config initialization completed."
+            else:
+                result["message"] = (
+                    "lark-cli emitted a verification URL but exited before config write-back could continue."
+                )
+        if result.get("exitCode") not in (0, None) or result.get("status") in {"timeout", "cancelled"}:
             return ToolResult.fail(result)
         return ToolResult.success(result)
 
@@ -874,7 +1080,7 @@ class FeishuCli(BaseTool):
         result = self._safe_run(
             command + ["auth", "qrcode", url, "--output", relative_output, "--size", "256"],
             env,
-            max(5, min(timeout, 30)),
+            max(3, min(timeout, 5)),
         )
         path = cwd / relative_output
         return {
@@ -943,7 +1149,7 @@ class FeishuCli(BaseTool):
             "exitCode": result.returncode,
             "command": self._display_command(command),
             "output": output[-12000:] if output else "(no output)",
-            "json": _parse_json_output(result.stdout),
+            "json": _sanitize_json_payload(_parse_json_output(result.stdout)),
         }
 
     @staticmethod

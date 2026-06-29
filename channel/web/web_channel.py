@@ -306,6 +306,82 @@ def _web_app_bridge_script() -> str:
     return prefix + path;
   }
 
+  function isSafeFeishuCliAuthUrl(value) {
+    var url = String(value || "").trim();
+    return url.indexOf("https://open.feishu.cn/") === 0 || url.indexOf("https://open.larksuite.com/") === 0;
+  }
+
+  function feishuCliAuthUrlFromPayload(payload) {
+    var agentAuth = payload && typeof payload.agentAuth === "object" ? payload.agentAuth : {};
+    var url = String((payload && payload.verificationUrl) || agentAuth.verificationUrl || "").trim();
+    return isSafeFeishuCliAuthUrl(url) ? url : "";
+  }
+
+  function copyTextBestEffort(text) {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).catch(function () {});
+        return;
+      }
+      var textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      textarea.style.top = "-9999px";
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      try { document.execCommand("copy"); } catch (error) {}
+      textarea.remove();
+    } catch (error) {}
+  }
+
+  function showFeishuCliAuthNotice(url) {
+    if (!url) return;
+    var existing = document.getElementById("ecorex-feishu-cli-auth-notice");
+    if (existing) existing.remove();
+    var notice = document.createElement("div");
+    notice.id = "ecorex-feishu-cli-auth-notice";
+    notice.style.cssText = "position:fixed;right:18px;top:18px;z-index:99999;max-width:min(460px,calc(100vw - 36px));padding:14px 16px;border:1px solid rgba(59,130,246,.28);border-radius:10px;background:#fff;color:#0f172a;box-shadow:0 18px 48px rgba(15,23,42,.18);font:14px/1.45 system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;";
+    var title = document.createElement("div");
+    title.textContent = "飞书 CLI 授权链接已打开并复制";
+    title.style.cssText = "font-weight:650;margin-bottom:6px;";
+    var hint = document.createElement("div");
+    hint.textContent = "如果浏览器拦截了弹窗，请点击下方链接完成授权。";
+    hint.style.cssText = "color:#475569;margin-bottom:8px;";
+    var link = document.createElement("a");
+    link.href = url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = url;
+    link.style.cssText = "display:block;color:#2563eb;word-break:break-all;text-decoration:underline;";
+    var close = document.createElement("button");
+    close.type = "button";
+    close.textContent = "×";
+    close.setAttribute("aria-label", "关闭");
+    close.style.cssText = "position:absolute;right:8px;top:6px;border:0;background:transparent;color:#64748b;font-size:20px;line-height:1;cursor:pointer;";
+    close.onclick = function () { notice.remove(); };
+    notice.appendChild(close);
+    notice.appendChild(title);
+    notice.appendChild(hint);
+    notice.appendChild(link);
+    document.body.appendChild(notice);
+    window.setTimeout(function () {
+      if (notice.parentNode) notice.remove();
+    }, 120000);
+  }
+
+  function handleFeishuCliAuthPayload(request, payload) {
+    var path = String((request && request.path) || "");
+    var body = request && request.body && typeof request.body === "object" ? request.body : {};
+    if (path.indexOf("/api/external-connections/feishu/actions") !== 0 || body.action !== "agent_auth") return;
+    var url = feishuCliAuthUrlFromPayload(payload);
+    if (!url) return;
+    copyTextBestEffort(url);
+    try { window.open(url, "_blank", "noopener,noreferrer"); } catch (error) {}
+    showFeishuCliAuthNotice(url);
+  }
+
   async function apiJson(request) {
     request = request || {};
     if (String(request.path || "") === "/message") {
@@ -343,6 +419,7 @@ def _web_app_bridge_script() -> str:
     if (String(request.path || "") === "/message" && payload && payload.request_id) {
       phase2EmitUserMessage(request, payload).catch(function () {});
     }
+    handleFeishuCliAuthPayload(request, payload);
     return payload;
   }
 
@@ -1839,6 +1916,75 @@ def _persist_project_session_binding(session_id: str, binding: Dict[str, Any]) -
         })
     except Exception as exc:
         logger.warning(f"[WebChannel] failed to persist project session binding: {_web_body_log_summary(exc)}")
+
+
+def restore_feishu_public_auth_fields(public_result: Any, bounded_raw_result: Any, tool_name: str) -> Any:
+    if str(tool_name or "").lower() != "feishu_cli":
+        return public_result
+    if not isinstance(public_result, dict) or not isinstance(bounded_raw_result, dict):
+        return public_result
+    if not (bounded_raw_result.get("authRequired") or bounded_raw_result.get("writebackPending")):
+        return public_result
+    restored = dict(public_result)
+    url = str(bounded_raw_result.get("verificationUrl") or "").strip()
+    if url.startswith("https://open.feishu.cn/") or url.startswith("https://open.larksuite.com/"):
+        restored["verificationUrl"] = url
+    qr = bounded_raw_result.get("qrCode")
+    if isinstance(qr, dict):
+        public_qr = dict(restored.get("qrCode") or {}) if isinstance(restored.get("qrCode"), dict) else {}
+        safe_qr: Dict[str, Any] = {}
+        for key in ("status", "exitCode", "relativePath", "message"):
+            if key in qr:
+                safe_qr[key] = qr.get(key)
+        safe_qr.update(public_qr)
+        if safe_qr:
+            restored["qrCode"] = safe_qr
+    for key in ("authRequired", "writebackPending", "backgroundProcess", "cliWritebackTimeoutSeconds", "authFlow", "nextAction"):
+        if key in bounded_raw_result:
+            if key == "nextAction":
+                restored[key] = redact_public_tool_value(bounded_raw_result.get(key))
+            else:
+                restored[key] = bounded_raw_result.get(key)
+    return restored
+
+
+def _safe_feishu_agent_auth_payload(public_result: Any) -> Dict[str, Any]:
+    if not isinstance(public_result, dict):
+        return {}
+    safe: Dict[str, Any] = {}
+    for key in (
+        "status",
+        "exitCode",
+        "authRequired",
+        "writebackPending",
+        "backgroundProcess",
+        "cliWritebackTimeoutSeconds",
+        "authFlow",
+        "verificationUrl",
+        "message",
+    ):
+        value = public_result.get(key)
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            safe[key] = value
+    next_action = public_result.get("nextAction")
+    if isinstance(next_action, dict):
+        safe["nextAction"] = {
+            key: value
+            for key, value in next_action.items()
+            if key in {"tool", "action", "domain", "scope"}
+            and (isinstance(value, str) or value is None)
+        }
+    qr = public_result.get("qrCode")
+    if isinstance(qr, dict):
+        safe_qr = {
+            key: value
+            for key, value in qr.items()
+            if key in {"status", "exitCode", "relativePath", "message"}
+            and (isinstance(value, (str, int, float, bool)) or value is None)
+        }
+        if safe_qr:
+            safe["qrCode"] = safe_qr
+    return safe
 
 
 class WebMessage(ChatMessage):
@@ -4049,11 +4195,16 @@ class WebChannel(ChatChannel):
         })
         return f"<non_json_value:{type(value).__name__}>"
 
-    def _bounded_tool_result_for_sse(self, result: Any) -> Tuple[str, Dict[str, Any]]:
+    @staticmethod
+    def _restore_feishu_public_auth_fields(public_result: Any, bounded_raw_result: Any, tool_name: str) -> Any:
+        return restore_feishu_public_auth_fields(public_result, bounded_raw_result, tool_name)
+
+    def _bounded_tool_result_for_sse(self, result: Any, tool_name: str = "") -> Tuple[str, Dict[str, Any]]:
         limits = self._tool_output_limits()
         truncated_fields: List[Dict[str, Any]] = []
         bounded_raw_result = self._bounded_tool_value(result, limits, truncated_fields)
         bounded_result = redact_public_tool_value(bounded_raw_result)
+        bounded_result = self._restore_feishu_public_auth_fields(bounded_result, bounded_raw_result, tool_name)
         if isinstance(bounded_result, (dict, list)):
             result_str = json.dumps(
                 bounded_result,
@@ -5148,7 +5299,7 @@ class WebChannel(ChatChannel):
                             request_id,
                             self._artifact_limit_event(request_id, tool_name, tool_call_id, omitted_artifact_count),
                         )
-                result_str, result_meta = self._bounded_tool_result_for_sse(result)
+                result_str, result_meta = self._bounded_tool_result_for_sse(result, tool_name)
                 self._push_sse_event(request_id, {
                     "type": "tool_end",
                     "tool": tool_name,
@@ -8325,9 +8476,11 @@ class AgentInstallRequestHandler:
             prompt = (
                 f"Connect the EcoreX Tongxin Assistant read-only CLI capability `{pack_id}` ({pack_name}) inside this response. "
                 "Do not install through raw bash/curl/npm/git and do not run the CLI directly through shell. "
-                "Tongxin is a default read-only capability: configure `tools.tongxin_cli.script_path` or "
-                "`ECOREX_TONGXIN_CLI_PATH` only if the packaged runtime cannot auto-discover `xin_agent_cli.py`, "
-                "then call `host_diagnostics` with action `status` and `tongxin_cli` with action `status` or `schema`. "
+                "Tongxin is a default read-only capability: call `agent_capability` action `install_pack` with "
+                "`pack_id=tongxin-cli` or call `tongxin_cli` action `configure` so EcoreX persists the auto-discovered "
+                "`xin_agent_cli.py` path into `tools.tongxin_cli.script_path`. If auto-discovery fails, pass an explicit "
+                "`script_path` or use `ECOREX_TONGXIN_CLI_PATH`, then call `host_diagnostics` with action `status` and "
+                "`tongxin_cli` with action `status` or `schema`. "
                 "Only read-only queries are allowed for all users; write, sync, auth, submit, approve, delete, export-to-file, "
                 "and permission-changing commands must stay blocked."
             )
@@ -11018,6 +11171,7 @@ def _external_connection_from_channel(channel: Dict[str, Any]) -> Dict[str, Any]
     actions = [
         {"id": "save_config", "label": "保存", "enabled": True},
         {"id": "test", "label": "状态检查", "enabled": True},
+        *([{"id": "agent_auth", "label": "CLI 授权", "enabled": True}] if name == "feishu" and auth.get("agentAuthSupported") else []),
         {"id": "start", "label": "连接", "enabled": not running},
         {"id": "stop", "label": "断开", "enabled": bool(running or enabled)},
         {"id": "set_home_channel", "label": "设为投递目标", "enabled": True},
@@ -11162,6 +11316,8 @@ class ExternalConnectionActionHandler:
                 return handler._handle_disconnect(channel_name)
             if action == "test":
                 return self._handle_test(channel_name)
+            if action in {"agent_auth", "agent_authorize", "authorize_agent"}:
+                return self._handle_agent_auth(channel_name, config)
             if action in {"set_home_channel", "clear_home_channel"}:
                 return self._handle_home_channel(channel_name, action, body)
             return json.dumps({"status": "error", "message": f"unknown action: {action}"}, ensure_ascii=False)
@@ -11250,6 +11406,72 @@ class ExternalConnectionActionHandler:
                 "message": _public_exception_message("Feishu CLI status probe failed.", exc),
                 **_public_exception_summary(exc),
             }
+
+    @staticmethod
+    def _handle_agent_auth(channel_name: str, config: Dict[str, Any]) -> str:
+        if channel_name != "feishu":
+            return json.dumps({"status": "error", "message": f"agent auth is not supported for: {channel_name}"}, ensure_ascii=False)
+        try:
+            from agent.tools.feishu_cli.feishu_cli import FeishuCli
+
+            current = conf()
+            app_id = str(
+                config.get("feishu_app_id")
+                or config.get("app_id")
+                or current.get("feishu_app_id")
+                or ""
+            ).strip()
+            app_secret = str(
+                config.get("feishu_app_secret")
+                or config.get("app_secret")
+                or current.get("feishu_app_secret")
+                or ""
+            ).strip()
+            if "****" in app_id:
+                app_id = str(current.get("feishu_app_id") or "").strip()
+            if "****" in app_secret:
+                app_secret = str(current.get("feishu_app_secret") or "").strip()
+            args: Dict[str, Any] = {"action": "config_init", "timeout": 240}
+            if app_id and app_secret:
+                args["feishu_app_id"] = app_id
+                args["feishu_app_secret"] = app_secret
+
+            result = FeishuCli({"cwd": _get_workspace_root()}).execute(args)
+            raw = getattr(result, "result", {})
+            public = redact_public_tool_value(raw)
+            public = restore_feishu_public_auth_fields(public, raw, "feishu_cli")
+            public = _safe_feishu_agent_auth_payload(public)
+            status = "success" if getattr(result, "status", "") == "success" else "error"
+            record_external_connection_runtime_event(
+                channel_name,
+                "external_connection.agent_auth.completed",
+                {
+                    "action": "agent_auth",
+                    "status": status,
+                    "authRequired": bool(isinstance(raw, dict) and raw.get("authRequired")),
+                    "writebackPending": bool(isinstance(raw, dict) and raw.get("writebackPending")),
+                    "hasVerificationUrl": bool(isinstance(raw, dict) and raw.get("verificationUrl")),
+                },
+            )
+            return json.dumps({
+                "status": status,
+                "platform": channel_name,
+                "agentAuth": public,
+                "authRequired": bool(isinstance(raw, dict) and raw.get("authRequired")),
+                "writebackPending": bool(isinstance(raw, dict) and raw.get("writebackPending")),
+                "verificationUrl": public.get("verificationUrl") if isinstance(public, dict) else "",
+                "message": (
+                    public.get("message")
+                    if isinstance(public, dict) and public.get("message")
+                    else "Feishu CLI auth/config action completed."
+                ),
+            }, ensure_ascii=False)
+        except Exception as exc:
+            return json.dumps({
+                "status": "error",
+                "message": _public_exception_message("Feishu CLI auth/config failed.", exc),
+                **_public_exception_summary(exc),
+            }, ensure_ascii=False)
 
     @staticmethod
     def _handle_home_channel(channel_name: str, action: str, body: Dict[str, Any]) -> str:

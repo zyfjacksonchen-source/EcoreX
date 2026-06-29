@@ -4,6 +4,7 @@ import sys
 import tempfile
 import textwrap
 import types
+import copy
 from pathlib import Path
 from unittest.mock import patch
 
@@ -69,6 +70,9 @@ def test_tongxin_cli_wrapper_runs_only_read_only_commands():
         assert status.status == "success"
         assert status.result["available"] is True
         assert status.result["readOnly"] is True
+        assert status.result["pathsRedacted"] is True
+        assert status.result["scriptPathRef"]["name"] == "xin_agent_cli.py"
+        assert str(script) not in json.dumps(status.result, ensure_ascii=False)
 
         schema = tool.execute({"action": "schema"})
         assert schema.status == "success"
@@ -120,6 +124,55 @@ def test_tongxin_cli_wrapper_runs_only_read_only_commands():
         assert blocked.status == "error"
         assert "blocked" in json.dumps(blocked.result, ensure_ascii=False).lower()
         run_process.assert_not_called()
+
+
+def test_tongxin_cli_auto_detects_and_persists_local_script_path():
+    from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
+    from config import conf
+
+    with tempfile.TemporaryDirectory() as workspace:
+        script = _make_tongxin_script(Path(workspace))
+        config_path = Path(workspace) / "config.json"
+        tool = TongxinCli({"cwd": workspace, "config_path": str(config_path)})
+        old_tools = copy.deepcopy(conf().get("tools", {}))
+        conf()["tools"] = {}
+
+        try:
+            with patch.object(TongxinCli, "_trusted_auto_config_roots", return_value=[]), \
+                    patch.object(TongxinCli, "_env_script_path_values", return_value=[]):
+                detected = tool.execute({"action": "status", "include_paths": True})
+                assert detected.status == "success"
+                assert detected.result["available"] is True
+                assert detected.result["configured"] is False
+                assert detected.result["autoConfigurable"] is False
+                assert detected.result["configurationState"] == "detected_untrusted"
+                assert detected.result["pathsRedacted"] is True
+                assert detected.result["scriptPathRef"]["name"] == "xin_agent_cli.py"
+                assert str(script) not in json.dumps(detected.result, ensure_ascii=False)
+
+                automatic = tool.execute({"action": "configure", "include_paths": True})
+                assert automatic.status == "error"
+                assert automatic.result["configured"] is False
+                assert automatic.result["configurationState"] == "detected_untrusted"
+                assert str(script) not in json.dumps(automatic.result, ensure_ascii=False)
+
+                configured = tool.execute({"action": "configure", "script_path": str(script), "include_paths": True})
+                assert configured.status == "success"
+                assert configured.result["configured"] is True
+                assert configured.result["configurationState"] == "configured"
+                assert configured.result["pathsRedacted"] is True
+                assert configured.result["configPathRef"]["name"] == "config.json"
+                assert str(config_path) not in json.dumps(configured.result, ensure_ascii=False)
+
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+            assert data["tools"]["tongxin_cli"]["script_path"] == str(script.resolve())
+            assert data["tools"]["tongxin_cli"]["read_only"] is True
+
+            ready = tool.execute({"action": "status"})
+            assert ready.result["configured"] is True
+            assert ready.result["configurationState"] == "configured"
+        finally:
+            conf()["tools"] = old_tools
 
 
 def test_tongxin_cli_read_only_contract_is_command_specific():
@@ -174,6 +227,41 @@ def test_tongxin_cli_broker_allows_readonly_and_blocks_mutations_in_readonly_mod
             assert allowed["allowed"] is True
             assert allowed["reason"] == "default-read-only-tongxin-cli"
 
+            configure = broker.authorize_noninteractive(
+                "tongxin_cli",
+                {"action": "configure"},
+            )
+            assert configure["allowed"] is True
+            assert configure["reason"] == "default-tongxin-cli-auto-config"
+
+            explicit_path_configure = broker.authorize_noninteractive(
+                "tongxin_cli",
+                {"action": "configure", "script_path": "C:/tmp/xin_agent_cli.py"},
+            )
+            assert explicit_path_configure["allowed"] is False
+            assert "read-only" in explicit_path_configure["reason"]
+
+            optional_configure = broker.authorize_noninteractive(
+                "optional_abilities",
+                {"action": "install", "ability": "tongxin-cli"},
+            )
+            assert optional_configure["allowed"] is True
+            assert optional_configure["reason"] == "default-tongxin-cli-auto-config"
+
+            optional_explicit_path = broker.authorize_noninteractive(
+                "optional_abilities",
+                {"action": "configure", "ability": "tongxin-cli", "script_path": "C:/tmp/xin_agent_cli.py"},
+            )
+            assert optional_explicit_path["allowed"] is False
+            assert "read-only" in optional_explicit_path["reason"]
+
+            agent_configure = broker.authorize_noninteractive(
+                "agent_capability",
+                {"action": "install_pack", "pack_id": "tx-assistant"},
+            )
+            assert agent_configure["allowed"] is True
+            assert agent_configure["reason"] == "default-tongxin-cli-auto-config"
+
             denied = broker.authorize_noninteractive(
                 "tongxin_cli",
                 {"action": "run", "args": ["account", "update", "--account-id", "123"]},
@@ -201,6 +289,7 @@ def test_raw_tongxin_cli_bash_is_blocked_and_autorouted():
     })
     assert bash_result.status == "error"
     assert "tongxin_cli" in str(bash_result.result)
+    assert Bash._looks_like_tongxin_cli_command('python "xin agent cli.py" schema') is True
 
     class FakeTongxinTool:
         name = "tongxin_cli"
@@ -270,30 +359,56 @@ def test_tongxin_tool_is_registered_and_diagnostics_source_mentions_it():
     assert "tongxin_cli" in Path("agent/protocol/agent_stream.py").read_text(encoding="utf-8")
 
 
-def test_tongxin_capability_pack_is_configure_only_not_installable():
+def test_tongxin_capability_pack_configures_detected_local_cli():
     from agent.tools.agent_capability.agent_capability import AgentCapabilityTool
     from agent.tools.optional_abilities.optional_abilities import OptionalAbilities
+    from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
     from agent.protocol.agent_stream import AgentStreamExecutor
+    from config import conf
 
-    optional = OptionalAbilities()
-    listed = optional.execute({"action": "list"}).result["abilities"]
-    tongxin = next(item for item in listed if item.get("packId") == "tongxin-cli")
-    assert tongxin["configureOnly"] is True
-    assert tongxin["readOnly"] is True
-    assert tongxin["defaultEnabled"] is True
-    assert tongxin["agentCanInstall"] is False
-    assert "installHint" in tongxin
+    old_cwd = os.getcwd()
+    old_tools = copy.deepcopy(conf().get("tools", {}))
+    old_state_dir = os.environ.get("ECOREX_CAPABILITY_STATE_DIR")
+    with tempfile.TemporaryDirectory() as workspace:
+        _make_tongxin_script(Path(workspace))
+        config_path = Path(workspace) / "config.json"
+        state_dir = Path(workspace) / "capability-state"
+        os.environ["ECOREX_CAPABILITY_STATE_DIR"] = str(state_dir)
+        os.chdir(workspace)
+        conf()["tools"] = {}
+        try:
+            with patch.object(TongxinCli, "_runtime_config_path", return_value=config_path), \
+                    patch.object(TongxinCli, "_trusted_auto_config_roots", return_value=[Path(workspace)]):
+                optional = OptionalAbilities()
+                listed = optional.execute({"action": "list"}).result["abilities"]
+                tongxin = next(item for item in listed if item.get("packId") == "tongxin-cli")
+                assert tongxin["configureOnly"] is True
+                assert tongxin["readOnly"] is True
+                assert tongxin["defaultEnabled"] is True
+                assert tongxin["agentCanInstall"] is False
+                assert "installHint" in tongxin
+                assert tongxin["capabilityState"]["installed"] is False
+                assert tongxin["capabilityState"]["available"] is True
+                assert tongxin["capabilityState"]["configurationState"] == "detected_unconfigured"
 
-    optional_install = optional.execute({"action": "install", "ability": "tongxin-cli"})
-    assert optional_install.status == "error"
-    assert optional_install.result["errorType"] == "capability_configure_only"
-    assert optional_install.result["configureOnly"] is True
+                optional_install = optional.execute({"action": "install", "ability": "tongxin-cli"})
+                assert optional_install.status == "success"
+                assert optional_install.result["configured"] is True
+                assert optional_install.result["capabilityState"]["installed"] is True
+                assert json.loads(config_path.read_text(encoding="utf-8"))["tools"]["tongxin_cli"]["read_only"] is True
 
-    agent_install = AgentCapabilityTool().execute({"action": "install_pack", "pack_id": "tongxin"})
-    assert agent_install.status == "error"
-    assert agent_install.result["packId"] == "tongxin-cli"
-    assert agent_install.result["configureOnly"] is True
-    assert "not an installable package" in agent_install.result["message"]
+                agent_install = AgentCapabilityTool().execute({"action": "install_pack", "pack_id": "tongxin"})
+                assert agent_install.status == "success"
+                assert agent_install.result["packId"] == "tongxin-cli"
+                assert agent_install.result["configureOnly"] is True
+                assert agent_install.result["configured"] is True
+        finally:
+            os.chdir(old_cwd)
+            conf()["tools"] = old_tools
+            if old_state_dir is None:
+                os.environ.pop("ECOREX_CAPABILITY_STATE_DIR", None)
+            else:
+                os.environ["ECOREX_CAPABILITY_STATE_DIR"] = old_state_dir
 
     proxy_name, proxy_args = AgentStreamExecutor._permission_proxy_for_tool(
         None,
@@ -301,7 +416,7 @@ def test_tongxin_capability_pack_is_configure_only_not_installable():
         {"action": "install_pack", "pack_id": "tx-assistant"},
     )
     assert proxy_name == "tongxin_cli"
-    assert proxy_args["action"] == "status"
+    assert proxy_args["action"] == "configure"
 
 
 def test_tongxin_diagnostics_and_initializer_behaviour():

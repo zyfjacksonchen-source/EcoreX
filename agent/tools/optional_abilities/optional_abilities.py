@@ -61,8 +61,8 @@ TONGXIN_CLI_PACK_ID = "tongxin-cli"
 TONGXIN_CLI_ALIASES = {"tongxin", "tongxin-cli", "xin-agent", "xin-agent-cli", "tx-assistant"}
 TONGXIN_CLI_INSTALL_HINT = (
     "Tongxin CLI is a default read-only EcoreX capability. Use the structured tongxin_cli tool; "
-    "configure tools.tongxin_cli.script_path or ECOREX_TONGXIN_CLI_PATH only when the packaged runtime "
-    "cannot auto-discover an existing xin_agent_cli.py. Do not install it as a generic capability pack."
+    "EcoreX can auto-configure an existing local xin_agent_cli.py path from the capability screen. "
+    "Do not install it as a generic capability pack."
 )
 
 _LIVE_PROVIDER_CONFIG_KEYS = {
@@ -262,10 +262,31 @@ def _capability_state(pack_id: str) -> Dict[str, Any]:
                 "logPath": data.get("logPath"),
                 "targetDir": data.get("targetDir"),
             }
+            for field in (
+                "available",
+                "configured",
+                "configurationState",
+                "persistedConfig",
+                "builtIn",
+                "configureOnly",
+                "readOnly",
+                "defaultEnabled",
+                "installHint",
+                "configKey",
+            ):
+                if field in data:
+                    state[field] = data[field]
             if builtin and not state["installed"]:
                 return builtin
             if builtin and state["installed"]:
-                state.setdefault("builtIn", builtin.get("builtIn"))
+                for field in (
+                    "builtIn",
+                    "configureOnly",
+                    "readOnly",
+                    "defaultEnabled",
+                    "installHint",
+                ):
+                    state.setdefault(field, builtin.get(field))
             return state
     except Exception as exc:
         logger.warning(f"[OptionalAbilities] failed reading capability state {pack_id}: {exc}")
@@ -295,19 +316,28 @@ def _builtin_capability_state(pack_id: str) -> Optional[Dict[str, Any]]:
             logger.debug(f"[OptionalAbilities] Tongxin CLI status probe skipped: {exc}")
             available = False
             configured = False
+            configuration_state = "missing"
+        else:
+            configuration_state = str(payload.get("configurationState") or (
+                "configured" if configured else "detected_unconfigured" if available else "missing"
+            ))
+        if configured:
+            message = "Tongxin CLI read-only capability is ready."
+        elif available:
+            message = "Tongxin CLI script was detected; click configuration check to persist it for EcoreX."
+        else:
+            message = "Tongxin CLI wrapper is built in; configure an existing xin_agent_cli.py path to enable data reads."
         return {
-            "installed": available,
-            "state": "installed" if available else "not-installed",
+            "installed": configured,
+            "state": "installed" if configured else "not-installed",
             "builtIn": True,
             "configureOnly": True,
             "readOnly": True,
             "defaultEnabled": True,
             "configured": configured,
-            "message": (
-                "Tongxin CLI read-only capability is ready."
-                if available else
-                "Tongxin CLI wrapper is built in; configure an existing xin_agent_cli.py path to enable data reads."
-            ),
+            "available": available,
+            "configurationState": configuration_state,
+            "message": message,
             "installHint": TONGXIN_CLI_INSTALL_HINT,
         }
     if normalized == "browser-automation" and _module_available("playwright"):
@@ -618,7 +648,7 @@ class OptionalAbilities(BaseTool):
         "properties": {
             "action": {
                 "type": "string",
-                "description": "One of: list, status, enable, disable, install.",
+                "description": "One of: list, status, enable, disable, install, configure.",
             },
             "ability": {
                 "type": "string",
@@ -636,6 +666,10 @@ class OptionalAbilities(BaseTool):
                 "type": "object",
                 "description": "Structured result returned by the built-in find skill/find-skill gate.",
             },
+            "script_path": {
+                "type": "string",
+                "description": "Optional local xin_agent_cli.py path when configuring the Tongxin CLI capability.",
+            },
         },
         "required": ["action"],
     }
@@ -646,9 +680,14 @@ class OptionalAbilities(BaseTool):
         ability = str(args.get("ability") or "").strip().lower().replace("_", "-")
         if action in {"list", "status"}:
             return ToolResult.success(self._list(ability or None))
-        if action in {"enable", "disable", "install"}:
+        if action in {"enable", "disable", "install", "configure"}:
             if not ability:
                 return ToolResult.fail({"status": "error", "message": "ability is required"})
+            script_path = args.get("script_path") or args.get("scriptPath") or args.get("path")
+            if action == "configure":
+                if ability in TONGXIN_CLI_ALIASES:
+                    return self._configure_tongxin_cli(ability, script_path=script_path)
+                return ToolResult.fail({"status": "error", "message": f"{ability} has no configuration action"})
             if action == "enable":
                 return self._enable(ability)
             if action == "disable":
@@ -658,8 +697,9 @@ class OptionalAbilities(BaseTool):
                 timeout=self._timeout(args.get("timeout")),
                 discovery_source=args.get("discovery_source"),
                 find_skill_result=args.get("find_skill_result") or args.get("findSkillResult"),
+                script_path=script_path,
             )
-        return ToolResult.fail({"status": "error", "message": "action must be one of: list, status, enable, disable, install"})
+        return ToolResult.fail({"status": "error", "message": "action must be one of: list, status, enable, disable, install, configure"})
 
     def _list(self, ability: Optional[str] = None) -> Dict[str, Any]:
         config = _read_runtime_config()
@@ -710,21 +750,62 @@ class OptionalAbilities(BaseTool):
             item["capabilityState"] = _capability_state(str(meta["packId"]))
         return apply_policy_to_capability(item)
 
-    def _tongxin_configure_only(self, ability: str) -> ToolResult:
-        return ToolResult.fail({
-            "status": "error",
-            "errorType": "capability_configure_only",
+    def _configure_tongxin_cli(self, ability: str, script_path: Any = None) -> ToolResult:
+        from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
+
+        configure_args: Dict[str, Any] = {"action": "configure"}
+        if script_path:
+            configure_args["script_path"] = script_path
+        result = TongxinCli().execute(configure_args)
+        payload = result.result if isinstance(result.result, dict) else {"result": result.result}
+        configured = result.status == "success" and bool(payload.get("configured"))
+        available = bool(payload.get("available"))
+        configuration_state = str(payload.get("configurationState") or (
+            "configured" if configured else "detected_unconfigured" if available else "missing"
+        ))
+        state = {
+            "packId": TONGXIN_CLI_PACK_ID,
+            "state": "installed" if configured else "not-installed",
+            "installed": configured,
+            "available": available,
+            "configured": configured,
+            "configurationState": configuration_state,
+            "persistedConfig": bool(payload.get("persistedConfig") or configured),
+            "builtIn": True,
+            "configureOnly": True,
+            "readOnly": True,
+            "defaultEnabled": True,
+            "updatedAt": _now(),
+            "message": payload.get("message") or (
+                "Tongxin CLI read-only capability is ready."
+                if configured else
+                "Tongxin CLI script was not found. Configure an existing xin_agent_cli.py path to enable data reads."
+            ),
+            "installHint": TONGXIN_CLI_INSTALL_HINT,
+            "configKey": "tools.tongxin_cli.script_path",
+        }
+        try:
+            state_dir = _state_dir()
+            state_dir.mkdir(parents=True, exist_ok=True)
+            (state_dir / f"{TONGXIN_CLI_PACK_ID}.json").write_text(
+                json.dumps(state, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            logger.warning(f"[OptionalAbilities] failed writing Tongxin CLI state: {exc}")
+
+        merged = {
+            **payload,
+            "status": "success" if configured else "error",
             "ability": ability,
             "packId": TONGXIN_CLI_PACK_ID,
             "configureOnly": True,
             "readOnly": True,
             "defaultEnabled": True,
             "installHint": TONGXIN_CLI_INSTALL_HINT,
-            "message": (
-                "tongxin-cli is a default read-only structured capability, not an installable package. "
-                "Configure an existing xin_agent_cli.py path if auto-discovery is unavailable, then use host_diagnostics and tongxin_cli status/schema."
-            ),
-        })
+            "capabilityState": state,
+        }
+        return ToolResult.success(merged) if configured else ToolResult.fail(merged)
 
     def _enable(self, ability: str) -> ToolResult:
         defs = _ability_defs()
@@ -813,10 +894,17 @@ class OptionalAbilities(BaseTool):
             ),
         })
 
-    def _install(self, ability: str, timeout: int, discovery_source: Any = None, find_skill_result: Any = None) -> ToolResult:
+    def _install(
+        self,
+        ability: str,
+        timeout: int,
+        discovery_source: Any = None,
+        find_skill_result: Any = None,
+        script_path: Any = None,
+    ) -> ToolResult:
         defs = _ability_defs()
         if ability in TONGXIN_CLI_ALIASES:
-            return self._tongxin_configure_only(ability)
+            return self._configure_tongxin_cli(ability, script_path=script_path)
         meta = defs.get(ability)
         if not meta:
             if ability == "feishu-lark":
@@ -833,7 +921,7 @@ class OptionalAbilities(BaseTool):
             return ToolResult.fail({"status": "error", "message": f"{ability} has no installer"})
         if str(pack_id) == "feishu-lark":
             return self._install_feishu_cli(timeout, discovery_source=discovery_source, find_skill_result=find_skill_result)
-        return self._install_capability_pack(str(pack_id), timeout)
+        return self._install_capability_pack(str(pack_id), timeout, script_path=script_path)
 
     def _install_feishu_cli(self, timeout: int, discovery_source: Any = None, find_skill_result: Any = None) -> ToolResult:
         blocked = blocked_install_payload("feishu-lark", pack_name="Feishu/Lark CLI connector", action="install")
@@ -881,9 +969,9 @@ class OptionalAbilities(BaseTool):
         }
         return ToolResult.success(merged) if status == "installed" else ToolResult.fail(merged)
 
-    def _install_capability_pack(self, pack_id: str, timeout: int) -> ToolResult:
+    def _install_capability_pack(self, pack_id: str, timeout: int, script_path: Any = None) -> ToolResult:
         if str(pack_id or "").strip().lower().replace("_", "-") == TONGXIN_CLI_PACK_ID:
-            return self._tongxin_configure_only(TONGXIN_CLI_PACK_ID)
+            return self._configure_tongxin_cli(TONGXIN_CLI_PACK_ID, script_path=script_path)
 
         blocked = blocked_install_payload(pack_id, action="install")
         if blocked:

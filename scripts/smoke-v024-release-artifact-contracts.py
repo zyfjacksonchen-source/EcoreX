@@ -549,11 +549,13 @@ def inspect_webui_artifact(path: pathlib.Path, artifact_id: str, install_suffix:
         )
         add_check(
             checks,
-            f"{artifact_id} Tongxin CLI configure-only install guard packaged",
+            f"{artifact_id} Tongxin CLI configure-only auto-configuration packaged",
             "TONGXIN_CLI_INSTALL_HINT" in optional_abilities
-            and "capability_configure_only" in optional_abilities
+            and "_configure_tongxin_cli" in optional_abilities
+            and "configurationState" in optional_abilities
             and "agentCanInstall\": bool(meta.get(\"packId\")) and not bool(meta.get(\"configureOnly\"))" in optional_abilities
-            and "capability_configure_only" in agent_capability
+            and "OptionalAbilities().execute(configure_args)" in agent_capability
+            and "script_path" in agent_capability
             and '"tongxin": "tongxin-cli"' in agent_capability,
             {
                 "optionalAbilitiesEntrySuffix": optional_abilities_entry.split("runtime/", 1)[-1],

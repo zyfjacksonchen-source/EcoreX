@@ -421,7 +421,7 @@ SAFETY:
     @staticmethod
     def _looks_like_tongxin_cli_command(command: str) -> bool:
         text = str(command or "").strip().lower().replace("\\", "/")
-        if "xin_agent_cli.py" in text or "tongxin_cli.py" in text:
+        if "xin_agent_cli.py" in text or "xin agent cli.py" in text or "xin-agent-cli.py" in text or "tongxin_cli.py" in text:
             return True
         if re.search(r"\b(tongxin-cli|xin-agent-cli|tx-assistant)\b", text):
             return True

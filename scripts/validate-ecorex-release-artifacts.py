@@ -1031,6 +1031,9 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
 
     tongxin_cli = read_text_by_suffix("agent/tools/tongxin_cli/tongxin_cli.py")
     require_contains(tongxin_cli, "class TongxinCli", f"{label} tongxin cli")
+    require_contains(tongxin_cli, "SUPPORTED_SCRIPT_NAMES", f"{label} tongxin cli")
+    require_contains(tongxin_cli, "def _configure", f"{label} tongxin cli")
+    require_contains(tongxin_cli, "tools.tongxin_cli.script_path", f"{label} tongxin cli")
     require_contains(tongxin_cli, "READ_ONLY_ALLOWED_COMMANDS", f"{label} tongxin cli")
     require_contains(tongxin_cli, "validate_read_only_tongxin_args", f"{label} tongxin cli")
     require_contains(tongxin_cli, "subprocess.Popen(command", f"{label} tongxin cli")

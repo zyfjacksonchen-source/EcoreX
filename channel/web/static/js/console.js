@@ -259,19 +259,19 @@ const I18N = {
         wecom_scan_success: '创建成功，正在启动通道...',
         wecom_scan_fail: '创建失败',
         wecom_mode_scan: '扫码接入', wecom_mode_manual: '手动填写',
-        feishu_scan_btn: '一键创建飞书应用',
-        feishu_scan_desc: '使用飞书 App 扫码，自动创建应用并预置全部权限与事件订阅',
-        feishu_scan_replace_desc: '使用飞书 App 扫码创建新机器人，将覆盖当前的 App ID / Secret',
-        feishu_scan_loading: '正在向飞书申请二维码...',
-        feishu_scan_waiting: '等待扫码...',
-        feishu_scan_tip: '二维码 10 分钟内有效，仅供一次扫描',
+        feishu_scan_btn: '启动 CLI 授权',
+        feishu_scan_desc: '打开飞书 CLI 授权链接，在飞书完成授权后自动回写本机 CLI 配置',
+        feishu_scan_replace_desc: '为当前设备打开飞书 CLI 授权链接，已保存的通道凭据不会被覆盖',
+        feishu_scan_loading: '正在启动飞书 CLI 授权...',
+        feishu_scan_waiting: '等待 CLI 回写...',
+        feishu_scan_tip: '完成授权后保持本页面打开；EcoreX 会在本机 CLI 配置就绪后使用它',
         feishu_scan_open_link: '或点击此处在浏览器中打开',
-        feishu_scan_success: '应用创建成功，正在启动通道...',
+        feishu_scan_success: 'CLI 授权已启动',
         feishu_scan_expired: '二维码已过期，请重试',
         feishu_scan_denied: '已取消授权',
-        feishu_scan_fail: '创建失败',
+        feishu_scan_fail: 'CLI 授权失败',
         feishu_scan_retry: '重试',
-        feishu_mode_scan: '扫码创建', feishu_mode_manual: '手动填写',
+        feishu_mode_scan: 'CLI 授权', feishu_mode_manual: '手动填写',
         tasks_title: '定时任务', tasks_desc: '查看和管理定时任务',
         tasks_coming: '即将推出', tasks_coming_desc: '定时任务管理功能即将在此提供',
         tasks_refresh: '刷新',
@@ -471,19 +471,19 @@ const I18N = {
         wecom_scan_success: 'Bot created, starting channel...',
         wecom_scan_fail: 'Bot creation failed',
         wecom_mode_scan: 'Scan QR', wecom_mode_manual: 'Manual',
-        feishu_scan_btn: 'One-click Create Feishu App',
-        feishu_scan_desc: 'Scan with Feishu App to create an app with all required permissions pre-configured',
-        feishu_scan_replace_desc: 'Scan with Feishu App to create a new bot — will overwrite the current App ID / Secret',
-        feishu_scan_loading: 'Requesting QR code from Feishu...',
-        feishu_scan_waiting: 'Waiting for scan...',
-        feishu_scan_tip: 'QR code expires in 10 minutes, single use only',
+        feishu_scan_btn: 'Start CLI Authorization',
+        feishu_scan_desc: 'Open the Feishu CLI authorization link, then finish setup in Feishu to write the local CLI config',
+        feishu_scan_replace_desc: 'Open the Feishu CLI authorization link for this device. Saved channel credentials are preserved.',
+        feishu_scan_loading: 'Starting Feishu CLI authorization...',
+        feishu_scan_waiting: 'Waiting for CLI writeback...',
+        feishu_scan_tip: 'Keep this page open after completing authorization; EcoreX will use the local CLI config when ready',
         feishu_scan_open_link: 'Or click here to open in browser',
-        feishu_scan_success: 'App created, starting channel...',
+        feishu_scan_success: 'CLI authorization started',
         feishu_scan_expired: 'QR code expired, please retry',
         feishu_scan_denied: 'Authorization cancelled',
-        feishu_scan_fail: 'App creation failed',
+        feishu_scan_fail: 'CLI authorization failed',
         feishu_scan_retry: 'Retry',
-        feishu_mode_scan: 'Scan QR', feishu_mode_manual: 'Manual',
+        feishu_mode_scan: 'CLI Auth', feishu_mode_manual: 'Manual',
         tasks_title: 'Scheduled Tasks', tasks_desc: 'View and manage scheduled tasks',
         tasks_coming: 'Coming Soon', tasks_coming_desc: 'Scheduled task management will be available here',
         tasks_refresh: 'Refresh',
@@ -8153,7 +8153,7 @@ function renderActiveChannels() {
 
         const weixinWaiting = chName === 'weixin' && ch.login_status && ch.login_status !== 'logged_in';
         const wecomNeedsCreds = chName === 'wecom_bot' && !_wecomBotHasCreds(ch);
-        // 飞书 active 卡片渲染带 Tab 的 panel：手动填写 + 扫码重建（覆盖现有配置）
+        // 飞书 active 卡片渲染带 Tab 的 panel：手动填写 + CLI 授权
         const isFeishu = chName === 'feishu';
         const transportSummary = channelTransportSummary(ch);
         const statusDot = transportSummary.dot;
@@ -8472,7 +8472,7 @@ function openAddChannelPanel() {
 
 function closeAddChannelPanel() {
     stopWeixinQrPoll();
-    stopFeishuRegisterPoll();
+    stopFeishuCliAuthTimer();
     const panel = document.getElementById('channels-add-panel');
     if (panel) {
         panel.classList.add('hidden');
@@ -8484,7 +8484,7 @@ function closeAddChannelPanel() {
 
 function onAddChannelSelect(chName) {
     stopWeixinQrPoll();
-    stopFeishuRegisterPoll();
+    stopFeishuCliAuthTimer();
     resetAddChannelStatus();
     const fieldsContainer = document.getElementById('add-channel-fields');
     const actions = document.getElementById('add-channel-actions');
@@ -8940,9 +8940,9 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 // =====================================================================
-// Feishu One-click App Registration (lark-oapi register_app)
+// Feishu CLI Authorization (lark-cli config init)
 // =====================================================================
-let _feishuRegisterPollTimer = null;
+let _feishuCliAuthTimer = null;
 
 function _feishuHasCreds(ch) {
     if (!ch || !ch.fields) return false;
@@ -8954,7 +8954,7 @@ function _feishuHasCreds(ch) {
 function buildFeishuPanel(ch, isActive) {
     const scanLabel = t('feishu_mode_scan');
     const manualLabel = t('feishu_mode_manual');
-    // 已有凭据时默认进入手动 Tab，方便修改；否则推荐扫码
+    // 已有凭据时默认进入手动 Tab，方便修改；否则推荐 CLI 授权
     const defaultMode = _feishuHasCreds(ch) ? 'manual' : 'scan';
     const activeAttr = isActive ? 'data-active="1"' : '';
     return `
@@ -8989,20 +8989,20 @@ function switchFeishuMode(mode) {
     const activeClasses = 'bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-100 shadow-sm';
     const inactiveClasses = 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200';
 
-    stopFeishuRegisterPoll();
+    stopFeishuCliAuthTimer();
 
     if (mode === 'scan') {
         scanTab.className = `flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${activeClasses}`;
         manualTab.className = `flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${inactiveClasses}`;
         if (actions) actions.classList.add('hidden');
-        // active 卡片下扫码替换的提示文案，强调"创建新机器人会覆盖现有配置"
+        // active 卡片下使用 CLI 授权提示，明确不会覆盖通道凭据
         const desc = isActive
             ? t('feishu_scan_replace_desc')
             : t('feishu_scan_desc');
         content.innerHTML = `
             <div id="feishu-scan-panel" class="flex flex-col items-center py-4">
                 <p class="text-sm text-slate-600 dark:text-slate-300 mb-3 text-center">${desc}</p>
-                <button onclick="startFeishuRegister()"
+                <button onclick="startFeishuCliAuth()"
                     class="mt-2 px-6 py-2.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-medium
                            cursor-pointer transition-colors duration-150">
                     <i class="fas fa-qrcode mr-2"></i>${t('feishu_scan_btn')}
@@ -9034,122 +9034,119 @@ function switchFeishuMode(mode) {
     }
 }
 
-function stopFeishuRegisterPoll() {
-    if (_feishuRegisterPollTimer) {
-        clearTimeout(_feishuRegisterPollTimer);
-        _feishuRegisterPollTimer = null;
+function stopFeishuCliAuthTimer() {
+    if (_feishuCliAuthTimer) {
+        clearTimeout(_feishuCliAuthTimer);
+        _feishuCliAuthTimer = null;
     }
 }
 
-function startFeishuRegister(targetStatusId) {
+function collectFeishuAuthConfig(statusId) {
+    const statusEl = document.getElementById(statusId);
+    const panel = statusEl ? statusEl.closest('#feishu-panel') : document.getElementById('feishu-panel');
+    const config = {};
+    if (!panel) return config;
+    channelInputsFor(panel, 'feishu').forEach(inp => {
+        const key = inp.dataset.field;
+        if (!key) return;
+        if (inp.type === 'checkbox') {
+            config[key] = inp.checked;
+        } else {
+            if (inp.dataset.masked === '1') return;
+            config[key] = inp.value;
+        }
+    });
+    return config;
+}
+
+function isSafeFeishuAuthUrl(url) {
+    const raw = String(url || '').trim();
+    return raw.startsWith('https://open.feishu.cn/') || raw.startsWith('https://open.larksuite.com/');
+}
+
+function openFeishuAuthUrl(url) {
+    if (!isSafeFeishuAuthUrl(url)) return;
+    copyToClipboard(url).catch(() => {});
+    try {
+        window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (_) {}
+}
+
+function startFeishuCliAuth(targetStatusId) {
     const statusId = targetStatusId || 'feishu-scan-status';
     const statusEl = document.getElementById(statusId);
+    const panel = statusEl ? statusEl.closest('#feishu-scan-panel') : null;
+    const button = panel ? panel.querySelector('button') : null;
     if (statusEl) {
         statusEl.innerHTML = `<p class="text-sm text-slate-500 dark:text-slate-400 text-center">${t('feishu_scan_loading')}</p>`;
     }
-    stopFeishuRegisterPoll();
-    fetch('/api/feishu/register')
+    stopFeishuCliAuthTimer();
+    if (button) button.disabled = true;
+    fetch('/api/external-connections/feishu/actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            action: 'agent_auth',
+            config: collectFeishuAuthConfig(statusId)
+        })
+    })
         .then(r => r.json())
         .then(data => {
             if (data.status !== 'success') {
-                renderFeishuRegisterError(statusId, data.message || t('feishu_scan_fail'));
+                renderFeishuCliAuthError(statusId, data.message || t('feishu_scan_fail'));
                 return;
             }
-            renderFeishuQr(statusId, data.qr_image, data.qrcode_url);
-            pollFeishuRegisterStatus(statusId);
+            renderFeishuCliAuth(statusId, data);
+            const url = String(data.verificationUrl || (data.agentAuth && data.agentAuth.verificationUrl) || '').trim();
+            openFeishuAuthUrl(url);
         })
         .catch(err => {
-            renderFeishuRegisterError(statusId, err.message || t('feishu_scan_fail'));
+            renderFeishuCliAuthError(statusId, err.message || t('feishu_scan_fail'));
+        })
+        .finally(() => {
+            if (button) button.disabled = false;
         });
 }
 
-function renderFeishuQr(statusId, qrImage, qrUrl) {
+function renderFeishuCliAuth(statusId, payload) {
     const statusEl = document.getElementById(statusId);
     if (!statusEl) return;
-    const imgHtml = qrImage
-        ? `<img src="${qrImage}" alt="QR" class="w-44 h-44 rounded-lg border border-slate-200 dark:border-white/10 bg-white p-2"/>`
-        : `<div class="w-44 h-44 rounded-lg border border-dashed border-slate-300 flex items-center justify-center text-xs text-slate-400">QR</div>`;
+    const agentAuth = payload && typeof payload.agentAuth === 'object' ? payload.agentAuth : {};
+    const rawUrl = String(payload.verificationUrl || agentAuth.verificationUrl || '').trim();
+    const authUrl = isSafeFeishuAuthUrl(rawUrl) ? rawUrl : '';
+    const qr = agentAuth.qrCode && typeof agentAuth.qrCode === 'object' ? agentAuth.qrCode : {};
+    const qrPath = String(qr.path || qr.relativePath || '').trim();
+    const qrImageUrl = qrPath ? _toWebUrl(qrPath) : '';
+    const pending = payload.writebackPending === true || agentAuth.writebackPending === true;
+    const message = String(payload.message || agentAuth.message || (pending ? t('feishu_scan_waiting') : t('feishu_scan_success'))).trim();
+    const imgHtml = qrImageUrl
+        ? `<img src="${escapeHtml(qrImageUrl)}" alt="QR" class="w-44 h-44 rounded-lg border border-slate-200 dark:border-white/10 bg-white p-2"/>`
+        : `<div class="w-12 h-12 rounded-full ${pending ? 'bg-amber-50 dark:bg-amber-900/30' : 'bg-emerald-50 dark:bg-emerald-900/30'} flex items-center justify-center">
+                <i class="fas ${pending ? 'fa-clock text-amber-500' : 'fa-check text-emerald-500'} text-lg"></i>
+           </div>`;
     statusEl.innerHTML = `
         <div class="flex flex-col items-center gap-3">
             ${imgHtml}
-            <p class="text-xs text-amber-500">${t('feishu_scan_waiting')}</p>
+            <p class="text-sm font-medium ${pending ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'} text-center">${escapeHtml(message)}</p>
             <p class="text-xs text-slate-400 dark:text-slate-500">${t('feishu_scan_tip')}</p>
-            ${qrUrl ? `<a href="${qrUrl}" target="_blank" rel="noopener"
-                class="text-xs text-blue-500 hover:text-blue-600 underline">${t('feishu_scan_open_link')}</a>` : ''}
+            ${authUrl ? `<a href="${escapeHtml(authUrl)}" target="_blank" rel="noopener"
+                class="text-xs text-blue-500 hover:text-blue-600 underline break-all">${t('feishu_scan_open_link')}</a>` : ''}
         </div>`;
 }
 
-function renderFeishuRegisterError(statusId, message) {
+function renderFeishuCliAuthError(statusId, message) {
     const statusEl = document.getElementById(statusId);
     if (!statusEl) return;
     statusEl.innerHTML = `
         <div class="flex flex-col items-center gap-2 py-2">
-            <p class="text-sm text-red-500 text-center">${message}</p>
-            <button onclick="startFeishuRegister('${statusId}')"
+            <p class="text-sm text-red-500 text-center">${escapeHtml(message)}</p>
+            <button onclick="startFeishuCliAuth('${statusId}')"
                 class="mt-1 px-4 py-1.5 rounded-md text-xs font-medium
                        bg-slate-100 dark:bg-white/10 text-slate-700 dark:text-slate-200
                        hover:bg-slate-200 dark:hover:bg-white/20 cursor-pointer">
                 <i class="fas fa-rotate-right mr-1"></i>${t('feishu_scan_retry')}
             </button>
         </div>`;
-}
-
-function pollFeishuRegisterStatus(statusId) {
-    stopFeishuRegisterPoll();
-    _feishuRegisterPollTimer = setTimeout(() => {
-        fetch('/api/feishu/register', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'poll' })
-        })
-        .then(r => r.json())
-        .then(data => {
-            if (data.status !== 'success') {
-                renderFeishuRegisterError(statusId, data.message || t('feishu_scan_fail'));
-                return;
-            }
-            const rs = data.register_status;
-            if (rs === 'done') {
-                const configured = data.channel_configured === true;
-                const statusEl = document.getElementById(statusId);
-                if (statusEl) {
-                    statusEl.innerHTML = `
-                        <div class="flex flex-col items-center py-2">
-                            <div class="w-10 h-10 rounded-full ${configured ? 'bg-emerald-50 dark:bg-emerald-900/30' : 'bg-amber-50 dark:bg-amber-900/30'} flex items-center justify-center mb-2">
-                                <i class="fas ${configured ? 'fa-check text-emerald-500' : 'fa-triangle-exclamation text-amber-500'} text-lg"></i>
-                            </div>
-                            <p class="text-sm font-medium ${configured ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}">${configured ? t('feishu_scan_success') : (data.writeback?.message || t('feishu_scan_fail'))}</p>
-                        </div>`;
-                }
-                if (configured) {
-                    refreshFeishuAfterRegister();
-                }
-            } else if (rs === 'expired') {
-                renderFeishuRegisterError(statusId, t('feishu_scan_expired'));
-            } else if (rs === 'denied') {
-                renderFeishuRegisterError(statusId, t('feishu_scan_denied'));
-            } else if (rs === 'error') {
-                renderFeishuRegisterError(statusId, data.message || t('feishu_scan_fail'));
-            } else {
-                pollFeishuRegisterStatus(statusId);
-            }
-        })
-        .catch(() => {
-            pollFeishuRegisterStatus(statusId);
-        });
-    }, 2000);
-}
-
-function refreshFeishuAfterRegister() {
-    fetch('/api/channels')
-    .then(r => r.json())
-    .then(data => {
-        if (data.status === 'success') {
-            channelsData = data.channels || channelsData;
-            setTimeout(() => renderActiveChannels(), 500);
-        }
-    })
-    .catch(() => {});
 }
 
 // =====================================================================

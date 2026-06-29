@@ -17,6 +17,7 @@ from agent.protocol.models import LLMRequest, LLMModel
 from agent.protocol.message_utils import sanitize_claude_messages, compress_turn_to_text_only
 from agent.skills.tool_bridge import SKILL_CALLABLE_TOOL_ALIASES
 from agent.tools.base_tool import BaseTool, ToolResult
+from common.ecorex_public_payload import mask_sensitive_text, redact_public_tool_value
 from common.ecorex_identity import sanitize_assistant_identity, sanitize_message_identity
 from common.log import logger
 from common.i18n import t as _t
@@ -77,6 +78,36 @@ def _private_agent_exception_text_for_classification(value: Any) -> str:
     if value is None:
         return ""
     return "{}".format(value)
+
+
+def _safe_tool_arg_log_value(key: Any, value: Any, max_chars: int = 200) -> str:
+    key_text = str(key or "")
+    try:
+        safe_container = redact_public_tool_value({key_text: value}, max_depth=4, max_items=20, max_chars=max_chars)
+        safe_value = safe_container.get(key_text) if isinstance(safe_container, dict) else safe_container
+    except Exception:
+        safe_value = "[redacted]"
+    if isinstance(safe_value, (dict, list)):
+        text = json.dumps(safe_value, ensure_ascii=False)
+    else:
+        text = str(safe_value)
+    if len(text) > max_chars:
+        text = text[:max_chars] + f"...({len(text)} chars)"
+    return text
+
+
+def _safe_tool_result_log_preview(value: Any, max_chars: int = 200) -> str:
+    try:
+        safe_value = redact_public_tool_value(value, max_depth=5, max_items=20, max_chars=max(512, max_chars))
+    except Exception:
+        safe_value = "[redacted]"
+    if isinstance(safe_value, (dict, list)):
+        text = json.dumps(safe_value, ensure_ascii=False)
+    else:
+        text = mask_sensitive_text(safe_value, max_chars=max(512, max_chars))
+    if len(text) > max_chars:
+        return text[:max_chars] + "..."
+    return text
 
 
 def _public_agent_tool_error_result(prefix: str, value: Any, *, execution_time: float = 0) -> Dict[str, Any]:
@@ -677,10 +708,14 @@ class AgentStreamExecutor:
                 ability = args.get("pack_id") or args.get("ability") or ""
                 normalized_ability = str(ability or "").strip().lower().replace("_", "-")
                 if normalized_ability in {"tongxin", "tongxin-cli", "xin-agent", "xin-agent-cli", "tx-assistant"}:
-                    return "tongxin_cli", {
-                        "action": "status",
+                    proxy_args = {
+                        "action": "configure",
                         "scope": "agent_capability_install_pack_preflight",
                     }
+                    script_path = args.get("script_path") or args.get("scriptPath") or args.get("path")
+                    if script_path:
+                        proxy_args["script_path"] = script_path
+                    return "tongxin_cli", proxy_args
                 if normalized_ability in {"feishu", "lark", "feishu-lark", "lark-feishu"}:
                     ability = "feishu-cli"
                 elif normalized_ability in {"feishu-cli", "lark-cli"}:
@@ -1643,8 +1678,9 @@ class AgentStreamExecutor:
                 return (
                     "Do not call Feishu/Lark CLI through raw bash. Use the `feishu_cli` tool first "
                     "so EcoreX can handle packaged CLI resolution, auth, timeouts, and safe output. "
-                    "If authorization is missing, call `feishu_cli` with action `auth_login` and ask "
-                    "the user to finish the displayed Feishu authorization flow."
+                    "For first-time CLI app configuration, call `feishu_cli` with action `config_init`; "
+                    "for user-scope authorization, call action `auth_login` and ask the user to finish "
+                    "the displayed Feishu authorization flow."
                 )
             if "host_diagnostics" in self.tools:
                 return (
@@ -1739,6 +1775,8 @@ class AgentStreamExecutor:
         name = text.rsplit("/", 1)[-1]
         return name in {
             "xin_agent_cli.py",
+            "xin agent cli.py",
+            "xin-agent-cli.py",
             "tongxin_cli.py",
             "tongxin-cli",
             "tongxin-cli.cmd",
@@ -1751,7 +1789,7 @@ class AgentStreamExecutor:
     @classmethod
     def _looks_like_tongxin_cli_command(cls, command: str) -> bool:
         text = str(command or "").strip().lower().replace("\\", "/")
-        if "xin_agent_cli.py" in text or "tongxin_cli.py" in text:
+        if "xin_agent_cli.py" in text or "xin agent cli.py" in text or "xin-agent-cli.py" in text or "tongxin_cli.py" in text:
             return True
         if "tongxin-cli" in text or "xin-agent-cli" in text:
             return True
@@ -1854,6 +1892,13 @@ class AgentStreamExecutor:
                 if value == "--domain" and idx + 1 < len(lark_args):
                     routed["domain"] = str(lark_args[idx + 1])
             routed.setdefault("domain", "base")
+        elif lowered[:2] == ["config", "init"]:
+            routed = {"action": "config_init"}
+            for idx, value in enumerate(lowered):
+                if value == "--brand" and idx + 1 < len(lark_args):
+                    routed["brand"] = str(lark_args[idx + 1])
+                if value == "--app-id" and idx + 1 < len(lark_args):
+                    routed["app_id"] = str(lark_args[idx + 1])
         else:
             routed = {"action": "run", "args": lark_args}
         if isinstance(original_args, dict) and original_args.get("timeout") is not None:
@@ -2035,10 +2080,7 @@ class AgentStreamExecutor:
                     if isinstance(args, dict):
                         parts = []
                         for k, v in args.items():
-                            v_str = str(v)
-                            if len(v_str) > 200:
-                                v_str = v_str[:200] + f"...({len(v_str)} chars)"
-                            parts.append(f"{k}={v_str}")
+                            parts.append(f"{k}={_safe_tool_arg_log_value(k, v)}")
                         args_str = ', '.join(parts)
                         if args_str:
                             tool_calls_str.append(f"{tc['name']}({args_str})")
@@ -2089,12 +2131,8 @@ class AgentStreamExecutor:
                         # Log tool result in compact format
                         status_emoji = "✅" if result.get("status") == "success" else "❌"
                         result_data = result.get('result', '')
-                        # Format result string with proper Chinese character support
-                        if isinstance(result_data, (dict, list)):
-                            result_str = json.dumps(result_data, ensure_ascii=False)
-                        else:
-                            result_str = str(result_data)
-                        logger.info(f"  {status_emoji} {tool_call['name']} ({result.get('execution_time', 0):.2f}s): {result_str[:200]}{'...' if len(result_str) > 200 else ''}")
+                        result_log_preview = _safe_tool_result_log_preview(result_data)
+                        logger.info(f"  {status_emoji} {tool_call['name']} ({result.get('execution_time', 0):.2f}s): {result_log_preview}")
 
                         # Build tool result block (Claude format)
                         # Format content in a way that's easy for LLM to understand

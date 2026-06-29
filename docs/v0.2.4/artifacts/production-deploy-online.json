@@ -2,18 +2,18 @@
   "artifacts": {
     "publicZip": {
       "artifactId": "EcoreX_0.2.4-public-release.zip",
-      "sha256": "4430E029180D2CF370284459C7145E99BEEEA36FD558F69A7C7E31875A924F7D",
-      "size": 380157446
+      "sha256": "E3B003CFE32B2993410E1587DF9DAAA7B8308EF81284ABF18A8F447ADDBD0566",
+      "size": 382672062
     },
     "webTarball": {
       "artifactId": "EcoreX_0.2.4-web-linux-service.tar.gz",
-      "sha256": "B52C30B92BBE26FF6A78DC6FCAF2EA20DABC0BE561425013B4608DBC77760A5B",
-      "size": 3813695
+      "sha256": "C8CEC63F0F722FF30DCE9848A7E6617735824B5D879783CCA6F0861156594A18",
+      "size": 3820515
     }
   },
   "commands": [
     {
-      "argvHash": "FF2D8B6E0D8229AA8C54B7C8460B07D7240A0E732109BDED033E650271C584E4",
+      "argvHash": "17F87E87414DF4D396F71ACCC11AA907DCEA737715A3A189F871601E885F687E",
       "exitCode": 0,
       "name": "prepare_remote_dir",
       "stderrExcerptRedacted": "",
@@ -22,7 +22,7 @@
       "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
     },
     {
-      "argvHash": "7F57DBE691D8D85B8A6135D2176D52FF873CEC2CB1CA6EFD7512C966BD30E8D9",
+      "argvHash": "D85698BB9BB43CA91790C6C1EC40EE745C25E1FC0245EEA37A9B5BCA66DD14B5",
       "exitCode": 0,
       "name": "upload_web_tar",
       "stderrExcerptRedacted": "",
@@ -31,7 +31,7 @@
       "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
     },
     {
-      "argvHash": "2DBC83D1F252410B2BD80A2D940D97F3A2C031AC134260D738F034D09CCCE521",
+      "argvHash": "64E2DFF6B5E61908382C626E9288506B88158B01F9AF44BC2FD4B3EA65E0AB6A",
       "exitCode": 0,
       "name": "upload_public_zip",
       "stderrExcerptRedacted": "",
@@ -40,7 +40,7 @@
       "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
     },
     {
-      "argvHash": "7300F7C305D28552B04010A63ED2A37DF7882345D8AF68AAD0AFDE0D00185B1A",
+      "argvHash": "846F37DB305C74173ECA553C7335D25C6FCE515056D1A0E243C9FA6DD0099317",
       "exitCode": 0,
       "name": "upload_install_web",
       "stderrExcerptRedacted": "",
@@ -49,7 +49,7 @@
       "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
     },
     {
-      "argvHash": "686C7DC1B899084A55D1F3E306805A2144C11F1361E125D428D28F7E7A25917B",
+      "argvHash": "4A6A21AF730B268B2A0ABF3CF535664E06CED29DBF52AAF831EDB7E01C20466F",
       "exitCode": 0,
       "name": "upload_check_web",
       "stderrExcerptRedacted": "",
@@ -58,7 +58,7 @@
       "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
     },
     {
-      "argvHash": "87077116CD2318550B74C1054A83EE87A5C023763EFC48B21785C5E5DFF76699",
+      "argvHash": "F1D4B290B492C42763B2E405ECA425796FEE93B766570EEF5AF495B0B816E58E",
       "exitCode": 0,
       "name": "upload_install_public",
       "stderrExcerptRedacted": "",
@@ -67,7 +67,7 @@
       "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
     },
     {
-      "argvHash": "639B22E2569958A68007A25B838707ECB8CE79FEEBC7534E9FE97EFF3B403C59",
+      "argvHash": "EDE6D12AAA44BD292D4A28C282765E41A869E7537B37E1E3E91F872133B31B98",
       "exitCode": 0,
       "name": "upload_check_server",
       "stderrExcerptRedacted": "",
@@ -76,7 +76,7 @@
       "stdoutHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855"
     },
     {
-      "argvHash": "63FF966371BEAF8EED954AEFCB532B8E803CFCA2EBAFBF43883CE1BE7B758C79",
+      "argvHash": "2F2282F9404D6E618A2B41CA154E06F96CB094E6AE1D4DBAD4BF2360DF2288C7",
       "exitCode": 0,
       "name": "chmod_release_scripts",
       "stderrExcerptRedacted": "",
@@ -94,16 +94,16 @@
       "stdoutHash": "DD28D925EBE5262CA7F75ED73D82251553F394780D8658373CB98B6F049787A0"
     },
     {
-      "argvHash": "CD0A011B17C3247F8E26D386BD1D922E0B19A3368EFD2AF53885E52D6B8F4676",
+      "argvHash": "B469551A0F498D653AE48C35F695D41189744B843BA0C5133684ED1478181C4F",
       "exitCode": 0,
       "name": "install_web_service",
       "stderrExcerptRedacted": "",
       "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
-      "stdoutExcerptRedacted": "Looking in indexes: [URL]\nRequirement already satisfied: pip in /opt/ecorex-web/venv/lib64/python3.11/site-packages (26.1.2)\nRequirement already satisfied: setuptools in /opt/ecorex-web/venv/lib64/python3.11/site-packages (82.0.1)\nRequirement already satisfied: wheel in /opt/ecorex-web/venv/lib64/python3.11/site-packages (0.47.0)\nRequirement already satisfied: packaging>=24.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from wheel) (26.2)\nLooking in indexes: [URL]\nIgnoring web.py: markers 'python_version >= \"3.13\"' don't match your environment\nIgnoring legacy-cgi: markers 'python_version >= \"3.13\"' don't match your environment\nRequirement already satisfied: numpy>=1.21 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260628170916-v0.2.4/runtime/requirements.txt (line 1)) (2.4.6)\nRequirement already satisfied: aiohttp<3.10,>=3.8.6 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260628170916-v0.2.4/runtime/requirements.txt (line 2)) (3.9.5)\nRequirement already satisfied: requests>=2.28.2 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260628170916-v0.2.4/runtime/requirements.txt (line 3)) (2.34.2)\nRequirement already satisfied: chardet>=5.1.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260628170916-v0.2.4/runtime/requirements.txt (line 4)) (7.4.3)\nRequirement already satisfied: Pillow in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260628170916-v0.2.4/runtime/requirements.txt (line 5)) (12.2.0)\nRequirement already satisfied: rapidocr-onnxruntime in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260628170916-v0.2.4/runtime/requirements.txt (line 6)) (1.4.4)\nRequirement already satisfied: python-dotenv>=1.0.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260628170916-v0.2.4/runtime/requirements.txt (line 7)) (1.2.2)\nRequirement already satisfied: PyYAML>=6.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260628170916-v0.2.4/runtime/requirements.txt (line 8)) (6.0.3)\nRequirement already satisfied: croniter>=2.0.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260628170916-v0.2.4/runtime/requirements.txt (line 9)) (6.2.2)\nRequirement already satisfied: click>=8.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260628170916-v0.2.4/runtime/requirements.txt (line 10)) (8.4.1)\nRequirement already satisfied: qrcode in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260628170916-v0.2.4/runtime/requirements.txt (line 11)) (8.2)\nRequirement already satisfied: json-repair in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260628170916-v0.2.4/run",
-      "stdoutHash": "05ADF7628FF1F5E4DBE21C2E4D0100FCEBCD5B002B095BB9CEE434D5D5B8E180"
+      "stdoutExcerptRedacted": "Looking in indexes: [URL]\nRequirement already satisfied: pip in /opt/ecorex-web/venv/lib64/python3.11/site-packages (26.1.2)\nRequirement already satisfied: setuptools in /opt/ecorex-web/venv/lib64/python3.11/site-packages (82.0.1)\nRequirement already satisfied: wheel in /opt/ecorex-web/venv/lib64/python3.11/site-packages (0.47.0)\nRequirement already satisfied: packaging>=24.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from wheel) (26.2)\nLooking in indexes: [URL]\nIgnoring web.py: markers 'python_version >= \"3.13\"' don't match your environment\nIgnoring legacy-cgi: markers 'python_version >= \"3.13\"' don't match your environment\nRequirement already satisfied: numpy>=1.21 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260629022922-v0.2.4/runtime/requirements.txt (line 1)) (2.4.6)\nRequirement already satisfied: aiohttp<3.10,>=3.8.6 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260629022922-v0.2.4/runtime/requirements.txt (line 2)) (3.9.5)\nRequirement already satisfied: requests>=2.28.2 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260629022922-v0.2.4/runtime/requirements.txt (line 3)) (2.34.2)\nRequirement already satisfied: chardet>=5.1.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260629022922-v0.2.4/runtime/requirements.txt (line 4)) (7.4.3)\nRequirement already satisfied: Pillow in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260629022922-v0.2.4/runtime/requirements.txt (line 5)) (12.2.0)\nRequirement already satisfied: rapidocr-onnxruntime in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260629022922-v0.2.4/runtime/requirements.txt (line 6)) (1.4.4)\nRequirement already satisfied: python-dotenv>=1.0.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260629022922-v0.2.4/runtime/requirements.txt (line 7)) (1.2.2)\nRequirement already satisfied: PyYAML>=6.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260629022922-v0.2.4/runtime/requirements.txt (line 8)) (6.0.3)\nRequirement already satisfied: croniter>=2.0.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260629022922-v0.2.4/runtime/requirements.txt (line 9)) (6.2.2)\nRequirement already satisfied: click>=8.0 in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260629022922-v0.2.4/runtime/requirements.txt (line 10)) (8.4.1)\nRequirement already satisfied: qrcode in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260629022922-v0.2.4/runtime/requirements.txt (line 11)) (8.2)\nRequirement already satisfied: json-repair in /opt/ecorex-web/venv/lib64/python3.11/site-packages (from -r /opt/ecorex-web/releases/20260629022922-v0.2.4/run",
+      "stdoutHash": "A116CFA9541E90B39AE4CB07B87238A871443D8049E8297364E76158559ABBD2"
     },
     {
-      "argvHash": "0CBE614ADBE3C9D13D24E6DF86FC2CC5884D6440DA0500309531D67124F4CCDD",
+      "argvHash": "47337C3734B82ABE7B6280FE376C05734BAEFB40A6A11C5983089E263E467816",
       "exitCode": 0,
       "name": "check_web_service",
       "stderrExcerptRedacted": "",
@@ -112,16 +112,16 @@
       "stdoutHash": "E5F1F7A54D0EC32A373BF39DF56F737746EA9F9EAE928BE8B094DE96C9D42196"
     },
     {
-      "argvHash": "4F6BD4EFC6C4E048C6E97D75F109849C6128050B18E18EB55584E438DAD2C062",
+      "argvHash": "B3751FB218412B08BAC25D44FFE5DF258464C8F3223ED8774D3007E259D1EA22",
       "exitCode": 0,
       "name": "install_public_site_admin",
       "stderrExcerptRedacted": "",
       "stderrHash": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855",
-      "stdoutExcerptRedacted": "EcoreX public release installed.\nversion: 0.2.4\nzipSha256: 4430E029180D2CF370284459C7145E99BEEEA36FD558F69A7C7E31875A924F7D\nreleaseDir: /srv/ecorex-agent-download/releases/20260628170920-v0.2.4\ncurrent: /srv/ecorex-agent-download/current\nadminApp: /srv/ecorex-agent-admin/app\nadminEnv: /srv/ecorex-agent-admin/env/ecorex-admin-api.env\nadminComposeContext: /opt/xhs-report/_ecorex_admin_api\nserverHelpers: /srv/ecorex-agent-admin/server\n",
-      "stdoutHash": "1E8ADF982649FF669D855D3AE0C00C568D9EAEA8CBB8BE1CF25DD3E03F789B4F"
+      "stdoutExcerptRedacted": "EcoreX public release installed.\nversion: 0.2.4\nzipSha256: E3B003CFE32B2993410E1587DF9DAAA7B8308EF81284ABF18A8F447ADDBD0566\nreleaseDir: /srv/ecorex-agent-download/releases/20260629022926-v0.2.4\ncurrent: /srv/ecorex-agent-download/current\nadminApp: /srv/ecorex-agent-admin/app\nadminEnv: /srv/ecorex-agent-admin/env/ecorex-admin-api.env\nadminComposeContext: /opt/xhs-report/_ecorex_admin_api\nserverHelpers: /srv/ecorex-agent-admin/server\n",
+      "stdoutHash": "EC0D790E86D2727B262037B231BCD8519904F7CF0D77C6BD1B9A7C3FBDAB182C"
     },
     {
-      "argvHash": "3C99C62AB17D4901E71C83367B5CF055D4F105B45053DE94C191380D83003130",
+      "argvHash": "0E460F9B2639155E0A854B55E982B57A3DA537E11C1779BF43BEF0B5AE6D33D4",
       "exitCode": 0,
       "name": "check_public_site_admin",
       "stderrExcerptRedacted": "",
@@ -139,7 +139,7 @@
       "stdoutHash": "DD28D925EBE5262CA7F75ED73D82251553F394780D8658373CB98B6F049787A0"
     }
   ],
-  "generatedAt": "2026-06-28T17:09:24.738293+00:00",
+  "generatedAt": "2026-06-29T02:29:29.848560+00:00",
   "onlineChecks": {
     "installationManifestVersion": "0.2.4",
     "publicManifestVersion": "0.2.4",

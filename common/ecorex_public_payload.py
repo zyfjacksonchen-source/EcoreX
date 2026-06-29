@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 
 
 _SENSITIVE_KEY_RE = re.compile(
-    r"(?i)(api[_-]?key|token|password|passwd|secret|authorization|cookie|session|app[_-]?id|client[_-]?id|open[_-]?id|chat[_-]?id|union[_-]?id|message[_-]?id|receive[_-]?id|qrcode|qr[_-]?(?:url|image)|verification[_-]?(?:url|uri)|home[_-]?channel)"
+    r"(?i)(api[_-]?key|token|password|passwd|secret|authorization|cookie|session|device[_-]?code|app[_-]?id|client[_-]?id|open[_-]?id|chat[_-]?id|union[_-]?id|message[_-]?id|receive[_-]?id|qrcode|qr[_-]?(?:url|image)|verification[_-]?(?:url|uri)|home[_-]?channel)"
 )
 _CONTENT_KEY_RE = re.compile(
     r"(?i)^(content|contents|body|file_content|file_contents|source|script|code|markdown|prompt|instructions?)$"
@@ -28,7 +28,7 @@ _SENSITIVE_TEXT_PATTERNS = [
     (re.compile(r"(?i)https://open\.feishu\.cn/[^\s\"')<>]+"), "https://open.feishu.cn/[redacted]"),
     (re.compile(r"(?i)data:image/(?:png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]{32,}"), "data:image/[redacted]"),
     (
-        re.compile(r"(?i)(api[_-]?key|token|password|passwd|secret|authorization|cookie)(\"?\s*[:=]\s*\"?)[^\",\s&}]+"),
+        re.compile(r"(?i)(api[_-]?key|token|password|passwd|secret|authorization|cookie|device[_-]?code)(\"?\s*[:=]\s*\"?)[^\",\s&}]+"),
         r"\1\2***",
     ),
 ]

@@ -15,6 +15,7 @@ tmp
 plugins.json
 *.log
 logs/
+capability-state/
 workspace
 config.yaml
 user_datas.pkl

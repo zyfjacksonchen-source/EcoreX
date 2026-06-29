@@ -242,7 +242,29 @@ def _is_read_only_tongxin_cli_request(args: Dict[str, Any]) -> bool:
         return is_read_only_tongxin_request(args)
     except Exception:
         action = str((args or {}).get("action") or "").strip().lower()
-        return action in {"status", "schema", "diagnose"}
+        if action in {"status", "schema", "diagnose"}:
+            return True
+        return False
+
+
+def _is_tongxin_auto_configure_request(args: Dict[str, Any]) -> bool:
+    action = str((args or {}).get("action") or "").strip().lower()
+    return action == "configure" and not any((args or {}).get(key) for key in ("script_path", "scriptPath", "path"))
+
+
+def _is_tongxin_capability_configure_request(tool_name: str, args: Dict[str, Any]) -> bool:
+    normalized_tool = str(tool_name or "").strip().lower()
+    action = str((args or {}).get("action") or "").strip().lower().replace("-", "_")
+    ability = str((args or {}).get("ability") or (args or {}).get("pack_id") or "").strip().lower().replace("_", "-")
+    aliases = {"tongxin", "tongxin-cli", "xin-agent", "xin-agent-cli", "tx-assistant"}
+    has_explicit_path = any((args or {}).get(key) for key in ("script_path", "scriptPath", "path"))
+    if has_explicit_path:
+        return False
+    if normalized_tool == "optional_abilities":
+        return action in {"configure", "install"} and ability in aliases
+    if normalized_tool == "agent_capability":
+        return action == "install_pack" and ability in aliases
+    return False
 
 
 def _normalize_access(value: Any, default: str = "deny") -> str:
@@ -413,9 +435,15 @@ class ToolPermissionBroker:
             return {"allowed": True, "reason": "read-only-optional-ability-status"}
         if normalized_tool == "agent_capability" and str(args.get("action") or "").strip().lower() in {"list_packs", "diagnose"}:
             return {"allowed": True, "reason": "read-only-agent-capability-status"}
+        if normalized_tool == "tongxin_cli" and _is_tongxin_auto_configure_request(args):
+            self._audit("tool-execution", "allow", {"tool": normalized_tool, "reason": "default-tongxin-cli-auto-config"})
+            return {"allowed": True, "reason": "default-tongxin-cli-auto-config"}
         if normalized_tool == "tongxin_cli" and _is_read_only_tongxin_cli_request(args):
             self._audit("tool-execution", "allow", {"tool": normalized_tool, "reason": "default-read-only-tongxin-cli"})
             return {"allowed": True, "reason": "default-read-only-tongxin-cli"}
+        if _is_tongxin_capability_configure_request(normalized_tool, args):
+            self._audit("tool-execution", "allow", {"tool": normalized_tool, "reason": "default-tongxin-cli-auto-config"})
+            return {"allowed": True, "reason": "default-tongxin-cli-auto-config"}
         if not self._requires_permission(normalized_tool):
             return {"allowed": True, "reason": "not-required"}
 
@@ -538,9 +566,15 @@ class ToolPermissionBroker:
             return {"allowed": True, "reason": "read-only-optional-ability-status"}
         if normalized_tool == "agent_capability" and str(args.get("action") or "").strip().lower() in {"list_packs", "diagnose"}:
             return {"allowed": True, "reason": "read-only-agent-capability-status"}
+        if normalized_tool == "tongxin_cli" and _is_tongxin_auto_configure_request(args):
+            self._audit("tool-execution", "allow", {"tool": normalized_tool, "reason": "default-tongxin-cli-auto-config"})
+            return {"allowed": True, "reason": "default-tongxin-cli-auto-config"}
         if normalized_tool == "tongxin_cli" and _is_read_only_tongxin_cli_request(args):
             self._audit("tool-execution", "allow", {"tool": normalized_tool, "reason": "default-read-only-tongxin-cli"})
             return {"allowed": True, "reason": "default-read-only-tongxin-cli"}
+        if _is_tongxin_capability_configure_request(normalized_tool, args):
+            self._audit("tool-execution", "allow", {"tool": normalized_tool, "reason": "default-tongxin-cli-auto-config"})
+            return {"allowed": True, "reason": "default-tongxin-cli-auto-config"}
         if not self._requires_permission(normalized_tool):
             return {"allowed": True, "reason": "not-required"}
 

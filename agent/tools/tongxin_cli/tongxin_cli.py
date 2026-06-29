@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import signal
@@ -19,6 +20,12 @@ from common.log import logger
 DEFAULT_TIMEOUT_SECONDS = 60
 MAX_OUTPUT_CHARS = 12000
 DEFAULT_SCRIPT_NAME = "xin_agent_cli.py"
+SUPPORTED_SCRIPT_NAMES = (
+    DEFAULT_SCRIPT_NAME,
+    "xin agent cli.py",
+    "xin-agent-cli.py",
+    "tongxin_cli.py",
+)
 DEFAULT_TONGXIN_SCOPE = "all-users-read-only"
 
 READ_ONLY_ALLOWED_COMMANDS = (
@@ -205,6 +212,17 @@ def _sanitize_json(value: Any, *, parent_key: str = "") -> Any:
     if isinstance(value, str):
         return _sanitize(value)
     return value
+
+
+def _path_ref(value: Any) -> Dict[str, Any]:
+    raw = str(value or "").strip()
+    if not raw:
+        return {"present": False}
+    return {
+        "present": True,
+        "name": Path(raw).name,
+        "pathHash": hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:16],
+    }
 
 
 def _is_sensitive_json_key(key: Any) -> bool:
@@ -415,7 +433,8 @@ class TongxinCli(BaseTool):
     name: str = "tongxin_cli"
     description: str = (
         "Default all-user read-only access to Tongxin Assistant / Xin Agent account data. "
-        "Use this instead of bash for xin_agent_cli.py. It can run schema and approved "
+        "Use this instead of bash for xin_agent_cli.py. It can configure an existing "
+        "local CLI path, run schema, and run approved "
         "read-only account/project/report/note/realtime queries only; write, sync, auth, "
         "submit, approve, delete, and permission-changing commands are blocked."
     )
@@ -424,7 +443,11 @@ class TongxinCli(BaseTool):
         "properties": {
             "action": {
                 "type": "string",
-                "description": "One of: status, schema, diagnose, run.",
+                "description": "One of: status, configure, schema, diagnose, run.",
+            },
+            "script_path": {
+                "type": "string",
+                "description": "Optional local xin_agent_cli.py path for action=configure. If omitted, EcoreX persists the auto-discovered local path.",
             },
             "args": {
                 "type": "array",
@@ -456,6 +479,8 @@ class TongxinCli(BaseTool):
         include_paths = bool(args.get("include_paths"))
         if action in {"status", "diagnose"}:
             return ToolResult.success(self._status(include_paths=include_paths, diagnose=action == "diagnose"))
+        if action == "configure":
+            return self._configure(args, include_paths=include_paths)
         if action == "schema":
             return self._run_cli(["schema"], timeout, include_paths=include_paths)
         if action == "run":
@@ -470,37 +495,130 @@ class TongxinCli(BaseTool):
                     "allowedCommands": list(READ_ONLY_ALLOWED_COMMANDS),
                 })
             return self._run_cli(cli_args, timeout, include_paths=include_paths)
-        return ToolResult.fail({"status": "error", "message": "action must be one of: status, schema, diagnose, run"})
+        return ToolResult.fail({"status": "error", "message": "action must be one of: status, configure, schema, diagnose, run"})
 
     def _status(self, *, include_paths: bool = False, diagnose: bool = False) -> Dict[str, Any]:
         script = self._script_path()
+        auto_configurable = self._auto_configurable_script_path()
+        configured_path = self._configured_script_path()
+        persisted = bool(configured_path)
+        configured_script = self._resolve_configurable_script(configured_path) if configured_path else None
+        configured = bool(
+            configured_script
+            and script
+            and self._same_path(configured_script, script)
+        )
         payload: Dict[str, Any] = {
             "status": "success",
             "available": bool(script),
             "tool": self.name,
-            "scriptName": DEFAULT_SCRIPT_NAME,
+            "scriptName": script.name if script else DEFAULT_SCRIPT_NAME,
             "readOnly": True,
             "defaultAudience": DEFAULT_TONGXIN_SCOPE,
             "allowedCommands": list(READ_ONLY_ALLOWED_COMMANDS),
-            "configured": bool(self._configured_script_path()),
+            "configured": configured,
+            "persistedConfig": persisted,
+            "autoConfigurable": bool(auto_configurable),
+            "configurationState": (
+                "configured"
+                if configured
+                else "detected_unconfigured"
+                if auto_configurable
+                else "detected_untrusted"
+                if script
+                else "missing"
+            ),
         }
         if include_paths:
-            payload["scriptPath"] = str(script) if script else ""
-            payload["candidatePaths"] = [str(path) for path in self._candidate_script_paths()]
+            payload["pathsRedacted"] = True
+            payload["scriptPathRef"] = _path_ref(script)
+            payload["candidatePathRefs"] = [_path_ref(path) for path in self._candidate_script_paths()]
+            payload["configuredScriptPathRef"] = _path_ref(configured_path)
         if diagnose:
-            payload["python"] = sys.executable
-            payload["cwd"] = self.cwd
+            payload["pythonRef"] = _path_ref(sys.executable)
+            payload["cwdRef"] = _path_ref(self.cwd)
         if not script:
             payload["message"] = (
                 "Tongxin CLI script was not found. Configure tools.tongxin_cli.script_path "
                 "or ECOREX_TONGXIN_CLI_PATH to the read-only xin_agent_cli.py path."
             )
+        elif not configured:
+            if auto_configurable:
+                payload["message"] = (
+                    "Tongxin CLI script was auto-discovered but not persisted. "
+                    "Run tongxin_cli action=configure or use EcoreX capability configuration to save it."
+                )
+            else:
+                payload["message"] = (
+                    "Tongxin CLI script was detected outside trusted auto-configuration roots. "
+                    "Pass script_path explicitly and approve the local configuration action to use it."
+                )
         return payload
 
-    def _run_cli(self, cli_args: List[str], timeout: int, *, include_paths: bool = False) -> ToolResult:
-        script = self._script_path()
+    def _configure(self, args: Dict[str, Any], *, include_paths: bool = False) -> ToolResult:
+        explicit_path = any(args.get(key) for key in ("script_path", "scriptPath", "path"))
+        candidate = (
+            args.get("script_path")
+            or args.get("scriptPath")
+            or args.get("path")
+            or self._auto_configurable_script_path()
+        )
+        script = self._resolve_configurable_script(candidate)
         if not script:
-            return ToolResult.fail(self._status(include_paths=include_paths))
+            payload = self._status(include_paths=include_paths)
+            payload.update({
+                "status": "error",
+                "configured": False,
+                "configurationState": payload.get("configurationState") or "missing",
+                "message": (
+                    "No trusted Tongxin xin_agent_cli.py script was found for automatic configuration. "
+                    "Pass script_path explicitly and approve the local configuration action."
+                    if not explicit_path else
+                    "No local Tongxin xin_agent_cli.py script was found to configure."
+                ),
+            })
+            return ToolResult.fail(payload)
+        try:
+            config_path = self._persist_script_path(script)
+        except Exception as exc:
+            return ToolResult.fail({
+                "status": "error",
+                "available": True,
+                "configured": False,
+                "configurationState": "persist_failed",
+                "message": f"Failed to persist Tongxin CLI configuration: {exc}",
+            })
+
+        payload: Dict[str, Any] = {
+            "status": "success",
+            "available": True,
+            "configured": True,
+            "persistedConfig": True,
+            "configurationState": "configured",
+            "tool": self.name,
+            "scriptName": script.name,
+            "readOnly": True,
+            "defaultAudience": DEFAULT_TONGXIN_SCOPE,
+            "configKey": "tools.tongxin_cli.script_path",
+            "message": "Tongxin CLI read-only path configured in EcoreX.",
+        }
+        if include_paths:
+            payload["pathsRedacted"] = True
+            payload["scriptPathRef"] = _path_ref(script)
+            payload["configPathRef"] = _path_ref(config_path)
+        return ToolResult.success(payload)
+
+    def _run_cli(self, cli_args: List[str], timeout: int, *, include_paths: bool = False) -> ToolResult:
+        script = self._execution_script_path()
+        if not script:
+            payload = self._status(include_paths=include_paths)
+            payload["status"] = "error"
+            if payload.get("available"):
+                payload["message"] = (
+                    "Tongxin CLI script is detected but is not configured or trusted for automatic execution. "
+                    "Use tongxin_cli action=configure for trusted local installs, or pass script_path explicitly and approve configuration."
+                )
+            return ToolResult.fail(payload)
         env = os.environ.copy()
         env.setdefault("PYTHONIOENCODING", "utf-8")
         command = [sys.executable, str(script), *cli_args]
@@ -549,35 +667,30 @@ class TongxinCli(BaseTool):
             "defaultAudience": DEFAULT_TONGXIN_SCOPE,
         }
         if include_paths:
-            payload["scriptPath"] = str(script)
+            payload["pathsRedacted"] = True
+            payload["scriptPathRef"] = _path_ref(script)
         if result.returncode != 0:
             return ToolResult.fail(payload)
         return ToolResult.success(payload)
 
     def _candidate_script_paths(self) -> List[Path]:
         configured = self._configured_script_path()
-        runtime_root = Path(__file__).resolve().parents[3]
         raw: List[Any] = [
             configured,
-            os.environ.get("ECOREX_TONGXIN_CLI_PATH"),
-            os.environ.get("XIN_AGENT_CLI_PATH"),
-            os.environ.get("TONGXIN_CLI_PATH"),
-            Path(self.cwd) / DEFAULT_SCRIPT_NAME,
-            runtime_root / "tools" / "tongxin" / DEFAULT_SCRIPT_NAME,
-            runtime_root / DEFAULT_SCRIPT_NAME,
-            Path("C:/自动报表工具") / DEFAULT_SCRIPT_NAME,
-            Path("C:/EcoreX Artifact Desk") / DEFAULT_SCRIPT_NAME,
+            *self._env_script_path_values(),
+            *self._trusted_auto_config_roots(),
+            Path(self.cwd),
         ]
         paths: List[Path] = []
         seen = set()
         for item in raw:
             if not item:
                 continue
-            path = Path(str(item)).expanduser()
-            key = str(path).lower()
-            if key not in seen:
-                seen.add(key)
-                paths.append(path)
+            for path in self._expand_script_candidates(item):
+                key = str(path).lower()
+                if key not in seen:
+                    seen.add(key)
+                    paths.append(path)
         return paths
 
     def _configured_script_path(self) -> str:
@@ -585,6 +698,14 @@ class TongxinCli(BaseTool):
             value = self.config.get(key)
             if value:
                 return str(value)
+        file_cfg = self._read_runtime_config()
+        file_tools = file_cfg.get("tools") if isinstance(file_cfg.get("tools"), dict) else {}
+        file_tongxin = file_tools.get("tongxin_cli") if isinstance(file_tools, dict) else None
+        if isinstance(file_tongxin, dict):
+            for key in ("script_path", "scriptPath", "path"):
+                value = file_tongxin.get(key)
+                if value:
+                    return str(value)
         try:
             from config import conf
 
@@ -601,12 +722,173 @@ class TongxinCli(BaseTool):
 
     def _script_path(self) -> Optional[Path]:
         for path in self._candidate_script_paths():
+            script = self._resolve_configurable_script(path)
+            if script:
+                return script
+        return None
+
+    def _execution_script_path(self) -> Optional[Path]:
+        raw: List[Any] = [
+            self._configured_script_path(),
+            *self._env_script_path_values(),
+            *self._trusted_auto_config_roots(),
+        ]
+        for item in raw:
+            if not item:
+                continue
+            script = self._resolve_configurable_script(item)
+            if script:
+                return script
+        return None
+
+    def _auto_configurable_script_path(self) -> Optional[Path]:
+        raw: List[Any] = [
+            *self._env_script_path_values(),
+            *self._trusted_auto_config_roots(),
+        ]
+        for item in raw:
+            if not item:
+                continue
+            script = self._resolve_configurable_script(item)
+            if script and (self._matches_env_script_path(script) or self._is_trusted_auto_config_path(script)):
+                return script
+        return None
+
+    def _resolve_configurable_script(self, candidate: Any) -> Optional[Path]:
+        if not candidate:
+            return None
+        for path in self._expand_script_candidates(candidate):
             try:
-                if path.is_file():
-                    return path
+                resolved = path.expanduser().resolve()
+            except Exception:
+                resolved = path.expanduser()
+            try:
+                if (
+                    resolved.is_file()
+                    and resolved.suffix.lower() == ".py"
+                    and resolved.name.lower() in {name.lower() for name in SUPPORTED_SCRIPT_NAMES}
+                ):
+                    return resolved
             except Exception:
                 continue
         return None
+
+    @staticmethod
+    def _same_path(left: Path, right: Path) -> bool:
+        try:
+            return left.resolve() == right.resolve()
+        except Exception:
+            return str(left).lower() == str(right).lower()
+
+    def _env_script_path_values(self) -> List[str]:
+        values = []
+        for key in ("ECOREX_TONGXIN_CLI_PATH", "XIN_AGENT_CLI_PATH", "TONGXIN_CLI_PATH"):
+            value = os.environ.get(key)
+            if value:
+                values.append(value)
+        return values
+
+    def _trusted_auto_config_roots(self) -> List[Path]:
+        runtime_root = Path(__file__).resolve().parents[3]
+        roots = [
+            runtime_root / "tools" / "tongxin",
+            runtime_root,
+            Path("C:/自动报表工具"),
+            Path("C:/EcoreX Artifact Desk"),
+        ]
+        extra = os.environ.get("ECOREX_TONGXIN_TRUSTED_ROOTS")
+        if extra:
+            roots.extend(Path(item).expanduser() for item in extra.split(os.pathsep) if item.strip())
+        return roots
+
+    def _matches_env_script_path(self, script: Path) -> bool:
+        for value in self._env_script_path_values():
+            for candidate in self._expand_script_candidates(value):
+                resolved = self._resolve_configurable_script(candidate)
+                if resolved and self._same_path(resolved, script):
+                    return True
+        return False
+
+    def _is_trusted_auto_config_path(self, script: Path) -> bool:
+        for root in self._trusted_auto_config_roots():
+            if self._path_within(script, root):
+                return True
+        return False
+
+    @staticmethod
+    def _path_within(path: Path, root: Path) -> bool:
+        try:
+            resolved_path = path.expanduser().resolve()
+            resolved_root = root.expanduser().resolve()
+            resolved_path.relative_to(resolved_root)
+            return True
+        except Exception:
+            try:
+                path_text = os.path.normcase(os.path.abspath(str(path)))
+                root_text = os.path.normcase(os.path.abspath(str(root)))
+                return os.path.commonpath([path_text, root_text]) == root_text
+            except Exception:
+                return False
+
+    @staticmethod
+    def _expand_script_candidates(value: Any) -> List[Path]:
+        path = Path(str(value)).expanduser()
+        if path.name.lower() in {name.lower() for name in SUPPORTED_SCRIPT_NAMES}:
+            return [path]
+        candidates = [path / name for name in SUPPORTED_SCRIPT_NAMES]
+        if path.suffix.lower() == ".py":
+            candidates.insert(0, path)
+        return candidates
+
+    def _runtime_config_path(self) -> Path:
+        configured = self.config.get("config_path") or self.config.get("configPath")
+        if configured:
+            return Path(str(configured)).expanduser()
+        return Path(__file__).resolve().parents[3] / "config.json"
+
+    def _read_runtime_config(self) -> Dict[str, Any]:
+        path = self._runtime_config_path()
+        if not path.exists():
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def _persist_script_path(self, script: Path) -> Path:
+        config_path = self._runtime_config_path()
+        data = self._read_runtime_config()
+        tools = data.get("tools")
+        if not isinstance(tools, dict):
+            tools = {}
+            data["tools"] = tools
+        tongxin = tools.get("tongxin_cli")
+        if not isinstance(tongxin, dict):
+            tongxin = {}
+            tools["tongxin_cli"] = tongxin
+        tongxin["script_path"] = str(script)
+        tongxin["read_only"] = True
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        self.config["script_path"] = str(script)
+        try:
+            from config import conf
+
+            live = conf()
+            live_tools = live.get("tools", {})
+            if not isinstance(live_tools, dict):
+                live_tools = {}
+                live["tools"] = live_tools
+            live_tongxin = live_tools.get("tongxin_cli")
+            if not isinstance(live_tongxin, dict):
+                live_tongxin = {}
+                live_tools["tongxin_cli"] = live_tongxin
+            live_tongxin["script_path"] = str(script)
+            live_tongxin["read_only"] = True
+        except Exception as exc:
+            logger.debug(f"[TongxinCli] live config update skipped: {exc}")
+        return config_path
 
     @staticmethod
     def _display_command(cli_args: List[str]) -> List[str]:

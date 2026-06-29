@@ -6238,8 +6238,8 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertTrue(feishu["running"])
         self.assertEqual(feishu["configState"], "configured")
         self.assertEqual(feishu["auth"]["mode"], "bot_app_credentials")
-        self.assertEqual(feishu["auth"]["authEndpoint"], "/api/feishu/register")
-        self.assertEqual(feishu["auth"]["agentAuthorizationAction"]["action"], "auth_login")
+        self.assertEqual(feishu["auth"]["authEndpoint"], "")
+        self.assertEqual(feishu["auth"]["agentAuthorizationAction"]["action"], "config_init")
         self.assertEqual(feishu["agentSurface"]["tool"], "feishu_cli")
         self.assertTrue(feishu["agentSurface"]["schemaVisible"])
         self.assertTrue(feishu["agentSurface"]["toolSchemaCallable"])
@@ -6289,7 +6289,7 @@ class TestWebParallelHandlers(unittest.TestCase):
         execute.assert_not_called()
         channels = {item["name"]: item for item in payload["channels"]}
         feishu = channels["feishu"]
-        self.assertEqual(feishu["auth"]["authEndpoint"], "/api/feishu/register")
+        self.assertEqual(feishu["auth"]["authEndpoint"], "")
         self.assertEqual(feishu["auth"]["channelConfigState"], "configured")
         self.assertEqual(feishu["agentSurface"]["tool"], "feishu_cli")
         self.assertTrue(feishu["agentSurface"]["schemaVisible"])
@@ -6673,8 +6673,14 @@ class TestWebParallelHandlers(unittest.TestCase):
         self.assertIn('Install-WindowsRuntimeDependency -RuntimeDir $winRuntime -ModuleName "lark_oapi"', release_script)
         self.assertNotIn('Ensure-PythonDependency -Python $python -StateDir $stateDir -ModuleName "lark_oapi"', release_script)
         self.assertIn('Write-OptionalPythonDependencyNotice -StateDir $stateDir -ModuleName "lark_oapi"', release_script)
-        self.assertIn("function refreshFeishuAfterRegister()", console_source)
+        self.assertIn("fetch('/api/external-connections/feishu/actions'", console_source)
+        self.assertIn("action: 'agent_auth'", console_source)
+        self.assertNotIn("fetch('/api/feishu/register'", console_source)
+        self.assertNotIn("function refreshFeishuAfterRegister()", console_source)
         self.assertNotIn("connectFeishuAfterRegister", console_source)
+        self.assertIn("function handleFeishuCliAuthPayload(request, payload)", web_source)
+        self.assertIn("showFeishuCliAuthNotice(url)", web_source)
+        self.assertIn('url.indexOf("https://open.feishu.cn/") === 0', web_source)
 
         self.assertIn("function artifactMergeKey", app_source)
         self.assertIn("function normalizeArtifactKeySource(value?: string)", app_source)
@@ -14128,6 +14134,35 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertTrue(executor._force_text_response_next_turn)
         self.assertIn("Feishu authorization", executor._force_text_response_reason)
+
+    def test_feishu_config_init_raw_cli_autoroutes_to_nonblocking_action(self):
+        from agent.protocol.agent_stream import AgentStreamExecutor
+
+        routed = AgentStreamExecutor._feishu_autoroute_args(
+            ["config", "init", "--new", "--brand", "feishu"],
+            {"timeout": 240},
+        )
+
+        self.assertEqual(routed["action"], "config_init")
+        self.assertEqual(routed["brand"], "feishu")
+        self.assertEqual(routed["timeout"], 240)
+        self.assertNotEqual(routed.get("action"), "run")
+
+    def test_agent_stream_tool_log_helpers_redact_feishu_sensitive_args(self):
+        from agent.protocol.agent_stream import _safe_tool_arg_log_value, _safe_tool_result_log_preview
+
+        arg_preview = _safe_tool_arg_log_value("device_code", "device-code-secret")
+        secret_preview = _safe_tool_arg_log_value("app_secret", "app-secret-value")
+        result_preview = _safe_tool_result_log_preview({
+            "deviceCode": "device-code-secret",
+            "appSecret": "app-secret-value",
+            "verificationUrl": "https://open.feishu.cn/page/cli?user_code=ABCD",
+        })
+
+        combined = "\n".join([arg_preview, secret_preview, result_preview])
+        self.assertNotIn("device-code-secret", combined)
+        self.assertNotIn("app-secret-value", combined)
+        self.assertIn("[redacted]", combined)
 
     def test_remote_document_download_obeys_filesystem_profile_before_network(self):
         from agent.tools.web_fetch.web_fetch import WebFetch

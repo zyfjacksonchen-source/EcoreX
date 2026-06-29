@@ -1,5 +1,7 @@
 import json
+import subprocess
 import sys
+import time
 import types
 from unittest.mock import patch
 
@@ -76,6 +78,7 @@ def test_feishu_cli_auth_start_uses_codex_split_flow_and_qrcode(tmp_path):
     assert qr_command[:3] == ["lark-cli", "auth", "qrcode"]
     assert qr_command[3] == start_payload["verification_url"]
     assert "--output" in qr_command
+    assert safe_run.call_args_list[1].args[2] <= 5
 
 
 def test_feishu_cli_auth_complete_uses_device_code_without_blocking_start_flags():
@@ -120,6 +123,104 @@ def test_feishu_cli_config_init_uses_external_credentials_over_stdin():
     ]
     assert safe_run.call_args.kwargs["input_text"] == "test-secret\n"
     assert result.result["credentialSource"] == "tool_args"
+
+
+def test_feishu_cli_config_init_new_returns_url_before_cli_writeback(tmp_path):
+    from agent.tools.feishu_cli.feishu_cli import FeishuCli
+
+    fake_cli = tmp_path / "fake_lark_cli.py"
+    fake_cli.write_text(
+        "\n".join([
+            "import sys, time",
+            "args = sys.argv[1:]",
+            "if args[:3] == ['config', 'init', '--new']:",
+            "    sys.stderr.write('打开以下链接配置应用:\\n')",
+            "    sys.stderr.write('  https://open.feishu.cn/page/cli?user_code=ABCD-1234&from=cli\\n')",
+            "    sys.stderr.write('等待配置应用...\\n')",
+            "    sys.stderr.flush()",
+            "    time.sleep(0.8)",
+            "    sys.stdout.write('{\"appId\":\"cli_test\",\"appSecret\":\"real-secret-after-writeback\",\"brand\":\"feishu\"}\\n')",
+            "    sys.stdout.flush()",
+            "    sys.exit(0)",
+            "sys.stderr.write('unexpected command: ' + ' '.join(args))",
+            "sys.exit(2)",
+        ]),
+        encoding="utf-8",
+    )
+
+    tool = FeishuCli({"cwd": str(tmp_path)})
+    with patch("agent.tools.feishu_cli.feishu_cli._resolve_lark_command", return_value=[sys.executable, str(fake_cli)]), \
+            patch.object(FeishuCli, "_generate_auth_qrcode", return_value={"status": "success", "path": "qr.png"}):
+        started = time.monotonic()
+        result = tool.execute({"action": "config_init", "timeout": 240})
+        elapsed = time.monotonic() - started
+
+    assert elapsed < 5
+    assert result.status == "success"
+    assert result.result["status"] == "auth_pending"
+    assert result.result["authFlow"] == "config_init_start"
+    assert result.result["authRequired"] is True
+    assert result.result["backgroundProcess"] is True
+    assert result.result["writebackPending"] is True
+    assert result.result["cliWritebackTimeoutSeconds"] == 240
+    assert result.result["verificationUrl"] == "https://open.feishu.cn/page/cli?user_code=ABCD-1234&from=cli"
+    assert result.result["nextAction"] == {"tool": "feishu_cli", "action": "status"}
+    assert result.result["stdoutLogPath"].endswith(".out.log")
+    assert result.result["stderrLogPath"].endswith(".err.log")
+    time.sleep(1.0)
+    stdout_log = open(result.result["stdoutLogPath"], encoding="utf-8").read()
+    stderr_log = open(result.result["stderrLogPath"], encoding="utf-8").read()
+    assert "real-secret-after-writeback" not in stdout_log + stderr_log
+    assert "appSecret" in stdout_log
+
+
+def test_feishu_cli_safe_run_redacts_json_payload():
+    from agent.tools.feishu_cli.feishu_cli import FeishuCli
+
+    raw = {
+        "appId": "cli_visible_app",
+        "appSecret": "raw-app-secret",
+        "access_token": "raw-access-token",
+        "refreshToken": "raw-refresh-token",
+        "nested": {
+            "authorization": "Bearer raw-auth-token",
+            "device_code": "device-code-kept-for-split-flow",
+            "verification_url": "https://open.feishu.cn/page/cli?user_code=ABCD",
+        },
+    }
+    completed = subprocess.CompletedProcess(["lark-cli"], 0, json.dumps(raw), "")
+    with patch("agent.tools.feishu_cli.feishu_cli._run_process", return_value=completed):
+        result = FeishuCli()._safe_run(["lark-cli", "auth", "status", "--json"], {}, 5)
+
+    serialized = json.dumps(result, ensure_ascii=False)
+    assert "raw-app-secret" not in serialized
+    assert "raw-access-token" not in serialized
+    assert "raw-refresh-token" not in serialized
+    assert "raw-auth-token" not in serialized
+    assert result["json"]["appSecret"] == "***"
+    assert result["json"]["access_token"] == "***"
+    assert result["json"]["refreshToken"] == "***"
+    assert result["json"]["nested"]["authorization"] == "***"
+    assert result["json"]["nested"]["device_code"] == "device-code-kept-for-split-flow"
+    assert result["json"]["nested"]["verification_url"] == "https://open.feishu.cn/page/cli?user_code=ABCD"
+
+
+def test_public_redaction_hides_feishu_device_code():
+    from common.ecorex_public_payload import redact_public_tool_value
+
+    public = redact_public_tool_value({
+        "deviceCode": "device-code-secret",
+        "nextAction": {
+            "tool": "feishu_cli",
+            "action": "auth_login",
+            "device_code": "device-code-secret",
+        },
+    })
+    serialized = json.dumps(public, ensure_ascii=False)
+
+    assert "device-code-secret" not in serialized
+    assert public["deviceCode"] == "[redacted]"
+    assert public["nextAction"]["device_code"] == "[redacted]"
 
 
 def test_feishu_cli_display_command_redacts_app_and_device_values():
@@ -192,3 +293,104 @@ def test_feishu_cli_external_connection_probe_uses_structured_tool(monkeypatch, 
     assert safe["available"] is True
     assert safe["authState"] == "ready"
     assert "authStatus" not in safe
+
+
+def test_feishu_cli_auth_url_survives_webui_tool_result_redaction():
+    _install_web_stub()
+    from channel.web import web_channel
+
+    channel = web_channel.WebChannel()
+    url = "https://open.feishu.cn/page/cli?user_code=ABCD-1234&from=cli"
+
+    feishu_result, _meta = channel._bounded_tool_result_for_sse({
+        "authRequired": True,
+        "writebackPending": True,
+        "verificationUrl": url,
+        "qrCode": {"status": "success", "path": "C:/workspace/.ecorex/lark-auth/qr.png"},
+        "output": f"open {url}",
+    }, "feishu_cli")
+    other_result, _ = channel._bounded_tool_result_for_sse({
+        "verificationUrl": url,
+        "output": f"open {url}",
+    }, "remote_tool")
+
+    assert url in feishu_result
+    assert "writebackPending" in feishu_result
+    assert "C:/workspace/.ecorex/lark-auth/qr.png" not in feishu_result
+    assert url not in other_result
+
+
+def test_feishu_auth_restore_does_not_readd_raw_device_code():
+    _install_web_stub()
+    from channel.web import web_channel
+
+    channel = web_channel.WebChannel()
+    url = "https://open.feishu.cn/page/cli?user_code=ABCD-1234&from=cli"
+    result, _meta = channel._bounded_tool_result_for_sse({
+        "authRequired": True,
+        "verificationUrl": url,
+        "deviceCode": "device-code-secret",
+        "nextAction": {
+            "tool": "feishu_cli",
+            "action": "auth_login",
+            "device_code": "device-code-secret",
+        },
+    }, "feishu_cli")
+
+    assert url in result
+    assert "device-code-secret" not in result
+    assert "[redacted]" in result
+
+
+def test_feishu_external_connection_agent_auth_returns_visible_cli_link(monkeypatch):
+    _install_web_stub()
+    from agent.tools.base_tool import ToolResult
+    from agent.tools.feishu_cli.feishu_cli import FeishuCli
+    from channel.web import web_channel
+
+    url = "https://open.feishu.cn/page/cli?user_code=ABCD-1234&from=cli"
+    monkeypatch.setattr(web_channel, "conf", lambda: {})
+    monkeypatch.setattr(web_channel, "_get_workspace_root", lambda: "C:/workspace")
+    monkeypatch.setattr(web_channel, "record_external_connection_runtime_event", lambda *args, **kwargs: None)
+
+    def fake_execute(self, args):
+        assert args["action"] == "config_init"
+        return ToolResult.success({
+            "status": "auth_pending",
+            "authRequired": True,
+            "writebackPending": True,
+            "verificationUrl": url,
+            "qrCode": {"status": "success", "path": "C:/workspace/.ecorex/lark-auth/qr.png", "relativePath": ".ecorex/lark-auth/qr.png"},
+            "json": {"appSecret": "raw-secret"},
+        })
+
+    monkeypatch.setattr(FeishuCli, "execute", fake_execute)
+
+    payload = json.loads(web_channel.ExternalConnectionActionHandler._handle_agent_auth("feishu", {}))
+    serialized = json.dumps(payload, ensure_ascii=False)
+
+    assert payload["status"] == "success"
+    assert payload["verificationUrl"] == url
+    assert payload["agentAuth"]["verificationUrl"] == url
+    assert payload["agentAuth"]["writebackPending"] is True
+    assert payload["agentAuth"]["qrCode"]["relativePath"] == ".ecorex/lark-auth/qr.png"
+    assert "stdoutLogPath" not in payload["agentAuth"]
+    assert "stderrLogPath" not in payload["agentAuth"]
+    assert "C:/workspace/.ecorex/lark-auth/qr.png" not in serialized
+    assert "raw-secret" not in serialized
+
+
+def test_feishu_external_connection_projection_exposes_cli_auth_action():
+    _install_web_stub()
+    from channel.web import web_channel
+
+    connection = web_channel._external_connection_from_channel({
+        "name": "feishu",
+        "label": {"zh": "飞书", "en": "Feishu / Lark"},
+        "auth": {"agentAuthSupported": True},
+        "agentSurface": {"tool": "feishu_cli", "callable": False},
+    })
+
+    actions = {item["id"]: item for item in connection["actions"]}
+    assert actions["agent_auth"]["enabled"] is True
+    assert actions["agent_auth"]["label"] == "CLI 授权"

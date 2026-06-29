@@ -1,24 +1,24 @@
 {
   "status": "PASS",
-  "generatedAt": "2026-06-28T18:07:58Z",
+  "generatedAt": "2026-06-29T02:33:58Z",
   "scope": "R24-01 webui release native skill facade contract",
   "windows": {
     "artifactId": "webui-windows-x64",
     "artifactName": "EcoreX_0.2.4-webui-windows-x64.zip",
-    "size": 113975793,
-    "sha256": "7B8DF00B62C9C7EE6D07AA3D8431DFD677B8E3E1EC1D8F6DE3942347187CB98E"
+    "size": 116299310,
+    "sha256": "1E395A345555330B6F475E7EA1BCBC7845CFD17EEB98E846BFA40FCD2A5F307E"
   },
   "macos": {
     "artifactId": "webui-macos-universal",
     "artifactName": "EcoreX_0.2.4-webui-macos-universal.zip",
-    "size": 263183329,
-    "sha256": "CB749E9BE716E1B66C9C6E2B4B3289AEB1B1525242F5377FBFB7A37769186319"
+    "size": 263191059,
+    "sha256": "DA5DC96EAF80A75D161BB5B85AF7228120833F06B658A1512B35F1A99E4426BB"
   },
   "publicRelease": {
     "artifactId": "public-release",
     "artifactName": "EcoreX_0.2.4-public-release.zip",
-    "size": 380157446,
-    "sha256": "4430E029180D2CF370284459C7145E99BEEEA36FD558F69A7C7E31875A924F7D"
+    "size": 382672062,
+    "sha256": "E3B003CFE32B2993410E1587DF9DAAA7B8308EF81284ABF18A8F447ADDBD0566"
   },
   "checks": [
     {
@@ -202,8 +202,8 @@
       "label": "public manifest matches webui-windows-x64",
       "status": "PASS",
       "evidence": {
-        "manifestSize": 113975793,
-        "artifactSize": 113975793,
+        "manifestSize": 116299310,
+        "artifactSize": 116299310,
         "hashMatches": true
       }
     },
@@ -218,8 +218,8 @@
       "label": "public manifest matches webui-macos-universal",
       "status": "PASS",
       "evidence": {
-        "manifestSize": 263183329,
-        "artifactSize": 263183329,
+        "manifestSize": 263191059,
+        "artifactSize": 263191059,
         "hashMatches": true
       }
     },
@@ -234,8 +234,8 @@
       "label": "public manifest matches web-linux-service",
       "status": "PASS",
       "evidence": {
-        "manifestSize": 3813695,
-        "artifactSize": 3813695,
+        "manifestSize": 3820515,
+        "artifactSize": 3820515,
         "hashMatches": true
       }
     }

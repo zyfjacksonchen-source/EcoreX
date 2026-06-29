@@ -1017,14 +1017,18 @@
   - Auth completion accepts a device code in a later call.
   - App configuration supports stdin credential initialization and masks sensitive command arguments in display output.
   - External Connections test results now include a sanitized `agentCliStatus` probe instead of raw CLI output.
+- 2026-06-29 Web-only Feishu CLI auth refresh after user supplied a Codex-successful new-device flow:
+  - `feishu_cli config_init --new` now starts `lark-cli config init --new`, reads stdout/stderr concurrently, returns as soon as the official `open.feishu.cn` / `open.larksuite.com` auth URL appears, and leaves the CLI process alive for callback writeback instead of waiting 240 seconds before surfacing the link.
+  - Web External Connections now exposes an `agent_auth` action for Feishu and injects a browser-only bridge that opens/copies the official auth URL and shows a fallback notice. No Electron desktop shell changes are part of this refresh.
+  - Public payload restoration is limited to Feishu CLI auth fields; QR payloads expose only safe status/relative refs, and `device_code`, `app_secret`, tokens, stdout/stderr log paths, and raw command output are redacted from SSE, external-connection payloads, and agent-stream logs.
 - Verification:
   - Real CLI status probe reported `authState=ready` and `authenticated=true`.
   - Real read-only Feishu CLI help and user-scoped contact command both succeeded; raw user data was not persisted into artifacts.
-  - Source and package tests passed: py_compile PASS; backend regression `395 passed, 26 subtests passed`; focused v0.2.4 hotfix pytest `50 passed`; typecheck/build PASS; release validation PASS; release artifact contracts PASS; install packaging contract PASS.
-  - Online short-path Windows install smoke passed: download SHA verified, robust ZIP extraction completed, local installer finished, WebUI returned HTTP 200, package files for tool bridge/Office wrappers/Feishu CLI were present, and bundled Lark runtime readiness reported SDK version `1.6.9` without relying on full SDK import.
+  - Source and package tests passed for the Web-only auth refresh: py_compile PASS; `node --check channel/web/static/js/console.js` PASS; focused Feishu/Tongxin/skill exposure pytest `26 passed`; focused Web backend pytest `34 passed, 10 subtests passed`; release validation PASS; release artifact contracts PASS; install packaging contract PASS.
+  - Local short-path Windows install smoke passed from the rebuilt public release: download SHA verified, robust ZIP extraction completed, local installer finished, WebUI returned HTTP 200, package files for Feishu CLI/WebChannel/public payload redaction were present, bundled `lark_oapi` was present, and installed Web app assets matched the latest renderer build. Evidence: `docs/v0.2.4/artifacts/webui-install-smoke-local.json`.
 - Final rebuilt/deployed artifacts:
-  - `release-artifacts/EcoreX_0.2.4-webui-windows-x64.zip` SHA256 `7B8DF00B62C9C7EE6D07AA3D8431DFD677B8E3E1EC1D8F6DE3942347187CB98E`, size `113975793`.
-  - `release-artifacts/EcoreX_0.2.4-webui-macos-universal.zip` SHA256 `CB749E9BE716E1B66C9C6E2B4B3289AEB1B1525242F5377FBFB7A37769186319`, size `263183329`.
-  - `release-artifacts/EcoreX_0.2.4-web-linux-service.tar.gz` SHA256 `B52C30B92BBE26FF6A78DC6FCAF2EA20DABC0BE561425013B4608DBC77760A5B`, size `3813695`.
-  - `release-artifacts/EcoreX_0.2.4-public-release.zip` SHA256 `4430E029180D2CF370284459C7145E99BEEEA36FD558F69A7C7E31875A924F7D`, size `380157446`.
-- Production deployment was refreshed successfully after clearing only stale deployment staging directories under the remote temporary release prefix. Final online checks remain v0.2.4 for web service, installation manifest, and public manifest.
+  - `release-artifacts/EcoreX_0.2.4-webui-windows-x64.zip` SHA256 `1E395A345555330B6F475E7EA1BCBC7845CFD17EEB98E846BFA40FCD2A5F307E`, size `116299310`.
+  - `release-artifacts/EcoreX_0.2.4-webui-macos-universal.zip` SHA256 `DA5DC96EAF80A75D161BB5B85AF7228120833F06B658A1512B35F1A99E4426BB`, size `263191059`.
+  - `release-artifacts/EcoreX_0.2.4-web-linux-service.tar.gz` SHA256 `C8CEC63F0F722FF30DCE9848A7E6617735824B5D879783CCA6F0861156594A18`, size `3820515`.
+  - `release-artifacts/EcoreX_0.2.4-public-release.zip` SHA256 `E3B003CFE32B2993410E1587DF9DAAA7B8308EF81284ABF18A8F447ADDBD0566`, size `382672062`.
+- Production deployment was refreshed successfully with the Web-only package. Final online checks remain v0.2.4 for web service, installation manifest, and public manifest; `/api/version` returns 200 and contains `0.2.4`.

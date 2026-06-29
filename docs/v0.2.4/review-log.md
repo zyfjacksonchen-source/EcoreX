@@ -40,3 +40,12 @@
 - Release/install review: PASS locally. `scripts/smoke-v024-release-artifact-contracts.py`, `scripts/validate-ecorex-release-artifacts.py`, and `scripts/smoke-v023-install-packaging-contracts.py` cover the hotfix markers. Online install smoke passed in a short isolated Windows install shape; long temporary extraction remains covered by `Expand-EcoreXZip` instead of `Expand-Archive`.
 - Sub-agent cross-review: Turing returned PASS across architecture/tool-surface, Feishu CLI auth/security, and release/install/deploy. It also checked local release artifact size/SHA consistency with `deploy/ecorex-site/manifest.json` and the public release ZIP embedded manifest.
 - Verification evidence: `skill-tool-exposure-hotfix-source.json`, `feishu-cli-auth-parity-source.json`, `online-install-smoke-short-path.json`, and refreshed `production-deploy-online.json`.
+
+## R24-16 Web-only Feishu CLI Auth Refresh Review
+
+- Status: PASS.
+- Backend/runtime review: PASS. `feishu_cli config_init` now follows Codex/lark-shared timing: it starts the CLI process, streams output, returns the official Feishu/Lark auth URL immediately, and keeps the CLI alive for writeback instead of waiting for the full 240-second window before the user sees the link.
+- WebUI review: PASS. Feishu External Connections exposes `agent_auth`; the WebChannel-injected browser bridge opens/copies only official Feishu/Lark CLI auth URLs and shows a fallback notice. No Electron desktop shell files are changed for this refresh.
+- Security/privacy review: PASS. Public payload restoration is scoped to `feishu_cli`; `device_code`/`deviceCode`, app secrets, tokens, raw stdout/stderr log paths, raw command output, and unsafe QR paths are redacted from SSE, external-connection payloads, and agent-stream logs.
+- Release/install review: PASS. Rebuilt WebUI Windows/macOS packages, web-linux-service tarball, public release ZIP, and production deployment all passed. Local short-path Windows install smoke passed from the rebuilt public release and records evidence in `webui-install-smoke-local.json`.
+- Multi-angle re-review: Franklin found high-risk device-code/tool-log leakage; fixes were applied. Lovelace re-reviewed the final Web-only flow and reported PASS across backend timing, Web bridge behavior, payload shape, and source/package markers.

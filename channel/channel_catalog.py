@@ -50,8 +50,9 @@ CHANNEL_CATALOG: "OrderedDict[str, ChannelDef]" = OrderedDict([
         "auth": {
             "mode": "bot_app_credentials",
             "channel_authorization": "app_credentials",
-            "auth_endpoint": "/api/feishu/register",
-            "auth_endpoint_methods": ["GET", "POST"],
+            "legacy_auth_endpoint": "/api/feishu/register",
+            "auth_endpoint": "",
+            "auth_endpoint_methods": [],
             "status_probe": "credential_configured_only",
         },
         "agent": {
@@ -61,7 +62,7 @@ CHANNEL_CATALOG: "OrderedDict[str, ChannelDef]" = OrderedDict([
             "policy": "find-skill-first-on-demand-cli",
             "permission_gated": True,
             "status_action": {"tool": "feishu_cli", "action": "status"},
-            "authorization_action": {"tool": "feishu_cli", "action": "auth_login", "domain": "base"},
+            "authorization_action": {"tool": "feishu_cli", "action": "config_init"},
         },
     }),
     ("dingtalk", {

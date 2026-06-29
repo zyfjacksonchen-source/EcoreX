@@ -194,6 +194,10 @@ class AgentCapabilityTool(BaseTool):
             "discovery_source": {"type": "string", "description": "Discovery gate used before install_skill, e.g. find-skill."},
             "find_skill_result": {"type": "object", "description": "Optional structured result returned by the find skill/find-skill gate."},
             "server": {"type": "object", "description": "MCP server config for configure_mcp."},
+            "script_path": {
+                "type": "string",
+                "description": "Optional local xin_agent_cli.py path when configuring the Tongxin CLI capability pack.",
+            },
             "timeout": {"type": "integer", "description": "Install timeout seconds."},
         },
         "required": ["action"],
@@ -235,23 +239,33 @@ class AgentCapabilityTool(BaseTool):
 
     def _install_pack(self, pack_id: str, params: Dict[str, Any]) -> ToolResult:
         if pack_id == "tongxin-cli":
-            return ToolResult.fail({
-                "status": "error",
-                "errorType": "capability_configure_only",
+            configure_args: Dict[str, Any] = {
+                "action": "configure",
+                "ability": "tongxin-cli",
+            }
+            script_path = params.get("script_path") or params.get("scriptPath") or params.get("path")
+            if script_path:
+                configure_args["script_path"] = script_path
+            payload = _payload_for_result(OptionalAbilities().execute(configure_args))
+            configured = payload.get("status") == "success" and bool(payload.get("configured"))
+            response = {
+                **payload,
                 "packId": "tongxin-cli",
                 "configureOnly": True,
                 "readOnly": True,
                 "defaultEnabled": True,
                 "installHint": TONGXIN_CLI_INSTALL_HINT,
-                "message": (
-                    "tongxin-cli is a default read-only structured capability, not an installable package. "
-                    "Configure an existing xin_agent_cli.py path if auto-discovery is unavailable, then use host_diagnostics and tongxin_cli status/schema."
+                "message": payload.get("message") or (
+                    "tongxin-cli 已配置完成。"
+                    if configured else
+                    "tongxin-cli 未能完成配置，请确认本地 xin_agent_cli.py 路径存在。"
                 ),
                 "nextAction": {
                     "tool": "tongxin_cli",
-                    "action": "status",
+                    "action": "status" if configured else "configure",
                 },
-            })
+            }
+            return ToolResult.success(response) if configured else ToolResult.fail(response)
         timeout = params.get("timeout")
         install_plan = ["feishu-cli"] if pack_id in {"feishu-lark", "feishu-cli"} else [pack_id]
         policy_pack_id = "feishu-lark" if pack_id in {"feishu-lark", "feishu-cli"} else pack_id
