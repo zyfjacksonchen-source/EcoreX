@@ -3022,7 +3022,8 @@ function AuthGate(props: { onLogin: (session: EnterpriseSession) => void; versio
 }
 
 export function App() {
-  const bootSession = useMemo(() => pickBootSession(readStorage<Record<string, SessionUiState>>(SESSION_UI_STORAGE_KEY, {})), []);
+  const bootRawSessionUiState = useMemo(() => readStorage<Record<string, SessionUiState>>(SESSION_UI_STORAGE_KEY, {}), []);
+  const bootSession = useMemo(() => pickBootSession(bootRawSessionUiState), [bootRawSessionUiState]);
   const bootProjects = useMemo(() => readStorage<ProjectFolder[]>(PROJECTS_STORAGE_KEY, []), []);
   const bootSessionProjects = useMemo(() => readStorage<SessionProjectMap>(SESSION_PROJECTS_STORAGE_KEY, {}), []);
   const bootSessionProjectBindings = useMemo(
@@ -3079,7 +3080,8 @@ export function App() {
   const [pinnedSessionTimes, setPinnedSessionTimes] = useState<StringNumberMap>(() => normalizeStringNumberMap(readStorage<StringNumberMap>(PINNED_SESSION_TIMES_STORAGE_KEY, {})));
   const [pinnedProjects, setPinnedProjects] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(PINNED_PROJECTS_STORAGE_KEY, {}));
   const [unreadSessionIds, setUnreadSessionIds] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(UNREAD_SESSIONS_STORAGE_KEY, {}));
-  const [sessionUiState, setSessionUiState] = useState<Record<string, SessionUiState>>(() => pruneSessionUiState(readStorage<Record<string, SessionUiState>>(SESSION_UI_STORAGE_KEY, {})));
+  const bootRawSessionUiStateRef = useRef<Record<string, SessionUiState> | null>(bootRawSessionUiState);
+  const [sessionUiState, setSessionUiState] = useState<Record<string, SessionUiState>>(() => pruneSessionUiState(bootRawSessionUiState));
   const [enabledCapabilityPacks, setEnabledCapabilityPacks] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(CAPABILITY_ENABLED_STORAGE_KEY, {}));
   const [sessionRequestIds, setSessionRequestIds] = useState<StringMap>({});
   const [locallyCompletedRequestIds, setLocallyCompletedRequestIds] = useState<StringBoolMap>({});
@@ -3344,7 +3346,29 @@ export function App() {
     if (runtimeUiStateHydrationStarted.current) return;
     if (sidecarStatus.state !== "running") return;
     runtimeUiStateHydrationStarted.current = true;
-    void loadRuntimeUiState()
+    const bootImportState = bootRawSessionUiStateRef.current;
+    bootRawSessionUiStateRef.current = null;
+    const bootImportPromise = bootImportState && Object.keys(bootImportState).length
+      ? saveRuntimeUiState({
+          version: 1,
+          replaceProjectState: false,
+          projectStateMode: "merge",
+          lastActiveSessionId: activeSessionIdRef.current,
+          activeProjectId: bootActiveProjectId,
+          projects: bootProjects,
+          sessionProjects: bootSessionProjects,
+          sessionProjectBindings: bootSessionProjectBindings,
+          sessionTitles,
+          pinnedSessions,
+          pinnedSessionTimes,
+          pinnedProjects,
+          sessionUiState: bootImportState,
+          historyImportSource: "boot-local-cache",
+          savedAt: new Date().toISOString()
+        }).catch(() => undefined)
+      : Promise.resolve(undefined);
+    void bootImportPromise
+      .then(() => loadRuntimeUiState())
       .then((state) => {
         if (!state) return;
         const runtimeProjects = Array.isArray(state.projects) ? mergeProjectFolders([], state.projects) : null;

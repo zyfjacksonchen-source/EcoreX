@@ -5841,6 +5841,74 @@ class TestWebParallelHandlers(unittest.TestCase):
             self.assertEqual(get_result["state"]["theme"], "dark")
             self.assertEqual(get_result["state"]["activeSessionId"], "abc")
 
+    def test_ui_state_handler_imports_cached_messages_into_history_store(self):
+        from agent.memory.conversation_store import ConversationStore
+        from channel.web import web_channel
+
+        with tempfile.TemporaryDirectory() as workspace:
+            store = ConversationStore(Path(workspace) / "conversation.sqlite3")
+            handler = web_channel.UiStateHandler()
+            payload = {
+                "state": {
+                    "sessionTitles": {"session-cache": "Cached Session"},
+                    "sessionProjectBindings": {
+                        "session-cache": {
+                            "projectId": "project-1",
+                            "projectName": "Project One",
+                            "projectPath": str(Path(workspace) / "project-1"),
+                        }
+                    },
+                    "sessionUiState": {
+                        "session-cache": {
+                            "title": "Cached Session",
+                            "messages": [
+                                {"role": "user", "content": "cached user", "attachments": []},
+                                {"role": "assistant", "content": "cached assistant", "requestId": "req-cache"},
+                            ],
+                        }
+                    },
+                }
+            }
+
+            with patch.object(web_channel, "_require_auth", return_value=None), \
+                    patch.object(web_channel, "_get_workspace_root", return_value=workspace), \
+                    patch("agent.memory.get_conversation_store", return_value=store), \
+                    patch.object(web_channel.web, "data", return_value=json.dumps(payload).encode("utf-8")):
+                result = json.loads(handler.POST())
+
+            history = store.load_history_page("session-cache", page=1, page_size=10)
+            sessions = store.list_sessions(channel_type="web")["sessions"]
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["historyImport"]["importedSessions"], 1)
+        self.assertEqual(result["historyImport"]["importedMessages"], 2)
+        self.assertEqual([item["content"] for item in history["messages"]], ["cached user", "cached assistant"])
+        self.assertEqual(sessions[0]["title"], "Cached Session")
+        self.assertEqual(sessions[0]["projectId"], "project-1")
+
+    def test_done_event_backfills_final_assistant_when_bridge_did_not_persist(self):
+        from agent.memory.conversation_store import ConversationStore
+        from channel.web import web_channel
+
+        with tempfile.TemporaryDirectory() as workspace:
+            store = ConversationStore(Path(workspace) / "conversation.sqlite3")
+            store.append_messages(
+                "session-final-backfill",
+                [{"role": "user", "content": [{"type": "text", "text": "hello"}]}],
+                channel_type="web",
+            )
+            channel = web_channel.WebChannel()
+            with patch("agent.memory.get_conversation_store", return_value=store), \
+                    patch.object(channel, "_fetch_agent_usage", return_value=None):
+                event = channel._build_done_event("req-final-backfill", "session-final-backfill", "final answer")
+                second = channel._build_done_event("req-final-backfill-2", "session-final-backfill", "duplicate answer")
+
+            history = store.load_history_page("session-final-backfill", page=1, page_size=10)
+
+        self.assertEqual(event["bot_seq"], 1)
+        self.assertEqual(second["bot_seq"], 1)
+        self.assertEqual([item["content"] for item in history["messages"]], ["hello", "final answer"])
+
     def test_installations_handler_registers_surface(self):
         from channel.web import web_channel
 

@@ -13,6 +13,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import ast
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -991,47 +992,85 @@ class TongxinCli(BaseTool):
                     "message": "Downloaded Tongxin CLI file name must be xin_agent_cli.py or a supported variant.",
                 })
 
-            data = self._download_bootstrap_bytes(url, token=token, timeout=timeout)
-            actual_sha = hashlib.sha256(data).hexdigest().upper()
-            if actual_sha != expected_sha:
-                return ToolResult.fail({
-                    "status": "error",
-                    "configurationState": "bootstrap_sha256_mismatch",
-                    "sourceRef": self._safe_url_ref(url),
-                    "expectedSha256": expected_sha,
-                    "actualSha256": actual_sha,
-                    "message": "Downloaded Tongxin CLI SHA256 did not match the expected value; file was not installed.",
+            file_entries = self._bootstrap_file_entries(
+                manifest,
+                auth_payload,
+                args=args,
+                script_name=script_name,
+                url=url,
+                expected_sha=expected_sha,
+            )
+            downloaded_files: List[Dict[str, Any]] = []
+            for entry in file_entries:
+                entry_url = str(entry["url"])
+                entry_sha = str(entry["expectedSha256"]).upper()
+                entry_path = str(entry["relativePath"])
+                data = self._download_bootstrap_bytes(entry_url, token=token, timeout=timeout)
+                actual_sha = hashlib.sha256(data).hexdigest().upper()
+                if actual_sha != entry_sha:
+                    return ToolResult.fail({
+                        "status": "error",
+                        "configurationState": "bootstrap_sha256_mismatch",
+                        "sourceRef": self._safe_url_ref(entry_url),
+                        "fileRef": self._safe_text_ref(entry_path),
+                        "expectedSha256": entry_sha,
+                        "actualSha256": actual_sha,
+                        "message": "Downloaded Tongxin CLI SHA256 did not match the expected value; file was not installed.",
+                    })
+                self._validate_bootstrap_python(data, file_name=entry_path)
+                downloaded_files.append({
+                    "relativePath": entry_path,
+                    "data": data,
+                    "sha256": actual_sha,
+                    "size": len(data),
+                    "sourceRef": self._safe_url_ref(entry_url),
+                    "isMain": bool(entry.get("isMain")),
                 })
-            self._validate_bootstrap_python(data)
             target_dir = self._bootstrap_target_dir()
             script = target_dir / script_name
             target_dir.mkdir(parents=True, exist_ok=True)
-            install_nonce = hashlib.sha256((actual_sha + str(time.time())).encode()).hexdigest()[:12]
-            tmp = script.with_name(f".{script.name}.{install_nonce}.tmp")
-            backup = script.with_name(f".{script.name}.{install_nonce}.bak")
-            tmp.write_bytes(data)
-            try:
-                tmp.chmod(0o600)
-            except Exception:
-                pass
-            had_existing_script = script.exists()
-            if had_existing_script:
-                os.replace(script, backup)
-            os.replace(tmp, script)
-            health = self._script_health(script, timeout)
-            if not health.get("ok"):
+            package_sha = hashlib.sha256(("".join(item["sha256"] for item in downloaded_files) + str(time.time())).encode()).hexdigest()
+            install_nonce = package_sha[:12]
+            install_plan: List[Dict[str, Any]] = []
+            for item in downloaded_files:
+                relative_path = self._safe_bootstrap_relative_path(str(item["relativePath"]))
+                target = (target_dir / relative_path).resolve()
+                if not (self._same_path(target, target_dir.resolve()) or self._path_within(target, target_dir.resolve())):
+                    raise ValueError("Tongxin bootstrap file path escapes the target directory.")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                tmp = target.with_name(f".{target.name}.{install_nonce}.tmp")
+                backup = target.with_name(f".{target.name}.{install_nonce}.bak")
+                tmp.write_bytes(item["data"])
                 try:
-                    if script.exists():
-                        script.unlink()
+                    tmp.chmod(0o600)
                 except Exception:
                     pass
-                if had_existing_script and backup.exists():
-                    os.replace(backup, script)
-                else:
-                    try:
-                        backup.unlink()
-                    except Exception:
-                        pass
+                install_plan.append({
+                    "target": target,
+                    "tmp": tmp,
+                    "backup": backup,
+                    "hadExisting": target.exists(),
+                    "relativePath": relative_path.as_posix(),
+                    "sha256": item["sha256"],
+                    "size": item["size"],
+                    "isMain": item["isMain"],
+                })
+            for item in install_plan:
+                target = item["target"]
+                backup = item["backup"]
+                if item["hadExisting"]:
+                    os.replace(target, backup)
+                os.replace(item["tmp"], target)
+            models_health = self._bootstrap_models_database_health(target_dir, script)
+            if not models_health.get("ok"):
+                health = models_health
+            else:
+                health = self._script_health(script, timeout)
+            if not health.get("ok"):
+                self._restore_bootstrap_install_plan(install_plan)
+                main_file = next((item for item in downloaded_files if item.get("isMain")), downloaded_files[0])
+                actual_sha = str(main_file["sha256"])
+                total_size = sum(int(item.get("size") or 0) for item in downloaded_files)
                 payload: Dict[str, Any] = {
                     "status": "error",
                     "available": True,
@@ -1043,9 +1082,10 @@ class TongxinCli(BaseTool):
                     "scriptName": script.name,
                     "readOnly": True,
                     "defaultAudience": DEFAULT_TONGXIN_SCOPE,
-                    "sourceRef": self._safe_url_ref(url),
+                    "sourceRef": main_file.get("sourceRef") or self._safe_url_ref(url),
                     "sha256": actual_sha,
-                    "size": len(data),
+                    "size": total_size,
+                    "installedFileCount": len(downloaded_files),
                     "scriptHealth": health,
                     "message": (
                         "Downloaded Tongxin CLI verified by SHA256, but failed the read-only data-layer health probe. "
@@ -1056,10 +1096,25 @@ class TongxinCli(BaseTool):
                     payload["pathsRedacted"] = True
                     payload["scriptPathRef"] = _path_ref(script)
                 return ToolResult.fail(payload)
-            try:
-                backup.unlink()
-            except Exception:
-                pass
+            for item in install_plan:
+                backup = item["backup"]
+                try:
+                    backup.unlink()
+                except Exception:
+                    pass
+            main_file = next((item for item in downloaded_files if item.get("isMain")), downloaded_files[0])
+            actual_sha = str(main_file["sha256"])
+            total_size = sum(int(item.get("size") or 0) for item in downloaded_files)
+            installed_files = [
+                {
+                    "name": Path(str(item["relativePath"])).name,
+                    "pathHash": hashlib.sha256(str(item["relativePath"]).encode("utf-8", errors="replace")).hexdigest()[:16],
+                    "sha256": str(item["sha256"]),
+                    "size": int(item["size"]),
+                    "main": bool(item["isMain"]),
+                }
+                for item in install_plan
+            ]
             config_path = self._persist_script_path(script)
             payload: Dict[str, Any] = {
                 "status": "success",
@@ -1073,9 +1128,11 @@ class TongxinCli(BaseTool):
                 "readOnly": True,
                 "defaultAudience": DEFAULT_TONGXIN_SCOPE,
                 "configKey": "tools.tongxin_cli.script_path",
-                "sourceRef": self._safe_url_ref(url),
+                "sourceRef": main_file.get("sourceRef") or self._safe_url_ref(url),
                 "sha256": actual_sha,
-                "size": len(data),
+                "size": total_size,
+                "installedFileCount": len(downloaded_files),
+                "installedFiles": installed_files,
                 "remoteAuthenticated": bool(auth_payload),
                 "permission": self._permission_snapshot(auth_payload),
                 "message": "Tongxin CLI downloaded from authenticated source, verified by SHA256, and configured for read-only EcoreX access.",
@@ -1846,14 +1903,182 @@ class TongxinCli(BaseTool):
             raise ValueError("Tongxin CLI bootstrap payload is empty.")
         return data
 
-    def _validate_bootstrap_python(self, data: bytes) -> None:
+    def _bootstrap_file_entries(
+        self,
+        manifest: Dict[str, Any],
+        auth_payload: Dict[str, Any],
+        *,
+        args: Dict[str, Any],
+        script_name: str,
+        url: str,
+        expected_sha: str,
+    ) -> List[Dict[str, Any]]:
+        entries: List[Dict[str, Any]] = [
+            {
+                "relativePath": script_name,
+                "url": url,
+                "expectedSha256": expected_sha,
+                "isMain": True,
+            }
+        ]
+        raw_files: List[Any] = []
+        for payload in (manifest, auth_payload):
+            for key in ("files", "bootstrapFiles", "bootstrap_files", "packageFiles", "package_files"):
+                value = payload.get(key) if isinstance(payload, dict) else None
+                if isinstance(value, list):
+                    raw_files.extend(value)
+        seen = {script_name.replace("\\", "/").lower()}
+        for raw in raw_files:
+            if not isinstance(raw, dict):
+                continue
+            relative = str(
+                raw.get("path")
+                or raw.get("relativePath")
+                or raw.get("relative_path")
+                or raw.get("fileName")
+                or raw.get("file_name")
+                or ""
+            ).strip()
+            if not relative:
+                continue
+            safe_relative = self._safe_bootstrap_relative_path(relative).as_posix()
+            key = safe_relative.lower()
+            if key in seen:
+                continue
+            file_url = str(raw.get("downloadUrl") or raw.get("download_url") or raw.get("url") or "").strip()
+            file_sha = str(raw.get("sha256") or raw.get("expectedSha256") or raw.get("expected_sha256") or "").strip().upper()
+            if not file_url:
+                raise ValueError("Tongxin bootstrap package file is missing downloadUrl.")
+            if not self._is_allowed_bootstrap_url(file_url, args=args):
+                raise ValueError("Tongxin bootstrap package file URL must use HTTPS, except explicit localhost test URLs.")
+            if not re.fullmatch(r"[A-Fa-f0-9]{64}", file_sha or ""):
+                raise ValueError("Tongxin bootstrap package file is missing a 64-character sha256.")
+            entries.append({
+                "relativePath": safe_relative,
+                "url": file_url,
+                "expectedSha256": file_sha,
+                "isMain": False,
+            })
+            seen.add(key)
+        return entries
+
+    @staticmethod
+    def _safe_bootstrap_relative_path(value: str) -> Path:
+        raw = str(value or "").replace("\\", "/").strip().lstrip("/")
+        path = Path(raw)
+        parts = path.parts
+        if not raw or path.is_absolute() or any(part in {"", ".", ".."} for part in parts):
+            raise ValueError("Tongxin bootstrap package contains an unsafe file path.")
+        if len(parts) > 4:
+            raise ValueError("Tongxin bootstrap package file path is too deep.")
+        for part in parts:
+            if not re.fullmatch(r"[A-Za-z0-9_.-]+", part):
+                raise ValueError("Tongxin bootstrap package file path contains unsupported characters.")
+        if path.suffix.lower() != ".py":
+            raise ValueError("Tongxin bootstrap package may only install Python source files.")
+        return path
+
+    @staticmethod
+    def _restore_bootstrap_install_plan(install_plan: List[Dict[str, Any]]) -> None:
+        for item in reversed(install_plan):
+            target = item["target"]
+            backup = item["backup"]
+            tmp = item["tmp"]
+            try:
+                if target.exists():
+                    target.unlink()
+            except Exception:
+                pass
+            try:
+                if item["hadExisting"] and backup.exists():
+                    os.replace(backup, target)
+                elif backup.exists():
+                    backup.unlink()
+            except Exception:
+                pass
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except Exception:
+                pass
+
+    def _bootstrap_models_database_health(self, target_dir: Path, script: Path) -> Dict[str, Any]:
+        try:
+            source = script.read_text(encoding="utf-8-sig")
+        except Exception as exc:
+            return self._script_health_failure(script, "package", None, f"Unable to read bootstrap script: {_sanitize(str(exc))}")
+        required = self._required_models_exports(source)
+        if not required:
+            return {"ok": True}
+        provided = self._provided_models_exports(target_dir)
+        missing = sorted(required - provided)
+        if not missing:
+            return {"ok": True}
+        detail = (
+            "Tongxin remote bootstrap package is missing models exports required by xin_agent_cli.py: "
+            + ", ".join(f"models.{name}" for name in missing)
+            + ". Ask the CLI provider to update the remote bootstrap package so models.py or models/__init__.py exposes database/DATABASE."
+        )
+        return self._script_health_failure(script, "package", None, detail)
+
+    @staticmethod
+    def _required_models_exports(source: str) -> set[str]:
+        required: set[str] = set()
+        if re.search(r"\bmodels\.DATABASE\b", source):
+            required.add("DATABASE")
+        if re.search(r"\bmodels\.database\b", source):
+            required.add("database")
+        for match in re.finditer(r"(?m)^\s*from\s+models\s+import\s+([^\n#]+)", source):
+            names = [part.strip().split(" as ", 1)[0].strip() for part in match.group(1).split(",")]
+            for name in names:
+                if name in {"database", "DATABASE"}:
+                    required.add(name)
+        return required
+
+    @classmethod
+    def _provided_models_exports(cls, target_dir: Path) -> set[str]:
+        provided: set[str] = set()
+        for path in (target_dir / "models.py", target_dir / "models" / "__init__.py"):
+            if path.is_file():
+                provided.update(cls._python_top_level_exports(path))
+        if (target_dir / "models" / "database.py").is_file():
+            provided.add("database")
+        return provided
+
+    @staticmethod
+    def _python_top_level_exports(path: Path) -> set[str]:
+        try:
+            source = path.read_text(encoding="utf-8-sig")
+            tree = ast.parse(source, filename=str(path))
+        except Exception:
+            return set()
+        names: set[str] = set()
+        for node in tree.body:
+            targets: List[ast.AST] = []
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names.add(node.name)
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                for alias in node.names:
+                    names.add(alias.asname or alias.name.split(".", 1)[0])
+            elif isinstance(node, ast.Assign):
+                targets.extend(node.targets)
+            elif isinstance(node, ast.AnnAssign):
+                targets.append(node.target)
+            elif isinstance(node, ast.AugAssign):
+                targets.append(node.target)
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    names.add(target.id)
+        return names
+
+    def _validate_bootstrap_python(self, data: bytes, *, file_name: str = DEFAULT_SCRIPT_NAME) -> None:
         if b"\x00" in data[:4096]:
             raise ValueError("Tongxin CLI bootstrap payload is not a text Python file.")
         try:
             source = data.decode("utf-8-sig")
         except UnicodeDecodeError as exc:
             raise ValueError("Tongxin CLI bootstrap payload must be UTF-8 Python source.") from exc
-        compile(source, DEFAULT_SCRIPT_NAME, "exec")
+        compile(source, file_name, "exec")
 
     def _bootstrap_target_dir(self) -> Path:
         configured = self._bootstrap_setting("target_dir")

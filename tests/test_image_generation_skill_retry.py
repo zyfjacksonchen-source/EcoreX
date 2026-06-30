@@ -315,6 +315,47 @@ class TestImageGenerationSkillRetry(unittest.TestCase):
         self.assertEqual(provider.model_fallback["to_model"], "gpt-image-2")
         self.assertEqual(provider.model_fallback["reason"], "server_error")
 
+    def test_main_accepts_image_urls_alias_for_openai_edits(self):
+        module = load_image_generation_module("ecorex_image_generation_image_urls_alias_test")
+        calls = []
+        stdout = io.StringIO()
+        env = {
+            "OPENAI_API_KEY": "sk-test",
+            "IMAGE_OUTPUT_DIR": tempfile.gettempdir(),
+        }
+        argv = [
+            "generate.py",
+            json.dumps({
+                "prompt": "combine references",
+                "provider": "openai",
+                "image_urls": ["first.png", "second.png"],
+            }),
+        ]
+
+        def fake_post(url, **kwargs):
+            calls.append((url, kwargs))
+            return FakeResponse(200, {"data": [{"b64_json": "aGVsbG8="}]})
+
+        with patch.dict(os.environ, env, clear=False):
+            with patch.object(sys, "argv", argv):
+                with patch.object(module.requests, "post", side_effect=fake_post):
+                    with patch.object(module, "_load_image", return_value=b"fake-input-image"):
+                        with patch.object(module, "_compress_image", return_value=b"\x89PNG\r\nfake"):
+                            with patch.object(module, "_save_image", return_value="alias-edit.png"):
+                                with contextlib.redirect_stdout(stdout):
+                                    module.main()
+
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(calls[0][0].endswith("/images/edits"))
+        fields = calls[0][1]["data"]
+        files = calls[0][1]["files"]
+        self.assertEqual(fields["model"], "gpt-image-2-pro")
+        self.assertEqual(fields["prompt"], "combine references")
+        self.assertEqual([item[0] for item in files], ["image[]", "image[]"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["model"], "gpt-image-2-pro")
+        self.assertEqual(payload["images"], [{"url": "alias-edit.png"}])
+
     def test_build_providers_defaults_to_gpt_image_pro_and_linkai_only_when_openai_missing(self):
         module = load_image_generation_module("ecorex_image_generation_default_provider_test")
 

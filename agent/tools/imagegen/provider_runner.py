@@ -36,6 +36,13 @@ CONFIG_TO_ENV = {
 }
 
 
+def _image_url_arg(args: Mapping[str, Any]) -> Any:
+    image_url = args.get("image_url")
+    if image_url not in (None, "", []):
+        return image_url
+    return args.get("image_urls")
+
+
 def image_generation_env_with_config(base_env: Mapping[str, str] | None = None) -> dict[str, str]:
     env = dict(base_env or os.environ)
     try:
@@ -148,7 +155,7 @@ def run_image_generation_payload(
         try:
             paths = provider.generate(
                 prompt,
-                image_url=args.get("image_url"),
+                image_url=_image_url_arg(args),
                 quality=args.get("quality"),
                 size=args.get("size"),
                 aspect_ratio=args.get("aspect_ratio"),

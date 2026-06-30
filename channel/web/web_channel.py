@@ -2136,6 +2136,7 @@ class WebChannel(ChatChannel):
         self.same_session_replacement_lock = threading.RLock()
         self.same_session_replacement_tickets = {}  # session_id -> latest rapid-resend ticket
         self.request_artifacts = {}  # request_id -> list of structured artifact dicts
+        self.request_project_contexts = {}  # request_id -> structured project binding
         self.sse_stream_tokens = {}  # legacy field; no longer used to supersede streams
         self._http_server = None
         self.runtime_event_append_failures = 0
@@ -3629,6 +3630,7 @@ class WebChannel(ChatChannel):
             self.sse_done_sent.discard(request_id)
             self.sse_stream_tokens.pop(request_id, None)
             self.request_artifacts.pop(request_id, None)
+            self.request_project_contexts.pop(request_id, None)
             self.request_to_session.pop(request_id, None)
 
     def _cleanup_sse_request_if_idle(self, request_id: str, reason: str = "") -> None:
@@ -4671,9 +4673,214 @@ class WebChannel(ChatChannel):
         except Exception as e:
             logger.debug(f"[WebChannel] artifact persist skipped for {request_id}: {_web_body_log_summary(e)}")
 
+    @staticmethod
+    def _cached_chat_item_to_store_message(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        role = str((item or {}).get("role") or "").strip()
+        if role not in {"user", "assistant"}:
+            return None
+        if role == "assistant" and item.get("pending") and not str(item.get("content") or "").strip():
+            return None
+        text = str((item or {}).get("content") or "").strip()
+        attachments = item.get("attachments") if isinstance(item.get("attachments"), list) else []
+        if not text and not attachments:
+            return None
+        message: Dict[str, Any] = {
+            "role": role,
+            "content": [{"type": "text", "text": text}] if text else "",
+        }
+        cleaned_attachments = []
+        for att in attachments[:20]:
+            if not isinstance(att, dict):
+                continue
+            cleaned = {}
+            for key in ("file_path", "file_name", "file_type", "preview_url"):
+                value = att.get(key)
+                if value:
+                    cleaned[key] = str(value)
+            if cleaned.get("file_path"):
+                cleaned_attachments.append(cleaned)
+        extras: Dict[str, Any] = {}
+        if cleaned_attachments:
+            extras["attachments"] = cleaned_attachments
+        request_id = str((item or {}).get("requestId") or "").strip()
+        if request_id:
+            extras["request_id"] = request_id
+            extras["turn_id"] = request_id
+        user_seq = item.get("userSeq")
+        bot_seq = item.get("botSeq")
+        if isinstance(user_seq, int):
+            extras["user_seq"] = user_seq
+        if isinstance(bot_seq, int):
+            extras["bot_seq"] = bot_seq
+        if extras:
+            message["extras"] = extras
+        return message
+
+    @staticmethod
+    def _ui_state_project_context(session_id: str, state: Dict[str, Any], cached: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        bindings = state.get("sessionProjectBindings") if isinstance(state.get("sessionProjectBindings"), dict) else {}
+        binding = bindings.get(session_id)
+        if not isinstance(binding, dict):
+            binding = cached.get("projectBinding") if isinstance(cached.get("projectBinding"), dict) else None
+        if not isinstance(binding, dict):
+            project_id = str(
+                (state.get("sessionProjects") or {}).get(session_id)
+                if isinstance(state.get("sessionProjects"), dict)
+                else cached.get("projectId") or ""
+            ).strip()
+            if not project_id:
+                return None
+            binding = {"projectId": project_id}
+        return _normalize_project_context_meta(binding)
+
+    @classmethod
+    def _hydrate_conversation_store_from_ui_state(cls, state: Dict[str, Any]) -> Dict[str, Any]:
+        session_state = state.get("sessionUiState") if isinstance(state.get("sessionUiState"), dict) else {}
+        if not session_state:
+            return {"importedSessions": 0, "importedMessages": 0, "skippedSessions": 0}
+        try:
+            from agent.memory import get_conversation_store
+
+            store = get_conversation_store()
+        except Exception as exc:
+            logger.debug(f"[WebChannel] UI history import skipped: {_web_body_log_summary(exc)}")
+            return {"importedSessions": 0, "importedMessages": 0, "skippedSessions": len(session_state)}
+
+        imported_sessions = 0
+        imported_messages = 0
+        skipped_sessions = 0
+        for session_id, cached in list(session_state.items())[:200]:
+            session_id = str(session_id or "").strip()
+            if not session_id or not isinstance(cached, dict):
+                skipped_sessions += 1
+                continue
+            messages_raw = cached.get("messages")
+            if not isinstance(messages_raw, list) or not messages_raw:
+                skipped_sessions += 1
+                continue
+            try:
+                existing = store.load_history_page(session_id, page=1, page_size=1)
+                if int(existing.get("total") or 0) > 0:
+                    skipped_sessions += 1
+                    continue
+            except Exception:
+                pass
+            messages = []
+            for item in messages_raw[:200]:
+                if isinstance(item, dict):
+                    converted = cls._cached_chat_item_to_store_message(item)
+                    if converted:
+                        messages.append(converted)
+            if not messages:
+                skipped_sessions += 1
+                continue
+            try:
+                store.append_messages(
+                    session_id,
+                    messages,
+                    channel_type="web",
+                    project_context=cls._ui_state_project_context(session_id, state, cached),
+                )
+                title = str(
+                    (state.get("sessionTitles") or {}).get(session_id)
+                    if isinstance(state.get("sessionTitles"), dict)
+                    else cached.get("title") or ""
+                ).strip()
+                if title:
+                    store.rename_session(session_id, title, respect_title_lock=True)
+                imported_sessions += 1
+                imported_messages += len(messages)
+            except Exception as exc:
+                skipped_sessions += 1
+                logger.debug(f"[WebChannel] UI history import failed: {_web_body_log_summary(exc)}")
+        return {
+            "importedSessions": imported_sessions,
+            "importedMessages": imported_messages,
+            "skippedSessions": skipped_sessions,
+        }
+
+    @staticmethod
+    def _pre_persist_web_user_message(
+        session_id: str,
+        visible_message: str,
+        *,
+        attachments: Any = None,
+        project_context: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        if not session_id or not str(visible_message or "").strip():
+            return False
+        try:
+            from config import conf
+            if not conf().get("conversation_persistence", True):
+                return False
+            from agent.memory import get_conversation_store
+
+            user_msg: Dict[str, Any] = {
+                "role": "user",
+                "content": [{"type": "text", "text": str(visible_message or "").strip()}],
+            }
+            cleaned_attachments = []
+            if isinstance(attachments, list):
+                for att in attachments[:20]:
+                    if not isinstance(att, dict):
+                        continue
+                    cleaned = {}
+                    for key in ("file_path", "file_name", "file_type", "preview_url"):
+                        value = att.get(key)
+                        if value:
+                            cleaned[key] = str(value)
+                    if cleaned.get("file_path"):
+                        cleaned_attachments.append(cleaned)
+            if cleaned_attachments:
+                user_msg["extras"] = {"attachments": cleaned_attachments}
+            get_conversation_store().append_messages(
+                session_id,
+                [user_msg],
+                channel_type="web",
+                project_context=project_context,
+            )
+            return True
+        except Exception as exc:
+            if getattr(exc, "code", "") == "SESSION_OWNER_CONFLICT":
+                logger.warning(
+                    f"[WebChannel] Refused pre-persist due to session owner conflict: reason={getattr(exc, 'reason', 'unknown')}"
+                )
+            else:
+                logger.warning(f"[WebChannel] pre-persist user message failed: {_web_body_log_summary(exc)}")
+            return False
+
+    def _ensure_final_reply_persisted(self, request_id: str, session_id: str, content: str) -> Dict[str, Optional[int]]:
+        seqs = self._fetch_latest_pair_seqs(session_id)
+        if not session_id or seqs.get("bot_seq") is not None or not str(content or "").strip():
+            return seqs
+        try:
+            from config import conf
+            if not conf().get("conversation_persistence", True):
+                return seqs
+            from agent.memory import get_conversation_store
+
+            extras = {"request_id": request_id, "turn_id": request_id}
+            user_seq = seqs.get("user_seq")
+            if user_seq is not None:
+                extras["user_seq"] = user_seq
+            get_conversation_store().append_messages(
+                session_id,
+                [{
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": str(content or "").strip()}],
+                    "extras": extras,
+                }],
+                channel_type="web",
+                project_context=self.request_project_contexts.get(request_id),
+            )
+            return self._fetch_latest_pair_seqs(session_id)
+        except Exception as exc:
+            logger.warning(f"[WebChannel] final reply persist failed: {_web_body_log_summary(exc)}")
+            return seqs
+
     def _build_done_event(self, request_id: str, session_id: str, content: str):
         self._persist_request_artifacts(request_id, session_id)
-        seqs = self._fetch_latest_pair_seqs(session_id)
+        seqs = self._ensure_final_reply_persisted(request_id, session_id, content)
         turn_id = request_id or ""
         if not turn_id and seqs.get("user_seq") is not None and seqs.get("bot_seq") is not None:
             turn_id = f"{seqs.get('user_seq')}:{seqs.get('bot_seq')}"
@@ -6026,6 +6233,7 @@ class WebChannel(ChatChannel):
 
                 request_id = self._generate_request_id()
                 self.request_to_session[request_id] = session_id
+                self.request_project_contexts[request_id] = project_context_meta or {}
                 try:
                     from agent.protocol import get_cancel_registry
                     get_cancel_registry().register(request_id, session_id=session_id)
@@ -6147,6 +6355,14 @@ class WebChannel(ChatChannel):
 
             if use_sse:
                 context["on_event"] = self._make_sse_callback(request_id)
+
+            if self._pre_persist_web_user_message(
+                session_id,
+                visible_message or visible_prompt or "Please handle these attachments.",
+                attachments=attachments,
+                project_context=project_context_meta,
+            ):
+                context["pre_persisted_user_message"] = True
 
             threading.Thread(target=self._produce_with_session_lock, args=(context, session_lock), daemon=True).start()
 
@@ -12712,7 +12928,7 @@ class MessageDeleteHandler:
 
 
 class UiStateHandler:
-    MAX_UI_STATE_PAYLOAD_BYTES = 2 * 1024 * 1024
+    MAX_UI_STATE_PAYLOAD_BYTES = 8 * 1024 * 1024
 
     def GET(self):
         _require_auth()
@@ -12738,7 +12954,12 @@ class UiStateHandler:
                 return json.dumps({"status": "error", "message": "state must be an object"})
             from common.ecorex_workspace import save_ui_state
             state = save_ui_state(_get_workspace_root(), incoming)
-            return json.dumps({"status": "success", "updatedAt": state.get("updatedAt")}, ensure_ascii=False)
+            import_result = WebChannel()._hydrate_conversation_store_from_ui_state(incoming)
+            return json.dumps({
+                "status": "success",
+                "updatedAt": state.get("updatedAt"),
+                "historyImport": import_result,
+            }, ensure_ascii=False)
         except Exception as e:
             logger.error(f"[WebChannel] UI state PUT error: {_web_body_log_summary(e)}")
             return json.dumps(_public_error_payload("Request failed.", e))

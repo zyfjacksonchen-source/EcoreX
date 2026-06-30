@@ -259,8 +259,11 @@ def _authorize_file_access(operation: str, path: Path, cwd: Path) -> tuple[bool,
 class ImageGenTool(BaseTool):
     name: str = "imagegen"
     description: str = (
-        "Generate or edit images using the built-in image-generation skill. "
-        "Use for text-to-image, image-to-image, and visual asset generation requests."
+        "Generate or edit images through the native EcoreX image route. "
+        "Use this tool for text-to-image, image edits, reference-image generation, "
+        "multi-image fusion, and visual asset requests. The default GPT Image route "
+        "starts with gpt-image-2-pro; do not replace image edits or reference-image "
+        "generation with Python/PIL/HTML/SVG scripts."
     )
     params: dict = {
         "type": "object",
@@ -271,12 +274,19 @@ class ImageGenTool(BaseTool):
             },
             "image_url": {
                 "type": "string",
-                "description": "Optional local path, file URL, data URL, or remote URL for image-to-image editing.",
+                "description": (
+                    "Optional local path, file URL, data URL, or remote URL for image-to-image "
+                    "editing/reference generation. Supplying this keeps the request on the image "
+                    "edit route."
+                ),
             },
             "image_urls": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Optional reference images for multi-image editing.",
+                "description": (
+                    "Optional reference/input images for multi-image editing or reference-guided "
+                    "generation. These are normalized to the edit route and should not be ignored."
+                ),
             },
             "model": {
                 "type": "string",

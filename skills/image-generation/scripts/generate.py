@@ -1752,6 +1752,8 @@ def main():
     background = args.get("background")
     moderation = args.get("moderation")
     image_url = args.get("image_url")
+    if image_url in (None, "", []):
+        image_url = args.get("image_urls")
 
     output_dir = os.environ.get("IMAGE_OUTPUT_DIR", os.path.join(os.getcwd(), "images"))
 

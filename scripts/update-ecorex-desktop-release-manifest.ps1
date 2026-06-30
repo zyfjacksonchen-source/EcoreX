@@ -404,7 +404,7 @@ if ([string]$manifest.version -ne $Version) {
         throw "Manifest version '$($manifest.version)' does not match '$Version'. Pass -PromoteVersion to intentionally advance the public manifest."
     }
     Set-ArtifactProperty $manifest "version" $Version
-    Set-ArtifactProperty $manifest "notes" "EcoreX v$Version WebUI release. Default/full-access permission modes, system Node/npx/Python runtime access in full-access, Feishu auth continuation, Tongxin remote auth/bootstrap, compact delivery replies, WebUI packages, Linux service package, installer scripts, /api/version, and update notes are aligned."
+    Set-ArtifactProperty $manifest "notes" "EcoreX v$Version WebUI release. Default/full-access permission modes, system Node/npx/Python runtime access in full-access, Feishu auth continuation, Tongxin remote auth/bootstrap with multi-file models.database package validation, session history cache import, native gpt-image-2-pro image edit/reference routing, compact delivery replies, sidebar pinned-session grouping, WebUI packages, Linux service package, installer scripts, /api/version, and update notes are aligned."
 }
 Set-ArtifactProperty $manifest "updatedAt" $UpdatedAt
 

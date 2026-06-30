@@ -37,7 +37,16 @@ rules, then read `imagegen` for workflow and QA details. Do not replace
 EcoreX's OpenAI/Gemini/Ark/DashScope/MiniMax/LinkAI routing with a single
 Codex built-in image path unless the user explicitly asks for that host tool.
 
-Generate and edit images using AI models. The default route uses `gpt-image-2-pro` final image generation, preferring OpenAI and using LinkAI only as a GPT Image compatible route when OpenAI is not configured. If `gpt-image-2-pro` is unavailable, the script may visibly retry the same GPT Image compatible route with `gpt-image-2`. **Do not create final images by coding HTML/canvas/SVG/Pillow layouts; use the image model API script for real image generation.**
+Generate and edit images using AI models. The default route uses `gpt-image-2-pro` final image generation, preferring OpenAI and using LinkAI only as a GPT Image compatible route when OpenAI is not configured. If `gpt-image-2-pro` is unavailable, the runtime may visibly retry the same GPT Image compatible route with `gpt-image-2`. **Do not create final images by coding HTML/canvas/SVG/Pillow layouts; use the native image model API route for real image generation.**
+
+In EcoreX Web, the native `imagegen` tool is the primary runtime route. Use it
+for text-to-image, image edits, reference-image generation, and multi-image
+fusion. Pass existing images as `image_url` or `image_urls`; the runtime
+normalizes them into the GPT Image edit/reference route and starts with
+`gpt-image-2-pro`. Do not replace edit/reference requests with custom Python,
+PIL, HTML, SVG, or local drawing scripts. The `scripts/generate.py` command
+below is a compatibility fallback and implementation detail for environments
+where the native tool facade is unavailable.
 
 Supported models (passed via `model` only when the user asks for a specific one):
 
@@ -49,7 +58,24 @@ Supported models (passed via `model` only when the user asks for a specific one)
 
 ## Usage
 
-Run `scripts/generate.py` with a JSON argument. The path is relative to this skill's `base_dir`.
+Prefer the native runtime tool:
+
+```json
+{"prompt": "A corgi astronaut floating in space"}
+```
+
+For edits or reference-image generation, always include image inputs:
+
+```json
+{"prompt": "Add a Santa hat to the dog", "image_url": "/path/to/dog.png"}
+```
+
+```json
+{"prompt": "Combine these characters into a group photo", "image_urls": ["/path/a.png", "/path/b.png"]}
+```
+
+Only when the native `imagegen` tool is unavailable, run `scripts/generate.py`
+with a JSON argument. The path is relative to this skill's `base_dir`.
 
 ```bash
 python <base_dir>/scripts/generate.py '<json_args>'
@@ -62,7 +88,8 @@ python <base_dir>/scripts/generate.py '<json_args>'
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `prompt` | string | yes | — | Image description |
-| `image_url` | string / list | no | null | Input image(s) for editing: local file path or URL. Multi-image fusion is supported (pass a list) |
+| `image_url` | string / list | no | null | Input image(s) for editing/reference generation: local file path or URL. Multi-image fusion is supported (pass a list) |
+| `image_urls` | list | no | null | Alias for multiple input/reference images; normalized to `image_url` by the runtime |
 | `quality` | string | no | auto | `low` / `medium` / `high` (only some backends honour this) |
 | `size` | string | no | auto | `512` / `1K` / `2K` / `3K` / `4K`, or pixel value (`1024x1024`) |
 | `aspect_ratio` | string | no | null | `1:1` / `3:2` / `2:3` / `16:9` / `9:16` / `21:9` (some backends also support extreme ratios like `1:4` / `8:1`) |
@@ -83,7 +110,7 @@ python <base_dir>/scripts/generate.py '{"prompt": "Isometric miniature city of S
 
 ### Important: Editing vs Generating
 
-When the user asks to **edit, modify, or improve an existing image**, pass the original image via `image_url`. Prefer **local file paths** directly — the script handles file reading internally. Without `image_url`, the script generates a brand-new image instead of editing.
+When the user asks to **edit, modify, improve, or generate from an existing/reference image**, pass the original image via `image_url` or `image_urls`. Prefer **local file paths** directly — the runtime handles file reading internally. Without image inputs, the request is a brand-new text-to-image generation instead of an edit/reference generation.
 
 For every input image, label its role before generation:
 

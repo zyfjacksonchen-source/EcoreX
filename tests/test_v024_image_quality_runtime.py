@@ -668,6 +668,41 @@ def test_imagegen_tool_success_images_are_allowlisted_and_stderr_is_summarized(m
     assert malicious_url not in serialized
 
 
+def test_imagegen_tool_routes_image_urls_as_reference_edit_payload(monkeypatch, tmp_path):
+    from agent.tools.imagegen import imagegen as imagegen_module
+
+    calls = []
+
+    def fake_provider_run(payload, **_kwargs):
+        calls.append(dict(payload))
+        return {
+            "returncode": 0,
+            "payload": {
+                "provider": "OpenAI",
+                "model": "gpt-image-2-pro",
+                "attempted_provider_count": 1,
+                "images": [{"url": "https://safe.example/generated.png"}],
+            },
+            "stderr": "",
+        }
+
+    refs = [tmp_path / "ref-a.png", tmp_path / "ref-b.png"]
+    monkeypatch.setattr(imagegen_module, "_authorize_file_access", lambda *_args, **_kwargs: (True, ""))
+    monkeypatch.setattr(imagegen_module, "run_image_generation_payload", fake_provider_run)
+
+    result = imagegen_module.ImageGenTool().execute(
+        {
+            "prompt": "combine the references",
+            "image_urls": [str(refs[0]), str(refs[1])],
+            "output_dir": str(tmp_path / "images"),
+        }
+    )
+
+    assert result.status == "success"
+    assert calls[0]["image_url"] == [str(ref.resolve()) for ref in refs]
+    assert result.result["model"] == "gpt-image-2-pro"
+
+
 def test_imagegen_tool_retries_local_quality_failure_before_success(monkeypatch, tmp_path):
     from types import SimpleNamespace
 
@@ -788,6 +823,64 @@ def test_imagegen_provider_runner_env_overlay_is_thread_safe():
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
+
+
+def test_imagegen_provider_runner_accepts_image_urls_alias(tmp_path):
+    from agent.tools.imagegen import provider_runner
+
+    script = tmp_path / "generate.py"
+    script.write_text(
+        """
+from pathlib import Path
+
+CALLS = []
+LAST_MODEL = ""
+LAST_PROVIDER_ID = ""
+
+
+class OpenAIProvider:
+    DEFAULT_MODEL = "gpt-image-2-pro"
+
+
+class FakeProvider:
+    model = "gpt-image-2-pro"
+    model_fallback = None
+
+    def generate(self, prompt, **kwargs):
+        CALLS.append({"prompt": prompt, **kwargs})
+        return [str(Path(kwargs["output_dir"]) / "out.png")]
+
+
+def _build_providers(model, provider_id=""):
+    global LAST_MODEL, LAST_PROVIDER_ID
+    LAST_MODEL = model
+    LAST_PROVIDER_ID = provider_id
+    provider = FakeProvider()
+    provider.model = model
+    return [("OpenAI", provider)]
+
+
+def _provider_error_from_exception(label, exc):
+    raise exc
+""",
+        encoding="utf-8",
+    )
+
+    result = provider_runner.run_image_generation_payload(
+        {
+            "prompt": "reference-guided edit",
+            "image_urls": ["ref-a.png", "ref-b.png"],
+        },
+        script_path=script,
+        output_dir=tmp_path / "images",
+        env={"OPENAI_API_KEY": "sk-test"},
+    )
+    module = provider_runner.load_image_generation_module(script)
+
+    assert result["returncode"] == 0
+    assert result["payload"]["model"] == "gpt-image-2-pro"
+    assert module.LAST_MODEL == "gpt-image-2-pro"
+    assert module.CALLS[0]["image_url"] == ["ref-a.png", "ref-b.png"]
 
 
 def _load_efficiency_benchmark_module():

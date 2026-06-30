@@ -1099,6 +1099,8 @@ class AgentBridge:
         """
         if not session_id or not query:
             return False
+        if context and context.get("pre_persisted_user_message"):
+            return True
         # Only real user turns: skip scheduler-injected / scheduled-task runs.
         if session_id.startswith("scheduler_") or (
             context and context.get("is_scheduled_task")

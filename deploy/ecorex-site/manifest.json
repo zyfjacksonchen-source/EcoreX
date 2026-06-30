@@ -2,7 +2,7 @@
     "product":  "EcoreX",
     "version":  "0.2.5",
     "updatedAt":  "2026-06-30",
-    "notes":  "EcoreX v0.2.5 WebUI release. Default/full-access permission modes, system Node/npx/Python runtime access in full-access, Feishu auth continuation, Tongxin remote auth/bootstrap, compact delivery replies, sidebar pinned-session grouping, WebUI packages, Linux service package, installer scripts, /api/version, and update notes are aligned to v0.2.5.",
+    "notes":  "EcoreX v0.2.5 WebUI release. Default/full-access permission modes, system Node/npx/Python runtime access in full-access, Feishu auth continuation, Tongxin remote auth/bootstrap with multi-file models.database package validation, session history cache import, native gpt-image-2-pro image edit/reference routing, compact delivery replies, sidebar pinned-session grouping, WebUI packages, Linux service package, installer scripts, /api/version, and update notes are aligned to v0.2.5.",
     "update":  {
                    "webui":  {
                                  "mode":  "manifest-download",
@@ -65,8 +65,8 @@
                           "variant":  "WebUI one-click local package",
                           "fileName":  "EcoreX_0.2.5-webui-windows-x64.zip",
                           "href":  "downloads/EcoreX_0.2.5-webui-windows-x64.zip",
-                          "size":  126774724,
-                          "sha256":  "439F36794CDAEABFE7EF75D76DBAC088DDF170D49C5C34039A098E0EF87AC487",
+                          "size":  126780455,
+                          "sha256":  "95E13D0EC731A535B3EC63B5D6D7CA5E8EF2F8358A03083DFD77A605DAA4E54E",
                           "status":  "ready",
                           "source":  "Local v0.2.5 WebUI Windows artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks.",
                           "updatedAt":  "2026-06-30"
@@ -78,8 +78,8 @@
                           "variant":  "WebUI one-click local package",
                           "fileName":  "EcoreX_0.2.5-webui-macos-universal.zip",
                           "href":  "downloads/EcoreX_0.2.5-webui-macos-universal.zip",
-                          "size":  301011608,
-                          "sha256":  "91FF4CC6AE3AE2C0373E51A3FD0B476C92E75BBADB75B05B602DBD01F4AAB8B3",
+                          "size":  301017340,
+                          "sha256":  "D15B12A39A81D5D68C80B36B0E3F13E76A7A68D6492AA8EB02D7FFA245C79A2F",
                           "status":  "ready",
                           "source":  "Local v0.2.5 WebUI macOS artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks.",
                           "updatedAt":  "2026-06-30"
@@ -199,8 +199,8 @@
                           "variant":  "Web service deployment package",
                           "fileName":  "EcoreX_0.2.5-web-linux-service.tar.gz",
                           "href":  "downloads/EcoreX_0.2.5-web-linux-service.tar.gz",
-                          "size":  3864150,
-                          "sha256":  "66440CBC6C38C4654ECE7A10DF7361815E8812D6159DA1949C476E8414AADFD4",
+                          "size":  3869399,
+                          "sha256":  "40E0B86FDF6B6BEF1810D507E5C5C977F1DC9AD3EBA3BB8A1A613E4A802540AF",
                           "status":  "ready",
                           "visible":  false,
                           "source":  "Local v0.2.5 Web service tarball built by prepare-ecorex-web-release.ps1 and validated by release artifact checks.",

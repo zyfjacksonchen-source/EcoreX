@@ -729,6 +729,91 @@ def test_tongxin_cli_auto_configure_authenticates_then_bootstraps_without_secret
             conf()["tools"] = old_tools
 
 
+def test_tongxin_cli_bootstrap_installs_manifest_models_database_package():
+    from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
+    from config import conf
+
+    script_body = textwrap.dedent(
+        """
+        import json
+        import sys
+        from models import database
+        if sys.argv[1:] == ["schema"]:
+            print(json.dumps({"ok": True, "name": "xin_agent_cli"}))
+        else:
+            print(json.dumps({"ok": True, "database": database["name"]}))
+        """
+    ).strip() + "\n"
+    models_body = "database = {'name': 'remote-bootstrap'}\n"
+    script_bytes = script_body.encode("utf-8")
+    models_bytes = models_body.encode("utf-8")
+    script_sha = __import__("hashlib").sha256(script_bytes).hexdigest().upper()
+    models_sha = __import__("hashlib").sha256(models_bytes).hexdigest().upper()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/manifest.json":
+                body = json.dumps({
+                    "downloadUrl": f"http://127.0.0.1:{self.server.server_port}/xin_agent_cli.py",
+                    "sha256": script_sha,
+                    "fileName": "xin_agent_cli.py",
+                    "files": [
+                        {
+                            "path": "models.py",
+                            "downloadUrl": f"http://127.0.0.1:{self.server.server_port}/models.py",
+                            "sha256": models_sha,
+                        }
+                    ],
+                }).encode("utf-8")
+            elif self.path == "/xin_agent_cli.py":
+                body = script_bytes
+            elif self.path == "/models.py":
+                body = models_bytes
+            else:
+                self.send_response(404)
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            return
+
+    with tempfile.TemporaryDirectory() as workspace:
+        config_path = Path(workspace) / "config.json"
+        target_dir = Path(workspace) / "runtime" / "tools" / "tongxin"
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        old_tools = copy.deepcopy(conf().get("tools", {}))
+        conf()["tools"] = {}
+        try:
+            tool = TongxinCli({
+                "cwd": workspace,
+                "config_path": str(config_path),
+                "bootstrap_manifest_url": f"http://127.0.0.1:{server.server_port}/manifest.json",
+                "bootstrap_dir": str(target_dir),
+            })
+            with patch.object(TongxinCli, "_trusted_auto_config_roots", return_value=[Path(workspace)]):
+                result = tool.execute({"action": "bootstrap", "allow_insecure_localhost": True, "include_paths": True})
+
+            assert result.status == "success"
+            assert result.result["installedFileCount"] == 2
+            assert (target_dir / "models.py").read_text(encoding="utf-8") == models_body
+            configured = json.loads(config_path.read_text(encoding="utf-8"))
+            assert configured["tools"]["tongxin_cli"]["script_path"].endswith("xin_agent_cli.py")
+            run = tool.execute({"action": "run", "args": ["project", "list", "--source", "cache", "--limit", "1"]})
+            assert run.status == "success"
+            assert run.result["json"]["database"] == "remote-bootstrap"
+        finally:
+            server.shutdown()
+            server.server_close()
+            conf()["tools"] = old_tools
+
+
 def test_tongxin_cli_auto_configure_remote_auth_requires_login_before_local_fallback():
     from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
     from config import conf
