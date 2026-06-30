@@ -57,6 +57,16 @@ SKILL_CALLABLE_TOOL_ALIASES: dict[str, str] = {
     "lark": "feishu_cli",
     "lark-cli": "feishu_cli",
     "lark_cli": "feishu_cli",
+    "find": "find",
+    "find-skill": "find",
+    "find_skill": "find",
+    "ecorex-cli": "ecorex_cli",
+    "ecorex_cli": "ecorex_cli",
+    "host-diagnostics": "host_diagnostics",
+    "host_diagnostics": "host_diagnostics",
+    "optional-abilities": "optional_abilities",
+    "optional_abilities": "optional_abilities",
+    "scheduler": "scheduler",
 }
 
 _FRONTMATTER_TOOL_KEYS = (
@@ -131,6 +141,16 @@ def skill_agent_surface(
     enabled: bool = True,
 ) -> dict[str, Any]:
     """Project whether a skill has a model-visible callable tool surface."""
+
+    try:
+        from agent.skills.tool_binding_contract import skill_tool_binding_surface
+
+        return skill_tool_binding_surface(skill_or_name, tool_names, enabled=enabled)
+    except Exception:
+        # Keep the legacy projection as a safe fallback.  The v0.2.5 release
+        # gate verifies the contract path, so this branch is only for degraded
+        # runtime diagnostics.
+        pass
 
     tool_name = resolve_callable_tool_name(skill_or_name)
     loaded_tools = {str(item) for item in (tool_names or [])}

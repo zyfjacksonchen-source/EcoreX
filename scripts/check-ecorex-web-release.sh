@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${VERSION:-0.2.3}"
+VERSION="${VERSION:-0.2.5}"
 SERVICE_NAME="${SERVICE_NAME:-ecorex-web}"
 INSTALL_ROOT="${INSTALL_ROOT:-/opt/ecorex-web}"
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-/srv/ecorex-agent-workspace}"
@@ -100,6 +100,8 @@ check_package() {
   local required_suffixes=(
     "/runtime/app.py"
     "/runtime/requirements.txt"
+    "/runtime/core-requirements.txt"
+    "/runtime/runtime-manifest.json"
     "/runtime/channel/web/chat.html"
     "/runtime/channel/web/static/app/index.html"
     "/scripts/install-ecorex-web.sh"
@@ -248,6 +250,8 @@ if [[ "$CHECK_INSTALLED" == "1" ]]; then
   check_dir "$INSTALL_ROOT/current"
   check_file "$INSTALL_ROOT/current/runtime/app.py"
   check_file "$INSTALL_ROOT/current/runtime/requirements.txt"
+  check_file "$INSTALL_ROOT/current/runtime/core-requirements.txt"
+  check_file "$INSTALL_ROOT/current/runtime/runtime-manifest.json"
   check_file "$INSTALL_ROOT/current/runtime/channel/web/chat.html"
   check_file "$INSTALL_ROOT/current/runtime/channel/web/static/app/index.html"
   check_file "$INSTALL_ROOT/state/config.json"

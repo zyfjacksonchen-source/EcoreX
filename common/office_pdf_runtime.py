@@ -5,16 +5,16 @@ from __future__ import annotations
 import csv
 import hashlib
 import hmac
-import importlib.util
 import os
 import re
-import shutil
-import subprocess
 import time
 import zipfile
 import xml.etree.ElementTree as ET
+from functools import wraps
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+from common.tool_execution_environment import ToolExecutionEnvironment
 
 
 SCHEMA_VERSION = 1
@@ -131,24 +131,42 @@ def default_quality_gates(kind: str) -> List[str]:
 
 
 def _module_available(name: str) -> bool:
-    try:
-        return importlib.util.find_spec(name) is not None
-    except Exception:
-        return False
+    return ToolExecutionEnvironment(tool_name="office_pdf").provider.resolve_python_package(name).available
+
+
+def _import_owned_python_module(name: str):
+    return ToolExecutionEnvironment(tool_name="office_pdf").import_python_module(name)
+
+
+def _owned_python_runtime(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        with ToolExecutionEnvironment(tool_name="office_pdf").owned_python_import_context():
+            return func(*args, **kwargs)
+
+    return wrapper
 
 
 def _command_available(name: str) -> bool:
-    return bool(shutil.which(name))
+    return ToolExecutionEnvironment(tool_name="office_pdf").resolve_executable(name, native=True).available
+
+
+def _native_command_path(*names: str) -> Optional[str]:
+    executor = ToolExecutionEnvironment(tool_name="office_pdf")
+    for name in names:
+        dependency = executor.resolve_executable(name, native=True)
+        if dependency.available:
+            return dependency.path
+    return None
 
 
 def _artifact_tool_available() -> bool:
     candidates = [
-        Path.cwd() / "node_modules" / "@oai" / "artifact-tool",
         Path(__file__).resolve().parents[1] / "node_modules" / "@oai" / "artifact-tool",
     ]
-    env_roots = os.environ.get("NODE_REPL_NODE_MODULE_DIRS") or os.environ.get("ECOREX_NODE_MODULE_DIRS") or ""
-    for root in [item for item in env_roots.split(os.pathsep) if item]:
-        candidates.append(Path(root) / "@oai" / "artifact-tool")
+    executor = ToolExecutionEnvironment(tool_name="office_pdf")
+    for root in executor.provider.node_modules_dirs():
+        candidates.append(root / "@oai" / "artifact-tool")
     return any(path.exists() for path in candidates)
 
 
@@ -268,6 +286,7 @@ def inspect_office_pdf_artifact(path: str | os.PathLike[str], kind: Optional[str
     return payload
 
 
+@_owned_python_runtime
 def render_pdf_pages(
     pdf_path: str | os.PathLike[str],
     output_dir: str | os.PathLike[str],
@@ -279,7 +298,7 @@ def render_pdf_pages(
 
     if not _module_available("fitz"):
         raise OfficePdfRuntimeError("PyMuPDF render backend is not available")
-    import fitz  # type: ignore
+    fitz = _import_owned_python_module("fitz")
 
     source = Path(pdf_path)
     target_dir = Path(output_dir)
@@ -328,7 +347,7 @@ def render_presentation_preview(
 ) -> Dict[str, Any]:
     """Render PPTX slides through LibreOffice-to-PDF plus PDF page rendering."""
 
-    office_cmd = shutil.which("soffice") or shutil.which("libreoffice")
+    office_cmd = _native_command_path("soffice", "libreoffice")
     if not office_cmd:
         raise OfficePdfRuntimeError("LibreOffice render backend is not available")
     source = Path(pptx_path)
@@ -346,13 +365,9 @@ def render_presentation_preview(
         str(pdf_dir),
         str(source),
     ]
-    result = subprocess.run(
+    result = ToolExecutionEnvironment(tool_name="office_pdf", cwd=target_dir).run_completed(
         command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
         timeout=max(5, int(timeout_seconds or 90)),
-        check=False,
     )
     converted = pdf_dir / f"{source.stem}.pdf"
     if result.returncode != 0 or not converted.exists():
@@ -379,7 +394,7 @@ def render_spreadsheet_preview(
 ) -> Dict[str, Any]:
     """Render spreadsheet sheets through LibreOffice-to-PDF plus PDF page rendering."""
 
-    office_cmd = shutil.which("soffice") or shutil.which("libreoffice")
+    office_cmd = _native_command_path("soffice", "libreoffice")
     if not office_cmd:
         raise OfficePdfRuntimeError("LibreOffice render backend is not available")
     source = Path(workbook_path)
@@ -397,13 +412,9 @@ def render_spreadsheet_preview(
         str(pdf_dir),
         str(source),
     ]
-    result = subprocess.run(
+    result = ToolExecutionEnvironment(tool_name="office_pdf", cwd=target_dir).run_completed(
         command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
         timeout=max(5, int(timeout_seconds or 90)),
-        check=False,
     )
     converted = pdf_dir / f"{source.stem}.pdf"
     if result.returncode != 0 or not converted.exists():
@@ -430,7 +441,7 @@ def render_document_preview(
 ) -> Dict[str, Any]:
     """Render DOCX pages through LibreOffice-to-PDF plus PDF page rendering."""
 
-    office_cmd = shutil.which("soffice") or shutil.which("libreoffice")
+    office_cmd = _native_command_path("soffice", "libreoffice")
     if not office_cmd:
         raise OfficePdfRuntimeError("LibreOffice render backend is not available")
     source = Path(docx_path)
@@ -448,13 +459,9 @@ def render_document_preview(
         str(pdf_dir),
         str(source),
     ]
-    result = subprocess.run(
+    result = ToolExecutionEnvironment(tool_name="office_pdf", cwd=target_dir).run_completed(
         command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
         timeout=max(5, int(timeout_seconds or 90)),
-        check=False,
     )
     converted = pdf_dir / f"{source.stem}.pdf"
     if result.returncode != 0 or not converted.exists():
@@ -594,12 +601,13 @@ def _is_hmac_ref(value: str) -> bool:
     return 8 <= len(digest) <= 64 and all(char in "0123456789abcdef" for char in digest.lower())
 
 
+@_owned_python_runtime
 def analyze_pdf_quality(path: str | os.PathLike[str]) -> Dict[str, Any]:
     """Return content-free PDF page metrics for extraction, render, and diff QA."""
 
     if not _module_available("pypdf"):
         raise OfficePdfRuntimeError("pypdf is not available")
-    from pypdf import PdfReader  # type: ignore
+    PdfReader = getattr(_import_owned_python_module("pypdf"), "PdfReader")
 
     source = Path(path)
     reader = PdfReader(str(source))
@@ -649,7 +657,7 @@ def analyze_pdf_quality(path: str | os.PathLike[str]) -> Dict[str, Any]:
     fitz_doc = None
     if _module_available("fitz"):
         try:
-            import fitz  # type: ignore
+            fitz = _import_owned_python_module("fitz")
 
             fitz_doc = fitz.open(str(source))
         except Exception:
@@ -897,6 +905,7 @@ def build_pdf_quality_evidence(
     return evidence
 
 
+@_owned_python_runtime
 def analyze_spreadsheet_quality(path: str | os.PathLike[str]) -> Dict[str, Any]:
     """Return content-free workbook quality metrics for formula/chart/render QA."""
 
@@ -957,7 +966,7 @@ def analyze_spreadsheet_quality(path: str | os.PathLike[str]) -> Dict[str, Any]:
 
     if not _module_available("openpyxl"):
         raise OfficePdfRuntimeError("openpyxl is not available")
-    import openpyxl  # type: ignore
+    openpyxl = _import_owned_python_module("openpyxl")
 
     workbook = openpyxl.load_workbook(str(source), read_only=False, data_only=False)
     try:
@@ -1185,12 +1194,13 @@ def build_spreadsheet_quality_evidence(
     return evidence
 
 
+@_owned_python_runtime
 def analyze_document_quality(path: str | os.PathLike[str]) -> Dict[str, Any]:
     """Return content-free DOCX quality metrics for structure/table/redline QA."""
 
     if not _module_available("docx"):
         raise OfficePdfRuntimeError("python-docx is not available")
-    import docx  # type: ignore
+    docx = _import_owned_python_module("docx")
 
     source = Path(path)
     document = docx.Document(str(source))
@@ -1320,12 +1330,13 @@ def build_document_quality_evidence(
     return evidence
 
 
+@_owned_python_runtime
 def analyze_presentation_quality(path: str | os.PathLike[str]) -> Dict[str, Any]:
     """Return content-free PPTX quality metrics for story/layout/chart QA."""
 
     if not _module_available("pptx"):
         raise OfficePdfRuntimeError("python-pptx is not available")
-    from pptx import Presentation  # type: ignore
+    Presentation = getattr(_import_owned_python_module("pptx"), "Presentation")
 
     source = Path(path)
     presentation = Presentation(str(source))
@@ -1752,10 +1763,11 @@ def _compare_pdf_analyses(reference: Dict[str, Any], candidate: Dict[str, Any]) 
     }
 
 
+@_owned_python_runtime
 def _inspect_pdf(path: Path) -> Dict[str, Any]:
     if not _module_available("pypdf"):
         raise OfficePdfRuntimeError("pypdf is not available")
-    from pypdf import PdfReader  # type: ignore
+    PdfReader = getattr(_import_owned_python_module("pypdf"), "PdfReader")
 
     reader = PdfReader(str(path))
     metadata = reader.metadata or {}
@@ -1814,10 +1826,11 @@ def _inspect_docx_ooxml(path: Path) -> Dict[str, int]:
     return counts
 
 
+@_owned_python_runtime
 def _inspect_docx(path: Path) -> Dict[str, Any]:
     if not _module_available("docx"):
         raise OfficePdfRuntimeError("python-docx is not available")
-    import docx  # type: ignore
+    docx = _import_owned_python_module("docx")
 
     document = docx.Document(str(path))
     return {
@@ -1827,13 +1840,14 @@ def _inspect_docx(path: Path) -> Dict[str, Any]:
     }
 
 
+@_owned_python_runtime
 def _inspect_spreadsheet(path: Path) -> Dict[str, Any]:
     extension = path.suffix.lower()
     if extension in {".csv", ".tsv"}:
         return _inspect_csv(path)
     if not _module_available("openpyxl"):
         raise OfficePdfRuntimeError("openpyxl is not available")
-    import openpyxl  # type: ignore
+    openpyxl = _import_owned_python_module("openpyxl")
 
     workbook = openpyxl.load_workbook(str(path), read_only=True, data_only=False)
     try:
@@ -1890,10 +1904,11 @@ def _inspect_csv(path: Path) -> Dict[str, Any]:
     return {"rowsSampled": row_count, "maxColumns": max_columns, "truncated": row_count >= CSV_MAX_ROWS}
 
 
+@_owned_python_runtime
 def _inspect_presentation(path: Path) -> Dict[str, Any]:
     if not _module_available("pptx"):
         raise OfficePdfRuntimeError("python-pptx is not available")
-    from pptx import Presentation  # type: ignore
+    Presentation = getattr(_import_owned_python_module("pptx"), "Presentation")
 
     presentation = Presentation(str(path))
     slide_count = len(presentation.slides)

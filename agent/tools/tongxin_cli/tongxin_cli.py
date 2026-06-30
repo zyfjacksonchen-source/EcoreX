@@ -18,6 +18,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from agent.tools.base_tool import BaseTool, ToolResult
 from common.log import logger
+from common.tool_execution_environment import ToolExecutionCancelled, ToolExecutionEnvironment
 
 
 DEFAULT_TIMEOUT_SECONDS = 60
@@ -477,35 +478,16 @@ def _kill_process_tree(process: subprocess.Popen) -> None:
 
 
 def _run_process(command: List[str], timeout: int, cwd: str, env: Dict[str, str], cancel_event=None) -> subprocess.CompletedProcess:
-    kwargs: Dict[str, Any] = {
-        "cwd": cwd,
-        "stdout": subprocess.PIPE,
-        "stderr": subprocess.PIPE,
-        "text": True,
-        "encoding": "utf-8",
-        "errors": "replace",
-        "env": env,
-    }
-    if os.name == "nt":
-        kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    else:
-        kwargs["start_new_session"] = True
-    process = subprocess.Popen(command, **kwargs)
-    deadline = time.time() + max(1, timeout)
-    while True:
-        try:
-            stdout, stderr = process.communicate(timeout=0.25)
-            return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
-        except subprocess.TimeoutExpired:
-            if cancel_event is not None and getattr(cancel_event, "is_set", lambda: False)():
-                _kill_process_tree(process)
-                stdout, stderr = process.communicate()
-                raise _ProcessCancelled(stdout, stderr)
-            if time.time() >= deadline:
-                _kill_process_tree(process)
-                stdout, stderr = process.communicate()
-                exc = subprocess.TimeoutExpired(command, timeout, output=stdout, stderr=stderr)
-                raise exc
+    try:
+        return ToolExecutionEnvironment(tool_name="tongxin_cli", base_env=env, cwd=cwd).run_completed(
+            command,
+            timeout=timeout,
+            cwd=cwd,
+            env=env,
+            cancel_event=cancel_event,
+        )
+    except ToolExecutionCancelled as exc:
+        raise _ProcessCancelled(exc.stdout, exc.stderr)
 
 
 class TongxinCli(BaseTool):
@@ -670,7 +652,9 @@ class TongxinCli(BaseTool):
             payload["candidatePathRefs"] = [_path_ref(path) for path in self._candidate_script_paths()]
             payload["configuredScriptPathRef"] = _path_ref(configured_path)
         if diagnose:
-            payload["pythonRef"] = _path_ref(sys.executable)
+            python_dependency = self._python_dependency()
+            payload["pythonRef"] = _path_ref(python_dependency.path)
+            payload["pythonSource"] = python_dependency.source
             payload["cwdRef"] = _path_ref(self.cwd)
             payload["remoteAuthSourceRef"] = self._safe_url_ref(remote_auth_url) if remote_auth_url else {"present": False}
         if health_failure:
@@ -1041,7 +1025,17 @@ class TongxinCli(BaseTool):
                     payload["scriptPathRef"] = _path_ref(script)
                 return ToolResult.fail(payload)
         env = self._cli_env()
-        command = [sys.executable, str(script), *cli_args]
+        executor = ToolExecutionEnvironment(tool_name=self.name, base_env=env, cwd=str(script.parent))
+        python_dependency = executor.resolve_python()
+        if not python_dependency.available:
+            payload = executor.provider.missing_dependency(python_dependency, required_by=self.name)
+            payload.update({
+                "command": self._display_command(cli_args),
+                "readOnly": True,
+                "defaultAudience": DEFAULT_TONGXIN_SCOPE,
+            })
+            return ToolResult.fail(payload)
+        command = [python_dependency.path, str(script), *cli_args]
         try:
             result = _run_process(
                 command,
@@ -1102,10 +1096,10 @@ class TongxinCli(BaseTool):
 
     @staticmethod
     def _cli_env() -> Dict[str, str]:
-        env = os.environ.copy()
-        env.setdefault("PYTHONIOENCODING", "utf-8")
-        env.pop("PYTHONPATH", None)
-        return env
+        return ToolExecutionEnvironment(tool_name="tongxin_cli").build_env()
+
+    def _python_dependency(self):
+        return ToolExecutionEnvironment(tool_name=self.name, cwd=self.cwd).resolve_python()
 
     def _script_health(self, script: Optional[Path], timeout: int = DEFAULT_TIMEOUT_SECONDS) -> Dict[str, Any]:
         if not script:
@@ -1120,12 +1114,21 @@ class TongxinCli(BaseTool):
             return dict(cached)
 
         probe_timeout = max(1, min(int(timeout or DEFAULT_TIMEOUT_SECONDS), 8))
+        executor = ToolExecutionEnvironment(tool_name=self.name, cwd=str(script.parent))
+        python_dependency = executor.resolve_python()
+        if not python_dependency.available:
+            payload = self._script_health_failure(script, "python", None, "EcoreX-owned Python runtime is missing.")
+            payload["missingDependency"] = executor.provider.missing_dependency(python_dependency, required_by=self.name)
+            payload["configurationState"] = "dependency_missing"
+            self._script_health_cache[cache_key] = payload
+            self._last_script_health_failure = dict(payload)
+            return dict(payload)
         probes: List[Tuple[str, Tuple[str, ...]]] = [
             ("schema", ("schema",)),
             ("data", TONGXIN_DATA_HEALTH_PROBE_ARGS),
         ]
         for phase, probe_args in probes:
-            command = [sys.executable, str(script), *probe_args]
+            command = [python_dependency.path, str(script), *probe_args]
             try:
                 result = _run_process(
                     command,
@@ -1331,24 +1334,19 @@ class TongxinCli(BaseTool):
 
     def _env_script_path_values(self) -> List[str]:
         values = []
-        for key in ("ECOREX_TONGXIN_CLI_PATH", "XIN_AGENT_CLI_PATH", "TONGXIN_CLI_PATH"):
+        provider = ToolExecutionEnvironment(tool_name=self.name).provider
+        for key in ("ECOREX_TONGXIN_CLI_PATH",):
             value = os.environ.get(key)
-            if value:
+            if value and provider.classify_path(value) in {"ecorex-bundled", "ecorex-state"}:
                 values.append(value)
         return values
 
     def _trusted_auto_config_roots(self) -> List[Path]:
         runtime_root = Path(__file__).resolve().parents[3]
-        roots = [
+        return [
             runtime_root / "tools" / "tongxin",
             runtime_root,
-            Path("C:/自动报表工具"),
-            Path("C:/EcoreX Artifact Desk"),
         ]
-        extra = os.environ.get("ECOREX_TONGXIN_TRUSTED_ROOTS")
-        if extra:
-            roots.extend(Path(item).expanduser() for item in extra.split(os.pathsep) if item.strip())
-        return roots
 
     def _bootstrap_setting(self, group: str) -> str:
         keys = BOOTSTRAP_CONFIG_KEYS.get(group, ())

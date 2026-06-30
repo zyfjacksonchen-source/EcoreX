@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.2.4",
+    [string]$Version = "0.2.5",
     [string]$RuntimeRoot = "desktop/runtime/ecorex-runtime",
     [string]$OutputDir = "release-artifacts",
     [switch]$KeepStaging
@@ -62,6 +62,30 @@ function Invoke-ReleaseRuntimeSanitizer {
     & python $sanitizer $RuntimeDir
     if ($LASTEXITCODE -ne 0) {
         throw "Release runtime sanitizer failed for $RuntimeDir"
+    }
+}
+
+function Write-V025RuntimeManifest {
+    param(
+        [Parameter(Mandatory = $true)][string]$RuntimeDir,
+        [Parameter(Mandatory = $true)][string]$PackageRoot,
+        [Parameter(Mandatory = $true)][string]$Platform
+    )
+    $writer = Join-Path $repoRoot "scripts\write-v025-runtime-manifest.py"
+    $checker = Join-Path $repoRoot "scripts\check-v025-runtime-manifest.py"
+    if (-not (Test-Path -LiteralPath $writer)) {
+        throw "v0.2.5 runtime manifest writer missing: $writer"
+    }
+    if (-not (Test-Path -LiteralPath $checker)) {
+        throw "v0.2.5 runtime manifest checker missing: $checker"
+    }
+    & python $writer --runtime-root $RuntimeDir --package-root $PackageRoot --version $Version --platform $Platform
+    if ($LASTEXITCODE -ne 0) {
+        throw "v0.2.5 runtime manifest generation failed for $Platform"
+    }
+    & python $checker (Join-Path $RuntimeDir "runtime-manifest.json") --platform $Platform --version $Version --runtime-root $RuntimeDir --package-root $PackageRoot
+    if ($LASTEXITCODE -ne 0) {
+        throw "v0.2.5 runtime manifest check failed for $Platform"
     }
 }
 
@@ -435,8 +459,12 @@ Remove-GeneratedNoise -Root $winRuntime
 Sync-DesktopWebBuild -RuntimeDir $winRuntime
 Copy-OptionalLarkCliWindows -RuntimeDir $winRuntime
 Invoke-ReleaseRuntimeSanitizer -RuntimeDir $winRuntime
+Install-WindowsRuntimeDependency -RuntimeDir $winRuntime -ModuleName "web" -PackageSpec "web.py>=0.76,<0.77" -Reason "WebUI web.py runtime"
+Install-WindowsRuntimeDependency -RuntimeDir $winRuntime -ModuleName "chardet" -PackageSpec "chardet>=5.1.0" -Reason "WebUI request encoding detection"
+Install-WindowsRuntimeDependency -RuntimeDir $winRuntime -ModuleName "numpy" -PackageSpec "numpy>=1.21" -Reason "WebUI runtime data processing"
 Install-WindowsRuntimeDependency -RuntimeDir $winRuntime -ModuleName "lark_oapi" -PackageSpec "lark-oapi>=1.5.5" -Reason "Feishu/Lark websocket external connection"
 Remove-GeneratedNoise -Root $winRuntime
+Write-V025RuntimeManifest -RuntimeDir $winRuntime -PackageRoot $windowsStage -Platform "windows-x64"
 
 $windowsCmd = @'
 @echo off
@@ -774,6 +802,7 @@ Copy-Item -LiteralPath $pyArm -Destination (Join-Path $macStage "python/$(Split-
 Copy-Item -LiteralPath $pyX64 -Destination (Join-Path $macStage "python/$(Split-Path -Leaf $pyX64)") -Force
 Copy-Item -LiteralPath $wheelArm -Destination (Join-Path $macStage "wheelhouse/mac-arm64") -Recurse -Force
 Copy-Item -LiteralPath $wheelX64 -Destination (Join-Path $macStage "wheelhouse/mac-x64") -Recurse -Force
+Write-V025RuntimeManifest -RuntimeDir $macRuntime -PackageRoot $macStage -Platform "macos-universal"
 
 $macInstall = @'
 #!/usr/bin/env bash

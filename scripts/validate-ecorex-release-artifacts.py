@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import pathlib
 import re
@@ -52,6 +53,7 @@ REQUIRED_SITE_ASSETS = (
     "site/assets/ecorex-ecosystem-hub.png",
 )
 REQUIRED_RUNTIME_SUFFIXES = (
+    "runtime/runtime-manifest.json",
     "runtime/config.py",
     "runtime/config-template.json",
     "runtime/channel/web/web_channel.py",
@@ -143,6 +145,65 @@ REQUIRED_DESKTOP_RUNTIME_FILES = (
     "skills/skill-creator/scripts/init_skill.py",
     "skills/skill-creator/scripts/quick_validate.py",
 )
+EXPECTED_PACKAGE_BY_MODULE = {
+    "aiohttp": "aiohttp",
+    "requests": "requests",
+    "chardet": "chardet",
+    "numpy": "numpy",
+    "PIL": "Pillow",
+    "pypdf": "pypdf",
+    "pdfminer": "pdfminer.six",
+    "docx": "python-docx",
+    "pptx": "python-pptx",
+    "openpyxl": "openpyxl",
+    "xlsxwriter": "xlsxwriter",
+    "markdownify": "markdownify",
+    "reportlab": "reportlab",
+    "fitz": "PyMuPDF",
+    "rapidocr_onnxruntime": "rapidocr-onnxruntime",
+    "dotenv": "python-dotenv",
+    "yaml": "PyYAML",
+    "croniter": "croniter",
+    "click": "click",
+    "qrcode": "qrcode",
+    "json_repair": "json-repair",
+    "playwright": "playwright",
+    "lark_oapi": "lark-oapi",
+    "web": "web.py",
+    "legacy_cgi": "legacy-cgi",
+}
+PYTHON_PACKAGE_PATH_PREFIXES = (
+    "python/Lib/site-packages/",
+    "python/lib/python3.11/site-packages/",
+    "venv/Lib/site-packages/",
+    "venv/lib/python3.11/site-packages/",
+)
+PYTHON_EXECUTABLE_PATHS = {
+    "windows-x64": {"python/python.exe", "venv/Scripts/python.exe"},
+    "macos-universal": {"python/bin/python", "python/bin/python3", "venv/bin/python"},
+    "linux-service": {"python/bin/python", "python/bin/python3", "venv/bin/python"},
+}
+EXECUTABLE_PATH_PREFIXES = (
+    "bin/",
+    "tools/bin/",
+    "node/",
+    "node/bin/",
+    "tools/node/",
+    "tools/node/bin/",
+    "node_modules/.bin/",
+    "tools/lark-cli/bin/",
+    "tools/lark-cli/node_modules/.bin/",
+    "python/Lib/site-packages/playwright/driver/",
+)
+NATIVE_BIN_PATH_PREFIXES = (
+    "tools/bin/",
+    "tools/poppler/bin/",
+    "tools/libreoffice/program/",
+    "tools/tesseract/",
+)
+WEBUI_MODULES = ("web", "chardet", "numpy")
+OFFICE_MODULES = ("pypdf", "pdfminer", "docx", "pptx", "openpyxl", "xlsxwriter", "markdownify", "reportlab", "fitz")
+OCR_MODULES = ("PIL", "rapidocr_onnxruntime")
 
 
 def _s(*parts: str) -> str:
@@ -219,6 +280,16 @@ def read_zip_json_no_bom(archive: zipfile.ZipFile, name: str) -> dict:
     raw = archive.read(name)
     if raw.startswith(b"\xef\xbb\xbf"):
         raise ValidationError(f"{archive.filename}!{name} has a UTF-8 BOM")
+    return json.loads(raw.decode("utf-8"))
+
+
+def read_tar_json_no_bom(archive: tarfile.TarFile, name: str) -> dict:
+    member = archive.extractfile(name)
+    if member is None:
+        raise ValidationError(f"{archive.name}!{name} is not readable")
+    raw = member.read()
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raise ValidationError(f"{archive.name}!{name} has a UTF-8 BOM")
     return json.loads(raw.decode("utf-8"))
 
 
@@ -314,8 +385,30 @@ def validate_directory_no_forbidden_release_strings(root: pathlib.Path, label: s
         require_no_forbidden_release_text(label, rel, text)
 
 
+SAFE_ARTIFACT_FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
+
+
+def artifact_file_name(artifact_id: str, artifact: dict) -> str:
+    file_name = str(artifact.get("fileName") or "").strip()
+    require(file_name, f"artifact {artifact_id} missing fileName")
+    normalized = file_name.replace("\\", "/")
+    require(normalized == pathlib.PurePosixPath(normalized).name, f"artifact {artifact_id} fileName must not contain directories")
+    require(":" not in normalized, f"artifact {artifact_id} fileName must not contain drive/URL separator")
+    require(".." not in pathlib.PurePosixPath(normalized).parts, f"artifact {artifact_id} fileName must not traverse parents")
+    require(bool(SAFE_ARTIFACT_FILENAME_RE.fullmatch(normalized)), f"artifact {artifact_id} fileName has unsafe characters: {file_name}")
+    return normalized
+
+
 def artifact_path(artifact_dir: pathlib.Path, artifact: dict) -> pathlib.Path:
-    return artifact_dir / str(artifact["fileName"])
+    artifact_id = str(artifact.get("id") or artifact.get("fileName") or "unknown")
+    safe_name = artifact_file_name(artifact_id, artifact)
+    root = artifact_dir.resolve()
+    path = (root / safe_name).resolve()
+    try:
+        path.relative_to(root)
+    except Exception:
+        raise ValidationError(f"artifact {artifact_id} path escaped artifact dir: {safe_name}")
+    return path
 
 
 def artifact_href(artifact: dict) -> str:
@@ -422,7 +515,7 @@ def validate_external_artifact_metadata(artifact_id: str, artifact: dict) -> Non
     expected_size = int(artifact.get("size") or 0)
     expected_digest = str(artifact.get("sha256") or "").upper()
     require(href.lower().startswith(("http://", "https://")), f"external artifact {artifact_id} href is not HTTP(S)")
-    require(str(artifact.get("fileName") or ""), f"external artifact {artifact_id} missing fileName")
+    artifact_file_name(artifact_id, artifact)
     require(expected_size > 0, f"external artifact {artifact_id} missing positive size")
     require(bool(re.fullmatch(r"[A-F0-9]{64}", expected_digest)), f"external artifact {artifact_id} missing SHA256")
 
@@ -445,9 +538,7 @@ def validate_manifest_artifacts(manifest: dict, artifact_dir: pathlib.Path) -> l
             validate_macos_unsigned_install_smoke(manifest, artifact_id, artifact)
         if is_external_artifact(artifact):
             validate_external_artifact_metadata(artifact_id, artifact)
-            ready.append(artifact)
-            print(f"PASS external artifact {artifact_id} {artifact_href(artifact)}")
-            continue
+            raise ValidationError(f"publishable external artifact {artifact_id} must be mirrored into artifact-dir before release validation")
         path = artifact_path(artifact_dir, artifact)
         require(path.is_file(), f"ready artifact {artifact_id} missing: {path}")
         size = path.stat().st_size
@@ -462,10 +553,549 @@ def validate_manifest_artifacts(manifest: dict, artifact_dir: pathlib.Path) -> l
     return ready
 
 
-def validate_zip_assets(path: pathlib.Path, label: str) -> None:
+def validate_manifest_relative_paths(value, label: str, path: str = "$") -> None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key == "path":
+                require(isinstance(item, str) and item.strip(), f"{label} runtime manifest {path}.{key} must be a nonempty string")
+            if key == "archives":
+                require(isinstance(item, list) and item, f"{label} runtime manifest {path}.{key} must be a nonempty list")
+                require(all(isinstance(entry, str) and entry.strip() for entry in item), f"{label} runtime manifest {path}.{key} must contain only nonempty strings")
+            validate_manifest_relative_paths(item, label, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            validate_manifest_relative_paths(item, label, f"{path}[{index}]")
+    elif isinstance(value, str) and (path.endswith(".path") or ".archives" in path):
+        normalized = value.replace("\\", "/")
+        require(not pathlib.PurePosixPath(normalized).is_absolute(), f"{label} runtime manifest {path} must be relative")
+        require(":" not in normalized, f"{label} runtime manifest {path} must not contain drive/URL separator")
+        require(not normalized.startswith("../") and "/../" not in normalized, f"{label} runtime manifest {path} must not traverse parents")
+
+
+def expected_runtime_manifest_platforms(label: str) -> set[str]:
+    if label == "webui-windows-x64":
+        return {"windows-x64"}
+    if label == "webui-macos-universal":
+        return {"macos-universal"}
+    if label == "webui-win-mac":
+        return {"windows-x64", "macos-universal"}
+    if label == "web-linux-service":
+        return {"linux-service"}
+    return set()
+
+
+def validate_manifest_archive_references(manifest_name: str, manifest: dict, archive_names: set[str], archive_file_names: set[str], label: str) -> None:
+    normalized_manifest = manifest_name.replace("\\", "/")
+    marker = "runtime/runtime-manifest.json"
+    require(normalized_manifest.endswith(marker), f"{label} invalid runtime manifest path {manifest_name}")
+    package_prefix = normalized_manifest[: -len(marker)]
+    runtime_prefix = package_prefix + "runtime/"
+
+    def walk(value, path="$"):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key == "path" and isinstance(item, str):
+                    expected = runtime_prefix + item.replace("\\", "/")
+                    if (
+                        path.endswith(".runtimeDependencies.python")
+                        or ".executables." in path
+                        or ".nativeBins." in path
+                        or ".toolFiles." in path
+                        or ".pythonPackages." in path
+                    ):
+                        require(expected in archive_file_names, f"{label} manifest file reference missing archive file member {expected}")
+                    else:
+                        require(
+                            expected in archive_names or any(name.startswith(expected.rstrip("/") + "/") for name in archive_file_names),
+                            f"{label} manifest reference missing archive member {expected}",
+                        )
+                elif key == "archives":
+                    walk(item, f"{path}.{key}")
+                else:
+                    walk(item, f"{path}.{key}")
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                if isinstance(item, str) and ".archives" in path:
+                    expected = package_prefix + item.replace("\\", "/")
+                    require(expected in archive_file_names, f"{label} manifest archive reference missing file member {expected}")
+                else:
+                    walk(item, f"{path}[{index}]")
+
+    walk(manifest)
+
+
+def validate_manifest_status_evidence(value, label: str, path: str = "$") -> None:
+    if isinstance(value, dict):
+        status = value.get("status")
+        if status == "bundled":
+            require(isinstance(value.get("path"), str) and value.get("path").strip(), f"{label} {path} bundled status requires path")
+        elif status == "installer-bundled":
+            archives = value.get("archives")
+            wheelhouse = value.get("wheelhouse")
+            has_archives = isinstance(archives, list) and bool(archives)
+            has_wheelhouse = ".pythonPackages." in path and isinstance(wheelhouse, list) and bool(wheelhouse)
+            require(has_archives or has_wheelhouse, f"{label} {path} installer-bundled status requires archives or wheelhouse evidence")
+            if ".pythonPackages." not in path:
+                require(has_archives, f"{label} {path} installer-bundled executable/runtime status requires archives evidence")
+        for key, item in value.items():
+            validate_manifest_status_evidence(item, label, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            validate_manifest_status_evidence(item, label, f"{path}[{index}]")
+
+
+def manifest_archive_distribution(path: str) -> str:
+    name = pathlib.PurePosixPath(path.replace("\\", "/")).name
+    if not name.lower().endswith(".whl") or "-" not in name:
+        return ""
+    return re.sub(r"[-_.]+", "-", name.split("-", 1)[0]).lower()
+
+
+def normalized_distribution_name(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def zip_payload_members(payload: bytes) -> list[str]:
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            return [name for name in archive.namelist() if name and not name.endswith("/")]
+    except Exception:
+        return []
+
+
+def tar_payload_members(payload: bytes) -> list[str]:
+    try:
+        with tarfile.open(fileobj=io.BytesIO(payload), mode="r:*") as archive:
+            return [member.name for member in archive.getmembers() if member.isfile()]
+    except Exception:
+        return []
+
+
+def archive_payload_members(archive_name: str, payload: bytes) -> list[str]:
+    lowered = archive_name.lower()
+    if lowered.endswith((".zip", ".whl")):
+        return zip_payload_members(payload)
+    if lowered.endswith((".tgz", ".tar.gz", ".tar.xz")):
+        return tar_payload_members(payload)
+    return []
+
+
+def wheel_payload_matches(archive_name: str, payload: bytes, expected_dist: str) -> bool:
+    members = zip_payload_members(payload)
+    if not any(name.endswith(".dist-info/WHEEL") for name in members):
+        return False
+    normalized_expected = normalized_distribution_name(expected_dist)
+    for member in members:
+        normalized_member = member.replace("\\", "/")
+        if ".dist-info/" not in normalized_member:
+            continue
+        dist_info = pathlib.PurePosixPath(normalized_member).parts[0].removesuffix(".dist-info")
+        package_name = dist_info.split("-", 1)[0]
+        if normalized_distribution_name(package_name) == normalized_expected:
+            return True
+    return False
+
+
+def cpython_payload_matches(archive_name: str, payload: bytes) -> bool:
+    name = pathlib.PurePosixPath(archive_name.replace("\\", "/")).name.lower()
+    if not (name.startswith("cpython-") and name.endswith(".tar.gz")):
+        return False
+    members = tar_payload_members(payload)
+    return any(
+        re.fullmatch(r"python(?:3(?:\.\d+)?)?(?:\.exe)?", pathlib.PurePosixPath(member.replace("\\", "/")).name.lower())
+        for member in members
+    )
+
+
+def executable_payload_matches(archive_name: str, payload: bytes, executable: str) -> bool:
+    members = archive_payload_members(archive_name, payload)
+    allowed = {executable, f"{executable}.exe", f"{executable}.cmd", f"{executable}.sh"}
+    return any(pathlib.PurePosixPath(member.replace("\\", "/")).name.lower() in allowed for member in members)
+
+
+def validate_manifest_archive_payloads(manifest_name: str, manifest: dict, label: str, read_payload) -> None:
+    normalized_manifest = manifest_name.replace("\\", "/")
+    marker = "runtime/runtime-manifest.json"
+    require(normalized_manifest.endswith(marker), f"{label} invalid runtime manifest path {manifest_name}")
+    package_prefix = normalized_manifest[: -len(marker)]
+    deps = manifest.get("runtimeDependencies") or {}
+
+    python = deps.get("python") or {}
+    if python.get("status") == "installer-bundled":
+        for archive in python.get("archives") or []:
+            member_name = package_prefix + str(archive).replace("\\", "/")
+            payload = read_payload(member_name)
+            require(cpython_payload_matches(str(archive), payload), f"{label} CPython installer archive lacks Python payload: {member_name}")
+
+    for executable, metadata in (deps.get("executables") or {}).items():
+        if isinstance(metadata, dict) and metadata.get("status") == "installer-bundled":
+            for archive in metadata.get("archives") or []:
+                member_name = package_prefix + str(archive).replace("\\", "/")
+                payload = read_payload(member_name)
+                require(executable_payload_matches(str(archive), payload, str(executable)), f"{label} installer archive for {executable} lacks executable payload: {member_name}")
+
+    for module, metadata in (deps.get("pythonPackages") or {}).items():
+        if isinstance(metadata, dict) and metadata.get("status") == "installer-bundled":
+            expected_package = EXPECTED_PACKAGE_BY_MODULE.get(str(module)) or str(metadata.get("package") or module)
+            expected_dist = normalized_distribution_name(expected_package)
+            for archive in metadata.get("archives") or []:
+                member_name = package_prefix + str(archive).replace("\\", "/")
+                payload = read_payload(member_name)
+                require(wheel_payload_matches(str(archive), payload, expected_dist), f"{label} wheel archive for {module} lacks matching wheel metadata: {member_name}")
+
+
+def module_path_matches(module: str, path: str) -> bool:
+    normalized = path.replace("\\", "/").strip("/")
+    lowered = normalized.lower()
+    module_path = module.replace(".", "/")
+    module_lower = module_path.lower()
+    for prefix in PYTHON_PACKAGE_PATH_PREFIXES:
+        prefix_lower = prefix.lower()
+        if not lowered.startswith(prefix_lower):
+            continue
+        remainder = normalized[len(prefix) :].strip("/")
+        remainder_lower = remainder.lower()
+        return (
+            remainder_lower == module_lower + ".py"
+            or remainder_lower == module_lower + "/__init__.py"
+        )
+    return False
+
+
+def python_archive_architecture_paths(archives: list[str]) -> dict[str, set[str]]:
+    architecture_paths: dict[str, set[str]] = {"mac-arm64": set(), "mac-x64": set()}
+    for archive in archives:
+        name = pathlib.PurePosixPath(str(archive).replace("\\", "/")).name.lower()
+        if not (name.startswith("cpython-") and name.endswith(".tar.gz")):
+            continue
+        matches = []
+        if "aarch64" in name or "arm64" in name:
+            matches.append("mac-arm64")
+        if "x86_64" in name or "x64" in name or "amd64" in name:
+            matches.append("mac-x64")
+        if len(matches) == 1:
+            architecture_paths[matches[0]].add(archive)
+    return architecture_paths
+
+
+def manifest_basename(path: str) -> str:
+    return pathlib.PurePosixPath(path.replace("\\", "/")).name.lower()
+
+
+def manifest_prefixed(path: str, prefixes: tuple[str, ...]) -> bool:
+    lowered = path.replace("\\", "/").strip("/").lower()
+    return any(lowered.startswith(prefix.lower()) for prefix in prefixes)
+
+
+def python_path_matches(path: str, platform: str) -> bool:
+    normalized = path.replace("\\", "/").strip("/")
+    return normalized in PYTHON_EXECUTABLE_PATHS.get(platform, set())
+
+
+def executable_path_matches(name: str, path: str, platform: str) -> bool:
+    base = manifest_basename(path)
+    allowed = {name}
+    if platform.startswith("windows"):
+        allowed.update({f"{name}.exe", f"{name}.cmd"})
+    else:
+        allowed.add(f"{name}.sh")
+    return base in allowed and manifest_prefixed(path, EXECUTABLE_PATH_PREFIXES)
+
+
+def native_bin_path_matches(name: str, path: str, platform: str) -> bool:
+    base = manifest_basename(path)
+    allowed = {name}
+    if platform.startswith("windows"):
+        allowed.add(f"{name}.exe")
+    return base in allowed and manifest_prefixed(path, NATIVE_BIN_PATH_PREFIXES)
+
+
+def executable_archive_matches(name: str, archive: str) -> bool:
+    normalized = archive.replace("\\", "/").strip("/")
+    base = manifest_basename(normalized)
+    is_archive = base.endswith((".zip", ".tgz", ".tar.gz", ".tar.xz"))
+    if not is_archive:
+        return False
+    if name in {"node", "npm", "npx"}:
+        return normalized.lower().startswith("node/") and "node" in base
+    return name == "lark-cli" and normalized.lower().startswith("tools/lark-cli/")
+
+
+def validate_runtime_dependency_identity(deps: dict, platform: str, label: str) -> None:
+    python = deps.get("python") or {}
+    if python.get("status") == "bundled":
+        require(python_path_matches(str(python.get("path") or ""), platform), f"{label} bundled Python path does not match runtime interpreter layout")
+
+    executables = deps.get("executables") or {}
+    for name, metadata in executables.items():
+        if not isinstance(metadata, dict):
+            continue
+        if metadata.get("status") == "bundled":
+            require(executable_path_matches(str(name), str(metadata.get("path") or ""), platform), f"{label} bundled executable {name} path does not match executable identity")
+        if metadata.get("status") == "installer-bundled":
+            archives = metadata.get("archives") or []
+            require(all(executable_archive_matches(str(name), archive) for archive in archives), f"{label} installer archive evidence for {name} does not match executable identity")
+
+    native_bins = deps.get("nativeBins") or {}
+    for name, metadata in native_bins.items():
+        if isinstance(metadata, dict) and metadata.get("status") == "bundled":
+            require(native_bin_path_matches(str(name), str(metadata.get("path") or ""), platform), f"{label} native bin {name} path does not match binary identity")
+
+    tongxin = (deps.get("toolFiles") or {}).get("tongxinCli") or {}
+    if tongxin.get("status") == "bundled":
+        require(
+            str(tongxin.get("path") or "").replace("\\", "/").strip("/") == "tools/tongxin/xin_agent_cli.py",
+            f"{label} tongxinCli path must be tools/tongxin/xin_agent_cli.py",
+        )
+
+
+def manifest_packages_are_bundled(packages: dict, modules: tuple[str, ...]) -> bool:
+    return all((packages.get(module) or {}).get("status") == "bundled" for module in modules)
+
+
+def allowed_package_statuses(platform: str) -> set[str]:
+    if platform == "windows-x64":
+        return {"bundled"}
+    if platform == "macos-universal":
+        return {"bundled", "installer-bundled"}
+    return {"bundled", "external-required"}
+
+
+def manifest_package_missing(packages: dict, modules: tuple[str, ...], platform: str) -> list[str]:
+    allowed = allowed_package_statuses(platform)
+    return [module for module in modules if (packages.get(module) or {}).get("status") not in allowed]
+
+
+def manifest_expected_status(*, missing: list[str], all_bundled: bool) -> str:
+    if missing:
+        return "missing_dependency"
+    return "ready" if all_bundled else "install-ready"
+
+
+def validate_tool_state(state: dict, tool_name: str, expected: str, missing: list[str], label: str) -> None:
+    actual_status = str(state.get("status") or "")
+    actual_missing = sorted(str(item) for item in (state.get("missingDependencies") or []))
+    expected_missing = sorted(missing)
+    require(actual_status == expected, f"{label} {tool_name} status must be {expected}, got {actual_status}")
+    require(actual_missing == expected_missing, f"{label} {tool_name} missingDependencies must be {expected_missing}, got {actual_missing}")
+
+
+def validate_tool_dependency_consistency(deps: dict, states: dict, platform: str, label: str) -> None:
+    packages = deps.get("pythonPackages") or {}
+    executables = deps.get("executables") or {}
+    tool_files = deps.get("toolFiles") or {}
+
+    office_missing = manifest_package_missing(packages, OFFICE_MODULES, platform)
+    validate_tool_state(
+        states.get("office_pdf") or {},
+        "office_pdf",
+        manifest_expected_status(missing=office_missing, all_bundled=manifest_packages_are_bundled(packages, OFFICE_MODULES)),
+        office_missing,
+        label,
+    )
+
+    ocr_missing = manifest_package_missing(packages, OCR_MODULES, platform)
+    validate_tool_state(
+        states.get("ocr") or {},
+        "ocr",
+        manifest_expected_status(missing=ocr_missing, all_bundled=manifest_packages_are_bundled(packages, OCR_MODULES)),
+        ocr_missing,
+        label,
+    )
+
+    browser_missing = []
+    if (executables.get("node") or {}).get("status") not in {"bundled", "installer-bundled"}:
+        browser_missing.append("node")
+    if (executables.get("npx") or {}).get("status") not in {"bundled", "installer-bundled"}:
+        browser_missing.append("npx")
+    browser_missing.extend(manifest_package_missing(packages, ("playwright",), platform))
+    browser_all_bundled = (
+        (executables.get("node") or {}).get("status") == "bundled"
+        and (executables.get("npx") or {}).get("status") == "bundled"
+        and manifest_packages_are_bundled(packages, ("playwright",))
+    )
+    validate_tool_state(
+        states.get("browser_mcp") or {},
+        "browser_mcp",
+        manifest_expected_status(missing=browser_missing, all_bundled=browser_all_bundled),
+        browser_missing,
+        label,
+    )
+
+    lark_status = (executables.get("lark-cli") or {}).get("status")
+    feishu_package_missing = manifest_package_missing(packages, ("lark_oapi",), platform)
+    if lark_status == "missing":
+        validate_tool_state(states.get("feishu_cli") or {}, "feishu_cli", "discovery-only", feishu_package_missing, label)
+    else:
+        feishu_missing = ([] if lark_status in {"bundled", "installer-bundled"} else ["lark-cli"]) + feishu_package_missing
+        feishu_all_bundled = lark_status == "bundled" and manifest_packages_are_bundled(packages, ("lark_oapi",))
+        validate_tool_state(
+            states.get("feishu_cli") or {},
+            "feishu_cli",
+            manifest_expected_status(missing=feishu_missing, all_bundled=feishu_all_bundled),
+            feishu_missing,
+            label,
+        )
+
+    tongxin_status = (tool_files.get("tongxinCli") or {}).get("status")
+    expected_tongxin = "ready" if tongxin_status == "bundled" else "configure-required"
+    expected_tongxin_missing = [] if tongxin_status == "bundled" else ["xin_agent_cli.py"]
+    validate_tool_state(states.get("tongxin_cli") or {}, "tongxin_cli", expected_tongxin, expected_tongxin_missing, label)
+
+
+def validate_python_package_archive_semantics(packages: dict, platform: str, label: str) -> None:
+    for module, metadata in packages.items():
+        if not isinstance(metadata, dict):
+            continue
+        status = metadata.get("status")
+        if platform == "windows-x64":
+            require(status in {"bundled", "missing"}, f"{label} windows python package {module} cannot use {status} evidence")
+        elif platform == "macos-universal":
+            require(status in {"bundled", "installer-bundled", "missing"}, f"{label} macOS python package {module} cannot use {status} evidence")
+        elif platform == "linux-service":
+            require(status in {"bundled", "external-required", "missing"}, f"{label} linux-service python package {module} cannot use {status} evidence")
+        expected_package = EXPECTED_PACKAGE_BY_MODULE.get(module)
+        if expected_package:
+            require(
+                metadata.get("package") == expected_package,
+                f"{label} python package {module} package field must be {expected_package}",
+            )
+        if metadata.get("status") == "bundled":
+            require(
+                module_path_matches(module, str(metadata.get("path") or "")),
+                f"{label} python package {module} bundled path does not match module",
+            )
+            continue
+        if metadata.get("status") != "installer-bundled":
+            continue
+        expected_dist = normalized_distribution_name(expected_package or str(metadata.get("package") or module))
+        archives = metadata.get("archives") or []
+        require(isinstance(archives, list) and archives, f"{label} python package {module} installer-bundled requires wheel archives")
+        for archive in archives:
+            require(isinstance(archive, str), f"{label} python package {module} archive must be a string")
+            require(archive.lower().endswith(".whl"), f"{label} python package {module} archive must be a wheel: {archive}")
+            require(manifest_archive_distribution(archive) == expected_dist, f"{label} python package {module} archive distribution mismatch: {archive}")
+        if platform == "macos-universal":
+            normalized_archives = [item.replace("\\", "/") for item in archives]
+            require(any("/wheelhouse/mac-arm64/" in f"/{item}" for item in normalized_archives), f"{label} python package {module} missing mac-arm64 wheel archive")
+            require(any("/wheelhouse/mac-x64/" in f"/{item}" for item in normalized_archives), f"{label} python package {module} missing mac-x64 wheel archive")
+
+
+def validate_v025_runtime_manifests(
+    manifests: list,
+    label: str,
+    expected_version: str = "",
+    archive_names: set[str] | None = None,
+    archive_file_names: set[str] | None = None,
+) -> None:
+    require(manifests, f"{label} missing runtime/runtime-manifest.json")
+    acceptable_python = {
+        "windows-x64": {"bundled"},
+        "macos-universal": {"bundled", "installer-bundled"},
+        "linux-service": {"bundled", "external-required"},
+    }
+    normalized_manifests = [
+        item if isinstance(item, tuple) else ("runtime/runtime-manifest.json", item)
+        for item in manifests
+    ]
+    expected_platforms = expected_runtime_manifest_platforms(label)
+    actual_platforms = {str(manifest.get("platform") or "") for _, manifest in normalized_manifests}
+    if expected_platforms:
+        require(actual_platforms == expected_platforms, f"{label} runtime manifest platforms {sorted(actual_platforms)} != {sorted(expected_platforms)}")
+    archive_names = archive_names or set()
+    archive_file_names = archive_file_names or archive_names
+    for manifest_name, manifest in normalized_manifests:
+        require(manifest.get("schemaVersion") == "v0.2.5-runtime-manifest-v1", f"{label} runtime manifest schema mismatch")
+        require(manifest.get("product") == "EcoreX", f"{label} runtime manifest product mismatch")
+        if expected_version:
+            require(str(manifest.get("version") or "") == expected_version, f"{label} runtime manifest version mismatch")
+        validate_manifest_relative_paths(manifest, label)
+        validate_manifest_status_evidence(manifest, label)
+        if archive_names:
+            validate_manifest_archive_references(manifest_name, manifest, archive_names, archive_file_names, label)
+        platform = str(manifest.get("platform") or "")
+        require(platform in acceptable_python, f"{label} runtime manifest unknown platform {platform!r}")
+        policy = manifest.get("dependencyPolicy") or {}
+        require(policy.get("ownedRuntimeDefault") is True, f"{label} runtime manifest ownedRuntimeDefault must be true")
+        require(policy.get("systemPathDefault") is False, f"{label} runtime manifest systemPathDefault must be false")
+        require(policy.get("readyRequiresProbe") is True, f"{label} runtime manifest readyRequiresProbe must be true")
+        deps = manifest.get("runtimeDependencies") or {}
+        validate_runtime_dependency_identity(deps, platform, label)
+        python_status = (deps.get("python") or {}).get("status")
+        require(python_status in acceptable_python[platform], f"{label} {platform} python status {python_status!r} is invalid")
+        if platform == "macos-universal" and python_status == "installer-bundled":
+            architecture_paths = python_archive_architecture_paths(list((deps.get("python") or {}).get("archives") or []))
+            require(architecture_paths["mac-arm64"], f"{label} macOS Python archives must include mac-arm64 cpython archive")
+            require(architecture_paths["mac-x64"], f"{label} macOS Python archives must include mac-x64 cpython archive")
+            require(
+                architecture_paths["mac-arm64"].isdisjoint(architecture_paths["mac-x64"]),
+                f"{label} macOS Python archives must use distinct architecture-specific files",
+            )
+        packages = deps.get("pythonPackages") or {}
+        for package in WEBUI_MODULES + ("playwright", "pypdf", "docx", "pptx", "openpyxl", "fitz", "lark_oapi"):
+            require(package in packages, f"{label} runtime manifest missing python package {package}")
+            status = packages[package].get("status")
+            if platform == "windows-x64":
+                require(status == "bundled", f"{label} windows package {package} must be bundled, got {status}")
+            elif platform == "macos-universal":
+                require(status in {"bundled", "installer-bundled"}, f"{label} macOS package {package} cannot use external-required evidence")
+            elif platform == "linux-service":
+                require(status in {"bundled", "external-required"}, f"{label} linux-service package {package} cannot use installer-bundled evidence")
+            else:
+                require(status in {"bundled", "installer-bundled", "external-required"}, f"{label} {platform} package {package} missing")
+            if platform == "macos-universal" and status == "installer-bundled":
+                wheelhouse = set(packages[package].get("wheelhouse") or [])
+                require({"mac-arm64", "mac-x64"}.issubset(wheelhouse), f"{label} macOS package {package} must include both wheelhouses")
+                require(isinstance(packages[package].get("archives"), list) and packages[package].get("archives"), f"{label} macOS package {package} must include wheel archive evidence")
+        validate_python_package_archive_semantics(packages, platform, label)
+        executables = deps.get("executables") or {}
+        for executable in ("node", "npm", "npx", "lark-cli"):
+            require(executable in executables, f"{label} runtime manifest missing executable {executable}")
+            require(executables[executable].get("status") in {"bundled", "installer-bundled", "missing"}, f"{label} bad executable status for {executable}")
+        native_bins = deps.get("nativeBins") or {}
+        for native_bin in ("pdfinfo", "pdftoppm", "soffice", "tesseract"):
+            require(native_bin in native_bins, f"{label} runtime manifest missing native bin {native_bin}")
+            require(native_bins[native_bin].get("status") in {"bundled", "missing"}, f"{label} bad native bin status for {native_bin}")
+        tool_files = deps.get("toolFiles") or {}
+        require("tongxinCli" in tool_files, f"{label} runtime manifest missing tool file tongxinCli")
+        require(tool_files["tongxinCli"].get("status") in {"bundled", "missing"}, f"{label} bad tool file status for tongxinCli")
+        states = manifest.get("toolStates") or {}
+        require(states, f"{label} runtime manifest missing toolStates")
+        for tool_name, state in states.items():
+            missing = list(state.get("missingDependencies") or [])
+            require(state.get("status"), f"{label} toolState {tool_name} missing status")
+            require(state.get("status") != "ready" or not missing, f"{label} toolState {tool_name} ready with missing dependencies")
+        validate_tool_dependency_consistency(deps, states, platform, label)
+        if (executables.get("node") or {}).get("status") == "missing" or (executables.get("npx") or {}).get("status") == "missing":
+            require((states.get("browser_mcp") or {}).get("status") != "ready", f"{label} browser_mcp ready while node/npx missing")
+        if (executables.get("lark-cli") or {}).get("status") == "missing":
+            require((states.get("feishu_cli") or {}).get("status") != "ready", f"{label} feishu_cli ready while lark-cli missing")
+        gate = manifest.get("releaseGate") or {}
+        require(gate.get("installReady") is True, f"{label} releaseGate.installReady must be true")
+        require(gate.get("readyToolsNeverHaveMissingDependencies") is True, f"{label} readyToolsNeverHaveMissingDependencies must be true")
+
+
+def validate_zip_assets(path: pathlib.Path, label: str, expected_version: str = "") -> None:
     with zipfile.ZipFile(path) as archive:
         validate_zip_no_forbidden_release_strings(archive, label)
         names = archive.namelist()
+        normalized_names = {name.replace("\\", "/") for name in names}
+        normalized_file_names = {name.replace("\\", "/") for name in names if not name.replace("\\", "/").endswith("/")}
+        name_by_normalized = {name.replace("\\", "/"): name for name in names}
+        manifests = [(name.replace("\\", "/"), read_zip_json_no_bom(archive, name)) for name in names if name.replace("\\", "/").endswith("runtime/runtime-manifest.json")]
+        validate_v025_runtime_manifests(
+            manifests,
+            label,
+            expected_version,
+            normalized_names,
+            normalized_file_names,
+        )
+        for manifest_name, manifest in manifests:
+            def read_payload(member_name: str, *, _mapping=name_by_normalized, _archive=archive) -> bytes:
+                require(member_name in _mapping, f"{label} runtime manifest archive reference missing payload {member_name}")
+                return _archive.read(_mapping[member_name])
+
+            validate_manifest_archive_payloads(manifest_name, manifest, label, read_payload)
         if label in {"webui-win-mac", "webui-macos-universal"}:
             require(
                 any(name.endswith("Install EcoreX WebUI.app/Contents/MacOS/Install EcoreX WebUI") for name in names),
@@ -492,10 +1122,31 @@ def validate_zip_assets(path: pathlib.Path, label: str) -> None:
     print(f"PASS zip runtime/assets {label}")
 
 
-def validate_tar_assets(path: pathlib.Path, label: str) -> None:
+def validate_tar_assets(path: pathlib.Path, label: str, expected_version: str = "") -> None:
     with tarfile.open(path, "r:gz") as archive:
         validate_tar_no_forbidden_release_strings(archive, label)
         names = archive.getnames()
+        normalized_names = {name.replace("\\", "/") for name in names}
+        members = archive.getmembers()
+        normalized_file_names = {member.name.replace("\\", "/") for member in members if member.isfile()}
+        member_by_normalized = {member.name.replace("\\", "/"): member for member in members}
+        manifests = [(name.replace("\\", "/"), read_tar_json_no_bom(archive, name)) for name in names if name.replace("\\", "/").endswith("runtime/runtime-manifest.json")]
+        validate_v025_runtime_manifests(
+            manifests,
+            label,
+            expected_version,
+            normalized_names,
+            normalized_file_names,
+        )
+        for manifest_name, manifest in manifests:
+            def read_payload(member_name: str, *, _mapping=member_by_normalized, _archive=archive) -> bytes:
+                member = _mapping.get(member_name)
+                require(member is not None and member.isfile(), f"{label} runtime manifest archive reference missing payload {member_name}")
+                handle = _archive.extractfile(member)
+                require(handle is not None, f"{label} runtime manifest archive reference unreadable payload {member_name}")
+                return handle.read()
+
+            validate_manifest_archive_payloads(manifest_name, manifest, label, read_payload)
         if label == "webui-macos-universal":
             require(
                 any(name.endswith("Install EcoreX WebUI.app/Contents/MacOS/Install EcoreX WebUI") for name in names),
@@ -522,16 +1173,16 @@ def validate_tar_assets(path: pathlib.Path, label: str) -> None:
     print(f"PASS tar runtime/assets {label}")
 
 
-def validate_nested_web_assets(artifact_dir: pathlib.Path, ready: list[dict]) -> None:
+def validate_nested_web_assets(artifact_dir: pathlib.Path, ready: list[dict], expected_version: str = "") -> None:
     for artifact in ready:
         if is_external_artifact(artifact):
             continue
         artifact_id = str(artifact.get("id") or "")
         path = artifact_path(artifact_dir, artifact)
         if artifact_id in {"webui-win-mac", "webui-windows-x64", "webui-macos-universal"}:
-            validate_zip_assets(path, artifact_id)
+            validate_zip_assets(path, artifact_id, expected_version)
         elif artifact_id in {"web-linux-service"}:
-            validate_tar_assets(path, artifact_id)
+            validate_tar_assets(path, artifact_id, expected_version)
 
 
 def validate_public_zip(
@@ -629,6 +1280,7 @@ def validate_public_zip(
         require(set(public_ready_by_id) == set(ready_by_id), "public manifest ready artifact ids mismatch")
         for artifact_id, artifact in ready_by_id.items():
             public_artifact = public_ready_by_id[artifact_id]
+            file_name = artifact_file_name(artifact_id, artifact)
             for key in ("fileName", "status"):
                 require(
                     str(public_artifact.get(key) or "") == str(artifact.get(key) or ""),
@@ -643,20 +1295,23 @@ def validate_public_zip(
                 str(public_artifact.get("sha256") or "").upper() == str(artifact.get("sha256") or "").upper(),
                 f"public manifest {artifact_id} sha256 mismatch",
             )
+            if not is_external_artifact(artifact):
+                require(not is_external_artifact(public_artifact), f"public manifest {artifact_id} must not mark local artifact external")
+                require(str(public_artifact.get("href") or "") == f"downloads/{file_name}", f"public manifest {artifact_id} href must be downloads/{file_name}")
 
         download_files = {
             name.removeprefix("site/downloads/")
             for name in names
             if name.startswith("site/downloads/") and not name.endswith("/")
         }
-        expected_download_files = {str(item.get("fileName")) for item in ready if not is_external_artifact(item)}
+        expected_download_files = {artifact_file_name(str(item.get("id") or "unknown"), item) for item in ready if not is_external_artifact(item)}
         windows_ready = next((item for item in ready if str(item.get("id") or "") == "windows-x64" and not is_external_artifact(item)), None)
         if windows_ready:
-            installer_name = str(windows_ready.get("fileName") or "")
+            installer_name = artifact_file_name("windows-x64", windows_ready)
             expected_download_files.update({"latest.yml", f"{installer_name}.blockmap"})
         windows_ia32_ready = next((item for item in ready if str(item.get("id") or "") == "windows-ia32" and not is_external_artifact(item)), None)
         if windows_ia32_ready:
-            installer_name = str(windows_ia32_ready.get("fileName") or "")
+            installer_name = artifact_file_name("windows-ia32", windows_ia32_ready)
             expected_download_files.update({f"ia32/{installer_name}", "ia32/latest.yml", f"ia32/{installer_name}.blockmap"})
         require(download_files == expected_download_files, "public zip download file set mismatch")
 
@@ -681,17 +1336,20 @@ def validate_public_zip(
                 require(str(checksum.get("sha256") or "").upper() == expected_digest, f"checksums sha mismatch for {artifact_id}")
                 continue
 
-            file_name = str(artifact["fileName"])
+            file_name = artifact_file_name(artifact_id, artifact)
             rel = f"site/downloads/{file_name}"
             require(rel in names, f"public zip missing ready download {rel}")
             payload = archive.read(rel)
             require(len(payload) == expected_size, f"public zip {artifact_id} size mismatch")
             require(sha256_bytes(payload) == expected_digest, f"public zip {artifact_id} sha256 mismatch")
 
+            require(not checksum.get("external"), f"checksums local artifact {artifact_id} must not be external")
+            require(str(checksum.get("relativePath") or "") == rel, f"checksums relativePath mismatch for {artifact_id}")
+            require(not str(checksum.get("href") or "").lower().startswith(("http://", "https://")), f"checksums local artifact {artifact_id} must not use external href")
             require(int(checksum.get("size") or 0) == expected_size, f"checksums size mismatch for {artifact_id}")
             require(str(checksum.get("sha256") or "").upper() == expected_digest, f"checksums sha mismatch for {artifact_id}")
         if windows_ready:
-            installer_name = str(windows_ready.get("fileName") or "")
+            installer_name = artifact_file_name("windows-x64", windows_ready)
             installer_size = int(windows_ready.get("size") or 0)
             latest_rel = "site/downloads/latest.yml"
             blockmap_rel = f"site/downloads/{installer_name}.blockmap"
@@ -704,7 +1362,7 @@ def validate_public_zip(
             require(f"size: {installer_size}" in latest_text, "latest.yml installer size mismatch")
             require(len(archive.read(blockmap_rel)) > 0, "Windows installer blockmap is empty")
         if windows_ia32_ready:
-            installer_name = str(windows_ia32_ready.get("fileName") or "")
+            installer_name = artifact_file_name("windows-ia32", windows_ia32_ready)
             installer_size = int(windows_ia32_ready.get("size") or 0)
             latest_rel = "site/downloads/ia32/latest.yml"
             installer_rel = f"site/downloads/ia32/{installer_name}"
@@ -1050,7 +1708,8 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
     require_contains(tongxin_cli, "tools.tongxin_cli.script_path", f"{label} tongxin cli")
     require_contains(tongxin_cli, "READ_ONLY_ALLOWED_COMMANDS", f"{label} tongxin cli")
     require_contains(tongxin_cli, "validate_read_only_tongxin_args", f"{label} tongxin cli")
-    require_contains(tongxin_cli, "subprocess.Popen(command", f"{label} tongxin cli")
+    require_contains(tongxin_cli, "ToolExecutionEnvironment", f"{label} tongxin cli")
+    require_contains(tongxin_cli, ".run_completed(", f"{label} tongxin cli")
     require_not_contains(tongxin_cli, "shell=True", f"{label} tongxin cli")
 
     ecorex_cli = read_text_by_suffix("agent/tools/ecorex_cli/ecorex_cli.py")
@@ -1094,7 +1753,8 @@ def validate_runtime_source_texts(read_text_by_suffix, label: str) -> None:
     require_contains(skill_formatter, "<callable_tool>", f"{label} skill formatter")
 
     extension_registry = read_text_by_suffix("agent/extensions/registry.py")
-    require_contains(extension_registry, "skill_agent_surface", f"{label} extension registry")
+    require_contains(extension_registry, "skill_tool_binding_surface", f"{label} extension registry")
+    require_contains(extension_registry, "toolBinding", f"{label} extension registry")
     require_contains(extension_registry, "toolSchemaCallable", f"{label} extension registry")
 
     office_tools = read_text_by_suffix("agent/tools/office_artifacts/office_artifacts.py")
@@ -1334,7 +1994,7 @@ def main(argv: list[str]) -> int:
     manifest = read_json_no_bom(manifest_path)
     require(manifest.get("version") == args.version, f"manifest version {manifest.get('version')} != {args.version}")
     ready = validate_manifest_artifacts(manifest, artifact_dir)
-    validate_nested_web_assets(artifact_dir, ready)
+    validate_nested_web_assets(artifact_dir, ready, args.version)
     public_zip = pathlib.Path(args.public_zip) if args.public_zip else artifact_dir / f"EcoreX_{args.version}-public-release.zip"
     validate_public_zip(public_zip, manifest, ready)
     if args.desktop_dir:

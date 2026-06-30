@@ -1,0 +1,186 @@
+{
+  "schemaVersion": "v0.2.5-runtime-manifest-v1",
+  "product": "EcoreX",
+  "version": "0.2.5",
+  "platform": "linux-service",
+  "generatedAt": "2026-06-29T15:26:46.111443Z",
+  "dependencyPolicy": {
+    "ownedRuntimeDefault": true,
+    "systemPathDefault": false,
+    "readyRequiresProbe": true,
+    "missingDependencyStatus": "missing_dependency"
+  },
+  "runtimeDependencies": {
+    "python": {
+      "status": "external-required",
+      "command": "python3"
+    },
+    "executables": {
+      "node": {
+        "status": "missing"
+      },
+      "npm": {
+        "status": "missing"
+      },
+      "npx": {
+        "status": "missing"
+      },
+      "lark-cli": {
+        "status": "missing"
+      }
+    },
+    "pythonPackages": {
+      "aiohttp": {
+        "package": "aiohttp",
+        "status": "external-required"
+      },
+      "requests": {
+        "package": "requests",
+        "status": "external-required"
+      },
+      "chardet": {
+        "package": "chardet",
+        "status": "external-required"
+      },
+      "numpy": {
+        "package": "numpy",
+        "status": "external-required"
+      },
+      "PIL": {
+        "package": "Pillow",
+        "status": "external-required"
+      },
+      "pypdf": {
+        "package": "pypdf",
+        "status": "external-required"
+      },
+      "pdfminer": {
+        "package": "pdfminer.six",
+        "status": "external-required"
+      },
+      "docx": {
+        "package": "python-docx",
+        "status": "external-required"
+      },
+      "pptx": {
+        "package": "python-pptx",
+        "status": "external-required"
+      },
+      "openpyxl": {
+        "package": "openpyxl",
+        "status": "external-required"
+      },
+      "xlsxwriter": {
+        "package": "xlsxwriter",
+        "status": "external-required"
+      },
+      "markdownify": {
+        "package": "markdownify",
+        "status": "external-required"
+      },
+      "reportlab": {
+        "package": "reportlab",
+        "status": "external-required"
+      },
+      "fitz": {
+        "package": "PyMuPDF",
+        "status": "external-required"
+      },
+      "rapidocr_onnxruntime": {
+        "package": "rapidocr-onnxruntime",
+        "status": "external-required"
+      },
+      "dotenv": {
+        "package": "python-dotenv",
+        "status": "external-required"
+      },
+      "yaml": {
+        "package": "PyYAML",
+        "status": "external-required"
+      },
+      "croniter": {
+        "package": "croniter",
+        "status": "external-required"
+      },
+      "click": {
+        "package": "click",
+        "status": "external-required"
+      },
+      "qrcode": {
+        "package": "qrcode",
+        "status": "external-required"
+      },
+      "json_repair": {
+        "package": "json-repair",
+        "status": "external-required"
+      },
+      "playwright": {
+        "package": "playwright",
+        "status": "external-required"
+      },
+      "lark_oapi": {
+        "package": "lark-oapi",
+        "status": "external-required"
+      },
+      "web": {
+        "package": "web.py",
+        "status": "external-required"
+      },
+      "legacy_cgi": {
+        "package": "legacy-cgi",
+        "status": "external-required"
+      }
+    },
+    "nativeBins": {
+      "pdfinfo": {
+        "status": "missing"
+      },
+      "pdftoppm": {
+        "status": "missing"
+      },
+      "soffice": {
+        "status": "missing"
+      },
+      "tesseract": {
+        "status": "missing"
+      }
+    },
+    "toolFiles": {
+      "tongxinCli": {
+        "status": "missing"
+      }
+    }
+  },
+  "toolStates": {
+    "office_pdf": {
+      "status": "install-ready",
+      "missingDependencies": []
+    },
+    "ocr": {
+      "status": "install-ready",
+      "missingDependencies": []
+    },
+    "browser_mcp": {
+      "status": "missing_dependency",
+      "missingDependencies": [
+        "node",
+        "npx"
+      ]
+    },
+    "feishu_cli": {
+      "status": "discovery-only",
+      "missingDependencies": []
+    },
+    "tongxin_cli": {
+      "status": "configure-required",
+      "missingDependencies": [
+        "xin_agent_cli.py"
+      ]
+    }
+  },
+  "releaseGate": {
+    "runtimeReady": false,
+    "installReady": true,
+    "readyToolsNeverHaveMissingDependencies": true
+  }
+}

@@ -10,6 +10,7 @@ Group=ecorex
 WorkingDirectory=/opt/ecorex-web/current/runtime
 EnvironmentFile=/etc/ecorex-web/ecorex-web.env
 Environment=PYTHONPATH=/opt/ecorex-web/current/runtime
+Environment=ECOREX_INSTALL_ROOT=/opt/ecorex-web
 ExecStart=/opt/ecorex-web/venv/bin/python /opt/ecorex-web/current/runtime/app.py
 Restart=on-failure
 RestartSec=3

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${VERSION:-0.2.4}"
+VERSION="${VERSION:-0.2.5}"
 SERVICE_NAME="${SERVICE_NAME:-ecorex-web}"
 SERVICE_USER="${SERVICE_USER:-ecorex}"
 SERVICE_GROUP="${SERVICE_GROUP:-$SERVICE_USER}"
@@ -433,6 +433,7 @@ Group=$SERVICE_GROUP
 WorkingDirectory=$INSTALL_ROOT/current/runtime
 EnvironmentFile=$ENV_FILE
 Environment=PYTHONPATH=$INSTALL_ROOT/current/runtime
+Environment=ECOREX_INSTALL_ROOT=$INSTALL_ROOT
 Environment=ECOREX_CAPABILITY_STATE_DIR=$STATE_DIR/capability-state
 Environment=ECOREX_CAPABILITY_TARGET_DIR=$STATE_DIR/capability-packages
 Environment=ECOREX_PLAYWRIGHT_BROWSERS_DIR=$STATE_DIR/playwright-browsers
@@ -581,7 +582,19 @@ fi
 
 if [[ "$INSTALL_PY_DEPS" == "1" ]]; then
   "$VENV_DIR/bin/python" -m pip install --upgrade pip setuptools wheel
-  "$VENV_DIR/bin/python" -m pip install -r "$runtime_dir/requirements.txt"
+  declare -a python_requirement_files=()
+  if [[ -f "$runtime_dir/requirements.txt" ]]; then
+    python_requirement_files+=("$runtime_dir/requirements.txt")
+  fi
+  if [[ -f "$runtime_dir/core-requirements.txt" ]]; then
+    python_requirement_files+=("$runtime_dir/core-requirements.txt")
+  fi
+  if [[ "${#python_requirement_files[@]}" -eq 0 ]]; then
+    fail "Installed release is missing runtime Python requirements"
+  fi
+  for requirements_file in "${python_requirement_files[@]}"; do
+    "$VENV_DIR/bin/python" -m pip install -r "$requirements_file"
+  done
 fi
 chown -R "$SERVICE_USER:$SERVICE_GROUP" "$VENV_DIR" "$STATE_DIR" "$WORKSPACE_ROOT"
 

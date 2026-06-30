@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""Deploy EcoreX v0.2.4 to the configured production server.
+"""Deploy EcoreX to the configured production server.
 
 The script reads the local operator server file at runtime, never writes raw
 host/user/password/URL/command output to evidence, and writes only redacted
-deployment evidence under docs/v0.2.4/artifacts.
+deployment evidence under the matching docs/v*/artifacts directory.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 import posixpath
 import re
 import shlex
@@ -23,11 +24,11 @@ import paramiko
 
 ROOT = Path.cwd()
 SERVER_FILE = Path(r"C:\Users\user\Desktop\企业服务器地址.txt")
-VERSION = "0.2.4"
+VERSION = os.environ.get("ECOREX_DEPLOY_VERSION", "0.2.4")
 SERVICE_NAME = "ecorex-web"
 WEB_PORT = "9909"
 
-ARTIFACT_DIR = ROOT / "docs" / "v0.2.4" / "artifacts"
+ARTIFACT_DIR = ROOT / "docs" / f"v{VERSION}" / "artifacts"
 OUTPUT = ARTIFACT_DIR / "production-deploy-online.json"
 WEB_TAR = ROOT / "release-artifacts" / f"EcoreX_{VERSION}-web-linux-service.tar.gz"
 PUBLIC_ZIP = ROOT / "release-artifacts" / f"EcoreX_{VERSION}-public-release.zip"
@@ -98,7 +99,7 @@ class ProductionDeploy:
         self.host, self.domain, self.user, self.password = read_server_file()
         self.public_base_url = f"https://{self.domain}"
         self.public_site_url = f"{self.public_base_url}/ecorex-agent"
-        self.remote_dir = f"/tmp/ecorex-v024-release-{int(time.time())}"
+        self.remote_dir = f"/tmp/ecorex-v{VERSION.replace('.', '')}-release-{int(time.time())}"
         self.commands: list[dict[str, Any]] = []
 
     def secret_hash(self, value: str) -> str:
@@ -112,7 +113,7 @@ class ProductionDeploy:
         out = re.sub(r"https?://[^\s\)\]\"']+", "[URL]", out)
         out = re.sub(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", "[IP]", out)
         out = re.sub(r"(?i)(password|secret|token|key)(\s*[=:]\s*)[^\s\n]+", r"\1\2[REDACTED]", out)
-        out = re.sub(r"/tmp/ecorex-v024-release-[0-9]+", "/tmp/[RUN_DIR]", out)
+        out = re.sub(r"/tmp/ecorex-v[0-9]+-release-[0-9]+", "/tmp/[RUN_DIR]", out)
         return out[:3000]
 
     def record(self, name: str, semantic: str, code: int, stdout: str = "", stderr: str = "") -> None:
@@ -152,6 +153,7 @@ class ProductionDeploy:
         return r"""
 python3 - <<'PY'
 import json, os, pathlib, subprocess, urllib.error, urllib.request
+expected_version = '__EXPECTED_VERSION__'
 
 def read_json(path):
     try:
@@ -188,10 +190,10 @@ print(json.dumps({
     'serviceActive': run(['systemctl', 'is-active', 'ecorex-web']) == 'active',
     'serviceEnabled': run(['systemctl', 'is-enabled', 'ecorex-web']) == 'enabled',
     'webVersionStatus': web_status,
-    'webVersionBodyHas024': '"0.2.4"' in version_body or '0.2.4' in version_body,
+    'webVersionBodyHasExpectedVersion': expected_version in version_body,
 }, sort_keys=True))
 PY
-"""
+""".replace("__EXPECTED_VERSION__", VERSION)
 
     def run(self) -> dict[str, Any]:
         self.client = paramiko.SSHClient()
@@ -295,7 +297,7 @@ PY
                 "serviceActive": post_state.get("serviceActive"),
                 "serviceEnabled": post_state.get("serviceEnabled"),
                 "webVersionStatus": post_state.get("webVersionStatus"),
-                "webVersionBodyHas024": post_state.get("webVersionBodyHas024"),
+                "webVersionBodyHasExpectedVersion": post_state.get("webVersionBodyHasExpectedVersion"),
             },
             "commands": self.commands,
             "redaction": {

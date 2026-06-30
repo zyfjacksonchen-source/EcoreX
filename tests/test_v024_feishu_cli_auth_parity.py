@@ -6,6 +6,22 @@ import types
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _allow_system_python_for_fake_lark_cli(monkeypatch):
+    from common.tool_execution_environment import ToolExecutionEnvironment
+
+    original_popen = ToolExecutionEnvironment.popen
+
+    def fake_popen(self, command, **kwargs):
+        if command and str(command[0]) == sys.executable:
+            kwargs["allow_external_executable"] = True
+        return original_popen(self, command, **kwargs)
+
+    monkeypatch.setattr(ToolExecutionEnvironment, "popen", fake_popen)
+
 
 def _install_web_stub():
     if "web" in sys.modules:

@@ -1,0 +1,83 @@
+{
+  "schemaVersion": "v0.2.5-release-gate-report-v1",
+  "version": "0.2.5",
+  "generatedAt": "2026-06-29T23:57:46Z",
+  "status": "local_pass_production_pending",
+  "releaseReady": false,
+  "localGatePassed": true,
+  "productionServiceUserPending": true,
+  "artifacts": [
+    {
+      "name": "baseline",
+      "status": "present",
+      "schemaVersion": "v025-runtime-baseline-v1",
+      "redacted": true
+    },
+    {
+      "name": "runtimeManifest",
+      "status": "present",
+      "schemaVersion": "v0.2.5-runtime-manifest-v1",
+      "redacted": true
+    },
+    {
+      "name": "skillToolBinding",
+      "status": "pass",
+      "schemaVersion": "v0.2.5-skill-tool-binding-check-v1",
+      "redacted": true
+    },
+    {
+      "name": "toolMatrix",
+      "status": "pass",
+      "schemaVersion": "v0.2.5-tool-matrix-smoke-v1",
+      "redacted": true
+    }
+  ],
+  "refreshChecks": [
+    {
+      "name": "runtime-baseline",
+      "status": "pass",
+      "exitCode": 0,
+      "stdoutPresent": true,
+      "stderrPresent": false,
+      "durationMs": 188,
+      "redacted": true
+    },
+    {
+      "name": "skill-tool-bindings",
+      "status": "pass",
+      "exitCode": 0,
+      "stdoutPresent": true,
+      "stderrPresent": false,
+      "durationMs": 3405,
+      "redacted": true
+    },
+    {
+      "name": "tool-matrix-smoke",
+      "status": "pass",
+      "exitCode": 0,
+      "stdoutPresent": true,
+      "stderrPresent": false,
+      "durationMs": 8781,
+      "redacted": true
+    },
+    {
+      "name": "runtime-manifest",
+      "status": "pass",
+      "exitCode": 0,
+      "stdoutPresent": true,
+      "stderrPresent": false,
+      "durationMs": 203,
+      "redacted": true
+    }
+  ],
+  "requiredFollowUps": [
+    "Run scripts/run-v025-tool-matrix-smoke.py on the Web Linux service as the production ecorex user."
+  ],
+  "ledgerP2": [
+    "S6: verify production service-user effective user and venv.",
+    "S6: correlate Office/PDF partial smoke summaries with packaged manifest evidence.",
+    "S6: decide ImageGen generated-output path retrieval/redaction contract.",
+    "S6/test-hardening: add focused run_matrix variant tests."
+  ],
+  "redacted": true
+}

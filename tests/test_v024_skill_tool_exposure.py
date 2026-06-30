@@ -88,7 +88,9 @@ def test_v024_lark_skills_are_discoverable_and_mapped_to_feishu_cli(tmp_path):
     assert row["mention_category"] == "automation"
     assert "mention_hidden_reason" not in row
     assert resolve_callable_tool_name(skill) == "feishu_cli"
-    assert skill_agent_surface(skill, {"feishu_cli"}, enabled=True)["status"] == "ready"
+    surface = skill_agent_surface(skill, {"feishu_cli"}, enabled=True)
+    assert surface["toolSchemaCallable"] is True
+    assert surface["status"] == "partial"
 
 
 def test_v024_feishu_cli_ability_reports_lark_mcp_observation_state(monkeypatch):

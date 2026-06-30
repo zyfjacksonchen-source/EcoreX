@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.2.4",
+    [string]$Version = "0.2.5",
     [string]$RuntimeRoot = ".",
     [string]$SiteRoot = "deploy/ecorex-site",
     [string]$WebBuildRoot = "",
@@ -85,6 +85,30 @@ function Invoke-ReleaseRuntimeSanitizer {
     & python $sanitizer $RuntimeDir
     if ($LASTEXITCODE -ne 0) {
         throw "Release runtime sanitizer failed for $RuntimeDir"
+    }
+}
+
+function Write-V025RuntimeManifest {
+    param(
+        [Parameter(Mandatory = $true)][string]$RuntimeDir,
+        [Parameter(Mandatory = $true)][string]$PackageRoot,
+        [Parameter(Mandatory = $true)][string]$Platform
+    )
+    $writer = Join-Path $repoRoot "scripts\write-v025-runtime-manifest.py"
+    $checker = Join-Path $repoRoot "scripts\check-v025-runtime-manifest.py"
+    if (-not (Test-Path -LiteralPath $writer)) {
+        throw "v0.2.5 runtime manifest writer missing: $writer"
+    }
+    if (-not (Test-Path -LiteralPath $checker)) {
+        throw "v0.2.5 runtime manifest checker missing: $checker"
+    }
+    & python $writer --runtime-root $RuntimeDir --package-root $PackageRoot --version $Version --platform $Platform
+    if ($LASTEXITCODE -ne 0) {
+        throw "v0.2.5 runtime manifest generation failed for $Platform"
+    }
+    & python $checker (Join-Path $RuntimeDir "runtime-manifest.json") --platform $Platform --version $Version --runtime-root $RuntimeDir --package-root $PackageRoot
+    if ($LASTEXITCODE -ne 0) {
+        throw "v0.2.5 runtime manifest check failed for $Platform"
     }
 }
 
@@ -269,6 +293,7 @@ foreach ($entry in $scriptFiles) {
 $runtimeScriptsOut = Join-Path $runtimeOut "scripts"
 New-Item -ItemType Directory -Force -Path $runtimeScriptsOut | Out-Null
 Copy-IfExists -Source (Join-Path $repoRoot "scripts/install-capability.py") -Destination (Join-Path $runtimeScriptsOut "install-capability.py")
+Write-V025RuntimeManifest -RuntimeDir $runtimeOut -PackageRoot $stagingRoot -Platform "linux-service"
 
 $serviceFiles = @(
     @{ Source = "deploy/ecorex-site/caddy/Caddyfile.example"; Target = "caddy/Caddyfile.example" },

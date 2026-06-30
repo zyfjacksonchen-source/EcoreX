@@ -71,13 +71,29 @@ class ExtensionRegistry:
             return str(value or "")
 
     @staticmethod
+    def _path_ref(value: Any) -> Dict[str, Any]:
+        text = str(value or "").strip()
+        if not text:
+            return {"present": False, "redacted": True}
+        try:
+            path = Path(text).expanduser()
+            return {
+                "present": True,
+                "name": path.name,
+                "parentName": path.parent.name,
+                "redacted": True,
+            }
+        except Exception:
+            return {"present": True, "name": "", "redacted": True}
+
+    @staticmethod
     def _agent_tool_names() -> set:
         try:
             from agent.tools.tool_manager import ToolManager
 
             manager = ToolManager()
             if not getattr(manager, "tool_classes", None):
-                manager.load_tools()
+                manager.load_tools(start_mcp=False)
             names = {str(name) for name in getattr(manager, "tool_classes", {}).keys()}
             names.update(str(name) for name in getattr(manager, "_mcp_tool_instances", {}).keys())
             return names
@@ -87,18 +103,28 @@ class ExtensionRegistry:
 
     def _first_party_tools(self) -> List[ExtensionEntry]:
         try:
+            from agent.skills.tool_binding_contract import skill_tool_binding_surface
             from agent.tools.tool_manager import ToolManager
 
             manager = ToolManager()
             if not getattr(manager, "tool_classes", None):
-                manager.load_tools()
+                manager.load_tools(start_mcp=False)
             first_party = {str(name) for name in getattr(manager, "tool_classes", {}).keys()}
             tool_infos = manager.list_tools()
+            agent_tool_names = set(first_party)
+            agent_tool_names.update(str(name) for name in getattr(manager, "_mcp_tool_instances", {}).keys())
             entries: List[ExtensionEntry] = []
             for name in sorted(first_party):
                 info = tool_infos.get(name) if isinstance(tool_infos, dict) else {}
                 if not isinstance(info, dict):
                     info = {}
+                agent_surface = skill_tool_binding_surface(
+                    {"callable-tool": name},
+                    agent_tool_names,
+                    enabled=True,
+                )
+                tool_binding = agent_surface.get("toolBinding")
+                entry_status = agent_surface.get("status") or "ready"
                 entries.append({
                     "id": f"tool:{name}",
                     "type": "builtin_tool",
@@ -112,10 +138,13 @@ class ExtensionRegistry:
                     "requires": [],
                     "provides": ["tool", name],
                     "configRefs": [{"path": "config.tools", "key": name}],
-                    "status": "ready",
+                    "status": entry_status,
                     "toolName": name,
-                    "schemaVisible": True,
-                    "toolSchemaCallable": True,
+                    "schemaVisible": bool(agent_surface.get("schemaVisible", True)),
+                    "toolSchemaCallable": bool(agent_surface.get("toolSchemaCallable")),
+                    "agentSurface": agent_surface,
+                    "toolBinding": tool_binding,
+                    "tool_binding": tool_binding,
                 })
             return entries
         except Exception as exc:
@@ -136,7 +165,8 @@ class ExtensionRegistry:
         try:
             from agent.skills.manager import SkillManager
             from agent.skills.service import _decorate_mention_metadata, _decorate_skill_governance
-            from agent.skills.tool_bridge import resolve_callable_tool_name, skill_agent_surface
+            from agent.skills.tool_bridge import resolve_callable_tool_name
+            from agent.skills.tool_binding_contract import skill_tool_binding_surface
 
             custom_dir = Path(self.workspace_root) / "skills"
             manager = SkillManager(custom_dir=str(custom_dir))
@@ -172,7 +202,9 @@ class ExtensionRegistry:
                 enabled = bool(row.get("enabled", previous.get("enabled", default_enabled)))
                 policy = "built-in-locked" if row.get("source_group") == "builtin" else "user-overlay" if source == "custom" else "global-skill"
                 callable_tool = resolve_callable_tool_name(skill) if skill else resolve_callable_tool_name(name)
-                agent_surface = skill_agent_surface(skill or name, agent_tool_names, enabled=enabled)
+                agent_surface = skill_tool_binding_surface(skill or name, agent_tool_names, enabled=enabled)
+                tool_binding = agent_surface.get("toolBinding")
+                entry_status = agent_surface.get("status") if callable_tool else ("ready" if enabled else "disabled")
                 entries.append({
                     "id": f"skill:{name}",
                     "type": kind,
@@ -190,7 +222,8 @@ class ExtensionRegistry:
                     "purpose_group": row.get("purpose_group"),
                     "purposeLabel": row.get("purposeLabel"),
                     "purpose_label": row.get("purpose_label"),
-                    "sourcePath": self._normalize_path(getattr(skill, "base_dir", "")) if skill else "",
+                    "sourcePath": "[redacted]" if skill else "",
+                    "sourcePathRef": self._path_ref(getattr(skill, "base_dir", "")) if skill else {"present": False, "redacted": True},
                     "enabled": enabled,
                     "defaultEnabled": bool(row.get("default_enabled", default_enabled)),
                     "default_enabled": bool(row.get("default_enabled", default_enabled)),
@@ -203,11 +236,13 @@ class ExtensionRegistry:
                     "requires": getattr(metadata, "requires", {}) if metadata else {},
                     "provides": ["skill"] + ([f"tool:{callable_tool}"] if callable_tool else []),
                     "configRefs": [{"path": "skills_config.json", "key": name}],
-                    "status": "ready" if enabled else "disabled",
+                    "status": entry_status,
                     "toolName": callable_tool or "",
                     "schemaVisible": bool(agent_surface.get("schemaVisible")),
                     "toolSchemaCallable": bool(agent_surface.get("toolSchemaCallable")),
                     "agentSurface": agent_surface,
+                    "toolBinding": tool_binding,
+                    "tool_binding": tool_binding,
                     "category": row.get("category"),
                     "primary_env": row.get("primary_env"),
                     "user_invocable": row.get("user_invocable"),
@@ -304,8 +339,10 @@ class ExtensionRegistry:
 
     def _optional_abilities(self) -> List[ExtensionEntry]:
         try:
+            from agent.skills.tool_binding_contract import ability_tool_binding_surface
             from agent.tools.optional_abilities.optional_abilities import OptionalAbilities
 
+            agent_tool_names = self._agent_tool_names()
             result = OptionalAbilities().execute({"action": "list"})
             payload = getattr(result, "result", result)
             abilities = payload.get("abilities", []) if isinstance(payload, dict) else []
@@ -331,6 +368,21 @@ class ExtensionRegistry:
                 status = state.get("state") or ("enabled" if item.get("enabled") else "available")
                 if policy_mode == "disabled" and not installed:
                     status = "disabled"
+                binding_enabled = bool(
+                    item.get("enabled")
+                    or item.get("defaultEnabled")
+                    or state.get("defaultEnabled")
+                    or (
+                        state.get("installed")
+                        and str(item.get("defaultPolicy") or "") == "default-enabled-read-only"
+                    )
+                )
+                agent_surface = ability_tool_binding_surface(
+                    item,
+                    agent_tool_names,
+                    enabled=binding_enabled,
+                )
+                tool_binding = agent_surface.get("toolBinding")
                 entries.append({
                     "id": f"ability:{ability_id}",
                     "type": entry_type,
@@ -351,6 +403,14 @@ class ExtensionRegistry:
                     "provides": [kind or entry_type],
                     "configRefs": item.get("configPath") or item.get("configKey") or [],
                     "status": status,
+                    "runtimeStatus": status,
+                    "toolName": agent_surface.get("toolName") or agent_surface.get("tool") or "",
+                    "schemaVisible": bool(agent_surface.get("schemaVisible")),
+                    "toolSchemaCallable": bool(agent_surface.get("toolSchemaCallable")),
+                    "agentSurface": agent_surface,
+                    "toolBinding": tool_binding,
+                    "tool_binding": tool_binding,
+                    "toolBindingStatus": tool_binding.get("status") if isinstance(tool_binding, dict) else agent_surface.get("status"),
                     "lastError": state.get("message") if state.get("state") == "failed" else None,
                     "installHint": item.get("installHint"),
                     "mirrorUrls": item.get("mirrorUrls"),
@@ -392,7 +452,8 @@ class ExtensionRegistry:
                     "id": f"mcp:{name}",
                     "type": "mcp_server",
                     "displayName": name,
-                    "description": str(server.get("description") or server.get("command") or server.get("url") or "MCP server"),
+                    "description": str(server.get("description") or "MCP server"),
+                    "endpointConfigured": bool(server.get("command") or server.get("url")),
                     "origin": "mcp",
                     "enabled": state in {"pending", "ready"},
                     "installed": state == "ready",

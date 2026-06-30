@@ -1,0 +1,521 @@
+{
+  "schemaVersion": "v0.2.5-skill-tool-binding-check-v1",
+  "status": "pass",
+  "errors": [],
+  "skills": [
+    {
+      "name": "a11y-debugging",
+      "toolName": "",
+      "status": "no_tool_mapping",
+      "schemaVisible": false,
+      "builtin": true
+    },
+    {
+      "name": "chrome-devtools",
+      "toolName": "",
+      "status": "no_tool_mapping",
+      "schemaVisible": false,
+      "builtin": true
+    },
+    {
+      "name": "chrome-devtools-cli",
+      "toolName": "",
+      "status": "no_tool_mapping",
+      "schemaVisible": false,
+      "builtin": true
+    },
+    {
+      "name": "debug-optimize-lcp",
+      "toolName": "",
+      "status": "no_tool_mapping",
+      "schemaVisible": false,
+      "builtin": true
+    },
+    {
+      "name": "find",
+      "toolName": "find",
+      "status": "ready",
+      "schemaVisible": true,
+      "builtin": true
+    },
+    {
+      "name": "image-generation",
+      "toolName": "imagegen",
+      "status": "ready",
+      "schemaVisible": true,
+      "builtin": true
+    },
+    {
+      "name": "knowledge-wiki",
+      "toolName": "",
+      "status": "no_tool_mapping",
+      "schemaVisible": false,
+      "builtin": true
+    },
+    {
+      "name": "memory-leak-debugging",
+      "toolName": "",
+      "status": "no_tool_mapping",
+      "schemaVisible": false,
+      "builtin": true
+    },
+    {
+      "name": "office-documents",
+      "toolName": "office_documents",
+      "status": "ready",
+      "schemaVisible": true,
+      "builtin": true
+    },
+    {
+      "name": "office-pdf",
+      "toolName": "office_pdf",
+      "status": "ready",
+      "schemaVisible": true,
+      "builtin": true
+    },
+    {
+      "name": "office-presentations",
+      "toolName": "office_presentations",
+      "status": "ready",
+      "schemaVisible": true,
+      "builtin": true
+    },
+    {
+      "name": "office-spreadsheets",
+      "toolName": "office_spreadsheets",
+      "status": "ready",
+      "schemaVisible": true,
+      "builtin": true
+    },
+    {
+      "name": "skill-creator",
+      "toolName": "",
+      "status": "no_tool_mapping",
+      "schemaVisible": false,
+      "builtin": true
+    },
+    {
+      "name": "troubleshooting",
+      "toolName": "",
+      "status": "no_tool_mapping",
+      "schemaVisible": false,
+      "builtin": true
+    }
+  ],
+  "extensions": [
+    {
+      "id": "ability:browser-automation",
+      "type": "capability_pack",
+      "toolName": "browser",
+      "bindingStatus": "disabled",
+      "status": "not-installed"
+    },
+    {
+      "id": "ability:browser-cdp",
+      "type": "plugin",
+      "toolName": "browser",
+      "bindingStatus": "ready",
+      "status": "not-installed"
+    },
+    {
+      "id": "ability:ecorex-cli",
+      "type": "plugin",
+      "toolName": "ecorex_cli",
+      "bindingStatus": "ready",
+      "status": "enabled"
+    },
+    {
+      "id": "ability:feishu-cli",
+      "type": "connector",
+      "toolName": "feishu_cli",
+      "bindingStatus": "disabled",
+      "status": "not-installed"
+    },
+    {
+      "id": "ability:find-skill",
+      "type": "plugin",
+      "toolName": "find",
+      "bindingStatus": "ready",
+      "status": "enabled"
+    },
+    {
+      "id": "ability:host-diagnostics",
+      "type": "plugin",
+      "toolName": "host_diagnostics",
+      "bindingStatus": "ready",
+      "status": "enabled"
+    },
+    {
+      "id": "ability:office-pdf",
+      "type": "capability_pack",
+      "toolName": "office_pdf",
+      "bindingStatus": "disabled",
+      "status": "not-installed"
+    },
+    {
+      "id": "ability:scheduler",
+      "type": "plugin",
+      "toolName": "scheduler",
+      "bindingStatus": "disabled",
+      "status": "available"
+    },
+    {
+      "id": "ability:tongxin-cli",
+      "type": "capability_pack",
+      "toolName": "tongxin_cli",
+      "bindingStatus": "partial",
+      "status": "installed"
+    },
+    {
+      "id": "skill:Presentations",
+      "type": "user_skill",
+      "toolName": "office_presentations",
+      "bindingStatus": "ready",
+      "status": "ready"
+    },
+    {
+      "id": "skill:Spreadsheets",
+      "type": "user_skill",
+      "toolName": "office_spreadsheets",
+      "bindingStatus": "ready",
+      "status": "ready"
+    },
+    {
+      "id": "skill:documents",
+      "type": "user_skill",
+      "toolName": "office_documents",
+      "bindingStatus": "ready",
+      "status": "ready"
+    },
+    {
+      "id": "skill:find",
+      "type": "builtin_skill",
+      "toolName": "find",
+      "bindingStatus": "ready",
+      "status": "ready"
+    },
+    {
+      "id": "skill:image-generation",
+      "type": "builtin_skill",
+      "toolName": "imagegen",
+      "bindingStatus": "ready",
+      "status": "ready"
+    },
+    {
+      "id": "skill:imagegen",
+      "type": "user_skill",
+      "toolName": "imagegen",
+      "bindingStatus": "ready",
+      "status": "ready"
+    },
+    {
+      "id": "skill:lark-approval",
+      "type": "user_skill",
+      "toolName": "feishu_cli",
+      "bindingStatus": "partial",
+      "status": "partial"
+    },
+    {
+      "id": "skill:lark-apps",
+      "type": "user_skill",
+      "toolName": "feishu_cli",
+      "bindingStatus": "partial",
+      "status": "partial"
+    },
+    {
+      "id": "skill:lark-attendance",
+      "type": "user_skill",
+      "toolName": "feishu_cli",
+      "bindingStatus": "partial",
+      "status": "partial"
+    },
+    {
+      "id": "skill:lark-base",
+      "type": "user_skill",
+      "toolName": "feishu_cli",
+      "bindingStatus": "partial",
+      "status": "partial"
+    },
+    {
+      "id": "skill:lark-calendar",
+      "type": "user_skill",
+      "toolName": "feishu_cli",
+      "bindingStatus": "partial",
+      "status": "partial"
+    },
+    {
+      "id": "skill:lark-contact",
+      "type": "user_skill",
+      "toolName": "feishu_cli",
+      "bindingStatus": "partial",
+      "status": "partial"
+    },
+    {
+      "id": "skill:lark-doc",
+      "type": "user_skill",
+      "toolName": "feishu_cli",
+      "bindingStatus": "partial",
+      "status": "partial"
+    },
+    {
+      "id": "skill:lark-drive",
+      "type": "user_skill",
+      "toolName": "feishu_cli",
+      "bindingStatus": "partial",
+      "status": "partial"
+    },
+    {
+      "id": "skill:lark-event",
+      "type": "user_skill",
+      "toolName": "feishu_cli",
+      "bindingStatus": "partial",
+      "status": "partial"
+    },
+    {
+      "id": "skill:lark-im",
+      "type": "user_skill",
+      "toolName": "feishu_cli",
+      "bindingStatus": "partial",
+      "status": "partial"
+    },
+    {
+      "id": "skill:lark-mail",
+      "type": "user_skill",
+      "toolName": "feishu_cli",
+      "bindingStatus": "partial",
+      "status": "partial"
+    },
+    {
+      "id": "skill:lark-markdown",
+      "type": "user_skill",
+      "toolName": "feishu_cli",
+      "bindingStatus": "partial",
+      "status": "partial"
+    },
+    {
+      "id": "skill:lark-minutes",
+      "type": "user_skill",
+      "toolName": "feishu_cli",
+      "bindingStatus": "partial",
+      "status": "partial"
+    },
+    {
+      "id": "skill:lark-okr",
+      "type": "user_skill",
+      "toolName": "feishu_cli",
+      "bindingStatus": "partial",
+      "status": "partial"
+    },
+    {
+      "id": "skill:lark-openapi-explorer",
+      "type": "user_skill",
+      "toolName": "feishu_cli",
+      "bindingStatus": "partial",
+      "status": "partial"
+    },
+    {
+      "id": "skill:lark-shared",
+      "type": "user_skill",
+      "toolName": "feishu_cli",
+      "bindingStatus": "partial",
+      "status": "partial"
+    },
+    {
+      "id": "skill:lark-sheets",
+      "type": "user_skill",
+      "toolName": "feishu_cli",
+      "bindingStatus": "partial",
+      "status": "partial"
+    },
+    {
+      "id": "skill:lark-skill-maker",
+      "type": "user_skill",
+      "toolName": "feishu_cli",
+      "bindingStatus": "partial",
+      "status": "partial"
+    },
+    {
+      "id": "skill:lark-slides",
+      "type": "user_skill",
+      "toolName": "feishu_cli",
+      "bindingStatus": "partial",
+      "status": "partial"
+    },
+    {
+      "id": "skill:lark-task",
+      "type": "user_skill",
+      "toolName": "feishu_cli",
+      "bindingStatus": "partial",
+      "status": "partial"
+    },
+    {
+      "id": "skill:lark-vc",
+      "type": "user_skill",
+      "toolName": "feishu_cli",
+      "bindingStatus": "partial",
+      "status": "partial"
+    },
+    {
+      "id": "skill:lark-vc-agent",
+      "type": "user_skill",
+      "toolName": "feishu_cli",
+      "bindingStatus": "partial",
+      "status": "partial"
+    },
+    {
+      "id": "skill:lark-whiteboard",
+      "type": "user_skill",
+      "toolName": "feishu_cli",
+      "bindingStatus": "partial",
+      "status": "partial"
+    },
+    {
+      "id": "skill:lark-wiki",
+      "type": "user_skill",
+      "toolName": "feishu_cli",
+      "bindingStatus": "partial",
+      "status": "partial"
+    },
+    {
+      "id": "skill:lark-workflow-meeting-summary",
+      "type": "user_skill",
+      "toolName": "feishu_cli",
+      "bindingStatus": "partial",
+      "status": "partial"
+    },
+    {
+      "id": "skill:lark-workflow-standup-report",
+      "type": "user_skill",
+      "toolName": "feishu_cli",
+      "bindingStatus": "partial",
+      "status": "partial"
+    },
+    {
+      "id": "skill:office-documents",
+      "type": "builtin_skill",
+      "toolName": "office_documents",
+      "bindingStatus": "ready",
+      "status": "ready"
+    },
+    {
+      "id": "skill:office-pdf",
+      "type": "builtin_skill",
+      "toolName": "office_pdf",
+      "bindingStatus": "ready",
+      "status": "ready"
+    },
+    {
+      "id": "skill:office-presentations",
+      "type": "builtin_skill",
+      "toolName": "office_presentations",
+      "bindingStatus": "ready",
+      "status": "ready"
+    },
+    {
+      "id": "skill:office-spreadsheets",
+      "type": "builtin_skill",
+      "toolName": "office_spreadsheets",
+      "bindingStatus": "ready",
+      "status": "ready"
+    },
+    {
+      "id": "skill:pdf",
+      "type": "user_skill",
+      "toolName": "office_pdf",
+      "bindingStatus": "ready",
+      "status": "ready"
+    },
+    {
+      "id": "tool:browser",
+      "type": "builtin_tool",
+      "toolName": "browser",
+      "bindingStatus": "ready",
+      "status": "ready"
+    },
+    {
+      "id": "tool:ecorex_cli",
+      "type": "builtin_tool",
+      "toolName": "ecorex_cli",
+      "bindingStatus": "ready",
+      "status": "ready"
+    },
+    {
+      "id": "tool:feishu_cli",
+      "type": "builtin_tool",
+      "toolName": "feishu_cli",
+      "bindingStatus": "partial",
+      "status": "partial"
+    },
+    {
+      "id": "tool:find",
+      "type": "builtin_tool",
+      "toolName": "find",
+      "bindingStatus": "ready",
+      "status": "ready"
+    },
+    {
+      "id": "tool:host_diagnostics",
+      "type": "builtin_tool",
+      "toolName": "host_diagnostics",
+      "bindingStatus": "ready",
+      "status": "ready"
+    },
+    {
+      "id": "tool:imagegen",
+      "type": "builtin_tool",
+      "toolName": "imagegen",
+      "bindingStatus": "ready",
+      "status": "ready"
+    },
+    {
+      "id": "tool:office_documents",
+      "type": "builtin_tool",
+      "toolName": "office_documents",
+      "bindingStatus": "ready",
+      "status": "ready"
+    },
+    {
+      "id": "tool:office_pdf",
+      "type": "builtin_tool",
+      "toolName": "office_pdf",
+      "bindingStatus": "ready",
+      "status": "ready"
+    },
+    {
+      "id": "tool:office_presentations",
+      "type": "builtin_tool",
+      "toolName": "office_presentations",
+      "bindingStatus": "ready",
+      "status": "ready"
+    },
+    {
+      "id": "tool:office_spreadsheets",
+      "type": "builtin_tool",
+      "toolName": "office_spreadsheets",
+      "bindingStatus": "ready",
+      "status": "ready"
+    },
+    {
+      "id": "tool:optional_abilities",
+      "type": "builtin_tool",
+      "toolName": "optional_abilities",
+      "bindingStatus": "ready",
+      "status": "ready"
+    },
+    {
+      "id": "tool:scheduler",
+      "type": "builtin_tool",
+      "toolName": "scheduler",
+      "bindingStatus": "ready",
+      "status": "ready"
+    },
+    {
+      "id": "tool:tongxin_cli",
+      "type": "builtin_tool",
+      "toolName": "tongxin_cli",
+      "bindingStatus": "partial",
+      "status": "partial"
+    }
+  ],
+  "redacted": true
+}

@@ -4,6 +4,8 @@
         "description": "Uses Chrome DevTools MCP for accessibility (a11y) debugging and auditing based on web.dev guidelines. Use when testing semantic HTML, ARIA labels, focus states, keyboard navigation, tap targets, and color contrast.",
         "source": "custom",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": true,
         "category": "skill"
     },
     "chrome-devtools": {
@@ -11,6 +13,8 @@
         "description": "Uses Chrome DevTools via MCP for efficient debugging, troubleshooting and browser automation. Use when debugging web pages, automating browser interactions, analyzing performance, or inspecting network requests. This skill does not apply to `--slim` mode (MCP configuration).",
         "source": "custom",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": true,
         "category": "skill"
     },
     "chrome-devtools-cli": {
@@ -18,6 +22,8 @@
         "description": "Use this skill to write shell scripts or run shell commands to automate tasks in the browser or otherwise use Chrome DevTools via CLI.",
         "source": "custom",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": true,
         "category": "skill"
     },
     "debug-optimize-lcp": {
@@ -25,6 +31,8 @@
         "description": "Guides debugging and optimizing Largest Contentful Paint (LCP) using Chrome DevTools MCP tools. Use this skill whenever the user asks about LCP performance, slow page loads, Core Web Vitals optimization, or wants to understand why their page's main content takes too long to appear. Also use when the user mentions \"largest contentful paint\", \"page load speed\", \"CWV\", or wants to improve how fast their hero image or main content renders.",
         "source": "custom",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": true,
         "category": "skill"
     },
     "find": {
@@ -32,6 +40,8 @@
         "description": "Locate files and folders in the workspace or an allowed filesystem profile. Use when the user asks to find a file, locate paths, discover where code/config/docs live, search by filename pattern, or inspect repository structure before reading/editing files.",
         "source": "custom",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": true,
         "category": "skill"
     },
     "image-generation": {
@@ -39,6 +49,8 @@
         "description": "Generate or edit images from text prompts. Use when the user asks to create, draw, design, or edit an image, illustration, photo, icon, poster, or any visual content.",
         "source": "custom",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": true,
         "category": "skill"
     },
     "knowledge-wiki": {
@@ -46,6 +58,8 @@
         "description": "Manage the personal knowledge wiki. Use when the user shares articles, documents, or asks to organize knowledge; when a conversation produces insights worth preserving as structured knowledge; or when the user asks about the knowledge base.",
         "source": "custom",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": true,
         "category": "skill"
     },
     "memory-leak-debugging": {
@@ -53,6 +67,8 @@
         "description": "Diagnoses and resolves memory leaks in JavaScript/Node.js applications. Use when a user reports high memory usage, OOM errors, or wants to analyze heapsnapshots or run memory leak detection tools like memlab.",
         "source": "custom",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": true,
         "category": "skill"
     },
     "office-documents": {
@@ -60,6 +76,8 @@
         "description": "Read, create, edit, summarize, redline, and verify Word/DOCX office documents. Use for .doc, .docx, Word, and Google Docs-targeted local document workflows.",
         "source": "custom",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": true,
         "category": "skill",
         "mentionable": true,
         "mention_category": "document"
@@ -69,6 +87,8 @@
         "description": "Read, extract, summarize, create, inspect, and verify .pdf/PDF files, including office-exported PDFs where page layout matters.",
         "source": "custom",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": true,
         "category": "skill",
         "mentionable": true,
         "mention_category": "document"
@@ -78,15 +98,19 @@
         "description": "Create, edit, summarize, and verify PowerPoint/PPTX presentation decks. Use for .ppt, .pptx, slide outlines, speaker decks, visual story flow, and Google Slides-targeted local deck workflows.",
         "source": "custom",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": true,
         "category": "skill",
         "mentionable": true,
         "mention_category": "document"
     },
     "office-spreadsheets": {
         "name": "office-spreadsheets",
-        "description": "Read, create, edit, analyze, calculate, and verify Excel/CSV spreadsheet workbooks. Use for .xlsx, .xls, .csv, .tsv, formulas, charts, tables, and data analysis.",
+        "description": "Read, create, edit, analyze, calculate, and verify Excel/CSV spreadsheet workbooks. Use for .xlsx, .xlsm, .csv, .tsv, formulas, charts, tables, and data analysis; convert legacy .xls to .xlsx before structural verification.",
         "source": "custom",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": true,
         "category": "skill",
         "mentionable": true,
         "mention_category": "document"
@@ -96,6 +120,8 @@
         "description": "Create, install, or update skills in the workspace. Use when (1) installing a skill from a URL or remote source, (2) creating a new skill from scratch, (3) updating or restructuring existing skills. Always use this skill for any skill installation or creation task.",
         "source": "custom",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": true,
         "category": "skill"
     },
     "troubleshooting": {
@@ -103,6 +129,8 @@
         "description": "Uses Chrome DevTools MCP and documentation to troubleshoot connection and target issues. Trigger this skill when list_pages, new_page, or navigate_page fail, or when the server initialization fails.",
         "source": "custom",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": true,
         "category": "skill"
     },
     "good-skill": {
@@ -110,6 +138,8 @@
         "description": "This is a properly formatted skill.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "good-skill-complex": {
@@ -117,6 +147,8 @@
         "description": "A very complex description that spans multiple lines and contains weird chars: !@#$%^&*()\n",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "good-skill-minimal": {
@@ -124,6 +156,8 @@
         "description": "Minimal valid description",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "lark-approval": {
@@ -131,6 +165,8 @@
         "description": "飞书审批 API：审批实例、审批任务管理。",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "lark-apps": {
@@ -138,6 +174,8 @@
         "description": "把本地 HTML 文件或目录部署到飞书妙搭（Miaoda），生成一个公网可访问的应用及其链接（URL）。当用户要创建 HTML 或要把 HTML、静态网站或 Web demo 发布成公网可访问的链接 / 可分享链接、设置应用共享范围，或提到妙搭 / Miaoda 时使用。凡产出可独立访问的 HTML 产物都属本 skill 的潜在归宿，是否真要部署由 skill 内部协议判断。不用于：上传普通文件到云空间/云盘/云存储（用 lark-drive）、编辑飞书云文档内容（用 lark-doc）、创建飞书原生幻灯片 / 演示文稿（用 lark-slides）。",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "lark-attendance": {
@@ -145,6 +183,8 @@
         "description": "飞书考勤打卡：查询自己的考勤打卡记录",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "lark-base": {
@@ -152,6 +192,8 @@
         "description": "当需要用 lark-cli 操作飞书多维表格（Base）时调用：搜索 Base、建表、字段管理、记录读写、记录分享链接、视图配置、历史查询，以及角色/表单/仪表盘管理/工作流；也适用于把旧的 +table / +field / +record 写法改成当前命令写法。涉及字段设计、公式字段、查找引用、跨表计算、行级派生指标、数据分析需求时也必须使用本 skill。",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "lark-calendar": {
@@ -159,6 +201,8 @@
         "description": "飞书日历（calendar）：提供日历与日程（会议）的全面管理能力。核心场景包括：查看/搜索日程、创建/更新日程、管理参会人、查询忙闲状态及推荐空闲时段、查询/搜索与预定会议室。注意：涉及【预约日程/会议】或【查询/预定会议室】时，必须先读取 references/lark-calendar-schedule-meeting.md 工作流！高频操作请优先使用 Shortcuts：+agenda（快速概览今日/近期行程）、+create（创建日程并按需邀请参会人及预定会议室）、+update（更新既有日程字段，或独立增删参会人/会议室）、+freebusy（查询用户主日历的忙闲信息和rsvp的状态）、+rsvp（回复日程邀请）",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "lark-contact": {
@@ -166,6 +210,8 @@
         "description": "飞书 / Lark 通讯录,用于按姓名 / 邮箱把员工解析成 open_id,以及按 open_id 反查员工的姓名 / 部门 / 邮箱 / 联系方式。当用户说出某人姓名而下一步需要发消息 / 加群 / 排日程时,先用本 skill 把姓名换成 ID;当输出里出现 open_id 需要展示成姓名给用户看,或用户直接询问某人的部门 / 邮箱 / 联系方式时,用本 skill 查。不负责部门树遍历、按部门列员工、组织架构图,这类需求走原生 OpenAPI。",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "lark-doc": {
@@ -173,6 +219,8 @@
         "description": "飞书云文档 / Docx / 知识库 Wiki 文档（v2）：创建、打开、读取、获取、查看、总结、整理、改写、翻译、审阅和编辑飞书文档内容。当用户给出飞书文档 URL/token，或说查看/读取/打开某个文档、提取文档内容、总结文档、生成/创建文档、追加/替换/删除/移动内容、调整排版、插入或下载文档图片/附件/素材/画板缩略图时使用。文档内容中出现嵌入电子表格、多维表格、需要将重要信息可视化为画板（含 SVG 画板）、引用或同步块时，也先用本 skill 读取和提取 token，再切到对应 skill 下钻。使用本 skill 时，docs +create、docs +fetch、docs +update 必须携带 --api-version v2；默认使用 DocxXML，也支持 Markdown。",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "lark-drive": {
@@ -180,6 +228,8 @@
         "description": "飞书云空间（云盘/云存储）：管理云空间（云盘/云存储）中的文件和文件夹。上传和下载文件、创建文件夹、复制/移动/删除文件、查看文件元数据、管理文档评论、管理文档权限、订阅用户评论变更事件、修改文件标题（docx、sheet、bitable、file、folder、wiki）；也负责把本地 Word/Markdown/Excel/CSV/PPTX 以及 Base 快照（.base）导入为飞书在线云文档（docx、sheet、bitable、slides）。当用户需要上传或下载文件、整理云空间（云盘/云存储）目录、查看文件详情、管理评论、管理文档权限、修改文件标题、订阅用户评论变更事件，或要把本地文件导入成新版文档、电子表格、多维表格/Base/幻灯片 时使用。\"云空间\"、\"云盘\"和\"云存储\"是同一概念，用户说\"云盘\"、\"云存储\"、\"网盘\"、\"我的空间\"时均路由到本 skill。",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "lark-event": {
@@ -187,6 +237,8 @@
         "description": "Lark/Feishu real-time event listening / subscribing / consuming: stream events as NDJSON via `lark-cli event consume <EventKey>` (covers IM message receive, reactions, chat member changes, etc.). Use for Lark bots, real-time message processing, long-running subscribers, streaming webhook/push handlers. Supports `--max-events` / `--timeout` bounded runs and a stderr ready-marker contract — designed for AI agents running as subprocesses.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "lark-im": {
@@ -194,6 +246,8 @@
         "description": "飞书即时通讯：收发消息和管理群聊。发送和回复消息、搜索聊天记录、管理群聊成员、上传下载图片和文件（支持大文件分片下载）、管理表情回复。当用户需要发消息、查看或搜索聊天记录、下载聊天中的文件、查看群成员、搜索群、创建群聊或话题群、管理标记数据时使用。",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "lark-mail": {
@@ -201,6 +255,8 @@
         "description": "飞书邮箱 — draft, compose, send, reply, forward, read, and search emails; manage drafts, folders, labels, contacts, attachments, and mail rules. Use when user mentions 起草邮件, 写一封邮件, 拟邮件, 草稿, 发通知邮件, 发送邮件, 发邮件, 回复邮件, 转发邮件, 查看邮件, 看邮件, 读邮件, 搜索邮件, 查邮件, 收件箱, 邮件会话, 编辑草稿, 管理草稿, 下载附件, 邮件文件夹, 邮件标签, 邮件联系人, 监听新邮件, 收信规则, 邮件规则, draft, compose, send email, reply, forward, inbox, mail thread, mail rules.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "lark-markdown": {
@@ -208,6 +264,8 @@
         "description": "飞书 Markdown：查看、创建、上传、编辑和比较 Markdown 文件。当用户需要创建或编辑 Markdown 文件、读取、修改、局部 patch 或比较差异时使用。",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "lark-minutes": {
@@ -215,6 +273,8 @@
         "description": "飞书妙记：妙记相关基本功能。1.查询妙记列表（按关键词/所有者/参与者/时间范围）；2.获取妙记基础信息（标题、封面、时长 等）；3.下载妙记音视频文件；4.获取妙记相关 AI 产物（总结、待办、章节）；5.上传音视频生成妙记，也支持将本地音视频文件转成纪要、逐字稿、文字稿、撰写文字等产物。遇到这类请求时，应优先使用本 skill，而不是尝试 `ffmpeg`、`whisper` 等本地转写命令。飞书妙记 URL 格式: http(s)://<host>/minutes/<minute-token>",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "lark-okr": {
@@ -222,6 +282,8 @@
         "description": "飞书 OKR：管理目标与关键结果。查看和编辑 OKR 周期、目标（Objective）、关键结果（Key Result）、对齐关系、量化指标和进展记录。当用户需要查看或创建 OKR、管理目标和关键结果、查看对齐关系时使用。",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "lark-openapi-explorer": {
@@ -229,6 +291,8 @@
         "description": "飞书/Lark 原生 OpenAPI 探索：从官方文档库中挖掘未经 CLI 封装的原生 OpenAPI 接口。当用户的需求无法被现有 lark-* skill 或 lark-cli 已注册命令满足，需要查找并调用原生飞书 OpenAPI 时使用。",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "lark-shared": {
@@ -236,6 +300,8 @@
         "description": "Use when first setting up lark-cli, running auth login, switching user/bot identity (--as), handling permission denied or scope errors, needing to update lark-cli, or seeing _notice in JSON output.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "lark-sheets": {
@@ -243,6 +309,8 @@
         "description": "飞书电子表格：创建和操作电子表格。支持创建表格、创建/复制/删除/更新工作表、读写单元格、追加行数据、查找内容、导出文件。当用户需要创建电子表格、管理工作表、批量读写数据、在已知表格中查找内容、导出或下载表格时使用。若用户是想按名称或关键词搜索云空间（云盘/云存储）里的表格文件，请改用 lark-drive 的 drive +search 先定位资源。",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "lark-skill-maker": {
@@ -250,6 +318,8 @@
         "description": "创建 lark-cli 的自定义 Skill。当用户需要把飞书 API 操作封装成可复用的 Skill（包装原子 API 或编排多步流程）时使用。",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "lark-slides": {
@@ -257,6 +327,8 @@
         "description": "飞书幻灯片：创建和编辑幻灯片，接口通过 XML 协议通信。创建演示文稿、读取幻灯片内容、管理幻灯片页面（创建、删除、读取、局部替换）。当用户需要创建或编辑幻灯片、读取或修改单个页面时使用。",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "lark-task": {
@@ -264,6 +336,8 @@
         "description": "飞书任务：管理任务、清单和任务智能体。创建待办任务、查看和更新任务状态、拆分子任务、组织任务清单、分配协作成员、上传任务附件、注册或注销任务智能体、更新任务智能体的主页数据、写入智能体任务记录。当用户需要创建待办事项、查看任务列表、跟踪任务进度、管理项目清单或给他人分配任务、为任务上传附件文件、注册注销任务智能体、更新智能体主页数据、写入任务记录时使用。",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "lark-vc": {
@@ -271,6 +345,8 @@
         "description": "飞书视频会议：搜索历史会议、查询会议纪要产物（总结、待办、章节、逐字稿）、查询会议参会人快照。1. 查询已经结束的会议数量或详情时使用本技能（如历史日期｜昨天｜上周｜今天已经开过的会议等场景），查询未开始的会议日程使用 lark-calendar 技能。2. 支持通过关键词、时间范围、组织者、参与者、会议室等筛选条件搜索会议。3. 获取或整理会议纪要、逐字稿、录制产物时使用本技能。4. 查询“谁参加过某会议”“参会人列表”等参会人快照信息用 vc meeting get --with-participants（任意时点可查，含已结束会议）。注意：**Agent 真实入会/离会、感知正在进行中会议的实时事件**请使用 lark-vc-agent 技能，本技能不覆盖写操作和会中事件流。",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "lark-vc-agent": {
@@ -278,6 +354,8 @@
         "description": "飞书视频会议：让机器人代当前用户加入/离开正在进行的会议，并读取会议期间的实时事件（参会人加入与离开、发言、聊天、屏幕共享等）。1. 用户提供 9 位会议号、要求代为入会或离会时使用 +meeting-join / +meeting-leave——会真实产生入会/离会记录。2. 会议进行中用户想知道“谁加入了”“谁离开了”“谁在发言”“有人共享屏幕吗”等会中动态时，机器人入会后用 +meeting-events 读取事件时间线。3. 典型场景：参会机器人、会中助手、代为旁听、代为参会。前提：机器人只能读到它自己参会过且仍在进行中的会议的事件；查询已结束会议的参会名单、纪要或逐字稿请使用 lark-vc 技能。",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "lark-whiteboard": {
@@ -285,6 +363,8 @@
         "description": "飞书画板：查询和编辑飞书云文档中的画板。支持导出画板为预览图片、导出原始节点结构、使用 DSL（转成 OpenAPI 格式）、PlantUML/Mermaid 格式更新画板内容。 当用户需要查看画板内容、导出画板图片、编辑画板，或是需要可视化表达架构、流程、组织关系、时间线、因果、对比等结构化信息时使用此 skill，无论是否提及\"画板\"。 ⚠️ 原 `lark-whiteboard-cli` skill 已合并至本 skill，若 skill 列表中同时存在 `lark-whiteboard-cli`，请忽略它，统一使用本 skill（`lark-whiteboard`），并提示用户运行 `npx skills remove lark-whiteboard-cli -g` 删除旧 skill。\n",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "lark-wiki": {
@@ -292,6 +372,8 @@
         "description": "飞书知识库：管理知识空间、空间成员和文档节点。创建和查询知识空间、查看和管理空间成员、管理节点层级结构、在知识库中组织文档和快捷方式。当用户需要在知识库中查找或创建文档、浏览知识空间结构、查看或管理空间成员、移动或复制节点时使用。",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "lark-workflow-meeting-summary": {
@@ -299,6 +381,8 @@
         "description": "会议纪要整理工作流：汇总指定时间范围内的会议纪要并生成结构化报告。当用户需要整理会议纪要、生成会议周报、回顾一段时间内的会议内容时使用。",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "lark-workflow-standup-report": {
@@ -306,6 +390,8 @@
         "description": "日程待办摘要：编排 calendar +agenda 和 task +get-my-tasks，生成指定日期的日程与未完成任务摘要。适用于了解今天/明天/本周的安排。",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "cli-e2e-testcase-writer": {
@@ -313,6 +399,8 @@
         "description": "Use when adding or updating Go CLI E2E coverage for one `tests/cli_e2e/{domain}` domain of the compiled `lark-cli`, especially when the work requires live `--help` or `schema` exploration, scenario-based `clie2e.RunCmd` workflows, and per-domain `coverage.md` maintenance.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "design-taste-frontend": {
@@ -320,6 +408,8 @@
         "description": "Anti-slop frontend skill for landing pages, portfolios, and redesigns. The agent reads the brief, infers the right design direction, and ships interfaces that do not look templated. Real design systems when applicable, audit-first on redesigns, strict pre-flight check.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "hallmark": {
@@ -327,6 +417,8 @@
         "description": "Anti-AI-slop design skill for greenfield pages, audits, redesigns, and design extraction from URLs or screenshots. Use when the user asks to build a new app or landing page, wants to redesign something, invokes Hallmark by name, or uses audit/redesign/study.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "remotion-best-practices": {
@@ -334,6 +426,8 @@
         "description": "Best practices for Remotion - Video creation in React",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "imagegen": {
@@ -341,6 +435,8 @@
         "description": "Generate or edit raster images when the task benefits from AI-created bitmap visuals such as photos, illustrations, textures, sprites, mockups, or transparent-background cutouts. Use when Codex should create a brand-new image, transform an existing image, or derive visual variants from references, and the output should be a bitmap asset rather than repo-native code or vector. Do not use when the task is better handled by editing existing SVG/vector/code-native assets, extending an established icon or logo system, or building the visual directly in HTML/CSS/canvas.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "openai-docs": {
@@ -348,6 +444,8 @@
         "description": "Use when the user asks how to build with OpenAI products or APIs, asks about Codex itself or choosing Codex surfaces, needs up-to-date official documentation with citations, help choosing the latest model for a use case, or model upgrade and prompt-upgrade guidance; use OpenAI docs MCP tools for non-Codex docs questions, use the Codex manual helper first for broad Codex self-knowledge, and restrict fallback browsing to official OpenAI domains.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "plugin-creator": {
@@ -355,6 +453,8 @@
         "description": "Create and scaffold plugin directories for Codex with a required `.codex-plugin/plugin.json`, optional plugin folders/files, valid manifest defaults, and personal-marketplace entries by default. Use when Codex needs to create a new personal plugin, add optional plugin structure, generate or update marketplace entries for plugin ordering and availability metadata, or update an existing local plugin during development with the CLI-driven cachebuster and reinstall flow.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "skill-installer": {
@@ -362,6 +462,8 @@
         "description": "Install Codex skills into $CODEX_HOME/skills from a curated list or a GitHub repo path. Use when a user asks to list installable skills, install a curated skill, or install a skill from another repo (including private repos).",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "control-in-app-browser": {
@@ -369,6 +471,8 @@
         "description": "Control the in-app Browser. Use to open, navigate, inspect, test, click, type, screenshot, or verify local targets such as localhost, 127.0.0.1, ::1, file://, the current in-app browser tab, and websites shown side by side inside Codex.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "control-chrome": {
@@ -376,6 +480,8 @@
         "description": "Control the user's Chrome browser. Use for browser tasks that require the user's cookies, logged-in sessions, existing tabs, extensions, or remote authenticated sites.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "appkit-interop": {
@@ -383,6 +489,8 @@
         "description": "Bridge macOS SwiftUI into AppKit narrowly. Use when implementing representables, reaching NSWindow or panels, handling menus, or using the responder chain.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "build-run-debug": {
@@ -390,6 +498,8 @@
         "description": "Build, run, and debug macOS apps with shell-first Xcode and Swift workflows. Use when launching apps or diagnosing build, startup, or runtime failures.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "liquid-glass": {
@@ -397,6 +507,8 @@
         "description": "Implement and review macOS SwiftUI Liquid Glass UI. Use when adopting system glass, removing conflicting custom chrome, or building glass surfaces.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "packaging-notarization": {
@@ -404,6 +516,8 @@
         "description": "Prepare macOS packaging and notarization workflows. Use when archiving apps, validating bundles, or explaining distribution-only failures.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "signing-entitlements": {
@@ -411,6 +525,8 @@
         "description": "Inspect macOS signing, entitlements, and Gatekeeper issues. Use when diagnosing code signing, sandbox, hardened runtime, or trust failures.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "swiftpm-macos": {
@@ -418,6 +534,8 @@
         "description": "Build, run, and test SwiftPM macOS packages and executables. Use when the repo is package-first or has no Xcode project.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "swiftui-patterns": {
@@ -425,6 +543,8 @@
         "description": "Build macOS SwiftUI scenes and components with desktop patterns. Use when shaping windows, commands, toolbars, settings, split views, or inspectors.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "telemetry": {
@@ -432,6 +552,8 @@
         "description": "Add and verify lightweight macOS runtime telemetry. Use when wiring Logger events or inspecting logs for windows, sidebars, menus, and actions.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "test-triage": {
@@ -439,6 +561,8 @@
         "description": "Triage macOS tests across Xcode and SwiftPM. Use when narrowing failures, explaining assertions or crashes, or separating setup from regressions.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "view-refactor": {
@@ -446,6 +570,8 @@
         "description": "Refactor macOS SwiftUI views and scenes into stable structure. Use when splitting large views, tightening scene state, or narrowing AppKit escapes.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "window-management": {
@@ -453,6 +579,8 @@
         "description": "Customize macOS SwiftUI windows and scene behavior. Use when tuning window chrome, drag regions, placement, restoration, launch behavior, or borderless windows.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "figma-code-connect": {
@@ -460,6 +588,8 @@
         "description": "Creates and maintains Figma Code Connect template files that map Figma components to code snippets. Use when the user mentions Code Connect, Figma component mapping, design-to-code translation, or asks to create/update .figma.ts or .figma.js files.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "figma-create-new-file": {
@@ -467,6 +597,8 @@
         "description": "**MANDATORY prerequisite** — you MUST invoke this skill BEFORE every `create_new_file` tool call. NEVER call `create_new_file` directly without loading this skill first. Trigger whenever the user wants a new blank Figma file — a new design, FigJam, or Slides file — or when you need a fresh file before calling `use_figma`. Usage — /figma-create-new-file [editorType] [fileName] (e.g. /figma-create-new-file figjam My Whiteboard, /figma-create-new-file slides Q3 Review)",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "figma-generate-design": {
@@ -474,6 +606,8 @@
         "description": "Use this skill alongside figma-use when the task involves translating an application page, view, or multi-section layout into Figma. Triggers: 'write to Figma', 'create in Figma from code', 'push page to Figma', 'take this app/page and build it in Figma', 'create a screen', 'build a landing page in Figma', 'update the Figma screen to match code', 'convert this modal/dialog/drawer/panel to Figma'. This is the preferred workflow skill whenever the user wants to build or update a full page, modal, dialog, drawer, sidebar, panel, or any composed multi-section view in Figma from code or a description. Discovers design system components, variables, and styles from Code Connect files, existing screens, and library search, then imports them and assembles views incrementally section-by-section using design system tokens instead of hardcoded values.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "figma-generate-diagram": {
@@ -481,6 +615,8 @@
         "description": "MANDATORY prerequisite — load this skill BEFORE every `generate_diagram` tool call. NEVER call `generate_diagram` directly without loading this skill first. Trigger whenever the user asks to create, generate, draw, render, sketch, or build a diagram — flowchart, architecture diagram, sequence diagram, ERD or entity-relationship diagram, state diagram or state machine, gantt chart, or timeline. Also trigger when the user mentions Mermaid syntax or wants a system architecture, decision tree, dependency graph, API call flow, auth handshake, schema, or pipeline visualized in FigJam. Routes to type-specific guidance, sets universal Mermaid constraints, and tells you when to use a different diagram type or skip the tool entirely (mindmaps, pie charts, class diagrams, etc.).",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "figma-generate-library": {
@@ -488,6 +624,8 @@
         "description": "Build or update a professional-grade design system in Figma from a codebase. Use when the user wants to create variables/tokens, build component libraries, create individual components with proper variant sets and variable bindings, set up theming (light/dark modes), document foundations, or reconcile gaps between code and Figma. Also use when the user asks to create or generate any component in Figma — even a single one — since components require proper variable foundations, variant states, and design token bindings to be production-quality. This skill teaches WHAT to build and in WHAT ORDER — it complements the `figma-use` skill which teaches HOW to call the Plugin API. Both skills should be loaded together.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "figma-implement-motion": {
@@ -495,6 +633,8 @@
         "description": "Translates Figma motion and animations into production-ready application code. Use when implementing animation/motion from a Figma design — user mentions \"implement this motion\", \"add animation from Figma\", \"animate this component\", provides a Figma URL whose node is animated, or when `get_design_context` returns motion data or instructs you to call `get_motion_context`.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "figma-swiftui": {
@@ -502,6 +642,8 @@
         "description": "SwiftUI ↔ Figma translation. Use whenever the user mentions Swift, SwiftUI, iOS, iPhone, or iPad — in EITHER direction — translating a Figma design into SwiftUI (design → code), or pushing SwiftUI views / screens / tokens back into a Figma file (code → design). Triggers on phrases like 'implement this Figma design in SwiftUI', 'build this screen in Swift', 'push this SwiftUI view to Figma', 'mirror my Swift code in a Figma file', or whenever a Figma URL appears alongside `.swift` files / an `.xcodeproj`. Routes to a direction-specific reference doc; loads alongside `figma-use` for the code → design path.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "figma-use": {
@@ -509,6 +651,8 @@
         "description": "**MANDATORY prerequisite** — you MUST invoke this skill BEFORE every `use_figma` tool call. NEVER call `use_figma` directly without loading this skill first. Skipping it causes common, hard-to-debug failures. Trigger whenever the user wants to perform a write action or a unique read action that requires JavaScript execution in the Figma file context — e.g. create/edit/delete nodes, set up variables or tokens, build components and variants, modify auto-layout or fills, bind variables to properties, or inspect file structure programmatically.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "figma-use-figjam": {
@@ -516,6 +660,8 @@
         "description": "This skill helps agents use Figma's use_figma MCP tool in the FigJam context. Can be used alongside figma-use which has foundational context for using the use_figma tool.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "figma-use-motion": {
@@ -523,6 +669,8 @@
         "description": "Motion / animation context for the `use_figma` MCP tool — animating Figma nodes via manual keyframes, animation styles, easing, and timeline duration. Load alongside figma-use whenever a task involves adding, editing, or inspecting animation on a node.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "figma-use-slides": {
@@ -530,6 +678,8 @@
         "description": "This skill helps agents use Figma's use_figma MCP tool in the Slides context. Can be used alongside figma-use which has foundational context for using the use_figma tool.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "gh-address-comments": {
@@ -537,6 +687,8 @@
         "description": "Address actionable GitHub pull request review feedback. Use when the user wants to inspect unresolved review threads, requested changes, or inline review comments on a PR, then implement selected fixes. Use the GitHub app for PR metadata and flat comment reads, and use the bundled GraphQL script via `gh` whenever thread-level state, resolution status, or inline review context matters.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "gh-fix-ci": {
@@ -544,6 +696,8 @@
         "description": "Use when a user asks to debug or fix failing GitHub PR checks that run in GitHub Actions. Use the GitHub app from this plugin for PR metadata and patch context, and use `gh` for Actions check and log inspection before implementing any approved fix.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "github": {
@@ -551,6 +705,8 @@
         "description": "Triage and orient GitHub repository, pull request, and issue work through the connected GitHub app. Use when the user asks for general GitHub help, wants PR or issue summaries, or needs repository context before choosing a more specific GitHub workflow.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "yeet": {
@@ -558,6 +714,8 @@
         "description": "Publish local changes to GitHub by confirming scope, committing intentionally, pushing the branch, and opening a draft PR through the GitHub app from this plugin, with `gh` used only as a fallback where connector coverage is insufficient.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "documents": {
@@ -565,6 +723,8 @@
         "description": "Create, edit, redline, and comment on `.docx`, Word, and Google Docs-targeted document artifacts inside the container, with a strict render-and-verify workflow. Use `render_docx.py` to generate page PNGs (and optional PDF) for visual QA, then iterate until layout is flawless before delivering the final document.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "pdf": {
@@ -572,6 +732,8 @@
         "description": "Read, create, inspect, render, and verify PDF files where visual layout matters. Use Poppler rendering plus Python tools such as reportlab, pdfplumber, and pypdf for generation and extraction.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "Presentations": {
@@ -579,6 +741,8 @@
         "description": "Create or edit PowerPoint or Google Slides decks",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "Spreadsheets": {
@@ -586,6 +750,8 @@
         "description": "Use this skill when a user requests to create, modify, analyze, visualize, or work with spreadsheet files (`.xlsx`, `.xls`, `.csv`, `.tsv`) or Google Sheets-targeted spreadsheet artifacts with formulas, formatting, charts, tables, and recalculation.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     },
     "template-creator": {
@@ -593,6 +759,8 @@
         "description": "Create or update a reusable personal Codex artifact-template skill. Use when the user invokes $template-creator or asks in natural language to create a template using, from, or based on an attached Word document, PowerPoint presentation, or Excel workbook, or explicitly asks to edit or update a passed artifact-template skill. Do not use for one-off artifact creation from an existing template.",
         "source": "extra",
         "enabled": true,
+        "default_enabled": true,
+        "builtin_catalog": false,
         "category": "skill"
     }
 }

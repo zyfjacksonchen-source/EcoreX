@@ -250,6 +250,10 @@ def _web_app_bridge_script() -> str:
     return window.ECOREX_WEB_CLIENT_BASE || runtimePath("/client");
   }
 
+  function enterpriseClientConfigured() {
+    return Boolean(String(window.ECOREX_WEB_CLIENT_BASE || "").trim());
+  }
+
   function webClientKeys() {
     var configured = window.ECOREX_WEB_CLIENT_KEYS;
     var raw = [];
@@ -1467,7 +1471,10 @@ def _web_app_bridge_script() -> str:
       if (admin && admin.user && admin.token) return admin;
       var auth = await apiJson({ path: "/auth/check", method: "GET" });
       if (auth.auth_required && !auth.authenticated) return null;
-      if (!auth.auth_required) return webSession(false, true, null, true);
+      if (!auth.auth_required) {
+        if (enterpriseClientConfigured()) return null;
+        return webSession(false, true, null, true);
+      }
       var authIdentity = auth && auth.session && auth.session.user ? auth.session.user : null;
       if (auth && auth.session && auth.session.user && auth.session.user.email) {
         writeLocalSession(auth.session);
@@ -1475,9 +1482,13 @@ def _web_app_bridge_script() -> str:
       try {
         await clientJson("/model-config", "GET", undefined, false);
       } catch (error) {
-        if (isMissingClientBridge(error)) return webSession(Boolean(auth.auth_required), true, authIdentity, true);
+        if (isMissingClientBridge(error)) {
+          if (enterpriseClientConfigured()) return null;
+          return webSession(Boolean(auth.auth_required), true, authIdentity, true);
+        }
       }
       if (auth && auth.session && auth.session.user && auth.session.user.email) return auth.session;
+      if (enterpriseClientConfigured()) return null;
       return webSession(Boolean(auth.auth_required), true, authIdentity, true);
     },
     enterpriseLogin: async function (input) {
@@ -1511,6 +1522,9 @@ def _web_app_bridge_script() -> str:
       }
       if (adminError && !isMissingClientBridge(adminError)) {
         throw adminError;
+      }
+      if (enterpriseClientConfigured()) {
+        throw adminError || new Error("Enterprise login bridge is unavailable");
       }
       var localAuth = await apiJson({
         path: "/auth/login",

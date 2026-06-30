@@ -4,20 +4,17 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import importlib.util
 import os
 import re
-import shutil
-import subprocess
 import tempfile
 import time
+from functools import wraps
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from PIL import Image, ImageOps
-
 from agent.tools.base_tool import BaseTool, ToolResult
 from common.log import logger
+from common.tool_execution_environment import ToolExecutionEnvironment
 from common.utils import expand_path
 
 
@@ -28,6 +25,15 @@ _DEFAULT_TIMEOUT_SECONDS = 2.0
 _PREPROCESS_TARGET_LONG_EDGE = 960
 _RAPIDOCR_DET_LIMIT_SIDE_LEN = 736
 _RAPIDOCR_ENGINES: Dict[str, Any] = {}
+
+
+def _owned_python_runtime(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        with ToolExecutionEnvironment(tool_name="ocr").owned_python_import_context():
+            return func(*args, **kwargs)
+
+    return wrapper
 
 
 def _trim_url(value: str) -> str:
@@ -104,6 +110,9 @@ def _public_error_summary(exc: BaseException) -> Dict[str, Any]:
 
 
 def _preprocess_image(image_bytes: bytes) -> Tuple[str, str]:
+    executor = ToolExecutionEnvironment(tool_name="ocr")
+    Image = executor.import_python_module("PIL.Image")
+    ImageOps = executor.import_python_module("PIL.ImageOps")
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as handle:
         output = handle.name
     try:
@@ -147,21 +156,17 @@ def _preprocess_image(image_bytes: bytes) -> Tuple[str, str]:
 
 
 def _pytesseract_available() -> bool:
-    try:
-        import pytesseract  # noqa: F401
+    return ToolExecutionEnvironment(tool_name="ocr").provider.resolve_python_package("pytesseract").available
 
-        return True
-    except Exception:
-        return False
+
+def _pillow_available() -> bool:
+    return ToolExecutionEnvironment(tool_name="ocr").provider.resolve_python_package("PIL").available
 
 
 def _rapidocr_module_name() -> str:
     for name in ("rapidocr_onnxruntime", "rapidocr"):
-        try:
-            if importlib.util.find_spec(name) is not None:
-                return name
-        except Exception:
-            continue
+        if ToolExecutionEnvironment(tool_name="ocr").provider.resolve_python_package(name).available:
+            return name
     return ""
 
 
@@ -203,6 +208,7 @@ def _collect_rapidocr_text(value: Any) -> List[str]:
     return texts
 
 
+@_owned_python_runtime
 def _run_rapidocr(image_path: str, timeout: float) -> str:
     del timeout
     module_name = _rapidocr_module_name()
@@ -210,7 +216,7 @@ def _run_rapidocr(image_path: str, timeout: float) -> str:
         raise RuntimeError("rapidocr executable module not found")
     engine = _RAPIDOCR_ENGINES.get(module_name)
     if engine is None:
-        module = __import__(module_name, fromlist=["RapidOCR"])
+        module = ToolExecutionEnvironment(tool_name="ocr").import_python_module(module_name)
         rapidocr_cls = getattr(module, "RapidOCR")
         try:
             engine = rapidocr_cls(
@@ -224,30 +230,30 @@ def _run_rapidocr(image_path: str, timeout: float) -> str:
     return "\n".join(_collect_rapidocr_text(result))
 
 
+@_owned_python_runtime
 def _run_pytesseract(image_path: str, timeout: float) -> str:
-    import pytesseract
+    pytesseract = ToolExecutionEnvironment(tool_name="ocr").import_python_module("pytesseract")
+    Image = ToolExecutionEnvironment(tool_name="ocr").import_python_module("PIL.Image")
 
     with Image.open(image_path) as image:
         return str(pytesseract.image_to_string(image, timeout=timeout) or "")
 
 
 def _run_tesseract_cli(image_path: str, timeout: float) -> str:
-    executable = shutil.which("tesseract")
-    if not executable:
+    executor = ToolExecutionEnvironment(tool_name="ocr")
+    dependency = executor.resolve_executable("tesseract", native=True)
+    if not dependency.available:
         raise RuntimeError("tesseract executable not found")
-    result = subprocess.run(
-        [executable, image_path, "stdout", "--psm", "6"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
+    result = executor.run_completed(
+        [dependency.path, image_path, "stdout", "--psm", "6"],
         timeout=timeout,
-        check=False,
     )
     if result.returncode != 0:
         raise RuntimeError((result.stderr or "tesseract failed").strip()[:300])
     return result.stdout or ""
 
 
+@_owned_python_runtime
 def _local_ocr(image_bytes: bytes, timeout: float) -> Dict[str, Any]:
     cache = _CACHE.get(_cache_key(image_bytes))
     if cache:
@@ -255,6 +261,14 @@ def _local_ocr(image_bytes: bytes, timeout: float) -> Dict[str, Any]:
     started = time.monotonic()
     processed = ""
     source = ""
+    if not _pillow_available():
+        return {
+            "status": "unavailable",
+            "provider": "unavailable",
+            "text": "",
+            "latencyMs": int((time.monotonic() - started) * 1000),
+            "cacheHit": False,
+        }
     try:
         processed, source = _preprocess_image(image_bytes)
         provider = ""
@@ -264,7 +278,7 @@ def _local_ocr(image_bytes: bytes, timeout: float) -> Dict[str, Any]:
         elif _pytesseract_available():
             provider = "pytesseract"
             text = _run_pytesseract(processed, timeout)
-        elif shutil.which("tesseract"):
+        elif ToolExecutionEnvironment(tool_name="ocr").resolve_executable("tesseract", native=True).available:
             provider = "tesseract-cli"
             text = _run_tesseract_cli(processed, timeout)
         else:
@@ -395,7 +409,7 @@ class OcrTool(BaseTool):
                 "rapidocr": _rapidocr_available(),
                 "rapidocrModule": _rapidocr_module_name(),
                 "pytesseract": _pytesseract_available(),
-                "tesseractCli": bool(shutil.which("tesseract")),
+                "tesseractCli": ToolExecutionEnvironment(tool_name="ocr").resolve_executable("tesseract", native=True).available,
             },
             "cacheEntries": len(_CACHE),
             "rapidocrEngineCached": bool(_RAPIDOCR_ENGINES),

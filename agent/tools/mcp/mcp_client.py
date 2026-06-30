@@ -18,6 +18,7 @@ import urllib.error
 from typing import Optional
 
 from common.log import logger
+from common.tool_execution_environment import ToolExecutionEnvironment
 
 
 # Aliases accepted for the Streamable HTTP transport type
@@ -258,23 +259,45 @@ class McpClient:
         if not self._authorize_stdio_start(command, args):
             return False
         extra_env = self.config.get("env", None)
-        env = {**os.environ, **extra_env} if extra_env else None
+        executor = ToolExecutionEnvironment(tool_name=f"mcp:{self.name}")
+        prepared = executor.prepare_command([str(command), *[str(item) for item in args]], required_by=f"mcp:{self.name}")
+        if not prepared.ok:
+            logger.warning(
+                f"[MCP:{self.name}] stdio startup missing dependency: "
+                f"{(prepared.missing or {}).get('dependency') or command}"
+            )
+            return False
+        env = dict(prepared.env)
+        if isinstance(extra_env, dict):
+            blocked_env_keys = {
+                "path",
+                "node_path",
+                "pythonpath",
+                "pythonhome",
+                "pythonstartup",
+                "node_options",
+                "ld_library_path",
+                "ld_preload",
+                "dyld_library_path",
+                "dyld_fallback_library_path",
+                "dyld_insert_libraries",
+            }
+            env.update({
+                str(key): str(value)
+                for key, value in extra_env.items()
+                if str(key).lower() not in blocked_env_keys
+                and not str(key).lower().startswith("npm_config_")
+            })
+        command_parts = prepared.command
 
-        popen_kwargs = {}
-        if os.name == "nt":
-            popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        else:
-            popen_kwargs["start_new_session"] = True
-
-        self._proc = subprocess.Popen(
-            [command] + list(args),
+        self._proc = executor.popen(
+            command_parts,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             env=env,
-            **popen_kwargs,
         )
         logger.debug(f"[MCP:{self.name}] stdio process started (pid={self._proc.pid})")
 

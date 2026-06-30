@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
-import shutil
 import subprocess
 import sys
 import time
 import urllib.request
 from typing import Any, Dict, List, Optional
 
+from common.tool_execution_environment import ToolExecutionEnvironment
 from common.utils import expand_path
 
 
@@ -92,9 +91,9 @@ def find_chrome_executable(config: Optional[Dict[str, Any]] = None) -> str:
             if os.path.exists(candidate):
                 return candidate
         else:
-            found = shutil.which(candidate)
-            if found:
-                return found
+            dependency = ToolExecutionEnvironment(tool_name="browser", include_system_path=True).resolve_executable(candidate)
+            if dependency.available:
+                return dependency.path
     return ""
 
 
@@ -109,7 +108,7 @@ def cdp_user_data_dir(config: Optional[Dict[str, Any]] = None) -> str:
 
 
 def playwright_available() -> bool:
-    return importlib.util.find_spec("playwright") is not None
+    return ToolExecutionEnvironment(tool_name="browser").provider.resolve_python_package("playwright").available
 
 
 def launch_cdp_browser(config: Optional[Dict[str, Any]], endpoint: str) -> subprocess.Popen:
@@ -127,7 +126,14 @@ def launch_cdp_browser(config: Optional[Dict[str, Any]], endpoint: str) -> subpr
         "--no-default-browser-check",
         "about:blank",
     ]
-    return subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    executor = ToolExecutionEnvironment(tool_name="browser")
+    return executor.popen(
+        args,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=executor.build_env(),
+        allow_external_executable=True,
+    )
 
 
 def ensure_cdp_browser(config: Optional[Dict[str, Any]], endpoint: str, *, timeout_seconds: float = 8.0) -> Optional[subprocess.Popen]:
@@ -171,6 +177,7 @@ def browser_automation_diagnostics(config: Optional[Dict[str, Any]] = None) -> D
         "persistent": config.get("persistent", True) is not False,
         "chromeExecutable": chrome,
         "chromeExecutableFound": bool(chrome),
+        "chromeExecutableSource": "external-browser" if chrome else "missing",
         "cdpUserDataDir": cdp_user_data_dir(config),
         "openAtFirstUse": True,
     }

@@ -1,8 +1,8 @@
 {
     "product":  "EcoreX",
-    "version":  "0.2.4",
-    "updatedAt":  "2026-06-29",
-    "notes":  "EcoreX v0.2.4 WebUI-first release. Desktop updater is retired; Windows and macOS use manifest-verified WebUI packages for install/update.",
+    "version":  "0.2.5",
+    "updatedAt":  "2026-06-30",
+    "notes":  "EcoreX v0.2.5 WebUI-first release. Desktop updater is retired; Windows and macOS use manifest-verified WebUI packages for install/update.",
     "update":  {
                    "webui":  {
                                  "mode":  "manifest-download",
@@ -60,29 +60,29 @@
                       },
                       {
                           "id":  "webui-windows-x64",
-                          "version":  "0.2.4",
+                          "version":  "0.2.5",
                           "platform":  "Windows",
                           "variant":  "WebUI one-click local package",
-                          "fileName":  "EcoreX_0.2.4-webui-windows-x64.zip",
-                          "href":  "downloads/EcoreX_0.2.4-webui-windows-x64.zip",
-                          "size":  113931610,
-                          "sha256":  "5A0DC6E0A59C70CB3823DE2A256EA44F334E056D37BD6A2510AA49878E9ADF61",
+                          "fileName":  "EcoreX_0.2.5-webui-windows-x64.zip",
+                          "href":  "downloads/EcoreX_0.2.5-webui-windows-x64.zip",
+                          "size":  126759034,
+                          "sha256":  "608002E559D3EE40061E53BEA58AC4FCDD38F9166E5005276E215C1B912712C1",
                           "status":  "ready",
-                          "source":  "Local v0.2.4 WebUI Windows artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks.",
-                          "updatedAt":  "2026-06-29"
+                          "source":  "Local v0.2.5 WebUI Windows artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks.",
+                          "updatedAt":  "2026-06-30"
                       },
                       {
                           "id":  "webui-macos-universal",
-                          "version":  "0.2.4",
+                          "version":  "0.2.5",
                           "platform":  "macOS",
                           "variant":  "WebUI one-click local package",
-                          "fileName":  "EcoreX_0.2.4-webui-macos-universal.zip",
-                          "href":  "downloads/EcoreX_0.2.4-webui-macos-universal.zip",
-                          "size":  263206273,
-                          "sha256":  "00BF5C1E67FF7855F6CCA59D87073B77869CD83064893D1CBD8F18183A2EFBAD",
+                          "fileName":  "EcoreX_0.2.5-webui-macos-universal.zip",
+                          "href":  "downloads/EcoreX_0.2.5-webui-macos-universal.zip",
+                          "size":  301001393,
+                          "sha256":  "0B35034ACC3993B978838D07A08FBF2F05DFEB8433E39BDCBE7A9F53F36B591E",
                           "status":  "ready",
-                          "source":  "Local v0.2.4 WebUI macOS artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks.",
-                          "updatedAt":  "2026-06-29"
+                          "source":  "Local v0.2.5 WebUI macOS artifact built by prepare-ecorex-webui-local-release.ps1 and validated with release artifact checks.",
+                          "updatedAt":  "2026-06-30"
                       },
                       {
                           "id":  "macos-arm64-dmg",
@@ -194,17 +194,17 @@
                       },
                       {
                           "id":  "web-linux-service",
-                          "version":  "0.2.4",
+                          "version":  "0.2.5",
                           "platform":  "Linux",
                           "variant":  "Web service deployment package",
-                          "fileName":  "EcoreX_0.2.4-web-linux-service.tar.gz",
-                          "href":  "downloads/EcoreX_0.2.4-web-linux-service.tar.gz",
-                          "size":  3834803,
-                          "sha256":  "0EC37896C78879A9B390C68AC5036BA651473EF268D72CBD65B386082B04989A",
+                          "fileName":  "EcoreX_0.2.5-web-linux-service.tar.gz",
+                          "href":  "downloads/EcoreX_0.2.5-web-linux-service.tar.gz",
+                          "size":  3848731,
+                          "sha256":  "0EE6F437A590167C460696335A4D1BC7C76E64E60713A9215EDE8E591C92BBE6",
                           "status":  "ready",
                           "visible":  false,
-                          "source":  "Local v0.2.4 Web service tarball built by prepare-ecorex-web-release.ps1 and validated by release artifact checks.",
-                          "updatedAt":  "2026-06-29"
+                          "source":  "Local v0.2.5 Web service tarball built by prepare-ecorex-web-release.ps1 and validated by release artifact checks.",
+                          "updatedAt":  "2026-06-30"
                       }
                   ],
     "admin":  {

@@ -288,6 +288,47 @@ def _decorate_mention_metadata(row: dict) -> None:
         row.pop("mention_hidden_reason", None)
 
 
+def _current_agent_tool_names() -> set[str]:
+    """Return the current ToolManager schema snapshot without starting heavy probes."""
+
+    try:
+        from agent.tools.tool_manager import ToolManager
+
+        manager = ToolManager()
+        if not getattr(manager, "tool_classes", None):
+            manager.load_tools(start_mcp=False)
+        names = {str(name) for name in getattr(manager, "tool_classes", {}).keys()}
+        names.update(str(name) for name in getattr(manager, "_mcp_tool_instances", {}).keys())
+        return names
+    except Exception as exc:
+        logger.debug(f"[SkillService] tool snapshot unavailable: {exc}")
+        return set()
+
+
+def _skill_enabled(row: dict) -> bool:
+    enabled = _optional_bool(row.get("enabled"))
+    if enabled is not None:
+        return enabled
+    default_enabled = _optional_bool(row.get("default_enabled"))
+    return True if default_enabled is None else bool(default_enabled)
+
+
+def _decorate_tool_binding(row: dict, skill_or_name, tool_names: set[str]) -> None:
+    try:
+        from agent.skills.tool_binding_contract import skill_tool_binding_surface
+
+        surface = skill_tool_binding_surface(skill_or_name, tool_names, enabled=_skill_enabled(row))
+    except Exception as exc:
+        logger.debug(f"[SkillService] tool binding unavailable for {row.get('name')}: {exc}")
+        return
+    row["toolName"] = surface.get("toolName") or surface.get("tool") or ""
+    row["schemaVisible"] = bool(surface.get("schemaVisible"))
+    row["toolSchemaCallable"] = bool(surface.get("toolSchemaCallable"))
+    row["agentSurface"] = surface
+    row["toolBinding"] = surface.get("toolBinding")
+    row["tool_binding"] = surface.get("toolBinding")
+
+
 class SkillService:
     """
     High-level service for skill lifecycle management.
@@ -314,6 +355,7 @@ class SkillService:
         self.manager.refresh_skills()
         config = self.manager.get_skills_config()
         result = []
+        tool_names = _current_agent_tool_names()
         for name, item in config.items():
             row = dict(item)
             is_builtin_catalog = bool(getattr(self.manager, "is_builtin_catalog_skill", lambda _: False)(name))
@@ -359,6 +401,7 @@ class SkillService:
                     row["os"] = list(entry.metadata.os or [])
             _decorate_skill_governance(row)
             _decorate_mention_metadata(row)
+            _decorate_tool_binding(row, entry.skill if entry else row, tool_names)
             result.append(row)
         logger.info(f"[SkillService] query: {len(result)} skills found")
         return result

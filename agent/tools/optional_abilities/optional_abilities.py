@@ -5,17 +5,17 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import time
-import importlib.util
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from agent.tools.base_tool import BaseTool, ToolResult
 from common.ecorex_capability_policy import apply_policy_to_capability, blocked_install_payload
 from common.log import logger
+from common.runtime_dependencies import SOURCE_ECOREX_BUNDLED, SOURCE_ECOREX_STATE
+from common.tool_execution_environment import ToolExecutionEnvironment, redact_text
 from config import conf
 
 try:
@@ -145,19 +145,32 @@ def _update_live_config(data: Dict[str, Any]) -> None:
 
 
 def _which(name: str) -> Optional[str]:
-    found = shutil.which(name)
-    if found:
-        return found
-    if os.name == "nt" and not name.lower().endswith(".cmd"):
-        return shutil.which(f"{name}.cmd")
-    return None
+    dependency = ToolExecutionEnvironment(tool_name="optional_abilities").resolve_executable(name)
+    return dependency.path if dependency.available else None
+
+
+def _is_ecorex_owned_path(path: Path) -> bool:
+    if not path.is_absolute():
+        return False
+    provider = ToolExecutionEnvironment(tool_name="optional_abilities").provider
+    return provider.classify_path(path) in {SOURCE_ECOREX_BUNDLED, SOURCE_ECOREX_STATE}
+
+
+def _owned_path_or_default(value: Optional[str], default: Path, *, label: str) -> Path:
+    if value:
+        candidate = Path(value).expanduser()
+        if _is_ecorex_owned_path(candidate):
+            return candidate
+        logger.warning(f"[OptionalAbilities] ignoring unowned {label}: {candidate}")
+    return default
 
 
 def _state_dir() -> Path:
-    override = os.environ.get("ECOREX_CAPABILITY_STATE_DIR")
-    if override:
-        return Path(override).expanduser()
-    return RUNTIME_ROOT / "capability-state"
+    return _owned_path_or_default(
+        os.environ.get("ECOREX_CAPABILITY_STATE_DIR"),
+        RUNTIME_ROOT / "capability-state",
+        label="capability state dir",
+    )
 
 
 def _safe_pack_dir_name(pack_id: str) -> str:
@@ -166,15 +179,22 @@ def _safe_pack_dir_name(pack_id: str) -> str:
 
 
 def _capability_package_root() -> Path:
-    override = os.environ.get("ECOREX_CAPABILITY_TARGET_DIR")
-    if override:
-        return Path(override).expanduser()
-    return RUNTIME_ROOT / "capability-packages"
+    return _owned_path_or_default(
+        os.environ.get("ECOREX_CAPABILITY_TARGET_DIR"),
+        RUNTIME_ROOT / "capability-packages",
+        label="capability target dir",
+    )
 
 
 def _playwright_browsers_dir() -> Optional[Path]:
     override = os.environ.get("ECOREX_PLAYWRIGHT_BROWSERS_DIR") or os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
-    return Path(override).expanduser() if override else None
+    if not override:
+        return None
+    candidate = Path(override).expanduser()
+    if _is_ecorex_owned_path(candidate):
+        return candidate
+    logger.warning(f"[OptionalAbilities] ignoring unowned playwright browsers dir: {candidate}")
+    return None
 
 
 def _capability_target_dir(pack_id: str) -> Path:
@@ -182,6 +202,9 @@ def _capability_target_dir(pack_id: str) -> Path:
 
 
 def _add_capability_target_to_path(path: Path) -> None:
+    if not _is_ecorex_owned_path(path):
+        logger.warning(f"[OptionalAbilities] ignoring unowned capability target dir: {path}")
+        return
     try:
         resolved = str(path.resolve())
     except Exception:
@@ -191,12 +214,6 @@ def _add_capability_target_to_path(path: Path) -> None:
     existing = {str(Path(item).resolve()) for item in sys.path if item}
     if resolved not in existing:
         sys.path.insert(0, resolved)
-
-    pythonpath = os.environ.get("PYTHONPATH", "")
-    parts = [item for item in pythonpath.split(os.pathsep) if item]
-    normalized = {str(Path(item).resolve()) for item in parts}
-    if resolved not in normalized:
-        os.environ["PYTHONPATH"] = resolved if not pythonpath else resolved + os.pathsep + pythonpath
 
 
 def _apply_installed_capability_paths() -> None:
@@ -261,7 +278,7 @@ def _capability_state(pack_id: str) -> Dict[str, Any]:
                 "updatedAt": data.get("updatedAt"),
                 "message": data.get("message"),
                 "logPath": data.get("logPath"),
-                "targetDir": data.get("targetDir"),
+                "targetDir": data.get("targetDir") if _is_ecorex_owned_path(Path(str(data.get("targetDir") or ""))) else None,
             }
             for field in (
                 "available",
@@ -297,48 +314,26 @@ def _capability_state(pack_id: str) -> Dict[str, Any]:
 
 
 def _module_available(module_name: str) -> bool:
-    try:
-        return importlib.util.find_spec(module_name) is not None
-    except Exception:
-        return False
+    return ToolExecutionEnvironment(tool_name="optional_abilities").provider.resolve_python_package(module_name).available
 
 
 def _builtin_capability_state(pack_id: str) -> Optional[Dict[str, Any]]:
     normalized = str(pack_id or "").strip().lower().replace("_", "-")
     if normalized == TONGXIN_CLI_PACK_ID:
-        try:
-            from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
-
-            result = TongxinCli().execute({"action": "status", "include_paths": False})
-            payload = result.result if isinstance(result.result, dict) else {}
-            available = bool(payload.get("available"))
-            configured = bool(payload.get("configured"))
-        except Exception as exc:
-            logger.debug(f"[OptionalAbilities] Tongxin CLI status probe skipped: {exc}")
-            available = False
-            configured = False
-            configuration_state = "missing"
-        else:
-            configuration_state = str(payload.get("configurationState") or (
-                "configured" if configured else "detected_unconfigured" if available else "missing"
-            ))
-        if configured:
-            message = "Tongxin CLI read-only capability is ready."
-        elif available:
-            message = "Tongxin CLI script was detected; click configuration check to persist it for EcoreX."
-        else:
-            message = "Tongxin CLI wrapper is built in; run auto_configure to use a trusted local script or configured remote auth/bootstrap."
         return {
-            "installed": configured,
-            "state": "installed" if configured else "not-installed",
+            "installed": False,
+            "state": "not-installed",
             "builtIn": True,
             "configureOnly": True,
             "readOnly": True,
             "defaultEnabled": True,
-            "configured": configured,
-            "available": available,
-            "configurationState": configuration_state,
-            "message": message,
+            "configured": False,
+            "available": False,
+            "configurationState": "probe-required",
+            "message": (
+                "Tongxin CLI wrapper is built in. Run tongxin_cli status/diagnose or the "
+                "S5 matrix smoke to verify the read-only script and data-layer health."
+            ),
             "installHint": TONGXIN_CLI_INSTALL_HINT,
         }
     if normalized == "browser-automation" and _module_available("playwright"):
@@ -357,7 +352,7 @@ def _builtin_capability_state(pack_id: str) -> Optional[Dict[str, Any]]:
         _module_available("rapidocr_onnxruntime")
         or _module_available("rapidocr")
         or _module_available("pytesseract")
-        or bool(shutil.which("tesseract"))
+        or ToolExecutionEnvironment(tool_name="optional_abilities").resolve_executable("tesseract", native=True).available
     ):
         return {
             "installed": True,
@@ -1081,8 +1076,14 @@ class OptionalAbilities(BaseTool):
         state_dir = _state_dir()
         state_dir.mkdir(parents=True, exist_ok=True)
         target_dir = _capability_target_dir(pack_id)
+        executor = ToolExecutionEnvironment(tool_name="optional_abilities", cwd=RUNTIME_ROOT)
+        python_dependency = executor.resolve_python()
+        if not python_dependency.available:
+            payload = executor.provider.missing_dependency(python_dependency, required_by="optional_abilities.install_pack")
+            payload["packId"] = pack_id
+            return ToolResult.fail(payload)
         command = [
-            sys.executable,
+            python_dependency.path,
             str(installer),
             "--pack-id",
             pack_id,
@@ -1103,18 +1104,17 @@ class OptionalAbilities(BaseTool):
         if browsers_dir:
             command.extend(["--playwright-browsers-dir", str(browsers_dir)])
         try:
-            result = subprocess.run(
+            env = executor.build_env()
+            env.update({
+                "PYTHONIOENCODING": "utf-8",
+                "ECOREX_CAPABILITY_STATE_DIR": str(_state_dir()),
+                "ECOREX_CAPABILITY_TARGET_DIR": str(_capability_package_root()),
+            })
+            result = executor.run_completed(
                 command,
                 cwd=str(RUNTIME_ROOT),
-                text=True,
-                capture_output=True,
                 timeout=timeout,
-                env={
-                    **os.environ,
-                    "PYTHONIOENCODING": "utf-8",
-                    "ECOREX_CAPABILITY_STATE_DIR": str(_state_dir()),
-                    "ECOREX_CAPABILITY_TARGET_DIR": str(_capability_package_root()),
-                },
+                env=env,
             )
         except subprocess.TimeoutExpired:
             return ToolResult.fail({"status": "error", "message": f"install timed out after {timeout}s", "packId": pack_id})
@@ -1130,8 +1130,8 @@ class OptionalAbilities(BaseTool):
             "exitCode": result.returncode,
             "targetDir": str(target_dir),
             "capabilityState": state,
-            "stdout": (result.stdout or "")[-4000:],
-            "stderr": (result.stderr or "")[-4000:],
+            "stdout": redact_text(result.stdout or "")[-4000:],
+            "stderr": redact_text(result.stderr or "")[-4000:],
         }
         return ToolResult.success(payload) if result.returncode == 0 else ToolResult.fail(payload)
 

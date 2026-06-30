@@ -4,7 +4,7 @@ import importlib.util
 import re
 import threading
 from pathlib import Path
-from typing import Dict, Any, Type
+from typing import Dict, Any, Type, Optional
 from agent.tools.base_tool import BaseTool
 from common.log import logger
 from config import conf
@@ -117,7 +117,7 @@ class ToolManager:
         if len(self._registry_errors) > 50:
             self._registry_errors = self._registry_errors[-50:]
 
-    def load_tools(self, tools_dir: str = "", config_dict=None):
+    def load_tools(self, tools_dir: str = "", config_dict=None, *, start_mcp: Optional[bool] = None):
         """
         Load tools from both directory and configuration.
 
@@ -130,7 +130,8 @@ class ToolManager:
             self._load_tools_from_init()
             self._configure_tools_from_config(config_dict)
 
-        if conf().get("mcp_auto_start", False):
+        should_start_mcp = conf().get("mcp_auto_start", False) if start_mcp is None else bool(start_mcp)
+        if should_start_mcp:
             self._load_mcp_tools()
         else:
             logger.info("[ToolManager] MCP auto-start disabled; configured MCP servers remain discoverable through optional_abilities")

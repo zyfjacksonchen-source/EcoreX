@@ -23,6 +23,8 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from agent.tools.base_tool import BaseTool, ToolResult
 from common.log import logger
+from common.runtime_dependencies import SOURCE_ECOREX_BUNDLED, SOURCE_ECOREX_STATE, get_runtime_dependency_provider
+from common.tool_execution_environment import ToolExecutionCancelled, ToolExecutionEnvironment
 
 
 DEFAULT_LARK_CLI_PACKAGE = os.environ.get("ECOREX_LARK_CLI_PACKAGE", "@larksuite/cli@1.0.56")
@@ -113,57 +115,18 @@ def _configured_install_root_from_conf() -> Optional[Path]:
     return None
 
 
+def _path_is_ecorex_owned(path: Optional[Path]) -> bool:
+    if not path:
+        return False
+    return get_runtime_dependency_provider().classify_path(path) in {SOURCE_ECOREX_BUNDLED, SOURCE_ECOREX_STATE}
+
+
 def _candidate_bin_dirs() -> List[Path]:
-    home = Path.home()
-    dirs: List[Path] = []
-    install_root_override = os.environ.get("ECOREX_LARK_CLI_INSTALL_ROOT")
-    if install_root_override:
-        install_root = Path(install_root_override).expanduser()
-        dirs.extend([
-            install_root / "bin",
-            install_root / "node_modules" / ".bin",
-        ])
-    configured_install_root = _configured_install_root_from_conf()
-    if configured_install_root:
-        dirs.extend([
-            configured_install_root / "bin",
-            configured_install_root / "node_modules" / ".bin",
-        ])
-    if os.name == "nt":
-        for base in (os.environ.get("APPDATA"), os.environ.get("LOCALAPPDATA")):
-            if base:
-                dirs.append(Path(base) / "npm")
-        for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)")):
-            if base:
-                dirs.append(Path(base) / "nodejs")
-        dirs.append(Path("C:/cli-main/bin"))
-        dirs.append(Path("C:/EcoreX Artifact Desk/cli-main/bin"))
-        dirs.append(Path("C:/EcoreX Artifact Desk/cli-main"))
-    else:
-        dirs.extend([
-            home / ".npm-global" / "bin",
-            home / ".npm" / "bin",
-            Path("/usr/local/bin"),
-            Path("/opt/homebrew/bin"),
-        ])
-
-    runtime_root = Path(__file__).resolve().parents[3]
-    dirs.extend([
-        runtime_root / "bin",
-        runtime_root / "tools" / "bin",
-        runtime_root / "node" / "bin",
-        runtime_root / "tools" / "lark-cli" / "bin",
-        runtime_root / "tools" / "lark-cli" / "node_modules" / ".bin",
-    ])
-    return dirs
+    return ToolExecutionEnvironment(tool_name="feishu_cli").provider.bin_dirs()
 
 
-def _tool_env() -> Dict[str, str]:
-    env = os.environ.copy()
-    env.setdefault("PYTHONIOENCODING", "utf-8")
-    for candidate in _candidate_bin_dirs():
-        _prepend_path(env, candidate)
-    return env
+def _tool_env(extra_paths: Optional[Iterable[Path]] = None) -> Dict[str, str]:
+    return ToolExecutionEnvironment(tool_name="feishu_cli").build_env(extra_paths=extra_paths)
 
 
 def _which(name: str, env: Optional[Dict[str, str]] = None) -> Optional[str]:
@@ -186,8 +149,7 @@ def _find_local_lark_runner(env: Dict[str, str]) -> Optional[List[str]]:
         *(([
             override_root / "scripts" / "run.js",
             override_root / "node_modules" / "@larksuite" / "cli" / "scripts" / "run.js",
-        ]) if override_root else []),
-        Path("C:/EcoreX Artifact Desk/cli-main/scripts/run.js"),
+        ]) if override_root and _path_is_ecorex_owned(override_root) else []),
         Path(__file__).resolve().parents[3] / "tools" / "lark-cli" / "scripts" / "run.js",
         Path(__file__).resolve().parents[3] / "tools" / "lark-cli" / "node_modules" / "@larksuite" / "cli" / "scripts" / "run.js",
         Path(__file__).resolve().parents[3] / "node_modules" / "@larksuite" / "cli" / "scripts" / "run.js",
@@ -203,7 +165,7 @@ def _find_direct_lark_binary() -> Optional[str]:
     for directory in _candidate_bin_dirs():
         for name in names:
             candidate = directory / name
-            if candidate.exists():
+            if candidate.exists() and candidate.is_file() and (os.name == "nt" or os.access(candidate, os.X_OK)):
                 return str(candidate)
     return None
 
@@ -267,38 +229,17 @@ def _run_process(
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     else:
         kwargs["start_new_session"] = True
-    process = subprocess.Popen(command, **kwargs)
-    deadline = time.time() + max(1, timeout)
-    pending_input = input_text
-    while True:
-        try:
-            stdout, stderr = process.communicate(input=pending_input, timeout=0.25)
-            break
-        except subprocess.TimeoutExpired:
-            pending_input = None
-            if cancel_event is not None and getattr(cancel_event, "is_set", lambda: False)():
-                _kill_process_tree(process)
-                try:
-                    stdout, stderr = process.communicate(timeout=5)
-                except subprocess.TimeoutExpired:
-                    try:
-                        process.kill()
-                    except Exception:
-                        pass
-                    stdout, stderr = process.communicate()
-                raise _ProcessCancelled(stdout, stderr)
-            if time.time() >= deadline:
-                _kill_process_tree(process)
-                try:
-                    stdout, stderr = process.communicate(timeout=5)
-                except subprocess.TimeoutExpired:
-                    try:
-                        process.kill()
-                    except Exception:
-                        pass
-                    stdout, stderr = process.communicate()
-                raise subprocess.TimeoutExpired(command, timeout, output=stdout, stderr=stderr)
-    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+    try:
+        return ToolExecutionEnvironment(tool_name="feishu_cli", base_env=env, cwd=cwd).run_completed(
+            command,
+            timeout=timeout,
+            cwd=cwd,
+            env=env,
+            cancel_event=cancel_event,
+            input_text=input_text,
+        )
+    except ToolExecutionCancelled as exc:
+        raise _ProcessCancelled(exc.stdout, exc.stderr)
 
 
 def _trim_chunks(chunks: List[str], max_chars: int = 12000) -> None:
@@ -534,22 +475,17 @@ def _run_process_until_auth_url(
     stderr_path.touch()
     _cancel_running_auth_sessions_for_workdir(workdir)
 
-    kwargs: Dict[str, Any] = {
-        "cwd": str(workdir),
-        "stdin": subprocess.DEVNULL,
-        "stdout": subprocess.PIPE,
-        "stderr": subprocess.PIPE,
-        "text": True,
-        "encoding": "utf-8",
-        "errors": "replace",
-        "env": env,
-    }
-    if os.name == "nt":
-        kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    else:
-        kwargs["start_new_session"] = True
-
-    process = subprocess.Popen(command, **kwargs)
+    process = ToolExecutionEnvironment(tool_name="feishu_cli", base_env=env, cwd=str(workdir)).popen(
+        command,
+        cwd=str(workdir),
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
     lock = threading.Lock()
     stdout_chunks: List[str] = []
     stderr_chunks: List[str] = []
@@ -982,11 +918,9 @@ class FeishuCli(BaseTool):
         self.auto_install = bool(self.config.get("auto_install", False))
 
     def _env(self) -> Dict[str, str]:
-        env = _tool_env()
         install_root = self._install_root()
+        env = _tool_env([install_root / "bin", install_root / "node_modules" / ".bin"])
         env["ECOREX_LARK_CLI_INSTALL_ROOT"] = str(install_root)
-        _prepend_path(env, install_root / "bin")
-        _prepend_path(env, install_root / "node_modules" / ".bin")
         return env
 
     def execute(self, args: Dict[str, Any]) -> ToolResult:

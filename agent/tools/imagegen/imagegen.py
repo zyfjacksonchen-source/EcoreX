@@ -314,12 +314,28 @@ class ImageGenTool(BaseTool):
                 "type": "integer",
                 "description": "Maximum post-QA image regeneration attempts. Defaults to 1 and is capped at 2.",
             },
+            "action": {
+                "type": "string",
+                "enum": ["generate", "probe", "status"],
+                "description": "Use probe/status for lightweight readiness checks; generate is the default image action.",
+            },
         },
-        "required": ["prompt"],
     }
 
     def execute(self, params: Dict[str, Any]) -> ToolResult:
-        prompt = str((params or {}).get("prompt") or "").strip()
+        args = params or {}
+        action = str(args.get("action") or "generate").strip().lower().replace("-", "_")
+        if action in {"probe", "status"}:
+            return ToolResult.success(self._probe())
+        if action and action != "generate":
+            return ToolResult.fail({
+                "error": "unsupported imagegen action",
+                "action": action,
+                "allowedActions": ["generate", "probe", "status"],
+                "redacted": True,
+            })
+
+        prompt = str(args.get("prompt") or "").strip()
         if not prompt:
             return ToolResult.fail("prompt is required")
 
@@ -345,16 +361,16 @@ class ImageGenTool(BaseTool):
             "ocr_brief",
         )
         for key in passthrough:
-            value = params.get(key)
+            value = args.get(key)
             if value not in (None, ""):
                 payload[key] = value
 
-        image_urls = params.get("image_urls")
+        image_urls = args.get("image_urls")
         normalized_sources: list[str] = []
         if isinstance(image_urls, list) and image_urls:
             normalized_sources = [str(item) for item in image_urls if str(item or "").strip()]
-        elif params.get("image_url"):
-            normalized_sources = [str(params.get("image_url"))]
+        elif args.get("image_url"):
+            normalized_sources = [str(args.get("image_url"))]
 
         authorized_sources: list[str] = []
         for source in normalized_sources:
@@ -375,7 +391,7 @@ class ImageGenTool(BaseTool):
         elif authorized_sources:
             payload["image_url"] = authorized_sources[0]
 
-        output_dir = Path(expand_path(str(params.get("output_dir") or _default_output_dir())))
+        output_dir = Path(expand_path(str(args.get("output_dir") or _default_output_dir())))
         if not output_dir.is_absolute():
             output_dir = root / output_dir
         output_dir = output_dir.resolve()
@@ -393,9 +409,9 @@ class ImageGenTool(BaseTool):
         env = image_generation_env_with_config(env)
 
         max_quality_retries = _quality_retry_limit(
-            params.get("quality_retry_max")
-            if "quality_retry_max" in params
-            else params.get("max_quality_retries")
+            args.get("quality_retry_max")
+            if "quality_retry_max" in args
+            else args.get("max_quality_retries")
         )
         started = time.monotonic()
         provider_total_latency_ms = 0
@@ -479,3 +495,46 @@ class ImageGenTool(BaseTool):
             if quality_evidence:
                 result["qualityEvidence"] = quality_evidence
             return ToolResult.success(result)
+
+    def _probe(self) -> Dict[str, Any]:
+        root = _runtime_root()
+        script = root / "skills" / "image-generation" / "scripts" / "generate.py"
+        provider_env = image_generation_env_with_config(os.environ.copy())
+        configured_env = [
+            key
+            for key in (
+                "OPENAI_API_KEY",
+                "GEMINI_API_KEY",
+                "ARK_API_KEY",
+                "DASHSCOPE_API_KEY",
+                "MINIMAX_API_KEY",
+                "LINKAI_API_KEY",
+            )
+            if provider_env.get(key)
+        ]
+        checks = {
+            "script": script.exists(),
+            "providerRunner": callable(run_image_generation_payload),
+            "qualityRuntime": callable(build_image_quality_evidence)
+            and callable(build_image_finalization_decision)
+            and callable(attach_image_finalization_evidence)
+            and callable(aggregate_image_finalization_decisions),
+        }
+        missing = [name for name, ok in checks.items() if not ok]
+        return {
+            "schemaVersion": "v0.2.5",
+            "status": "ready" if not missing else "missing",
+            "tool": self.name,
+            "scriptPresent": checks["script"],
+            "qualityRuntimePresent": checks["qualityRuntime"],
+            "providerConfigured": bool(configured_env),
+            "configuredProviderEnvCount": len(configured_env),
+            "missing": missing,
+            "qualityGates": [
+                "structural-image-qa",
+                "vision-anomaly-qa",
+                "reference-fidelity-qa",
+                "retry-ledger",
+            ],
+            "redacted": True,
+        }

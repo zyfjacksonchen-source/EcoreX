@@ -34,7 +34,6 @@ slack_bolt
 # discord bot
 discord.py
 
-# web.py: PyPI 0.62 fails to build on Python 3.13+ (cgi module removed), use GitHub fix instead
-web.py; python_version < "3.13"
-web.py @ git+https://github.com/webpy/webpy.git ; python_version >= "3.13"
+# web.py 0.76 is the first PyPI release in this line with Python 3.13/3.14 classifiers.
+web.py>=0.76,<0.77
 legacy-cgi; python_version >= "3.13"

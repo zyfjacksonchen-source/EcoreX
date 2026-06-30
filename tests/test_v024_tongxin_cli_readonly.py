@@ -10,7 +10,27 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+
+@pytest.fixture(autouse=True)
+def _ecorex_owned_python_for_tongxin_unit_tests(monkeypatch):
+    from common.runtime_dependencies import RuntimeDependency, SOURCE_ECOREX_STATE
+    from common.tool_execution_environment import ToolExecutionEnvironment
+
+    def fake_resolve_python(self):
+        return RuntimeDependency("python", sys.executable, SOURCE_ECOREX_STATE, True, "python")
+
+    original_popen = ToolExecutionEnvironment.popen
+
+    def fake_popen(self, command, **kwargs):
+        kwargs["allow_external_executable"] = True
+        return original_popen(self, command, **kwargs)
+
+    monkeypatch.setattr(ToolExecutionEnvironment, "resolve_python", fake_resolve_python)
+    monkeypatch.setattr(ToolExecutionEnvironment, "popen", fake_popen)
 
 
 def test_tongxin_cli_config_template_does_not_persist_login_fields():
@@ -902,11 +922,12 @@ def test_tongxin_tool_is_registered_and_diagnostics_source_mentions_it():
 
 def test_tongxin_capability_pack_configures_detected_local_cli():
     from agent.tools.agent_capability.agent_capability import AgentCapabilityTool
-    from agent.tools.optional_abilities.optional_abilities import OptionalAbilities
+    import agent.tools.optional_abilities.optional_abilities as optional_abilities_module
     from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
     from agent.protocol.agent_stream import AgentStreamExecutor
     from config import conf
 
+    OptionalAbilities = optional_abilities_module.OptionalAbilities
     old_cwd = os.getcwd()
     old_tools = copy.deepcopy(conf().get("tools", {}))
     old_state_dir = os.environ.get("ECOREX_CAPABILITY_STATE_DIR")
@@ -914,12 +935,13 @@ def test_tongxin_capability_pack_configures_detected_local_cli():
         _make_tongxin_script(Path(workspace))
         config_path = Path(workspace) / "config.json"
         state_dir = Path(workspace) / "capability-state"
-        os.environ["ECOREX_CAPABILITY_STATE_DIR"] = str(state_dir)
+        os.environ.pop("ECOREX_CAPABILITY_STATE_DIR", None)
         os.chdir(workspace)
         conf()["tools"] = {}
         try:
             with patch.object(TongxinCli, "_runtime_config_path", return_value=config_path), \
-                    patch.object(TongxinCli, "_trusted_auto_config_roots", return_value=[Path(workspace)]):
+                    patch.object(TongxinCli, "_trusted_auto_config_roots", return_value=[Path(workspace)]), \
+                    patch.object(optional_abilities_module, "_state_dir", return_value=state_dir):
                 optional = OptionalAbilities()
                 listed = optional.execute({"action": "list"}).result["abilities"]
                 tongxin = next(item for item in listed if item.get("packId") == "tongxin-cli")
@@ -929,8 +951,8 @@ def test_tongxin_capability_pack_configures_detected_local_cli():
                 assert tongxin["agentCanInstall"] is False
                 assert "installHint" in tongxin
                 assert tongxin["capabilityState"]["installed"] is False
-                assert tongxin["capabilityState"]["available"] is True
-                assert tongxin["capabilityState"]["configurationState"] == "detected_unconfigured"
+                assert tongxin["capabilityState"]["available"] is False
+                assert tongxin["capabilityState"]["configurationState"] == "probe-required"
 
                 optional_install = optional.execute({"action": "install", "ability": "tongxin-cli"})
                 assert optional_install.status == "success"
