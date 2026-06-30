@@ -1,7 +1,7 @@
 {
   "schemaVersion": "v0.2.5-release-gate-report-v1",
   "version": "0.2.5",
-  "generatedAt": "2026-06-29T23:57:46Z",
+  "generatedAt": "2026-06-30T02:29:31Z",
   "status": "local_pass_production_pending",
   "releaseReady": false,
   "localGatePassed": true,
@@ -39,7 +39,7 @@
       "exitCode": 0,
       "stdoutPresent": true,
       "stderrPresent": false,
-      "durationMs": 188,
+      "durationMs": 406,
       "redacted": true
     },
     {
@@ -48,7 +48,7 @@
       "exitCode": 0,
       "stdoutPresent": true,
       "stderrPresent": false,
-      "durationMs": 3405,
+      "durationMs": 4421,
       "redacted": true
     },
     {
@@ -57,7 +57,7 @@
       "exitCode": 0,
       "stdoutPresent": true,
       "stderrPresent": false,
-      "durationMs": 8781,
+      "durationMs": 14796,
       "redacted": true
     },
     {
@@ -66,7 +66,7 @@
       "exitCode": 0,
       "stdoutPresent": true,
       "stderrPresent": false,
-      "durationMs": 203,
+      "durationMs": 171,
       "redacted": true
     }
   ],

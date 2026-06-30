@@ -40,6 +40,7 @@ UI_METADATA_COLLECTIONS = (
     "sessionProjectBindings",
     "sessionTitles",
     "pinnedSessions",
+    "pinnedSessionTimes",
 )
 
 BACKUP_FILES = {

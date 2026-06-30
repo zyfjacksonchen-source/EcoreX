@@ -75,13 +75,14 @@ def test_feishu_cli_auth_start_uses_codex_split_flow_and_qrcode(tmp_path):
     assert result.result["authFlow"] == "start"
     assert result.result["authRequired"] is True
     assert result.result["deviceCode"] == "device-code-123"
+    assert result.result["sessionId"].startswith("lark-auth-login-")
+    assert result.result["writebackPending"] is True
     assert result.result["verificationUrl"] == start_payload["verification_url"]
     assert result.result["qrCode"]["relativePath"].startswith(".ecorex/lark-auth/feishu-auth-")
-    assert result.result["nextAction"] == {
-        "tool": "feishu_cli",
-        "action": "auth_login",
-        "device_code": "device-code-123",
-    }
+    assert result.result["nextAction"]["tool"] == "feishu_cli"
+    assert result.result["nextAction"]["action"] == "auth_login_status"
+    assert result.result["nextAction"]["session_id"] == result.result["sessionId"]
+    assert result.result["nextAction"]["device_code"] == "device-code-123"
     assert safe_run.call_args_list[0].args[0] == [
         "lark-cli",
         "auth",
@@ -98,6 +99,22 @@ def test_feishu_cli_auth_start_uses_codex_split_flow_and_qrcode(tmp_path):
     assert safe_run.call_args_list[1].args[2] <= 5
 
 
+def test_feishu_cli_qrcode_falls_back_to_local_png_when_official_command_fails(tmp_path):
+    pytest.importorskip("qrcode")
+    from agent.tools.feishu_cli.feishu_cli import FeishuCli
+
+    tool = FeishuCli({"cwd": str(tmp_path)})
+    url = "https://open.feishu.cn/open-apis/authen/v1/device?client_id=cli_x&user_code=ABCD"
+    with patch.object(FeishuCli, "_safe_run", return_value={"status": "error", "exitCode": 2, "output": "bad url"}):
+        result = tool._generate_auth_qrcode(["lark-cli"], {}, url, 5)
+
+    assert result["status"] == "success"
+    assert result["fallbackUsed"] is True
+    assert result["relativePath"].startswith(".ecorex/lark-auth/feishu-auth-")
+    assert Path(result["path"]).is_file()
+    assert Path(result["path"]).stat().st_size > 0
+
+
 def test_feishu_cli_auth_complete_uses_device_code_without_blocking_start_flags():
     from agent.tools.feishu_cli.feishu_cli import FeishuCli
 
@@ -111,6 +128,68 @@ def test_feishu_cli_auth_complete_uses_device_code_without_blocking_start_flags(
     assert result.result["authFlow"] == "complete"
     assert result.result["authCompleted"] is True
     assert safe_run.call_args.args[0] == ["lark-cli", "auth", "login", "--device-code", "device-code-123"]
+
+
+def test_feishu_cli_auth_login_status_completes_stored_device_code(tmp_path):
+    from agent.tools.feishu_cli import feishu_cli as module
+    from agent.tools.feishu_cli.feishu_cli import FeishuCli
+
+    with module._AUTH_SESSIONS_LOCK:
+        module._AUTH_SESSIONS.clear()
+    session_id = module._register_auth_login_session(
+        device_code="device-code-secret",
+        verification_url="https://open.feishu.cn/open-apis/authen/v1/device?user_code=ABCD",
+        timeout=120,
+        cwd=str(tmp_path),
+        domain="all",
+    )
+
+    tool = FeishuCli({"cwd": str(tmp_path)})
+    with patch("agent.tools.feishu_cli.feishu_cli._resolve_lark_command", return_value=["lark-cli"]), \
+            patch.object(FeishuCli, "_safe_run", return_value={
+                "status": "success",
+                "exitCode": 0,
+                "command": ["lark-cli", "auth", "login", "--device-code", "***"],
+                "output": "ok device-code-secret",
+                "json": None,
+            }) as safe_run, \
+            patch.object(FeishuCli, "_status", return_value={"authState": "ready", "authenticated": True}):
+        result = tool.execute({"action": "auth_login_status", "session_id": session_id})
+
+    serialized = json.dumps(result.result, ensure_ascii=False)
+    assert result.status == "success"
+    assert result.result["status"] == "success"
+    assert result.result["authFlow"] == "auth_login_status"
+    assert result.result["sessionId"] == session_id
+    assert result.result["authCompleted"] is True
+    assert result.result["writebackPending"] is False
+    assert "device-code-secret" not in serialized
+    assert safe_run.call_args.args[0] == ["lark-cli", "auth", "login", "--device-code", "device-code-secret"]
+
+
+def test_feishu_cli_agent_auth_status_routes_auth_login_session(tmp_path):
+    from agent.tools.feishu_cli import feishu_cli as module
+    from agent.tools.feishu_cli.feishu_cli import FeishuCli
+
+    with module._AUTH_SESSIONS_LOCK:
+        module._AUTH_SESSIONS.clear()
+    session_id = module._register_auth_login_session(
+        device_code="device-code-secret",
+        verification_url="https://open.feishu.cn/open-apis/authen/v1/device?user_code=ABCD",
+        timeout=120,
+        cwd=str(tmp_path),
+        scope="docs:document:read",
+    )
+
+    tool = FeishuCli({"cwd": str(tmp_path)})
+    with patch("agent.tools.feishu_cli.feishu_cli._resolve_lark_command", return_value=["lark-cli"]), \
+            patch.object(FeishuCli, "_safe_run", return_value={"status": "success", "exitCode": 0, "output": "ok", "json": None}), \
+            patch.object(FeishuCli, "_status", return_value={"authState": "ready", "authenticated": True}):
+        result = tool.execute({"action": "agent_auth_status", "session_id": session_id})
+
+    assert result.status == "success"
+    assert result.result["authFlow"] == "auth_login_status"
+    assert result.result["authCompleted"] is True
 
 
 def test_feishu_cli_auth_login_without_target_does_not_default_to_base():
@@ -563,7 +642,7 @@ def test_feishu_external_connection_agent_auth_status_polls_session(monkeypatch)
     monkeypatch.setattr(web_channel, "record_external_connection_runtime_event", lambda *args, **kwargs: None)
 
     def fake_execute(self, args):
-        assert args["action"] == "config_init_status"
+        assert args["action"] == "agent_auth_status"
         assert args["session_id"] == "lark-auth-test"
         return ToolResult.success({
             "status": "success",

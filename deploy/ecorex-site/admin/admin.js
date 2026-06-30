@@ -20,7 +20,7 @@ const state = {
       recentEvents: [],
       privacy: {},
     },
-    version: "0.2.2",
+    version: "0.2.5",
   },
   connected: false,
 };
@@ -343,7 +343,7 @@ function renderRelease() {
   fetch("../manifest.json", { cache: "no-store" })
     .then((response) => response.json())
     .then((manifest) => {
-      setMetric("version", manifest.version || "0.2.2");
+      setMetric("version", manifest.version || "0.2.5");
       const target = $("[data-release]");
       target.innerHTML = manifest.artifacts
         .map(
@@ -373,7 +373,7 @@ function renderMetrics() {
   setMetric("errors", formatNumber(summary.errors ?? 0));
   setMetric("capabilities", formatNumber(summary.capabilities ?? 0));
   setMetric("modelCredentials", formatNumber(summary.modelCredentials ?? (state.data.globalModel ? 1 : 0)));
-  setMetric("version", state.data.version || summary.version || "0.2.2");
+  setMetric("version", state.data.version || summary.version || "0.2.5");
 }
 
 function render() {

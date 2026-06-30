@@ -98,6 +98,7 @@ def main() -> int:
     parser.add_argument("--target-dir", default="")
     parser.add_argument("--playwright-browsers-dir", default="")
     parser.add_argument("--index-url", default="")
+    parser.add_argument("--primary-index-url", default=os.environ.get("ECOREX_PIP_PRIMARY_INDEX_URL", ""))
     parser.add_argument("--fallback-index-url", default=os.environ.get("ECOREX_PIP_FALLBACK_INDEX_URL", "https://pypi.tuna.tsinghua.edu.cn/simple"))
     parser.add_argument("--find-links", default="")
     parser.add_argument("--no-index", action="store_true")
@@ -220,9 +221,10 @@ def main() -> int:
                     "--no-warn-script-location",
                     "--prefer-binary",
                 ]
+                primary_index_url = args.primary_index_url or args.index_url
                 command = list(base_command)
-                if args.index_url:
-                    command.extend(["--index-url", args.index_url])
+                if primary_index_url:
+                    command.extend(["--index-url", primary_index_url])
                 if args.find_links:
                     command.extend(["--find-links", args.find_links])
                 if args.no_index:
@@ -231,9 +233,11 @@ def main() -> int:
                     command.extend(["--target", str(target_dir), "--upgrade"])
                 command.append(str(requirement))
                 try:
+                    if primary_index_url:
+                        log_file.write(f"[{utc_stamp()}] Primary install index: {primary_index_url}\n")
                     run_logged(command, log_file, env, timeout)
                 except Exception:
-                    if args.no_index or args.index_url or not args.fallback_index_url:
+                    if args.no_index or not args.fallback_index_url:
                         raise
                     fallback = list(base_command)
                     fallback.extend(["--index-url", args.fallback_index_url])

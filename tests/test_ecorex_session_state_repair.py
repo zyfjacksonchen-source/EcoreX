@@ -66,6 +66,7 @@ class EcoreXSessionStateRepairTests(unittest.TestCase):
                 },
                 "sessionTitles": {"session-missing": "raw title should not leak", "session-general": "General"},
                 "pinnedSessions": {"session-missing": True, "session-general": True},
+                "pinnedSessionTimes": {"session-missing": 1000, "session-general": 2000},
                 "sessionUiState": {
                     "session-missing": {"messages": [{"role": "user", "content": "raw prompt should not leak"}]},
                     "runtime-0": {},
@@ -134,6 +135,7 @@ class EcoreXSessionStateRepairTests(unittest.TestCase):
                 },
                 "sessionTitles": {"session-missing": "orphan title", "session-general": "General"},
                 "pinnedSessions": {"session-missing": True, "session-general": True},
+                "pinnedSessionTimes": {"session-missing": 1000, "session-general": 2000},
                 "sessionUiState": {
                     "session-missing": {"messages": [{"role": "user", "content": "local draft remains"}]},
                     "runtime-0": {},
@@ -177,11 +179,13 @@ class EcoreXSessionStateRepairTests(unittest.TestCase):
         self.assertNotIn("session-missing", repaired["sessionProjects"])
         self.assertNotIn("session-missing", repaired["sessionTitles"])
         self.assertNotIn("session-missing", repaired["pinnedSessions"])
+        self.assertNotIn("session-missing", repaired["pinnedSessionTimes"])
         self.assertIn("session-missing", repaired["sessionUiState"])
         self.assertNotIn("runtime-0", repaired["sessionUiState"])
         self.assertEqual(messages_after_apply[0]["content"], "keep message")
         self.assertEqual(restored["sessionProjects"], original["sessionProjects"])
         self.assertEqual(restored["pinnedSessions"], original["pinnedSessions"])
+        self.assertEqual(restored["pinnedSessionTimes"], original["pinnedSessionTimes"])
         self.assertEqual(apply_report["backup"]["fileCount"], 2)
         self.assertTrue(apply_report["backup"]["manifestIdHash"].startswith("hmac:"))
         self.assertNotIn("Sha256", json.dumps(apply_report))

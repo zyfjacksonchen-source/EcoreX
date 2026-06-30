@@ -182,6 +182,7 @@ type SessionRow = {
   streamAvailable?: boolean;
   cancelling?: boolean;
   pinned?: boolean;
+  pinnedAt?: number;
   projectId?: string;
   projectName?: string;
 };
@@ -253,6 +254,7 @@ type SettingsSection = "account" | "projects" | "abilities" | "external-connecti
 type SessionProjectMap = Record<string, string>;
 type SessionProjectBindingMap = Record<string, ProjectSessionBinding>;
 type StringBoolMap = Record<string, boolean>;
+type StringNumberMap = Record<string, number>;
 type StringMap = Record<string, string>;
 type SessionUiState = {
   title: string;
@@ -400,6 +402,7 @@ const SESSION_PROJECT_BINDINGS_STORAGE_KEY = "ecorex-session-project-bindings";
 const SESSION_TITLES_STORAGE_KEY = "ecorex-session-titles";
 const LOCKED_SESSION_TITLES_STORAGE_KEY = "ecorex-locked-session-titles";
 const PINNED_SESSIONS_STORAGE_KEY = "ecorex-pinned-sessions";
+const PINNED_SESSION_TIMES_STORAGE_KEY = "ecorex-pinned-session-times";
 const PINNED_PROJECTS_STORAGE_KEY = "ecorex-pinned-projects";
 const UNREAD_SESSIONS_STORAGE_KEY = "ecorex-unread-sessions";
 const SESSION_UI_STORAGE_KEY = "ecorex-session-ui-state";
@@ -423,8 +426,8 @@ const SESSION_UI_PREVIEW_DATA_URL_CHARS = 500;
 const CONTEXT_THRESHOLD_TOKENS = 258_000;
 const EFFECTIVE_MODEL_FALLBACK = "gpt-5.5";
 const EFFECTIVE_MODEL_ALIAS_PREFIXES = ["deepseek-"];
-const COMPOSER_PERMISSION_MENU_MODES: PermissionMode[] = ["always-ask", "smart-ask", "full-access", "read-only", "custom"];
-const SETTINGS_PERMISSION_MODES: PermissionMode[] = ["full-access", "smart-ask", "always-ask", "read-only", "custom"];
+const COMPOSER_PERMISSION_MENU_MODES: PermissionMode[] = ["smart-ask", "full-access"];
+const SETTINGS_PERMISSION_MODES: PermissionMode[] = ["smart-ask", "full-access"];
 
 const coreAbilityNames = new Set([
   "bash",
@@ -455,6 +458,18 @@ function readStorage<T>(key: string, fallback: T): T {
 
 function writeStorage<T>(key: string, value: T) {
   window.localStorage.setItem(key, JSON.stringify(value));
+}
+
+function normalizeStringNumberMap(value: unknown): StringNumberMap {
+  if (!value || typeof value !== "object") return {};
+  const result: StringNumberMap = {};
+  Object.entries(value as Record<string, unknown>).forEach(([key, raw]) => {
+    const normalizedKey = String(key || "").trim();
+    const normalizedValue = Number(raw);
+    if (!normalizedKey || !Number.isFinite(normalizedValue) || normalizedValue <= 0) return;
+    result[normalizedKey] = normalizedValue;
+  });
+  return result;
 }
 
 function truncatePersistedText(value: unknown, limit: number) {
@@ -1516,6 +1531,13 @@ function sessionActivityMs(row: SessionRow) {
   return timeMs(row.createdAt);
 }
 
+function pinnedSessionMs(sessionId: string, pinnedSessions: StringBoolMap, pinnedSessionTimes: StringNumberMap, fallbackMs = 0) {
+  if (!pinnedSessions[sessionId]) return undefined;
+  const pinnedAt = Number(pinnedSessionTimes[sessionId] || 0);
+  if (Number.isFinite(pinnedAt) && pinnedAt > 0) return pinnedAt;
+  return fallbackMs > 0 ? fallbackMs : undefined;
+}
+
 function sessionProjectIdFromState(
   sessionId: string,
   sessionProjects: SessionProjectMap,
@@ -1546,6 +1568,7 @@ function mapSessions(
   sessionProjectBindings: SessionProjectBindingMap,
   sessionTitles: StringMap,
   pinnedSessions: StringBoolMap,
+  pinnedSessionTimes: StringNumberMap,
   projects: ProjectFolder[],
   sessionUiState: Record<string, SessionUiState>,
   locallyCompletedRequestIds: StringBoolMap = {},
@@ -1589,6 +1612,7 @@ function mapSessions(
       streamAvailable: activeRequest?.stream_available !== false,
       cancelling: isCancelling,
       pinned: Boolean(pinnedSessions[id]),
+      pinnedAt: pinnedSessionMs(id, pinnedSessions, pinnedSessionTimes, sortKeyMs),
       ...(project ? { projectId: project.id, projectName: project.name } : {})
     } satisfies SessionRow;
   });
@@ -1626,6 +1650,7 @@ function mapSessions(
       streamAvailable: activeRequest?.stream_available !== false,
       cancelling: isCancelling,
       pinned: Boolean(pinnedSessions[sessionId]),
+      pinnedAt: pinnedSessionMs(sessionId, pinnedSessions, pinnedSessionTimes, sortKeyMs),
       ...(project ? { projectId: project.id, projectName: project.name } : {})
     });
     rowIds.add(sessionId);
@@ -1652,6 +1677,7 @@ function mapSessions(
       streamAvailable: activeRequest.stream_available !== false,
       cancelling: isCancelling,
       pinned: Boolean(pinnedSessions[sessionId]),
+      pinnedAt: pinnedSessionMs(sessionId, pinnedSessions, pinnedSessionTimes, sortKeyMs),
       ...(project ? { projectId: project.id, projectName: project.name } : {})
     });
     rowIds.add(sessionId);
@@ -1680,12 +1706,17 @@ function mapSessions(
       streamAvailable: activeRequest?.stream_available !== false,
       cancelling: isCancelling,
       pinned: Boolean(pinnedSessions[activeSessionId]),
+      pinnedAt: pinnedSessionMs(activeSessionId, pinnedSessions, pinnedSessionTimes, sortKeyMs),
       ...(project ? { projectId: project.id, projectName: project.name } : {})
     });
   }
   return rows.sort((a, b) => {
     const pinnedDiff = Number(Boolean(b.pinned)) - Number(Boolean(a.pinned));
     if (pinnedDiff) return pinnedDiff;
+    if (a.pinned || b.pinned) {
+      const pinnedTimeDiff = (b.pinnedAt || 0) - (a.pinnedAt || 0);
+      if (pinnedTimeDiff) return pinnedTimeDiff;
+    }
     const activityDiff = sessionActivityMs(b) - sessionActivityMs(a);
     if (activityDiff) return activityDiff;
     const createdDiff = timeMs(b.createdAt) - timeMs(a.createdAt);
@@ -1858,52 +1889,23 @@ function ThinkingIndicator({ label = "思考中", compact = false }: { label?: s
 
 function permissionModeLabel(mode?: PermissionMode) {
   return mode === "full-access"
-    ? "完全访问"
-    : mode === "smart-ask"
-    ? "智能确认"
-    : mode === "always-ask"
-      ? "每次询问"
-      : mode === "read-only"
-        ? "只读优先"
-        : mode === "custom"
-          ? "自定义"
-          : "未设置";
+    ? "完全访问权限"
+    : "默认权限";
 }
 
 function composerPermissionTitle(mode?: PermissionMode) {
-  return mode === "always-ask"
-    ? "请求批准"
-    : mode === "smart-ask"
-      ? "替我批准"
-      : mode === "full-access"
-        ? "完全访问权限"
-        : mode === "read-only"
-          ? "只读优先"
-          : mode === "custom"
-            ? "自定义 (config.toml)"
-            : "权限";
+  return mode === "full-access" ? "完全访问权限" : "默认权限";
 }
 
 function composerPermissionDetail(mode?: PermissionMode) {
-  return mode === "always-ask"
-    ? "编辑外部文件和使用互联网时始终询问"
-    : mode === "smart-ask"
-      ? "仅对检测到的风险操作请求批准"
-      : mode === "full-access"
-        ? "可不受限制地访问互联网和电脑上的任何文件"
-        : mode === "read-only"
-          ? "读取和查看优先，阻止高风险写入和执行"
-          : mode === "custom"
-            ? "使用 config.toml 中定义的权限"
-            : "";
+  return mode === "full-access"
+    ? "按用户选择放开系统 PATH、Node/npx、Python 与本地文件能力"
+    : "自动批准日常安全操作，高风险操作按结构化工具边界执行";
 }
 
 function composerPermissionIcon(mode?: PermissionMode) {
   if (mode === "full-access") return <KeyRound aria-hidden="true" />;
-  if (mode === "custom") return <Settings aria-hidden="true" />;
-  if (mode === "always-ask") return <ShieldCheck aria-hidden="true" />;
-  if (mode === "smart-ask") return <CheckCircle2 aria-hidden="true" />;
-  return <ShieldCheck aria-hidden="true" />;
+  return <CheckCircle2 aria-hidden="true" />;
 }
 
 function pausedMessageContent(content: string) {
@@ -3074,6 +3076,7 @@ export function App() {
   const [sessionTitles, setSessionTitles] = useState<StringMap>(() => readStorage<StringMap>(SESSION_TITLES_STORAGE_KEY, {}));
   const [lockedSessionTitles, setLockedSessionTitles] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(LOCKED_SESSION_TITLES_STORAGE_KEY, {}));
   const [pinnedSessions, setPinnedSessions] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(PINNED_SESSIONS_STORAGE_KEY, {}));
+  const [pinnedSessionTimes, setPinnedSessionTimes] = useState<StringNumberMap>(() => normalizeStringNumberMap(readStorage<StringNumberMap>(PINNED_SESSION_TIMES_STORAGE_KEY, {})));
   const [pinnedProjects, setPinnedProjects] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(PINNED_PROJECTS_STORAGE_KEY, {}));
   const [unreadSessionIds, setUnreadSessionIds] = useState<StringBoolMap>(() => readStorage<StringBoolMap>(UNREAD_SESSIONS_STORAGE_KEY, {}));
   const [sessionUiState, setSessionUiState] = useState<Record<string, SessionUiState>>(() => pruneSessionUiState(readStorage<Record<string, SessionUiState>>(SESSION_UI_STORAGE_KEY, {})));
@@ -3302,6 +3305,30 @@ export function App() {
   }, [pinnedSessions]);
 
   useEffect(() => {
+    setPinnedSessionTimes((current) => {
+      let changed = false;
+      const next: StringNumberMap = {};
+      Object.entries(current).forEach(([sessionId, pinnedAt]) => {
+        if (!pinnedSessions[sessionId]) {
+          changed = true;
+          return;
+        }
+        const normalized = Number(pinnedAt);
+        if (!Number.isFinite(normalized) || normalized <= 0) {
+          changed = true;
+          return;
+        }
+        next[sessionId] = normalized;
+      });
+      return changed ? next : current;
+    });
+  }, [pinnedSessions]);
+
+  useEffect(() => {
+    writeStorage(PINNED_SESSION_TIMES_STORAGE_KEY, pinnedSessionTimes);
+  }, [pinnedSessionTimes]);
+
+  useEffect(() => {
     writeStorage(PINNED_PROJECTS_STORAGE_KEY, pinnedProjects);
   }, [pinnedProjects]);
 
@@ -3343,6 +3370,9 @@ export function App() {
         }
         if (state.pinnedSessions && typeof state.pinnedSessions === "object") {
           setPinnedSessions((current) => ({ ...current, ...(state.pinnedSessions as StringBoolMap) }));
+        }
+        if (state.pinnedSessionTimes && typeof state.pinnedSessionTimes === "object") {
+          setPinnedSessionTimes((current) => normalizeStringNumberMap({ ...current, ...(state.pinnedSessionTimes as StringNumberMap) }));
         }
         if (state.pinnedProjects && typeof state.pinnedProjects === "object") {
           setPinnedProjects((current) => normalizePinnedProjectsForProjects(
@@ -3414,13 +3444,14 @@ export function App() {
         sessionProjectBindings,
         sessionTitles,
         pinnedSessions,
+        pinnedSessionTimes,
         pinnedProjects,
         sessionUiState: pruned,
         savedAt: new Date().toISOString()
       }).catch(() => undefined);
       uiStateSyncTimer.current = null;
     }, hasLiveState ? 2500 : 350);
-  }, [sessionUiState, sessionProjects, sessionProjectBindings, sessionTitles, pinnedSessions, pinnedProjects, projects, sidecarStatus.state]);
+  }, [sessionUiState, sessionProjects, sessionProjectBindings, sessionTitles, pinnedSessions, pinnedSessionTimes, pinnedProjects, projects, sidecarStatus.state]);
 
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
@@ -3871,8 +3902,8 @@ export function App() {
   }, [projects, sessionProjectBindings]);
 
   const allSessions = useMemo(() => (
-    mapSessions(runtimeSnapshot, activeSessionId, activeSessionTitle, sessionProjects, sessionProjectBindings, sessionTitles, pinnedSessions, projectCatalog, sessionUiState, locallyCompletedRequestIds, runClockTick)
-  ), [runtimeSnapshot, activeSessionId, activeSessionTitle, sessionProjects, sessionProjectBindings, sessionTitles, pinnedSessions, projectCatalog, sessionUiState, locallyCompletedRequestIds, runClockTick]);
+    mapSessions(runtimeSnapshot, activeSessionId, activeSessionTitle, sessionProjects, sessionProjectBindings, sessionTitles, pinnedSessions, pinnedSessionTimes, projectCatalog, sessionUiState, locallyCompletedRequestIds, runClockTick)
+  ), [runtimeSnapshot, activeSessionId, activeSessionTitle, sessionProjects, sessionProjectBindings, sessionTitles, pinnedSessions, pinnedSessionTimes, projectCatalog, sessionUiState, locallyCompletedRequestIds, runClockTick]);
   const visibleSessions = useMemo(() => {
     const needle = searchQuery.trim().toLowerCase();
     return needle ? allSessions.filter((row) => `${row.title} ${row.detail}`.toLowerCase().includes(needle)) : allSessions;
@@ -3976,7 +4007,7 @@ export function App() {
       : sortedProjects;
     return matches.slice(0, 8);
   }, [projectStartSearch, sortedProjects]);
-  const { projectSessions, generalSessions, projectSessionGroups } = useMemo(() => {
+  const { projectSessions, generalSessions, pinnedGeneralSessions, regularGeneralSessions, projectSessionGroups } = useMemo(() => {
     const grouped = new Map<string, SessionRow[]>();
     const general: SessionRow[] = [];
     const projectRows: SessionRow[] = [];
@@ -3993,6 +4024,8 @@ export function App() {
     return {
       projectSessions: projectRows,
       generalSessions: general,
+      pinnedGeneralSessions: general.filter((row) => row.pinned),
+      regularGeneralSessions: general.filter((row) => !row.pinned),
       projectSessionGroups: sortedProjects.map((project) => ({
         project,
         sessions: grouped.get(project.id) || []
@@ -4551,6 +4584,7 @@ export function App() {
     const previousProjectBinding = sessionProjectBindings[row.id];
     const previousLocked = lockedSessionTitles[row.id];
     const previousPinned = pinnedSessions[row.id];
+    const previousPinnedAt = pinnedSessionTimes[row.id];
     setRuntimeSnapshot((current) => ({
       ...current,
       sessions: current.sessions.filter((session, index) => (session.session_id || session.id || `runtime-${index}`) !== row.id),
@@ -4581,6 +4615,11 @@ export function App() {
       return next;
     });
     setPinnedSessions((current) => {
+      const next = { ...current };
+      delete next[row.id];
+      return next;
+    });
+    setPinnedSessionTimes((current) => {
       const next = { ...current };
       delete next[row.id];
       return next;
@@ -4625,6 +4664,9 @@ export function App() {
       }
       if (previousPinned) {
         setPinnedSessions((current) => ({ ...current, [row.id]: previousPinned }));
+      }
+      if (previousPinnedAt) {
+        setPinnedSessionTimes((current) => ({ ...current, [row.id]: previousPinnedAt }));
       }
       scheduleRuntimeSnapshotRefresh(0);
       setApproval({ type: "error", title: "会话删除失败", message: error instanceof Error ? error.message : "请稍后重试。" });
@@ -4673,7 +4715,17 @@ export function App() {
   }
 
   function togglePinSession(row: SessionRow) {
-    setPinnedSessions((current) => ({ ...current, [row.id]: !current[row.id] }));
+    const nextPinned = !Boolean(row.pinned);
+    setPinnedSessions((current) => ({ ...current, [row.id]: nextPinned }));
+    setPinnedSessionTimes((current) => {
+      const next = { ...current };
+      if (nextPinned) {
+        next[row.id] = Date.now();
+      } else {
+        delete next[row.id];
+      }
+      return next;
+    });
   }
 
   function togglePinProject(project: ProjectFolder) {
@@ -4731,6 +4783,7 @@ export function App() {
         sessionProjectBindings: nextSessionProjectBindings,
         sessionTitles,
         pinnedSessions,
+        pinnedSessionTimes,
         pinnedProjects: nextPinnedProjects,
         sessionUiState: nextSessionUiState,
         savedAt: new Date().toISOString()
@@ -7459,6 +7512,7 @@ export function App() {
       sessionProjectBindings,
       sessionTitles,
       pinnedSessions,
+      pinnedSessionTimes,
       pinnedProjects,
       sessionUiState: mergedState,
       savedAt: new Date().toISOString()
@@ -8828,13 +8882,14 @@ export function App() {
     const hasUnread = Boolean(unreadSessionIds[row.id]) && !isActive && !isRunning;
     const hasLeadingSessionStatus = isRunning || hasUnread;
     const waitingReply = isActive && Boolean(approval);
-    const rowTitle = [row.title, row.detail, formatTime(row.updatedAt)].filter(Boolean).join("\n");
+    const rowTitle = [row.title, row.pinned ? "置顶会话" : "", row.detail, formatTime(row.updatedAt)].filter(Boolean).join("\n");
     return (
       <article
-        className={`session-row is-${isRunning ? "waiting" : row.status}${isActive ? " is-active" : ""}${waitingReply ? " is-awaiting-reply" : ""}${hasUnread ? " is-unread" : ""}`}
+        className={`session-row is-${isRunning ? "waiting" : row.status}${isActive ? " is-active" : ""}${row.pinned ? " is-pinned" : ""}${waitingReply ? " is-awaiting-reply" : ""}${hasUnread ? " is-unread" : ""}`}
         key={row.id}
         draggable={false}
         data-session-ownership={rowProjectId ? "project" : "general"}
+        data-session-pinned={row.pinned ? "true" : undefined}
         onDragStart={(event) => event.preventDefault()}
       >
         <button
@@ -8859,6 +8914,18 @@ export function App() {
       </article>
     );
   };
+
+  const renderGeneralSessionGroup = (label: string, rows: SessionRow[], kind: "pinned" | "regular") => (
+    <section className={`session-group is-${kind}`} aria-label={label} key={kind}>
+      <div className="session-group-title">
+        <span>{kind === "pinned" ? <Pin aria-hidden="true" /> : null}{label}</span>
+        <small>{rows.length}</small>
+      </div>
+      <div className="session-group-rows">
+        {rows.map(renderSessionRow)}
+      </div>
+    </section>
+  );
 
   function renderMessageRunTiming(message: ChatItem) {
     const label = messageRunTimingLabel(message);
@@ -9023,7 +9090,12 @@ export function App() {
             </button>
             <small>{generalSessions.length}</small>
           </div>
-          {generalSessionsCollapsed ? null : generalSessions.length ? generalSessions.map(renderSessionRow) : <div className="session-empty">暂无通用会话</div>}
+          {generalSessionsCollapsed ? null : generalSessions.length ? (
+            <div className="session-groups">
+              {pinnedGeneralSessions.length ? renderGeneralSessionGroup("置顶任务", pinnedGeneralSessions, "pinned") : null}
+              {regularGeneralSessions.length ? renderGeneralSessionGroup("任务", regularGeneralSessions, "regular") : null}
+            </div>
+          ) : <div className="session-empty">暂无通用会话</div>}
         </div>
 
         <div className="sidebar-footer">

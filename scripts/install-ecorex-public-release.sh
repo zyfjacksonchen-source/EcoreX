@@ -139,14 +139,19 @@ fi
 
 env_file="$ADMIN_ROOT/env/ecorex-admin-api.env"
 active_env_file="$ADMIN_ROOT/ecorex-admin-api.env"
-required_client_keys="ecorex-web-v0.2.3-web.1,ecorex-web-v0.2.2-web.1,ecorex-web-v0.2.1-web.1,ecorex-desktop-v0.1.10,ecorex-desktop-v0.1.11,ecorex-desktop-v0.1.12,ecorex-desktop-v0.1.13,ecorex-desktop-v0.1.14,ecorex-desktop-v0.1.15,ecorex-desktop-v0.1.16,ecorex-desktop-v0.1.17,ecorex-desktop-v0.1.18,ecorex-desktop-v0.1.19,ecorex-desktop-v0.2.0,ecorex-web-v0.1.11-web.1,ecorex-web-v0.1.12-web.1,ecorex-web-v0.1.13-web.1,ecorex-web-v0.1.14-web.1,ecorex-web-v0.1.15-web.1,ecorex-web-v0.1.16-web.1,ecorex-web-v0.1.17-web.1,ecorex-web-v0.1.18-web.1,ecorex-web-v0.1.19-web.1,ecorex-web-v0.2.0-web.1"
+required_client_keys="ecorex-web-v0.2.5-web.1,ecorex-web-v0.2.4-web.1,ecorex-web-v0.2.3-web.1,ecorex-web-v0.2.2-web.1,ecorex-web-v0.2.1-web.1,ecorex-desktop-v0.1.10,ecorex-desktop-v0.1.11,ecorex-desktop-v0.1.12,ecorex-desktop-v0.1.13,ecorex-desktop-v0.1.14,ecorex-desktop-v0.1.15,ecorex-desktop-v0.1.16,ecorex-desktop-v0.1.17,ecorex-desktop-v0.1.18,ecorex-desktop-v0.1.19,ecorex-desktop-v0.2.0,ecorex-web-v0.1.11-web.1,ecorex-web-v0.1.12-web.1,ecorex-web-v0.1.13-web.1,ecorex-web-v0.1.14-web.1,ecorex-web-v0.1.15-web.1,ecorex-web-v0.1.16-web.1,ecorex-web-v0.1.17-web.1,ecorex-web-v0.1.18-web.1,ecorex-web-v0.1.19-web.1,ecorex-web-v0.2.0-web.1"
 if [[ ! -f "$env_file" ]]; then
   cat > "$env_file" <<'EOF'
 ECOREX_ADMIN_DB=/srv/ecorex-agent-admin/data/ecorex-admin.sqlite3
-ECOREX_CLIENT_EVENT_KEYS=ecorex-web-v0.2.3-web.1,ecorex-web-v0.2.2-web.1,ecorex-web-v0.2.1-web.1,ecorex-desktop-v0.1.10,ecorex-desktop-v0.1.11,ecorex-desktop-v0.1.12,ecorex-desktop-v0.1.13,ecorex-desktop-v0.1.14,ecorex-desktop-v0.1.15,ecorex-desktop-v0.1.16,ecorex-desktop-v0.1.17,ecorex-desktop-v0.1.18,ecorex-desktop-v0.1.19,ecorex-desktop-v0.2.0,ecorex-web-v0.1.11-web.1,ecorex-web-v0.1.12-web.1,ecorex-web-v0.1.13-web.1,ecorex-web-v0.1.14-web.1,ecorex-web-v0.1.15-web.1,ecorex-web-v0.1.16-web.1,ecorex-web-v0.1.17-web.1,ecorex-web-v0.1.18-web.1,ecorex-web-v0.1.19-web.1,ecorex-web-v0.2.0-web.1
+ECOREX_CLIENT_EVENT_KEYS=ecorex-web-v0.2.5-web.1,ecorex-web-v0.2.4-web.1,ecorex-web-v0.2.3-web.1,ecorex-web-v0.2.2-web.1,ecorex-web-v0.2.1-web.1,ecorex-desktop-v0.1.10,ecorex-desktop-v0.1.11,ecorex-desktop-v0.1.12,ecorex-desktop-v0.1.13,ecorex-desktop-v0.1.14,ecorex-desktop-v0.1.15,ecorex-desktop-v0.1.16,ecorex-desktop-v0.1.17,ecorex-desktop-v0.1.18,ecorex-desktop-v0.1.19,ecorex-desktop-v0.2.0,ecorex-web-v0.1.11-web.1,ecorex-web-v0.1.12-web.1,ecorex-web-v0.1.13-web.1,ecorex-web-v0.1.14-web.1,ecorex-web-v0.1.15-web.1,ecorex-web-v0.1.16-web.1,ecorex-web-v0.1.17-web.1,ecorex-web-v0.1.18-web.1,ecorex-web-v0.1.19-web.1,ecorex-web-v0.2.0-web.1
 ECOREX_ALLOWED_ORIGINS=https://www.ecoreai.cn
 ECOREX_ADMIN_USERNAME=admin
 ECOREX_ADMIN_PASSWORD=change-this-before-starting
+ECOREX_TONGXIN_AUTH_UPSTREAM_URL=
+ECOREX_TONGXIN_BOOTSTRAP_MANIFEST_URL=
+ECOREX_TONGXIN_BOOTSTRAP_URL=
+ECOREX_TONGXIN_BOOTSTRAP_SHA256=
+ECOREX_TONGXIN_BOOTSTRAP_TOKEN=
 # ECOREX_ADMIN_TOKEN=
 # ECOREX_ADMIN_API_KEY=
 EOF
@@ -185,6 +190,22 @@ PY
 
 merge_client_keys "$env_file"
 merge_client_keys "$active_env_file"
+
+ensure_tongxin_env_defaults() {
+  local target="$1"
+  [[ -f "$target" ]] || return 0
+  for key in \
+    ECOREX_TONGXIN_AUTH_UPSTREAM_URL \
+    ECOREX_TONGXIN_BOOTSTRAP_MANIFEST_URL \
+    ECOREX_TONGXIN_BOOTSTRAP_URL \
+    ECOREX_TONGXIN_BOOTSTRAP_SHA256 \
+    ECOREX_TONGXIN_BOOTSTRAP_TOKEN; do
+    grep -q "^${key}=" "$target" || printf '%s=\n' "$key" >> "$target"
+  done
+}
+
+ensure_tongxin_env_defaults "$env_file"
+ensure_tongxin_env_defaults "$active_env_file"
 
 ln -sfn "$release_dir" "$RELEASE_ROOT/current"
 

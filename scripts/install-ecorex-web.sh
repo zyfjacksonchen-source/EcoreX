@@ -241,10 +241,19 @@ write_env_file() {
 
   local public_base
   local client_base
+  local tongxin_auth_url
   public_base="${PUBLIC_BASE_URL%/}"
   client_base=""
   if [[ -n "$public_base" ]]; then
     client_base="$public_base/client"
+  fi
+  tongxin_auth_url="${ECOREX_TONGXIN_AUTH_URL:-}"
+  if [[ -z "$tongxin_auth_url" && -n "$public_base" ]]; then
+    if [[ "$public_base" == */ecorex-agent ]]; then
+      tongxin_auth_url="$public_base/client/tongxin/auth"
+    else
+      tongxin_auth_url="$public_base/ecorex-agent/client/tongxin/auth"
+    fi
   fi
 
   if [[ ! -f "$ENV_FILE" ]]; then
@@ -256,6 +265,7 @@ WEB_PASSWORD=$existing_password
 AGENT_WORKSPACE=$WORKSPACE_ROOT
 ECOREX_WEB_PUBLIC_BASE_URL=$PUBLIC_BASE_URL
 ECOREX_WEB_CLIENT_BASE=$client_base
+ECOREX_TONGXIN_AUTH_URL=$tongxin_auth_url
 ECOREX_TOOL_EXECUTION_LEASE_SECONDS=900
 ECOREX_TOOL_EXECUTION_EXTENSION_SECONDS=900
 ECOREX_TOOL_EXECUTION_MAX_SECONDS=5400
@@ -278,9 +288,11 @@ EOF
     if [[ -n "$PUBLIC_BASE_URL" ]]; then
       upsert_env_value ECOREX_WEB_PUBLIC_BASE_URL "$PUBLIC_BASE_URL"
       upsert_env_value ECOREX_WEB_CLIENT_BASE "$client_base"
+      upsert_env_value ECOREX_TONGXIN_AUTH_URL "$tongxin_auth_url"
     else
       grep -q '^ECOREX_WEB_PUBLIC_BASE_URL=' "$ENV_FILE" || printf 'ECOREX_WEB_PUBLIC_BASE_URL=\n' >> "$ENV_FILE"
       grep -q '^ECOREX_WEB_CLIENT_BASE=' "$ENV_FILE" || printf 'ECOREX_WEB_CLIENT_BASE=\n' >> "$ENV_FILE"
+      grep -q '^ECOREX_TONGXIN_AUTH_URL=' "$ENV_FILE" || printf 'ECOREX_TONGXIN_AUTH_URL=\n' >> "$ENV_FILE"
     fi
   fi
 }
@@ -290,10 +302,12 @@ write_runtime_config() {
   local password
   local effective_host
   local effective_port
+  local tongxin_auth_url
 
   password="$(read_env_value WEB_PASSWORD "")"
   effective_host="$(read_env_value WEB_HOST "$WEB_HOST")"
   effective_port="$(read_env_value WEB_PORT "$WEB_PORT")"
+  tongxin_auth_url="$(read_env_value ECOREX_TONGXIN_AUTH_URL "")"
 
   install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_GROUP" "$STATE_DIR"
   install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_GROUP" \
@@ -307,6 +321,8 @@ write_runtime_config() {
   ECOREX_WEB_PORT="$effective_port" \
   ECOREX_WEB_PASSWORD="$password" \
   ECOREX_WORKSPACE_ROOT="$WORKSPACE_ROOT" \
+  ECOREX_STATE_DIR="$STATE_DIR" \
+  ECOREX_TONGXIN_AUTH_URL="$tongxin_auth_url" \
   python3 - <<'PY'
 import json
 import os
@@ -332,6 +348,37 @@ payload.update({
     "web_file_serve_root": os.environ["ECOREX_WORKSPACE_ROOT"],
     "appdata_dir": os.path.join(os.environ["ECOREX_WORKSPACE_ROOT"], "appdata"),
 })
+
+tools = payload.setdefault("tools", {})
+if not isinstance(tools, dict):
+    tools = {}
+    payload["tools"] = tools
+
+feishu_cli = tools.setdefault("feishu_cli", {})
+if not isinstance(feishu_cli, dict):
+    feishu_cli = {}
+    tools["feishu_cli"] = feishu_cli
+feishu_cli.setdefault("package", "@larksuite/cli@1.0.56")
+feishu_cli.setdefault("auto_install", False)
+feishu_cli.setdefault("allow_system_node", True)
+feishu_cli.setdefault("install_root", os.path.join(os.environ["ECOREX_STATE_DIR"], "tools", "lark-cli"))
+
+tongxin_cli = tools.setdefault("tongxin_cli", {})
+if not isinstance(tongxin_cli, dict):
+    tongxin_cli = {}
+    tools["tongxin_cli"] = tongxin_cli
+tongxin_cli.setdefault("script_path", "")
+tongxin_cli.setdefault("python_path", "")
+tongxin_cli["read_only"] = True
+tongxin_auth_url = os.environ.get("ECOREX_TONGXIN_AUTH_URL", "").strip()
+if tongxin_auth_url:
+    tongxin_cli["auth_url"] = tongxin_auth_url
+else:
+    tongxin_cli.setdefault("auth_url", "")
+tongxin_cli.setdefault("bootstrap_manifest_url", "")
+tongxin_cli.setdefault("bootstrap_url", "")
+tongxin_cli.setdefault("bootstrap_sha256", "")
+tongxin_cli.setdefault("bootstrap_dir", os.path.join(os.environ["ECOREX_STATE_DIR"], "tools", "tongxin"))
 
 config_path.parent.mkdir(parents=True, exist_ok=True)
 tmp_path = config_path.with_suffix(".json.tmp")

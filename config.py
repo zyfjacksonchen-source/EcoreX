@@ -12,6 +12,7 @@ from common.log import logger
 from common import i18n
 
 DEFAULT_CDP_ENDPOINT = "http://127.0.0.1:9222"
+DEFAULT_TONGXIN_AUTH_URL = "https://mvdcm.ecoremedia.net/ecorex-agent/client/tongxin/auth"
 CHROME_DEVTOOLS_MCP_FULL_FLAGS = [
     "--no-usage-statistics",
     "--no-performance-crux",
@@ -316,9 +317,20 @@ available_setting = {
             "cdp_fallback": True,
             "persistent": True
         },
+        "feishu_cli": {
+            "package": "@larksuite/cli@1.0.56",
+            "auto_install": False,
+            "allow_system_node": True
+        },
         "tongxin_cli": {
             "script_path": "",
-            "read_only": True
+            "python_path": "",
+            "read_only": True,
+            "auth_url": DEFAULT_TONGXIN_AUTH_URL,
+            "bootstrap_manifest_url": "",
+            "bootstrap_url": "",
+            "bootstrap_sha256": "",
+            "bootstrap_dir": ""
         }
     },
     "mcp_servers": [
@@ -463,12 +475,20 @@ def _ensure_ecorex_runtime_defaults(cfg: dict):
     if feishu_cli.get("package") in (None, "", "@larksuite/cli@1.0.40"):
         feishu_cli["package"] = "@larksuite/cli@1.0.56"
     feishu_cli.setdefault("auto_install", False)
+    feishu_cli.setdefault("allow_system_node", True)
 
     tongxin_cli = tools.get("tongxin_cli")
     if not isinstance(tongxin_cli, dict):
         tongxin_cli = {}
         tools["tongxin_cli"] = tongxin_cli
     tongxin_cli.setdefault("script_path", "")
+    tongxin_cli.setdefault("python_path", "")
+    if tongxin_cli.get("auth_url") in (None, ""):
+        tongxin_cli["auth_url"] = os.environ.get("ECOREX_TONGXIN_AUTH_URL") or DEFAULT_TONGXIN_AUTH_URL
+    tongxin_cli.setdefault("bootstrap_manifest_url", "")
+    tongxin_cli.setdefault("bootstrap_url", "")
+    tongxin_cli.setdefault("bootstrap_sha256", "")
+    tongxin_cli.setdefault("bootstrap_dir", "")
     tongxin_cli["read_only"] = True
 
     mcp_servers = cfg.get("mcp_servers")

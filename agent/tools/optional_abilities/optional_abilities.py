@@ -61,8 +61,8 @@ TONGXIN_CLI_PACK_ID = "tongxin-cli"
 TONGXIN_CLI_ALIASES = {"tongxin", "tongxin-cli", "xin-agent", "xin-agent-cli", "tx-assistant"}
 TONGXIN_CLI_INSTALL_HINT = (
     "Tongxin CLI is a default read-only EcoreX capability. Use the structured tongxin_cli tool; "
-    "EcoreX can auto-configure a trusted local xin_agent_cli.py path, "
-    "or authenticate to the configured Tongxin server and bootstrap the CLI with SHA256 verification. "
+    "EcoreX first authenticates to the configured Tongxin server and bootstraps the CLI with SHA256 verification; "
+    "a trusted local xin_agent_cli.py path is only an explicit fallback. "
     "Do not install it as a generic capability pack."
 )
 
@@ -725,6 +725,10 @@ class OptionalAbilities(BaseTool):
                 "type": "string",
                 "description": "Optional local xin_agent_cli.py path when configuring the Tongxin CLI capability.",
             },
+            "python_path": {
+                "type": "string",
+                "description": "Optional EcoreX-owned Python executable path used to run xin_agent_cli.py.",
+            },
         },
         "required": ["action"],
     }
@@ -739,9 +743,10 @@ class OptionalAbilities(BaseTool):
             if not ability:
                 return ToolResult.fail({"status": "error", "message": "ability is required"})
             script_path = args.get("script_path") or args.get("scriptPath") or args.get("path")
+            python_path = args.get("python_path") or args.get("pythonPath")
             if action == "configure":
                 if ability in TONGXIN_CLI_ALIASES:
-                    return self._configure_tongxin_cli(ability, script_path=script_path)
+                    return self._configure_tongxin_cli(ability, script_path=script_path, python_path=python_path)
                 return ToolResult.fail({"status": "error", "message": f"{ability} has no configuration action"})
             if action == "enable":
                 return self._enable(ability)
@@ -753,6 +758,7 @@ class OptionalAbilities(BaseTool):
                 discovery_source=args.get("discovery_source"),
                 find_skill_result=args.get("find_skill_result") or args.get("findSkillResult"),
                 script_path=script_path,
+                python_path=python_path,
             )
         return ToolResult.fail({"status": "error", "message": "action must be one of: list, status, enable, disable, install, configure"})
 
@@ -806,18 +812,27 @@ class OptionalAbilities(BaseTool):
             item["capabilityState"] = _capability_state(str(meta["packId"]))
         return apply_policy_to_capability(item)
 
-    def _configure_tongxin_cli(self, ability: str, script_path: Any = None) -> ToolResult:
+    def _configure_tongxin_cli(self, ability: str, script_path: Any = None, python_path: Any = None) -> ToolResult:
         from agent.tools.tongxin_cli.tongxin_cli import TongxinCli
 
         configure_args: Dict[str, Any] = {"action": "configure" if script_path else "auto_configure"}
         if script_path:
             configure_args["script_path"] = script_path
+        if python_path:
+            configure_args["python_path"] = python_path
         result = TongxinCli().execute(configure_args)
-        if result.status != "success" and not script_path:
+        payload = result.result if isinstance(result.result, dict) else {"result": result.result}
+        fallback_local_bootstrap_state = str(payload.get("configurationState") or "").strip().lower()
+        if (
+            result.status != "success"
+            and not script_path
+            and not bool(payload.get("remoteAuthConfigured"))
+            and fallback_local_bootstrap_state in {"missing", "bootstrap_not_configured", "detected_unconfigured", "detected_untrusted"}
+        ):
             bootstrap = TongxinCli().execute({"action": "bootstrap"})
             if bootstrap.status == "success":
                 result = bootstrap
-        payload = result.result if isinstance(result.result, dict) else {"result": result.result}
+                payload = result.result if isinstance(result.result, dict) else {"result": result.result}
         configured = result.status == "success" and bool(payload.get("configured"))
         available = bool(payload.get("available"))
         configuration_state = str(payload.get("configurationState") or (
@@ -961,10 +976,11 @@ class OptionalAbilities(BaseTool):
         discovery_source: Any = None,
         find_skill_result: Any = None,
         script_path: Any = None,
+        python_path: Any = None,
     ) -> ToolResult:
         defs = _ability_defs()
         if ability in TONGXIN_CLI_ALIASES:
-            return self._configure_tongxin_cli(ability, script_path=script_path)
+            return self._configure_tongxin_cli(ability, script_path=script_path, python_path=python_path)
         meta = defs.get(ability)
         if not meta:
             if ability == "feishu-lark":
@@ -981,7 +997,7 @@ class OptionalAbilities(BaseTool):
             return ToolResult.fail({"status": "error", "message": f"{ability} has no installer"})
         if str(pack_id) == "feishu-lark":
             return self._install_feishu_cli(timeout, discovery_source=discovery_source, find_skill_result=find_skill_result)
-        return self._install_capability_pack(str(pack_id), timeout, script_path=script_path)
+        return self._install_capability_pack(str(pack_id), timeout, script_path=script_path, python_path=python_path)
 
     def _install_feishu_cli(self, timeout: int, discovery_source: Any = None, find_skill_result: Any = None) -> ToolResult:
         blocked = blocked_install_payload("feishu-lark", pack_name="Feishu/Lark CLI connector", action="install")
@@ -1029,9 +1045,9 @@ class OptionalAbilities(BaseTool):
         }
         return ToolResult.success(merged) if status == "installed" else ToolResult.fail(merged)
 
-    def _install_capability_pack(self, pack_id: str, timeout: int, script_path: Any = None) -> ToolResult:
+    def _install_capability_pack(self, pack_id: str, timeout: int, script_path: Any = None, python_path: Any = None) -> ToolResult:
         if str(pack_id or "").strip().lower().replace("_", "-") == TONGXIN_CLI_PACK_ID:
-            return self._configure_tongxin_cli(TONGXIN_CLI_PACK_ID, script_path=script_path)
+            return self._configure_tongxin_cli(TONGXIN_CLI_PACK_ID, script_path=script_path, python_path=python_path)
 
         blocked = blocked_install_payload(pack_id, action="install")
         if blocked:
@@ -1097,6 +1113,8 @@ class OptionalAbilities(BaseTool):
             str(target_dir),
             "--timeout",
             str(timeout),
+            "--primary-index-url",
+            os.environ.get("ECOREX_PIP_PRIMARY_INDEX_URL", "https://pypi.org/simple"),
             "--fallback-index-url",
             os.environ.get("ECOREX_PIP_FALLBACK_INDEX_URL", "https://pypi.tuna.tsinghua.edu.cn/simple"),
         ]

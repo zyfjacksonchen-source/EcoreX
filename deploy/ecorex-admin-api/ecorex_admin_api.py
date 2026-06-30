@@ -17,7 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 
-VERSION = "0.2.2"
+VERSION = "0.2.5"
 PASSWORD_ITERATIONS = 180000
 SESSION_DAYS = 7
 DEFAULT_CLIENT_EVENT_KEY = "ecorex-web-v0.2.2-web.1"
@@ -188,6 +188,13 @@ class ForbiddenError(Exception):
 class RateLimitError(Exception):
     pass
 
+
+class UpstreamHTTPError(Exception):
+    def __init__(self, status, payload):
+        super().__init__(payload.get("error") or payload.get("message") or f"upstream HTTP {status}")
+        self.status = int(status)
+        self.payload = payload
+
 DEFAULT_USERS = [
     ("运营管理员", "admin@ecorex.local", "admin", "active"),
     ("广告优化师", "media@ecorex.local", "member", "active"),
@@ -202,7 +209,7 @@ DEFAULT_USAGE = [
 ]
 
 DEFAULT_LOGS = [
-    ("error", "Web", "EcoreX Web failure collection is ready for v0.2.2 validation.", "unread"),
+    ("error", "Web", "EcoreX Web failure collection is ready for v0.2.5 validation.", "unread"),
 ]
 
 DEFAULT_CAPABILITIES = [
@@ -456,6 +463,44 @@ def client_event_keys():
         if key not in keys:
             keys.append(key)
     return keys
+
+
+def tongxin_auth_config():
+    upstream = compact_text(os.environ.get("ECOREX_TONGXIN_AUTH_UPSTREAM_URL") or os.environ.get("TONGXIN_AUTH_UPSTREAM_URL"), 500)
+    manifest_url = compact_text(os.environ.get("ECOREX_TONGXIN_BOOTSTRAP_MANIFEST_URL"), 500)
+    download_url = compact_text(os.environ.get("ECOREX_TONGXIN_BOOTSTRAP_URL"), 500)
+    sha256 = compact_text(os.environ.get("ECOREX_TONGXIN_BOOTSTRAP_SHA256"), 80)
+    token = compact_text(os.environ.get("ECOREX_TONGXIN_BOOTSTRAP_TOKEN"), 500)
+    configured = bool(upstream or manifest_url or (download_url and re.fullmatch(r"[A-Fa-f0-9]{64}", sha256 or "")))
+    return {
+        "configured": configured,
+        "upstreamConfigured": bool(upstream),
+        "bootstrapManifestConfigured": bool(manifest_url),
+        "bootstrapUrlConfigured": bool(download_url),
+        "bootstrapSha256Configured": bool(re.fullmatch(r"[A-Fa-f0-9]{64}", sha256 or "")),
+        "upstreamUrl": upstream,
+        "manifestUrl": manifest_url,
+        "downloadUrl": download_url,
+        "sha256": sha256,
+        "token": token,
+    }
+
+
+def tongxin_public_auth_status():
+    cfg = tongxin_auth_config()
+    return {
+        "ok": True,
+        "product": "EcoreX",
+        "version": VERSION,
+        "tool": "tongxin_cli",
+        "readOnly": True,
+        "scope": "all-users-read-only",
+        "configured": cfg["configured"],
+        "upstreamConfigured": cfg["upstreamConfigured"],
+        "bootstrapManifestConfigured": cfg["bootstrapManifestConfigured"],
+        "bootstrapUrlConfigured": cfg["bootstrapUrlConfigured"],
+        "bootstrapSha256Configured": cfg["bootstrapSha256Configured"],
+    }
 
 
 def hash_password(password):
@@ -2924,6 +2969,91 @@ class AdminHandler(BaseHTTPRequestHandler):
             return auth.split(" ", 1)[1].strip()
         return self.headers.get("X-EcoreX-User-Token", "")
 
+    def _forward_tongxin_auth(self, upstream_url, payload):
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json; charset=utf-8",
+            "User-Agent": f"EcoreX-Tongxin-Auth-Gateway/{VERSION}",
+        }
+        upstream_token = os.environ.get("ECOREX_TONGXIN_AUTH_UPSTREAM_TOKEN", "").strip()
+        if upstream_token:
+            headers["Authorization"] = f"Bearer {upstream_token}"
+        request = urllib.request.Request(upstream_url, data=body, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=25) as response:
+                raw = response.read(512_000).decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            raw = exc.read(512_000).decode("utf-8", errors="replace")
+            payload = json_loads(raw, {})
+            if not isinstance(payload, dict):
+                payload = {"ok": False, "error": f"upstream_http_{exc.code}", "message": "Tongxin upstream auth rejected the request."}
+            payload.setdefault("ok", False)
+            payload.setdefault("error", f"upstream_http_{exc.code}")
+            payload["readOnly"] = True
+            raise UpstreamHTTPError(exc.code, payload) from exc
+        result = json_loads(raw, {})
+        if not isinstance(result, dict):
+            raise ValueError("Tongxin upstream auth response must be a JSON object")
+        result.setdefault("ok", True)
+        result["readOnly"] = True
+        result.setdefault("permission", {"readOnly": True, "scope": "all-users-read-only"})
+        return result
+
+    def _handle_tongxin_auth(self, payload):
+        username = compact_text(payload.get("username") or payload.get("user") or payload.get("account") or payload.get("login"), 180)
+        password = str(payload.get("password") or payload.get("passwd") or payload.get("passcode") or "")
+        if not username or not password:
+            raise ValueError("Tongxin username and password are required")
+        if payload.get("readOnly") is False:
+            raise ForbiddenError("Tongxin auth only supports read-only access")
+
+        cfg = tongxin_auth_config()
+        if cfg["upstreamUrl"]:
+            return self._forward_tongxin_auth(cfg["upstreamUrl"], {
+                "username": username,
+                "password": password,
+                "threadId": compact_text(payload.get("threadId") or payload.get("thread_id"), 180),
+                "scope": "all-users-read-only",
+                "readOnly": True,
+                "visibility": "permission-visible-data-only",
+            })
+
+        if cfg["manifestUrl"]:
+            return {
+                "ok": True,
+                "status": "success",
+                "tool": "tongxin_cli",
+                "readOnly": True,
+                "manifestUrl": cfg["manifestUrl"],
+                "bootstrapToken": cfg["token"],
+                "permission": {"readOnly": True, "scope": "all-users-read-only"},
+            }
+
+        if cfg["downloadUrl"] and cfg["bootstrapSha256Configured"]:
+            return {
+                "ok": True,
+                "status": "success",
+                "tool": "tongxin_cli",
+                "readOnly": True,
+                "bootstrapToken": cfg["token"],
+                "manifest": {
+                    "downloadUrl": cfg["downloadUrl"],
+                    "sha256": cfg["sha256"],
+                    "fileName": "xin_agent_cli.py",
+                },
+                "permission": {"readOnly": True, "scope": "all-users-read-only"},
+            }
+
+        return {
+            "ok": False,
+            "status": "error",
+            "tool": "tongxin_cli",
+            "readOnly": True,
+            "configurationState": "tongxin_auth_upstream_not_configured",
+            "message": "EcoreX Tongxin auth endpoint is reachable, but upstream Tongxin auth/bootstrap is not configured on the server.",
+        }
+
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header(
@@ -2979,6 +3109,11 @@ class AdminHandler(BaseHTTPRequestHandler):
                     self._json(403, {"ok": False, "error": "invalid client key"})
                     return
                 self._json(200, {"ok": True, "syncPolicy": self.store.sync_policy()})
+            elif path in ("/client/tongxin/auth", "/tongxin/auth/client"):
+                if not self._client_key_valid():
+                    self._json(403, {"ok": False, "error": "invalid client key"})
+                    return
+                self._json(200, tongxin_public_auth_status())
             else:
                 self._json(404, {"ok": False, "error": "not found"})
         except ForbiddenError as exc:
@@ -3013,6 +3148,11 @@ class AdminHandler(BaseHTTPRequestHandler):
                     self._json(403, {"ok": False, "error": "invalid client key"})
                     return
                 self._json(200, self.store.check_quota(payload, self._user_token(), self.headers.get("X-EcoreX-Device-Id", "")))
+            elif path in ("/client/tongxin/auth", "/tongxin/auth/client"):
+                if not self._client_key_valid():
+                    self._json(403, {"ok": False, "error": "invalid client key"})
+                    return
+                self._json(200, self._handle_tongxin_auth(payload))
             elif path == "/logs/mark-read":
                 if not self._require_admin():
                     return
@@ -3104,6 +3244,8 @@ class AdminHandler(BaseHTTPRequestHandler):
             self._json(401, {"ok": False, "error": str(exc)})
         except NotImplementedError as exc:
             self._json(501, {"ok": False, "error": str(exc), "syncPolicy": self.store.sync_policy()})
+        except UpstreamHTTPError as exc:
+            self._json(exc.status, exc.payload)
         except RateLimitError as exc:
             self._json(429, {"ok": False, "error": str(exc), "syncPolicy": self.store.sync_policy()})
         except ValueError as exc:

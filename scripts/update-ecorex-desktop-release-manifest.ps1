@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.2.4",
+    [string]$Version = "0.2.5",
     [string]$ManifestPath = "deploy/ecorex-site/manifest.json",
     [string]$WindowsInstallerPath = "",
     [string]$WindowsInstalledSmokePath = "",
@@ -404,7 +404,7 @@ if ([string]$manifest.version -ne $Version) {
         throw "Manifest version '$($manifest.version)' does not match '$Version'. Pass -PromoteVersion to intentionally advance the public manifest."
     }
     Set-ArtifactProperty $manifest "version" $Version
-    Set-ArtifactProperty $manifest "notes" "EcoreX v$Version WebUI-first release. Desktop updater is retired; Windows and macOS use manifest-verified WebUI packages for install/update."
+    Set-ArtifactProperty $manifest "notes" "EcoreX v$Version WebUI release. Default/full-access permission modes, system Node/npx/Python runtime access in full-access, Feishu auth continuation, Tongxin remote auth/bootstrap, compact delivery replies, WebUI packages, Linux service package, installer scripts, /api/version, and update notes are aligned."
 }
 Set-ArtifactProperty $manifest "updatedAt" $UpdatedAt
 

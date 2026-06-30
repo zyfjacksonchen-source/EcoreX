@@ -3984,6 +3984,34 @@ class TestProjectSessionSourceContracts(unittest.TestCase):
         self.assertIn("columnCount(item.main) === 2", script)
         self.assertIn("columnCount(unread.main) === 3", script)
 
+    def test_v025_sidebar_pinned_sessions_sort_and_split_without_losing_project_ownership(self):
+        source = self._app_source()
+        css = (Path(__file__).resolve().parents[1] / "desktop" / "src" / "styles" / "app.css").read_text(encoding="utf-8")
+        api_source = self._api_source()
+        workspace_source = (Path(__file__).resolve().parents[1] / "common" / "ecorex_workspace.py").read_text(encoding="utf-8")
+        audit_source = (Path(__file__).resolve().parents[1] / "scripts" / "audit-ecorex-session-state.py").read_text(encoding="utf-8")
+
+        self.assertIn('const PINNED_SESSION_TIMES_STORAGE_KEY = "ecorex-pinned-session-times";', source)
+        self.assertIn("pinnedAt?: number;", source)
+        self.assertIn("function pinnedSessionMs(", source)
+        self.assertIn("pinnedAt: pinnedSessionMs(", source)
+        self.assertIn("const pinnedTimeDiff = (b.pinnedAt || 0) - (a.pinnedAt || 0);", source)
+        self.assertIn("next[row.id] = Date.now();", source)
+        self.assertIn("pinnedGeneralSessions: general.filter((row) => row.pinned),", source)
+        self.assertIn("regularGeneralSessions: general.filter((row) => !row.pinned),", source)
+        self.assertIn('renderGeneralSessionGroup("置顶任务", pinnedGeneralSessions, "pinned")', source)
+        self.assertIn('renderGeneralSessionGroup("任务", regularGeneralSessions, "regular")', source)
+        self.assertIn('data-session-ownership={rowProjectId ? "project" : "general"}', source)
+        self.assertIn('data-session-pinned={row.pinned ? "true" : undefined}', source)
+        self.assertIn("if (!row.projectId) {\n        general.push(row);\n        continue;\n      }", source)
+        self.assertIn("pinnedSessionTimes?: Record<string, number>;", api_source)
+        self.assertIn('state.setdefault("pinnedSessionTimes", {})', workspace_source)
+        self.assertIn('"pinnedSessionTimes"', workspace_source)
+        self.assertIn('"pinnedSessionTimes"', audit_source)
+        self.assertIn(".session-group.is-pinned", css)
+        self.assertIn(".session-group.is-regular", css)
+        self.assertIn(".session-row.is-pinned", css)
+
     def test_api_posts_project_context_meta(self):
         source = self._api_source()
 
@@ -4138,6 +4166,7 @@ class TestEcoreXWorkspaceState(unittest.TestCase):
                 "pinnedProjects": {"p1": True},
                 "sessionTitles": {"s1": "Old title", "s2": "Keep title"},
                 "pinnedSessions": {"s1": True, "s2": True},
+                "pinnedSessionTimes": {"s1": 1000, "s2": 2000},
                 "projectStateMode": "merge",
             })
             save_ui_state(workspace, {
@@ -4146,6 +4175,7 @@ class TestEcoreXWorkspaceState(unittest.TestCase):
                 "pinnedProjects": {"p1": False, "p2": True},
                 "sessionTitles": {"s1": "New title"},
                 "pinnedSessions": {"s1": False},
+                "pinnedSessionTimes": {"s1": 3000},
                 "projectStateMode": "merge",
             })
             state = load_ui_state(workspace)
@@ -4154,6 +4184,7 @@ class TestEcoreXWorkspaceState(unittest.TestCase):
         self.assertEqual(state["pinnedProjects"], {"p1": False, "p2": True})
         self.assertEqual(state["sessionTitles"], {"s1": "New title", "s2": "Keep title"})
         self.assertEqual(state["pinnedSessions"], {"s1": False, "s2": True})
+        self.assertEqual(state["pinnedSessionTimes"], {"s1": 3000, "s2": 2000})
 
     def test_ui_state_merge_preserves_session_project_bindings(self):
         from common.ecorex_workspace import load_ui_state, save_ui_state
@@ -5187,7 +5218,7 @@ class TestAgentCapabilityPermissions(unittest.TestCase):
 
                 captured = {}
 
-                def fake_run(command, **kwargs):
+                def fake_run_completed(_executor, command, **kwargs):
                     captured["command"] = command
                     captured["kwargs"] = kwargs
                     target_dir = root / "capability-packages" / "office-pdf"
@@ -5206,7 +5237,9 @@ class TestAgentCapabilityPermissions(unittest.TestCase):
                     return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
 
                 with patch.object(optional_abilities, "RUNTIME_ROOT", root), \
-                        patch.object(optional_abilities.subprocess, "run", fake_run):
+                        patch.object(optional_abilities, "_is_ecorex_owned_path", return_value=True), \
+                        patch.object(optional_abilities.ToolExecutionEnvironment, "resolve_python", return_value=types.SimpleNamespace(available=True, path=sys.executable)), \
+                        patch.object(optional_abilities.ToolExecutionEnvironment, "run_completed", fake_run_completed):
                     result = OptionalAbilities()._install_capability_pack("office-pdf", 123)
 
                 self.assertEqual(result.status, "success")
@@ -5641,7 +5674,7 @@ class TestAgentCapabilityPermissions(unittest.TestCase):
                 manager.tool_configs = old_configs
 
         by_id = {entry["id"]: entry for entry in payload["extensions"]}
-        for tool_name in ("bash", "read", "write", "edit", "ls", "find", "host_diagnostics", "feishu_cli"):
+        for tool_name in ("bash", "read", "write", "edit", "ls", "find", "host_diagnostics"):
             with self.subTest(tool_name=tool_name):
                 row = by_id[f"tool:{tool_name}"]
                 self.assertEqual(row["type"], "builtin_tool")
@@ -5649,6 +5682,12 @@ class TestAgentCapabilityPermissions(unittest.TestCase):
                 self.assertTrue(row["enabled"])
                 self.assertTrue(row["installed"])
                 self.assertTrue(row["toolSchemaCallable"])
+        feishu = by_id["tool:feishu_cli"]
+        self.assertEqual(feishu["type"], "builtin_tool")
+        self.assertIn(feishu["status"], {"ready", "partial"})
+        self.assertTrue(feishu["enabled"])
+        self.assertTrue(feishu["installed"])
+        self.assertTrue(feishu["toolSchemaCallable"])
 
     def test_v023_channel_tool_snapshot_self_loads_builtin_feishu_cli(self):
         from agent.tools.tool_manager import ToolManager
@@ -8275,9 +8314,9 @@ process.stdout.write(JSON.stringify(payload));
         self.assertNotIn("resume_args", mac_installer)
         self.assertIn("local curl_args=", mac_installer)
         self.assertIn('curl "${curl_args[@]}" "$url" -o "$partial"', mac_installer)
-        self.assertIn("EcoreX WebUI installer script: 0.2.4", mac_installer)
+        self.assertIn("EcoreX WebUI installer script: 0.2.5", mac_installer)
         self.assertIn("EcoreX WebUI manifest version:", mac_installer)
-        self.assertIn("EcoreX WebUI installer script: 0.2.4", win_installer)
+        self.assertIn("EcoreX WebUI installer script: 0.2.5", win_installer)
         self.assertIn("EcoreX WebUI manifest version:", win_installer)
         self.assertIn("EcoreX WebUI package installer:", package_source)
         self.assertIn("Generated macOS WebUI installer still contains retired resume_args code", package_source)
@@ -8314,7 +8353,9 @@ process.stdout.write(JSON.stringify(payload));
         self.assertIn("handle /ecorex-agent/client/*", web_caddy_source)
         self.assertIn("read_timeout 1200s", web_caddy_source)
         self.assertIn("write_timeout 1200s", web_caddy_source)
-        self.assertIn('VERSION="${VERSION:-0.2.4}"', installer_source)
+        self.assertIn('VERSION="${VERSION:-0.2.5}"', installer_source)
+        self.assertIn("<strong data-version>0.2.5</strong>", (root / "deploy" / "ecorex-site" / "index.html").read_text(encoding="utf-8"))
+        self.assertIn("site.js?v=0.2.5-webui-0001", (root / "deploy" / "ecorex-site" / "index.html").read_text(encoding="utf-8"))
         self.assertIn("https://mvdcm.ecoremedia.net/ecorex-agent/downloads", installer_source)
         self.assertIn("ECOREX_WEB_CLIENT_BASE=$client_base", installer_source)
         self.assertIn("ECOREX_TOOL_EXECUTION_LEASE_SECONDS=900", installer_source)
@@ -11314,6 +11355,13 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertIn("call `feishu_cli` first", prompt)
         self.assertIn("prefer the configured CDP/chrome-devtools path first", prompt)
         self.assertIn("stop repeating it", prompt)
+        self.assertIn("交付型任务，最终回复保持紧凑", prompt)
+
+    def test_bootstrap_prompt_does_not_append_onboarding_to_active_tasks(self):
+        from agent.prompt import workspace
+
+        self.assertIn("不要追加初始化问题", workspace._BOOTSTRAP_TEMPLATE_ZH)
+        self.assertIn("do not append onboarding questions", workspace._BOOTSTRAP_TEMPLATE_EN)
 
     def test_feishu_tool_chain_budget_blocks_repeated_probing(self):
         from agent.protocol.agent_stream import AgentStreamExecutor
@@ -16478,7 +16526,7 @@ class TestAgentHostBoundary(unittest.TestCase):
         self.assertFalse(blocked)
         self.assertTrue(allowed)
 
-    def test_host_diagnostics_feishu_status_obeys_noninteractive_permission(self):
+    def test_host_diagnostics_feishu_status_is_allowed_for_readonly_default(self):
         from agent.tools.host_diagnostics import host_diagnostics
         from common.ecorex_tool_permissions import get_tool_permission_broker
 
@@ -16490,6 +16538,7 @@ class TestAgentHostBoundary(unittest.TestCase):
             get_tool_permission_broker().set_mode("read-only")
             try:
                 with patch("agent.tools.feishu_cli.feishu_cli.FeishuCli.execute") as execute:
+                    execute.return_value = types.SimpleNamespace(status="success", result={"available": True, "command": ["lark-cli", "status"]})
                     result = host_diagnostics._feishu_status(workspace)
             finally:
                 if old_desktop is None:
@@ -16501,8 +16550,10 @@ class TestAgentHostBoundary(unittest.TestCase):
                 else:
                     os.environ["ECOREX_DESKTOP_USER_DATA"] = old_user_data
 
-        self.assertEqual(result["status"], "blocked")
-        execute.assert_not_called()
+        self.assertEqual(result["status"], "success")
+        self.assertTrue(result["available"])
+        self.assertEqual(result["command"][0], "lark-cli")
+        execute.assert_called_once()
 
     def test_bash_tool_cancel_event_stops_running_command(self):
         from agent.tools.bash.bash import Bash

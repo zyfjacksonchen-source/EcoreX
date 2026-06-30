@@ -1,7 +1,7 @@
 {
   "schemaVersion": "v0.2.5-tool-matrix-smoke-v1",
   "status": "pass",
-  "generatedAt": "2026-06-29T23:57:46Z",
+  "generatedAt": "2026-06-30T02:29:30Z",
   "platform": {
     "system": "Windows",
     "machine": "AMD64",
@@ -12,246 +12,6 @@
     {
       "schemaVersion": "v0.2.5-tool-matrix-smoke-v1",
       "environment": "current",
-      "status": "pass",
-      "failedCount": 0,
-      "toolCount": 27,
-      "smokes": [
-        {
-          "id": "office-documents",
-          "tool": "office_documents",
-          "status": "pass",
-          "toolResultStatus": "success",
-          "summary": {
-            "payloadKeys": [
-              "artifactKind",
-              "compatibilityId",
-              "officialSkill",
-              "packId",
-              "redacted",
-              "runtime",
-              "schemaVersion",
-              "status"
-            ],
-            "redacted": true,
-            "status": "partial",
-            "artifactKind": "document",
-            "compatibilityId": "office-documents",
-            "officialSkill": "documents",
-            "schemaVersion": 1,
-            "parseStatus": "missing",
-            "writeStatus": "missing",
-            "renderStatus": "missing"
-          },
-          "durationMs": 264,
-          "canary": false,
-          "redacted": true
-        },
-        {
-          "id": "office-pdf",
-          "tool": "office_pdf",
-          "status": "pass",
-          "toolResultStatus": "success",
-          "summary": {
-            "payloadKeys": [
-              "artifactKind",
-              "compatibilityId",
-              "officialSkill",
-              "packId",
-              "redacted",
-              "runtime",
-              "schemaVersion",
-              "status"
-            ],
-            "redacted": true,
-            "status": "partial",
-            "artifactKind": "pdf",
-            "compatibilityId": "office-pdf",
-            "officialSkill": "pdf",
-            "schemaVersion": 1,
-            "parseStatus": "missing",
-            "writeStatus": "missing",
-            "renderStatus": "missing"
-          },
-          "durationMs": 203,
-          "canary": false,
-          "redacted": true
-        },
-        {
-          "id": "office-presentations",
-          "tool": "office_presentations",
-          "status": "pass",
-          "toolResultStatus": "success",
-          "summary": {
-            "payloadKeys": [
-              "artifactKind",
-              "compatibilityId",
-              "officialSkill",
-              "packId",
-              "redacted",
-              "runtime",
-              "schemaVersion",
-              "status"
-            ],
-            "redacted": true,
-            "status": "partial",
-            "artifactKind": "presentation",
-            "compatibilityId": "office-presentations",
-            "officialSkill": "Presentations",
-            "schemaVersion": 1,
-            "parseStatus": "missing",
-            "writeStatus": "missing",
-            "renderStatus": "missing"
-          },
-          "durationMs": 218,
-          "canary": false,
-          "redacted": true
-        },
-        {
-          "id": "office-spreadsheets",
-          "tool": "office_spreadsheets",
-          "status": "pass",
-          "toolResultStatus": "success",
-          "summary": {
-            "payloadKeys": [
-              "artifactKind",
-              "compatibilityId",
-              "officialSkill",
-              "packId",
-              "redacted",
-              "runtime",
-              "schemaVersion",
-              "status"
-            ],
-            "redacted": true,
-            "status": "partial",
-            "artifactKind": "spreadsheet",
-            "compatibilityId": "office-spreadsheets",
-            "officialSkill": "Spreadsheets",
-            "schemaVersion": 1,
-            "parseStatus": "missing",
-            "writeStatus": "missing",
-            "renderStatus": "missing"
-          },
-          "durationMs": 250,
-          "canary": false,
-          "redacted": true
-        },
-        {
-          "id": "imagegen",
-          "tool": "imagegen",
-          "status": "pass",
-          "toolResultStatus": "success",
-          "summary": {
-            "payloadKeys": [
-              "configuredProviderEnvCount",
-              "missing",
-              "providerConfigured",
-              "qualityGates",
-              "qualityRuntimePresent",
-              "redacted",
-              "schemaVersion",
-              "scriptPresent",
-              "status",
-              "tool"
-            ],
-            "redacted": true,
-            "status": "ready",
-            "scriptPresent": true,
-            "qualityRuntimePresent": true,
-            "providerConfigured": false,
-            "schemaVersion": "v0.2.5",
-            "missing": []
-          },
-          "durationMs": 0,
-          "canary": false,
-          "redacted": true
-        },
-        {
-          "id": "feishu-canary",
-          "tool": "feishu_cli",
-          "status": "pass",
-          "toolResultStatus": "success",
-          "summary": {
-            "payloadKeys": [
-              "authState",
-              "available",
-              "command",
-              "installRoot",
-              "mirrorUrls",
-              "npm",
-              "npx",
-              "package",
-              "pathHints",
-              "sourceUrl",
-              "status"
-            ],
-            "redacted": true,
-            "status": "success",
-            "available": false,
-            "authState": "cli_missing"
-          },
-          "durationMs": 141,
-          "canary": true,
-          "redacted": true
-        },
-        {
-          "id": "tongxin-canary",
-          "tool": "tongxin_cli",
-          "status": "pass",
-          "toolResultStatus": "success",
-          "summary": {
-            "payloadKeys": [
-              "allowedCommands",
-              "autoConfigurable",
-              "available",
-              "configurationState",
-              "configured",
-              "defaultAudience",
-              "message",
-              "persistedConfig",
-              "readOnly",
-              "remoteAuthConfigured",
-              "remoteBootstrapAvailable",
-              "scriptHealth",
-              "scriptName",
-              "status",
-              "tool"
-            ],
-            "redacted": true,
-            "status": "success",
-            "available": true,
-            "configured": false,
-            "configurationState": "dependency_missing"
-          },
-          "durationMs": 46,
-          "canary": true,
-          "redacted": true
-        },
-        {
-          "id": "browser-schema",
-          "tool": "browser",
-          "status": "pass",
-          "schemaVisible": true,
-          "redacted": true
-        },
-        {
-          "id": "mcp-discovery",
-          "tool": "mcp",
-          "status": "pass",
-          "configuredCount": 0,
-          "statusCount": 0,
-          "autoStarted": false,
-          "redacted": true
-        }
-      ],
-      "durationMs": 1125,
-      "redacted": true,
-      "workerExitCode": 0,
-      "workerDurationMs": 2921
-    },
-    {
-      "schemaVersion": "v0.2.5-tool-matrix-smoke-v1",
-      "environment": "clean-path",
       "status": "pass",
       "failedCount": 0,
       "toolCount": 27,
@@ -312,7 +72,7 @@
             "writeStatus": "missing",
             "renderStatus": "missing"
           },
-          "durationMs": 235,
+          "durationMs": 328,
           "canary": false,
           "redacted": true
         },
@@ -342,7 +102,7 @@
             "writeStatus": "missing",
             "renderStatus": "missing"
           },
-          "durationMs": 171,
+          "durationMs": 561,
           "canary": false,
           "redacted": true
         },
@@ -372,7 +132,7 @@
             "writeStatus": "missing",
             "renderStatus": "missing"
           },
-          "durationMs": 186,
+          "durationMs": 766,
           "canary": false,
           "redacted": true
         },
@@ -423,7 +183,247 @@
               "package",
               "pathHints",
               "sourceUrl",
+              "status",
+              "systemNodeAllowed"
+            ],
+            "redacted": true,
+            "status": "success",
+            "available": false,
+            "authState": "cli_missing"
+          },
+          "durationMs": 250,
+          "canary": true,
+          "redacted": true
+        },
+        {
+          "id": "tongxin-canary",
+          "tool": "tongxin_cli",
+          "status": "pass",
+          "toolResultStatus": "success",
+          "summary": {
+            "payloadKeys": [
+              "allowedCommands",
+              "autoConfigurable",
+              "available",
+              "configurationState",
+              "configured",
+              "defaultAudience",
+              "persistedConfig",
+              "readOnly",
+              "remoteAuthConfigured",
+              "remoteBootstrapAvailable",
+              "scriptName",
+              "status",
+              "tool"
+            ],
+            "redacted": true,
+            "status": "success",
+            "available": true,
+            "configured": true,
+            "configurationState": "configured"
+          },
+          "durationMs": 1125,
+          "canary": true,
+          "redacted": true
+        },
+        {
+          "id": "browser-schema",
+          "tool": "browser",
+          "status": "pass",
+          "schemaVisible": true,
+          "redacted": true
+        },
+        {
+          "id": "mcp-discovery",
+          "tool": "mcp",
+          "status": "pass",
+          "configuredCount": 0,
+          "statusCount": 0,
+          "autoStarted": false,
+          "redacted": true
+        }
+      ],
+      "durationMs": 3313,
+      "redacted": true,
+      "workerExitCode": 0,
+      "workerDurationMs": 8546
+    },
+    {
+      "schemaVersion": "v0.2.5-tool-matrix-smoke-v1",
+      "environment": "clean-path",
+      "status": "pass",
+      "failedCount": 0,
+      "toolCount": 27,
+      "smokes": [
+        {
+          "id": "office-documents",
+          "tool": "office_documents",
+          "status": "pass",
+          "toolResultStatus": "success",
+          "summary": {
+            "payloadKeys": [
+              "artifactKind",
+              "compatibilityId",
+              "officialSkill",
+              "packId",
+              "redacted",
+              "runtime",
+              "schemaVersion",
               "status"
+            ],
+            "redacted": true,
+            "status": "partial",
+            "artifactKind": "document",
+            "compatibilityId": "office-documents",
+            "officialSkill": "documents",
+            "schemaVersion": 1,
+            "parseStatus": "missing",
+            "writeStatus": "missing",
+            "renderStatus": "missing"
+          },
+          "durationMs": 266,
+          "canary": false,
+          "redacted": true
+        },
+        {
+          "id": "office-pdf",
+          "tool": "office_pdf",
+          "status": "pass",
+          "toolResultStatus": "success",
+          "summary": {
+            "payloadKeys": [
+              "artifactKind",
+              "compatibilityId",
+              "officialSkill",
+              "packId",
+              "redacted",
+              "runtime",
+              "schemaVersion",
+              "status"
+            ],
+            "redacted": true,
+            "status": "partial",
+            "artifactKind": "pdf",
+            "compatibilityId": "office-pdf",
+            "officialSkill": "pdf",
+            "schemaVersion": 1,
+            "parseStatus": "missing",
+            "writeStatus": "missing",
+            "renderStatus": "missing"
+          },
+          "durationMs": 218,
+          "canary": false,
+          "redacted": true
+        },
+        {
+          "id": "office-presentations",
+          "tool": "office_presentations",
+          "status": "pass",
+          "toolResultStatus": "success",
+          "summary": {
+            "payloadKeys": [
+              "artifactKind",
+              "compatibilityId",
+              "officialSkill",
+              "packId",
+              "redacted",
+              "runtime",
+              "schemaVersion",
+              "status"
+            ],
+            "redacted": true,
+            "status": "partial",
+            "artifactKind": "presentation",
+            "compatibilityId": "office-presentations",
+            "officialSkill": "Presentations",
+            "schemaVersion": 1,
+            "parseStatus": "missing",
+            "writeStatus": "missing",
+            "renderStatus": "missing"
+          },
+          "durationMs": 250,
+          "canary": false,
+          "redacted": true
+        },
+        {
+          "id": "office-spreadsheets",
+          "tool": "office_spreadsheets",
+          "status": "pass",
+          "toolResultStatus": "success",
+          "summary": {
+            "payloadKeys": [
+              "artifactKind",
+              "compatibilityId",
+              "officialSkill",
+              "packId",
+              "redacted",
+              "runtime",
+              "schemaVersion",
+              "status"
+            ],
+            "redacted": true,
+            "status": "partial",
+            "artifactKind": "spreadsheet",
+            "compatibilityId": "office-spreadsheets",
+            "officialSkill": "Spreadsheets",
+            "schemaVersion": 1,
+            "parseStatus": "missing",
+            "writeStatus": "missing",
+            "renderStatus": "missing"
+          },
+          "durationMs": 235,
+          "canary": false,
+          "redacted": true
+        },
+        {
+          "id": "imagegen",
+          "tool": "imagegen",
+          "status": "pass",
+          "toolResultStatus": "success",
+          "summary": {
+            "payloadKeys": [
+              "configuredProviderEnvCount",
+              "missing",
+              "providerConfigured",
+              "qualityGates",
+              "qualityRuntimePresent",
+              "redacted",
+              "schemaVersion",
+              "scriptPresent",
+              "status",
+              "tool"
+            ],
+            "redacted": true,
+            "status": "ready",
+            "scriptPresent": true,
+            "qualityRuntimePresent": true,
+            "providerConfigured": false,
+            "schemaVersion": "v0.2.5",
+            "missing": []
+          },
+          "durationMs": 0,
+          "canary": false,
+          "redacted": true
+        },
+        {
+          "id": "feishu-canary",
+          "tool": "feishu_cli",
+          "status": "pass",
+          "toolResultStatus": "success",
+          "summary": {
+            "payloadKeys": [
+              "authState",
+              "available",
+              "command",
+              "installRoot",
+              "mirrorUrls",
+              "npm",
+              "npx",
+              "package",
+              "pathHints",
+              "sourceUrl",
+              "status",
+              "systemNodeAllowed"
             ],
             "redacted": true,
             "status": "success",
@@ -447,12 +447,10 @@
               "configurationState",
               "configured",
               "defaultAudience",
-              "message",
               "persistedConfig",
               "readOnly",
               "remoteAuthConfigured",
               "remoteBootstrapAvailable",
-              "scriptHealth",
               "scriptName",
               "status",
               "tool"
@@ -460,10 +458,10 @@
             "redacted": true,
             "status": "success",
             "available": true,
-            "configured": false,
-            "configurationState": "dependency_missing"
+            "configured": true,
+            "configurationState": "configured"
           },
-          "durationMs": 46,
+          "durationMs": 483,
           "canary": true,
           "redacted": true
         },
@@ -484,10 +482,10 @@
           "redacted": true
         }
       ],
-      "durationMs": 1046,
+      "durationMs": 1578,
       "redacted": true,
       "workerExitCode": 0,
-      "workerDurationMs": 2891
+      "workerDurationMs": 3358
     },
     {
       "schemaVersion": "v0.2.5-tool-matrix-smoke-v1",
@@ -522,7 +520,7 @@
             "writeStatus": "missing",
             "renderStatus": "missing"
           },
-          "durationMs": 218,
+          "durationMs": 186,
           "canary": false,
           "redacted": true
         },
@@ -552,7 +550,7 @@
             "writeStatus": "missing",
             "renderStatus": "missing"
           },
-          "durationMs": 343,
+          "durationMs": 171,
           "canary": false,
           "redacted": true
         },
@@ -582,7 +580,7 @@
             "writeStatus": "missing",
             "renderStatus": "missing"
           },
-          "durationMs": 297,
+          "durationMs": 156,
           "canary": false,
           "redacted": true
         },
@@ -612,7 +610,7 @@
             "writeStatus": "missing",
             "renderStatus": "missing"
           },
-          "durationMs": 186,
+          "durationMs": 156,
           "canary": false,
           "redacted": true
         },
@@ -663,14 +661,15 @@
               "package",
               "pathHints",
               "sourceUrl",
-              "status"
+              "status",
+              "systemNodeAllowed"
             ],
             "redacted": true,
             "status": "success",
             "available": false,
             "authState": "cli_missing"
           },
-          "durationMs": 110,
+          "durationMs": 61,
           "canary": true,
           "redacted": true
         },
@@ -687,12 +686,10 @@
               "configurationState",
               "configured",
               "defaultAudience",
-              "message",
               "persistedConfig",
               "readOnly",
               "remoteAuthConfigured",
               "remoteBootstrapAvailable",
-              "scriptHealth",
               "scriptName",
               "status",
               "tool"
@@ -700,10 +697,10 @@
             "redacted": true,
             "status": "success",
             "available": true,
-            "configured": false,
-            "configurationState": "dependency_missing"
+            "configured": true,
+            "configurationState": "configured"
           },
-          "durationMs": 46,
+          "durationMs": 485,
           "canary": true,
           "redacted": true
         },
@@ -724,7 +721,7 @@
           "redacted": true
         }
       ],
-      "durationMs": 1203,
+      "durationMs": 1218,
       "redacted": true,
       "workerExitCode": 0,
       "workerDurationMs": 2703

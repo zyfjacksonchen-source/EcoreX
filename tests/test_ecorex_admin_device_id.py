@@ -4,9 +4,13 @@ import hashlib
 import json
 import pathlib
 import tempfile
+import threading
 import unittest
+import urllib.error
+import urllib.request
 from unittest import mock
 from urllib.parse import quote
+from http.server import ThreadingHTTPServer
 
 
 def load_admin_api():
@@ -57,6 +61,75 @@ class AdminBasicAuthTest(unittest.TestCase):
             self.assertTrue(self._authorized("root", "Password123"))
             self.assertFalse(self._authorized("operator", "Password123"))
             self.assertFalse(self._authorized("admin", "wrong"))
+
+
+class TongxinAuthEndpointTest(unittest.TestCase):
+    def _start_server(self):
+        temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(temp_dir.cleanup)
+        previous_store = getattr(admin_api.AdminHandler, "store", None)
+        self.addCleanup(lambda: setattr(admin_api.AdminHandler, "store", previous_store))
+        admin_api.AdminHandler.store = admin_api.AdminStore(str(pathlib.Path(temp_dir.name) / "admin.sqlite3"))
+        server = ThreadingHTTPServer(("127.0.0.1", 0), admin_api.AdminHandler)
+        self.addCleanup(server.server_close)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.shutdown)
+        return server
+
+    def _request_json(self, server, method, path, payload=None, client_key="unit-key"):
+        body = None if payload is None else json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_port}{path}",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "X-EcoreX-Client-Key": client_key,
+            },
+            method=method,
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                raw = response.read().decode("utf-8")
+                return response.status, json.loads(raw)
+        except urllib.error.HTTPError as exc:
+            raw = exc.read().decode("utf-8")
+            return exc.code, json.loads(raw)
+
+    def test_tongxin_auth_endpoint_uses_client_key_and_returns_configured_manifest(self):
+        server = self._start_server()
+        with mock.patch.dict(
+            admin_api.os.environ,
+            {
+                "ECOREX_CLIENT_EVENT_KEYS": "unit-key",
+                "ECOREX_TONGXIN_BOOTSTRAP_MANIFEST_URL": "https://example.invalid/tongxin/manifest.json",
+                "ECOREX_TONGXIN_BOOTSTRAP_TOKEN": "server-bootstrap-token",
+            },
+            clear=False,
+        ):
+            status_code, status = self._request_json(server, "GET", "/client/tongxin/auth")
+            self.assertEqual(status_code, 200)
+            self.assertTrue(status["configured"])
+            self.assertTrue(status["readOnly"])
+            self.assertNotIn("server-bootstrap-token", json.dumps(status, ensure_ascii=False))
+
+            auth_code, auth = self._request_json(
+                server,
+                "POST",
+                "/client/tongxin/auth",
+                {"username": "xin-user@example.test", "password": "xin-password-secret", "readOnly": True},
+            )
+            self.assertEqual(auth_code, 200)
+            self.assertTrue(auth["ok"])
+            self.assertEqual(auth["manifestUrl"], "https://example.invalid/tongxin/manifest.json")
+            self.assertTrue(auth["permission"]["readOnly"])
+            rendered = json.dumps(auth, ensure_ascii=False)
+            self.assertNotIn("xin-password-secret", rendered)
+            self.assertNotIn("xin-user@example.test", rendered)
+
+            denied_code, denied = self._request_json(server, "GET", "/client/tongxin/auth", client_key="bad-key")
+            self.assertEqual(denied_code, 403)
+            self.assertFalse(denied["ok"])
 
 
 class Phase1SyncIngestTest(unittest.TestCase):

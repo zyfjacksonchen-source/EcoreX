@@ -67,15 +67,18 @@
     },
     "feishu_cli": {
       "package": "@larksuite/cli@1.0.56",
-      "auto_install": false
+      "auto_install": false,
+      "allow_system_node": true
     },
     "tongxin_cli": {
       "script_path": "",
+      "python_path": "",
       "read_only": true,
-      "auth_url": "",
+      "auth_url": "https://mvdcm.ecoremedia.net/ecorex-agent/client/tongxin/auth",
       "bootstrap_manifest_url": "",
       "bootstrap_url": "",
-      "bootstrap_sha256": ""
+      "bootstrap_sha256": "",
+      "bootstrap_dir": ""
     }
   },
   "mcp_servers": [

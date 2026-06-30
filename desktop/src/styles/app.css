@@ -736,6 +736,71 @@ html[data-platform="web"] .window-brand {
   line-height: 1.35;
 }
 
+.session-groups {
+  display: grid;
+  gap: 8px;
+}
+
+.session-group {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.session-group.is-pinned {
+  padding: 4px 3px 6px 5px;
+  border-left: 2px solid color-mix(in srgb, var(--color-brand) 72%, var(--color-border));
+  background: color-mix(in srgb, var(--color-brand) 5%, transparent);
+}
+
+.session-group.is-regular {
+  padding-top: 6px;
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 76%, transparent);
+}
+
+.session-group:first-child.is-regular {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.session-group-title {
+  min-height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 6px;
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.session-group-title span {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-group-title svg {
+  width: 13px;
+  height: 13px;
+  color: color-mix(in srgb, var(--color-brand) 82%, var(--color-text));
+}
+
+.session-group-title small {
+  color: var(--color-muted);
+  font-weight: 600;
+}
+
+.session-group-rows {
+  display: grid;
+  gap: 2px;
+}
+
 .session-row {
   position: relative;
   width: 100%;
@@ -755,6 +820,28 @@ html[data-platform="web"] .window-brand {
 .session-row:hover {
   border-color: var(--color-border);
   background: var(--color-surface-muted);
+}
+
+.session-row.is-pinned {
+  border-color: color-mix(in srgb, var(--color-brand) 24%, transparent);
+  background: color-mix(in srgb, var(--color-brand) 5%, transparent);
+}
+
+.session-row.is-pinned::before {
+  content: "";
+  position: absolute;
+  left: 1px;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-brand) 82%, var(--color-text));
+  opacity: 0.78;
+}
+
+.session-row.is-pinned:hover {
+  border-color: color-mix(in srgb, var(--color-brand) 42%, var(--color-border));
+  background: color-mix(in srgb, var(--color-brand) 8%, var(--color-surface-muted));
 }
 
 .session-row.is-active {
@@ -810,6 +897,10 @@ html[data-platform="web"] .window-brand {
   font-size: 13px;
   font-weight: 400;
   line-height: 1.22;
+}
+
+.session-row.is-pinned .session-main strong {
+  font-weight: 520;
 }
 
 .session-main em {

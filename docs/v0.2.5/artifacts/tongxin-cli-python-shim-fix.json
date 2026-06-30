@@ -1,0 +1,75 @@
+{
+  "schemaVersion": "v0.2.5-tongxin-cli-python-shim-fix-v1",
+  "recordedAt": "2026-06-30T00:26:15Z",
+  "status": "pass",
+  "scope": "local-windows-v0.2.5-completion",
+  "issue": {
+    "summary": "Tongxin CLI script path was persisted, but status stayed dependency_missing because v0.2.5 only accepts an EcoreX-owned Python runtime by default.",
+    "observedStateBeforeFix": {
+      "scriptConfigured": true,
+      "scriptExists": true,
+      "configured": false,
+      "configurationState": "dependency_missing",
+      "missingDependency": "python",
+      "redacted": true
+    }
+  },
+  "rootCause": [
+    "The Tongxin wrapper health probe created a strict ToolExecutionEnvironment without a configurable Python executable, so the configured local CLI could not run when the source checkout did not expose an owned Python at the runtime root.",
+    "The external Tongxin script owns adjacent modules such as config.py and models.py; running it through ambient EcoreX Python path state can shadow those modules or produce models.DATABASE failures.",
+    "The Windows embedded WebUI Python successfully runs the script when launched through a runpy shim that inserts the Tongxin script directory at sys.path[0]."
+  ],
+  "changes": [
+    "Added tools.tongxin_cli.python_path support through config, per-call arguments, and environment aliases.",
+    "Tongxin schema/data probes and run calls now use the configured EcoreX-owned Python executable when present.",
+    "Tongxin CLI execution now uses a runpy shim so the external script directory is first in sys.path.",
+    "Tongxin CLI execution clears PYTHONPATH and PYTHONHOME to avoid EcoreX module shadowing.",
+    "optional_abilities and agent_capability now pass python_path through the Tongxin configure/install path.",
+    "config defaults and config-template expose python_path without changing the read-only default policy.",
+    "Local config.json was completed with a redacted EcoreX-owned Python path so this workstation status is configured."
+  ],
+  "localProbeAfterFix": {
+    "statusResult": "success",
+    "available": true,
+    "configured": true,
+    "configurationState": "configured",
+    "pythonSource": "ecorex-bundled",
+    "runStatus": "success",
+    "runExitCode": 0,
+    "runJsonOk": true,
+    "runDataCount": 1,
+    "redacted": true
+  },
+  "validation": {
+    "pyCompile": "pass",
+    "pytestTongxinAndV025Focused": "40 passed, 1 skipped",
+    "toolMatrixSmoke": {
+      "status": "pass",
+      "generatedAt": "2026-06-30T00:25:40Z",
+      "tongxinCurrentConfigured": true,
+      "tongxinCleanPathConfigured": true,
+      "tongxinCleanUserStateConfigured": true,
+      "productionServiceUserStatus": "skipped_on_windows",
+      "redacted": true
+    },
+    "releaseGateRefresh": {
+      "status": "local_pass_production_pending",
+      "releaseReady": false,
+      "localGatePassed": true,
+      "productionServiceUserPending": true,
+      "generatedAt": "2026-06-30T00:26:15Z",
+      "redacted": true
+    }
+  },
+  "preservedContracts": [
+    "System Python is still not accepted by default for v0.2.5 tool execution.",
+    "Tongxin remains a read-only wrapper; mutating commands are still blocked before subprocess execution.",
+    "Status and matrix summaries remain redacted and do not persist raw CLI stdout.",
+    "This local fix does not make releaseReady true because the Linux production ecorex service-user probe is still pending."
+  ],
+  "requiredFollowUps": [
+    "Run scripts/run-v025-tool-matrix-smoke.py on the Web Linux service as the production ecorex user.",
+    "Re-run scripts/generate-v025-release-gate-report.py --refresh --strict-production after production evidence exists."
+  ],
+  "redacted": true
+}

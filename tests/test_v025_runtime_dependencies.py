@@ -265,10 +265,17 @@ def test_runtime_dependency_provider_state_root_falls_back_when_config_unavailab
 
 
 def test_runtime_dependency_provider_nested_default_state_classifies_as_state(tmp_path):
-    runtime = tmp_path / "runtime"
-    provider = RuntimeDependencyProvider(runtime, env={"PATH": ""})
+    from config import conf
 
-    assert provider.classify_path(runtime / "state" / "tools" / "bin" / "node") == SOURCE_ECOREX_STATE
+    old_appdata_dir = conf().get("appdata_dir")
+    conf()["appdata_dir"] = ""
+    runtime = tmp_path / "runtime"
+    try:
+        provider = RuntimeDependencyProvider(runtime, env={"PATH": ""})
+
+        assert provider.classify_path(runtime / "state" / "tools" / "bin" / "node") == SOURCE_ECOREX_STATE
+    finally:
+        conf()["appdata_dir"] = old_appdata_dir
 
 
 def test_runtime_dependency_provider_linux_install_root_venv_is_owned_state(tmp_path):

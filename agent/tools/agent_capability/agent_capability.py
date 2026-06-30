@@ -198,6 +198,10 @@ class AgentCapabilityTool(BaseTool):
                 "type": "string",
                 "description": "Optional local xin_agent_cli.py path when configuring the Tongxin CLI capability pack. If omitted, EcoreX may auto-detect or use configured authenticated bootstrap settings.",
             },
+            "python_path": {
+                "type": "string",
+                "description": "Optional EcoreX-owned Python executable path used to run xin_agent_cli.py.",
+            },
             "timeout": {"type": "integer", "description": "Install timeout seconds."},
         },
         "required": ["action"],
@@ -246,6 +250,9 @@ class AgentCapabilityTool(BaseTool):
             script_path = params.get("script_path") or params.get("scriptPath") or params.get("path")
             if script_path:
                 configure_args["script_path"] = script_path
+            python_path = params.get("python_path") or params.get("pythonPath")
+            if python_path:
+                configure_args["python_path"] = python_path
             payload = _payload_for_result(OptionalAbilities().execute(configure_args))
             configured = payload.get("status") == "success" and bool(payload.get("configured"))
             response = {

@@ -712,6 +712,7 @@ export type RuntimeUiStateSync = {
   sessionTitles?: Record<string, string>;
   sessionUiState?: Record<string, unknown>;
   pinnedSessions?: Record<string, boolean>;
+  pinnedSessionTimes?: Record<string, number>;
   pinnedProjects?: Record<string, boolean>;
   activeProjectId?: string | null;
   activeSessionId?: string;
@@ -1602,10 +1603,20 @@ export async function readLocalJson(filePath: string): Promise<LocalJsonResult> 
 }
 
 export async function loadPermissionState(): Promise<PermissionState | null> {
+  const normalize = async (state: PermissionState | null): Promise<PermissionState | null> => {
+    if (!state) return null;
+    if (state.mode === "full-access" || state.mode === "smart-ask") return state;
+    try {
+      const migrated = await updatePermissionMode("smart-ask");
+      return migrated || { ...state, mode: "smart-ask" };
+    } catch {
+      return { ...state, mode: "smart-ask" };
+    }
+  };
   if (window.ecorexDesktop?.getPermissionState) {
-    return window.ecorexDesktop.getPermissionState();
+    return normalize(await window.ecorexDesktop.getPermissionState());
   }
-  return apiJson<PermissionState & { status?: string }>("/api/tool-permissions");
+  return normalize(await apiJson<PermissionState & { status?: string }>("/api/tool-permissions"));
 }
 
 export async function saveRuntimeUiState(state: unknown) {

@@ -210,6 +210,7 @@ def load_ui_state(workspace: str) -> Dict[str, Any]:
     state.setdefault("sessionProjectBindings", {})
     state.setdefault("sessionTitles", {})
     state.setdefault("pinnedSessions", {})
+    state.setdefault("pinnedSessionTimes", {})
     state.setdefault("pinnedProjects", {})
     state.setdefault("updatedAt", 0)
     return state
@@ -415,6 +416,7 @@ def save_ui_state(workspace: str, incoming: Dict[str, Any]) -> Dict[str, Any]:
         "sessionTitles",
         "sessionUiState",
         "pinnedSessions",
+        "pinnedSessionTimes",
         "pinnedProjects",
         "capabilityEnabled",
         "enabledCapabilityPacks",
@@ -493,7 +495,7 @@ def save_ui_state(workspace: str, incoming: Dict[str, Any]) -> Dict[str, Any]:
         normalized_current_pins = _normalize_project_keyed_mapping(current.get("pinnedProjects"), id_aliases, valid_project_ids, project_ids_known)
         if normalized_current_pins != current.get("pinnedProjects"):
             incoming["pinnedProjects"] = normalized_current_pins
-    for key in ("sessionTitles", "pinnedSessions"):
+    for key in ("sessionTitles", "pinnedSessions", "pinnedSessionTimes"):
         if key in incoming:
             if replace_project_state:
                 merged_map = incoming.get(key) if isinstance(incoming.get(key), dict) else {}

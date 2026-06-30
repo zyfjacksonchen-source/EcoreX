@@ -665,6 +665,7 @@ $stateDir = Join-Path $installRoot "state"
 $workspaceRoot = Join-Path $env:USERPROFILE "EcoreX"
 $logPath = Join-Path $stateDir "ecorex-webui.log"
 $errorLogPath = Join-Path $stateDir "ecorex-webui.err.log"
+$python = Join-Path $runtimeDir "python\python.exe"
 
 New-Item -ItemType Directory -Force -Path $installRoot, $stateDir, $workspaceRoot | Out-Null
 Stop-ExistingWebUi -RuntimeDir $runtimeDir
@@ -703,14 +704,19 @@ $config = [ordered]@{
         feishu_cli = [ordered]@{
             package = "@larksuite/cli@1.0.56"
             auto_install = $false
+            allow_system_node = $true
             install_root = (Join-Path $stateDir "tools\lark-cli")
         }
         tongxin_cli = [ordered]@{
             script_path = ""
+            python_path = $python
             read_only = $true
+            auth_url = "https://mvdcm.ecoremedia.net/ecorex-agent/client/tongxin/auth"
+            bootstrap_manifest_url = ""
             bootstrap_url = ""
             bootstrap_sha256 = ""
             bootstrap_token = ""
+            bootstrap_dir = (Join-Path $stateDir "tools\tongxin")
         }
     }
     mcp_servers = @(
@@ -729,7 +735,6 @@ $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
 Ensure-LarkCli -RuntimeDir $runtimeDir -StateDir $stateDir
 
-$python = Join-Path $runtimeDir "python\python.exe"
 if (-not (Test-Path -LiteralPath $python)) {
     throw "Packaged Python runtime is missing: $python"
 }
@@ -1011,6 +1016,10 @@ config_path = pathlib.Path(sys.argv[1])
 port = int(sys.argv[2])
 workspace = pathlib.Path(sys.argv[3]).expanduser()
 state = pathlib.Path(sys.argv[4]).expanduser()
+runtime = config_path.parent
+python = runtime / "python" / "bin" / "python3"
+if not python.exists():
+    python = runtime / "python" / "bin" / "python"
 payload = {
     "cow_lang": "auto",
     "channel_type": "web",
@@ -1037,11 +1046,18 @@ payload = {
         "feishu_cli": {
             "package": "@larksuite/cli@1.0.56",
             "auto_install": False,
+            "allow_system_node": True,
             "install_root": str(state / "tools" / "lark-cli"),
         },
         "tongxin_cli": {
             "script_path": "",
+            "python_path": str(python),
             "read_only": True,
+            "auth_url": "https://mvdcm.ecoremedia.net/ecorex-agent/client/tongxin/auth",
+            "bootstrap_manifest_url": "",
+            "bootstrap_url": "",
+            "bootstrap_sha256": "",
+            "bootstrap_dir": str(state / "tools" / "tongxin"),
         }
     },
     "mcp_servers": [

@@ -2,7 +2,9 @@
 
 This layer centralizes PATH/NODE_PATH/PYTHONPATH construction, dependency
 resolution, subprocess timeout/cancel behavior, and output redaction for local
-tools. It deliberately defaults to the EcoreX runtime/state dependency provider.
+tools. It defaults to the EcoreX runtime/state dependency provider, and follows
+the active full-access permission mode when the user explicitly grants whole-host
+runtime access.
 """
 
 from __future__ import annotations
@@ -53,6 +55,107 @@ _TRUSTED_CACHED_MODULES: Dict[str, ModuleType] = {
     for name, module in list(sys.modules.items())
     if _is_importer_proven_builtin_or_frozen(name, module)
 }
+
+_TRUE_VALUES = {"1", "true", "yes", "on", "enabled", "allow", "allowed"}
+_FALSE_VALUES = {"0", "false", "no", "off", "disabled", "deny", "denied"}
+
+
+def _bool_text(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+    if text in _TRUE_VALUES:
+        return True
+    if text in _FALSE_VALUES:
+        return False
+    return None
+
+
+def _env_bool(env: Dict[str, str], *names: str) -> Optional[bool]:
+    for name in names:
+        if name in env:
+            parsed = _bool_text(env.get(name))
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def system_runtime_allowed(base_env: Optional[Dict[str, str]] = None) -> bool:
+    """Return whether system PATH/Python/Node should be visible to tool runs.
+
+    The strict EcoreX-owned resolver remains the default for packaged/runtime
+    health checks. Full-access is the explicit product-level opt-in that should
+    make common shell, node/npx and Python tools usable like Codex.
+    """
+
+    base_env_keys = set(base_env or {})
+    env = dict(os.environ)
+    if base_env:
+        env.update({str(key): str(value) for key, value in base_env.items()})
+
+    strict = _env_bool(
+        env,
+        "ECOREX_FORCE_STRICT_RUNTIME",
+        "ECOREX_STRICT_RUNTIME",
+        "ECOREX_DISABLE_SYSTEM_RUNTIME",
+    )
+    if strict is True:
+        return False
+
+    explicit = _env_bool(
+        env,
+        "ECOREX_ALLOW_SYSTEM_RUNTIME",
+        "ECOREX_INCLUDE_SYSTEM_PATH",
+        "ECOREX_TOOL_ENV_INCLUDE_SYSTEM_PATH",
+    )
+    if explicit is not None:
+        return explicit
+
+    try:
+        from config import conf
+
+        cfg = conf()
+        direct = _bool_text(cfg.get("allow_system_runtime") or cfg.get("allow_system_path"))
+        if direct is not None:
+            return direct
+        tools = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
+        runtime = tools.get("runtime") if isinstance(tools, dict) and isinstance(tools.get("runtime"), dict) else {}
+        configured = _bool_text(
+            runtime.get("allow_system_runtime")
+            if "allow_system_runtime" in runtime
+            else runtime.get("allow_system_path")
+        )
+        if configured is not None:
+            return configured
+    except Exception:
+        pass
+
+    if base_env is not None and not (
+        base_env_keys
+        & {
+            "ECOREX_DESKTOP",
+            "ECOREX_USER_DATA",
+            "ECOREX_DESKTOP_USER_DATA",
+            "ECOREX_INSTALL_ROOT",
+            "ECOREX_WEB_PORT",
+            "ECOREX_WEB_PUBLIC_BASE_URL",
+            "ECOREX_TOOL_PERMISSION_INTERACTIVE",
+            "INSTALL_ROOT",
+        }
+    ):
+        return False
+
+    try:
+        from common.ecorex_tool_permissions import get_tool_permission_broker
+
+        state = get_tool_permission_broker().get_state()
+        if str(state.get("mode") or "").strip().lower() == "full-access":
+            return True
+    except Exception:
+        pass
+    return False
 
 
 class ToolExecutionCancelled(Exception):
@@ -105,7 +208,7 @@ def kill_process_tree(process: subprocess.Popen) -> None:
 
 
 class ToolExecutionEnvironment:
-    """Resolve and execute tools through EcoreX-owned runtime dependencies."""
+    """Resolve and execute tools through the active EcoreX runtime boundary."""
 
     def __init__(
         self,
@@ -114,13 +217,13 @@ class ToolExecutionEnvironment:
         provider: Optional[RuntimeDependencyProvider] = None,
         base_env: Optional[Dict[str, str]] = None,
         cwd: str | os.PathLike[str] | None = None,
-        include_system_path: bool = False,
+        include_system_path: Optional[bool] = None,
     ) -> None:
         self.tool_name = tool_name
-        self.provider = provider or get_runtime_dependency_provider(env=base_env)
         self.base_env = dict(base_env or os.environ)
+        self.provider = provider or get_runtime_dependency_provider(env=self.base_env)
         self.cwd = str(cwd or os.getcwd())
-        self.include_system_path = bool(include_system_path)
+        self.include_system_path = system_runtime_allowed(self.base_env) if include_system_path is None else bool(include_system_path)
 
     def build_env(self, *, extra_paths: Optional[Iterable[Path | str]] = None) -> Dict[str, str]:
         return self.provider.build_env(

@@ -890,8 +890,27 @@ export class SidecarManager {
         feishuCli.auto_install = false;
         changed = true;
       }
+      if (feishuCli.allow_system_node === undefined) {
+        feishuCli.allow_system_node = true;
+        changed = true;
+      }
       if (tools.feishu_cli !== feishuCli) {
         tools.feishu_cli = feishuCli;
+        changed = true;
+      }
+      const tongxinCli = typeof tools.tongxin_cli === "object" && tools.tongxin_cli !== null && !Array.isArray(tools.tongxin_cli)
+        ? tools.tongxin_cli as Record<string, unknown>
+        : {};
+      if (tongxinCli.read_only !== true) {
+        tongxinCli.read_only = true;
+        changed = true;
+      }
+      if (tongxinCli.auth_url === undefined || tongxinCli.auth_url === "") {
+        tongxinCli.auth_url = "https://mvdcm.ecoremedia.net/ecorex-agent/client/tongxin/auth";
+        changed = true;
+      }
+      if (tools.tongxin_cli !== tongxinCli) {
+        tools.tongxin_cli = tongxinCli;
         changed = true;
       }
       if (config.tools !== tools) {

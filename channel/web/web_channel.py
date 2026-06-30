@@ -11658,7 +11658,7 @@ class ExternalConnectionActionHandler:
                 or ""
             ).strip()
             result = FeishuCli({"cwd": _get_workspace_root()}).execute({
-                "action": "config_init_status",
+                "action": "agent_auth_status",
                 "session_id": session_id,
                 "timeout": 15,
             })

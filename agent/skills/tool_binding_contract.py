@@ -65,6 +65,51 @@ def _contract(
 
 
 TOOL_BINDING_CONTRACTS: dict[str, dict[str, Any]] = {
+    "bash": _contract(
+        "bash",
+        aliases=("bash", "shell", "terminal"),
+        purpose_group="system",
+        dependencies=(),
+        probe_action="schema",
+        smoke_action="schema",
+        failure_prompt="Shell execution capability is not ready. Reload built-in tools and verify the bash tool schema is visible.",
+    ),
+    "read": _contract(
+        "read",
+        aliases=("read", "file-read"),
+        purpose_group="system",
+        dependencies=(),
+        probe_action="schema",
+        smoke_action="schema",
+        failure_prompt="File read capability is not ready. Reload built-in tools and verify the read tool schema is visible.",
+    ),
+    "write": _contract(
+        "write",
+        aliases=("write", "file-write"),
+        purpose_group="system",
+        dependencies=(),
+        probe_action="schema",
+        smoke_action="schema",
+        failure_prompt="File write capability is not ready. Reload built-in tools and verify the write tool schema is visible.",
+    ),
+    "edit": _contract(
+        "edit",
+        aliases=("edit", "file-edit", "patch"),
+        purpose_group="system",
+        dependencies=(),
+        probe_action="schema",
+        smoke_action="schema",
+        failure_prompt="File edit capability is not ready. Reload built-in tools and verify the edit tool schema is visible.",
+    ),
+    "ls": _contract(
+        "ls",
+        aliases=("ls", "list-files"),
+        purpose_group="system",
+        dependencies=(),
+        probe_action="schema",
+        smoke_action="schema",
+        failure_prompt="Directory listing capability is not ready. Reload built-in tools and verify the ls tool schema is visible.",
+    ),
     "office_documents": _contract(
         "office_documents",
         aliases=("office-documents", "documents", "word", "docx"),

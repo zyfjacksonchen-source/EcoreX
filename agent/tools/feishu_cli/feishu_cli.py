@@ -36,6 +36,16 @@ DEFAULT_TIMEOUT_SECONDS = 45
 DEFAULT_AUTH_URL_WAIT_SECONDS = 20
 AUTH_SESSION_RETENTION_SECONDS = 15 * 60
 AUTH_SESSION_OUTPUT_LIMIT = 12000
+SYSTEM_NODE_ENV_FLAG = "ECOREX_FEISHU_ALLOW_SYSTEM_NODE"
+SYSTEM_NODE_DIRS_ENV = "ECOREX_FEISHU_SYSTEM_NODE_DIRS"
+SYSTEM_NODE_BIN_NAMES = {"node", "node.exe", "npm", "npm.cmd", "npx", "npx.cmd"}
+NODE_ENV_KEYS_TO_CLEAR = (
+    "NODE_OPTIONS",
+    "npm_config_script_shell",
+    "NPM_CONFIG_SCRIPT_SHELL",
+    "npm_config_prefix",
+    "NPM_CONFIG_PREFIX",
+)
 
 _AUTH_SESSIONS: Dict[str, Dict[str, Any]] = {}
 _AUTH_SESSIONS_LOCK = threading.Lock()
@@ -100,6 +110,29 @@ def _prepend_path(env: Dict[str, str], path: Optional[Path]) -> None:
         env["PATH"] = raw + (os.pathsep + current if current else "")
 
 
+def _append_path(env: Dict[str, str], path: Optional[Path]) -> None:
+    if not path or not path.exists():
+        return
+    current = env.get("PATH", "")
+    raw = str(path)
+    parts = current.split(os.pathsep) if current else []
+    if raw not in parts:
+        env["PATH"] = (current + os.pathsep if current else "") + raw
+
+
+def _config_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on", "allow", "enabled"}:
+        return True
+    if text in {"0", "false", "no", "off", "deny", "disabled"}:
+        return False
+    return default
+
+
 def _configured_install_root_from_conf() -> Optional[Path]:
     try:
         from config import conf
@@ -115,6 +148,17 @@ def _configured_install_root_from_conf() -> Optional[Path]:
     return None
 
 
+def _configured_feishu_cli() -> Dict[str, Any]:
+    try:
+        from config import conf
+
+        tools = conf().get("tools", {})
+        config = tools.get("feishu_cli") if isinstance(tools, dict) else None
+        return dict(config) if isinstance(config, dict) else {}
+    except Exception:
+        return {}
+
+
 def _path_is_ecorex_owned(path: Optional[Path]) -> bool:
     if not path:
         return False
@@ -125,8 +169,91 @@ def _candidate_bin_dirs() -> List[Path]:
     return ToolExecutionEnvironment(tool_name="feishu_cli").provider.bin_dirs()
 
 
-def _tool_env(extra_paths: Optional[Iterable[Path]] = None) -> Dict[str, str]:
-    return ToolExecutionEnvironment(tool_name="feishu_cli").build_env(extra_paths=extra_paths)
+def _system_node_dirs(config: Optional[Dict[str, Any]] = None) -> List[Path]:
+    cfg = config or {}
+    raw_paths: List[Any] = [
+        cfg.get("node_path") or cfg.get("nodePath"),
+        cfg.get("npm_path") or cfg.get("npmPath"),
+        os.environ.get("ECOREX_FEISHU_NODE_PATH"),
+        os.environ.get("ECOREX_FEISHU_NPM_PATH"),
+    ]
+    search_path = os.environ.get("PATH", "")
+    for name in ("node", "npm", "npx"):
+        found = shutil.which(name, path=search_path)
+        if not found and os.name == "nt":
+            found = shutil.which(f"{name}.cmd", path=search_path)
+        if found:
+            raw_paths.append(found)
+
+    dirs: List[Path] = []
+    seen: set[str] = set()
+    for raw in raw_paths:
+        if not raw:
+            continue
+        path = Path(str(raw)).expanduser()
+        directory = path.parent if path.suffix or path.name.lower() in SYSTEM_NODE_BIN_NAMES else path
+        try:
+            resolved = directory.resolve()
+        except Exception:
+            resolved = directory
+        key = os.path.normcase(str(resolved))
+        if key in seen or not resolved.exists() or not resolved.is_dir():
+            continue
+        seen.add(key)
+        dirs.append(resolved)
+    return dirs
+
+
+def _allow_system_node(config: Optional[Dict[str, Any]] = None) -> bool:
+    cfg = dict(_configured_feishu_cli())
+    cfg.update(config or {})
+    if os.environ.get("ECOREX_FEISHU_DISABLE_SYSTEM_NODE") == "1":
+        return False
+    env_value = os.environ.get("ECOREX_FEISHU_ALLOW_SYSTEM_NODE")
+    if env_value is not None:
+        return _config_bool(env_value)
+    return _config_bool(cfg.get("allow_system_node", cfg.get("allowSystemNode")), default=False)
+
+
+def _tool_env(
+    extra_paths: Optional[Iterable[Path]] = None,
+    *,
+    allow_system_node: bool = False,
+    config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, str]:
+    env = ToolExecutionEnvironment(tool_name="feishu_cli").build_env(extra_paths=extra_paths)
+    for key in NODE_ENV_KEYS_TO_CLEAR:
+        env.pop(key, None)
+    if allow_system_node:
+        dirs = _system_node_dirs(config)
+        for directory in dirs:
+            _append_path(env, directory)
+        env[SYSTEM_NODE_ENV_FLAG] = "1"
+        env[SYSTEM_NODE_DIRS_ENV] = os.pathsep.join(str(directory) for directory in dirs)
+    return env
+
+
+def _is_allowed_system_node_command(command: List[str], env: Dict[str, str]) -> bool:
+    if env.get(SYSTEM_NODE_ENV_FLAG) != "1" or not command:
+        return False
+    executable = Path(str(command[0])).expanduser()
+    if executable.name.lower() not in SYSTEM_NODE_BIN_NAMES:
+        return False
+    raw_dirs = [item for item in str(env.get(SYSTEM_NODE_DIRS_ENV) or "").split(os.pathsep) if item]
+    if not raw_dirs:
+        return False
+    try:
+        exe_dir = executable.resolve().parent
+    except Exception:
+        exe_dir = executable.parent
+    for raw in raw_dirs:
+        try:
+            allowed_dir = Path(raw).expanduser().resolve()
+        except Exception:
+            allowed_dir = Path(raw).expanduser()
+        if os.path.normcase(str(exe_dir)) == os.path.normcase(str(allowed_dir)):
+            return executable.exists() and executable.is_file()
+    return False
 
 
 def _which(name: str, env: Optional[Dict[str, str]] = None) -> Optional[str]:
@@ -172,7 +299,7 @@ def _find_direct_lark_binary() -> Optional[str]:
 
 def _resolve_lark_command(env: Dict[str, str]) -> Optional[List[str]]:
     cli = _which("lark-cli", env)
-    if cli:
+    if cli and _path_is_ecorex_owned(Path(cli)):
         return [cli]
     direct = _find_direct_lark_binary()
     if direct:
@@ -237,6 +364,7 @@ def _run_process(
             env=env,
             cancel_event=cancel_event,
             input_text=input_text,
+            allow_external_executable=_is_allowed_system_node_command(command, env),
         )
     except ToolExecutionCancelled as exc:
         raise _ProcessCancelled(exc.stdout, exc.stderr)
@@ -275,6 +403,40 @@ def _register_auth_session(session: Dict[str, Any]) -> None:
         daemon=True,
         name="feishu-config-init-watchdog",
     ).start()
+
+
+def _register_auth_login_session(
+    *,
+    device_code: str,
+    verification_url: str,
+    timeout: int,
+    cwd: str,
+    scope: str = "",
+    domain: str = "",
+) -> str:
+    digest = hashlib.sha256(
+        f"{device_code}\n{verification_url}\n{time.time()}".encode("utf-8", errors="replace")
+    ).hexdigest()[:16]
+    session_id = f"lark-auth-login-{digest}"
+    now = time.time()
+    session = {
+        "kind": "auth_login",
+        "authFlow": "auth_login_start",
+        "sessionId": session_id,
+        "deviceCode": device_code,
+        "verificationUrl": verification_url,
+        "scope": scope,
+        "domain": domain,
+        "startedAt": now,
+        "deadlineAt": now + max(1, int(timeout or DEFAULT_TIMEOUT_SECONDS)),
+        "timeoutSeconds": max(1, int(timeout or DEFAULT_TIMEOUT_SECONDS)),
+        "cwd": cwd,
+        "writebackPending": True,
+    }
+    with _AUTH_SESSIONS_LOCK:
+        _cleanup_auth_sessions_locked()
+        _AUTH_SESSIONS[session_id] = session
+    return session_id
 
 
 def _auth_session_watchdog(session_id: str) -> None:
@@ -450,6 +612,18 @@ def _auth_session_snapshot(session_id: str, *, kill_expired: bool = True) -> Dic
     return payload
 
 
+def _replace_auth_secret(value: Any, secret: str) -> Any:
+    if not secret:
+        return value
+    if isinstance(value, dict):
+        return {key: _replace_auth_secret(child, secret) for key, child in value.items()}
+    if isinstance(value, list):
+        return [_replace_auth_secret(child, secret) for child in value]
+    if isinstance(value, str):
+        return value.replace(secret, "***")
+    return value
+
+
 def _run_process_until_auth_url(
     command: List[str],
     timeout: int,
@@ -479,6 +653,7 @@ def _run_process_until_auth_url(
         command,
         cwd=str(workdir),
         env=env,
+        allow_external_executable=_is_allowed_system_node_command(command, env),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -844,7 +1019,7 @@ class FeishuCli(BaseTool):
         "properties": {
             "action": {
                 "type": "string",
-                "description": "One of: status, ensure, diagnose, install, agent_auth, config_init, config_init_status, auth_login, run",
+                "description": "One of: status, ensure, diagnose, install, agent_auth, config_init, config_init_status, auth_login, auth_login_status, agent_auth_status, run",
             },
             "session_id": {
                 "type": "string",
@@ -919,7 +1094,12 @@ class FeishuCli(BaseTool):
 
     def _env(self) -> Dict[str, str]:
         install_root = self._install_root()
-        env = _tool_env([install_root / "bin", install_root / "node_modules" / ".bin"])
+        allow_system_node = _allow_system_node(self.config)
+        env = _tool_env(
+            [install_root / "bin", install_root / "node_modules" / ".bin"],
+            allow_system_node=allow_system_node,
+            config=self.config,
+        )
         env["ECOREX_LARK_CLI_INSTALL_ROOT"] = str(install_root)
         return env
 
@@ -949,8 +1129,15 @@ class FeishuCli(BaseTool):
             if not ensure.get("available"):
                 return ToolResult.fail(ensure)
             return self._config_init(args, env, timeout)
-        if action in {"config_init_status", "agent_auth_status", "auth_status"}:
+        if action == "config_init_status":
             return self._config_init_status(args, env, timeout)
+        if action in {"agent_auth_status", "auth_login_status"}:
+            return self._agent_auth_status(args, env, timeout)
+        if action == "auth_status":
+            session_id = _clean_cli_value(args.get("session_id") or args.get("sessionId"))
+            if session_id:
+                return self._agent_auth_status(args, env, timeout)
+            return ToolResult.success(self._status(env, auth_timeout=max(1, min(timeout, 15))))
         if action == "auth_login":
             ensure = self._ensure_payload(env, timeout, install_if_missing)
             if not ensure.get("available"):
@@ -961,7 +1148,7 @@ class FeishuCli(BaseTool):
             if not ensure.get("available"):
                 return ToolResult.fail(ensure)
             return self._run_cli(args, env, timeout)
-        return ToolResult.fail({"status": "error", "message": "action must be one of: status, ensure, diagnose, install, agent_auth, config_init, config_init_status, auth_login, run"})
+        return ToolResult.fail({"status": "error", "message": "action must be one of: status, ensure, diagnose, install, agent_auth, config_init, config_init_status, auth_login, auth_login_status, agent_auth_status, run"})
 
     def _status(self, env: Dict[str, str], auth_timeout: int = 15) -> Dict[str, Any]:
         command = _resolve_lark_command(env)
@@ -976,6 +1163,7 @@ class FeishuCli(BaseTool):
             "sourceUrl": FEISHU_LARK_SOURCE_URL,
             "mirrorUrls": FEISHU_LARK_MIRROR_URLS,
             "authState": "unknown" if command else "cli_missing",
+            "systemNodeAllowed": env.get(SYSTEM_NODE_ENV_FLAG) == "1",
             "pathHints": [str(path) for path in _candidate_bin_dirs() if path.exists()],
         }
         if command:
@@ -1334,6 +1522,189 @@ class FeishuCli(BaseTool):
             return ToolResult.fail(snapshot)
         return ToolResult.success(snapshot)
 
+    def _agent_auth_status(self, args: Dict[str, Any], env: Dict[str, str], timeout: int) -> ToolResult:
+        session_id = _clean_cli_value(args.get("session_id") or args.get("sessionId"))
+        with _AUTH_SESSIONS_LOCK:
+            session = dict(_AUTH_SESSIONS.get(session_id) or {})
+        if session.get("kind") == "auth_login":
+            return self._auth_login_status(args, env, timeout)
+        return self._config_init_status(args, env, timeout)
+
+    def _auth_login_status(self, args: Dict[str, Any], env: Dict[str, str], timeout: int) -> ToolResult:
+        session_id = _clean_cli_value(args.get("session_id") or args.get("sessionId"))
+        if not session_id:
+            return ToolResult.fail({"status": "error", "message": "session_id is required", "writebackPending": False})
+        command = _resolve_lark_command(env)
+        if not command:
+            return ToolResult.fail(self._missing_payload(env))
+
+        with _AUTH_SESSIONS_LOCK:
+            _cleanup_auth_sessions_locked()
+            session = dict(_AUTH_SESSIONS.get(session_id) or {})
+        if not session:
+            return ToolResult.fail({
+                "status": "not_found",
+                "sessionId": session_id,
+                "authFlow": "auth_login_status",
+                "writebackPending": False,
+                "message": "Feishu CLI auth login session was not found or already expired.",
+            })
+        if session.get("kind") != "auth_login":
+            return self._config_init_status(args, env, timeout)
+
+        now = time.time()
+        deadline_at = float(session.get("deadlineAt") or now)
+        url = str(session.get("verificationUrl") or "").strip()
+        device_code = str(session.get("deviceCode") or "").strip()
+        if not device_code:
+            return ToolResult.fail({
+                "status": "error",
+                "sessionId": session_id,
+                "authFlow": "auth_login_status",
+                "verificationUrl": url,
+                "writebackPending": False,
+                "message": "Feishu CLI auth login session is missing its device code; restart authorization.",
+            })
+        if now >= deadline_at:
+            payload = {
+                "status": "timeout",
+                "sessionId": session_id,
+                "authFlow": "auth_login_status",
+                "verificationUrl": url,
+                "writebackPending": False,
+                "authRequired": True,
+                "authCompleted": False,
+                "authenticated": False,
+                "startedAt": session.get("startedAt"),
+                "deadlineAt": session.get("deadlineAt"),
+                "message": "Feishu CLI user authorization window expired; start authorization again.",
+            }
+            with _AUTH_SESSIONS_LOCK:
+                stored = _AUTH_SESSIONS.get(session_id)
+                if stored:
+                    stored["timedOut"] = True
+                    stored["lastPayload"] = payload
+            return ToolResult.fail(payload)
+
+        cached = session.get("lastPayload")
+        if isinstance(cached, dict) and cached.get("status") == "success":
+            return ToolResult.success(cached)
+        last_attempt_at = float(session.get("lastAttemptAt") or 0)
+        if last_attempt_at and now - last_attempt_at < 2.0:
+            return ToolResult.success({
+                "status": "auth_pending",
+                "sessionId": session_id,
+                "authFlow": "auth_login_status",
+                "verificationUrl": url,
+                "writebackPending": True,
+                "backgroundProcess": False,
+                "authRequired": True,
+                "authCompleted": False,
+                "authenticated": False,
+                "startedAt": session.get("startedAt"),
+                "deadlineAt": session.get("deadlineAt"),
+                "cliWritebackTimeoutSeconds": int(session.get("timeoutSeconds") or DEFAULT_TIMEOUT_SECONDS),
+                "message": "Waiting for Feishu user authorization to be completed in the browser.",
+            })
+
+        with _AUTH_SESSIONS_LOCK:
+            stored = _AUTH_SESSIONS.get(session_id)
+            if stored:
+                stored["lastAttemptAt"] = now
+
+        complete_timeout = max(3, min(int(timeout or DEFAULT_TIMEOUT_SECONDS), 15))
+        result = self._safe_run(command + ["auth", "login", "--device-code", device_code], env, complete_timeout)
+        result = _replace_auth_secret(result, device_code)
+        auth_status = self._status(env, auth_timeout=max(1, min(timeout, 15)))
+        authenticated = _auth_status_is_ready(auth_status)
+        output = str(result.get("output") or "").lower()
+        exit_code = result.get("exitCode")
+        pending_markers = (
+            "authorization_pending",
+            "auth pending",
+            "pending",
+            "waiting",
+            "wait",
+            "not yet",
+            "please authorize",
+            "请完成",
+            "等待",
+            "未完成",
+        )
+        expired_markers = ("expired", "expire", "过期")
+        denied_markers = ("denied", "rejected", "cancelled", "canceled", "拒绝", "取消")
+
+        payload: Dict[str, Any] = {
+            "sessionId": session_id,
+            "authFlow": "auth_login_status",
+            "verificationUrl": url,
+            "startedAt": session.get("startedAt"),
+            "deadlineAt": session.get("deadlineAt"),
+            "cliWritebackTimeoutSeconds": int(session.get("timeoutSeconds") or DEFAULT_TIMEOUT_SECONDS),
+            "completeResult": result,
+            "authStatus": auth_status,
+            "authState": _auth_status_state(auth_status),
+            "authenticated": authenticated,
+            "authCompleted": authenticated,
+        }
+        if exit_code == 0 and authenticated:
+            payload.update({
+                "status": "success",
+                "writebackPending": False,
+                "authRequired": False,
+                "message": "Feishu CLI user authorization completed and user identity is ready.",
+            })
+            with _AUTH_SESSIONS_LOCK:
+                stored = _AUTH_SESSIONS.get(session_id)
+                if stored:
+                    stored["writebackPending"] = False
+                    stored["completedAt"] = time.time()
+                    stored["exitCode"] = 0
+                    stored["lastPayload"] = payload
+            return ToolResult.success(payload)
+
+        if result.get("status") == "timeout" or any(marker in output for marker in pending_markers):
+            payload.update({
+                "status": "auth_pending",
+                "writebackPending": True,
+                "backgroundProcess": False,
+                "authRequired": True,
+                "message": "Waiting for Feishu user authorization; keep the opened Feishu page active, then retry status.",
+            })
+            with _AUTH_SESSIONS_LOCK:
+                stored = _AUTH_SESSIONS.get(session_id)
+                if stored:
+                    stored["lastPayload"] = payload
+            return ToolResult.success(payload)
+
+        if any(marker in output for marker in expired_markers):
+            payload.update({
+                "status": "timeout",
+                "writebackPending": False,
+                "authRequired": True,
+                "message": "Feishu user authorization expired; start authorization again.",
+            })
+        elif any(marker in output for marker in denied_markers):
+            payload.update({
+                "status": "cancelled",
+                "writebackPending": False,
+                "authRequired": True,
+                "message": "Feishu user authorization was cancelled or rejected.",
+            })
+        else:
+            payload.update({
+                "status": "auth_incomplete" if exit_code == 0 else "error",
+                "writebackPending": False,
+                "authRequired": True,
+                "message": "Feishu CLI device-code completion did not produce a ready user identity.",
+            })
+        with _AUTH_SESSIONS_LOCK:
+            stored = _AUTH_SESSIONS.get(session_id)
+            if stored:
+                stored["lastPayload"] = payload
+                stored["exitCode"] = exit_code
+        return ToolResult.fail(payload)
+
     def _auth_login(self, args: Dict[str, Any], env: Dict[str, str], timeout: int) -> ToolResult:
         command = _resolve_lark_command(env)
         if not command:
@@ -1382,15 +1753,30 @@ class FeishuCli(BaseTool):
             result["verificationUrl"] = url
             result["qrCode"] = self._generate_auth_qrcode(command, env, url, timeout)
             result["authRequired"] = True
+            if device_code:
+                session_id = _register_auth_login_session(
+                    device_code=device_code,
+                    verification_url=url,
+                    timeout=timeout,
+                    cwd=self.cwd,
+                    scope=scope,
+                    domain=domain,
+                )
+                result["sessionId"] = session_id
+                result["writebackPending"] = True
+                result["backgroundProcess"] = False
+                result["cliWritebackTimeoutSeconds"] = max(1, int(timeout or DEFAULT_TIMEOUT_SECONDS))
             result["message"] = (
                 "Open the verification URL or scan the QR code, finish Feishu authorization, "
-                "then run feishu_cli auth_login again with device_code to complete."
+                "then poll feishu_cli auth_login_status with session_id to complete."
             )
             result["nextAction"] = {
                 "tool": "feishu_cli",
-                "action": "auth_login",
-                "device_code": device_code,
+                "action": "auth_login_status",
+                "session_id": result.get("sessionId"),
             }
+            if device_code:
+                result["nextAction"]["device_code"] = device_code
         if result.get("exitCode") != 0:
             return ToolResult.fail(result)
         return ToolResult.success(result)
@@ -1454,13 +1840,52 @@ class FeishuCli(BaseTool):
             max(3, min(timeout, 5)),
         )
         path = cwd / relative_output
-        return {
+        payload = {
             "status": result.get("status"),
             "exitCode": result.get("exitCode"),
             "path": str(path),
             "relativePath": relative_output,
             "output": result.get("output", ""),
         }
+        if result.get("exitCode") == 0 and path.exists() and path.stat().st_size > 0:
+            return payload
+        local = self._generate_local_auth_qrcode(url, path)
+        if local.get("status") == "success":
+            local["officialQrcode"] = {
+                "status": result.get("status"),
+                "exitCode": result.get("exitCode"),
+                "output": str(result.get("output") or "")[-1200:],
+            }
+            return local
+        payload["fallback"] = local
+        return payload
+
+    @staticmethod
+    def _generate_local_auth_qrcode(url: str, path: Path) -> Dict[str, Any]:
+        try:
+            import qrcode as qr_lib
+
+            qr = qr_lib.QRCode(error_correction=qr_lib.constants.ERROR_CORRECT_M, box_size=8, border=2)
+            qr.add_data(url)
+            qr.make(fit=True)
+            image = qr.make_image(fill_color="black", back_color="white")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            image.save(str(path))
+            return {
+                "status": "success",
+                "exitCode": 0,
+                "path": str(path),
+                "relativePath": str(path).replace("\\", "/").split("/.ecorex/", 1)[-1].join([".ecorex/"]) if "/.ecorex/" in str(path).replace("\\", "/") else str(path),
+                "fallbackUsed": True,
+                "message": "Generated Feishu auth QR code locally from the official verification URL.",
+            }
+        except Exception as exc:
+            return {
+                "status": "error",
+                "exitCode": None,
+                "path": str(path),
+                "message": f"Local QR generation failed: {type(exc).__name__}",
+            }
 
     def _run_cli(self, args: Dict[str, Any], env: Dict[str, str], timeout: int) -> ToolResult:
         command = _resolve_lark_command(env)

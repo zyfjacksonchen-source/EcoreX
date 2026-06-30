@@ -32,11 +32,11 @@
       "discoveryOnly": true,
       "sourceUrl": "https://github.com/larksuite/cli",
       "mirrorUrls": ["https://registry.npmmirror.com/@larksuite/cli"],
-      "installHint": "优先让 agent 通过内置 find skill / find-skill 能力发现；真实飞书任务需要 CLI 时再按需安装 @larksuite/cli。npm 官方源超时后降级使用 https://registry.npmmirror.com。",
+      "installHint": "优先让 agent 通过内置 find skill / find-skill 能力发现；真实飞书任务需要 CLI 时再按需安装 @larksuite/cli。EcoreX 仅为 feishu_cli 受控启用系统 Node/npm/npx，CLI 仍安装到 EcoreX state。npm 官方源超时后降级使用 https://registry.npmmirror.com。",
       "estimatedSizeMb": 58,
       "requirements": ["@larksuite/cli@1.0.56"],
       "moduleChecks": ["lark-cli"],
-      "failureHint": "请让当前 agent 会话优先通过内置 find skill / find-skill 能力发现安装源；npm 官方源超时后切换国内 npm 镜像。"
+      "failureHint": "请让当前 agent 会话优先通过内置 find skill / find-skill 能力发现安装源；确认本机或管理员预置 Node/npm 可用，并允许 tools.feishu_cli.allow_system_node；npm 官方源超时后切换国内 npm 镜像。"
     },
     {
       "id": "office-pdf",

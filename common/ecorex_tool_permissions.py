@@ -318,7 +318,27 @@ def _is_tongxin_config_driven_auth_request(args: Dict[str, Any]) -> bool:
 
 def _is_read_only_feishu_cli_request(args: Dict[str, Any]) -> bool:
     action = str((args or {}).get("action") or "").strip().lower()
-    return action in {"config_init_status", "agent_auth_status", "auth_status"}
+    return action in {"status", "diagnose", "ensure", "config_init_status", "agent_auth_status", "auth_login_status", "auth_status"}
+
+
+def _is_default_feishu_cli_request(args: Dict[str, Any]) -> bool:
+    action = str((args or {}).get("action") or "").strip().lower().replace("-", "_")
+    return action in {
+        "status",
+        "diagnose",
+        "ensure",
+        "install",
+        "agent_auth",
+        "agent_authorize",
+        "authorize_agent",
+        "config_init",
+        "config_init_status",
+        "agent_auth_status",
+        "auth_login_status",
+        "auth_status",
+        "auth_login",
+        "run",
+    }
 
 
 def _is_tongxin_capability_configure_request(tool_name: str, args: Dict[str, Any]) -> bool:
@@ -522,6 +542,9 @@ class ToolPermissionBroker:
         if normalized_tool == "feishu_cli" and _is_read_only_feishu_cli_request(args):
             self._audit("tool-execution", "allow", {"tool": normalized_tool, "reason": "default-read-only-feishu-cli"})
             return {"allowed": True, "reason": "default-read-only-feishu-cli"}
+        if normalized_tool == "feishu_cli" and _is_default_feishu_cli_request(args):
+            self._audit("tool-execution", "allow", {"tool": normalized_tool, "reason": "default-structured-feishu-cli"})
+            return {"allowed": True, "reason": "default-structured-feishu-cli"}
         if not self._requires_permission(normalized_tool):
             return {"allowed": True, "reason": "not-required"}
 
@@ -541,7 +564,7 @@ class ToolPermissionBroker:
             self._audit("tool-execution", "allow", {"tool": normalized_tool, "reason": "remembered-grant"})
             return {"allowed": True, "reason": "remembered-grant"}
 
-        if not self._interactive_permission_available():
+        if not (emit_event or self._interactive_permission_available()):
             summary = _summarize_args(normalized_tool, args)
             self._audit(
                 "tool-execution",
@@ -662,6 +685,9 @@ class ToolPermissionBroker:
         if normalized_tool == "feishu_cli" and _is_read_only_feishu_cli_request(args):
             self._audit("tool-execution", "allow", {"tool": normalized_tool, "reason": "default-read-only-feishu-cli"})
             return {"allowed": True, "reason": "default-read-only-feishu-cli"}
+        if normalized_tool == "feishu_cli" and _is_default_feishu_cli_request(args):
+            self._audit("tool-execution", "allow", {"tool": normalized_tool, "reason": "default-structured-feishu-cli"})
+            return {"allowed": True, "reason": "default-structured-feishu-cli"}
         if not self._requires_permission(normalized_tool):
             return {"allowed": True, "reason": "not-required"}
 
@@ -914,7 +940,14 @@ class ToolPermissionBroker:
 
     @staticmethod
     def _interactive_permission_available() -> bool:
+        explicit = str(os.environ.get("ECOREX_TOOL_PERMISSION_INTERACTIVE") or "").strip().lower()
+        if explicit in {"1", "true", "yes", "on"}:
+            return True
+        if explicit in {"0", "false", "no", "off"}:
+            return False
         if os.environ.get("ECOREX_DESKTOP") == "1":
+            return True
+        if os.environ.get("ECOREX_WEB_PORT") or os.environ.get("ECOREX_WEB_PUBLIC_BASE_URL"):
             return True
         try:
             from config import conf

@@ -69,6 +69,52 @@ def test_tool_execution_environment_rejects_absolute_system_path_by_default(tmp_
     assert fallback.prepare_command([str(foreign)]).ok is True
 
 
+def test_tool_execution_environment_system_runtime_opt_in_resolves_npx(tmp_path):
+    runtime = tmp_path / "runtime"
+    state = tmp_path / "state"
+    system_bin = tmp_path / "system-bin"
+    npx_name = "npx.cmd" if os.name == "nt" else "npx"
+    npx = _touch(system_bin / npx_name)
+    provider = RuntimeDependencyProvider(
+        runtime,
+        state,
+        env={"PATH": str(system_bin), "ECOREX_ALLOW_SYSTEM_RUNTIME": "1"},
+    )
+
+    env = ToolExecutionEnvironment(tool_name="unit", provider=provider, base_env=provider.env)
+    prepared = env.prepare_command([npx_name, "--version"], required_by="mcp:unit")
+
+    assert prepared.ok is True
+    assert Path(prepared.command[0]) == npx
+    assert str(system_bin) in prepared.env["PATH"]
+
+
+def test_tool_execution_environment_full_access_web_install_root_resolves_npx(monkeypatch, tmp_path):
+    from common.ecorex_tool_permissions import get_tool_permission_broker
+
+    runtime = tmp_path / "runtime"
+    state = tmp_path / "state"
+    system_bin = tmp_path / "system-bin"
+    npx_name = "npx.cmd" if os.name == "nt" else "npx"
+    npx = _touch(system_bin / npx_name)
+    monkeypatch.setenv("ECOREX_USER_DATA", str(tmp_path / "user-data"))
+    monkeypatch.delenv("ECOREX_ALLOW_SYSTEM_RUNTIME", raising=False)
+    monkeypatch.delenv("ECOREX_INCLUDE_SYSTEM_PATH", raising=False)
+    monkeypatch.delenv("ECOREX_TOOL_ENV_INCLUDE_SYSTEM_PATH", raising=False)
+    get_tool_permission_broker().set_mode("full-access")
+    provider = RuntimeDependencyProvider(
+        runtime,
+        state,
+        env={"PATH": str(system_bin), "ECOREX_INSTALL_ROOT": str(runtime)},
+    )
+
+    env = ToolExecutionEnvironment(tool_name="mcp:unit", provider=provider, base_env=provider.env)
+    prepared = env.prepare_command([npx_name, "--version"], required_by="mcp:unit")
+
+    assert prepared.ok is True
+    assert Path(prepared.command[0]) == npx
+
+
 def test_tool_execution_environment_popen_rejects_unprepared_external_executable(tmp_path):
     provider = RuntimeDependencyProvider(tmp_path / "runtime", tmp_path / "state", env={"PATH": ""})
     env = ToolExecutionEnvironment(tool_name="unit", provider=provider, base_env=provider.env)
@@ -421,6 +467,82 @@ def test_feishu_direct_lark_binary_requires_runnable_file(monkeypatch, tmp_path)
     monkeypatch.setattr(feishu_module, "_candidate_bin_dirs", lambda: [binary.parent])
 
     assert feishu_module._find_direct_lark_binary() is None
+
+
+def test_feishu_cli_allows_configured_system_node_without_global_path_leak(monkeypatch, tmp_path):
+    import agent.tools.feishu_cli.feishu_cli as feishu_module
+    from agent.tools.feishu_cli.feishu_cli import FeishuCli
+
+    system_node = tmp_path / "system-node"
+    other_bin = tmp_path / "other-bin"
+    node_name = "node.exe" if os.name == "nt" else "node"
+    npm_name = "npm.cmd" if os.name == "nt" else "npm"
+    _touch(system_node / node_name)
+    _touch(system_node / npm_name)
+    _touch(system_node / ("lark-cli.cmd" if os.name == "nt" else "lark-cli"))
+    foreign = _touch(other_bin / ("bad-node.exe" if os.name == "nt" else "bad-node"))
+    monkeypatch.setenv("PATH", str(system_node) + os.pathsep + str(other_bin))
+    monkeypatch.setenv("NODE_OPTIONS", f"--require {foreign}")
+    monkeypatch.setenv("npm_config_script_shell", str(foreign))
+
+    tool = FeishuCli({
+        "cwd": str(tmp_path),
+        "install_root": str(tmp_path / "state" / "tools" / "lark-cli"),
+        "allow_system_node": True,
+    })
+    env = tool._env()
+    node = feishu_module._which("node", env)
+    npm = feishu_module._which("npm", env)
+
+    assert env[feishu_module.SYSTEM_NODE_ENV_FLAG] == "1"
+    assert str(system_node.resolve()) in env[feishu_module.SYSTEM_NODE_DIRS_ENV]
+    assert str(other_bin) not in env["PATH"]
+    assert "NODE_OPTIONS" not in env
+    assert "npm_config_script_shell" not in env
+    assert node and Path(node).name.lower() == node_name.lower()
+    assert npm and Path(npm).name.lower() == npm_name.lower()
+    assert feishu_module._is_allowed_system_node_command([node, "--version"], env) is True
+    assert feishu_module._is_allowed_system_node_command([str(foreign), "--version"], env) is False
+    assert feishu_module._resolve_lark_command(env) is None
+
+
+def test_permission_broker_allows_structured_feishu_and_tongxin_readonly(monkeypatch, tmp_path):
+    from common.ecorex_tool_permissions import ToolPermissionBroker
+
+    monkeypatch.setenv("ECOREX_USER_DATA", str(tmp_path / "user-data"))
+    broker = ToolPermissionBroker()
+    broker.set_mode("read-only")
+
+    for action in ("status", "diagnose", "ensure", "config_init_status", "agent_auth_status", "auth_login_status", "auth_status"):
+        decision = broker.authorize_noninteractive("feishu_cli", {"action": action})
+        assert decision["allowed"] is True
+        assert decision["reason"] == "default-read-only-feishu-cli"
+
+    for args in (
+        {"action": "install", "discovery_source": "find-skill"},
+        {"action": "agent_auth"},
+        {"action": "config_init"},
+        {"action": "auth_login", "domain": "base"},
+        {"action": "run", "args": ["base", "+record-list", "--as", "user"]},
+        {"action": "run", "args": ["base", "+record-create", "--as", "user"]},
+    ):
+        decision = broker.authorize_noninteractive("feishu_cli", args)
+        assert decision["allowed"] is True
+        assert decision["reason"] == "default-structured-feishu-cli"
+
+    tongxin_read = broker.authorize_noninteractive(
+        "tongxin_cli",
+        {"action": "run", "args": ["project", "list", "--source", "cache", "--limit", "1"]},
+    )
+    assert tongxin_read["allowed"] is True
+    assert tongxin_read["reason"] == "default-read-only-tongxin-cli"
+
+    tongxin_write = broker.authorize_noninteractive(
+        "tongxin_cli",
+        {"action": "run", "args": ["account", "update", "--account-id", "123"]},
+    )
+    assert tongxin_write["allowed"] is False
+    assert "read-only" in tongxin_write["reason"]
 
 
 def test_tongxin_env_script_paths_are_ecorex_owned_only(monkeypatch, tmp_path):

@@ -1,0 +1,121 @@
+{
+  "schemaVersion": "v0.2.5-web-only-final-online-fix-v1",
+  "recordedAt": "2026-06-30T04:12:20Z",
+  "status": "pass",
+  "scope": "WebUI-only v0.2.5 completion, public release, and production online verification",
+  "requestedMode": "web-only",
+  "historicalThreadContext": [
+    {
+      "threadId": "019ef8e1-a93e-7802-95e9-d3c0fd2d6a44",
+      "title": "v0.2.2",
+      "takeaway": "Feishu backend success is not enough; EcoreX must persist app_id/app_secret locally, and release packages must carry lark_oapi plus writeback compatibility."
+    },
+    {
+      "threadId": "019f029a-d132-7b63-9c7b-d1a33b4cef16",
+      "title": "v0.2.3",
+      "takeaway": "Tool recovery must prove real model tool_call and runtime execution, not UI ready-only state; package/runtime gates and privacy evidence must fail closed."
+    },
+    {
+      "threadId": "019f036f-c57e-7691-a85e-1b779535eff6",
+      "title": "usage reporting",
+      "takeaway": "Web UI fixes should avoid hardcoded ranges, support user-selected state, and prevent hover/help UI from visually blocking primary controls."
+    },
+    {
+      "threadId": "019f0463-4df0-7371-b346-51f104952d93",
+      "title": "v0.2.4-v0.2.5",
+      "takeaway": "v0.2.5 release work must keep WebUI artifact metadata, public manifest, installation manifest, deployment evidence, and privacy redaction aligned."
+    }
+  ],
+  "changes": [
+    "Feishu CLI auth login now registers an internal auth_login session, preserves the device code server-side, and lets agent_auth_status continue the CLI writeback after the user authorizes the official link.",
+    "Feishu CLI can use controlled system Node/npm/npx when enabled, while global system lark-cli remains rejected.",
+    "Structured Feishu CLI status, diagnose, install, auth, config, and run actions are allowed through the wrapper so normal read/write workflows do not get blocked by EcoreX confirmation in Web runtimes.",
+    "Tongxin CLI has a default auth/bootstrap address, state-backed bootstrap_dir, EcoreX-owned python_path support, and a runpy shim for user-provided xin_agent_cli.py.",
+    "Tongxin remains read-only by default; mutating Tongxin commands are still denied before subprocess execution.",
+    "WebUI sidebar now separates general pinned sessions from regular sessions with distinct group headings.",
+    "Pinned general sessions sort by latest pinned time first, then by activity; unpinned sessions keep the existing activity order.",
+    "Project sessions do not leave their project when pinned; pinning only changes order inside the owning project/group.",
+    "Runtime UI state persists pinnedSessionTimes and repairs/removes stale pin timestamps during session cleanup.",
+    "Release manifest, public page assets, installer scripts, Web service package, and /api/version are aligned to 0.2.5."
+  ],
+  "artifacts": {
+    "webuiWindows": {
+      "artifactId": "EcoreX_0.2.5-webui-windows-x64.zip",
+      "size": 126771905,
+      "sha256": "8D437723CD8D385C19BD06E62EFEC2AF0CDFA81597FDD9AD386CF31EEC457B2A"
+    },
+    "webuiMacos": {
+      "artifactId": "EcoreX_0.2.5-webui-macos-universal.zip",
+      "size": 301008787,
+      "sha256": "029D082A0236AAA351FE1A38F35D48C4A3AB6EB4BE25F69692810846890CC112"
+    },
+    "webLinuxService": {
+      "artifactId": "EcoreX_0.2.5-web-linux-service.tar.gz",
+      "size": 3861679,
+      "sha256": "7BA75DC8BA30EDBF3655C94CBE20AB7E102D3CA7D005724AB16AC13DEE7DA143"
+    },
+    "publicRelease": {
+      "artifactId": "EcoreX_0.2.5-public-release.zip",
+      "size": 430626161,
+      "sha256": "0BB06BC42570BC621339A8323C3EEC170BC5AE6ABB80D6FECDC1FD5FECF989C6"
+    }
+  },
+  "validation": {
+    "pyCompile": "pass",
+    "pytestFeishuAuthParity": "23 passed, 1 skipped",
+    "pytestToolExecution": "21 passed, 1 skipped",
+    "pytestCombinedV025": "150 passed, 2 skipped, 3 warnings",
+    "pytestWebParallelBackend": "400 passed, 3 warnings, 25 subtests passed",
+    "pytestSessionStateRepair": "7 passed",
+    "npmRunBuild": "pass",
+    "webuiLocalReleasePackaging": "pass for Windows and macOS WebUI artifacts; optional combined win-mac zip intentionally omitted for Web-only release",
+    "webLinuxServicePackaging": "pass",
+    "publicReleasePackaging": "pass",
+    "productionDeploy": "pass"
+  },
+  "onlineVerification": {
+    "status": "pass",
+    "domainHash": "A753D877497CBE35",
+    "checks": {
+      "publicPage200": true,
+      "publicManifest200": true,
+      "publicManifestVersion025": true,
+      "publicManifestNotesFeishu": true,
+      "publicManifestNotesTongxin": true,
+      "publicManifestNotesPinned": true,
+      "webuiWindowsReady": true,
+      "webuiMacosReady": true,
+      "webServiceReady": true,
+      "apiVersionStatus": 200,
+      "apiVersion025": true,
+      "appStatus": 200
+    },
+    "responseHashes": {
+      "publicPage": "CBE8B36E7BE6E945",
+      "manifest": "39CE0790A44E961B",
+      "apiVersion": "444C3E945BCA7463",
+      "app": "3A1E07E0D2934AF8"
+    }
+  },
+  "deploymentEvidence": [
+    "docs/v0.2.5/artifacts/production-disk-cleanup.json",
+    "docs/v0.2.5/artifacts/production-deploy-online.json"
+  ],
+  "privacy": {
+    "rawDomainPersisted": false,
+    "rawUrlPersisted": false,
+    "rawSshHostPersisted": false,
+    "rawUserPersisted": false,
+    "rawPasswordPersisted": false,
+    "rawSecretPersisted": false,
+    "rawCliOutputPersisted": false
+  },
+  "preservedContracts": [
+    "This release remains WebUI-only; native desktop installer/DMG artifacts are not promoted.",
+    "System shell/raw bash access is still not opened by the structured-tool permission change.",
+    "System Node allowance is scoped to Feishu CLI Node/npm/npx and does not allow system lark-cli.",
+    "Tongxin write operations remain blocked by read-only policy.",
+    "Pinned project sessions remain inside their project scope."
+  ],
+  "redacted": true
+}

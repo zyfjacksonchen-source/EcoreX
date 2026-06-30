@@ -1,0 +1,51 @@
+{
+  "cleanup": {
+    "deletedOnly": [
+      "/tmp/ecorex-v*-release-*"
+    ],
+    "preserved": [
+      "/srv/ecorex-agent-download/current",
+      "/srv/ecorex-agent-download/releases/*",
+      "/opt/ecorex-web/current",
+      "/opt/ecorex-web/releases/*",
+      "non-EcoreX /tmp entries"
+    ],
+    "removedCount": 3,
+    "tmpFilesystemAfter": {
+      "available": "1.5G",
+      "filesystem": "tmpfs",
+      "mount": "/tmp",
+      "size": "3.7G",
+      "usePercent": "60%",
+      "used": "2.2G"
+    },
+    "tmpFilesystemBefore": {
+      "available": "291M",
+      "filesystem": "tmpfs",
+      "mount": "/tmp",
+      "size": "3.7G",
+      "usePercent": "93%",
+      "used": "3.4G"
+    }
+  },
+  "privacy": {
+    "containsRawDeploymentTarget": false,
+    "containsRawIp": false,
+    "containsServerCredentials": false
+  },
+  "recordedAt": "2026-06-30T04:04:09.844242+00:00",
+  "schemaVersion": "v0.2.5-production-disk-cleanup-v1",
+  "scope": "production-deploy-retry",
+  "target": {
+    "domainHash": "a753d877497cbe35",
+    "rawTargetPersisted": false,
+    "sshHostHash": "cdf1cf905198ca97",
+    "sshUserHash": "4813494d137e1631"
+  },
+  "trigger": {
+    "affectedMount": "/tmp",
+    "failedCommand": "install_public_site_admin",
+    "failure": "No space left on device"
+  },
+  "version": "0.2.5"
+}
